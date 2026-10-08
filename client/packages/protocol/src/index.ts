@@ -74,6 +74,7 @@ export type {
   HeldEntry,
   HeldMessage,
   ChannelMute,
+  SavedMessage,
   NotificationLevel,
   NotificationSetting,
   UserBlock,
@@ -172,6 +173,7 @@ export {
   type MessageHolding,
   type Sent,
   type MessageSearch,
+  type ActivityFilter,
   type ForeignDmNotice,
   type PluginEvent,
   type PluginNotice,
@@ -235,6 +237,8 @@ export {
   READ_REPORT_MS,
   REACTORS_PAGE,
   SEARCH_PAGE,
+  ACTIVITY_PAGE,
+  SAVED_PAGE,
 } from "./sync";
 export {
   CONNECT_TIMEOUT_MS,

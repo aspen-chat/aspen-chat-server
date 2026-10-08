@@ -14,6 +14,7 @@ use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, LOCATION, RETRY_AFTER};
 use axum::routing::any;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+pub mod activity;
 pub mod admin;
 pub mod attachment;
 pub mod auth;
@@ -53,8 +54,10 @@ pub mod react;
 pub mod read_state;
 pub mod report;
 pub mod role;
+pub mod saved_message;
 mod schema;
 pub mod security;
+pub mod thread_follow;
 pub mod user;
 pub mod voice;
 pub mod web_client;
@@ -430,6 +433,18 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             channel_mute::mute_channel,
             channel_mute::unmute_channel
         ))
+        .routes(routes!(
+            thread_follow::follow_thread,
+            thread_follow::unfollow_thread
+        ))
+        .routes(routes!(thread_follow::read_follows))
+        .routes(routes!(saved_message::read_saves))
+        .routes(routes!(saved_message::read_saved_messages))
+        .routes(routes!(
+            saved_message::save_message,
+            saved_message::unsave_message
+        ))
+        .routes(routes!(activity::read_activity))
         .routes(routes!(
             notification_setting::set_community_notifications,
             notification_setting::reset_community_notifications

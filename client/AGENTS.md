@@ -82,10 +82,11 @@ commit, as with comments.
 - [`reports.md`](docs/architecture/reports.md): reporting messages, profiles, and nicknames, message links and their embeds, warnings, reviewing reports and their categories, and bans from the deployment.
 - [`roles-and-permissions.md`](docs/architecture/roles-and-permissions.md): the client's permission resolver (kept in step with the server's through `spec/permission_vectors.json`), hidden controls, community settings, bans, access presets, member search, and pins.
 - [`screen-sharing-and-game-capture.md`](docs/architecture/screen-sharing-and-game-capture.md): the desktop shell's libobs helper, Linux's application audio, the game capture dialog, and the screen picker.
+- [`saved-and-activity.md`](docs/architecture/saved-and-activity.md): saved messages, the activity feed and its filters, and the rows and pages they share.
 - [`search.md`](docs/architecture/search.md): message search across channels, communities, and deployments.
 - [`sign-in.md`](docs/architecture/sign-in.md): the signed-out screens, the server each shell signs in to, passkey ceremonies and their hand-off to the system browser, and signing in from another device by a QR code.
 - [`tagging.md`](docs/architecture/tagging.md): rendering tags, completing them in the message box, and mention counts.
-- [`threads-and-dms.md`](docs/architecture/threads-and-dms.md): threads, echoes, DMs and group DMs, the DM list, and the system account's DM.
+- [`threads-and-dms.md`](docs/architecture/threads-and-dms.md): threads, following them, echoes, DMs and group DMs, the DM list, and the system account's DM.
 - [`unread-and-muting.md`](docs/architecture/unread-and-muting.md): read states, unread marks, marking read, the New Messages line, and muting.
 - [`voice.md`](docs/architecture/voice.md): `VoiceCall`: joining, media, screens and cameras, call state, per-person volume, the call screen, DM calls and rings, and moderation.
 
@@ -175,7 +176,9 @@ commit, as with comments.
   pane fills the screen and has no edge.
 - Every list sidebar, the channel list's and the DM list's, is drawn by the same two pieces:
   `SidebarHeader` (its title and plain icon buttons, `headerIconButtonClass`, spaced so their
-  touch areas never overlap) and `SidebarFooter` (the call bar and the user bar).
+  touch areas never overlap) and `SidebarFooter` (the call bar and the user bar). A page of its
+  own beside the community rail (the Administration Dashboard, activity, saved messages) is a
+  `RailPage`, whose rail has the user bar at its foot.
 - Events are routed by the server to the communities the user belongs to and to the user alone,
   leaving out channels they may not view, so the client filters nothing itself. An event about a
   user reaches the client once per community shared with them; every copy carries the same

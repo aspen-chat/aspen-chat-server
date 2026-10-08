@@ -13,7 +13,8 @@ import { VideoCard } from "@/features/messages/VideoCard";
 import { playerSrc } from "@/features/messages/video";
 import { ErrorBoundary } from "@/features/layout/ErrorBoundary";
 import { mediaUrl, webPageUrl } from "@/features/layout/safeUrl";
-import { useUser } from "@/api/hooks";
+import { useIsSaved, useUser } from "@/api/hooks";
+import { BookmarkSimpleIcon } from "@phosphor-icons/react";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
@@ -125,6 +126,7 @@ function MessageBodyContent({
             </span>
           )}
           <AlteredBy pluginIds={message.alteredBy} />
+          <SavedMark messageId={message.id} />
           {trailing}
         </div>
       )}
@@ -239,5 +241,20 @@ function CardPicture({
           : " bg-surface-sunken")
       }
     />
+  );
+}
+
+/** A quiet mark on a message the reader saved, which their saved messages list. */
+function SavedMark({ messageId }: { messageId: string }) {
+  const m = useMessages();
+  const saved = useIsSaved(messageId);
+  if (!saved) {
+    return null;
+  }
+  return (
+    <span className="inline-flex self-center text-ink-faint" title={m.saved.marker}>
+      <BookmarkSimpleIcon size="1em" weight="fill" aria-hidden="true" />
+      <span className="sr-only">{m.saved.marker}</span>
+    </span>
   );
 }

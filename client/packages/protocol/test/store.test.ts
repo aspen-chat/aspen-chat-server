@@ -1655,6 +1655,65 @@ describe("RecordStore notifications", () => {
     store.setBlocked(bob.id, true);
     expect(store.notifies(plain)).toBe(false);
   });
+
+  it("notifies of every reply in a followed thread, past its parent's level but not its mute", () => {
+    const store = bootstrapped();
+    const thread: Channel = {
+      ...general,
+      id: id(30),
+      name: "",
+      ty: "thread",
+      parentChannel: general.id,
+      starterMessage: id(1001),
+    };
+    store.ingest({
+      channels: [thread],
+      readStates: [{ channel: general.id, lastRead: id(1000), lastMessage: null, mentions: 0 }],
+    });
+    const reply = message(2, thread.id, bob.id);
+    expect(store.notifies(reply)).toBe(false);
+    store.applyEvent({ serverEvent: "threadFollowChanged", thread: thread.id, following: true });
+    expect(store.follows(thread.id)).toBe(true);
+    expect(store.notifies(reply)).toBe(true);
+    store.replaceNotificationSettings([{ community: null, channel: general.id, level: "nothing" }]);
+    expect(store.notifies(reply)).toBe(true);
+    store.replaceMutes([{ channel: general.id, until: null }]);
+    expect(store.notifies(reply)).toBe(false);
+    store.replaceMutes([]);
+    store.applyEvent({ serverEvent: "channelRead", channel: thread.id, lastRead: id(1002) });
+    expect(store.threadRead(thread.id)).toBe(id(1002));
+    expect(store.notifies(reply)).toBe(false);
+    store.replaceFollows([]);
+    expect(store.notifies(message(3, thread.id, bob.id))).toBe(false);
+  });
+
+  it("keeps threads' read positions out of what is unread in the lists", () => {
+    const store = bootstrapped();
+    const thread: Channel = { ...general, id: id(30), ty: "thread", parentChannel: general.id };
+    store.ingest({
+      channels: [thread],
+      readStates: [{ channel: thread.id, lastRead: id(1000), lastMessage: id(1005), mentions: 2 }],
+    });
+    expect(store.threadRead(thread.id)).toBe(id(1000));
+    expect(store.unreadPlaces().size).toBe(0);
+    expect(store.placeMentions(aspen.id)).toBe(0);
+    store.setThreadRead(thread.id, id(999));
+    expect(store.threadRead(thread.id)).toBe(id(1000));
+  });
+
+  it("follows the caller's saves, newest first", () => {
+    const store = bootstrapped();
+    store.replaceSaves([
+      { id: id(5001), message: id(1001) },
+      { id: id(5002), message: id(1002) },
+    ]);
+    expect(store.saves().map((s) => s.message)).toEqual([id(1002), id(1001)]);
+    expect(store.isSaved(id(1001))).toBe(true);
+    store.applyEvent({ serverEvent: "savedMessageChanged", message: id(1001), saved: null });
+    expect(store.isSaved(id(1001))).toBe(false);
+    store.applyEvent({ serverEvent: "savedMessageChanged", message: id(1003), saved: id(5003) });
+    expect(store.saves().map((s) => s.message)).toEqual([id(1003), id(1002)]);
+  });
 });
 
 describe("RecordStore plugins", () => {

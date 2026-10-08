@@ -111,13 +111,13 @@ export function useChannel(id: string): Channel | undefined {
 
 /**
  * A channel by id, read on demand when the store lacks it (`AspenSync.ensureChannel`), such as
- * a DM from before the last listing.
+ * a DM from before the last listing. The empty id names none and reads nothing.
  */
 export function useChannelOnDemand(id: string): Channel | undefined {
   const sync = useSync();
   const channel = useChannel(id);
   useEffect(() => {
-    if (channel === undefined) {
+    if (id !== "" && channel === undefined) {
       sync.ensureChannel(id);
     }
   }, [sync, id, channel]);
@@ -609,6 +609,46 @@ export function useMessageWindow(channelId: string): MessageWindow | undefined {
 
 export function useMessage(id: string): Message | undefined {
   return useTopic(`message:${id}`, (s) => s.message(id));
+}
+
+/**
+ * A message by id, read on demand while `ask` holds and the store lacks it, and whether the
+ * server said the caller may not read it or that it is gone.
+ */
+export function useMessageOnDemand(
+  id: string,
+  ask: boolean,
+): { message: Message | undefined; missing: boolean } {
+  const sync = useSync();
+  const message = useMessage(id);
+  const missing = useTopic(`message:${id}`, (s) => s.missing("message", id));
+  useEffect(() => {
+    if (ask && message === undefined && !missing) {
+      void sync.loadMessage(id).catch(() => undefined);
+    }
+  }, [sync, id, ask, message, missing]);
+  return { message, missing };
+}
+
+/** Whether the caller saved a message. */
+export function useIsSaved(messageId: string): boolean {
+  return useTopic(`saved:${messageId}`, (s) => s.isSaved(messageId));
+}
+
+/** Whether the caller follows a thread. */
+export function useFollowing(threadId: string): boolean {
+  return useTopic(`follow:${threadId}`, (s) => s.follows(threadId));
+}
+
+/**
+ * How far the caller has read a channel, DM, or thread, a position among its message ids, when
+ * the store holds it.
+ */
+export function useLastRead(channelId: string): string | undefined {
+  return useTopic(
+    `read:${channelId}`,
+    (s) => s.threadRead(channelId) ?? s.readState(channelId)?.lastRead,
+  );
 }
 
 /** What the caller finds at a message another links to, once a read has said. */

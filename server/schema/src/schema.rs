@@ -768,6 +768,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    saved_message (id) {
+        id -> Uuid,
+        user -> Uuid,
+        message -> Uuid,
+    }
+}
+
+diesel::table! {
     server_secret (name) {
         name -> Text,
         secret -> Bytea,
@@ -780,6 +788,14 @@ diesel::table! {
         token -> Text,
         expires -> Timestamp,
         refresh_token -> Text,
+    }
+}
+
+diesel::table! {
+    thread_follow (user, thread) {
+        user -> Uuid,
+        thread -> Uuid,
+        followed_at -> Timestamptz,
     }
 }
 
@@ -1060,7 +1076,11 @@ diesel::joinable!(report -> report_category (category));
 diesel::joinable!(report -> user (reporter));
 diesel::joinable!(report_case -> community (community));
 diesel::joinable!(report_case -> message (message));
+diesel::joinable!(saved_message -> message (message));
+diesel::joinable!(saved_message -> user (user));
 diesel::joinable!(session -> refresh_token (refresh_token));
+diesel::joinable!(thread_follow -> channel (thread));
+diesel::joinable!(thread_follow -> user (user));
 diesel::joinable!(totp_secret -> user (user));
 diesel::joinable!(upload_usage -> user (user_id));
 diesel::joinable!(user -> plugin (plugin));
@@ -1145,8 +1165,10 @@ diesel::allow_tables_to_appear_in_same_query!(
     report,
     report_case,
     report_category,
+    saved_message,
     server_secret,
     session,
+    thread_follow,
     totp_secret,
     upload_usage,
     user,

@@ -1,4 +1,5 @@
 import { CheckIcon } from "@phosphor-icons/react";
+import type { ReactNode } from "react";
 import { CheckboxButton, CheckboxField } from "react-aria-components";
 
 /** A bordered choice (a radio button or checkbox) with its mark, label, and hint. */
@@ -60,5 +61,34 @@ export function RadioMark() {
     <span className={markClass + " rounded-full"}>
       <span className="forced-fill h-1.5 w-1.5 rounded-full bg-accent-contrast opacity-0 group-selected:opacity-100" />
     </span>
+  );
+}
+
+/** A checkbox drawn small, as one of a list: its tick and its label, on one line. */
+export function CompactCheckbox({
+  isSelected,
+  onChange,
+  isDisabled = false,
+  children,
+}: {
+  isSelected: boolean;
+  onChange: (selected: boolean) => void;
+  isDisabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <CheckboxField isSelected={isSelected} onChange={onChange} isDisabled={isDisabled}>
+      <CheckboxButton className="group flex items-center gap-2 rounded px-2 py-1 text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-60 disabled:hover:bg-transparent">
+        <span className={markClass + " mt-0"}>
+          <CheckIcon
+            size={12}
+            weight="bold"
+            aria-hidden="true"
+            className="hidden group-selected:block"
+          />
+        </span>
+        {children}
+      </CheckboxButton>
+    </CheckboxField>
   );
 }

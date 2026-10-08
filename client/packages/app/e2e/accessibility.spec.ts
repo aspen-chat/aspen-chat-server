@@ -183,6 +183,19 @@ for (const { palette, scheme, contrast } of combinations) {
       await expectAccessible(page, "search results");
     });
 
+    test("activity and saved messages", async ({ page }) => {
+      await openChannel(page, "general");
+      await page.goto("/activity");
+      await expect(
+        page.getByRole("list", { name: "Activity" }).getByText("Did you get the photos?"),
+      ).toBeVisible();
+      await settleAnimations(page);
+      await expectAccessible(page, "activity");
+      await page.goto("/saved");
+      await expect(page.getByText(/^Nothing saved yet/)).toBeVisible();
+      await expectAccessible(page, "saved messages");
+    });
+
     test("community settings", async ({ page }) => {
       await page.getByRole("button", { name: "Community settings" }).click();
       const dialog = page.getByRole("dialog");

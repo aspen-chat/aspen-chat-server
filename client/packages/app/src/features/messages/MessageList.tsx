@@ -148,7 +148,7 @@ export function MessageList({
   const readState = useReadState(channelId);
   const { seenFrame, noteSeenSoon } = useReadMarking({
     viewport,
-    readState,
+    tracked: readState !== undefined || parentId !== null,
     ids,
     sync,
     channelId,

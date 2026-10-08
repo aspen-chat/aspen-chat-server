@@ -28,7 +28,7 @@ import { toggleChipClass } from "@/features/invites/dialog";
 import { SourceScope } from "@/api/deployments";
 import { ScopeDomainContext } from "@/api/deploymentsContext";
 import { useSources, type Source } from "@/api/everywhere";
-import { useChannel, useCommunity, useSync, useUser } from "@/api/hooks";
+import { useCommunity, useSync, useUser } from "@/api/hooks";
 import {
   fieldClass,
   hintClass,
@@ -41,7 +41,8 @@ import { listModalClass, overlayClass, dialogClass } from "@/features/invites/di
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { decodeTags } from "@/features/mentions/tags";
-import { messageLink, threadLink, type ChannelHome } from "@/features/messages/links";
+import { messageLink } from "@/features/messages/links";
+import { useMessagePlace } from "@/features/messages/place";
 import { mergeResults, type SourceResults } from "@/features/search/merge";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
@@ -368,25 +369,7 @@ function SearchResult({
   const sync = useSync();
   const time = useDateFormat(TIME);
   const author = useUser(message.author);
-  const channel = useChannel(message.channelId);
-  const parent = useChannel(channel?.parentChannel ?? "");
-  const place = parent ?? channel;
-  const community = useCommunity(place?.community ?? "");
-  const home: ChannelHome = { domain, community: place?.community ?? null };
-  const link =
-    channel?.parentChannel != null
-      ? threadLink(home, channel.parentChannel, channel.id)
-      : messageLink(home, message.channelId, message.id);
-  const where =
-    place === undefined
-      ? ""
-      : place.ty === "dm"
-        ? m.search.inDm
-        : place.ty === "groupDm"
-          ? m.search.inGroupDm
-          : channel?.parentChannel != null
-            ? format(m.search.inThread, { thread: channel.name, channel: place.name })
-            : format(m.search.inChannel, { channel: place.name, community: community?.name ?? "" });
+  const { place, home, link, where } = useMessagePlace(message, domain);
   const roles = place?.community == null ? [] : sync.store.roles(place.community);
   const { text } = decodeTags(
     message.content,
@@ -396,7 +379,7 @@ function SearchResult({
   return (
     <li>
       <Link
-        {...link}
+        {...(link ?? messageLink(home, message.channelId, message.id))}
         onClick={onJump}
         aria-label={`${m.search.jump}: ${author === undefined ? m.unknownUser : displayNameOf(author)}, ${where}`}
         className="flex flex-col gap-0.5 rounded-md px-2 py-1.5 text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"

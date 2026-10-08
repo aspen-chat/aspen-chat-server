@@ -1,16 +1,8 @@
 import type { Role } from "@aspen/protocol";
-import { CheckIcon } from "@phosphor-icons/react";
-import {
-  CheckboxButton,
-  CheckboxField,
-  Label,
-  RadioButton,
-  RadioField,
-  RadioGroup,
-} from "react-aria-components";
+import { Label, RadioButton, RadioField, RadioGroup } from "react-aria-components";
 import { fieldClass, labelClass } from "@/features/auth/styles";
 import type { Preset, PresetOption } from "@/features/community-settings/accessPresets";
-import { RadioMark, choiceClass, markClass } from "@/features/layout/choices";
+import { CompactCheckbox, RadioMark, choiceClass } from "@/features/layout/choices";
 import { useMessages } from "@/i18n/context";
 
 /**
@@ -61,7 +53,7 @@ export function PresetChoices({
         <fieldset className="flex flex-col gap-1">
           <legend className={labelClass}>{m.access.rolesLabel}</legend>
           {roles.map((role) => (
-            <CheckboxField
+            <CompactCheckbox
               key={role.id}
               isSelected={chosen.has(role.id)}
               onChange={(selected) => {
@@ -74,18 +66,8 @@ export function PresetChoices({
                 onChosenChange(next);
               }}
             >
-              <CheckboxButton className="group flex items-center gap-2 rounded px-2 py-1 text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50">
-                <span className={markClass + " mt-0"}>
-                  <CheckIcon
-                    size={12}
-                    weight="bold"
-                    aria-hidden="true"
-                    className="hidden group-selected:block"
-                  />
-                </span>
-                {role.name}
-              </CheckboxButton>
-            </CheckboxField>
+              {role.name}
+            </CompactCheckbox>
           ))}
         </fieldset>
       )}

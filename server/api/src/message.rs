@@ -6,6 +6,7 @@ use crate::link_preview::LinkPreview;
 use crate::message_enum::request::{MessageCreateRequest, MessageUpdateRequest};
 use crate::message_enum::{Message, UserCommunity};
 use crate::poll::{OwnWriteIn, PollVote};
+use crate::read_state::ReadState;
 
 /// The polls on a page of messages, with the caller's own votes and write-ins on them.
 type PollSideload = (
@@ -76,6 +77,9 @@ pub enum MessageInclude {
     /// What plugins say about the messages, and about the other messages the read names, as
     /// `included.messageAnnotations`.
     Annotations,
+    /// How far the caller has read each channel the messages were posted in, threads included,
+    /// as `included.readStates`, so a reader can tell which of them are unread.
+    ReadStates,
 }
 
 /// Body of a message read; a named alias for the same reason as `api::community::CommunityRead`.
@@ -94,7 +98,7 @@ pub struct MessageReadQuery {
 
 /// Loads the relationships named in `include` for every message in `messages`, one batched
 /// read per relationship, run concurrently.
-async fn sideload_messages(
+pub(crate) async fn sideload_messages(
     state: &GlobalServerContext,
     caller: UserId,
     messages: &[Message],
@@ -163,7 +167,17 @@ async fn sideload_messages(
         .chain(linked_records.iter())
         .chain(warned.iter().flatten().map(|w| &w.message))
         .collect();
-    let (users, attachments, polls, threads, channels, reactions, memberships, annotations) = tokio::try_join!(
+    let (
+        users,
+        attachments,
+        polls,
+        threads,
+        channels,
+        reactions,
+        memberships,
+        annotations,
+        read_states,
+    ) = tokio::try_join!(
         async {
             let authors = include.contains(MessageInclude::Authors);
             let mentions = include.contains(MessageInclude::Mentions);
@@ -274,6 +288,22 @@ async fn sideload_messages(
                 Ok(None)
             }
         },
+        async {
+            if include.contains(MessageInclude::ReadStates) {
+                // Every channel named here holds a message the caller may read.
+                let ids: Vec<ChannelId> = messages
+                    .iter()
+                    .map(|m| m.channel_id)
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                app::read_state::read_channels_read_states(state, caller, &ids)
+                    .await
+                    .map(|rows| Some(rows.into_iter().map(ReadState::from).collect()))
+            } else {
+                Ok(None)
+            }
+        },
     )?;
     let (polls, poll_votes, own_write_ins) = match polls {
         Some((polls, votes, write_ins)) => (Some(polls), Some(votes), Some(write_ins)),
@@ -325,6 +355,7 @@ async fn sideload_messages(
         reactions,
         user_communities: memberships,
         message_annotations: annotations,
+        read_states,
         ..Included::default()
     })
 }

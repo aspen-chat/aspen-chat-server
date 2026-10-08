@@ -11,7 +11,8 @@ use crate::user::{CustomStatus, UserOnlineStatus};
 use crate::voice::VoiceSessionEndReason;
 use crate::{
     AnnotationId, AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId, HeldMessageId,
-    IconId, MessageId, PollId, ReportCaseId, RoleId, UserId, VoiceServerId, VoiceSessionId,
+    IconId, MessageId, PollId, ReportCaseId, RoleId, SavedMessageId, UserId, VoiceServerId,
+    VoiceSessionId,
 };
 use chrono::Utc;
 use message_gen::message_enum_source;
@@ -231,6 +232,19 @@ enum MessageEnumSource {
         channel: Option<ChannelId>,
         level: Option<crate::notification_setting::NotificationLevel>,
     },
+    // The user saved a message for themself or stopped saving it, on one of their devices, or
+    // the message was deleted; the others follow. `saved` is the save's id while it is saved,
+    // `null` once it is not. See `app::saved_message`.
+    #[message_gen(custom_event)]
+    SavedMessageChanged {
+        message: MessageId,
+        saved: Option<SavedMessageId>,
+    },
+    // The user began or stopped following a thread, by hand on one of their devices, or by
+    // taking part in it; the others follow. A followed thread tells them of every reply. See
+    // `app::thread_follow`.
+    #[message_gen(custom_event)]
+    ThreadFollowChanged { thread: ChannelId, following: bool },
     Message {
         #[message_gen(id)]
         id: MessageId,

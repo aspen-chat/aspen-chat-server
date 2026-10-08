@@ -7,6 +7,8 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { detectShell } from "@/config";
+import { ActivityScreen } from "@/features/activity/ActivityScreen";
+import { SavedScreen } from "@/features/activity/SavedScreen";
 import { AdminDashboard } from "@/features/admin/AdminDashboard";
 import { AttributionsScreen } from "@/features/about/AttributionsScreen";
 import { ChannelSidebarLayout, CommunityIndex } from "@/features/channels/CommunityScreen";
@@ -45,6 +47,10 @@ import { RegisterLanding } from "@/features/auth/RegisterLanding";
  *   /device-link?server={origin}#{id}                   a sign-in code scanned or opened: sign in
  *                                                       this device, or confirm another; the
  *                                                       app's own scanner passes `link={id}`
+ *   /activity                                           the messages that tell the user of
+ *                                                       themselves, from every deployment
+ *   /saved                                              the user's saved messages, from every
+ *                                                       deployment
  *   /admin, /admin/{tab}                                the Administration Dashboard, at its first
  *                                                       tab the caller may open, or at one
  *   /bots/{bot}/add?permissions={names}                 what a bot's link opens: add it to a
@@ -93,6 +99,18 @@ export const deviceLinkRoute = createRoute({
     ...(typeof search.link === "string" ? { link: search.link } : {}),
   }),
   component: DeviceLinkRoute,
+});
+
+export const activityRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/activity",
+  component: ActivityScreen,
+});
+
+export const savedRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/saved",
+  component: SavedScreen,
 });
 
 export const adminRoute = createRoute({
@@ -292,6 +310,8 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   registerRoute,
   deviceLinkRoute,
+  activityRoute,
+  savedRoute,
   adminRoute,
   adminTabRoute,
   attributionsRoute,

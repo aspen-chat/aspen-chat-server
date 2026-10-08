@@ -12,7 +12,10 @@
   accent fill, padded so nothing moves), and every unread row's accessible name says so. `MessageList` marks the newest message on screen read through
   `AspenSync.markRead`, which updates the store at once and reports to the server at most every
   `READ_REPORT_MS` per channel, and only while the page is visible and focused; leaving the
-  channel or hiding the page flushes the report. The "New Messages" line is placed where the
+  channel or hiding the page flushes the report. A thread's list marks it the same way: a
+  thread's position is kept apart (`threadRead`, topic `read:<threadId>`, from a read that
+  sideloads it and `channelRead`, and moved by the caller's own replies), so it never counts
+  toward what the lists show unread; the activity feed reads it. The "New Messages" line is placed where the
   read position was when the channel opened, and only if it was unread then, and stays there
   while the channel is open; posting removes it.
 - Muting is store state from the `mutes` sideload of the community and DM lists (replaced

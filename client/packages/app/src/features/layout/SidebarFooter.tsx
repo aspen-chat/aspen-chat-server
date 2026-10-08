@@ -1,7 +1,11 @@
+import { BookmarksSimpleIcon, TrayIcon } from "@phosphor-icons/react";
+import { Link } from "@tanstack/react-router";
 import { useCallSource } from "@/api/calls";
 import { HomeScope, SourceScope } from "@/api/deployments";
 import { useMe } from "@/api/hooks";
 import { Avatar } from "@/features/communities/Avatar";
+import { Tooltip } from "@/features/layout/Tooltip";
+import { useMessages } from "@/i18n/context";
 import { SettingsDialog } from "@/features/settings/SettingsDialog";
 import { EditProfileDialog } from "@/features/users/EditProfileDialog";
 import { displayNameOf, statusLine } from "@/features/users/profile";
@@ -17,7 +21,8 @@ const footerButtonClass =
  * when they are in one on any deployment, and the signed-in user with their profile and
  * settings controls. The dialog that says why a call ended lives here too, so it shows wherever
  * the user is. The user,
- * their profile, and their settings are their home's, even beside another deployment's lists.
+ * their profile, and their settings are their home's, even beside another deployment's lists,
+ * beside the ways to their activity and saved messages, which span every deployment.
  */
 export function SidebarFooter() {
   const callSource = useCallSource();
@@ -38,6 +43,7 @@ export function SidebarFooter() {
 }
 
 function UserFooter() {
+  const m = useMessages();
   const me = useMe();
   return (
     <div className="flex items-center gap-3 border-t border-line py-5 ps-3 pe-5">
@@ -50,6 +56,16 @@ function UserFooter() {
           <span className="truncate text-sm text-ink-muted">{statusLine(me.status)}</span>
         )}
       </span>
+      <Tooltip text={m.activity.open}>
+        <Link to="/activity" aria-label={m.activity.open} className={footerButtonClass}>
+          <TrayIcon size={20} aria-hidden="true" />
+        </Link>
+      </Tooltip>
+      <Tooltip text={m.saved.open}>
+        <Link to="/saved" aria-label={m.saved.open} className={footerButtonClass}>
+          <BookmarksSimpleIcon size={20} aria-hidden="true" />
+        </Link>
+      </Tooltip>
       {me !== null && <EditProfileDialog user={me} triggerClassName={footerButtonClass} />}
       <SettingsDialog triggerClassName={footerButtonClass} />
     </div>

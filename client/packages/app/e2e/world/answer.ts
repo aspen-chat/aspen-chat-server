@@ -2,7 +2,7 @@ import type { Route } from "@playwright/test";
 import type { administration } from "./administration";
 import { HISTORY_DELAY_MS } from "./fixtures";
 import type { lunch } from "./poll";
-import { type Asked, type Publish, Reply, type WorldRoute } from "./reply";
+import { type Asked, type Personal, type Publish, Reply, type WorldRoute } from "./reply";
 import { adminRoutes } from "./routes/admin";
 import { coreRoutes } from "./routes/core";
 import { messageRoutes } from "./routes/messages";
@@ -19,12 +19,24 @@ export async function answer(
   admin: ReturnType<typeof administration>,
   blocks: Set<string>,
   bans: Map<string, Record<string, unknown>>,
+  personal: Personal,
 ) {
   const request = route.request();
   const url = new URL(request.url());
   const path = decodeURIComponent(url.pathname.replace(/^.*\/api\/v1/, ""));
   const method = request.method();
-  const asked: Asked = { route, request, url, path, poll, publish, admin, blocks, bans };
+  const asked: Asked = {
+    route,
+    request,
+    url,
+    path,
+    poll,
+    publish,
+    admin,
+    blocks,
+    bans,
+    personal,
+  };
   // First match wins, in this order.
   const routes: WorldRoute[] = [
     ...coreRoutes(asked),

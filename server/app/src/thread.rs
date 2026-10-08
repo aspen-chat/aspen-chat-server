@@ -37,13 +37,22 @@ pub async fn open_thread(
     conn.transaction(|conn| {
         async move {
             // The starter is locked so two first openings make one thread.
-            let (parent_id, kind, existing): (ChannelId, MessageKind, Option<ChannelId>) =
-                message::table
-                    .select((message::channel, message::kind, message::thread))
-                    .filter(message::id.eq(starter).and(message::deleted_at.is_null()))
-                    .for_update()
-                    .first(conn.as_mut())
-                    .await?;
+            let (parent_id, kind, existing, starter_author): (
+                ChannelId,
+                MessageKind,
+                Option<ChannelId>,
+                UserId,
+            ) = message::table
+                .select((
+                    message::channel,
+                    message::kind,
+                    message::thread,
+                    message::author,
+                ))
+                .filter(message::id.eq(starter).and(message::deleted_at.is_null()))
+                .for_update()
+                .first(conn.as_mut())
+                .await?;
             let access = channel_access(state, conn.as_mut(), caller, parent_id).await?;
             if let Some(thread) = existing {
                 let thread: Channel = channel::table
@@ -127,6 +136,9 @@ pub async fn open_thread(
                 }),
             )
             .await?;
+            // Whoever wrote the message replies are to is told of them.
+            crate::thread_follow::took_part(state, conn.as_mut(), &[starter_author], thread.id)
+                .await?;
             Ok((thread, true))
         }
         .scope_boxed()

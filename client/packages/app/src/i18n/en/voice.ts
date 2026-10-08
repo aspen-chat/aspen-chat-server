@@ -29,7 +29,8 @@ export const voice = {
   cameraUnsent: "Your camera couldn't be sent to the call. Try again, or rejoin the call.",
   stateRefusedWait:
     "You're changing mute or deafen too often, so your last change didn't go through. Try again in {wait}.",
-  stateRefused: "Your last change to mute or deafen didn't go through. Try again, or rejoin the call.",
+  stateRefused:
+    "Your last change to mute or deafen didn't go through. Try again, or rejoin the call.",
   voiceVolume: "Voice volume",
   streamVolume: "Stream volume",
   muteStreamForMe: "Mute stream for me",

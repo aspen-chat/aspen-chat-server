@@ -57,7 +57,8 @@ export const bots = {
   offered: "Offered to {name} until {date}.",
   withdraw: "Withdraw offer",
   offersHeading: "Bots offered to you",
-  offerFrom: "{giver} is offering you {bot}, until {date}. Accepting makes it yours, with a new token.",
+  offerFrom:
+    "{giver} is offering you {bot}, until {date}. Accepting makes it yours, with a new token.",
   accept: "Accept",
   decline: "Decline",
   accepted: "{name} is yours now. Turn on developer mode to manage it.",

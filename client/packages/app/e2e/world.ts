@@ -102,7 +102,10 @@ export async function signInToWorld(
   const blocks = new Set<string>();
   /** The community's standing bans, by user, as the tests make and lift them. */
   const bans = new Map<string, Record<string, unknown>>();
-  await page.route(/\/api\/v1\//, (route) => answer(route, poll, publish, admin, blocks, bans));
+  const personal = { saves: new Map<string, string>(), follows: new Set<string>() };
+  await page.route(/\/api\/v1\//, (route) =>
+    answer(route, poll, publish, admin, blocks, bans, personal),
+  );
   await page.route(PIXEL_PNG, (route) =>
     route.fulfill({ contentType: "image/png", body: PIXEL_PNG_BYTES }),
   );

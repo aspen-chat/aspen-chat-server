@@ -17,6 +17,7 @@ use std::error::Error as StdError;
 use std::fmt::Debug;
 use std::result::Result as StdResult;
 
+pub mod activity;
 pub mod admin;
 pub mod aspen_config;
 pub mod attachment;
@@ -73,10 +74,12 @@ pub mod recent;
 pub mod registration_invite;
 pub mod report;
 pub mod role;
+pub mod saved_message;
 pub mod search;
 pub mod server_secret;
 pub mod system_account;
 pub mod thread;
+pub mod thread_follow;
 pub mod two_factor;
 pub mod typing;
 pub mod upload_quota;
@@ -101,7 +104,8 @@ pub use aspen_wire::{
     AnnotationId, AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId,
     DeploymentRoleId, FederationKeyId, HeldMessageId, IconId, LinkPreviewImageId, MessageId,
     NewsletterPostId, PasskeyId, PluginNoticeId, PollId, PushKeyId, PushSubscriptionId,
-    ReportCaseId, ReportCategoryId, ReportId, RoleId, UserId, VoiceServerId, VoiceSessionId,
+    ReportCaseId, ReportCategoryId, ReportId, RoleId, SavedMessageId, UserId, VoiceServerId,
+    VoiceSessionId,
 };
 pub use aspen_wire::{jsonb_sql_traits, text_sql_traits, wire_name_traits};
 

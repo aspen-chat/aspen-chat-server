@@ -243,6 +243,8 @@ id_type!(ReportCategoryId);
 id_type!(AnnotationId);
 id_type!(PluginNoticeId);
 id_type!(NewsletterPostId);
+// A message a user saved for themself (`app::saved_message`), its id a UUIDv7 of the saving.
+id_type!(SavedMessageId);
 
 /// Deserializes `Option<Option<T>>` for JSON Merge Patch fields. Plain serde folds a JSON `null`
 /// into the outer `None`, which would make "clear this field" indistinguishable from "leave it

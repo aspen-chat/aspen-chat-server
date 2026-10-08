@@ -51,6 +51,7 @@ import type {
   ReactionSummary,
   Reactions,
   ReadState,
+  SavedMessage,
   Topic,
   VoiceParticipantState,
 } from "./storeTypes";
@@ -226,6 +227,15 @@ export class RecordStore {
   readonly #categoryOverrides = new Map<string, CategoryOverride>();
   /** `channel -> message -> pin`, for the channels whose pins have been loaded. */
   readonly #pins = new Map<string, Map<string, Pin>>();
+  /** The caller's saved messages, `message -> save id`. */
+  readonly #saved = new Map<string, string>();
+  /** The threads the caller follows, every reply in which tells them. */
+  readonly #follows = new Set<string>();
+  /**
+   * How far the caller has read each thread whose position a read brought, by thread: kept
+   * apart from channels' read states, which say what is unread in the lists of channels.
+   */
+  readonly #threadReads = new Map<string, string>();
   /** How many people are online in each channel whose count has been read. */
   readonly #channelOnline = new Map<string, number>();
   /**
@@ -926,7 +936,8 @@ export class RecordStore {
 
   /**
    * Whether a message should notify the caller: someone else's, not someone they blocked here
-   * or elsewhere, still unread, in a channel not muted, and at a level that asks for it.
+   * or elsewhere, still unread, in a channel not muted, and at a level that asks for it or in a
+   * thread they follow.
    */
   notifies(message: Message): boolean {
     if (message.author === this.#myUserId || this.silenced(message.author)) {
@@ -941,9 +952,12 @@ export class RecordStore {
     if (this.#mutes.has(place)) {
       return false;
     }
-    const read = this.#readStates.get(place);
-    if (read !== undefined && message.id <= read.lastRead) {
+    const read = this.#threadReads.get(message.channelId) ?? this.#readStates.get(place)?.lastRead;
+    if (read !== undefined && message.id <= read) {
       return false;
+    }
+    if (this.#follows.has(message.channelId)) {
+      return true;
     }
     const { level } = this.notificationLevel(message.channelId);
     return level === "all" || (level === "tags" && this.mentionsMe(message));
@@ -952,6 +966,67 @@ export class RecordStore {
   /** Topic `mute:<channelId>`: the caller's mute of the channel while it lasts, if any. */
   mute(channelId: string): ChannelMute | undefined {
     return this.#mutes.get(channelId);
+  }
+
+  /** Topic `saved`: the caller's saved messages, newest save first. */
+  saves(): readonly SavedMessage[] {
+    return this.#memoized("saved", () =>
+      Array.from(this.#saved, ([message, id]) => ({ id, message })).sort((a, b) =>
+        b.id.localeCompare(a.id),
+      ),
+    );
+  }
+
+  /** Topic `saved:<messageId>`: whether the caller saved the message. */
+  isSaved(messageId: string): boolean {
+    return this.#saved.has(messageId);
+  }
+
+  /** Replaces every save held with `saves`, the complete list a bootstrap read. */
+  replaceSaves(saves: readonly SavedMessage[]): void {
+    this.#batch(() => {
+      for (const message of Array.from(this.#saved.keys())) {
+        this.#setSaved(message, null);
+      }
+      for (const save of saves) {
+        this.#setSaved(save.message, save.id);
+      }
+    });
+  }
+
+  /** Topic `follow:<threadId>`: whether the caller follows the thread. */
+  follows(threadId: string): boolean {
+    return this.#follows.has(threadId);
+  }
+
+  /** Replaces every follow held with `threads`, the complete list a bootstrap read. */
+  replaceFollows(threads: readonly string[]): void {
+    this.#batch(() => {
+      for (const thread of Array.from(this.#follows)) {
+        this.#setFollowing(thread, false);
+      }
+      for (const thread of threads) {
+        this.#setFollowing(thread, true);
+      }
+    });
+  }
+
+  /**
+   * Topic `read:<threadId>`: how far the caller has read a thread, a position among its
+   * message ids, when a read brought it.
+   */
+  threadRead(threadId: string): string | undefined {
+    return this.#threadReads.get(threadId);
+  }
+
+  /**
+   * Records that the caller has read `threadId` up to `messageId`, ahead of the server's
+   * `channelRead`. A position only moves forward.
+   */
+  setThreadRead(threadId: string, messageId: string): void {
+    this.#batch(() => {
+      this.#moveThreadRead(threadId, messageId);
+    });
   }
 
   /**
@@ -1580,7 +1655,11 @@ export class RecordStore {
         this.#putPoll(poll);
       }
       for (const state of included.readStates ?? []) {
-        this.#putReadState(state);
+        if (this.#channels.get(state.channel)?.ty === "thread") {
+          this.#moveThreadRead(state.channel, state.lastRead);
+        } else {
+          this.#putReadState(state);
+        }
       }
       for (const mute of included.channelMutes ?? []) {
         this.#putMute(mute);
@@ -2051,6 +2130,9 @@ export class RecordStore {
       this.#bans.clear();
       this.#voiceMutes.clear();
       this.#pins.clear();
+      this.#saved.clear();
+      this.#follows.clear();
+      this.#threadReads.clear();
       this.#channelOnline.clear();
       this.#forgetCommands();
       this.#staleFrequentEmoji();
@@ -2386,7 +2468,20 @@ export class RecordStore {
             this.#removeMute(event.channel);
           }
           break;
+        case "savedMessageChanged":
+          this.#setSaved(event.message, event.saved ?? null);
+          break;
+        case "threadFollowChanged":
+          this.#setFollowing(event.thread, event.following);
+          break;
         case "channelRead": {
+          if (
+            this.#threadReads.has(event.channel) ||
+            this.#channels.get(event.channel)?.ty === "thread"
+          ) {
+            this.#moveThreadRead(event.channel, event.lastRead);
+            break;
+          }
           const state = this.#readStates.get(event.channel);
           if (state !== undefined && event.lastRead > state.lastRead) {
             this.#putReadState({ ...state, lastRead: event.lastRead });
@@ -3073,6 +3168,37 @@ export class RecordStore {
     return true;
   }
 
+  #setSaved(message: string, id: string | null): void {
+    if (id === null ? !this.#saved.delete(message) : this.#saved.get(message) === id) {
+      return;
+    }
+    if (id !== null) {
+      this.#saved.set(message, id);
+    }
+    this.#touch("saved");
+    this.#touch(`saved:${message}`);
+  }
+
+  #setFollowing(thread: string, following: boolean): void {
+    if (following === this.#follows.has(thread)) {
+      return;
+    }
+    if (following) {
+      this.#follows.add(thread);
+    } else {
+      this.#follows.delete(thread);
+    }
+    this.#touch(`follow:${thread}`);
+  }
+
+  #moveThreadRead(thread: string, position: string): void {
+    const held = this.#threadReads.get(thread);
+    if (held === undefined || position > held) {
+      this.#threadReads.set(thread, position);
+      this.#touch(`read:${thread}`);
+    }
+  }
+
   #putReadState(given: ReadState): void {
     // Tags are among the unread, so a channel read to its newest message holds none.
     const read = given.lastMessage == null || given.lastMessage <= given.lastRead;
@@ -3082,13 +3208,6 @@ export class RecordStore {
     this.#touch("unread");
   }
 
-  /**
-   * Keeps read states current as messages arrive: someone else's message is the channel's
-   * newest, unless the caller blocked them, and the caller's own is read, as the server
-   * records it. A channel with no read
-   * state yet, one made since the caller's channels were last read, is unread from its start.
-   * Threads keep no read state.
-   */
   /** Notes that a message arrived now, forgetting the oldest past `MAX_ARRIVALS`. */
   #noteArrival(id: string): void {
     this.#arrivals.set(id, this.#now());
@@ -3105,8 +3224,18 @@ export class RecordStore {
     }
   }
 
+  /**
+   * Keeps read states current as messages arrive: someone else's message is the channel's
+   * newest, unless the caller blocked them, and the caller's own is read, as the server
+   * records it. A channel with no read state yet, one made since the caller's channels were
+   * last read, is unread from its start. A thread's position moves with the caller's own
+   * replies, as the server records it.
+   */
   #noteNewMessage(message: Message): void {
     const channel = this.#channels.get(message.channelId);
+    if (channel?.ty === "thread" && message.author === this.#myUserId) {
+      this.#moveThreadRead(channel.id, message.id);
+    }
     if (channel === undefined || channel.ty === "thread") {
       return;
     }

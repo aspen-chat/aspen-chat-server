@@ -82,6 +82,34 @@ export interface MessageSearch {
 /** How many messages one page of search results holds. */
 export const SEARCH_PAGE = 25;
 
+/** Which part of the activity feed to read (`AspenSync.readActivity`). */
+export interface ActivityFilter {
+  /** Only these communities' messages; every community's when absent. */
+  communities?: readonly string[];
+  /** Whether DMs' messages are read. */
+  dms: boolean;
+  /** Only messages the caller has not read. */
+  unread: boolean;
+  /** The last message of the previous page. */
+  before?: string;
+}
+
+/** How many messages one page of the activity feed holds. */
+export const ACTIVITY_PAGE = 25;
+/** How many messages one page of saved messages holds. */
+export const SAVED_PAGE = 50;
+
+/** What a feed or saved messages read brings with each message, so it renders as in a channel. */
+const LISTED_INCLUDES = [
+  "authors",
+  "memberships",
+  "attachments",
+  "polls",
+  "channels",
+  "reactions",
+  "readStates",
+] as const;
+
 type Icon = components["schemas"]["Icon"];
 type CommunityUpdateRequest = components["schemas"]["CommunityUpdateRequest"];
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"];
@@ -967,7 +995,8 @@ export class AspenSync {
 
   /**
    * Reads one message into the store when it is not there yet, such as the message a thread
-   * opened from a link started. Its author, attachments, poll, and thread come with it.
+   * opened from a link started. Its author, attachments, poll, and thread come with it. A
+   * message the caller may not read, or that is gone, is marked missing.
    */
   async loadMessage(messageId: string): Promise<Message> {
     const held = this.store.message(messageId);
@@ -993,6 +1022,9 @@ export class AspenSync {
       },
     });
     if (result.data === undefined) {
+      if (result.response.status === 403 || result.response.status === 404) {
+        this.store.markMissing("message", messageId);
+      }
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     this.#ingestMessageRead(result.data.included, [result.data.data]);
@@ -1433,16 +1465,24 @@ export class AspenSync {
 
   /** Removes a written-in answer, and every vote for it. */
   /**
-   * Records that the caller has seen `messageId` in `channelId`: at once in the store, and to
-   * the server within `READ_REPORT_MS`, together with whatever else was read meanwhile. Reading
-   * behind the current position changes nothing.
+   * Records that the caller has seen `messageId` in `channelId`, a channel, DM, or thread: at
+   * once in the store, and to the server within `READ_REPORT_MS`, together with whatever else
+   * was read meanwhile. Reading behind the current position changes nothing.
    */
   markRead(channelId: string, messageId: string): void {
-    const state = this.store.readState(channelId);
-    if (state === undefined || messageId <= state.lastRead) {
-      return;
+    if (this.store.channel(channelId)?.ty === "thread") {
+      const read = this.store.threadRead(channelId);
+      if (read !== undefined && messageId <= read) {
+        return;
+      }
+      this.store.setThreadRead(channelId, messageId);
+    } else {
+      const state = this.store.readState(channelId);
+      if (state === undefined || messageId <= state.lastRead) {
+        return;
+      }
+      this.store.setLastRead(channelId, messageId);
     }
-    this.store.setLastRead(channelId, messageId);
     this.#unreported.set(channelId, messageId);
     this.#readTimer ??= setTimeout(() => {
       this.flushReads();
@@ -2528,6 +2568,99 @@ export class AspenSync {
   }
 
   /**
+   * Saves a message for the caller, or stops saving it. The store follows at once; the
+   * `savedMessageChanged` event that follows changes nothing more.
+   */
+  async setSaved(messageId: string, saved: boolean): Promise<void> {
+    const params = { path: { message: messageId } };
+    if (saved) {
+      const result = await this.#client.api.PUT("/api/v1/users/@me/saved-messages/{message}", {
+        params,
+      });
+      if (result.data === undefined) {
+        throw new ApiProblemError(problemOf(result.error, result.response));
+      }
+      this.store.applyEvent({
+        serverEvent: "savedMessageChanged",
+        message: messageId,
+        saved: result.data.id,
+      });
+    } else {
+      const result = await this.#client.api.DELETE("/api/v1/users/@me/saved-messages/{message}", {
+        params,
+      });
+      if (result.error !== undefined) {
+        throw new ApiProblemError(problemOf(result.error, result.response));
+      }
+      this.store.applyEvent({
+        serverEvent: "savedMessageChanged",
+        message: messageId,
+        saved: null,
+      });
+    }
+  }
+
+  /**
+   * The messages the caller saved, newest save first, a page of `SAVED_PAGE` after the save of
+   * `before`. Their authors, channels, attachments, polls, and reactions are cached.
+   */
+  async loadSavedMessages(before?: string): Promise<Message[]> {
+    const result = await this.#client.api.GET("/api/v1/users/@me/saved-messages/messages", {
+      params: {
+        query: {
+          ...(before === undefined ? {} : { before }),
+          limit: SAVED_PAGE,
+          include: [...LISTED_INCLUDES],
+        },
+      },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.#ingestListed(result.data);
+    return result.data.data;
+  }
+
+  /** Follows a thread for the caller, or stops following it. The store follows at once. */
+  async setFollowing(threadId: string, following: boolean): Promise<void> {
+    const params = { path: { channel: threadId } };
+    const result = following
+      ? await this.#client.api.PUT("/api/v1/channels/{channel}/follows/@me", { params })
+      : await this.#client.api.DELETE("/api/v1/channels/{channel}/follows/@me", { params });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.applyEvent({ serverEvent: "threadFollowChanged", thread: threadId, following });
+  }
+
+  /**
+   * A page of `ACTIVITY_PAGE` of the caller's activity feed on this deployment, newest first:
+   * the messages that tell them of themselves. Their authors, channels (threads among them),
+   * read positions, attachments, polls, and reactions are cached.
+   */
+  async readActivity(filter: ActivityFilter): Promise<Message[]> {
+    const result = await this.#client.api.GET("/api/v1/users/@me/activity", {
+      params: {
+        query: {
+          ...(filter.communities === undefined
+            ? {}
+            : { "filter[community]": [...filter.communities] }),
+          "filter[dms]": filter.dms,
+          "filter[unread]": filter.unread,
+          ...(filter.before === undefined ? {} : { before: filter.before }),
+          limit: ACTIVITY_PAGE,
+          include: [...LISTED_INCLUDES],
+        },
+      },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.#ingestListed(result.data);
+    return result.data.data;
+  }
+
+  /**
    * Reads a channel's pins into the store, once however many ask at the same time; pin events
    * keep them current after.
    */
@@ -2854,39 +2987,42 @@ export class AspenSync {
     this.#held = [];
     const startedAt = this.#now();
     try {
-      const [me, communities, dms, admin, blocks, plugins, heldMessages] = await Promise.all([
-        this.#client.api.GET("/api/v1/users/{user}", { params: { path: { user: "@me" } } }),
-        this.#client.api.GET("/api/v1/users/{user}/communities", {
-          params: {
-            path: { user: "@me" },
-            query: {
-              include: [
-                "channels",
-                "categories",
-                "members",
-                "voice",
-                "readStates",
-                "mutes",
-                "collapses",
-                "roles",
-                "notifications",
-                "emoji",
-              ],
+      const [me, communities, dms, admin, blocks, plugins, heldMessages, saves, follows] =
+        await Promise.all([
+          this.#client.api.GET("/api/v1/users/{user}", { params: { path: { user: "@me" } } }),
+          this.#client.api.GET("/api/v1/users/{user}/communities", {
+            params: {
+              path: { user: "@me" },
+              query: {
+                include: [
+                  "channels",
+                  "categories",
+                  "members",
+                  "voice",
+                  "readStates",
+                  "mutes",
+                  "collapses",
+                  "roles",
+                  "notifications",
+                  "emoji",
+                ],
+              },
             },
-          },
-        }),
-        this.#client.api.GET("/api/v1/users/@me/dms", {
-          params: {
-            query: { include: ["users", "readStates", "mutes", "notifications", "voice"] },
-          },
-        }),
-        this.#client.api.GET("/api/v1/users/@me/admin"),
-        this.#client.api.GET("/api/v1/users/@me/blocks", {
-          params: { query: { include: ["users"] } },
-        }),
-        this.#client.api.GET("/api/v1/plugins"),
-        this.#client.api.GET("/api/v1/users/@me/held-messages"),
-      ]);
+          }),
+          this.#client.api.GET("/api/v1/users/@me/dms", {
+            params: {
+              query: { include: ["users", "readStates", "mutes", "notifications", "voice"] },
+            },
+          }),
+          this.#client.api.GET("/api/v1/users/@me/admin"),
+          this.#client.api.GET("/api/v1/users/@me/blocks", {
+            params: { query: { include: ["users"] } },
+          }),
+          this.#client.api.GET("/api/v1/plugins"),
+          this.#client.api.GET("/api/v1/users/@me/held-messages"),
+          this.#client.api.GET("/api/v1/users/@me/saved-messages"),
+          this.#client.api.GET("/api/v1/users/@me/thread-follows"),
+        ]);
       if (generation !== this.#generation) {
         return false;
       }
@@ -2922,6 +3058,9 @@ export class AspenSync {
       // Read before the events held back meanwhile, applied below, which settle any posted
       // since; a deployment that does not hold messages has none.
       this.store.replaceHeldMessages(heldMessages.data ?? []);
+      // A deployment that keeps no saves or follows has none.
+      this.store.replaceSaves(saves.data ?? []);
+      this.store.replaceFollows((follows.data ?? []).map((follow) => follow.thread));
       this.store.replaceCollapsed(
         (communities.data.included.categoryCollapses ?? []).map((c) => c.category),
       );
@@ -3474,6 +3613,15 @@ export class AspenSync {
    * stored too. Its memberships say which roles the authors hold and what they are called
    * there, for drawing their names in their roles' colours and by their nicknames; they are not the community's member sample, which they leave alone.
    */
+  /** Caches a list of messages read from outside any one channel, and what came with them. */
+  #ingestListed(read: { data: NonNullable<Included["messages"]>; included: Included }): void {
+    this.#ingestMessageRead(read.included, read.data);
+    this.store.setReactions(
+      read.data.map((m) => m.id),
+      read.included.reactions ?? [],
+    );
+  }
+
   #ingestMessageRead(included: Included, messages?: Included["messages"]): void {
     const { userCommunities, ...rest } = included;
     this.store.ingest(messages === undefined ? rest : { ...rest, messages: [...messages] });

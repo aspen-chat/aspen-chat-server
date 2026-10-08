@@ -1,4 +1,4 @@
-import type { AspenSync, MessageWindow, ReadState } from "@aspen/protocol";
+import type { AspenSync, MessageWindow } from "@aspen/protocol";
 import { useEffect, useRef, type RefObject } from "react";
 import { rowsInView } from "@/features/messages/rowsInView";
 
@@ -8,13 +8,14 @@ import { rowsInView } from "@/features/messages/rowsInView";
  */
 export function useReadMarking({
   viewport,
-  readState,
+  tracked,
   ids,
   sync,
   channelId,
 }: {
   viewport: RefObject<HTMLDivElement | null>;
-  readState: ReadState | undefined;
+  /** Whether the channel keeps a read position: one the caller belongs to, or a thread. */
+  tracked: boolean;
   ids: MessageWindow["ids"] | undefined;
   sync: AspenSync;
   channelId: string;
@@ -30,7 +31,7 @@ export function useReadMarking({
     const box = viewport.current;
     if (
       box === null ||
-      readState === undefined ||
+      !tracked ||
       ids === undefined ||
       document.visibilityState !== "visible" ||
       !document.hasFocus()
