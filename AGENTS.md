@@ -207,10 +207,12 @@ How each feature works is written up in `docs/architecture/`, one file per featu
 
 - `docs/architecture/background-tasks.md` — the poll closer, the voice report listener and reaper, closing polls, message kinds, and poll write-ins
 - `docs/architecture/reactions.md` — reactions, their canonical emoji, summaries, and reactor lists
-- `docs/architecture/threads-and-dms.md` — threads, echoes, DMs and group DMs, their calls and rings, and the system account
+- `docs/architecture/threads-and-dms.md` — threads, following them, echoes, DMs and group DMs, their calls and rings, and the system account
 - `docs/architecture/sign-in-and-security.md` — password sign-in, second factors, recovery codes, reverification, password hashing limits, passkeys, and signing in from another device by a QR code
 - `docs/architecture/user-preferences.md` — account-scoped preferences stored as one JSON object
-- `docs/architecture/read-positions.md` — read positions, unread, and unread tag counts
+- `docs/architecture/read-positions.md` — read positions, threads' among them, unread, and unread tag counts
+- `docs/architecture/saved-messages.md` — saving messages for oneself, the saved list, and what losing access does to a save
+- `docs/architecture/activity-feed.md` — the activity feed: every message that tells its reader, by the notification rule, and its filters
 - `docs/architecture/muting.md` — muting channels and DMs
 - `docs/architecture/collapsed-categories.md` — folded categories that follow a user between devices
 - `docs/architecture/search.md` — message search and its indexes

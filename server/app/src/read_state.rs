@@ -9,18 +9,17 @@
 //! Nothing a member's channels held before they joined (the community, or the DM) is unread to
 //! them: until they have read past it, their position is that moment. A channel is unread while
 //! it holds a message by someone else after the position; the caller's own messages, and those
-//! of anyone they have blocked (`app::block`), never make a channel unread. Threads keep no
-//! position of their own.
+//! of anyone they have blocked (`app::block`), never make a channel unread. A thread keeps a
+//! position of its own, read only when asked for by name: until its reader has one there, it is
+//! the moment they joined where the thread's parent belongs.
 //!
 //! Each read state also counts the unread messages that tag the caller (`app::mention`):
 //! directly, through a role they hold now, or as everyone. The same messages are left out as
 //! for being unread.
 
-use crate::channel::ChannelType;
 use crate::context::GlobalServerContext;
-use crate::t;
 use crate::{ChannelId, CommunityId, EventScope, MessageId, UserId, publish_event};
-use aspen_schema::{channel, message};
+use aspen_schema::message;
 use aspen_wire::message_enum::server_event::ServerEvent;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
@@ -76,9 +75,9 @@ impl From<Row> for ReadState {
     }
 }
 
-/// The user's read states for the listed channels and for every channel of the listed
-/// communities, in one query: only channels they belong to (as a member of the community or a
-/// recipient of the DM), never threads or deleted channels. The newest message of each is
+/// The user's read states for the listed channels, threads among them, and for every channel of
+/// the listed communities, threads aside, in one query: only channels they belong to (as a
+/// member of the community or a recipient of the DM, a thread's parent's), never deleted ones. The newest message of each is
 /// found through the `(channel, id)` index, one short scan per channel, and its unread tags
 /// through `mention`'s indexes on who is tagged, however much of it is unread.
 async fn read(
@@ -96,7 +95,8 @@ async fn read(
                COALESCE(mc.mentions, 0) AS mentions
         FROM channel c
         LEFT JOIN community_user cu ON cu.community = c.community AND cu."user" = $1
-        LEFT JOIN dm_recipient dr ON dr.channel = c.id AND dr."user" = $1
+        LEFT JOIN dm_recipient dr
+            ON dr.channel = COALESCE(c.parent_channel, c.id) AND dr."user" = $1
         LEFT JOIN read_state rs ON rs.channel = c.id AND rs."user" = $1
         LEFT JOIN LATERAL (
             SELECT message.id FROM message
@@ -134,8 +134,7 @@ async fn read(
               )
         ) mc ON true
         WHERE c.deleted_at IS NULL
-          AND c.parent_channel IS NULL
-          AND (c.id = ANY($2) OR c.community = ANY($3))
+          AND (c.id = ANY($2) OR (c.community = ANY($3) AND c.parent_channel IS NULL))
           AND (cu."user" IS NOT NULL OR dr."user" IS NOT NULL)
         "#,
     )
@@ -168,8 +167,8 @@ pub async fn read_channels_read_states(
     read(conn.as_mut(), user, channels, &[]).await
 }
 
-/// The user's read state of one channel; not found for a channel they do not belong to or may
-/// not view, or a thread.
+/// The user's read state of one channel or thread; not found for one they do not belong to or
+/// may not view.
 pub async fn read_read_state(
     state: &GlobalServerContext,
     user: UserId,
@@ -235,18 +234,6 @@ pub async fn mark_read(
 ) -> crate::Result<()> {
     let mut conn = state.connection_pool.get().await?;
     crate::permissions::channel_access(state, conn.as_mut(), user, channel_id).await?;
-    let ty: ChannelType = channel::table
-        .select(channel::ty)
-        .filter(
-            channel::id
-                .eq(channel_id)
-                .and(channel::deleted_at.is_null()),
-        )
-        .first(conn.as_mut())
-        .await?;
-    if ty == ChannelType::Thread {
-        return Err(crate::Error::Validation(t!("readStateThread")));
-    }
     let in_channel: bool = diesel::select(diesel::dsl::exists(
         message::table.filter(
             message::id

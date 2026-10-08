@@ -90,6 +90,8 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
     "/api/v1/users/@me/blocks": () => json({ data: [], included: { users: [] } }),
     "/api/v1/plugins": () => json([]),
     "/api/v1/users/@me/held-messages": () => json([]),
+    "/api/v1/users/@me/saved-messages": () => json([]),
+    "/api/v1/users/@me/thread-follows": () => json([]),
     "/api/v1/users/statuses": (url) =>
       json(
         (url.searchParams.get("ids") ?? "")
@@ -380,6 +382,8 @@ describe("AspenSync", () => {
       "/api/v1/users/@me/blocks",
       "/api/v1/plugins",
       "/api/v1/users/@me/held-messages",
+      "/api/v1/users/@me/saved-messages",
+      "/api/v1/users/@me/thread-follows",
       "/api/v1/users/%40me/preferences",
       "/api/v1/users/statuses",
     ]);

@@ -37,4 +37,12 @@ export interface Asked {
   admin: ReturnType<typeof administration>;
   blocks: Set<string>;
   bans: Map<string, Record<string, unknown>>;
+  /** The caller's saved messages (message to save) and followed threads, as the tests change them. */
+  personal: Personal;
+}
+
+/** What is the caller's own in the world: their saves, by message, and the threads they follow. */
+export interface Personal {
+  saves: Map<string, string>;
+  follows: Set<string>;
 }

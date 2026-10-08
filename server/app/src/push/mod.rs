@@ -31,7 +31,7 @@ use crate::{
 use aspen_schema::{
     self as schema, channel, channel_mute, community_member_role, community_user, dm_recipient,
     message, notification_setting, push_key, push_subscription, read_state, refresh_token,
-    user_block,
+    thread_follow, user_block,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -856,7 +856,8 @@ async fn channel_read(
 /// Whom a new message is for, among those with a phone to wake (`spec/push.md`, Who is woken):
 /// the people of a DM, or the members of a community who may read it, as far as each one's
 /// notification setting for the channel asks (`app::notification_setting`: every message, or
-/// only those that tag them); never its author, anyone who blocked them, anyone who muted the
+/// only those that tag them), and those following the thread it is a reply in
+/// (`app::thread_follow`); never its author, anyone who blocked them, anyone who muted the
 /// channel (a thread counting as its parent), or anyone using Aspen right now.
 async fn recipients(
     state: &GlobalServerContext,
@@ -871,6 +872,7 @@ async fn recipients(
         .first(conn.as_mut())
         .await?;
     // A thread's messages are its parent's, for who may read them, settings, and muting.
+    let posted_in_thread = posted_in.parent_channel.is_some();
     let place = match posted_in.parent_channel {
         Some(parent) => {
             channel::table
@@ -920,7 +922,29 @@ async fn recipients(
             (&tagged_users | &everything, tagged_users)
         }
     };
-    let mut candidates = candidates;
+    // Those following a thread are told of every reply in it, whatever their level.
+    let followers: HashSet<UserId> = if posted_in_thread {
+        thread_follow::table
+            .select(thread_follow::user)
+            .filter(thread_follow::thread.eq(channel_id))
+            .filter(
+                thread_follow::user
+                    .eq_any(push_subscription::table.select(push_subscription::user)),
+            )
+            .load::<UserId>(conn.as_mut())
+            .await?
+            .into_iter()
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    // A DM's thread is for the DM's people alone, whoever followed it before they left.
+    let followers: HashSet<UserId> = if community.is_none() {
+        &followers & &candidates
+    } else {
+        followers
+    };
+    let mut candidates = &candidates | &followers;
     candidates.remove(&author);
     if candidates.is_empty() {
         return Ok(Vec::new());
@@ -957,10 +981,13 @@ async fn recipients(
             .copied()
             .unwrap_or_else(|| default_level(place.ty))
     };
-    candidates.retain(|user| match level_of(*user) {
-        NotificationLevel::All => true,
-        NotificationLevel::Tags => tagged_users.contains(user),
-        NotificationLevel::Nothing => false,
+    candidates.retain(|user| {
+        followers.contains(user)
+            || match level_of(*user) {
+                NotificationLevel::All => true,
+                NotificationLevel::Tags => tagged_users.contains(user),
+                NotificationLevel::Nothing => false,
+            }
     });
     if let Some(community) = community {
         let viewers = viewers(conn.as_mut(), community, &candidates, place.id).await?;

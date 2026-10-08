@@ -176,6 +176,8 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::ChannelRead { .. }
         | ServerEvent::ChannelMuteChanged { .. }
         | ServerEvent::NotificationSettingChanged { .. }
+        | ServerEvent::SavedMessageChanged { .. }
+        | ServerEvent::ThreadFollowChanged { .. }
         | ServerEvent::ForeignDmJoined { .. }
         | ServerEvent::UserBlockChanged { .. }
         | ServerEvent::BotCommandInvoked { .. }
@@ -701,6 +703,8 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         | ServerEvent::ChannelRead { .. }
         | ServerEvent::ChannelMuteChanged { .. }
         | ServerEvent::NotificationSettingChanged { .. }
+        | ServerEvent::SavedMessageChanged { .. }
+        | ServerEvent::ThreadFollowChanged { .. }
         | ServerEvent::ForeignDmJoined { .. }
         | ServerEvent::BotCommandInvoked { .. }
         | ServerEvent::CategoryCollapseChanged { .. }

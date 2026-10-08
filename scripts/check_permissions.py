@@ -2102,19 +2102,157 @@ def frequent_emoji(world: World, check: Checks) -> None:
     check("a reaction taken back no longer counts", "\U0001F389" not in used(), used())
 
 
+def saved_messages(world: World, check: Checks) -> None:
+    say("saved messages follow access to what they save, and are their saver's alone")
+    stack, member = world.stack, world.member["token"]
+    staff = world.role("Staff")
+    world.give(staff)
+    secret = world.channel("saved-secret", overrides=[{"role": world.everyone, "allow": [], "deny": ["viewChannel"]}])
+    world.as_owner("PUT", f"/channels/{secret}/overrides/{staff}", {"allow": ["viewChannel"], "deny": []})
+    said = world.post(secret, "come back to this")
+    world.stream.gather(0.8)
+
+    def saves(token: str = member) -> list[str]:
+        return [s["message"] for s in stack.api("GET", "/users/@me/saved-messages", token=token)]
+
+    def saved_messages() -> list[str]:
+        return [m["id"] for m in stack.api("GET", "/users/@me/saved-messages/messages", token=member)["data"]]
+
+    check("the member saves a message they may read", stack.status("PUT", f"/users/@me/saved-messages/{said}",
+                                                                   token=member) == 201)
+    got = world.stream.gather(1.0)
+    check("and their devices hear of it", len(of(got, "savedMessageChanged", message=said)) == 1, got)
+    check("saving it again answers the same save",
+          stack.status("PUT", f"/users/@me/saved-messages/{said}", token=member) == 200)
+    check("it is listed, with its message", saves() == [said] and saved_messages() == [said])
+    check("no one else sees it", said not in saves(world.owner["token"]))
+    world.as_owner("PUT", f"/channels/{secret}/overrides/{staff}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.8)
+    check("once the member loses the channel, the save is unlisted", saves() == [] and saved_messages() == [])
+    check("and nothing more of it may be saved",
+          stack.status("PUT", f"/users/@me/saved-messages/{said}", token=member) == 404)
+    world.as_owner("PUT", f"/channels/{secret}/overrides/{staff}", {"allow": ["viewChannel"], "deny": []})
+    world.stream.gather(0.8)
+    check("given it back, the save is listed again", saves() == [said])
+    world.as_owner("PUT", f"/channels/{secret}/overrides/{staff}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.8)
+    world.as_owner("DELETE", f"/messages/{said}")
+    got = world.stream.gather(1.0)
+    check("deleting the message, unseen, still tells its saver the save is gone",
+          bool(of(got, "savedMessageChanged", message=said, saved=None)), got)
+    world.as_owner("PUT", f"/channels/{secret}/overrides/{staff}", {"allow": ["viewChannel"], "deny": []})
+    check("and it is gone for good", saves() == [])
+    dm = world.as_owner("POST", "/users/@me/dms", {"recipients": [world.member["id"]]})
+    dm_id = dm.get("id") or dm["data"]["id"]
+    private = world.post(dm_id, "between us")
+    outsider = world.account("outsider")
+    check("someone outside a DM cannot save its messages",
+          stack.status("PUT", f"/users/@me/saved-messages/{private}", token=outsider["token"]) == 404)
+    stack.api("PUT", f"/users/@me/saved-messages/{private}", token=member)
+    world.stream.gather(0.5)
+    stack.api("DELETE", f"/users/@me/saved-messages/{private}", token=member)
+    got = world.stream.gather(1.0)
+    check("unsaving reaches the saver's devices",
+          bool(of(got, "savedMessageChanged", message=private, saved=None)) and saves() == [], got)
+
+
+def thread_follows(world: World, check: Checks) -> None:
+    say("following threads: by taking part, by hand, and as access changes")
+    stack, member = world.stack, world.member["token"]
+    talk = world.channel("follow-talk")
+    starter = world.post(talk, "replies welcome")
+    thread = stack.api("PUT", f"/messages/{starter}/thread", token=member)["id"]
+
+    def follows(token: str = member) -> list[str]:
+        return [f["thread"] for f in stack.api("GET", "/users/@me/thread-follows", token=token)]
+
+    def feed(query: str = "") -> list[str]:
+        return [m["id"] for m in stack.api("GET", f"/users/@me/activity{query}", token=member)["data"]]
+
+    check("the starter's author follows the thread once it is made", follows(world.owner["token"]) == [thread])
+    check("opening it follows nothing", follows() == [])
+    world.stream.gather(0.5)
+    stack.api("POST", f"/channels/{thread}/messages", {"content": "me too", "attachments": []}, member)
+    got = world.stream.gather(1.0)
+    check("posting in it follows it, heard by the poster's devices",
+          follows() == [thread] and bool(of(got, "threadFollowChanged", thread=thread, following=True)), got)
+    reply = world.post(thread, "a reply no one is tagged in")
+    check("a followed thread's untagged replies are in the follower's feed", reply in feed())
+    stack.api("DELETE", f"/channels/{thread}/follows/@me", token=member)
+    got = world.stream.gather(1.0)
+    check("unfollowing is heard", bool(of(got, "threadFollowChanged", thread=thread, following=False)), got)
+    check("and the replies leave the feed", reply not in feed())
+    tagging = world.post(thread, f"<@{world.member['id']}> look")
+    check("a reply tagging them follows it again", follows() == [thread] and tagging in feed())
+    latest = stack.api("GET", f"/channels/{thread}/messages", token=member)
+    newest = max(m["id"] for m in (latest.get("data") if isinstance(latest, dict) else latest))
+    check("a thread keeps its reader's position",
+          stack.status("PUT", f"/channels/{thread}/read-states/@me", {"lastRead": newest}, member) == 204)
+    check("and what is read there leaves the unread feed", tagging not in feed("?filter[unread]=true")
+          and tagging in feed())
+    world.as_owner("PUT", f"/channels/{talk}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.8)
+    check("once the channel is lost, its thread's follow is unlisted", follows() == [])
+    check("and its replies leave the feed", tagging not in feed() and reply not in feed())
+    check("and it cannot be followed",
+          stack.status("PUT", f"/channels/{thread}/follows/@me", token=member) == 404)
+    world.as_owner("DELETE", f"/channels/{talk}/overrides/{world.everyone}")
+    world.stream.gather(0.8)
+    check("given it back, the follow returns", follows() == [thread])
+    check("only threads are followed", stack.status("PUT", f"/channels/{talk}/follows/@me", token=member) == 400)
+
+
+def activity_feed(world: World, check: Checks) -> None:
+    say("the activity feed holds what notifies its reader, as they may read it now")
+    stack, member = world.stack, world.member["token"]
+    room = world.channel("activity-room")
+
+    def feed(query: str = "") -> list[str]:
+        return [m["id"] for m in stack.api("GET", f"/users/@me/activity{query}", token=member)["data"]]
+
+    plain = world.post(room, "nothing for you")
+    tagged = world.post(room, f"<@{world.member['id']}> this is for you")
+    own = stack.api("POST", f"/channels/{room}/messages", {"content": "my own", "attachments": []}, member)["id"]
+    check("at the default level only tags are in it, never the reader's own",
+          tagged in feed() and plain not in feed() and own not in feed(), feed())
+    stack.api("PUT", f"/communities/{world.community}/notification-settings/@me", {"level": "all"}, member)
+    check("at every message, every message is", plain in feed() and tagged in feed())
+    stack.api("PUT", f"/channels/{room}/mutes/@me", {}, member)
+    check("a muted channel gives nothing", plain not in feed() and tagged not in feed())
+    stack.api("DELETE", f"/channels/{room}/mutes/@me", token=member)
+    check("filtered to another community, it holds none of this one",
+          feed(f"?filter[community]={world.everyone}") == [])
+    dm = world.as_owner("POST", "/users/@me/dms", {"recipients": [world.member["id"]]})
+    dm_id = dm.get("id") or dm["data"]["id"]
+    whisper = world.post(dm_id, "psst")
+    check("a DM's messages are in it", whisper in feed())
+    check("unless DMs are filtered out", whisper not in feed("?filter[dms]=false") and plain in feed("?filter[dms]=false"))
+    world.as_owner("PUT", f"/channels/{room}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.8)
+    check("once the channel is lost, nothing of it is in the feed", plain not in feed() and tagged not in feed())
+    world.as_owner("DELETE", f"/channels/{room}/overrides/{world.everyone}")
+    stack.api("PUT", f"/channels/{room}/read-states/@me", {"lastRead": tagged}, member)
+    check("what is read leaves the unread feed", tagged not in feed("?filter[unread]=true") and tagged in feed())
+    outsider = world.account("feedless")
+    check("nothing of a community reaches the feed of someone outside it",
+          not ({plain, tagged, whisper} & set(m["id"] for m in stack.api(
+              "GET", "/users/@me/activity", token=outsider["token"])["data"])))
+
+
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, typing, name_colours, dual_invites, device_links,
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, dm_reads, frequent_emoji,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,
-             deleted_communities, previews, icons, uploads]
+             deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check that changes to access reach everything already open.")
     parser.add_argument("--bin", type=Path, required=True, help="the directory holding the binaries")
     parser.add_argument("--start-services", action="store_true", help="docker compose up the services first")
+    parser.add_argument("--only", help="the scenarios to run, comma separated by name; every one when absent")
     args = parser.parse_args()
     if shutil.which("docker") is None:
         sys.exit("permissions: docker is required")
@@ -2127,7 +2265,10 @@ def main() -> None:
         say("starting a database and a NATS of its own, the chat server, and the voice server")
         with Stack(args.bin.resolve(), "permissions", PORTS, SETTINGS) as stack:
             run = format(int(time.time() * 1000) % 36**6, "x")
+            only = None if args.only is None else set(args.only.split(","))
             for index, scenario in enumerate(SCENARIOS):
+                if only is not None and scenario.__name__ not in only:
+                    continue
                 # Each starts from a community and accounts of its own, so one that fails, or stops
                 # on a request refused, leaves the rest fair.
                 try:

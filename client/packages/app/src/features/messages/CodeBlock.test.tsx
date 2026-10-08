@@ -24,9 +24,14 @@ async function settle() {
 describe("CodeBlock", () => {
   it("highlights a block up to the limit and leaves a longer one plain", async () => {
     const short = draw("const a = 1;");
-    await vi.waitFor(() => { expect(short.querySelector("code.hljs")).not.toBeNull(); }, {
-      timeout: 10_000,
-    });
+    await vi.waitFor(
+      () => {
+        expect(short.querySelector("code.hljs")).not.toBeNull();
+      },
+      {
+        timeout: 10_000,
+      },
+    );
 
     const long = draw("const a = 1;\n".repeat(Math.ceil(MAX_HIGHLIGHT_LENGTH / 13) + 1));
     await settle();

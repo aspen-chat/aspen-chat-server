@@ -35,8 +35,7 @@ function HeldRow({ entry }: { entry: HeldEntry }) {
   const [error, setError] = useState<string | null>(null);
   const { message, failure } = entry;
   const count = message.attachments.length;
-  const files =
-    count === 1 ? m.held.oneFile : format(m.held.files, { count: String(count) });
+  const files = count === 1 ? m.held.oneFile : format(m.held.files, { count: String(count) });
   return (
     <li
       className="motion-rise flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-line bg-surface-sunken px-3 py-2 text-sm"

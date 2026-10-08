@@ -23,7 +23,7 @@ export const search = {
   results: "Results",
   failedOn: "{domain} couldn't be searched: {problem}",
   inChannel: "#{channel} in {community}",
-  inThread: "{thread}, a thread in #{channel}",
+  inThread: "A thread in #{channel} in {community}",
   inDm: "Direct message",
   inGroupDm: "Group DM",
   onDomain: "on {domain}",

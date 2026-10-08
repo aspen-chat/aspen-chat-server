@@ -15,4 +15,8 @@ export const threads = {
   starterDeleted: "The message that started this thread was deleted.",
   notFound: "This thread could not be opened.",
   thisConversation: "this conversation",
+  follow: "Follow thread",
+  unfollow: "Unfollow thread",
+  following: "Following",
+  followHint: "Following a thread tells you of every reply, whatever its channel's notifications.",
 } as const;

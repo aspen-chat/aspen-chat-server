@@ -48,7 +48,7 @@ test("a reply found in a thread opens its thread", async ({ page }) => {
   await dialog.getByRole("button", { name: "Search", exact: true }).click();
   expect(new URL((await asked).url()).searchParams.get("filter[channel]")).toBe(general);
   const found = dialog.getByRole("link", { name: /Go to message: Bob/ });
-  await expect(found).toContainText("a thread in #general");
+  await expect(found).toContainText("A thread in #general in Family");
   await found.click();
   await expect(page).toHaveURL(new RegExp(`/threads/${thread}$`));
 });

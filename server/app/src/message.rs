@@ -554,15 +554,21 @@ async fn post(
                     )
                     .await?;
                 }
+                read_state::advance(state, conn.as_mut(), author, channel_id, message.id).await?;
                 if target.ty == ChannelType::Thread {
                     thread::record_reply(state, conn.as_mut(), channel_id, message.timestamp)
                         .await?;
+                    crate::thread_follow::reply_posted(
+                        state,
+                        conn.as_mut(),
+                        &target,
+                        author,
+                        &message.mentions,
+                    )
+                    .await?;
                     if let (Some(parent), Some(echo)) = (target.parent_channel, echo) {
                         thread::echo(state, conn.as_mut(), parent, &message, echo).await?;
                     }
-                } else {
-                    read_state::advance(state, conn.as_mut(), author, channel_id, message.id)
-                        .await?;
                 }
                 if let Some(held) = released {
                     held::announce_released(state, conn.as_mut(), author, held, &message).await?;
@@ -1043,6 +1049,7 @@ pub async fn soft_delete(
     }
     // Its files leave the public read path, kept for reviewing reports.
     crate::attachment::evidence::keep_deleted(conn, id).await?;
+    crate::saved_message::forget(state, conn, id).await?;
     publish_event(
         state,
         conn,

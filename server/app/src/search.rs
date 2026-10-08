@@ -206,20 +206,27 @@ async fn readable_channels(
                 .await?
                 .visible_channels())
         }
-        SearchScope::Everywhere => {
-            let mut conn = state.connection_pool.get().await?;
-            let communities = crate::events::memberships(conn.as_mut(), caller).await?;
-            let dms: Vec<ChannelId> = dm_recipient::table
-                .select(dm_recipient::channel)
-                .filter(dm_recipient::user.eq(caller))
-                .load(conn.as_mut())
-                .await?;
-            drop(conn);
-            let mut channels = Visibility::load(state, caller, &communities)
-                .await?
-                .visible_channels();
-            channels.extend(dms);
-            Ok(channels)
-        }
+        SearchScope::Everywhere => readable_everywhere(state, caller).await,
     }
+}
+
+/// Every channel and DM `user` may read: the channels they may view in the communities they
+/// belong to, and the DMs they are in. Their threads are read as they are.
+pub async fn readable_everywhere(
+    state: &GlobalServerContext,
+    user: UserId,
+) -> crate::Result<Vec<ChannelId>> {
+    let mut conn = state.connection_pool.get().await?;
+    let communities = crate::events::memberships(conn.as_mut(), user).await?;
+    let dms: Vec<ChannelId> = dm_recipient::table
+        .select(dm_recipient::channel)
+        .filter(dm_recipient::user.eq(user))
+        .load(conn.as_mut())
+        .await?;
+    drop(conn);
+    let mut channels = Visibility::load(state, user, &communities)
+        .await?
+        .visible_channels();
+    channels.extend(dms);
+    Ok(channels)
 }

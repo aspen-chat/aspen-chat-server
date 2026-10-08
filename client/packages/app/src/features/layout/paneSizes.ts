@@ -73,5 +73,11 @@ export const ADMIN_RAIL = paneSizing("adminRail", 1, {
   min: 200,
   max: 440,
 });
+/** The rail of the activity and saved messages pages. */
+export const PERSONAL_RAIL = paneSizing("personalRail", 1, {
+  ...CALL_BAR_WIDTH,
+  min: 200,
+  max: 440,
+});
 export const MEMBER_LIST = paneSizing("memberList", 1, { fallback: 224, min: 180, max: 400 });
 export const THREAD_PANEL = paneSizing("threadPanel", 1, { fallback: 384, min: 300, max: 760 });

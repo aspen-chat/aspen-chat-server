@@ -37,6 +37,8 @@ export type PollVote = components["schemas"]["PollVote"];
 export type ReadState = components["schemas"]["ReadState"];
 /** A channel the caller has muted; `until` is `null` for a mute that lasts until lifted. */
 export type ChannelMute = components["schemas"]["ChannelMute"];
+/** A message the caller saved for themself; saves sort newest first by `id`. */
+export type SavedMessage = components["schemas"]["SavedMessage"];
 export type NotificationLevel = components["schemas"]["NotificationLevel"];
 export type NotificationSetting = components["schemas"]["NotificationSetting"];
 /** Who a message tags, as far as its author was allowed to; the tags that count. */
@@ -107,7 +109,7 @@ export type Listener = () => void;
 export type Topic = string;
 
 /** The kinds of record fetched on demand whose absence the store remembers. */
-export type MissingKind = "user" | "icon" | "poll" | "attachment" | "channel";
+export type MissingKind = "user" | "icon" | "poll" | "attachment" | "channel" | "message";
 
 /**
  * The loaded portion of a channel's history. Message ids are UUIDv7, so their lexical order is

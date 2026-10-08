@@ -240,9 +240,10 @@ pub async fn create_poll(
                 &ServerEvent::Message(MessageEvent::Create(message_record.clone())),
             )
             .await?;
-            if !crate::thread::record_if_reply(state, conn.as_mut(), channel, now).await? {
-                crate::read_state::advance(state, conn.as_mut(), creator, channel, message_row.id)
-                    .await?;
+            crate::read_state::advance(state, conn.as_mut(), creator, channel, message_row.id)
+                .await?;
+            if crate::thread::record_if_reply(state, conn.as_mut(), channel, now).await? {
+                crate::thread_follow::took_part(state, conn.as_mut(), &[creator], channel).await?;
             }
             Ok((poll_record, message_record))
         }

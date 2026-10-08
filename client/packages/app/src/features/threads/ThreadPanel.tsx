@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { Button } from "react-aria-components";
 import { useBlocked, useChannel, useMessage, useSync, useSyncStatus } from "@/api/hooks";
 import { useEchoTarget } from "@/features/threads/echoTarget";
+import { FollowButton } from "@/features/threads/FollowButton";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { BlockedRun } from "@/features/messages/BlockedRun";
 import { Composer } from "@/features/messages/Composer";
@@ -99,6 +100,7 @@ export function ThreadPanel({
           ) : (
             <h2 className="flex-1 font-semibold">{m.threads.heading}</h2>
           )}
+          <FollowButton threadId={threadId} />
           <Tooltip text={m.threads.close}>
             <Button
               aria-label={m.threads.close}

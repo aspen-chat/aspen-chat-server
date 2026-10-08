@@ -30,6 +30,8 @@ import { palettes } from "./en/palettes";
 import { permissionGroups } from "./en/permissionGroups";
 import { permissionNames } from "./en/permissionNames";
 import { pins } from "./en/pins";
+import { saved } from "./en/saved";
+import { activity } from "./en/activity";
 import { plugins } from "./en/plugins";
 import { poll } from "./en/poll";
 import { profile } from "./en/profile";
@@ -291,6 +293,8 @@ export const en = {
   search,
   folders,
   pins,
+  saved,
+  activity,
   plugins,
   federation,
   deploymentPermissionNames,

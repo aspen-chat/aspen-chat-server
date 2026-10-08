@@ -431,6 +431,24 @@ user = { requests = 60, per_seconds = 60, burst = 20 }
 [rate_limits.endpoints."DELETE /channels/{channel}/mutes/@me"]
 user = { requests = 60, per_seconds = 60, burst = 20 }
 
+# Saving a message and following a thread are the caller's own, but each change is published.
+[rate_limits.endpoints."PUT /users/@me/saved-messages/{message}"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."DELETE /users/@me/saved-messages/{message}"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."PUT /channels/{channel}/follows/@me"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."DELETE /channels/{channel}/follows/@me"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
+# The feed reads across every channel the caller reads, as search does, though a person paging
+# down it or switching its filters asks for more pages than they search.
+[rate_limits.endpoints."GET /users/@me/activity"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
 # Folding a category is the caller's own setting, but each change is published.
 [rate_limits.endpoints."PUT /categories/{category}/collapses/@me"]
 user = { requests = 60, per_seconds = 60, burst = 20 }

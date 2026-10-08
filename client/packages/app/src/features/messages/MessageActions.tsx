@@ -17,6 +17,7 @@ import { toast } from "@/features/layout/toast";
 import { DeleteMessageDialog } from "@/features/messages/DeleteMessageDialog";
 import { ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactions";
 import { PinButton } from "@/features/messages/PinButton";
+import { SaveButton } from "@/features/messages/SaveButton";
 import { ACTION_ICON } from "@/features/messages/actionIcon";
 import { ReportMessageButton } from "@/features/reports/ReportDialog";
 import { EchoReplyButton } from "@/features/threads/EchoReplyButton";
@@ -110,6 +111,11 @@ export function MessageActions({
           iconSize={ACTION_ICON}
         />
       )}
+      <SaveButton
+        messageId={messageId}
+        {...action}
+        {...(onDone === undefined ? {} : { onPressed: onDone })}
+      />
       {permissions.has("pinMessages") && (
         <PinButton
           messageId={messageId}

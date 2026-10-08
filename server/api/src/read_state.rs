@@ -1,5 +1,6 @@
 //! Read positions: how far the caller has read each channel (`app::read_state`). Community and
-//! DM list reads sideload them with `include=readStates`; these endpoints read one and move it.
+//! DM list reads sideload them with `include=readStates`, as message reads do those of the
+//! channels and threads their messages were posted in; these endpoints read one and move it.
 
 use crate::TAG_CHANNELS;
 use crate::auth::SessionUser;
@@ -48,7 +49,7 @@ pub struct ReadStateUpdate {
     pub last_read: MessageId,
 }
 
-/// The caller's read position in a channel they belong to. Threads keep none.
+/// The caller's read position in a channel or thread they belong to.
 #[utoipa::path(
     get,
     path = "/channels/{channel}/read-states/@me",
@@ -59,7 +60,7 @@ pub struct ReadStateUpdate {
         (status = OK, body = ReadState),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
-        (status = NOT_FOUND, description = "Not a channel the caller belongs to, or a thread", body = Problem),
+        (status = NOT_FOUND, description = "Not a channel the caller belongs to", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -84,7 +85,7 @@ pub async fn get_read_state(
     security(("bearerAuth" = [])),
     responses(
         (status = NO_CONTENT, description = "Recorded"),
-        (status = BAD_REQUEST, description = "`validation` for a thread", body = Problem),
+        (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, description = "No such channel, or no such message in it", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),

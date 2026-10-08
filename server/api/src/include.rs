@@ -131,7 +131,8 @@ pub struct Included {
     #[schema(nullable = false)]
     pub own_write_ins: Option<Vec<OwnWriteIn>>,
     /// How far the caller has read each channel in the read, one record per channel they
-    /// belong to, threads excepted.
+    /// belong to: in a community or DM read, its channels, threads excepted; in a message read,
+    /// the channels the messages were posted in, threads among them.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub read_states: Option<Vec<ReadState>>,

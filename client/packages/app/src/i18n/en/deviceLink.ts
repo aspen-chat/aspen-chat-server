@@ -37,7 +37,8 @@ export const deviceLink = {
   waitingForComputer: "Signing in as {account}. Confirm this phone on your computer to finish.",
   cancel: "Cancel",
   cancelled: "Signing in was cancelled. Make a new code on your computer to try again.",
-  notVerified: "Signing in another device needs you to confirm it's you first. Try again, and confirm.",
+  notVerified:
+    "Signing in another device needs you to confirm it's you first. Try again, and confirm.",
   needsSignedInPhone:
     "This code asks for a sign-in, so it needs a phone that's already signed in. Sign in here first, or scan it with one that is.",
   switchServerPrompt: "This code signs in to {server}. This app uses {here}. Switch to {server}?",
