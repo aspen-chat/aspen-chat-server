@@ -18,7 +18,10 @@ anchoring is off on the list on every platform, since the list keeps its own vie
 and what it does with the position is the same either way. The Chromium history tests run
 both ways, Chromium standing in for iOS by claiming the property the list knows it by. Where the list scrolls itself, once a finger has moved `DRAG_SLOP_PX` it is dragging,
 and the rows take no pointer until it lifts, so lifting it over a picture or a button is not
-a press, as it would not be under a pan the browser made. What is in view never moves when something changes around it: the list notes a row
+a press, as it would not be under a pan the browser made. It takes only what happens in the list itself: React passes events up through what a row
+opens in a layer of its own over the page (the actions' sheet, the emoji picker's, a dialog)
+as though it were in the row, and a finger scrolling a picker there would otherwise drag the
+list behind it. What is in view never moves when something changes around it: the list notes a row
 and where it stands in the content (`still`), which scrolling does not change, and after
 every change, a page's arrival at commit, a picture's arrival told by the picture itself in
 the same task (`useKeepStill`), or any change of the rows' size seen by a `ResizeObserver`

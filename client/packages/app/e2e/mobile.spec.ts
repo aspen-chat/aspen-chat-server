@@ -588,6 +588,47 @@ test.describe("on a phone", () => {
     });
   }
 
+  for (const ios of [false, true]) {
+    test(`a finger in the reaction picker's sheet leaves the list behind it still${ios ? ", with the list scrolling itself as on iOS" : ""}`, async ({
+      page,
+      browserName,
+    }) => {
+      test.skip(browserName !== "chromium", "only Chromium takes synthetic touch input");
+      if (ios) {
+        // Claims to be iOS, so the list scrolls itself from its own touch handlers.
+        await page.addInitScript(() => {
+          const supports = CSS.supports.bind(CSS) as (property: string, value: string) => boolean;
+          CSS.supports = ((property: string, value: string) =>
+            property === "-webkit-touch-callout" ||
+            supports(property, value)) as typeof CSS.supports;
+        });
+        // Signed in already, by the page before the claim: loaded again, the page makes it.
+        await page.reload();
+        await expect(channelList(page)).toBeVisible();
+      }
+      await openReactionPicker(page);
+      await settleAnimations(page);
+      // Where a message behind the sheet stands on the screen: the list's own position moves
+      // as history pages in above, with nothing on screen moving.
+      const behind = messageWith(page, ownText);
+      const before = (await behind.boundingBox())?.y;
+      // Partway down the emoji, so a finger moving down the sheet scrolls the picker back
+      // rather than pulling the sheet away; a list taking the finger too would draw older
+      // messages into view.
+      const emoji = page.locator(".emoji-picker .epr-body");
+      await emoji.evaluate((element) => {
+        element.scrollTop = 400;
+      });
+      const box = await emoji.boundingBox();
+      const x = (box?.x ?? 0) + 100;
+      const y = (box?.y ?? 0) + 20;
+      await swipe(page, x, y, y + 150);
+      await page.waitForTimeout(500);
+      expect(await emoji.evaluate((element) => element.scrollTop)).toBeLessThan(400);
+      expect((await behind.boundingBox())?.y).toBe(before);
+    });
+  }
+
   for (const width of [412, 340]) {
     test(`the reaction picker fills a sheet across a ${String(width)}px phone in whole rows`, async ({
       page,
