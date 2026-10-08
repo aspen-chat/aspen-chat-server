@@ -7,7 +7,8 @@ import type { PaneSizing } from "@/features/layout/paneSizes";
  * A page of its own beside the community rail, as the Administration Dashboard and the
  * activity and saved messages pages are: a rail of what the page holds (`rail`, in a `nav`
  * named `navLabel`), the page's content, and the user bar at the rail's foot. On a one-pane
- * screen the rail runs across the top, the content below it, and the user bar last.
+ * screen the rail runs across the top, the content below it, and the user bar last. The content
+ * scrolls up and down only: what is wider than it (a code block, a table) scrolls in itself.
  */
 export function RailPage({
   sizing,
@@ -46,7 +47,7 @@ export function RailPage({
           <PaneEdge />
         </nav>
       </ResizablePane>
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto md:col-start-2 md:row-span-2 md:row-start-1">
+      <div className="min-h-0 min-w-0 flex-1 overflow-x-clip overflow-y-auto md:col-start-2 md:row-span-2 md:row-start-1">
         <div className={contentClassName}>{children}</div>
       </div>
       <div className="shrink-0 bg-surface-sunken md:col-start-1 md:row-start-2 md:w-0 md:min-w-full md:border-e md:border-line">

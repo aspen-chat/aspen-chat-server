@@ -77,8 +77,13 @@ export function CompactCheckbox({
   children: ReactNode;
 }) {
   return (
-    <CheckboxField isSelected={isSelected} onChange={onChange} isDisabled={isDisabled}>
-      <CheckboxButton className="group flex items-center gap-2 rounded px-2 py-1 text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-60 disabled:hover:bg-transparent">
+    <CheckboxField
+      isSelected={isSelected}
+      onChange={onChange}
+      isDisabled={isDisabled}
+      className="min-w-0"
+    >
+      <CheckboxButton className="group flex min-w-0 items-center gap-2 rounded px-2 py-1 text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-60 disabled:hover:bg-transparent">
         <span className={markClass + " mt-0"}>
           <CheckIcon
             size={12}

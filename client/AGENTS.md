@@ -178,7 +178,8 @@ commit, as with comments.
   `SidebarHeader` (its title and plain icon buttons, `headerIconButtonClass`, spaced so their
   touch areas never overlap) and `SidebarFooter` (the call bar and the user bar). A page of its
   own beside the community rail (the Administration Dashboard, activity, saved messages) is a
-  `RailPage`, whose rail has the user bar at its foot.
+  `RailPage`, whose rail has the user bar at its foot and whose content scrolls only up and
+  down.
 - Events are routed by the server to the communities the user belongs to and to the user alone,
   leaving out channels they may not view, so the client filters nothing itself. An event about a
   user reaches the client once per community shared with them; every copy carries the same

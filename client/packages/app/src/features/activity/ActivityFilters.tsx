@@ -49,7 +49,7 @@ export function ActivityFilters() {
           {m.activity.show}
         </Button>
       </Heading>
-      <DisclosurePanel className="min-h-0 overflow-y-auto">
+      <DisclosurePanel className="min-h-0 overflow-x-clip overflow-y-auto">
         <div className="flex flex-col gap-2 py-1">
           {deployments.map(({ domain, communities }) => (
             <DeploymentChoices

@@ -109,7 +109,7 @@ export function messageRoutes({
           ...(follows.has(thread) ? threadReplies : []),
         ]
           .filter((m) => m.author !== me)
-          .sort((a, b) => b.id.localeCompare(a.id)),
+          .sort((a, b) => String(b.id).localeCompare(String(a.id))),
         included: { users, channels: [threadRecord, dmRecord] },
       }),
     ],
