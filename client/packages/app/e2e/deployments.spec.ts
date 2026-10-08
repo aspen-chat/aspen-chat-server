@@ -98,7 +98,6 @@ test("a moderator bans a user of another server, and lifts the ban", async ({ pa
             bot: false,
             botOwner: null,
             homeDomain: foreignDomain,
-            system: false,
             banned: banned !== null,
             ban: banned,
           },
