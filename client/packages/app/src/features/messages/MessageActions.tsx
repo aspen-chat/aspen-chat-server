@@ -48,8 +48,8 @@ export type MessageSheet = "react" | "reactions" | "delete" | "report";
  * buttons. A touch screen shows them as a list of icons and names, in a sheet under a
  * long press (`MessageActionSheet`), which every action closes: the ones that open something
  * hand that to `open`, since what opens from inside the sheet would go with it. The list
- * leaves out reacting, which the sheet offers above it. Each is offered only where the
- * permissions allow it.
+ * leaves out reacting, which the sheet offers above it, and ends with deleting, the one that
+ * cannot be undone, away from the rest. Each is offered only where the permissions allow it.
  */
 export function MessageActions({
   messageId,
@@ -166,20 +166,9 @@ export function MessageActions({
           icon={<PencilSimpleIcon size={ACTION_ICON} aria-hidden="true" />}
         />
       )}
-      {deletable &&
-        (open === undefined ? (
-          <DeleteMessageDialog messageId={messageId} triggerClassName={dangerClass} />
-        ) : (
-          <IconAction
-            label={m.deleteMessage}
-            labelled
-            className={dangerClass}
-            onPress={() => {
-              open("delete");
-            }}
-            icon={<TrashIcon size={ACTION_ICON} aria-hidden="true" />}
-          />
-        ))}
+      {deletable && open === undefined && (
+        <DeleteMessageDialog messageId={messageId} triggerClassName={dangerClass} />
+      )}
       {text !== null && text !== "" && (
         <CopyButton
           text={text}
@@ -218,6 +207,17 @@ export function MessageActions({
         iconSize={ACTION_ICON}
         {...(onDone === undefined ? {} : { onCopied: onDone })}
       />
+      {deletable && open !== undefined && (
+        <IconAction
+          label={m.deleteMessage}
+          labelled
+          className={dangerClass}
+          onPress={() => {
+            open("delete");
+          }}
+          icon={<TrashIcon size={ACTION_ICON} aria-hidden="true" />}
+        />
+      )}
     </>
   );
 }
