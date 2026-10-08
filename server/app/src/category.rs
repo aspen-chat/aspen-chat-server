@@ -308,27 +308,33 @@ pub async fn delete_category(
                 .returning(channel::id)
                 .get_results(conn.as_mut())
                 .await?;
-            for channel in moved {
-                publish_event(
-                    state,
-                    conn.as_mut(),
-                    EventScope::ChannelDefinition {
-                        channel,
-                        departed: None,
-                    },
-                    &ServerEvent::Channel(ChannelEvent::Update {
-                        id: channel,
-                        parent_category: Some(None),
-                        community: None,
-                        name: None,
-                        sort_index: None,
-                        reply_count: None,
-                        last_reply_at: None,
-                        recipients: None,
-                    }),
-                )
-                .await?;
-            }
+            // Announced together, acknowledged in one round trip however many moved.
+            crate::events::publish_events(
+                state,
+                conn.as_mut(),
+                moved
+                    .into_iter()
+                    .map(|channel| {
+                        (
+                            EventScope::ChannelDefinition {
+                                channel,
+                                departed: None,
+                            },
+                            ServerEvent::Channel(ChannelEvent::Update {
+                                id: channel,
+                                parent_category: Some(None),
+                                community: None,
+                                name: None,
+                                sort_index: None,
+                                reply_count: None,
+                                last_reply_at: None,
+                                recipients: None,
+                            }),
+                        )
+                    })
+                    .collect(),
+            )
+            .await?;
             diesel::delete(category_override::table.filter(category_override::category.eq(id)))
                 .execute(conn.as_mut())
                 .await?;

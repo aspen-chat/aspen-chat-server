@@ -20,7 +20,7 @@ use crate::channel::ChannelType;
 use crate::context::GlobalServerContext;
 use crate::t;
 use crate::{ChannelId, EventScope, MessageId, UserId, publish_event};
-use aspen_schema::{channel, message};
+use aspen_schema::message;
 use aspen_wire::message_enum::server_event::ServerEvent;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
@@ -247,17 +247,8 @@ pub async fn mark_read(
     message_id: MessageId,
 ) -> crate::Result<()> {
     let mut conn = state.connection_pool.get().await?;
-    crate::permissions::channel_access(state, conn.as_mut(), user, channel_id).await?;
-    let ty: ChannelType = channel::table
-        .select(channel::ty)
-        .filter(
-            channel::id
-                .eq(channel_id)
-                .and(channel::deleted_at.is_null()),
-        )
-        .first(conn.as_mut())
-        .await?;
-    if ty == ChannelType::Thread {
+    let access = crate::permissions::channel_access(state, conn.as_mut(), user, channel_id).await?;
+    if access.ty == ChannelType::Thread {
         return Err(crate::Error::Validation(t!("readStateThread")));
     }
     let in_channel: bool = diesel::select(diesel::dsl::exists(

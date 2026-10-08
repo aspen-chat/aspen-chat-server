@@ -599,6 +599,73 @@ impl Visibility {
     }
 }
 
+/// Who of a community is online, by what decides what they may view: each distinct set of roles
+/// held (the owner apart), with how many hold it, beside the community's model. Asking how many
+/// may view a channel then takes one check per distinct set rather than one per person
+/// ([`OnlineGroups::viewers_of`]).
+pub struct OnlineGroups {
+    model: CommunityModel,
+    /// A member holding each set, the set, and how many hold it.
+    groups: Vec<(UserId, Vec<RoleId>, u32)>,
+}
+
+impl OnlineGroups {
+    /// How many of them may view `place`, a channel of the community that is not a thread.
+    pub fn viewers_of(&self, place: ChannelId) -> u32 {
+        self.groups
+            .iter()
+            .filter(|(user, roles, _)| self.model.can_view(*user, roles, place))
+            .map(|(_, _, count)| *count)
+            .sum()
+    }
+}
+
+/// `online`'s members of `community`, grouped as [`OnlineGroups`]. Three queries however many
+/// there are.
+pub async fn online_groups(
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+    online: &HashSet<UserId>,
+) -> crate::Result<Option<OnlineGroups>> {
+    let listed: Vec<UserId> = online.iter().copied().collect();
+    let members: Vec<UserId> = community_user::table
+        .select(community_user::user)
+        .filter(community_user::community.eq(community))
+        .filter(community_user::user.eq_any(&listed))
+        .load(conn)
+        .await?;
+    let Some(model) = CommunityModel::load(conn, &[community])
+        .await?
+        .remove(&community)
+    else {
+        return Ok(None);
+    };
+    let mut roles: HashMap<UserId, Vec<RoleId>> = HashMap::new();
+    for (user, role) in community_member_role::table
+        .select((community_member_role::user, community_member_role::role))
+        .filter(community_member_role::community.eq(community))
+        .filter(community_member_role::user.eq_any(&members))
+        .load::<(UserId, RoleId)>(conn)
+        .await?
+    {
+        roles.entry(user).or_default().push(role);
+    }
+    let mut by_set: HashMap<(bool, Vec<RoleId>), (UserId, u32)> = HashMap::new();
+    for user in members {
+        let mut held = roles.remove(&user).unwrap_or_default();
+        held.sort();
+        let key = (model.owner == Some(user), held);
+        by_set.entry(key).or_insert((user, 0)).1 += 1;
+    }
+    Ok(Some(OnlineGroups {
+        groups: by_set
+            .into_iter()
+            .map(|((_, held), (user, count))| (user, held, count))
+            .collect(),
+        model,
+    }))
+}
+
 /// Which of `users` belong to `community` and may view `place`, a channel of it that is not a
 /// thread. Three queries however many there are.
 pub async fn viewers(

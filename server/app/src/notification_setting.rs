@@ -10,7 +10,7 @@ use crate::channel::ChannelType;
 use crate::context::GlobalServerContext;
 use crate::t;
 use crate::{ChannelId, CommunityId, EventScope, UserId, publish_event};
-use aspen_schema::{channel, community_user, notification_setting};
+use aspen_schema::{community_user, notification_setting};
 use aspen_wire::message_enum::server_event::ServerEvent;
 pub use aspen_wire::notification_setting::NotificationLevel;
 use diesel::prelude::*;
@@ -166,16 +166,9 @@ async fn check_target(
             }
         }
         NotificationTarget::Channel(channel_id) => {
-            crate::permissions::channel_access(state, conn, user, channel_id).await?;
-            let ty: ChannelType = channel::table
-                .select(channel::ty)
-                .filter(
-                    channel::id
-                        .eq(channel_id)
-                        .and(channel::deleted_at.is_null()),
-                )
-                .first(conn)
-                .await?;
+            let ty = crate::permissions::channel_access(state, conn, user, channel_id)
+                .await?
+                .ty;
             if !matches!(
                 ty,
                 ChannelType::Text | ChannelType::Dm | ChannelType::GroupDm | ChannelType::Plugin

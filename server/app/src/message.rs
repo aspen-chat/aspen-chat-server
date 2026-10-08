@@ -513,12 +513,16 @@ async fn post(
                     .execute(conn.as_mut())
                     .await?;
                 mention::record(conn.as_mut(), message.id, channel_id, &message.mentions).await?;
-                for attachment in &attachments {
+                let held: Vec<MessageAttachment> = attachments
+                    .iter()
+                    .map(|attachment| MessageAttachment {
+                        message_id: message.id,
+                        attachment_id: *attachment,
+                    })
+                    .collect();
+                if !held.is_empty() {
                     diesel::insert_into(message_attachment::table)
-                        .values(&MessageAttachment {
-                            message_id: message.id,
-                            attachment_id: *attachment,
-                        })
+                        .values(&held)
                         .execute(conn.as_mut())
                         .await?;
                 }
@@ -896,12 +900,16 @@ pub async fn update_message(
                         .returning(message_attachment::attachment_id)
                         .load(conn.as_mut())
                         .await?;
-                    for attachment_id in new_attachments {
+                    let held: Vec<MessageAttachment> = new_attachments
+                        .iter()
+                        .map(|attachment_id| MessageAttachment {
+                            message_id: id,
+                            attachment_id: *attachment_id,
+                        })
+                        .collect();
+                    if !held.is_empty() {
                         diesel::insert_into(message_attachment::table)
-                            .values(&MessageAttachment {
-                                message_id: id,
-                                attachment_id: *attachment_id,
-                            })
+                            .values(&held)
                             .execute(conn.as_mut())
                             .await?;
                     }

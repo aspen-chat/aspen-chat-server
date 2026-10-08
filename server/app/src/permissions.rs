@@ -289,6 +289,8 @@ pub struct ChannelAccess {
     pub permissions: Permissions,
     /// Whether the channel is a thread, whose posting takes `SEND_IN_THREADS`.
     pub thread: bool,
+    /// The channel's type, read with the check, so callers need not read the channel again.
+    pub ty: crate::channel::ChannelType,
     /// Whether the caller reads a DM they are not in, by Moderate any community, which only
     /// `channel_access_reading` and `channel_access_moderating` allow.
     pub dm_moderator: bool,
@@ -611,34 +613,35 @@ async fn access_to_channel(
     dm_moderator: DmModerator,
 ) -> crate::Result<ChannelAccess> {
     let not_found = || crate::Error::Diesel(diesel::result::Error::NotFound);
-    let (parent, category, thread): (Option<ChannelId>, Option<CategoryId>, bool) = {
-        let (parent, category): (Option<ChannelId>, Option<CategoryId>) = channel::table
-            .select((channel::parent_channel, channel::parent_category))
-            .filter(
-                channel::id
-                    .eq(channel_id)
-                    .and(channel::deleted_at.is_null()),
-            )
-            .first(conn)
-            .await
-            .optional()?
-            .ok_or_else(not_found)?;
-        (parent, category, parent.is_some())
-    };
-    // A thread's permissions are its parent channel's, and it goes with its parent: a thread
-    // of a deleted channel is not found.
+    // The channel and, for a thread, its parent, in one read: a thread's permissions are its
+    // parent channel's, and it goes with its parent, so a thread of a deleted channel is not
+    // found.
+    #[derive(diesel::QueryableByName)]
+    struct Found {
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+        parent: Option<ChannelId>,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+        category: Option<CategoryId>,
+        #[diesel(sql_type = aspen_schema::sql_types::ChannelType)]
+        ty: crate::channel::ChannelType,
+    }
+    let found: Found = diesel::sql_query(
+        "SELECT c.parent_channel AS parent, \
+                CASE WHEN c.parent_channel IS NULL THEN c.parent_category \
+                     ELSE p.parent_category END AS category, \
+                c.ty \
+         FROM channel c LEFT JOIN channel p ON p.id = c.parent_channel \
+         WHERE c.id = $1 AND c.deleted_at IS NULL \
+           AND (c.parent_channel IS NULL OR (p.id IS NOT NULL AND p.deleted_at IS NULL))",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(channel_id.0)
+    .get_result(conn)
+    .await
+    .optional()?
+    .ok_or_else(not_found)?;
+    let (parent, category, thread) = (found.parent, found.category, found.parent.is_some());
+    let ty = found.ty;
     let governing = parent.unwrap_or(channel_id);
-    let category = if parent.is_some() {
-        channel::table
-            .select(channel::parent_category)
-            .filter(channel::id.eq(governing).and(channel::deleted_at.is_null()))
-            .first(conn)
-            .await
-            .optional()?
-            .ok_or_else(not_found)?
-    } else {
-        category
-    };
     match channel_home(state, conn, channel_id).await? {
         ChannelHome::Direct(dm) => {
             let recipient: bool = diesel::select(diesel::dsl::exists(
@@ -674,6 +677,7 @@ async fn access_to_channel(
                         dm_moderator: true,
                         blocked: false,
                         from_system: false,
+                        ty,
                         checked: Checked,
                     });
                 }
@@ -692,6 +696,7 @@ async fn access_to_channel(
                 dm_moderator: false,
                 blocked,
                 from_system,
+                ty,
                 checked: Checked,
             })
         }
@@ -724,6 +729,7 @@ async fn access_to_channel(
                 dm_moderator: false,
                 blocked: false,
                 from_system: false,
+                ty,
                 checked: Checked,
             })
         }

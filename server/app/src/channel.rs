@@ -367,12 +367,8 @@ pub async fn read_channel_messages(
     window: MessageWindow,
 ) -> crate::error::Result<Vec<MessageWithRelations>> {
     let mut conn = state.connection_pool.get().await?;
-    channel::table
-        .select(Channel::as_select())
-        .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
-        .first(conn.as_mut())
-        .await?;
-    // Reading a DM one is not in is moderation, and every such reading is logged.
+    // Reading a DM one is not in is moderation, and every such reading is logged. The check
+    // finds a deleted channel not found.
     crate::permissions::channel_access_reading(state, conn.as_mut(), caller, id, None).await?;
     let query = message::table
         .select(Message::as_select())
@@ -478,15 +474,6 @@ pub async fn read_channel_pins(
 ) -> crate::error::Result<Vec<Pin>> {
     let mut conn = state.connection_pool.get().await?;
     crate::permissions::channel_access_reading(state, conn.as_mut(), caller, channel_id, None)
-        .await?;
-    channel::table
-        .select(Channel::as_select())
-        .filter(
-            channel::id
-                .eq(channel_id)
-                .and(channel::deleted_at.is_null()),
-        )
-        .first(conn.as_mut())
         .await?;
     let pins = pin::table
         .inner_join(message::table)

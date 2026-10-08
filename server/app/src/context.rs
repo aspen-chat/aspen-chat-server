@@ -38,6 +38,11 @@ pub struct GlobalServerContext {
     pub channel_homes: Arc<Mutex<HashMap<crate::ChannelId, crate::events::ChannelHome>>>,
     /// Each channel's recent count of who is online in it (`app::channel_presence`).
     pub channel_presence: Arc<crate::recent::Recent<crate::ChannelId, u32>>,
+    /// Who of each community is online, by the roles they hold, for its channels' counts
+    /// (`app::channel_presence`).
+    pub community_online: Arc<
+        crate::recent::Recent<crate::CommunityId, Option<Arc<crate::visibility::OnlineGroups>>>,
+    >,
     /// Where each call recently reported speaking in is, its voice server and channel, which
     /// never change (`app::voice::sessions`), so speaking changes are checked without a read.
     pub voice_session_homes: Arc<
@@ -164,6 +169,7 @@ impl GlobalServerContext {
         Ok(Self {
             channel_homes: Arc::new(Mutex::new(HashMap::new())),
             channel_presence: Arc::default(),
+            community_online: Arc::default(),
             voice_session_homes: Arc::default(),
             connected_members: Arc::default(),
             connection_pool,

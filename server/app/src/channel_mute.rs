@@ -46,16 +46,9 @@ pub async fn mute(
         )));
     }
     let mut conn = state.connection_pool.get().await?;
-    crate::permissions::channel_access(state, conn.as_mut(), user, channel_id).await?;
-    let ty: ChannelType = channel::table
-        .select(channel::ty)
-        .filter(
-            channel::id
-                .eq(channel_id)
-                .and(channel::deleted_at.is_null()),
-        )
-        .first(conn.as_mut())
-        .await?;
+    let ty = crate::permissions::channel_access(state, conn.as_mut(), user, channel_id)
+        .await?
+        .ty;
     if !matches!(
         ty,
         ChannelType::Text | ChannelType::Dm | ChannelType::GroupDm | ChannelType::Plugin

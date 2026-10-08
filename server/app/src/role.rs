@@ -131,6 +131,17 @@ async fn load_role(conn: &mut AsyncPgConnection, id: RoleId) -> crate::Result<Ro
         .await?)
 }
 
+/// The role `id`, locked for the rest of the caller's transaction, so a change made from what
+/// it reads is never made over another change that committed meanwhile.
+async fn lock_role(conn: &mut AsyncPgConnection, id: RoleId) -> crate::Result<RoleRow> {
+    Ok(community_role::table
+        .select(RoleRow::as_select())
+        .filter(community_role::id.eq(id))
+        .for_update()
+        .first(conn)
+        .await?)
+}
+
 /// The roles of every one of `communities`, lowest first.
 pub async fn read_communities_roles(
     state: &GlobalServerContext,
@@ -457,6 +468,15 @@ pub async fn delete_bot_role(
     community_id: CommunityId,
     bot: UserId,
 ) -> crate::Result<()> {
+    // Taking turns with every other change to the community's roles, as `hold_for_count` has
+    // them do, whether or not the community is still there.
+    aspen_schema::community::table
+        .select(aspen_schema::community::id)
+        .filter(aspen_schema::community::id.eq(community_id))
+        .for_no_key_update()
+        .first::<CommunityId>(conn)
+        .await
+        .optional()?;
     let deleted: Vec<RoleId> = diesel::delete(
         community_role::table.filter(
             community_role::community
@@ -498,7 +518,7 @@ pub async fn update_role(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let mut role = load_role(conn.as_mut(), role_id).await?;
+            let mut role = lock_role(conn.as_mut(), role_id).await?;
             if role.everyone && name.is_some() {
                 return Err(crate::Error::Validation(t!("everyoneRoleFixed")));
             }
@@ -566,6 +586,8 @@ pub async fn take_from_everyone(
     community_id: CommunityId,
     permission: Permissions,
 ) -> crate::Result<bool> {
+    // Locked, so a role edit at the same moment neither gives the permission back nor loses its
+    // own change.
     let role: RoleRow = community_role::table
         .select(RoleRow::as_select())
         .filter(
@@ -573,6 +595,7 @@ pub async fn take_from_everyone(
                 .eq(community_id)
                 .and(community_role::everyone),
         )
+        .for_update()
         .first(conn)
         .await?;
     if !role.permissions.contains(permission) {
@@ -610,6 +633,9 @@ pub async fn delete_role(
     conn.transaction(|conn| {
         async move {
             let role = load_role(conn.as_mut(), role_id).await?;
+            // Changes to a community's roles take turns, as making one does, so two that
+            // renumber at once cannot leave two roles at one position.
+            crate::community::hold_for_count(conn.as_mut(), role.community).await?;
             if role.everyone {
                 return Err(crate::Error::Validation(t!("everyoneRoleFixed")));
             }
@@ -652,6 +678,8 @@ pub async fn reorder_roles(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
+            // Taking turns with every other change to the community's roles (`hold_for_count`).
+            crate::community::hold_for_count(conn.as_mut(), community_id).await?;
             let access = require_member(conn.as_mut(), caller, community_id).await?;
             access.require(Permissions::MANAGE_ROLES)?;
             let roles = load_roles(conn.as_mut(), community_id).await?;
@@ -1138,17 +1166,8 @@ pub async fn set_override(
                         channel: channel_id,
                         departed: None,
                     };
-                    let existed: bool = diesel::select(diesel::dsl::exists(
-                        channel_override::table.filter(
-                            channel_override::channel
-                                .eq(channel_id)
-                                .and(channel_override::role.eq(role_id)),
-                        ),
-                    ))
-                    .get_result(conn.as_mut())
-                    .await?;
                     if permissions.is_none() {
-                        diesel::delete(
+                        let existed = 0 < diesel::delete(
                             channel_override::table.filter(
                                 channel_override::channel
                                     .eq(channel_id)
@@ -1174,7 +1193,7 @@ pub async fn set_override(
                             ..cleared
                         });
                     }
-                    diesel::insert_into(channel_override::table)
+                    let existed: bool = diesel::insert_into(channel_override::table)
                         .values((
                             channel_override::channel.eq(channel_id),
                             channel_override::role.eq(role_id),
@@ -1187,7 +1206,9 @@ pub async fn set_override(
                             channel_override::allow.eq(allow),
                             channel_override::deny.eq(deny),
                         ))
-                        .execute(conn.as_mut())
+                        // Whether it replaced one, said by the statement that wrote it.
+                        .returning(diesel::dsl::sql::<diesel::sql_types::Bool>("xmax <> 0"))
+                        .get_result::<bool>(conn.as_mut())
                         .await?;
                     let record = message_enum::ChannelOverride {
                         channel: channel_id,
@@ -1218,17 +1239,8 @@ pub async fn set_override(
                     })
                 }
                 OverrideTarget::Category(category_id) => {
-                    let existed: bool = diesel::select(diesel::dsl::exists(
-                        category_override::table.filter(
-                            category_override::category
-                                .eq(category_id)
-                                .and(category_override::role.eq(role_id)),
-                        ),
-                    ))
-                    .get_result(conn.as_mut())
-                    .await?;
                     if permissions.is_none() {
-                        diesel::delete(
+                        let existed = 0 < diesel::delete(
                             category_override::table.filter(
                                 category_override::category
                                     .eq(category_id)
@@ -1254,7 +1266,7 @@ pub async fn set_override(
                             ..cleared
                         });
                     }
-                    diesel::insert_into(category_override::table)
+                    let existed: bool = diesel::insert_into(category_override::table)
                         .values((
                             category_override::category.eq(category_id),
                             category_override::role.eq(role_id),
@@ -1267,7 +1279,9 @@ pub async fn set_override(
                             category_override::allow.eq(allow),
                             category_override::deny.eq(deny),
                         ))
-                        .execute(conn.as_mut())
+                        // Whether it replaced one, said by the statement that wrote it.
+                        .returning(diesel::dsl::sql::<diesel::sql_types::Bool>("xmax <> 0"))
+                        .get_result::<bool>(conn.as_mut())
                         .await?;
                     let record = message_enum::CategoryOverride {
                         category: category_id,

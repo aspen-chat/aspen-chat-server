@@ -162,6 +162,8 @@ pub async fn create_emoji(
             if crate::icon::in_use(conn.as_mut(), icon_id).await? {
                 return Err(crate::Error::Validation(t!("customEmojiIconUsed")));
             }
+            // Additions at once take turns, so none passes the limit beside another.
+            crate::community::hold_for_count(conn.as_mut(), community_id).await?;
             let count: i64 = custom_emoji::table
                 .filter(custom_emoji::community.eq(community_id))
                 .count()
