@@ -106,6 +106,19 @@ pub enum JobKind {
     ShutOut,
     /// Rechecking every call on the deployment, for a change that touches them all.
     RecheckAllCalls,
+    /// Asking other deployments whether their users here may stay, and reading their documents
+    /// again.
+    ConfirmStanding,
+    /// Making the daily digests that are due.
+    MakeDigests,
+    /// Sweeping uploads never confirmed or never sent, and staging objects past their URLs.
+    SweepUploads,
+    /// Moving the files of deleted messages off the public read path.
+    MoveEvidence,
+    /// Sending one piece of mail.
+    SendEmail,
+    /// Queueing a newsletter post's mail to its subscribers.
+    QueueNewsletter,
 }
 
 crate::wire_name_traits!(JobKind);

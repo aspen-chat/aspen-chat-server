@@ -173,6 +173,38 @@ pub async fn enqueue(conn: &mut AsyncPgConnection, job: NewJob) -> crate::Result
     Ok(saved.id)
 }
 
+/// Saves `jobs` on `conn` in one statement, as [`enqueue`] saves one; those of a kind and key
+/// already saved are left as they are.
+pub async fn enqueue_many(conn: &mut AsyncPgConnection, jobs: Vec<NewJob>) -> crate::Result<()> {
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<Uuid> = jobs.iter().map(|_| Uuid::now_v7()).collect();
+    let kinds: Vec<JobKind> = jobs.iter().map(|job| job.kind).collect();
+    let keys: Vec<Option<String>> = jobs.iter().map(|job| job.key.clone()).collect();
+    let classes: Vec<i16> = jobs.iter().map(|job| job.class.rank()).collect();
+    let starts: Vec<Option<DateTime<Utc>>> = jobs.iter().map(|job| job.not_before).collect();
+    let payloads: Vec<serde_json::Value> = jobs.into_iter().map(|job| job.payload).collect();
+    diesel::sql_query(
+        r#"
+        INSERT INTO job (id, kind, key, class, due, not_before, payload)
+        SELECT id, kind, key, class, COALESCE(start, now()), COALESCE(start, now()), payload
+        FROM unnest($1::uuid[], $2::text[], $3::text[], $4::smallint[], $5::timestamptz[],
+                    $6::jsonb[]) AS j(id, kind, key, class, start, payload)
+        ON CONFLICT (kind, key) DO NOTHING
+        "#,
+    )
+    .bind::<Array<diesel::sql_types::Uuid>, _>(ids)
+    .bind::<Array<Text>, _>(kinds)
+    .bind::<Array<Nullable<Text>>, _>(keys)
+    .bind::<Array<SmallInt>, _>(classes)
+    .bind::<Array<Nullable<Timestamptz>>, _>(starts)
+    .bind::<Array<Jsonb>, _>(payloads)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
 /// Writes how far `job` has come, inside the transaction of the step that came that far, and
 /// renews its lease: what it did and what it says it did commit together.
 pub async fn checkpoint(
@@ -215,7 +247,7 @@ pub struct Recurring {
 }
 
 /// The recurring jobs, with the periods `state`'s configuration gives them.
-fn recurring(_state: &GlobalServerContext) -> Vec<Recurring> {
+fn recurring(state: &GlobalServerContext) -> Vec<Recurring> {
     const HOUR: Duration = Duration::from_secs(3600);
     vec![
         Recurring {
@@ -232,6 +264,26 @@ fn recurring(_state: &GlobalServerContext) -> Vec<Recurring> {
             kind: JobKind::ReapVoice,
             class: JobClass::Normal,
             every: crate::voice::REAPER_INTERVAL,
+        },
+        Recurring {
+            kind: JobKind::SweepUploads,
+            class: JobClass::Maintenance,
+            every: crate::media_store::SWEEP_EVERY,
+        },
+        Recurring {
+            kind: JobKind::MoveEvidence,
+            class: JobClass::Normal,
+            every: crate::attachment::evidence::MOVE_EVERY,
+        },
+        Recurring {
+            kind: JobKind::MakeDigests,
+            class: JobClass::Bulk,
+            every: crate::email::digest::TICK,
+        },
+        Recurring {
+            kind: JobKind::ConfirmStanding,
+            class: JobClass::Normal,
+            every: crate::federation::standing::pass_every(&state.config.federation),
         },
     ]
 }
@@ -258,19 +310,35 @@ async fn ensure_recurring(state: &GlobalServerContext) -> crate::Result<()> {
     Ok(())
 }
 
-/// Whether this server runs jobs of `kind`: every kind, unless what it needs is not here.
-fn handles(_state: &GlobalServerContext, _kind: JobKind) -> bool {
-    true
+/// Whether this server runs jobs of `kind`: every kind, unless what it needs is not here, as a
+/// server that sends no mail makes no digests.
+fn handles(state: &GlobalServerContext, kind: JobKind) -> bool {
+    match kind {
+        JobKind::MakeDigests | JobKind::SendEmail => {
+            state.mailer.as_ref().is_some_and(|mailer| mailer.sends())
+        }
+        _ => true,
+    }
 }
 
-/// How many times a job of `kind` is claimed without coming further before it is given up.
-fn max_attempts(_kind: JobKind) -> i32 {
-    5
+/// How many times a job of `kind` is claimed without coming further before it is given up. A
+/// piece of mail gives itself up first, once it has been tried as often as mail is
+/// (`outbox::MAX_ATTEMPTS`), so its content is never kept as a job given up.
+fn max_attempts(kind: JobKind) -> i32 {
+    match kind {
+        JobKind::SendEmail => crate::email::outbox::MAX_ATTEMPTS + 1,
+        _ => 5,
+    }
 }
 
-/// How long a job waits after its `attempts`th failure before it is tried again: ten seconds,
-/// doubling, at most an hour.
-fn backoff(attempts: i32) -> Duration {
+/// How long a job of `kind` waits after its `attempts`th failure before it is tried again: ten
+/// seconds, doubling, at most an hour; mail a minute, doubling, as mail servers expect.
+fn backoff(kind: JobKind, attempts: i32) -> Duration {
+    if kind == JobKind::SendEmail {
+        return crate::email::outbox::retry_wait(attempts)
+            .to_std()
+            .unwrap_or(Duration::from_secs(60));
+    }
     let doublings = u32::try_from(attempts.saturating_sub(1).clamp(0, 9)).unwrap_or(0);
     Duration::from_secs(10 * 2u64.pow(doublings)).min(Duration::from_secs(3600))
 }
@@ -290,6 +358,12 @@ async fn step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outco
         JobKind::PurgePlugin => crate::plugin::install::purge_step(state, job).await,
         JobKind::ShutOut => crate::federation::standing::shut_out_step(state, job).await,
         JobKind::RecheckAllCalls => crate::voice::recheck_all_step(state, job).await,
+        JobKind::ConfirmStanding => crate::federation::standing::pass_step(state, job).await,
+        JobKind::MakeDigests => crate::email::digest::make_step(state, job).await,
+        JobKind::SweepUploads => crate::media_store::sweep_step(state, job).await,
+        JobKind::MoveEvidence => crate::attachment::evidence::move_step(state, job).await,
+        JobKind::SendEmail => crate::email::outbox::send_step(state, job).await,
+        JobKind::QueueNewsletter => crate::email::newsletter::queue_step(state, job).await,
     }
 }
 
@@ -605,7 +679,7 @@ async fn fail(
              running_since = NULL WHERE id = $1",
         )
         .bind::<diesel::sql_types::Uuid, _>(job.id)
-        .bind::<diesel::sql_types::Double, _>(backoff(job.attempts).as_secs_f64())
+        .bind::<diesel::sql_types::Double, _>(backoff(job.kind, job.attempts).as_secs_f64())
         .bind::<Text, _>(error.to_string())
         .execute(conn.as_mut())
         .await?;
@@ -774,10 +848,12 @@ mod tests {
 
     #[test]
     fn a_failing_job_waits_longer_each_time_up_to_an_hour() {
-        assert_eq!(backoff(1), Duration::from_secs(10));
-        assert_eq!(backoff(2), Duration::from_secs(20));
-        assert_eq!(backoff(4), Duration::from_secs(80));
-        assert_eq!(backoff(20), Duration::from_secs(3600));
+        let kind = JobKind::DeleteMessagesBy;
+        assert_eq!(backoff(kind, 1), Duration::from_secs(10));
+        assert_eq!(backoff(kind, 2), Duration::from_secs(20));
+        assert_eq!(backoff(kind, 4), Duration::from_secs(80));
+        assert_eq!(backoff(kind, 20), Duration::from_secs(3600));
+        assert_eq!(backoff(JobKind::SendEmail, 2), Duration::from_secs(120));
     }
 
     #[test]

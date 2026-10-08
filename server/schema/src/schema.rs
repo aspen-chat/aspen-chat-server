@@ -284,19 +284,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    email_outbox (id) {
-        id -> Uuid,
-        priority -> Int2,
-        user -> Uuid,
-        address -> Nullable<Text>,
-        mail -> Jsonb,
-        attempts -> Int4,
-        not_before -> Timestamptz,
-        created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     federated_deployment (domain) {
         domain -> Text,
         origin -> Text,
@@ -1023,7 +1010,6 @@ diesel::joinable!(custom_emoji -> user (created_by));
 diesel::joinable!(deployment_settings -> icon (icon));
 diesel::joinable!(dm_recipient -> channel (channel));
 diesel::joinable!(dm_recipient -> user (user));
-diesel::joinable!(email_outbox -> user (user));
 diesel::joinable!(federated_deployment -> user (added_by));
 diesel::joinable!(federation_list_entry -> federated_deployment (domain));
 diesel::joinable!(federation_list_entry -> user (added_by));
@@ -1131,7 +1117,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     deployment_role,
     deployment_settings,
     dm_recipient,
-    email_outbox,
     federated_deployment,
     federation_key,
     federation_list_entry,

@@ -72,3 +72,25 @@ CREATE UNIQUE INDEX custom_emoji_name_key ON custom_emoji (community, lower(name
 ALTER TABLE react DROP CONSTRAINT react_custom_emoji_fkey;
 ALTER TABLE react ADD CONSTRAINT react_custom_emoji_fkey
     FOREIGN KEY (custom_emoji) REFERENCES custom_emoji (id) ON DELETE NO ACTION;
+
+-- Foreign users by when their home last confirmed them, never first, which a standing pass
+-- walks to ask about those due the longest.
+CREATE INDEX user_standing_due ON "user" (home_confirmed_at)
+    WHERE home_domain IS NOT NULL AND deleted_at IS NULL;
+
+-- Mail waiting to be sent is a job of its own, its class taken from its priority; the outbox
+-- goes. A piece's recipient is in its payload, by which the account's or address's going takes
+-- its mail with it.
+INSERT INTO job (id, kind, key, class, due, not_before, payload, attempts)
+SELECT id, 'sendEmail', NULL,
+       CASE WHEN priority >= 30 THEN 1 WHEN priority >= 15 THEN 2 ELSE 3 END,
+       not_before, not_before,
+       jsonb_build_object('user', "user", 'address', address, 'mail', mail), attempts
+FROM email_outbox;
+DROP TABLE email_outbox;
+CREATE INDEX job_send_email_user ON job ((payload->>'user')) WHERE kind = 'sendEmail';
+-- A newsletter post sent and not yet queued is queued by a job.
+INSERT INTO job (id, kind, key, class, due, not_before, payload)
+SELECT gen_random_uuid(), 'queueNewsletter', id::text, 3, sent_at, now(),
+       jsonb_build_object('post', id)
+FROM newsletter_post WHERE sent_at IS NOT NULL AND queued_at IS NULL;

@@ -12,10 +12,11 @@
 //! not sent.
 //!
 //! Each account's digest comes at a fixed point of its chosen hour ([`spread`]), so a popular
-//! hour is an hour's trickle of digests rather than one burst at its start. Every sending server
-//! looks for digests that are due each [`TICK`] ([`spawn_scheduler`]), claiming them under
-//! `FOR UPDATE SKIP LOCKED`, so each is made once. What a digest says is fixed when it
-//! is made and kept in the outbox with it; the names in it are as they were then.
+//! hour is an hour's trickle of digests rather than one burst at its start. A recurring job
+//! ([`make_step`], every [`TICK`], run by a server that sends mail) makes those that are due,
+//! each in a transaction of its own with its row locked, so each is made once and one that fails
+//! holds up no other. What a digest says is fixed when it is made and kept in the outbox with it;
+//! the names in it are as they were then.
 
 use super::EmailAccount;
 use super::outbox::{self, Mail};
@@ -47,9 +48,9 @@ const MAX_COUNTED: i64 = 10_000;
 const EXCERPT_CHARS: usize = 300;
 /// The longest tag or custom emoji reference in a message's text, in bytes: `<@&`, a UUID, `>`.
 const TOKEN_MAX_BYTES: usize = 40;
-/// How often each server looks for digests that are due.
-const TICK: Duration = Duration::from_secs(60);
-/// How many digests one look claims.
+/// How often the digests that are due are made (`make_step`).
+pub const TICK: Duration = Duration::from_secs(60);
+/// How many digests one step makes.
 const CLAIM: i64 = 20;
 
 /// What a digest tells of.
@@ -190,21 +191,17 @@ pub fn next_due(account: &EmailAccount, user: UserId, now: DateTime<Utc>) -> Opt
     })
 }
 
-/// Starts making digests as they fall due, for as long as the server runs.
-pub fn spawn_scheduler(state: GlobalServerContext) {
-    if !state.mailer.as_ref().is_some_and(|mailer| mailer.sends()) {
-        return;
-    }
-    tokio::spawn(async move {
-        loop {
-            match make_due(&state).await {
-                Ok(made) if made as i64 == CLAIM => continue,
-                Ok(_) => {}
-                Err(e) => tracing::error!(error = %e, "could not make the digests that are due"),
-            }
-            tokio::time::sleep(TICK).await;
-        }
-    });
+/// One step of making the digests that are due (`jobs::JobKind::MakeDigests`, every [`TICK`],
+/// run by servers that send mail): up to [`CLAIM`] of them, carrying on while there are more.
+pub async fn make_step(
+    state: &GlobalServerContext,
+    _job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    Ok(if make_due(state).await? as i64 >= CLAIM {
+        crate::jobs::Outcome::Progress(serde_json::Value::Null)
+    } else {
+        crate::jobs::Outcome::Done
+    })
 }
 
 #[derive(QueryableByName)]
@@ -221,59 +218,76 @@ struct Due {
     banned: bool,
 }
 
-/// Makes the digests that are due, a claim at a time, answering how many it claimed.
+/// Makes the digests that are due, the longest due first through `user_email_digest_due`, up to
+/// [`CLAIM`], answering how many were due. Each is made in a transaction of its own, which
+/// queues its mail and schedules the next with the account's row locked: one that fails is
+/// logged and its day skipped, so it never holds up the others.
 async fn make_due(state: &GlobalServerContext) -> crate::Result<usize> {
     let mut conn = state.connection_pool.get().await?;
-    let made = conn
-        .transaction(|conn| {
-            async move {
-                let due: Vec<Due> = diesel::sql_query(format!(
-                    r#"
-                    SELECT e."user", e.digest_time_zone, e.digest_hour, e.digest_since,
-                           {banned} AS banned
-                    FROM user_email e
-                    JOIN "user" ON "user".id = e."user"
-                    WHERE e.digest
-                      AND e.verified_at IS NOT NULL
-                      AND e.digest_next_at <= now()
-                      AND "user".deleted_at IS NULL
-                    ORDER BY e.digest_next_at
-                    LIMIT $1
-                    FOR UPDATE OF e SKIP LOCKED
-                    "#,
-                    banned = crate::user_ban::BANNED_SQL
-                ))
-                .bind::<BigInt, _>(CLAIM)
-                .load(conn)
-                .await?;
-                let now = Utc::now();
-                for account in &due {
+    let due: Vec<Due> = diesel::sql_query(format!(
+        r#"
+        SELECT e."user", e.digest_time_zone, e.digest_hour, e.digest_since,
+               {banned} AS banned
+        FROM user_email e
+        JOIN "user" ON "user".id = e."user"
+        WHERE e.digest
+          AND e.verified_at IS NOT NULL
+          AND e.digest_next_at <= now()
+          AND "user".deleted_at IS NULL
+        ORDER BY e.digest_next_at
+        LIMIT $1
+        "#,
+        banned = crate::user_ban::BANNED_SQL
+    ))
+    .bind::<BigInt, _>(CLAIM)
+    .load(conn.as_mut())
+    .await?;
+    let count = due.len();
+    for account in due {
+        let now = Utc::now();
+        let next = next_due(
+            &EmailAccount {
+                address: String::new(),
+                verified_at: None,
+                shown: false,
+                newsletter: false,
+                digest: true,
+                digest_time_zone: account.digest_time_zone.clone(),
+                digest_hour: account.digest_hour,
+                digest_next_at: None,
+                locale: String::new(),
+            },
+            account.user,
+            now,
+        );
+        let account = &account;
+        let made = conn
+            .transaction(|conn| {
+                async move {
+                    // Still due once locked: a change to the account meanwhile has scheduled
+                    // it afresh.
+                    let still: Option<UserId> = user_email::table
+                        .select(user_email::user)
+                        .filter(user_email::user.eq(account.user))
+                        .filter(user_email::digest_next_at.le(now))
+                        .for_update()
+                        .first(conn)
+                        .await
+                        .optional()?;
+                    if still.is_none() {
+                        return Ok(());
+                    }
                     // A banned account's digest is skipped, not saved up.
                     if !account.banned {
                         let since = account.digest_since.unwrap_or(now - chrono::Days::new(1));
-                        let digest =
+                        if let Some(digest) =
                             build(state, conn, account.user, since, &account.digest_time_zone)
-                                .await?;
-                        if let Some(digest) = digest {
+                                .await?
+                        {
                             outbox::queue(conn, account.user, None, &Mail::Digest { digest })
                                 .await?;
                         }
                     }
-                    let next = next_due(
-                        &EmailAccount {
-                            address: String::new(),
-                            verified_at: None,
-                            shown: false,
-                            newsletter: false,
-                            digest: true,
-                            digest_time_zone: account.digest_time_zone.clone(),
-                            digest_hour: account.digest_hour,
-                            digest_next_at: None,
-                            locale: String::new(),
-                        },
-                        account.user,
-                        now,
-                    );
                     diesel::update(user_email::table.filter(user_email::user.eq(account.user)))
                         .set((
                             user_email::digest_since.eq(now),
@@ -281,13 +295,20 @@ async fn make_due(state: &GlobalServerContext) -> crate::Result<usize> {
                         ))
                         .execute(conn)
                         .await?;
+                    Ok::<_, crate::Error>(())
                 }
-                Ok::<_, crate::Error>(due.len())
-            }
-            .scope_boxed()
-        })
-        .await?;
-    Ok(made)
+                .scope_boxed()
+            })
+            .await;
+        if let Err(e) = made {
+            tracing::error!(user = %account.user.0, error = %e, "could not make a digest; skipping its day");
+            diesel::update(user_email::table.filter(user_email::user.eq(account.user)))
+                .set(user_email::digest_next_at.eq(next))
+                .execute(conn.as_mut())
+                .await?;
+        }
+    }
+    Ok(count)
 }
 
 #[derive(QueryableByName)]

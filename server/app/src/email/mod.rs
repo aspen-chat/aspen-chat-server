@@ -23,9 +23,9 @@
 //! verified address on its profile, where `user.public_email` carries it to every reader of the
 //! user, other deployments included ([`set_public_email`]).
 //!
-//! Mail is not sent while a request waits: it is written to `email_outbox` in the transaction
-//! that causes it, and sent by [`outbox`], password resets first, on the servers whose `[email]`
-//! has `send` on.
+//! Mail is not sent while a request waits: it is queued as a job in the transaction that causes
+//! it, and sent by [`outbox`], codes someone waits for first, on the servers whose `[email]` has
+//! `send` on.
 
 pub mod digest;
 pub mod newsletter;
@@ -38,7 +38,7 @@ use crate::context::GlobalServerContext;
 use crate::two_factor::Caller;
 use crate::{CHACHA_RNG, t};
 use crate::{EventScope, UserId, publish_event};
-use aspen_schema::{email_outbox, user, user_email};
+use aspen_schema::{user, user_email};
 use aspen_wire::message_enum::server_event::{ServerEvent, UserEvent};
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
@@ -54,7 +54,6 @@ use rand::RngExt;
 use std::str::FromStr;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
-use tokio::sync::Notify;
 
 /// The longest address SMTP carries (RFC 5321's path limit, less its brackets).
 pub const ADDRESS_MAX_LENGTH: usize = 254;
@@ -63,11 +62,6 @@ pub const ADDRESS_MAX_LENGTH: usize = 254;
 const VERIFICATION_LIFETIME: Duration = Duration::from_secs(60 * 60);
 /// How many wrong verification codes end the code, so a new one must be sent.
 const VERIFICATION_ATTEMPTS: i64 = 5;
-
-/// The NATS subject a server publishes to when it queues mail someone waits for, which every
-/// sending server listens on (`outbox::spawn_sender`). Plain NATS, not the event stream: a
-/// wake-up missed costs only the time to the sender's next look.
-pub const WAKE_SUBJECT: &str = "aspen.email.wake";
 
 /// What a server knows of mail, made when `[email]` is configured: every such server takes
 /// addresses and queues mail, and those with `send` on also send it.
@@ -79,9 +73,6 @@ pub struct Mailer {
     public_url: String,
     /// The deployment-wide sending rate, when `max_per_second` sets one.
     rate: Option<aspen_limits::Rate>,
-    /// Woken when mail someone waits for is queued, on this server or another, so the sender
-    /// need not wait for its next look.
-    wake: Notify,
 }
 
 impl Mailer {
@@ -119,7 +110,6 @@ impl Mailer {
             from,
             public_url: public_url.to_string(),
             rate,
-            wake: Notify::new(),
         })
     }
 
@@ -385,13 +375,7 @@ pub async fn remove_address(state: &GlobalServerContext, caller: &Caller) -> cra
                 return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
             };
             // Mail waiting for the address goes with it; a code reaching it would do nothing.
-            diesel::delete(
-                email_outbox::table
-                    .filter(email_outbox::user.eq(user_id))
-                    .filter(email_outbox::address.is_null()),
-            )
-            .execute(conn)
-            .await?;
+            outbox::forget_queued(conn, user_id, true).await?;
             if removed.verified() {
                 outbox::queue(
                     conn,
@@ -716,19 +700,11 @@ async fn announce(
     .await
 }
 
-/// Wakes every sending server, once mail someone waits for has been queued and its transaction
-/// committed. A failure is logged: the senders find the mail at their next look regardless.
+/// Wakes every job runner, once mail someone waits for has been queued and its transaction
+/// committed (`jobs::wake`). A runner finds the mail at its next look regardless.
 pub async fn wake(state: &GlobalServerContext) {
-    if state.mailer.is_none() {
-        return;
-    }
-    if let Err(e) = state
-        .nats_context
-        .client()
-        .publish(WAKE_SUBJECT, bytes::Bytes::new())
-        .await
-    {
-        tracing::warn!(error = %e, "could not wake the mail senders");
+    if state.mailer.is_some() {
+        crate::jobs::wake(state).await;
     }
 }
 

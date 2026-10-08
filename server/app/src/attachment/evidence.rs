@@ -29,7 +29,7 @@ pub const URL_LIFETIME: Duration = Duration::from_secs(10 * 60);
 
 /// How often each server looks for evidence still on the anonymous read path. A deleted
 /// message's files stay readable there, by whoever already holds their URLs, until then.
-const MOVE_EVERY: Duration = Duration::from_secs(5);
+pub const MOVE_EVERY: Duration = Duration::from_secs(5);
 
 /// How many attachments one look moves at most before looking again.
 const MOVE_BATCH: i64 = 50;
@@ -202,18 +202,17 @@ async fn move_one(state: &GlobalServerContext, row: &Unmoved) -> crate::Result<b
     Ok(updated == 1)
 }
 
-/// Looks for evidence to move every [`MOVE_EVERY`], on every server, for as long as it runs.
-pub fn spawn_mover(state: GlobalServerContext) {
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(MOVE_EVERY).await;
-            match move_unmoved(&state).await {
-                Ok(0) => {}
-                Ok(moved) => tracing::info!(moved, "moved evidence off the public read path"),
-                Err(e) => tracing::warn!(error = %e, "could not look for evidence to move"),
-            }
-        }
-    });
+/// One move of evidence off the public read path (`jobs::JobKind::MoveEvidence`, every
+/// [`MOVE_EVERY`]).
+pub async fn move_step(
+    state: &GlobalServerContext,
+    _job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let moved = move_unmoved(state).await?;
+    if moved > 0 {
+        tracing::info!(moved, "moved evidence off the public read path");
+    }
+    Ok(crate::jobs::Outcome::Done)
 }
 
 /// URLs reading an attachment kept as evidence and its preview, signed for [`URL_LIFETIME`],

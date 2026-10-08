@@ -1,3 +1,21 @@
+DROP INDEX job_send_email_user;
+CREATE TABLE email_outbox (
+    id UUID PRIMARY KEY,
+    priority SMALLINT NOT NULL,
+    "user" UUID NOT NULL REFERENCES "user" (id) ON DELETE CASCADE,
+    address TEXT,
+    mail JSONB NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    not_before TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX email_outbox_next ON email_outbox (priority DESC, not_before, id);
+INSERT INTO email_outbox (id, priority, "user", address, mail, attempts, not_before)
+SELECT id, CASE class WHEN 1 THEN 30 WHEN 2 THEN 20 ELSE 0 END,
+       (payload->>'user')::uuid, payload->>'address', payload->'mail', attempts, not_before
+FROM job WHERE kind = 'sendEmail'
+  AND EXISTS (SELECT 1 FROM "user" u WHERE u.id = (payload->>'user')::uuid);
+DROP INDEX user_standing_due;
 ALTER TABLE react DROP CONSTRAINT react_custom_emoji_fkey;
 ALTER TABLE react ADD CONSTRAINT react_custom_emoji_fkey
     FOREIGN KEY (custom_emoji) REFERENCES custom_emoji (id) ON DELETE CASCADE;

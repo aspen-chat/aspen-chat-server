@@ -134,6 +134,8 @@ pub enum Error {
     Webauthn(#[from] webauthn_rs::prelude::WebauthnError),
     #[error("authenticator app secret error {0}")]
     Totp(String),
+    #[error("mail could not be sent now: {0}")]
+    MailUnsent(String),
     #[error("the server is too busy to do this now")]
     Busy,
     /// An upload would take its uploader past the deployment's daily quota

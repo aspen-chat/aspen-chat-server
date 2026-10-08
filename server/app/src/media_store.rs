@@ -78,7 +78,7 @@ const COPY_PART_BYTES: u64 = 1024 * 1024 * 1024;
 /// How long after its URL expires a staging object is kept, for a confirm already under way.
 const STAGING_GRACE: StdDuration = StdDuration::from_secs(3600);
 /// How often each server sweeps staging objects.
-const SWEEP_EVERY: StdDuration = StdDuration::from_secs(3600);
+pub const SWEEP_EVERY: StdDuration = StdDuration::from_secs(3600);
 
 /// The staging key a client's upload of what becomes `key` is written to.
 pub fn upload_key(key: &str) -> String {
@@ -610,31 +610,56 @@ impl MediaStore {
     }
 }
 
-/// Sweeps staging objects, and attachments never sent (`attachment::sweep_unsent`), every
-/// [`SWEEP_EVERY`], on every server, for as long as it runs: deleting one twice is harmless, and
-/// a deployment of one server needs no other to do it.
-pub fn spawn_upload_sweeper(state: crate::context::GlobalServerContext) {
-    tokio::spawn(async move {
-        loop {
-            // Spread around the hour, so servers started together do not sweep together.
-            let jitter = StdDuration::from_secs(rand::random_range(0..SWEEP_EVERY.as_secs() / 2));
-            tokio::time::sleep(SWEEP_EVERY * 3 / 4 + jitter).await;
-            let cutoff = state.media_store.staging_cutoff();
-            match state.media_store.sweep_uploads(cutoff).await {
-                Ok(0) => {}
-                Ok(swept) => tracing::info!(swept, "deleted staging uploads past their URLs"),
-                Err(e) => tracing::warn!(error = %e, "could not sweep staging uploads"),
-            }
-            match crate::attachment::sweep_unsent(&state).await {
-                Ok(0) => {}
-                Ok(swept) => tracing::info!(swept, "deleted attachments never sent"),
-                Err(e) => tracing::warn!(error = %e, "could not sweep attachments never sent"),
-            }
-            if let Err(e) = crate::upload_quota::prune(&state).await {
-                tracing::warn!(error = %e, "could not prune the record of uploads");
-            }
-        }
-    });
+/// One sweep of uploads (`jobs::JobKind::SweepUploads`, every [`SWEEP_EVERY`]): the staging
+/// objects past their URLs, the attachments never sent (`attachment::sweep_unsent`), the
+/// reservations of uploads never confirmed (`sweep_unconfirmed`), and the record of uploads past
+/// its window (`upload_quota::prune`). Deleting one twice is harmless.
+pub async fn sweep_step(
+    state: &crate::context::GlobalServerContext,
+    _job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let cutoff = state.media_store.staging_cutoff();
+    let swept = state.media_store.sweep_uploads(cutoff).await?;
+    if swept > 0 {
+        tracing::info!(swept, "deleted staging uploads past their URLs");
+    }
+    let unsent = crate::attachment::sweep_unsent(state).await?;
+    if unsent > 0 {
+        tracing::info!(unsent, "deleted attachments never sent");
+    }
+    let unconfirmed = sweep_unconfirmed(state).await?;
+    crate::upload_quota::prune(state).await?;
+    Ok(if unconfirmed {
+        crate::jobs::Outcome::Progress(serde_json::Value::Null)
+    } else {
+        crate::jobs::Outcome::Done
+    })
+}
+
+/// How long after its URL expires an upload never confirmed keeps its row: long past any
+/// confirmation that could still be on its way.
+const UNCONFIRMED_KEPT: chrono::Duration = chrono::Duration::days(1);
+/// How many reservations of each kind one sweep deletes.
+const UNCONFIRMED_BATCH: i64 = 1000;
+
+/// Deletes the rows of attachments and icons whose upload was never confirmed, a day past their
+/// URLs, through `attachment_pending_idx` and `icon_pending_idx`; their staging objects go with
+/// every other. Answers whether a whole batch of either went, so there may be more.
+async fn sweep_unconfirmed(state: &crate::context::GlobalServerContext) -> crate::Result<bool> {
+    let cutoff = state.media_store.staging_cutoff() - UNCONFIRMED_KEPT;
+    let mut conn = state.connection_pool.get().await?;
+    let mut full = false;
+    for table in ["attachment", "icon"] {
+        let deleted = diesel::sql_query(format!(
+            "DELETE FROM {table} WHERE id IN (SELECT id FROM {table} \
+             WHERE ready_at IS NULL AND timestamp < $1 LIMIT $2)"
+        ))
+        .bind::<diesel::sql_types::Timestamptz, _>(cutoff)
+        .bind::<diesel::sql_types::BigInt, _>(UNCONFIRMED_BATCH);
+        let deleted = diesel_async::RunQueryDsl::execute(deleted, conn.as_mut()).await?;
+        full |= deleted as i64 >= UNCONFIRMED_BATCH;
+    }
+    Ok(full)
 }
 
 #[cfg(test)]
