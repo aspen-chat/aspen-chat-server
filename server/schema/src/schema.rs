@@ -216,6 +216,9 @@ diesel::table! {
         sort_index -> Int4,
         joined_at -> Timestamptz,
         nickname -> Nullable<Text>,
+        last_seen_at -> Timestamptz,
+        shown_name -> Text,
+        search_name -> Text,
     }
 }
 

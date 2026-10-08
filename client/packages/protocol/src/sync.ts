@@ -2401,15 +2401,19 @@ export class AspenSync {
   }
 
   /**
-   * A page of a community's members whose name contains `name`, sorted by name. Only those who
-   * act on members may search a community larger than its member sample; the server refuses
-   * anyone else. The members are cached, their roles too, but not added to the sample.
+   * A page of a community's members whose name contains `name`, sorted by name, after the
+   * member `after` when given. Only those who act on members may search a community larger
+   * than its member sample; the server refuses anyone else. The members are cached, their roles
+   * too, but not added to the sample.
    */
-  async searchMembers(communityId: string, name: string, offset = 0): Promise<User[]> {
+  async searchMembers(communityId: string, name: string, after?: string): Promise<User[]> {
     const result = await this.#client.api.GET("/api/v1/communities/{community}/members", {
       params: {
         path: { community: communityId },
-        query: { "filter[name]": name, offset, limit: MEMBER_SEARCH_PAGE },
+        query:
+          after === undefined
+            ? { "filter[name]": name, limit: MEMBER_SEARCH_PAGE }
+            : { "filter[name]": name, after, limit: MEMBER_SEARCH_PAGE },
       },
     });
     if (result.data === undefined) {

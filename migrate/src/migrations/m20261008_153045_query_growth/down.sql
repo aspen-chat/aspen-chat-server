@@ -1,3 +1,13 @@
+DROP INDEX community_user_search;
+DROP INDEX community_user_by_shown_name;
+DROP TRIGGER user_names_changed ON "user";
+DROP FUNCTION user_names_changed();
+DROP TRIGGER community_user_names ON community_user;
+DROP FUNCTION community_user_names();
+ALTER TABLE community_user DROP COLUMN search_name;
+ALTER TABLE community_user DROP COLUMN shown_name;
+DROP INDEX community_user_recent;
+ALTER TABLE community_user DROP COLUMN last_seen_at;
 ALTER TABLE plugin ADD COLUMN storage_bytes BIGINT NOT NULL DEFAULT 0;
 UPDATE plugin SET storage_bytes = COALESCE((SELECT sum(bytes) FROM plugin_storage_usage u WHERE u.plugin = plugin.id), 0);
 ALTER TABLE plugin_storage ALTER COLUMN key TYPE TEXT COLLATE "default";

@@ -116,3 +116,50 @@ ALTER TABLE plugin_storage ALTER COLUMN key TYPE TEXT COLLATE "C";
 -- A plugin's total is the sum of its owners' shares, read when shown, so no write for one
 -- owner waits on another's for the plugin's one row.
 ALTER TABLE plugin DROP COLUMN storage_bytes;
+
+-- When each member last came online, kept beside the membership, so a community's member
+-- sample reads its most recently seen members through an index rather than ranking everyone.
+ALTER TABLE community_user ADD COLUMN last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now();
+UPDATE community_user cu SET last_seen_at = u.last_seen_at FROM "user" u WHERE u.id = cu."user";
+CREATE INDEX community_user_recent ON community_user (community, last_seen_at DESC, "user");
+
+-- Each member's names as their community searches and sorts them, kept beside the membership:
+-- `shown_name`, the name the community shows (nickname, else display name, else username), and
+-- `search_name`, all three, each after a space, so a search matches the start of any of them.
+-- Triggers keep both current through every change to a nickname or a profile's names.
+ALTER TABLE community_user ADD COLUMN shown_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE community_user ADD COLUMN search_name TEXT NOT NULL DEFAULT '';
+CREATE FUNCTION community_user_names() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    username TEXT;
+    shown TEXT;
+BEGIN
+    SELECT name, display_name INTO username, shown FROM "user" WHERE id = NEW."user";
+    NEW.shown_name := lower(COALESCE(NEW.nickname, shown, username, ''));
+    NEW.search_name := ' ' || lower(concat_ws(' ', username, shown, NEW.nickname));
+    RETURN NEW;
+END
+$$;
+CREATE TRIGGER community_user_names BEFORE INSERT OR UPDATE OF nickname ON community_user
+    FOR EACH ROW EXECUTE FUNCTION community_user_names();
+CREATE FUNCTION user_names_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE community_user
+    SET shown_name = lower(COALESCE(nickname, NEW.display_name, NEW.name)),
+        search_name = ' ' || lower(concat_ws(' ', NEW.name, NEW.display_name, nickname))
+    WHERE "user" = NEW.id;
+    RETURN NULL;
+END
+$$;
+CREATE TRIGGER user_names_changed AFTER UPDATE OF name, display_name ON "user"
+    FOR EACH ROW
+    WHEN (OLD.name IS DISTINCT FROM NEW.name OR OLD.display_name IS DISTINCT FROM NEW.display_name)
+    EXECUTE FUNCTION user_names_changed();
+UPDATE community_user cu
+SET shown_name = lower(COALESCE(cu.nickname, u.display_name, u.name)),
+    search_name = ' ' || lower(concat_ws(' ', u.name, u.display_name, cu.nickname))
+FROM "user" u WHERE u.id = cu."user";
+-- A community's members by the name it shows, a page at a time, and searched by any part of
+-- any of their names within the community alone.
+CREATE INDEX community_user_by_shown_name ON community_user (community, shown_name, "user");
+CREATE INDEX community_user_search ON community_user USING gin (community, search_name gin_trgm_ops);

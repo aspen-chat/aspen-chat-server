@@ -391,13 +391,13 @@ pub type MemberList = SideloadedList<User>;
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct MemberListQuery {
-    /// Search: members whose username or display name contains this, ignoring case; at most
-    /// 100 characters.
+    /// Search: members whose username, display name, or nickname contains this, ignoring case,
+    /// or for one or two characters starts with it; at most 100 characters.
     #[serde(rename = "filter[name]")]
     #[param(rename = "filter[name]")]
     pub name: Option<String>,
-    /// Where a search's page starts, at most 10000.
-    pub offset: Option<i64>,
+    /// Continue a search after this member, the last of the previous page.
+    pub after: Option<UserId>,
     /// How many a search returns, at most 50; 20 when absent.
     pub limit: Option<i64>,
 }
@@ -432,14 +432,14 @@ pub async fn list_community_members(
     Path(community): Path<CommunityId>,
     Query(query): Query<MemberListQuery>,
 ) -> ApiResult<Json<MemberList>> {
-    let searching = query.name.is_some() || query.offset.is_some() || query.limit.is_some();
+    let searching = query.name.is_some() || query.after.is_some() || query.limit.is_some();
     let members = if searching {
         app::community::search_community_members(
             &state,
             user.id,
             community,
             query.name.as_deref(),
-            query.offset.unwrap_or(0),
+            query.after,
             query.limit.unwrap_or(DEFAULT_MEMBER_PAGE),
         )
         .await?
