@@ -13,7 +13,8 @@ One TypeScript web application, shipped three ways:
 
 - Node 22.12 or newer and pnpm 11 (`corepack enable` picks up the pinned version).
 - A Rust toolchain, only if you need to regenerate the server's schema files.
-- For the mobile shells: Android Studio and/or Xcode, per Capacitor's requirements.
+- For the mobile shells: Android Studio and/or Xcode, per Capacitor's requirements. Android builds
+  need JDK 21 and the Android SDK (`ANDROID_HOME`, with `platform-tools` on `PATH` for `adb`).
 
 ## Getting started
 
@@ -54,8 +55,56 @@ pnpm e2e              # Playwright against Chromium, Firefox, and WebKit (run `p
 pnpm build            # production build of every package
 pnpm dev:desktop      # Electron pointed at the running Vite dev server
 pnpm --filter @aspen/desktop package   # installers under packages/desktop/release
-pnpm --filter @aspen/mobile add:android && pnpm --filter @aspen/mobile run:android
+pnpm --filter @aspen/mobile run:android   # build, sync, and install on a phone (see below)
 ```
+
+## Running the Android app on a phone
+
+The app bundles a copy of the `build:shell` output rather than loading a dev server, so rebuild
+and sync after every change to the client.
+
+Once: turn on Developer options on the phone (tap Settings → About phone → Build number seven
+times), turn on USB debugging, plug it in, and accept the prompt. `adb devices` should list it as
+`device`, not `unauthorized`.
+
+```sh
+pnpm codegen                                  # the build needs the generated types
+pnpm --filter @aspen/mobile run:android       # build:shell, cap sync, assemble, install, launch
+```
+
+The same steps by hand, as CI runs them:
+
+```sh
+pnpm --filter @aspen/app build:shell
+(cd packages/mobile && npx cap sync android)
+(cd packages/mobile/android && ./gradlew :app:installDebug)
+```
+
+`pnpm --filter @aspen/mobile open:android` opens the project in Android Studio instead.
+
+**Reaching a development server.** The app asks for a deployment on first launch. A debug build
+may use plain HTTP only to `localhost` and `127.0.0.1`
+(`packages/mobile/android/app/src/debug/res/xml/network_security_config.xml`); every other
+address needs HTTPS, so a dev server's LAN address is refused. Forward the dev server's port over
+USB and enter `http://localhost:5173`:
+
+```sh
+adb reverse tcp:5173 tcp:5173                 # again after each reconnect
+```
+
+The page is served from `https://localhost`, so anything else it loads over plain HTTP at
+another address is mixed content and blocked too: attachments, icons, and uploads fail unless
+`[media.s3]`'s `public_endpoint` and `public_base_url` name `localhost` with their ports
+forwarded the same way, or the deployment serves them over HTTPS. A call's media is UDP, which
+`adb reverse` does not carry, so the phone must reach the voice server over the network.
+
+**Debugging.** `chrome://inspect` in desktop Chrome opens DevTools on the app's web view;
+`adb logcat` has the native side. `pnpm --filter @aspen/mobile test:android` runs the JVM tests
+and, on the attached phone, the push handler's device tests, which post real notifications.
+
+**Push** works only in a build with a relay in the `aspen_push_relay` string
+(`app/src/main/res/values/strings.xml`) and a `google-services.json` from the publisher's
+Firebase project; without them the app registers for nothing (see `docs/architecture/push.md`).
 
 ## License
 
