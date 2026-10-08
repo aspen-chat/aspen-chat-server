@@ -5,6 +5,7 @@ import { useSync, useVoiceCall } from "@/api/hooks";
 import { GameCaptureDialog } from "@/features/voice/GameCaptureDialog";
 import { gameCaptureBridge, type GameCaptureBridge } from "@/features/voice/gameCapture";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { callBarButtonClass } from "@/features/voice/callBarButton";
 import { useMessages } from "@/i18n/context";
 
 /**
@@ -77,8 +78,7 @@ export function ShareControl({
 
   const bar = variant === "bar";
   const triggerClass = bar
-    ? "rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
-      "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 pointer-coarse:p-2.5"
+    ? callBarButtonClass
     : "flex items-center gap-1.5 rounded-md px-2 py-1 text-sm text-ink-muted outline-none " +
       "hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50";
   const menuItemClass =
@@ -99,7 +99,7 @@ export function ShareControl({
               "bg-danger-soft text-danger hover:bg-danger-soft/80 focus-visible:ring-2 focus-visible:ring-accent/50"
         }
       >
-        <ScreencastIcon size={18} aria-hidden="true" />
+        <ScreencastIcon size={bar ? 24 : 18} aria-hidden="true" />
         {!bar && m.voice.stopSharing}
       </Button>
     );
@@ -133,7 +133,7 @@ export function ShareControl({
         }}
         className={triggerClass}
       >
-        <ScreencastIcon size={18} aria-hidden="true" />
+        <ScreencastIcon size={bar ? 24 : 18} aria-hidden="true" />
         {!bar && m.voice.shareScreen}
       </Button>
     );
@@ -147,7 +147,7 @@ export function ShareControl({
 
   const trigger = (
     <Button aria-label={m.voice.shareMenu} className={triggerClass}>
-      <ScreencastIcon size={18} aria-hidden="true" />
+      <ScreencastIcon size={bar ? 24 : 18} aria-hidden="true" />
       {!bar && m.voice.shareMenu}
     </Button>
   );
