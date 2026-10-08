@@ -288,7 +288,6 @@ export function MessageList({
                     channelId={channelId}
                     parentId={parentId}
                     highlighted={id === highlightId}
-                    latest={atLatest && id === lastId}
                     grouped={continuing.has(id)}
                     continued={next !== undefined && continuing.has(next)}
                   />
