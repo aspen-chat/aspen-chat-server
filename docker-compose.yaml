@@ -8,11 +8,10 @@ services:
   database:
     image: postgres:alpine
     volumes:
-      - db:/data/postgres
+      - db:/var/lib/postgresql
     restart: always
     environment:
       POSTGRES_PASSWORD: aspen_test
-      PGDATA: /data/postgress
     ports:
       - "${ASPEN_DEV_BIND:-127.0.0.1}:5432:5432"
   nats:
