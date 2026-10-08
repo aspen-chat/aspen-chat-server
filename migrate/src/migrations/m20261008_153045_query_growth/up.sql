@@ -92,3 +92,11 @@ CREATE INDEX report_by_case ON report ("case", created_at, id);
 CREATE INDEX user_dashboard_name ON "user" (lower(COALESCE(display_name, name)), id)
     WHERE deleted_at IS NULL AND NOT system;
 CREATE INDEX community_dashboard_name ON community (lower(name), id) WHERE deleted_at IS NULL;
+
+-- Plugins' keys compare by their bytes, so a prefix is a range of the key's index rather than
+-- a filter over everything a scope holds (`app::plugin::storage::list`).
+ALTER TABLE plugin_storage ALTER COLUMN key TYPE TEXT COLLATE "C";
+
+-- A plugin's total is the sum of its owners' shares, read when shown, so no write for one
+-- owner waits on another's for the plugin's one row.
+ALTER TABLE plugin DROP COLUMN storage_bytes;

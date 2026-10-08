@@ -542,7 +542,6 @@ diesel::table! {
         enabled -> Bool,
         position -> Int4,
         settings -> Jsonb,
-        storage_bytes -> Int8,
         installed_at -> Timestamptz,
         updated_at -> Timestamptz,
         removed_at -> Nullable<Timestamptz>,

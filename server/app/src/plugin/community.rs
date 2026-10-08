@@ -90,12 +90,31 @@ pub async fn list(
     require_member(conn.as_mut(), caller, community)
         .await?
         .require(Permissions::MANAGE_PLUGINS)?;
-    let mut out = Vec::new();
-    for plugin in state.plugins.loaded().iter() {
-        let found = row(conn.as_mut(), community, &plugin.id).await?;
-        out.push(record(plugin, community, found.as_ref()));
-    }
-    Ok(out)
+    // Every plugin's row for the community in one read, with no lock: listing changes nothing.
+    let rows: std::collections::HashMap<String, Row> = community_plugin::table
+        .select((
+            community_plugin::plugin,
+            community_plugin::enabled,
+            community_plugin::settings,
+        ))
+        .filter(community_plugin::community.eq(community))
+        .load::<(String, bool, Value)>(conn.as_mut())
+        .await?
+        .into_iter()
+        .map(|(plugin, enabled, settings)| {
+            let settings = match settings {
+                Value::Object(map) => map,
+                _ => Map::new(),
+            };
+            (plugin, Row { enabled, settings })
+        })
+        .collect();
+    Ok(state
+        .plugins
+        .loaded()
+        .iter()
+        .map(|plugin| record(plugin, community, rows.get(&plugin.id)))
+        .collect())
 }
 
 /// `settings` checked against `plugin`'s community settings and laid over `current`, naming the

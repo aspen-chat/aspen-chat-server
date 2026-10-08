@@ -8,13 +8,13 @@
 //! scope, and the deployment's for the plugin's own. A plugin keeps at most its manifest's
 //! `storageQuota` of keys and values together in each owner's share, counted in
 //! `plugin_storage_usage` as values are written and deleted, so no one community can use up what
-//! the plugin may keep for the rest. `plugin.storage_bytes` counts every share together, for the
-//! operator.
+//! the plugin may keep for the rest. A plugin's total is its shares' sum (`totals`), read for the
+//! operator and the dashboard.
 
 use super::host::wit;
 use crate::context::GlobalServerContext;
 use crate::{ChannelId, CommunityId, UserId};
-use aspen_schema::{plugin, plugin_storage, plugin_storage_usage, plugin_timer};
+use aspen_schema::{plugin_storage, plugin_storage_usage, plugin_timer};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -115,8 +115,9 @@ impl Owner {
     }
 }
 
-/// Adds `delta` bytes to `owner`'s share of `plugin_id`'s storage, and to the plugin's count of
-/// every share, refusing growth past `quota`; answers whether it fit.
+/// Adds `delta` bytes to `owner`'s share of `plugin_id`'s storage, refusing growth past `quota`;
+/// answers whether it fit. Only the owner's row is written, so writes for different owners
+/// never wait on each other; the plugin's total is the shares' sum, read when it is shown.
 async fn count_usage(
     conn: &mut AsyncPgConnection,
     plugin_id: &str,
@@ -145,14 +146,22 @@ async fn count_usage(
     .bind::<diesel::sql_types::BigInt, _>(quota)
     .execute(conn)
     .await?;
-    if counted == 0 {
-        return Ok(false);
-    }
-    diesel::update(plugin::table.filter(plugin::id.eq(plugin_id)))
-        .set(plugin::storage_bytes.eq(plugin::storage_bytes + delta))
-        .execute(conn)
-        .await?;
-    Ok(true)
+    Ok(counted > 0)
+}
+
+/// How much each plugin keeps, every owner's share together, summed through
+/// `plugin_storage_usage`'s key; a plugin keeping nothing is absent.
+pub async fn totals(conn: &mut AsyncPgConnection) -> crate::Result<HashMap<String, i64>> {
+    Ok(plugin_storage_usage::table
+        .group_by(plugin_storage_usage::plugin)
+        .select((
+            plugin_storage_usage::plugin,
+            diesel::dsl::sql::<diesel::sql_types::BigInt>("COALESCE(sum(bytes), 0)::bigint"),
+        ))
+        .load::<(String, i64)>(conn)
+        .await?
+        .into_iter()
+        .collect())
 }
 
 fn check_key(key: &str) -> Result<(), wit::Error> {
@@ -426,7 +435,24 @@ pub async fn delete(
     .await
 }
 
-/// The keys after `after` that begin with `prefix`, in order, with their values.
+/// The least string greater than every string that begins with `prefix`, in byte order (which
+/// is code point order in UTF-8), or `None` when there is none: `prefix` with its last
+/// character moved one on, dropping characters that cannot move.
+fn past_prefix(prefix: &str) -> Option<String> {
+    let mut chars: Vec<char> = prefix.chars().collect();
+    while let Some(last) = chars.pop() {
+        let next = (u32::from(last) + 1..=u32::from(char::MAX)).find_map(char::from_u32);
+        if let Some(next) = next {
+            chars.push(next);
+            return Some(chars.into_iter().collect());
+        }
+    }
+    None
+}
+
+/// The keys after `after` that begin with `prefix`, in order of their bytes, with their values:
+/// a range of the key's index (`key` compares in the `C` collation), so a page reads what it
+/// returns and no more.
 pub async fn list(
     conn: &mut AsyncPgConnection,
     plugin_id: &str,
@@ -451,6 +477,12 @@ pub async fn list(
         .order(plugin_storage::key.asc())
         .limit(i64::from(limit))
         .into_boxed();
+    if !prefix.is_empty() {
+        query = query.filter(plugin_storage::key.ge(prefix.to_string()));
+    }
+    if let Some(past) = past_prefix(prefix) {
+        query = query.filter(plugin_storage::key.lt(past));
+    }
     if let Some(after) = after {
         query = query.filter(plugin_storage::key.gt(after.to_string()));
     }
@@ -558,6 +590,15 @@ pub async fn count(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_end_of_a_prefix_range_is_past_every_key_with_it() {
+        assert_eq!(past_prefix("ab").as_deref(), Some("ac"));
+        assert_eq!(past_prefix(""), None);
+        assert_eq!(past_prefix("a\u{10FFFF}").as_deref(), Some("b"));
+        assert_eq!(past_prefix("\u{D7FF}").as_deref(), Some("\u{E000}"));
+        assert!("ab\u{10FFFF}zz" < "ac");
+    }
     use diesel_async::SimpleAsyncConnection;
 
     const COMMUNITY: &str = "5e1f0000-0000-4000-8000-000000000001";
@@ -631,12 +672,7 @@ mod tests {
         set(&mut conn, plugin, quota, &thread, "k", &[0; 40])
             .await
             .unwrap();
-        let total: i64 = plugin::table
-            .select(plugin::storage_bytes)
-            .filter(plugin::id.eq(plugin))
-            .first(&mut conn)
-            .await
-            .unwrap();
+        let total = totals(&mut conn).await.unwrap()[plugin];
         assert_eq!(total, (1 + 40) + (1 + 30) + (1 + 90) + (1 + 90));
 
         forget(&mut conn, Scope::Community(CommunityId(id(COMMUNITY))))

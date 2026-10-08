@@ -214,25 +214,56 @@ pub async fn read_log(
     limit: i64,
 ) -> crate::Result<Vec<(OfferRow, Vec<TransferRow>)>> {
     let mut conn = state.connection_pool.get().await?;
-    let mut query = file_offer::table
-        .select(OfferRow::as_select())
-        .order(file_offer::id.desc())
-        .limit(limit)
-        .into_boxed();
-    if let Some(before) = before {
-        query = query.filter(file_offer::id.lt(before));
-    }
-    if let Some(user) = user {
-        let received = file_transfer::table
-            .select(file_transfer::offer)
-            .filter(file_transfer::receiver.eq(user));
-        query = query.filter(
-            file_offer::sender
-                .eq(user)
-                .or(file_offer::id.eq_any(received)),
-        );
-    }
-    let offers: Vec<OfferRow> = query.load(conn.as_mut()).await?;
+    let offers: Vec<OfferRow> = match user {
+        // One person's: what they offered and what they received, each newest first through
+        // its own index (`file_offer_sender`, `file_transfer_receiver`), merged, so the page
+        // reads only their offers however many others there are.
+        Some(user) => {
+            #[derive(diesel::QueryableByName)]
+            struct Listed {
+                #[diesel(sql_type = diesel::sql_types::Uuid)]
+                id: Uuid,
+            }
+            let listed: Vec<Listed> = diesel::sql_query(
+                r#"
+                SELECT id FROM (
+                    (SELECT id FROM file_offer
+                     WHERE sender = $1 AND ($2::uuid IS NULL OR id < $2)
+                     ORDER BY id DESC LIMIT $3)
+                    UNION
+                    (SELECT DISTINCT offer AS id FROM file_transfer
+                     WHERE receiver = $1 AND ($2::uuid IS NULL OR offer < $2)
+                     ORDER BY offer DESC LIMIT $3)
+                ) theirs
+                ORDER BY id DESC
+                LIMIT $3
+                "#,
+            )
+            .bind::<diesel::sql_types::Uuid, _>(user.0)
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(before)
+            .bind::<diesel::sql_types::BigInt, _>(limit)
+            .load(conn.as_mut())
+            .await?;
+            let ids: Vec<Uuid> = listed.into_iter().map(|l| l.id).collect();
+            file_offer::table
+                .select(OfferRow::as_select())
+                .filter(file_offer::id.eq_any(&ids))
+                .order(file_offer::id.desc())
+                .load(conn.as_mut())
+                .await?
+        }
+        None => {
+            let mut query = file_offer::table
+                .select(OfferRow::as_select())
+                .order(file_offer::id.desc())
+                .limit(limit)
+                .into_boxed();
+            if let Some(before) = before {
+                query = query.filter(file_offer::id.lt(before));
+            }
+            query.load(conn.as_mut()).await?
+        }
+    };
     let ids: Vec<Uuid> = offers.iter().map(|offer| offer.id).collect();
     let mut transfers: HashMap<Uuid, Vec<TransferRow>> = HashMap::new();
     for transfer in file_transfer::table

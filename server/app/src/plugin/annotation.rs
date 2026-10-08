@@ -165,6 +165,22 @@ impl From<UserAnnotationRow> for UserAnnotation {
     }
 }
 
+/// The most kinds of annotation one plugin keeps on one message, or on one person.
+pub const MAX_KINDS: i64 = 8;
+
+fn too_many_kinds() -> crate::Error {
+    crate::Error::Validation(
+        format!("a plugin keeps at most {MAX_KINDS} kinds of annotation on one message or person")
+            .into(),
+    )
+}
+
+/// Whether the row an `INSERT … ON CONFLICT DO UPDATE` returns was made by it rather than
+/// updated: a row it made has no deleting transaction (`xmax`) yet.
+fn created_now() -> diesel::expression::SqlLiteral<diesel::sql_types::Bool> {
+    diesel::dsl::sql::<diesel::sql_types::Bool>("xmax = 0")
+}
+
 /// Sets `plugin`'s annotation of its kind on `message`, replacing one it set before, and
 /// announces it in the message's channel.
 pub async fn set_on_message(
@@ -176,64 +192,69 @@ pub async fn set_on_message(
 ) -> crate::Result<()> {
     conn.transaction(|conn| {
         async move {
-            let existing: Option<AnnotationId> = message_annotation::table
-                .select(message_annotation::id)
+            // A plugin says a few kinds of thing about one message, not without end.
+            let others: i64 = message_annotation::table
                 .filter(
                     message_annotation::message
                         .eq(message)
                         .and(message_annotation::plugin.eq(plugin))
-                        .and(message_annotation::kind.eq(&annotation.kind)),
+                        .and(message_annotation::kind.ne(&annotation.kind)),
                 )
-                .for_update()
-                .first(conn)
-                .await
-                .optional()?;
+                .count()
+                .get_result(conn)
+                .await?;
+            if others >= MAX_KINDS {
+                return Err(too_many_kinds());
+            }
             let severity = annotation.severity.to_string();
-            let event = match existing {
-                Some(id) => {
-                    diesel::update(message_annotation::table.filter(message_annotation::id.eq(id)))
-                        .set((
-                            message_annotation::severity.eq(&severity),
-                            message_annotation::label.eq(&annotation.label),
-                            message_annotation::detail.eq(&annotation.detail),
-                            message_annotation::link.eq(&annotation.link),
-                            message_annotation::updated_at.eq(diesel::dsl::now),
-                        ))
-                        .execute(conn)
-                        .await?;
-                    MessageAnnotationEvent::Update {
-                        id,
-                        severity: Some(annotation.severity),
-                        label: Some(annotation.label),
-                        detail: Some(annotation.detail),
-                        link: Some(annotation.link),
-                    }
-                }
-                None => {
-                    let id = AnnotationId::new();
-                    diesel::insert_into(message_annotation::table)
-                        .values((
-                            message_annotation::id.eq(id),
-                            message_annotation::plugin.eq(plugin),
-                            message_annotation::message.eq(message),
-                            message_annotation::kind.eq(&annotation.kind),
-                            message_annotation::severity.eq(&severity),
-                            message_annotation::label.eq(&annotation.label),
-                            message_annotation::detail.eq(&annotation.detail),
-                            message_annotation::link.eq(&annotation.link),
-                        ))
-                        .execute(conn)
-                        .await?;
-                    MessageAnnotationEvent::Create(MessageAnnotation {
-                        id,
-                        message,
-                        plugin: plugin.to_string(),
-                        kind: annotation.kind,
-                        severity: annotation.severity,
-                        label: annotation.label,
-                        detail: annotation.detail,
-                        link: annotation.link,
-                    })
+            // One statement makes it or replaces it, and says which, so two plugins' calls at
+            // once for the same kind never both try to make it.
+            let (id, created): (AnnotationId, bool) =
+                diesel::insert_into(message_annotation::table)
+                    .values((
+                        message_annotation::id.eq(AnnotationId::new()),
+                        message_annotation::plugin.eq(plugin),
+                        message_annotation::message.eq(message),
+                        message_annotation::kind.eq(&annotation.kind),
+                        message_annotation::severity.eq(&severity),
+                        message_annotation::label.eq(&annotation.label),
+                        message_annotation::detail.eq(&annotation.detail),
+                        message_annotation::link.eq(&annotation.link),
+                    ))
+                    .on_conflict((
+                        message_annotation::message,
+                        message_annotation::plugin,
+                        message_annotation::kind,
+                    ))
+                    .do_update()
+                    .set((
+                        message_annotation::severity.eq(&severity),
+                        message_annotation::label.eq(&annotation.label),
+                        message_annotation::detail.eq(&annotation.detail),
+                        message_annotation::link.eq(&annotation.link),
+                        message_annotation::updated_at.eq(diesel::dsl::now),
+                    ))
+                    .returning((message_annotation::id, created_now()))
+                    .get_result(conn)
+                    .await?;
+            let event = if created {
+                MessageAnnotationEvent::Create(MessageAnnotation {
+                    id,
+                    message,
+                    plugin: plugin.to_string(),
+                    kind: annotation.kind,
+                    severity: annotation.severity,
+                    label: annotation.label,
+                    detail: annotation.detail,
+                    link: annotation.link,
+                })
+            } else {
+                MessageAnnotationEvent::Update {
+                    id,
+                    severity: Some(annotation.severity),
+                    label: Some(annotation.label),
+                    detail: Some(annotation.detail),
+                    link: Some(annotation.link),
                 }
             };
             publish_event(
@@ -304,64 +325,65 @@ pub async fn set_on_user(
                 .filter(user::id.eq(subject).and(user::deleted_at.is_null()))
                 .first::<UserId>(conn)
                 .await?;
-            let existing: Option<AnnotationId> = user_annotation::table
-                .select(user_annotation::id)
+            let others: i64 = user_annotation::table
                 .filter(
                     user_annotation::user
                         .eq(subject)
                         .and(user_annotation::plugin.eq(plugin))
-                        .and(user_annotation::kind.eq(&annotation.kind)),
+                        .and(user_annotation::kind.ne(&annotation.kind)),
                 )
-                .for_update()
-                .first(conn)
-                .await
-                .optional()?;
+                .count()
+                .get_result(conn)
+                .await?;
+            if others >= MAX_KINDS {
+                return Err(too_many_kinds());
+            }
             let severity = annotation.severity.to_string();
-            let event = match existing {
-                Some(id) => {
-                    diesel::update(user_annotation::table.filter(user_annotation::id.eq(id)))
-                        .set((
-                            user_annotation::severity.eq(&severity),
-                            user_annotation::label.eq(&annotation.label),
-                            user_annotation::detail.eq(&annotation.detail),
-                            user_annotation::link.eq(&annotation.link),
-                            user_annotation::updated_at.eq(diesel::dsl::now),
-                        ))
-                        .execute(conn)
-                        .await?;
-                    UserAnnotationEvent::Update {
-                        id,
-                        severity: Some(annotation.severity),
-                        label: Some(annotation.label),
-                        detail: Some(annotation.detail),
-                        link: Some(annotation.link),
-                    }
-                }
-                None => {
-                    let id = AnnotationId::new();
-                    diesel::insert_into(user_annotation::table)
-                        .values((
-                            user_annotation::id.eq(id),
-                            user_annotation::plugin.eq(plugin),
-                            user_annotation::user.eq(subject),
-                            user_annotation::kind.eq(&annotation.kind),
-                            user_annotation::severity.eq(&severity),
-                            user_annotation::label.eq(&annotation.label),
-                            user_annotation::detail.eq(&annotation.detail),
-                            user_annotation::link.eq(&annotation.link),
-                        ))
-                        .execute(conn)
-                        .await?;
-                    UserAnnotationEvent::Create(UserAnnotation {
-                        id,
-                        user: subject,
-                        plugin: plugin.to_string(),
-                        kind: annotation.kind,
-                        severity: annotation.severity,
-                        label: annotation.label,
-                        detail: annotation.detail,
-                        link: annotation.link,
-                    })
+            let (id, created): (AnnotationId, bool) = diesel::insert_into(user_annotation::table)
+                .values((
+                    user_annotation::id.eq(AnnotationId::new()),
+                    user_annotation::plugin.eq(plugin),
+                    user_annotation::user.eq(subject),
+                    user_annotation::kind.eq(&annotation.kind),
+                    user_annotation::severity.eq(&severity),
+                    user_annotation::label.eq(&annotation.label),
+                    user_annotation::detail.eq(&annotation.detail),
+                    user_annotation::link.eq(&annotation.link),
+                ))
+                .on_conflict((
+                    user_annotation::user,
+                    user_annotation::plugin,
+                    user_annotation::kind,
+                ))
+                .do_update()
+                .set((
+                    user_annotation::severity.eq(&severity),
+                    user_annotation::label.eq(&annotation.label),
+                    user_annotation::detail.eq(&annotation.detail),
+                    user_annotation::link.eq(&annotation.link),
+                    user_annotation::updated_at.eq(diesel::dsl::now),
+                ))
+                .returning((user_annotation::id, created_now()))
+                .get_result(conn)
+                .await?;
+            let event = if created {
+                UserAnnotationEvent::Create(UserAnnotation {
+                    id,
+                    user: subject,
+                    plugin: plugin.to_string(),
+                    kind: annotation.kind,
+                    severity: annotation.severity,
+                    label: annotation.label,
+                    detail: annotation.detail,
+                    link: annotation.link,
+                })
+            } else {
+                UserAnnotationEvent::Update {
+                    id,
+                    severity: Some(annotation.severity),
+                    label: Some(annotation.label),
+                    detail: Some(annotation.detail),
+                    link: Some(annotation.link),
                 }
             };
             publish_event(

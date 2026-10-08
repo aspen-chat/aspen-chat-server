@@ -49,7 +49,6 @@ type InstalledRow = (
     bool,
     i32,
     Value,
-    i64,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
 );
@@ -66,7 +65,6 @@ pub async fn list(conn: &mut AsyncPgConnection, removed: bool) -> crate::Result<
             plugin::enabled,
             plugin::position,
             plugin::settings,
-            plugin::storage_bytes,
             plugin::installed_at,
             plugin::removed_at,
         ))
@@ -76,19 +74,19 @@ pub async fn list(conn: &mut AsyncPgConnection, removed: bool) -> crate::Result<
         query = query.filter(plugin::removed_at.is_null());
     }
     let rows: Vec<InstalledRow> = query.load(conn).await?;
+    let totals = super::storage::totals(conn).await?;
     let principals: Vec<(Option<String>, UserId)> = user::table
         .select((user::plugin, user::id))
         .filter(user::plugin.is_not_null())
         .load(conn)
         .await?;
     let mut out = Vec::with_capacity(rows.len());
-    for (id, version, manifest, granted, mode, enabled, position, stored, bytes, at, removed_at) in
-        rows
-    {
+    for (id, version, manifest, granted, mode, enabled, position, stored, at, removed_at) in rows {
         let Ok(manifest) = serde_json::from_value::<Manifest>(manifest) else {
             tracing::error!(plugin = id, "its manifest is not one this version reads");
             continue;
         };
+        let storage_bytes = totals.get(&id).copied().unwrap_or(0);
         out.push(Installed {
             principal: principals
                 .iter()
@@ -109,7 +107,7 @@ pub async fn list(conn: &mut AsyncPgConnection, removed: bool) -> crate::Result<
             manifest,
             enabled,
             position,
-            storage_bytes: bytes,
+            storage_bytes,
             installed_at: at,
             removed: removed_at.is_some(),
         });
@@ -510,7 +508,9 @@ pub async fn remove(
 /// and its deployment settings. Its row stays, as the record that it was installed, and so does
 /// its account, both of which a later install of the same plugin takes up again.
 pub async fn purge(conn: &mut AsyncPgConnection, id: &str) -> crate::Result<()> {
-    use aspen_schema::{community_plugin, plugin_storage};
+    use aspen_schema::{
+        community_plugin, plugin_capability, plugin_storage, plugin_storage_usage, plugin_timer,
+    };
     conn.transaction(|conn| {
         async move {
             let removed = diesel::update(
@@ -518,7 +518,6 @@ pub async fn purge(conn: &mut AsyncPgConnection, id: &str) -> crate::Result<()> 
             )
             .set((
                 plugin::settings.eq(Value::Object(Map::new())),
-                plugin::storage_bytes.eq(0),
                 plugin::updated_at.eq(diesel::dsl::now),
             ))
             .execute(conn)
@@ -529,6 +528,17 @@ pub async fn purge(conn: &mut AsyncPgConnection, id: &str) -> crate::Result<()> 
                 ));
             }
             diesel::delete(plugin_storage::table.filter(plugin_storage::plugin.eq(id)))
+                .execute(conn)
+                .await?;
+            // What counted it, what it would have been woken for, and the links it gave out
+            // go with it, so a later install starts with nothing of this one's.
+            diesel::delete(plugin_storage_usage::table.filter(plugin_storage_usage::plugin.eq(id)))
+                .execute(conn)
+                .await?;
+            diesel::delete(plugin_timer::table.filter(plugin_timer::plugin.eq(id)))
+                .execute(conn)
+                .await?;
+            diesel::delete(plugin_capability::table.filter(plugin_capability::plugin.eq(id)))
                 .execute(conn)
                 .await?;
             diesel::delete(community_plugin::table.filter(community_plugin::plugin.eq(id)))

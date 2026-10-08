@@ -334,17 +334,24 @@ pub async fn purge(
                         if exists.is_none() {
                             return Err(PurgeError::NotFound);
                         }
-                        let held = message_attachment::table
+                        // What it holds and what was taken off it, each found through its
+                        // own index, then those of them kept as evidence.
+                        let mut named: Vec<AttachmentId> = message_attachment::table
                             .select(message_attachment::attachment_id)
-                            .filter(message_attachment::message_id.eq(message_id));
+                            .filter(message_attachment::message_id.eq(message_id))
+                            .load(conn)
+                            .await?;
+                        named.extend(
+                            attachment::table
+                                .select(attachment::id)
+                                .filter(attachment::removed_from.eq(message_id))
+                                .load::<AttachmentId>(conn)
+                                .await?,
+                        );
                         attachment::table
                             .select(attachment::id)
                             .filter(attachment::evidence_at.is_not_null())
-                            .filter(
-                                attachment::removed_from
-                                    .eq(message_id)
-                                    .or(attachment::id.eq_any(held)),
-                            )
+                            .filter(attachment::id.eq_any(&named))
                             .load(conn)
                             .await?
                     }

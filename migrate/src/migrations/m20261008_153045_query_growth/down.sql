@@ -1,3 +1,6 @@
+ALTER TABLE plugin ADD COLUMN storage_bytes BIGINT NOT NULL DEFAULT 0;
+UPDATE plugin SET storage_bytes = COALESCE((SELECT sum(bytes) FROM plugin_storage_usage u WHERE u.plugin = plugin.id), 0);
+ALTER TABLE plugin_storage ALTER COLUMN key TYPE TEXT COLLATE "default";
 DROP INDEX community_dashboard_name;
 DROP INDEX user_dashboard_name;
 DROP INDEX report_by_case;

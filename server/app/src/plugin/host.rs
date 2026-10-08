@@ -511,6 +511,42 @@ impl Call {
         Ok(())
     }
 
+    /// Whether the plugin reaches `user`, a person of this deployment's who is there: everyone,
+    /// for a plugin that runs everywhere or in DMs; otherwise a member of a community where it
+    /// is turned on.
+    async fn reaches(
+        &self,
+        conn: &mut AsyncPgConnection,
+        user: UserId,
+    ) -> Result<bool, wit::Error> {
+        use aspen_schema::{community_plugin, community_user};
+        let live: bool = diesel::select(diesel::dsl::exists(
+            user::table.filter(user::id.eq(user).and(user::deleted_at.is_null())),
+        ))
+        .get_result(conn)
+        .await
+        .map_err(|e| self.fail(e.into()))?;
+        if !live {
+            return Ok(false);
+        }
+        if self.plugin.mode == super::Mode::Everywhere || self.plugin.holds(PluginPermission::Dms) {
+            return Ok(true);
+        }
+        diesel::select(diesel::dsl::exists(
+            community_user::table
+                .inner_join(
+                    community_plugin::table
+                        .on(community_plugin::community.eq(community_user::community)),
+                )
+                .filter(community_user::user.eq(user))
+                .filter(community_plugin::plugin.eq(&self.plugin.id))
+                .filter(community_plugin::enabled),
+        ))
+        .get_result(conn)
+        .await
+        .map_err(|e| self.fail(e.into()))
+    }
+
     /// Whether the plugin runs in `community`.
     async fn running_in(
         &self,
@@ -530,14 +566,29 @@ impl Call {
         }
     }
 
-    /// The scope a plugin names, checked: where the plugin runs, and while answering a route,
-    /// where the caller may look.
+    /// The scope a plugin names, checked: a community, channel, or person that is there (not
+    /// deleted, nor made up), where the plugin runs, and while answering a route, where the
+    /// caller may look. What a plugin keeps counts against the quota of whom it is kept for, so
+    /// a plugin cannot multiply its quota by naming places and people that do not exist.
     async fn scope(&self, scope: wit::Scope) -> Result<storage::Scope, wit::Error> {
         let mut conn = self.conn().await?;
         let scope = match scope {
             wit::Scope::Deployment => storage::Scope::Deployment,
             wit::Scope::Community(id) => {
                 let community = CommunityId(parse_id(&id)?);
+                let live: bool = diesel::select(diesel::dsl::exists(
+                    aspen_schema::community::table.filter(
+                        aspen_schema::community::id
+                            .eq(community)
+                            .and(aspen_schema::community::deleted_at.is_null()),
+                    ),
+                ))
+                .get_result(conn.as_mut())
+                .await
+                .map_err(|e| self.fail(e.into()))?;
+                if !live {
+                    return Err(wit::Error::NotFound);
+                }
                 self.running_in(conn.as_mut(), community).await?;
                 if let Phase::Route { caller } = self.phase {
                     crate::permissions::require_member(conn.as_mut(), caller, community)
@@ -548,6 +599,19 @@ impl Call {
             }
             wit::Scope::Channel(id) => {
                 let channel_id = ChannelId(parse_id(&id)?);
+                let live: bool = diesel::select(diesel::dsl::exists(
+                    channel::table.filter(
+                        channel::id
+                            .eq(channel_id)
+                            .and(channel::deleted_at.is_null()),
+                    ),
+                ))
+                .get_result(conn.as_mut())
+                .await
+                .map_err(|e| self.fail(e.into()))?;
+                if !live {
+                    return Err(wit::Error::NotFound);
+                }
                 self.running_at(conn.as_mut(), channel_id).await?;
                 if let Phase::Route { caller } = self.phase {
                     channel_access(&self.server, conn.as_mut(), caller, channel_id)
@@ -561,6 +625,9 @@ impl Call {
                 if let Phase::Route { caller } = self.phase
                     && caller != user
                 {
+                    return Err(wit::Error::NotFound);
+                }
+                if !self.reaches(conn.as_mut(), user).await? {
                     return Err(wit::Error::NotFound);
                 }
                 storage::Scope::User(user)
