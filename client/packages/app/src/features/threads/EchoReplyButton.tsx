@@ -1,9 +1,8 @@
 import { ApiProblemError } from "@aspen/protocol";
 import { ArrowBendLeftUpIcon } from "@phosphor-icons/react";
-import { Button } from "react-aria-components";
 import { useSync } from "@/api/hooks";
+import { IconAction } from "@/features/layout/IconAction";
 import { toast } from "@/features/layout/toast";
-import { Tooltip } from "@/features/layout/Tooltip";
 import { ACTION_ICON } from "@/features/messages/actionIcon";
 import { useEchoTarget } from "@/features/threads/echoTarget";
 import { useMessages } from "@/i18n/context";
@@ -19,12 +18,15 @@ export function EchoReplyButton({
   messageId,
   parentId,
   className,
+  labelled = false,
   onPressed,
 }: {
   messageId: string;
   parentId: string;
   className: string;
-  /** Called as it is pressed, for a popover offering it to close. */
+  /** Drawn with its name beside its icon, as a row of a list. */
+  labelled?: boolean;
+  /** Called as it is pressed, for a sheet offering it to close. */
   onPressed?: () => void;
 }) {
   const m = useMessages();
@@ -32,24 +34,24 @@ export function EchoReplyButton({
   const target = useEchoTarget(parentId);
   const label = format(m.threads.echoToParent, { channel: target });
   return (
-    <Tooltip text={label}>
-      <Button
-        aria-label={label}
-        onPress={() => {
-          sync.echoReply(messageId).then(
-            () => {
-              toast(format(m.threads.echoed, { channel: target }));
-            },
-            (problem: unknown) => {
-              toast(problem instanceof ApiProblemError ? problem.message : m.threads.echoFailed);
-            },
-          );
-          onPressed?.();
-        }}
-        className={className}
-      >
+    <IconAction
+      label={label}
+      labelled={labelled}
+      onPress={() => {
+        sync.echoReply(messageId).then(
+          () => {
+            toast(format(m.threads.echoed, { channel: target }));
+          },
+          (problem: unknown) => {
+            toast(problem instanceof ApiProblemError ? problem.message : m.threads.echoFailed);
+          },
+        );
+        onPressed?.();
+      }}
+      className={className}
+      icon={
         <ArrowBendLeftUpIcon size={ACTION_ICON} aria-hidden="true" className="rtl:-scale-x-100" />
-      </Button>
-    </Tooltip>
+      }
+    />
   );
 }

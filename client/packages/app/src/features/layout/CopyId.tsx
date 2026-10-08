@@ -1,9 +1,9 @@
 import { CheckIcon, IdentificationCardIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
-import { Button, MenuItem } from "react-aria-components";
+import { MenuItem } from "react-aria-components";
 import { useIdWizard } from "@/api/hooks";
 import { copyText } from "@/features/layout/clipboard";
-import { Tooltip } from "@/features/layout/Tooltip";
+import { IconAction } from "@/features/layout/IconAction";
 import { useMessages } from "@/i18n/context";
 import { format, type Messages } from "@/i18n/messages";
 
@@ -22,13 +22,18 @@ export function CopyIdButton({
   id,
   thing,
   className = "",
+  labelled = false,
+  iconSize = 16,
   onCopied,
 }: {
   id: string;
   thing: IdThing;
-  /** Sizes it to sit among the controls beside it. */
+  /** Sizes it to sit among the controls beside it; given with `labelled`, the whole class. */
   className?: string;
-  /** Called once the id is copied, for a popover offering it to close. */
+  /** Drawn with its name beside its icon, as a row of a list. */
+  labelled?: boolean;
+  iconSize?: number;
+  /** Called once the id is copied, for a sheet or popover offering it to close. */
   onCopied?: () => void;
 }) {
   const m = useMessages();
@@ -52,32 +57,34 @@ export function CopyIdButton({
   const name = m.bots.idOf[thing];
   const label = format(copied ? m.bots.copiedId : m.bots.copyId, { thing: name });
   return (
-    <Tooltip text={label}>
-      <Button
-        ref={button}
-        aria-label={label}
-        onPress={() => {
-          if (button.current !== null) {
-            void copyText(id, button.current).then((ok) => {
-              setCopied(ok);
-              if (ok) {
-                onCopied?.();
-              }
-            });
-          }
-        }}
-        className={
-          "rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
-          className
+    <IconAction
+      ref={button}
+      label={label}
+      labelled={labelled}
+      onPress={() => {
+        if (button.current !== null) {
+          void copyText(id, button.current).then((ok) => {
+            setCopied(ok);
+            if (ok) {
+              onCopied?.();
+            }
+          });
         }
-      >
-        {copied ? (
-          <CheckIcon size={16} aria-hidden="true" />
+      }}
+      className={
+        labelled
+          ? className
+          : "rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
+            className
+      }
+      icon={
+        copied ? (
+          <CheckIcon size={iconSize} aria-hidden="true" />
         ) : (
-          <IdentificationCardIcon size={16} aria-hidden="true" />
-        )}
-      </Button>
-    </Tooltip>
+          <IdentificationCardIcon size={iconSize} aria-hidden="true" />
+        )
+      }
+    />
   );
 }
 

@@ -5,6 +5,7 @@ import {
   longPress,
   ownText,
   pollQuestion,
+  reactedText,
   settleAnimations,
   signInToWorld,
   starterText,
@@ -247,7 +248,7 @@ test.describe("on a phone", () => {
     await expect(page.getByRole("button", { name: "Show members" })).toBeFocused();
   });
 
-  test("a long press opens a message's actions beside the finger, and each action closes them", async ({
+  test("a long press opens a message's actions in a sheet from the bottom, and each action closes it", async ({
     page,
     context,
     browserName,
@@ -259,73 +260,106 @@ test.describe("on a phone", () => {
     await openChannel(page, "general");
     const own = messageWith(page, ownText);
     const starter = messageWith(page, starterText);
-    const popover = page.getByRole("dialog", { name: "Message actions" });
-    const composer = page.getByRole("textbox", { name: "Message" });
+    const sheet = page.getByRole("dialog", { name: "Message actions" });
+    const quick = sheet.getByRole("group", { name: "Quick reactions" });
+    const list = sheet.getByRole("group", { name: "Message actions" });
     // A tap focuses the message, as a tap on a link needs, and offers nothing.
     await own.locator(".message-body").tap();
-    await expect(popover).toHaveCount(0);
+    await expect(sheet).toHaveCount(0);
     await expect(actionsOf(own)).toHaveCount(0);
-    // A long press opens the actions in a popover beside the finger, each at finger size.
-    const press = await longPress(page, own.locator(".message-body"));
-    await expect(popover).toBeVisible();
-    const near = async () => {
-      const box = await popover.boundingBox();
-      const composerBox = await composer.boundingBox();
-      expect(box).not.toBeNull();
-      const top = box?.y ?? 0;
-      const bottom = top + (box?.height ?? 0);
-      expect(Math.min(Math.abs(top - press.y), Math.abs(bottom - press.y))).toBeLessThan(100);
-      // Never over the message box.
-      expect(bottom).toBeLessThanOrEqual((composerBox?.y ?? 0) + 1);
-      return { top, bottom };
-    };
-    await near();
-    for (const name of ["Add a reaction", "Edit message", "Delete message", "Copy text"]) {
-      const action = popover.getByRole("button", { name });
-      await expect(action).toBeVisible();
-      expect((await action.boundingBox())?.height).toBeGreaterThanOrEqual(40);
+    // A long press opens the actions in a sheet across the bottom of the screen.
+    await longPress(page, own.locator(".message-body"));
+    await expect(sheet).toBeVisible();
+    await settleAnimations(page);
+    const viewport = page.viewportSize();
+    const box = await sheet.boundingBox();
+    expect(box?.width ?? 0).toBeCloseTo(viewport?.width ?? 0, 0);
+    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeCloseTo(viewport?.height ?? 0, 0);
+    // Above the list, the reader's most used emoji, then the defaults, then the picker's
+    // button, unnamed on screen; it is not in the list again.
+    const quickNames = ["🎉", "👍", "😄", "❤️", "👎"].map((emoji) => `React with ${emoji}`);
+    await expect(quick.getByRole("button")).toHaveCount(6);
+    for (const [i, name] of [...quickNames, "Add a reaction"].entries()) {
+      const button = quick.getByRole("button").nth(i);
+      await expect(button).toHaveAccessibleName(name);
+      await expectTouchable(button);
+    }
+    await expect(quick.getByRole("button", { name: "Add a reaction" })).toHaveText("");
+    await expect(list.getByRole("button", { name: "Add a reaction" })).toHaveCount(0);
+    // The list names each action beside its icon, each a full row a finger can hit.
+    for (const name of ["Edit message", "Delete message", "Copy text"]) {
+      const action = list.getByRole("button", { name });
+      await expect(action).toHaveText(name);
+      await expectTouchable(action);
     }
     // Copying the text closes the actions and says so in a toast.
-    await popover.getByRole("button", { name: "Copy text" }).tap();
-    await expect(popover).toHaveCount(0);
+    await list.getByRole("button", { name: "Copy text" }).tap();
+    await expect(sheet).toHaveCount(0);
     await expect(page.getByText("Copied text")).toBeVisible();
     // Adding a reaction closes the actions and opens the picker in their place, which stays.
     await longPress(page, own.locator(".message-body"));
-    await popover.getByRole("button", { name: "Add a reaction" }).tap();
-    await expect(popover).toHaveCount(0);
+    await quick.getByRole("button", { name: "Add a reaction" }).tap();
+    await expect(sheet).toHaveCount(0);
     const picker = page.locator(".emoji-picker");
     await expect(picker).toBeVisible();
     await page.waitForTimeout(500);
     await expect(picker).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(picker).toHaveCount(0);
-    // A tap elsewhere closes them (the tap lands on the popover's underlay, so it is sent by
-    // position, to a corner of the list the popover is not over); a long press on another
-    // message opens that one's.
+    // A tap on the darkened screen above the sheet closes it; a long press on another message
+    // opens that one's.
     await longPress(page, own.locator(".message-body"));
-    await expect(popover).toBeVisible();
+    await expect(sheet).toBeVisible();
     await settleAnimations(page);
-    const list = await page.locator("[data-message-list]").boundingBox();
-    const open = await popover.boundingBox();
-    const listTop = (list?.y ?? 0) + 6;
-    const listBottom = (list?.y ?? 0) + (list?.height ?? 0) - 6;
-    const overTop = open !== null && open.y < listTop + 6;
-    await page.touchscreen.tap((list?.x ?? 0) + 6, overTop ? listBottom : listTop);
-    await expect(popover).toHaveCount(0);
+    await page.touchscreen.tap((viewport?.width ?? 0) / 2, 20);
+    await expect(sheet).toHaveCount(0);
     await longPress(page, starter.locator(".message-body"));
-    await expect(popover).toBeVisible();
-    await expect(popover.getByRole("button", { name: "Reply in thread" })).toBeVisible();
+    await expect(sheet).toBeVisible();
+    await expect(list.getByRole("button", { name: "Reply in thread" })).toBeVisible();
     // The actions take focus once the press ends, so a screen reader is in them; Escape then
     // closes them.
-    await expect(popover).toBeFocused();
+    await expect(sheet).toBeFocused();
     await page.keyboard.press("Escape");
-    await expect(popover).toHaveCount(0);
-    // On the newest message, which sits on the message box, they open above the finger.
-    const newest = page.locator("article[data-message-id]").last();
-    const pressed = await longPress(page, newest.locator(".message-body"));
-    await expect(popover).toBeVisible();
-    const box = await popover.boundingBox();
-    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(pressed.y);
+    await expect(sheet).toHaveCount(0);
+  });
+
+  test("a quick reaction reacts and closes the sheet, and one already chosen takes it back", async ({
+    page,
+  }) => {
+    await openChannel(page, "general");
+    const reacted = messageWith(page, reactedText);
+    const sheet = page.getByRole("dialog", { name: "Message actions" });
+    const quick = sheet.getByRole("group", { name: "Quick reactions" });
+    const chips = reacted.getByRole("list", { name: "Reactions" });
+    // The caller already reacted 👍 here, so its quick reaction is pressed, and takes it back.
+    await longPress(page, reacted.locator(".message-body"));
+    await expect(quick.getByRole("button", { name: "Remove your 👍" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await quick.getByRole("button", { name: "Remove your 👍" }).tap();
+    await expect(sheet).toHaveCount(0);
+    await expect(chips.getByRole("button", { name: "React with 👍" })).toBeVisible();
+    // 🎉 is not theirs yet: one tap adds it.
+    await longPress(page, reacted.locator(".message-body"));
+    await quick.getByRole("button", { name: "React with 🎉" }).tap();
+    await expect(sheet).toHaveCount(0);
+    await expect(chips.getByRole("button", { name: "Remove your 🎉" })).toBeVisible();
+  });
+
+  test("a swipe down on the actions' sheet puts it away", async ({ page, browserName }) => {
+    test.skip(browserName !== "chromium", "only Chromium takes synthetic touch input");
+    await openChannel(page, "general");
+    const own = messageWith(page, ownText);
+    const sheet = page.getByRole("dialog", { name: "Message actions" });
+    await longPress(page, own.locator(".message-body"));
+    await expect(sheet).toBeVisible();
+    await settleAnimations(page);
+    const box = await sheet.boundingBox();
+    const x = (box?.x ?? 0) + (box?.width ?? 0) / 2;
+    const top = (box?.y ?? 0) + 6;
+    await swipe(page, x, top, top + (box?.height ?? 0));
+    await expect(sheet).toHaveCount(0);
   });
 
   test("a link in a message opens on the first tap", async ({ page }) => {

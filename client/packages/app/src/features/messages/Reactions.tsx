@@ -25,7 +25,6 @@ import {
 import {
   useChannel,
   useChannelCan,
-  useCustomEmoji,
   useMe,
   useMessage,
   useReactions,
@@ -46,6 +45,7 @@ import { displayNameOf } from "@/features/users/profile";
 import { useNameIn } from "@/features/users/nameIn";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
+import { useEmojiName } from "@/features/messages/emojiName";
 import { emojiIdOf } from "@/features/emoji/customEmoji";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -390,25 +390,13 @@ function ReactionTab({
 }
 
 /** A reaction's emoji as drawn: the glyph, or a custom emoji's picture. */
-function EmojiKey({ emoji, communityId }: { emoji: string; communityId: string | null }) {
+export function EmojiKey({ emoji, communityId }: { emoji: string; communityId: string | null }) {
   const id = emojiIdOf(emoji);
   return id === null ? (
     <span className="text-[1.5em] leading-none">{emoji}</span>
   ) : (
     <CustomEmojiGlyph id={id} communityId={communityId} size="large" />
   );
-}
-
-/** A reaction's emoji as spoken: the glyph, or a custom emoji's `:name:`. */
-function useEmojiName(communityId: string | null, emoji: string): string {
-  const m = useMessages();
-  const custom = useCustomEmoji(communityId ?? "");
-  const id = emojiIdOf(emoji);
-  if (id === null) {
-    return emoji;
-  }
-  const name = custom.find((e) => e.id === id)?.name;
-  return name === undefined ? m.emoji.unknown : `:${name}:`;
 }
 
 /** Everyone who reacted with one emoji, earliest first, read a page at a time. */

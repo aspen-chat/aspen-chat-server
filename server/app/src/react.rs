@@ -360,6 +360,90 @@ pub async fn read_reactors(
     Ok(rows.into_iter().map(|row| row.author).collect())
 }
 
+/// How far back an emoji's use counts as recent, in days.
+pub const FREQUENT_RECENT_DAYS: i32 = 90;
+/// The most emoji one read of someone's most used returns.
+pub const MAX_FREQUENT: u32 = 20;
+/// How many of someone's latest reactions their most used emoji are counted from, so the
+/// count's cost does not grow with every reaction they ever made.
+pub const FREQUENT_WINDOW: i64 = 10_000;
+
+/// One emoji someone reacts with, and how often they have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrequentEmoji {
+    /// The emoji as reactions store it: canonical, or a custom emoji's reference.
+    pub emoji: String,
+    /// How many of their latest [`FREQUENT_WINDOW`] reactions use it from the past
+    /// [`FREQUENT_RECENT_DAYS`].
+    pub recent: u32,
+    /// How many of their latest [`FREQUENT_WINDOW`] reactions use it.
+    pub total: u32,
+}
+
+#[derive(QueryableByName)]
+struct FrequentRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    emoji: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    recent: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    total: i64,
+}
+
+/// The emoji `user` reacts with most, at most `limit` of them: first those they used in the
+/// past [`FREQUENT_RECENT_DAYS`], most used there first, then the rest by how often they were
+/// used, each tie going to the one used last. Counted from their latest [`FREQUENT_WINDOW`]
+/// reactions on messages now, read newest first along `react_by_author`, so one taken back no
+/// longer counts and the cost stops growing at the window. Custom emoji are only those of
+/// `community`, the one the emoji are wanted for, since a custom emoji reacts only there; with
+/// none (a DM), only Unicode emoji. Only `user` may read their own.
+pub async fn read_frequent(
+    state: &GlobalServerContext,
+    caller: UserId,
+    user: UserId,
+    community: Option<crate::CommunityId>,
+    limit: u32,
+) -> crate::Result<Vec<FrequentEmoji>> {
+    if caller != user {
+        return Err(crate::Error::Unauthorized);
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let rows: Vec<FrequentRow> = diesel::sql_query(
+        r#"
+        SELECT emoji,
+               count(*) FILTER (WHERE "timestamp" > now() - make_interval(days => $3)) AS recent,
+               count(*) AS total
+        FROM (
+            SELECT emoji, "timestamp" FROM react
+            WHERE author = $1
+              AND (custom_emoji IS NULL OR custom_emoji IN (
+                  SELECT id FROM custom_emoji WHERE community = $2))
+            ORDER BY "timestamp" DESC
+            LIMIT $5
+        ) AS latest
+        GROUP BY emoji
+        ORDER BY count(*) FILTER (WHERE "timestamp" > now() - make_interval(days => $3)) > 0 DESC,
+                 recent DESC, total DESC, max("timestamp") DESC, emoji
+        LIMIT $4
+        "#,
+    )
+    .bind::<diesel::sql_types::Uuid, _>(user.0)
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(community.map(|c| c.0))
+    .bind::<diesel::sql_types::Integer, _>(FREQUENT_RECENT_DAYS)
+    .bind::<diesel::sql_types::BigInt, _>(i64::from(limit.min(MAX_FREQUENT)))
+    .bind::<diesel::sql_types::BigInt, _>(FREQUENT_WINDOW)
+    .load(conn.as_mut())
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| FrequentEmoji {
+            emoji: row.emoji,
+            recent: u32::try_from(row.recent).unwrap_or(u32::MAX),
+            total: u32::try_from(row.total).unwrap_or(u32::MAX),
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

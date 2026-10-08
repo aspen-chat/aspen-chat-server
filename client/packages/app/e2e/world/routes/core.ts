@@ -212,6 +212,18 @@ export function coreRoutes({
         return reply({ emoji: decodeURIComponent(emoji), messageId, userId: me }, 201);
       },
     ],
+    // Taking a reaction back answers with nothing, which the app applies as its event.
+    ["DELETE", /^\/messages\/[^/]+\/reactions\/[^/]+\/@me$/, () => reply(null, 204)],
+    // The caller reacts with 🎉 most lately and 👍 most of all: the quick reactions take those
+    // two first and the defaults after them.
+    [
+      "GET",
+      /^\/users\/@me\/frequent-emoji$/,
+      () => [
+        { emoji: "🎉", recentUses: 4, uses: 9 },
+        { emoji: "👍", recentUses: 0, uses: 20 },
+      ],
+    ],
     // Folding a category answers as the server does, and tells the caller's devices by event.
     [
       "PUT",

@@ -2083,11 +2083,30 @@ def blackjack_tables(world: World, check: Checks) -> None:
     stack.command("plugins", "disable", BLACKJACK_ID)
 
 
+def frequent_emoji(world: World, check: Checks) -> None:
+    say("the emoji someone reacts with most are theirs alone, and follow their reactions")
+    stack, member = world.stack, world.member
+    channel = world.channel("quick")
+    post = world.post(channel, "react to me")
+    party = "%F0%9F%8E%89"
+    mine = f"/users/@me/frequent-emoji?community={world.community}"
+
+    def used() -> list[str]:
+        return [f["emoji"] for f in stack.api("GET", mine, token=member["token"])]
+
+    stack.api("PUT", f"/messages/{post}/reactions/{party}/@me", token=member["token"])
+    check("a reaction counts toward its author's most used", used()[:1] == ["\U0001F389"], used())
+    check("no one else may read them",
+          stack.status("GET", f"/users/{member['id']}/frequent-emoji", token=world.owner["token"]) == 403)
+    stack.api("DELETE", f"/messages/{post}/reactions/{party}/@me", token=member["token"])
+    check("a reaction taken back no longer counts", "\U0001F389" not in used(), used())
+
+
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, typing, name_colours, dual_invites, device_links,
-             nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, dm_reads,
+             nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, dm_reads, frequent_emoji,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,
              deleted_communities, previews, icons, uploads]
 

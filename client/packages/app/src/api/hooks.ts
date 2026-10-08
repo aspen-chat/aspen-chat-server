@@ -46,7 +46,15 @@ import type {
   VoiceCallState,
 } from "@aspen/protocol";
 import { DEVELOPER_MODE, ID_WIZARD } from "@aspen/protocol";
-import { useCallback, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useBlockedAnywhere } from "./identity";
 import { AspenSyncContext } from "./syncContext";
 
@@ -787,6 +795,34 @@ export function usePins(channelId: string): readonly Pin[] | undefined {
   }, [sync, channelId, pins]);
   return pins;
 }
+
+/**
+ * The emoji the reader reacts with most in a community, or (`null`) a DM, most used first: read
+ * when first asked for, and again once the reader's own reactions have changed, showing the
+ * last answer meanwhile; `undefined` until first read. A read that fails gives none, so the
+ * quick reactions offer their defaults rather than wait.
+ */
+export function useFrequentEmoji(communityId: string | null): readonly string[] | undefined {
+  const sync = useSync();
+  const entry = useTopic(`frequentEmoji:${communityId ?? ""}`, (s) => s.frequentEmoji(communityId));
+  const [failed, setFailed] = useState<string | null>(null);
+  const key = communityId ?? "";
+  useEffect(() => {
+    if (entry === undefined || entry.stale) {
+      void sync.loadFrequentEmoji(communityId).then(
+        () => {
+          setFailed(null);
+        },
+        () => {
+          setFailed(key);
+        },
+      );
+    }
+  }, [sync, communityId, key, entry]);
+  return entry?.emoji ?? (failed === key ? NO_EMOJI : undefined);
+}
+
+const NO_EMOJI: readonly string[] = [];
 
 /**
  * The commands of the bots that can see a channel, read when first asked for and again

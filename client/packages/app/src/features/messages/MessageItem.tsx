@@ -4,7 +4,7 @@ import type { Message, User } from "@aspen/protocol";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 // React Aria Components has no long press; the hook it is built on does.
 import { useLongPress } from "react-aria";
-import { Button, Dialog, Popover } from "react-aria-components";
+import { Button } from "react-aria-components";
 import {
   useChannel,
   useChannelAccess,
@@ -40,6 +40,7 @@ import { ReportModal } from "@/features/reports/ReportDialog";
 import { useAspenClient } from "@/api/context";
 import { useMessages } from "@/i18n/context";
 import { feelPress } from "@/features/messages/haptics";
+import { MessageActionSheet } from "@/features/messages/MessageActionSheet";
 import { MessageActions, type MessageSheet } from "@/features/messages/MessageActions";
 import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useDateFormat } from "@/i18n/format";
@@ -53,7 +54,7 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
 
 /** How long a finger is held on a message before its actions are offered under it. */
 const LONG_PRESS_MS = 450;
-/** How far from the finger's point the popovers open, clear of the finger. */
+/** How far from the finger's point the reaction picker opens, clear of the finger. */
 const PRESS_OFFSET_PX = 12;
 
 /** What a long press has open: the actions, or what one of them opened in their place. */
@@ -63,15 +64,11 @@ type Sheet = "actions" | MessageSheet;
 interface Press {
   x: number;
   y: number;
-  /** Whether the popovers open above the point rather than below it. */
+  /** Whether the picker opens above the point rather than below it. */
   above: boolean;
-  /** The list they keep within. */
+  /** The list it keeps within. */
   list: HTMLElement | null;
 }
-/** The popover the actions open in under a long-pressed message. */
-const actionsPopoverClass =
-  "max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-surface-raised p-1 shadow-lg";
-
 /** How far the pointer's actions rise above their message's top, over the message before. */
 const TOOLBAR_RISE_PX = 20;
 
@@ -88,10 +85,10 @@ const ARRIVING_MS = 1000;
  * over it or focus is in it, kept out of the layout so the header and body sit where they
  * would without it; near the top of its list, the bar rises only as far as there is room. A
  * touch screen has no hover, and a row of buttons over every message would cost the
- * screen's room, so there a long press on the message opens them in a popover under it,
- * settling into place, with a tap felt in the hand in the apps; the press owns the message,
- * so the browser's own long press, which would select its text, is turned off there, and the
- * actions copy the text instead.
+ * screen's room, so there a long press on the message opens them in a sheet sliding up from
+ * the bottom (`MessageActionSheet`), with quick reactions above them and a tap felt in the
+ * hand in the apps; the press owns the message, so the browser's own long press, which would
+ * select its text, is turned off there, and the actions copy the text instead.
  */
 export const MessageItem = memo(function MessageItem({
   id,
@@ -131,14 +128,24 @@ export const MessageItem = memo(function MessageItem({
   // What the press has open: the actions, or what one of them opened in their place.
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const row = useRef<HTMLElement>(null);
-  // Where the finger pressed, which the popovers open beside, so that on a long message they
-  // come where the finger is rather than under the whole of it; and which way they open.
+  // Where the finger pressed, which the reaction picker opens beside, so that on a long message
+  // it comes where the finger is rather than under the whole of it; and which way it opens.
   const [press, setPress] = useState<Press | null>(null);
   const anchor = useRef<HTMLSpanElement>(null);
   const { longPressProps } = useLongPress({
     isDisabled: !touchOnly || editing,
     threshold: LONG_PRESS_MS,
     accessibilityDescription: m.longPressForActions,
+    // The reader's most used emoji are read as the finger goes down, so the quick reactions
+    // have them by the time the press is long enough to show them.
+    onLongPressStart: () => {
+      if (
+        permissions.has("addReactions") &&
+        sync.store.frequentEmoji(home.community) === undefined
+      ) {
+        void sync.loadFrequentEmoji(home.community).catch(() => undefined);
+      }
+    },
     onLongPress: (e) => {
       feelPress();
       const list = row.current?.closest<HTMLElement>("[data-message-list]") ?? null;
@@ -297,30 +304,30 @@ export const MessageItem = memo(function MessageItem({
     >
       {touchOnly && press !== null && (
         <>
-          {/* The point the finger pressed, which the popovers open beside. */}
+          {/* The point the finger pressed, which the reaction picker opens beside. */}
           <span
             ref={anchor}
             aria-hidden="true"
             className="pointer-events-none absolute h-0 w-0"
             style={{ left: press.x, top: press.y }}
           />
-          <Popover
-            triggerRef={anchor}
-            {...popoverProps("actions")}
-            className={"motion-settle " + actionsPopoverClass}
+          <MessageActionSheet
+            messageId={id}
+            communityId={home.community}
+            canReact={permissions.has("addReactions")}
+            {...sheetProps("actions")}
+            onMore={() => {
+              setSheet("react");
+            }}
           >
-            <Dialog aria-label={m.messageActionsLabel} className="outline-none">
-              <div role="group" aria-label={m.messageActionsLabel} className="flex flex-wrap gap-1">
-                <MessageActions
-                  {...actions}
-                  open={setSheet}
-                  onDone={() => {
-                    setSheet(null);
-                  }}
-                />
-              </div>
-            </Dialog>
-          </Popover>
+            <MessageActions
+              {...actions}
+              open={setSheet}
+              onDone={() => {
+                setSheet(null);
+              }}
+            />
+          </MessageActionSheet>
           <ReactionPickerPopover
             messageId={id}
             communityId={home.community}

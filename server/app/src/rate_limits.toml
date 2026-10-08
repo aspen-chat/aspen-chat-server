@@ -393,6 +393,10 @@ user_per_message = { requests = 20, per_seconds = 10, burst = 20, bucket = "reac
 user = { requests = 120, per_seconds = 60, burst = 20, bucket = "reactions" }
 user_per_message = { requests = 20, per_seconds = 10, burst = 20, bucket = "reactions" }
 
+# Counts every reaction the caller has made; clients read it once and again after they react.
+[rate_limits.endpoints."GET /users/{user}/frequent-emoji"]
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
 [rate_limits.endpoints."PUT /messages/{message}/thread"]
 user = { requests = 20, per_seconds = 60, burst = 10 }
 

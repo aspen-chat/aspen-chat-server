@@ -1,7 +1,6 @@
 import { PushPinIcon, PushPinSlashIcon } from "@phosphor-icons/react";
-import { Button } from "react-aria-components";
 import { usePins, useSync } from "@/api/hooks";
-import { Tooltip } from "@/features/layout/Tooltip";
+import { IconAction } from "@/features/layout/IconAction";
 import { ACTION_ICON } from "@/features/messages/actionIcon";
 import { useMessages } from "@/i18n/context";
 
@@ -10,12 +9,15 @@ export function PinButton({
   messageId,
   channelId,
   className,
+  labelled = false,
   onPressed,
 }: {
   messageId: string;
   channelId: string;
   className: string;
-  /** Called as it is pressed, for a popover offering it to close. */
+  /** Drawn with its name beside its icon, as a row of a list. */
+  labelled?: boolean;
+  /** Called as it is pressed, for a sheet offering it to close. */
   onPressed?: () => void;
 }) {
   const m = useMessages();
@@ -24,22 +26,22 @@ export function PinButton({
   const pinned = pins?.some((p) => p.messageId === messageId) ?? false;
   const label = pinned ? m.pins.unpin : m.pins.pin;
   return (
-    <Tooltip text={label}>
-      <Button
-        aria-label={label}
-        isDisabled={pins === undefined}
-        onPress={() => {
-          void sync.setPinned(messageId, !pinned).catch(() => undefined);
-          onPressed?.();
-        }}
-        className={className}
-      >
-        {pinned ? (
+    <IconAction
+      label={label}
+      labelled={labelled}
+      isDisabled={pins === undefined}
+      onPress={() => {
+        void sync.setPinned(messageId, !pinned).catch(() => undefined);
+        onPressed?.();
+      }}
+      className={className}
+      icon={
+        pinned ? (
           <PushPinSlashIcon size={ACTION_ICON} aria-hidden="true" />
         ) : (
           <PushPinIcon size={ACTION_ICON} aria-hidden="true" />
-        )}
-      </Button>
-    </Tooltip>
+        )
+      }
+    />
   );
 }

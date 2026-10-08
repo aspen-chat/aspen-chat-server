@@ -47,6 +47,16 @@ export type UserBlock = components["schemas"]["UserBlock"];
 export type Pin = components["schemas"]["Pin"];
 /** A bot and the commands it answers, as a channel offers them. */
 export type BotCommands = components["schemas"]["BotCommands"];
+/** One emoji the user reacts with often, and how often (`GET /users/@me/frequent-emoji`). */
+export type FrequentEmoji = components["schemas"]["FrequentEmoji"];
+/**
+ * The emoji the user reacts with most where they are, most used first, and whether they are
+ * to be read again because the user's own reactions have changed since.
+ */
+export interface FrequentEmojiEntry {
+  readonly emoji: readonly string[];
+  readonly stale: boolean;
+}
 export type Command = components["schemas"]["Command"];
 export type CommandParameter = components["schemas"]["Parameter"];
 export type ParameterType = components["schemas"]["ParameterType"];

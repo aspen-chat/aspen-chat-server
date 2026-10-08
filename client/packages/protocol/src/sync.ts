@@ -296,6 +296,7 @@ export class AspenSync {
   /** The channels whose online count is shown, with how many places show each. */
   readonly #presenceChannels = new Map<string, number>();
   readonly #commandLoads = new Map<string, Promise<void>>();
+  readonly #frequentEmojiLoads = new Map<string, Promise<void>>();
   /** Reads of a channel's newest page under way, which a second ask joins. */
   readonly #latestLoads = new Map<string, Promise<void>>();
   readonly #foreignDmListeners = new Set<(notice: ForeignDmNotice) => void>();
@@ -2571,6 +2572,40 @@ export class AspenSync {
       this.#commandLoads.delete(channelId);
     });
     this.#commandLoads.set(channelId, load);
+    return load;
+  }
+
+  /**
+   * Reads the emoji the user reacts with most in `communityId` (`null`: a DM) into the store,
+   * once however many ask at the same time; the store marks them to be read again when one of
+   * the user's own reactions comes or goes.
+   */
+  loadFrequentEmoji(communityId: string | null): Promise<void> {
+    const key = communityId ?? "";
+    const pending = this.#frequentEmojiLoads.get(key);
+    if (pending !== undefined) {
+      return pending;
+    }
+    const load = (async () => {
+      const asOf = this.store.reactionChanges;
+      const result = await this.#client.api.GET("/api/v1/users/{user}/frequent-emoji", {
+        params: {
+          path: { user: "@me" },
+          query: communityId === null ? {} : { community: communityId },
+        },
+      });
+      if (result.data === undefined) {
+        throw new ApiProblemError(problemOf(result.error, result.response));
+      }
+      this.store.setFrequentEmoji(
+        communityId,
+        result.data.map((f) => f.emoji),
+        asOf,
+      );
+    })().finally(() => {
+      this.#frequentEmojiLoads.delete(key);
+    });
+    this.#frequentEmojiLoads.set(key, load);
     return load;
   }
 

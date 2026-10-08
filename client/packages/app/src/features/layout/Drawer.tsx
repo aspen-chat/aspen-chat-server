@@ -31,25 +31,34 @@ function isOut(phase: Phase): boolean {
   return phase.kind === "opening" || phase.kind === "open";
 }
 
+/** Which edge of the screen a drawer comes from. */
+export type DrawerEdge = "end" | "bottom";
+
 /**
- * A drawer at the inline end of the screen, titled `title`: a modal over a backdrop that
- * darkens as it comes out. A finger draws it out by swiping toward the inline start across
- * `swipeFrom`'s element, while `enabled`, and puts it away by swiping back toward the end. It
- * follows the finger, and when the finger lifts it goes the way the finger was thrown, or, if
- * the finger had come to rest, whichever way it is more than half. Opened through `isOpen`, it
- * slides all the way; a tap on the backdrop, Escape, its X, or the Android back button puts it
- * away. Where motion is reduced it fades in and out in place, and only a finger moves it.
+ * A drawer at an edge of the screen: a modal over a backdrop that darkens as it comes out. At
+ * the inline `end` it is a panel titled `title`, which a finger draws out by swiping toward
+ * the inline start across `swipeFrom`'s element, while `enabled`, and puts away by swiping
+ * back toward the end. At the `bottom` it is a sheet as tall as what it holds, named `title`
+ * for assistive technology alone, with a handle to show it can be pulled down, which puts it
+ * away. It follows the finger, and when the finger lifts it goes the way the finger was
+ * thrown, or, if the finger had come to rest, whichever way it is more than half. Opened
+ * through `isOpen`, it slides all the way; a tap on the backdrop, Escape, the panel's X, or
+ * the Android back button puts it away. Where motion is reduced it fades in and out in place,
+ * and only a finger moves it.
  */
 export function Drawer({
+  edge = "end",
   swipeFrom,
-  enabled,
+  enabled = true,
   isOpen,
   onOpenChange,
   title,
   children,
 }: {
-  swipeFrom: RefObject<HTMLElement | null>;
-  enabled: boolean;
+  edge?: DrawerEdge;
+  /** Where a finger swipes to draw an `end` drawer out; none draws it out by finger. */
+  swipeFrom?: RefObject<HTMLElement | null>;
+  enabled?: boolean;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
@@ -57,9 +66,12 @@ export function Drawer({
 }) {
   const motion = useMotion();
   const [phase, setPhase] = useState<Phase>({ kind: "closed" });
-  const [seenOpen, setSeenOpen] = useState(isOpen);
+  // Closed as first seen, so a drawer drawn already open slides in like one opened later.
+  const [seenOpen, setSeenOpen] = useState(false);
   const overlay = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const nowhere = useRef<HTMLElement>(null);
+  const bottom = edge === "bottom";
 
   /** Moves to `next`, telling the owner when that opens or closes the drawer. */
   const go = (next: Phase) => {
@@ -90,17 +102,18 @@ export function Drawer({
   }
 
   /** What share of the drawer `travel` pixels is. */
-  const share = (travel: number) =>
-    Math.min(
-      1,
-      Math.max(0, travel / (panel.current?.offsetWidth ?? drawerWidth(window.innerWidth))),
-    );
+  const share = (travel: number) => {
+    const size = bottom
+      ? (panel.current?.offsetHeight ?? window.innerHeight / 2)
+      : (panel.current?.offsetWidth ?? drawerWidth(window.innerWidth));
+    return Math.min(1, Math.max(0, travel / size));
+  };
   const settle = (shown: number, velocity: number) => {
     const opens = velocity > FLICK || (velocity >= -FLICK && shown > 0.5);
     go(opens ? { kind: "open" } : { kind: "closing", shown });
   };
   useSwipe(
-    swipeFrom,
+    swipeFrom ?? nowhere,
     {
       onStart: (toward) => toward === "start" && phase.kind === "closed",
       onMove: (travel) => {
@@ -113,7 +126,7 @@ export function Drawer({
         settle(0, 0);
       },
     },
-    enabled,
+    enabled && swipeFrom !== undefined,
   );
   useSwipe(
     overlay,
@@ -130,6 +143,7 @@ export function Drawer({
       },
     },
     enabled && phase.kind !== "closed",
+    bottom ? "block" : "inline",
   );
 
   // Drawn first where it is away, so that it slides in from there on the next frame.
@@ -215,8 +229,11 @@ export function Drawer({
         ? "opacity var(--motion-base) var(--motion-ease-out)"
         : "transform var(--motion-slow) var(--motion-ease-out), opacity var(--motion-slow) var(--motion-ease-out)";
   const panelStyle: CSSProperties = {
-    // Away is off the end: rightward left to right, leftward right to left (`--drawer-away`).
-    transform: `translateX(calc(${String(1 - drawn)} * var(--drawer-away)))`,
+    // Away is off the end: rightward left to right, leftward right to left (`--drawer-away`);
+    // or below the bottom.
+    transform: bottom
+      ? `translateY(calc(${String(1 - drawn)} * 100%))`
+      : `translateX(calc(${String(1 - drawn)} * var(--drawer-away)))`,
     opacity: faded ? 0 : 1,
     transition,
   };
@@ -237,21 +254,42 @@ export function Drawer({
         className="absolute inset-0 bg-black/40"
         style={{ opacity: darkness, transition }}
       />
-      <Modal
-        ref={panel}
-        className="absolute inset-y-0 end-0 flex w-[min(20rem,100%_-_3rem)] flex-col border-s border-line bg-surface-raised pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-xl outline-none [--drawer-away:100%] ltr:pe-[env(safe-area-inset-right)] rtl:pe-[env(safe-area-inset-left)] rtl:[--drawer-away:-100%]"
-        style={panelStyle}
-      >
-        <Dialog className="flex min-h-0 flex-1 flex-col outline-none">
-          <div className="px-4 pt-4 pb-2">
-            <DialogHeading>{title}</DialogHeading>
-          </div>
-          {children}
-        </Dialog>
+      <Modal ref={panel} className={bottom ? bottomSheetClass : endPanelClass} style={panelStyle}>
+        {bottom ? (
+          <Dialog aria-label={title} className="flex min-h-0 flex-1 flex-col outline-none">
+            <div aria-hidden="true" className="flex shrink-0 justify-center pt-2 pb-1">
+              <div className="h-1 w-10 rounded-full bg-line forced-fill" />
+            </div>
+            {children}
+          </Dialog>
+        ) : (
+          <Dialog className="flex min-h-0 flex-1 flex-col outline-none">
+            <div className="px-4 pt-4 pb-2">
+              <DialogHeading>{title}</DialogHeading>
+            </div>
+            {children}
+          </Dialog>
+        )}
       </Modal>
     </ModalOverlay>
   );
 }
+
+/** A drawer at the inline end: 20rem wide, leaving at least 3rem of the screen beside it. */
+const endPanelClass =
+  "absolute inset-y-0 end-0 flex w-[min(20rem,100%_-_3rem)] flex-col border-s border-line " +
+  "bg-surface-raised pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-xl " +
+  "outline-none [--drawer-away:100%] ltr:pe-[env(safe-area-inset-right)] " +
+  "rtl:pe-[env(safe-area-inset-left)] rtl:[--drawer-away:-100%]";
+/**
+ * A drawer at the bottom: the screen's width, as tall as what it holds up to most of the
+ * screen, and clear of the home indicator and the sides of a phone held sideways.
+ */
+const bottomSheetClass =
+  "absolute inset-x-0 bottom-0 flex max-h-[85%] flex-col rounded-t-xl border-t border-line " +
+  "bg-surface-raised pb-[env(safe-area-inset-bottom)] shadow-xl outline-none " +
+  "ltr:ps-[env(safe-area-inset-left)] ltr:pe-[env(safe-area-inset-right)] " +
+  "rtl:ps-[env(safe-area-inset-right)] rtl:pe-[env(safe-area-inset-left)]";
 
 /**
  * How wide a drawer is drawn on a screen this wide, in CSS pixels, as its class has it: 20rem,

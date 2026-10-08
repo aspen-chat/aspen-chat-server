@@ -80,6 +80,8 @@ export type {
   Mentions,
   Pin,
   BotCommands,
+  FrequentEmoji,
+  FrequentEmojiEntry,
   Command,
   CommandParameter,
   Invocation,

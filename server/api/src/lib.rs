@@ -342,6 +342,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(react::add_reaction, react::remove_reaction))
         .routes(routes!(react::list_reactors))
         .routes(routes!(react::remove_users_reaction))
+        .routes(routes!(react::list_frequent_emoji))
         .routes(routes!(admin::get_admin_access))
         .routes(routes!(admin::get_overview))
         .routes(routes!(admin::list_users))

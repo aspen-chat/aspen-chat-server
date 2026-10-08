@@ -33,6 +33,7 @@ import type {
   HeldEntry,
   HeldMessage,
   BotCommands,
+  FrequentEmojiEntry,
   ChannelMute,
   ChannelVoice,
   EmojiReactions,
@@ -237,6 +238,10 @@ export class RecordStore {
   /** When messages deleted while the app was open went, for drawing them going. */
   readonly #departures = new Map<string, number>();
   readonly #commands = new Map<string, readonly BotCommands[]>();
+  /** The emoji the user reacts with most, by the community they are for (`""` for a DM). */
+  readonly #frequentEmoji = new Map<string, FrequentEmojiEntry>();
+  /** How many times the user's own reactions have changed, for telling a read overtaken. */
+  #reactionChanges = 0;
   /** What plugins say about each message, by message and then by annotation id. */
   readonly #annotations = new Map<string, Map<string, MessageAnnotation>>();
   /** Which message each held annotation is about, for the events that name only the id. */
@@ -797,6 +802,47 @@ export class RecordStore {
       this.#touch(`commands:${channelId}`);
     }
     this.#commands.clear();
+  }
+
+  /**
+   * Topic `frequentEmoji:<community>`: the emoji the user reacts with most where they are, in
+   * `communityId` or (`null`) a DM; `undefined` until read.
+   */
+  frequentEmoji(communityId: string | null): FrequentEmojiEntry | undefined {
+    return this.#frequentEmoji.get(communityId ?? "");
+  }
+
+  /** How many times the user's own reactions have changed; a read notes it as it starts. */
+  get reactionChanges(): number {
+    return this.#reactionChanges;
+  }
+
+  /**
+   * Installs the emoji the user reacts with most in `communityId` (`null`: a DM), as read by a
+   * request started when `reactionChanges` was `asOf`. A reaction that came or went while it
+   * was answered may not be counted in it, so it is kept to show but read again.
+   */
+  setFrequentEmoji(communityId: string | null, emoji: readonly string[], asOf: number): void {
+    const key = communityId ?? "";
+    this.#batch(() => {
+      this.#frequentEmoji.set(key, { emoji, stale: asOf !== this.#reactionChanges });
+      this.#touch(`frequentEmoji:${key}`);
+    });
+  }
+
+  /**
+   * Marks every list of the user's most used emoji to be read again, keeping it to show
+   * meanwhile: the server counts them from the user's reactions, one of which has just come
+   * or gone, on this device or another.
+   */
+  #staleFrequentEmoji(): void {
+    this.#reactionChanges += 1;
+    for (const [key, entry] of this.#frequentEmoji) {
+      if (!entry.stale) {
+        this.#frequentEmoji.set(key, { ...entry, stale: true });
+        this.#touch(`frequentEmoji:${key}`);
+      }
+    }
   }
 
   /** Topic `icon:<id>`. */
@@ -2007,6 +2053,7 @@ export class RecordStore {
       this.#pins.clear();
       this.#channelOnline.clear();
       this.#forgetCommands();
+      this.#staleFrequentEmoji();
       this.#channelOverrides.clear();
       this.#categoryOverrides.clear();
       this.#memberRoles.clear();
@@ -2242,6 +2289,9 @@ export class RecordStore {
           break;
         case "react":
           this.#applyReaction(event.messageId, event.emoji, event.userId, event.type === "create");
+          if (event.userId === this.#myUserId) {
+            this.#staleFrequentEmoji();
+          }
           break;
         case "invite":
           if (event.type === "create") {

@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { PresenceMark } from "@/features/users/PresenceMark";
-import { ArrowLeftIcon, ArrowSquareLeftIcon, ArrowSquareRightIcon } from "@phosphor-icons/react";
+import { ArrowLeftIcon, ArrowSquareRightIcon, UserIcon } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import { Button } from "react-aria-components";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -63,7 +63,7 @@ export function ChannelHeader({
           {membersPanel.open ? (
             <ArrowSquareRightIcon size={20} aria-hidden="true" className="rtl:-scale-x-100" />
           ) : (
-            <ArrowSquareLeftIcon size={20} aria-hidden="true" className="rtl:-scale-x-100" />
+            <UserIcon size={20} aria-hidden="true" />
           )}
         </Button>
       </Tooltip>

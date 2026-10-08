@@ -260,7 +260,7 @@ commit, as with comments.
   screen, since on a narrow one the index is the channel list.
   Below Tailwind's `lg` breakpoint, where there is no room for the member list beside a channel,
   it is a drawer over the channel instead (`Drawer`, `src/features/layout/Drawer.tsx`, a modal
-  at the inline end): the channel header's members
+  at the inline end, or at the bottom for a sheet): the channel header's members
   button opens it, and a finger swiping across the channel toward the inline start draws it out
   and back toward the end puts it away (`useSwipe`, `src/features/layout/useSwipe.ts`). It
   follows the finger and, as the finger lifts, goes the way it was thrown or, if it came to
@@ -280,18 +280,22 @@ commit, as with comments.
   (`MessageActions`, icons at `ACTION_ICON`) show on hover or focus where there is a pointer, in
   a bar positioned out of the layout and rising over the message before (as far as the top of
   the list or the row's container leaves room), so the header stays one line of text tall and
-  the body sits right under it, and on a touch-only device (`TOUCH_ONLY`) a long press on the message opens them in
-  a popover beside the finger (`useLongPress` from `react-aria`, the one hook taken from it,
-  since the components package has no long press; the popover is anchored to the point
-  pressed, so on a long message it comes where the finger is, below it, or above it in the
-  lower half of the list and always on the newest message, which sits on the message box),
-  settling into place with `motion-settle` and a tap felt in the hand in the apps
-  (`haptics.ts`, `@capacitor/haptics`); the press owns the message there, so the browser's
-  text selection is off on it and Copy text is among the actions. Every action closes the
-  popover: the ones that open something (the reaction picker, who reacted, delete) open it
-  as a sheet of `MessageItem`'s own, anchored to the same point, since a popover or dialog
-  inside the actions would go with them (`MessageSheet`, `ReactionPickerPopover`,
-  `ReactionsDialog`, `DeleteMessageModal`). Otherwise a control is shown outright with
+  the body sits right under it, and on a touch-only device (`TOUCH_ONLY`) a long press on the
+  message (`useLongPress` from `react-aria`, the one hook taken from it, since the components
+  package has no long press) opens them in a sheet sliding up from the bottom over a darkened
+  screen (`MessageActionSheet`, a `Drawer` at the `bottom` edge, which a finger pulls down to
+  put away), with a tap felt in the hand in the apps (`haptics.ts`, `@capacitor/haptics`):
+  the actions are a list of icons with their names beside them (`MessageActions` given
+  `open`, each through `IconAction`), and above it the quick reactions, the reader's five most
+  used emoji (`useFrequentEmoji`, topped up by `quickReactions`' defaults) and an unnamed Add a
+  reaction button, which is not in the list again. The press owns the message there, so the
+  browser's text selection is off on it and Copy text is among the actions. Every action
+  closes the sheet: the ones that open something (the reaction picker, who reacted, delete)
+  open it in the sheet's place, as `MessageItem`'s own, the picker as a popover anchored to
+  the point pressed (below it, or above it in the lower half of the list and always on the
+  newest message, which sits on the message box), since a popover or dialog inside the sheet
+  would go with it (`MessageSheet`, `ReactionPickerPopover`, `ReactionsDialog`,
+  `DeleteMessageModal`). Otherwise a control is shown outright with
   `pointer-coarse:`. Small icon controls take `tap-target` (`src/styles.css`), which
   widens what a finger can hit to 44px on a touch screen without moving anything; controls side
   by side are drawn larger with `pointer-coarse:` instead, so their areas do not overlap. The app
@@ -320,7 +324,10 @@ commit, as with comments.
   `onOpenChange`, which the X, Escape, and a click outside all reach. The exceptions are a
   modal that must not be left before the reader acts, such as the recovery codes, and an
   incoming call (`DialogHeading closeButton={false}`), whose Accept and Decline are the ways
-  out; a click beside it does nothing, and Escape declines.
+  out; a click beside it does nothing, and Escape declines. A sheet of choices at the bottom of the
+  screen (`Drawer` at the `bottom` edge, as a message's actions on a touch screen) is a menu
+  more than a dialog: it is named for assistive technology alone, shows a handle rather than a
+  title, and is put away by a tap above it, a pull down, Escape, or the Android back button.
 - User-facing strings live in `packages/app/src/i18n/messages.ts` (keys outside any namespace) and `packages/app/src/i18n/en/<namespace>.ts` (one file per namespace, which `messages.ts` assembles into `en`), with camelCase keys, matching
   the server's locale files. Server Problem text is already localized and is shown as-is.
   The language shown (`src/i18n/locales.ts`, `I18nProvider`) is the account preference

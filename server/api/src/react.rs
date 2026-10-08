@@ -7,15 +7,18 @@
 //! Message reads sideload each message's reactions in brief (`include=reactions`): per emoji,
 //! the count, whether the caller reacted, and the first few to react. Everyone who reacted with
 //! an emoji is `GET /messages/{message}/reactions/{emoji}`, earliest first, a page at a time.
+//! The emoji someone reacts with most, which their quick reactions offer, are
+//! `GET /users/@me/frequent-emoji`.
 
 use crate::TAG_REACTIONS;
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Json, NoContent, Path, Query};
 use crate::message_enum::{React, User};
+use crate::user::{UserRef, not_your_account};
 use aspen_app as app;
 use aspen_app::context::GlobalServerContext;
-use aspen_app::{MessageId, UserId};
+use aspen_app::{CommunityId, MessageId, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;
 use diesel::result::DatabaseErrorKind;
@@ -198,4 +201,75 @@ pub async fn remove_users_reaction(
 ) -> ApiResult<NoContent> {
     app::react::remove_others_react(&state, user.id, message, emoji, author).await?;
     Ok(NoContent)
+}
+
+/// One emoji the caller reacts with, and how often they have.
+#[derive(Debug, Clone, Serialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrequentEmoji {
+    /// A Unicode emoji in canonical form, or a custom emoji's reference (`<:id>`).
+    pub emoji: String,
+    /// How many of the caller's reactions use it from the past 90 days.
+    pub recent_uses: u32,
+    /// How many of the caller's latest 10,000 reactions use it.
+    pub uses: u32,
+}
+
+impl From<app::react::FrequentEmoji> for FrequentEmoji {
+    fn from(frequent: app::react::FrequentEmoji) -> Self {
+        FrequentEmoji {
+            emoji: frequent.emoji,
+            recent_uses: frequent.recent,
+            uses: frequent.total,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(rename_all = "camelCase")]
+pub struct FrequentEmojiQuery {
+    /// The community the emoji are for: its own custom emoji are among them. Without one (a
+    /// DM), only Unicode emoji are.
+    pub community: Option<CommunityId>,
+    /// How many to return, at most 20; 5 when absent.
+    pub limit: Option<u32>,
+}
+
+/// The emoji the caller reacts with most: first those used in the past 90 days, most used
+/// first, then the rest by how often they were used. Counted from the caller's latest 10,000
+/// reactions on messages now. Only the caller may read their own.
+#[utoipa::path(
+    get,
+    path = "/users/{user}/frequent-emoji",
+    tag = TAG_REACTIONS,
+    params(("user" = inline(UserRef), Path), FrequentEmojiQuery),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Vec<FrequentEmoji>),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "Only the user themself may read their most used emoji", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn list_frequent_emoji(
+    State(state): State<GlobalServerContext>,
+    session: SessionUser,
+    Path(user): Path<UserRef>,
+    Query(query): Query<FrequentEmojiQuery>,
+) -> ApiResult<Json<Vec<FrequentEmoji>>> {
+    let user_id = user.resolve(&session);
+    let frequent = app::react::read_frequent(
+        &state,
+        session.user.id,
+        user_id,
+        query.community,
+        query.limit.unwrap_or(5),
+    )
+    .await
+    .map_err(not_your_account)?;
+    Ok(Json(
+        frequent.into_iter().map(FrequentEmoji::from).collect(),
+    ))
 }

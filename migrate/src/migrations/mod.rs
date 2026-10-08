@@ -106,3 +106,4 @@ pub mod m20261007_181834_voice_mute;
 pub mod m20261007_182216_attachment_evidence;
 pub mod m20261007_183427_upload_quota;
 pub mod m20261007_192833_bot_transfer;
+pub mod m20261008_013730_react_by_author;
