@@ -40,14 +40,14 @@ export function SidebarFooter() {
 function UserFooter() {
   const me = useMe();
   return (
-    <div className="flex items-center gap-2 border-t border-line py-2 ps-3 pe-5">
-      {me !== null && <Avatar name={displayNameOf(me)} iconId={me.icon} size="sm" />}
+    <div className="flex items-center gap-3 border-t border-line py-5 ps-3 pe-5">
+      {me !== null && <Avatar name={displayNameOf(me)} iconId={me.icon} size="lg" />}
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-sm font-medium">
+        <span className="truncate text-base font-medium">
           {me === null ? "…" : displayNameOf(me)}
         </span>
         {me?.status != null && (
-          <span className="truncate text-xs text-ink-muted">{statusLine(me.status)}</span>
+          <span className="truncate text-sm text-ink-muted">{statusLine(me.status)}</span>
         )}
       </span>
       {me !== null && <EditProfileDialog user={me} triggerClassName={footerButtonClass} />}
