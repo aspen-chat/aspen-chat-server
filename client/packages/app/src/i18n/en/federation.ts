@@ -88,7 +88,6 @@ export const federation = {
     botsSharedAllow: "Bots may come and go",
     botsSharedBlock: "Bots may neither come nor go",
   },
-  done: "Done",
   reviewKey: "Review key",
   reviewKeyLabel: "Review {domain}'s new key",
   keyHeading: "{domain} offers a new key",

@@ -5,7 +5,7 @@ import { useCan } from "@/api/hooks";
 import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import { CreateChannelForm } from "@/features/channels/CreateChannelForm";
 import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
-import { OptionButton, StepHeading } from "@/features/layout/steps";
+import { OptionButton } from "@/features/layout/steps";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
@@ -76,9 +76,9 @@ function Steps({ category, close }: { category: Category; close: () => void }) {
     case "text":
       return (
         <>
-          <StepHeading onBack={back}>
+          <DialogHeading onBack={back}>
             {format(m.newTextChannelIn, { category: category.name })}
-          </StepHeading>
+          </DialogHeading>
           <CreateChannelForm
             communityId={category.community}
             ty="text"
@@ -90,9 +90,9 @@ function Steps({ category, close }: { category: Category; close: () => void }) {
     case "voice":
       return (
         <>
-          <StepHeading onBack={back}>
+          <DialogHeading onBack={back}>
             {format(m.newVoiceChannelIn, { category: category.name })}
-          </StepHeading>
+          </DialogHeading>
           <CreateChannelForm
             communityId={category.community}
             ty="voice"

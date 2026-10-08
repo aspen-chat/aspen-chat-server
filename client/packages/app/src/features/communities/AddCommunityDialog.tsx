@@ -5,7 +5,7 @@ import { CreateCommunityForm } from "@/features/communities/CreateCommunityForm"
 import { OtherServerForm } from "@/features/deployments/OtherServerForm";
 import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
 import { JoinForm } from "@/features/invites/JoinForm";
-import { OptionButton, StepHeading } from "@/features/layout/steps";
+import { OptionButton } from "@/features/layout/steps";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 
@@ -80,13 +80,13 @@ function Steps({ initialStep, close }: { initialStep: AddCommunityStep; close: (
 
   return (
     <>
-      <StepHeading onBack={back}>
+      <DialogHeading onBack={back}>
         {step === "create"
           ? m.createCommunity
           : step === "join"
             ? m.joinCommunity
             : m.deployments.useOther}
-      </StepHeading>
+      </DialogHeading>
       {step === "create" ? (
         <CreateCommunityForm onDone={close} />
       ) : step === "join" ? (

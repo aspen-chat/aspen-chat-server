@@ -1,15 +1,15 @@
 import { CopyIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
 import { saveFile } from "@/features/layout/saveFile";
 import { useState } from "react";
-import { Button, Dialog, Heading, Modal, ModalOverlay } from "react-aria-components";
+import { Button, Dialog, Modal, ModalOverlay } from "react-aria-components";
 import { primaryButtonClass } from "@/features/auth/styles";
 import {
   dialogClass,
-  headingClass,
   modalClass,
   overlayClass,
   secondaryButtonClass,
 } from "@/features/invites/dialog";
+import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 import { copyText } from "@/features/layout/clipboard";
 
@@ -36,9 +36,7 @@ export function RecoveryCodesDialog({
     >
       <Modal className={modalClass}>
         <Dialog className={dialogClass} aria-label={m.security.codesHeading}>
-          <Heading slot="title" className={headingClass}>
-            {m.security.codesHeading}
-          </Heading>
+          <DialogHeading closeButton={false}>{m.security.codesHeading}</DialogHeading>
           <p className="text-sm text-ink-muted">{m.security.codesPrompt}</p>
           <ul
             aria-label={m.security.recoveryHeading}
