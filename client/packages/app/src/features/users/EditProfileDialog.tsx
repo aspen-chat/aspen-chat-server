@@ -61,7 +61,7 @@ export function EditProfileDialog({
     <DialogTrigger>
       <Tooltip text={m.profile.edit}>
         <Button aria-label={m.profile.edit} className={triggerClassName}>
-          <PencilSimpleIcon size={16} aria-hidden="true" />
+          <PencilSimpleIcon size={24} aria-hidden="true" />
         </Button>
       </Tooltip>
       <ModalOverlay className={overlayClass} isDismissable>

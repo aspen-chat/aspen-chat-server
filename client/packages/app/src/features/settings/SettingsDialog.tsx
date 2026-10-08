@@ -83,7 +83,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
     <DialogTrigger>
       <Tooltip text={m.settings.title}>
         <Button aria-label={m.settings.title} className={triggerClassName}>
-          <GearSixIcon size={16} aria-hidden="true" />
+          <GearSixIcon size={24} aria-hidden="true" />
         </Button>
       </Tooltip>
       <ModalOverlay isDismissable className={overlayClass}>

@@ -9,7 +9,7 @@ import { CallBar } from "@/features/voice/CallBar";
 import { VoiceEndedDialog } from "@/features/voice/VoiceEndedDialog";
 
 const footerButtonClass =
-  "tap-target rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
+  "tap-target rounded-md p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
   "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
 
 /**
