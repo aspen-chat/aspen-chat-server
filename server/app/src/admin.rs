@@ -53,6 +53,8 @@ fn order_by(column: &str, descending: bool, id: &str) -> String {
 /// The deployment's totals.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Overview {
+    /// The deployment's people, leaving out the system account (`app::system_account`), which
+    /// is the deployment itself.
     pub users: i64,
     /// Accounts made in the last seven days.
     pub new_users_this_week: i64,
@@ -63,11 +65,13 @@ pub async fn overview(state: &GlobalServerContext) -> crate::Result<Overview> {
     let mut conn = state.connection_pool.get().await?;
     let users: i64 = user::table
         .filter(user::deleted_at.is_null())
+        .filter(user::system.eq(false))
         .count()
         .get_result(conn.as_mut())
         .await?;
     let new_users_this_week: i64 = user::table
         .filter(user::deleted_at.is_null())
+        .filter(user::system.eq(false))
         .filter(user::created_at.gt(Utc::now() - chrono::Duration::days(7)))
         .count()
         .get_result(conn.as_mut())
@@ -138,9 +142,6 @@ pub struct UserEntry {
     /// For a user of another deployment, that deployment.
     #[diesel(sql_type = Nullable<Text>)]
     pub home_domain: Option<String>,
-    /// Whether this is the deployment's own account (`app::system_account`).
-    #[diesel(sql_type = diesel::sql_types::Bool)]
-    pub system: bool,
     /// The ban from the deployment standing now, if one does (`app::user_ban`): when it was
     /// made, the reason they were given, and when it ends.
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -153,7 +154,8 @@ pub struct UserEntry {
 
 /// One page of the users whose username or display name contains `search`, and with
 /// `banned_only` only those banned from the deployment now, in `sort` order: `limit` of them
-/// (at most `MAX_PAGE`) from `offset` (at most `MAX_OFFSET`).
+/// (at most `MAX_PAGE`) from `offset` (at most `MAX_OFFSET`). The system account
+/// (`app::system_account`) is left out: it is the deployment itself, nobody to moderate.
 pub async fn search_users(
     state: &GlobalServerContext,
     search: Option<&str>,
@@ -170,12 +172,13 @@ pub async fn search_users(
     Ok(diesel::sql_query(format!(
         r#"
         SELECT id, name, display_name, icon, created_at, registered_with, bot, bot_owner,
-               home_domain, system,
+               home_domain,
                CASE WHEN {banned} THEN banned_at END AS banned_at,
                CASE WHEN {banned} THEN ban_reason END AS ban_reason,
                CASE WHEN {banned} THEN banned_until END AS banned_until
         FROM "user"
         WHERE deleted_at IS NULL
+          AND NOT system
           AND ($1::text IS NULL OR lower(name) LIKE $1 OR lower(display_name) LIKE $1)
           AND (NOT $4 OR {banned})
         ORDER BY {order}
@@ -308,9 +311,10 @@ struct Earliest {
 const COMMUNITY_CREATED_AT: &str = "to_timestamp(('x' || lpad(substr(replace(id::text, '-', ''), 1, 12), 16, '0'))::bit(64)::bigint / 1000.0)";
 
 /// How many users and communities there were at each step of `range`, counting each from its
-/// creation until its deletion. The steps are days, weeks, or months (`GrowthUnit::for_span`),
-/// so a range is a few dozen to a few hundred points. It reads the whole of both tables, once,
-/// as events of +1 and -1 grouped by step, and sums them in order.
+/// creation until its deletion, and leaving out the system account as `overview` does. The
+/// steps are days, weeks, or months (`GrowthUnit::for_span`), so a range is a few dozen to a few
+/// hundred points. It reads the whole of both tables, once, as events of +1 and -1 grouped by
+/// step, and sums them in order.
 pub async fn growth(
     state: &GlobalServerContext,
     range: GrowthRange,
@@ -324,7 +328,7 @@ pub async fn growth(
         GrowthRange::FiveYears => now - chrono::Months::new(60),
         GrowthRange::AllTime => {
             let earliest: Earliest = diesel::sql_query(format!(
-                r#"SELECT LEAST((SELECT min(created_at) FROM "user"),
+                r#"SELECT LEAST((SELECT min(created_at) FROM "user" WHERE NOT system),
                                (SELECT min({COMMUNITY_CREATED_AT}) FROM community)) AS earliest"#
             ))
             .get_result(conn.as_mut())
@@ -336,10 +340,11 @@ pub async fn growth(
     let points = diesel::sql_query(format!(
         r#"
         WITH user_events AS (
-            SELECT date_trunc($1, created_at) AS at, count(*) AS delta FROM "user" GROUP BY 1
+            SELECT date_trunc($1, created_at) AS at, count(*) AS delta FROM "user"
+            WHERE NOT system GROUP BY 1
             UNION ALL
             SELECT date_trunc($1, deleted_at), -count(*) FROM "user"
-            WHERE deleted_at IS NOT NULL GROUP BY 1
+            WHERE deleted_at IS NOT NULL AND NOT system GROUP BY 1
         ),
         community_events AS (
             SELECT date_trunc($1, {COMMUNITY_CREATED_AT}) AS at, count(*) AS delta

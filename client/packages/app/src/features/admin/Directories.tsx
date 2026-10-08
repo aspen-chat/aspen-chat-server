@@ -117,7 +117,7 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
                 cell: (user: AdminUserEntry) => (
                   <span className="flex flex-wrap items-center gap-2">
                     {moderator && <UserDms user={user} />}
-                    {((banUsers && !user.system && user.id !== me?.id) || user.ban != null) && (
+                    {((banUsers && user.id !== me?.id) || user.ban != null) && (
                       <UserBanControl user={user} mayBan={banUsers} onChanged={reload} />
                     )}
                     {deleteOwnerlessBots && user.bot && user.botOwner == null && (
