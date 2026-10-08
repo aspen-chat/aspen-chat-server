@@ -23,7 +23,8 @@ const quickClass =
 /**
  * A touch screen's actions on a message, opened by a long press on it (`MessageItem`): a sheet
  * sliding up from the bottom over a darkened screen, holding the quick reactions, where the
- * reader may react (`canReact`), and below them `children`, the actions as a list of icons and
+ * reader may react (`canReact`), when the message was sent (`sentAt`, which a message grouped
+ * under another shows nowhere else on a touch screen), and below them `children`, the actions as a list of icons and
  * names (`MessageActions`). A quick reaction toggles the reader's reaction and closes the
  * sheet; the Add a reaction button beside them calls `onMore`, which opens the full picker in
  * the sheet's place.
@@ -31,6 +32,7 @@ const quickClass =
 export function MessageActionSheet({
   messageId,
   communityId,
+  sentAt,
   canReact,
   isOpen,
   onOpenChange,
@@ -40,6 +42,8 @@ export function MessageActionSheet({
   messageId: string;
   /** The community the message is in, whose own emoji may be among the quick reactions. */
   communityId: string | null;
+  /** When the message was sent, as the reader reads dates and times. */
+  sentAt: string;
   canReact: boolean;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
@@ -60,6 +64,9 @@ export function MessageActionSheet({
             onMore={onMore}
           />
         )}
+        <p className="border-b border-line px-4 py-2 text-xs text-ink-muted">
+          {format(m.sentAt, { time: sentAt })}
+        </p>
         <div role="group" aria-label={m.messageActionsLabel} className="flex flex-col pt-1">
           {children}
         </div>
@@ -97,7 +104,7 @@ function QuickReactions({
       role="group"
       aria-label={m.quickReactions}
       aria-busy={chosen === undefined}
-      className="flex items-center justify-between gap-2 border-b border-line px-4 pt-1 pb-3"
+      className="flex items-center justify-between gap-2 px-4 pt-1 pb-2"
     >
       {chosen === undefined
         ? Array.from({ length: QUICK_REACTIONS }, (_, i) => (

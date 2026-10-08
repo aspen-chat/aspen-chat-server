@@ -51,6 +51,8 @@ import { useNameIn } from "@/features/users/nameIn";
 import { useRowProps } from "@/features/messages/messageRows";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
+/** The time a grouped message shows after its text, its day being its group's. */
+const TIME_OF_DAY: Intl.DateTimeFormatOptions = { timeStyle: "short" };
 
 /** How long a finger is held on a message before its actions are offered under it. */
 const LONG_PRESS_MS = 450;
@@ -81,6 +83,12 @@ const ARRIVING_MS = 1000;
  * start a thread, and one that started a thread shows its replies' summary; an echo shows the
  * thread reply it names.
  *
+ * A message that continues its author's group (`grouped`, `messageGroups`) is drawn without
+ * their picture, name, and time, under the message before it, which the list says is
+ * `continued` by it; a little padding still parts the two. Its author and time are kept for
+ * assistive technology, a pointer over it or focus in it shows its time after its text, and
+ * a touch screen's actions say when it was sent.
+ *
  * Its actions (`MessageActions`) show in a bar rising over its top corner while the pointer is
  * over it or focus is in it, kept out of the layout so the header and body sit where they
  * would without it; near the top of its list, the bar rises only as far as there is room. A
@@ -98,6 +106,8 @@ export const MessageItem = memo(function MessageItem({
   highlighted,
   threadable = true,
   latest = false,
+  grouped = false,
+  continued = false,
 }: {
   id: string;
   home: ChannelHome;
@@ -108,6 +118,10 @@ export const MessageItem = memo(function MessageItem({
   threadable?: boolean;
   /** Whether it is the newest message, on which the actions never open downward. */
   latest?: boolean;
+  /** Whether it continues its author's group, drawn without picture, name, or time. */
+  grouped?: boolean;
+  /** Whether the message after it continues its group. */
+  continued?: boolean;
 }) {
   const m = useMessages();
   const sync = useSync();
@@ -119,6 +133,8 @@ export const MessageItem = memo(function MessageItem({
   const authorLoading = useUserLoading(message?.author);
   const me = useMe();
   const permissions = useChannelAccess(channelId);
+  const fullTime = useDateFormat(TIME);
+  const timeOfDay = useDateFormat(TIME_OF_DAY);
   const [editing, setEditing] = useState(false);
   const rowProps = useRowProps(id);
   // How far the pointer's actions rise above the row: all the way, or as far as there is room.
@@ -179,6 +195,7 @@ export const MessageItem = memo(function MessageItem({
   if (message === undefined) {
     return null;
   }
+  const sentAt = new Date(message.timestamp);
   const inThread = parentId !== null;
   // Opening a thread that exists is reading it; starting one takes Start threads.
   const canThread =
@@ -292,7 +309,9 @@ export const MessageItem = memo(function MessageItem({
             },
           })}
       className={
-        "group relative flex gap-3 rounded-md py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-accent/50 " +
+        "group relative flex gap-3 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50 " +
+        (grouped ? "pt-0.5 " : "pt-1.5 ") +
+        (continued ? "pb-0.5 " : "pb-1.5 ") +
         (touchOnly ? "select-none [-webkit-touch-callout:none] " : "") +
         arriving +
         (highlighted ? "motion-flash " : "") +
@@ -314,6 +333,7 @@ export const MessageItem = memo(function MessageItem({
           <MessageActionSheet
             messageId={id}
             communityId={home.community}
+            sentAt={fullTime.format(sentAt)}
             canReact={permissions.has("addReactions")}
             {...sheetProps("actions")}
             onMore={() => {
@@ -343,7 +363,9 @@ export const MessageItem = memo(function MessageItem({
           <ReportModal target={{ kind: "message", messageId: id }} {...sheetProps("report")} />
         </>
       )}
-      {author === undefined ? (
+      {grouped ? (
+        <div className="w-9 shrink-0" aria-hidden="true" />
+      ) : author === undefined ? (
         authorLoading ? (
           <Skeleton className="h-9 w-9 shrink-0 rounded-full" />
         ) : (
@@ -363,14 +385,21 @@ export const MessageItem = memo(function MessageItem({
         </ProfilePopover>
       )}
       <div className="min-w-0 flex-1">
-        <MessageHeader
-          message={message}
-          author={author}
-          authorLoading={authorLoading}
-          home={home}
-          channelId={channelId}
-          parentId={parentId}
-        />
+        {grouped ? (
+          <span className="sr-only">
+            {authorName ?? (author === undefined ? m.unknownUser : displayNameOf(author))}{" "}
+            <time dateTime={message.timestamp}>{fullTime.format(sentAt)}</time>
+          </span>
+        ) : (
+          <MessageHeader
+            message={message}
+            author={author}
+            authorLoading={authorLoading}
+            home={home}
+            channelId={channelId}
+            parentId={parentId}
+          />
+        )}
         {!editing && !touchOnly && (
           // Out of the header's flow, so its buttons never make the header taller than its
           // text; after the header in the document, so a keyboard reaches it before the body.
@@ -403,6 +432,21 @@ export const MessageItem = memo(function MessageItem({
             message={message}
             home={home}
             hideText={editing || (message.kind === "threadEcho" && message.echoOf != null)}
+            {...(grouped && !touchOnly
+              ? {
+                  // Read out with the author above, so shown alone.
+                  trailing: (
+                    <time
+                      aria-hidden="true"
+                      dateTime={message.timestamp}
+                      title={fullTime.format(sentAt)}
+                      className="hidden text-xs whitespace-nowrap text-ink-faint group-focus-within:inline group-hover:inline"
+                    >
+                      {timeOfDay.format(sentAt)}
+                    </time>
+                  ),
+                }
+              : {})}
             {...(own || permissions.has("manageMessages")
               ? {
                   onRemoveAttachment: (attachmentId: string) => {

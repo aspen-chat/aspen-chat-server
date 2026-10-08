@@ -24,6 +24,7 @@ import { HistorySkeleton } from "@/features/messages/MessageSkeleton";
 import { useNewMessagesLine } from "@/features/messages/newMessagesLine";
 import { ScrollDiagnosticsPanel } from "@/features/messages/ScrollDiagnosticsPanel";
 import { useShownWindow } from "@/features/messages/shownWindow";
+import { useGroupContinuations } from "@/features/messages/useMessageGroups";
 import { useReadMarking, useReadReports } from "@/features/messages/useReadMarking";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useMessages } from "@/i18n/context";
@@ -204,6 +205,14 @@ export function MessageList({
   }, [window, blockedUsers, store]);
 
   const lineIndex = useNewMessagesLine(channelId, latest, window);
+  const continuing = useGroupContinuations(
+    parts,
+    lineIndex,
+    store,
+    viewport,
+    content,
+    window !== undefined,
+  );
 
   if (window === undefined) {
     return <HistorySkeleton />;
@@ -272,7 +281,7 @@ export function MessageList({
               {lineIndex === -1 && <NewMessagesLine />}
               {leaving(null)}
               {parts.map((part) => {
-                const item = (id: string) => (
+                const item = (id: string, next?: string) => (
                   <MessageItem
                     id={id}
                     home={home}
@@ -280,12 +289,15 @@ export function MessageList({
                     parentId={parentId}
                     highlighted={id === highlightId}
                     latest={atLatest && id === lastId}
+                    grouped={continuing.has(id)}
+                    continued={next !== undefined && continuing.has(next)}
                   />
                 );
                 if (part.kind === "message") {
+                  const next = ids?.[part.index + 1];
                   return (
                     <Fragment key={part.id}>
-                      {item(part.id)}
+                      {item(part.id, next)}
                       {leaving(part.id)}
                       {part.index === lineIndex && <NewMessagesLine />}
                     </Fragment>

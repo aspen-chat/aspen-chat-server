@@ -288,7 +288,7 @@ commit, as with comments.
   the actions are a list of icons with their names beside them (`MessageActions` given
   `open`, each through `IconAction`), and above it the quick reactions, the reader's five most
   used emoji (`useFrequentEmoji`, topped up by `quickReactions`' defaults) and an unnamed Add a
-  reaction button, which is not in the list again. The press owns the message there, so the
+  reaction button, which is not in the list again, then when the message was sent. The press owns the message there, so the
   browser's text selection is off on it and Copy text is among the actions. Every action
   closes the sheet: the ones that open something (the reaction picker, who reacted, delete)
   open it in the sheet's place, as `MessageItem`'s own, the picker as a popover anchored to

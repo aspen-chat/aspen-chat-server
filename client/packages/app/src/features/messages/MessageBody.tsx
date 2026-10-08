@@ -1,5 +1,5 @@
 import type { LinkPreview, Message } from "@aspen/protocol";
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { MessageMedia } from "@/features/messages/Attachments";
 import { imageUrls, keptRoom, onlyImageLinks } from "@/features/messages/images";
@@ -27,7 +27,7 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
  * nothing but links to pictures the server has previews of shows the pictures alone. `hideText` leaves the text out where something takes its place (the editor,
  * an echo's reply); `onRemoveAttachment` offers each attachment's removal to those who may.
  * `still` draws it for reference only, as another message shows it: no poll to vote in, no
- * card's buttons to press. A message that fails to draw shows its text alone, plainly, rather
+ * card's buttons to press. `trailing` follows the text, after its edited mark. A message that fails to draw shows its text alone, plainly, rather
  * than taking the list it is in down with it.
  */
 export function MessageBody(props: MessageBodyProps) {
@@ -50,6 +50,7 @@ interface MessageBodyProps {
   hideText?: boolean;
   still?: boolean;
   onRemoveAttachment?: (attachmentId: string) => void;
+  trailing?: ReactNode;
 }
 
 function MessageBodyContent({
@@ -58,6 +59,7 @@ function MessageBodyContent({
   hideText = false,
   still = false,
   onRemoveAttachment,
+  trailing,
 }: MessageBodyProps) {
   const m = useMessages();
   const timeFormat = useDateFormat(TIME);
@@ -123,6 +125,7 @@ function MessageBodyContent({
             </span>
           )}
           <AlteredBy pluginIds={message.alteredBy} />
+          {trailing}
         </div>
       )}
       {!still && message.kind === "poll" && message.poll != null && (

@@ -188,6 +188,7 @@ export const en = {
   close: "Close",
   edited: "(edited)",
   editedAt: "Edited {date}",
+  sentAt: "Sent at {time}",
   edit: "Edit",
   editMessage: "Edit message",
   delete: "Delete",

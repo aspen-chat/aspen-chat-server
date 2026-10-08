@@ -141,3 +141,24 @@
   Capacitor plugin Capacitor asks about each navigation (`AspenNavigationPlugin`, in
   `android/.../navigation/` and in iOS's `MainViewController.swift`): an address outside the
   app leaves it only when it is `http:`, `https:`, or `mailto:`, and any other is dropped.
+- A run of one author's messages is drawn as a group (`messageGroups.ts`, worked out by
+  `useGroupContinuations` in `MessageList`): the first with the author's picture, name, and
+  time, the rest under it with none of them, each still its own row with a little padding
+  between, so it highlights, takes focus, and opens its actions alone. A message continues
+  the group before it when it is by the same author, on the same day where the reader is,
+  within 30 minutes of the group's first message (`GROUP_SPAN_MS`), with nothing between them
+  (the New Messages line, a run of blocked messages), neither being a kind that stands alone
+  (anything but `standard` and `poll`: notices, calls, closed polls, thread echoes, commands,
+  warnings), and with the group's height staying within three quarters of the list's
+  (`GROUP_HEIGHT_SHARE`). That height is estimated, never measured (`estimateHeight`): text
+  wrapped at the column's width from the list's font size, wide characters counted twice,
+  pictures at their recorded sizes as they are drawn, and fixed heights for files, link cards,
+  polls, reaction chips, and thread summaries, so a group is the same however its pictures
+  load. Groups are worked out oldest first over the window whenever it changes, but a message
+  keeps what it was decided to be (begins a group, or continues one) for as long as it stays
+  in the window and the message before it is still its author's with nothing between: read
+  afresh, a page of older history arriving above the view would move group boundaries all the
+  way down into it. Resizing the list decides them all again. A grouped message keeps its author and time for assistive technology
+  (visually hidden); on a computer its time shows after its text (`MessageBody`'s `trailing`)
+  while the pointer is over it or focus is in it, and on a touch screen its actions' sheet
+  says when it was sent, as every message's does.
