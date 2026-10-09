@@ -8,6 +8,7 @@ import { Button } from "react-aria-components";
 import {
   useChannel,
   useChannelAccess,
+  useIsSaved,
   useMe,
   useMessage,
   useSync,
@@ -22,7 +23,7 @@ import { displayNameOf } from "@/features/users/profile";
 import { useNameColor } from "@/features/users/nameColor";
 import { MessageMedia } from "@/features/messages/Attachments";
 import { Markdown } from "@/features/messages/Markdown";
-import { MessageBody } from "@/features/messages/MessageBody";
+import { MessageBody, SavedMark } from "@/features/messages/MessageBody";
 import { MessageAnnotations } from "@/features/plugins/Annotations";
 import { MessageEditor } from "@/features/messages/MessageEditor";
 import { CallNotice, MissedCallNotice } from "@/features/messages/CallNotice";
@@ -85,7 +86,9 @@ const ARRIVING_MS = 1000;
  * their picture, name, and time, under the message before it, which the list says is
  * `continued` by it; a little padding still parts the two. Its author and time are kept for
  * assistive technology, a pointer over it or focus in it shows its time after whatever it ends
- * with (`MessageBody`'s `trailing`), and a touch screen's actions say when it was sent.
+ * with (`MessageBody`'s `trailing`), and a touch screen's actions say when it was sent. On a
+ * touch screen the reader's mark on a message they saved follows the time in its header, and a
+ * grouped message, which has none, keeps it after whatever it ends with.
  *
  * Its actions (`MessageActions`) show in a bar rising over its top corner while the pointer is
  * over it or focus is in it, kept out of the layout so the header and body sit where they
@@ -399,6 +402,7 @@ export const MessageItem = memo(function MessageItem({
             home={home}
             channelId={channelId}
             parentId={parentId}
+            savedMark={touchOnly}
           />
         )}
         {!editing && !touchOnly && (
@@ -435,6 +439,7 @@ export const MessageItem = memo(function MessageItem({
             home={home}
             hideText={editing || (message.kind === "threadEcho" && message.echoOf != null)}
             {...(trailingDrop === undefined ? {} : { trailingDrop })}
+            savedMark={grouped || !touchOnly}
             {...(grouped && !touchOnly
               ? {
                   // Read out with the author above, so shown alone.
@@ -516,6 +521,7 @@ function MessageHeader({
   home,
   channelId,
   parentId,
+  savedMark,
 }: {
   message: Message;
   author: User | undefined;
@@ -523,8 +529,11 @@ function MessageHeader({
   home: ChannelHome;
   channelId: string;
   parentId: string | null;
+  /** Whether the reader's mark on a message they saved follows its time. */
+  savedMark: boolean;
 }) {
   const timeFormat = useDateFormat(TIME);
+  const saved = useIsSaved(message.id);
   const m = useMessages();
   const nameColor = useNameColor(author?.id, home.community);
   const name = useNameIn(author, home.community);
@@ -578,6 +587,7 @@ function MessageHeader({
       >
         <time dateTime={message.timestamp}>{timeFormat.format(new Date(message.timestamp))}</time>
       </Link>
+      {savedMark && saved && <SavedMark className="text-xs" />}
     </div>
   );
 }
