@@ -955,22 +955,25 @@ async fn recipients(
     drop(conn);
     let listed: Vec<(UserId, bool)> = candidates.into_iter().collect();
     // Those using Aspen right now are not woken; asked in batches, so a message to a whole
-    // community never sends Valkey one command naming every member.
-    let mut asleep = Vec::with_capacity(listed.len());
-    for batch in listed.chunks(ACTIVE_BATCH) {
+    // community never sends Valkey one command naming every member, and the batches at once.
+    let batches = futures_util::future::try_join_all(listed.chunks(ACTIVE_BATCH).map(|batch| {
         let keys: Vec<String> = batch
             .iter()
             .map(|(user, _)| crate::user_status::active_key(*user))
             .collect();
-        let active: Vec<Option<i64>> = state.valkey.mget(keys).await?;
-        asleep.extend(
-            batch
-                .iter()
-                .zip(active)
-                .filter_map(|(recipient, active)| active.is_none().then_some(*recipient)),
-        );
-    }
-    Ok((asleep, community.is_some()))
+        async move {
+            let active: Vec<Option<i64>> = state.valkey.mget(keys).await?;
+            Ok::<_, crate::Error>(
+                batch
+                    .iter()
+                    .zip(active)
+                    .filter_map(|(recipient, active)| active.is_none().then_some(*recipient))
+                    .collect::<Vec<_>>(),
+            )
+        }
+    }))
+    .await?;
+    Ok((batches.into_iter().flatten().collect(), community.is_some()))
 }
 
 /// How many people's activity one Valkey command asks about.

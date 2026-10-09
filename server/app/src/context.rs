@@ -53,6 +53,9 @@ pub struct GlobalServerContext {
             Option<(crate::VoiceServerId, crate::ChannelId)>,
         >,
     >,
+    /// The users this server marked online lately, which it does not mark again yet
+    /// (`app::user_status::mark_user_online_id`).
+    pub presence_marked: crate::user_status::PresenceMarked,
     /// Each community's recent set of members with a connection (`app::user_status`).
     pub connected_members:
         Arc<crate::recent::Recent<crate::CommunityId, Arc<HashSet<crate::UserId>>>>,
@@ -188,6 +191,7 @@ impl GlobalServerContext {
             community_online: Arc::default(),
             voice_session_homes: Arc::default(),
             connected_members: Arc::default(),
+            presence_marked: crate::user_status::presence_marked(),
             connection_pool,
             event_feed: match role {
                 Role::Public => crate::event_feed::EventFeed::start(
