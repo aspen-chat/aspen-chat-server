@@ -94,3 +94,25 @@ INSERT INTO job (id, kind, key, class, due, not_before, payload)
 SELECT gen_random_uuid(), 'queueNewsletter', id::text, 3, sent_at, now(),
        jsonb_build_object('post', id)
 FROM newsletter_post WHERE sent_at IS NOT NULL AND queued_at IS NULL;
+
+-- Making a picture's preview or a video's poster is a job of its own, keyed by its attachment,
+-- whose payload holds until when messages holding the attachment wait for it (`holdUntil`); the
+-- preview queue goes. What was just uploaded is interactive, what was queued when previews
+-- began to be made bulk.
+INSERT INTO job (id, kind, key, class, due, not_before, payload, attempts)
+SELECT gen_random_uuid(),
+       CASE WHEN a.mime_type LIKE 'video/%' THEN 'makeVideoPoster' ELSE 'makePicturePreview' END,
+       q.attachment_id::text, CASE WHEN q.priority > 0 THEN 1 ELSE 3 END,
+       q.not_before, q.not_before, jsonb_build_object('holdUntil', q.hold_until), q.attempts
+FROM attachment_preview_job q JOIN attachment a ON a.id = q.attachment_id;
+DROP TABLE attachment_preview_job;
+
+-- Each held message is posted by a job of its own (`releaseHeldMessage`), keyed by it, which
+-- holds its claims and attempts; an author's are posted in the order they were sent, through
+-- `held_message_by_author`.
+INSERT INTO job (id, kind, key, class, due, not_before, payload)
+SELECT gen_random_uuid(), 'releaseHeldMessage', id::text, 1, held_at, now(), '{}'
+FROM held_message;
+ALTER TABLE held_message DROP COLUMN not_before, DROP COLUMN attempts;
+DROP INDEX held_message_author_idx;
+CREATE INDEX held_message_by_author ON held_message (author, held_at, id);

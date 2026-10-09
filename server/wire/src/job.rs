@@ -84,7 +84,7 @@ impl JobClass {
 pub enum JobKind {
     /// Deleting the messages a ban's deletion window covers.
     DeleteMessagesBy,
-    /// Sweeping jobs given up long enough ago.
+    /// Sweeping jobs given up long enough ago, and previews no server made in time.
     PruneFailedJobs,
     /// Sweeping sessions and sign-ins that have ended.
     SweepSignIns,
@@ -119,6 +119,12 @@ pub enum JobKind {
     SendEmail,
     /// Queueing a newsletter post's mail to its subscribers.
     QueueNewsletter,
+    /// Making a picture's preview.
+    MakePicturePreview,
+    /// Making a video's poster.
+    MakeVideoPoster,
+    /// Posting a message held for its previews once nothing holds it.
+    ReleaseHeldMessage,
 }
 
 crate::wire_name_traits!(JobKind);

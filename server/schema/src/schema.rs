@@ -33,16 +33,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    attachment_preview_job (attachment_id) {
-        attachment_id -> Uuid,
-        priority -> Int2,
-        not_before -> Timestamptz,
-        attempts -> Int4,
-        hold_until -> Timestamptz,
-    }
-}
-
-diesel::table! {
     benchmark_community (run, community) {
         run -> Text,
         community -> Uuid,
@@ -359,8 +349,6 @@ diesel::table! {
         echo_to_parent -> Bool,
         locale -> Text,
         held_at -> Timestamptz,
-        not_before -> Timestamptz,
-        attempts -> Int4,
     }
 }
 
@@ -976,7 +964,6 @@ diesel::table! {
 
 diesel::joinable!(attachment -> message (removed_from));
 diesel::joinable!(attachment -> user (uploader));
-diesel::joinable!(attachment_preview_job -> attachment (attachment_id));
 diesel::joinable!(benchmark_community -> benchmark_run (run));
 diesel::joinable!(benchmark_community -> community (community));
 diesel::joinable!(benchmark_user -> benchmark_run (run));
@@ -1094,7 +1081,6 @@ diesel::joinable!(voice_session -> voice_server (voice_server));
 
 diesel::allow_tables_to_appear_in_same_query!(
     attachment,
-    attachment_preview_job,
     benchmark_community,
     benchmark_run,
     benchmark_user,

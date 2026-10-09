@@ -110,8 +110,9 @@ them, or name them in [`[media.previews]`](configuration.md#mediapreviews). An H
 larger than `max_video_bytes`, has no poster by design.
 
 **Messages with a picture take twenty seconds to appear.** No server makes previews (`[media.previews]
-make` is off everywhere, or every maker is stuck), so each message waits out its hold. The
-`attachment_preview_job` table shows what is waiting.
+make` or `[jobs] run` is off everywhere, or every server making them is stuck), so each message
+waits out its hold. The dashboard's Jobs tab, or `aspen-chat-server jobs list`, shows
+`makePicturePreview` and `makeVideoPoster` jobs waiting.
 
 **Nobody can join a call** ("No voice server can take a call right now"). No voice server is
 enabled, has room, and reported within `[voice] offer_silence_seconds`. The dashboard's Server fleet

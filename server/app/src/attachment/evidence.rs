@@ -82,8 +82,11 @@ async fn mark(
     .await?;
     let marked: Vec<AttachmentId> = marked.into_iter().map(|m| AttachmentId(m.id)).collect();
     if !marked.is_empty() {
-        diesel::delete(aspen_schema::attachment_preview_job::table)
-            .filter(aspen_schema::attachment_preview_job::attachment_id.eq_any(&marked))
+        // Evidence gets no preview; what its previews held goes without one.
+        crate::message::held::wake_holding_any(conn, &marked).await?;
+        diesel::sql_query("DELETE FROM job WHERE kind = ANY($1) AND key = ANY($2::uuid[]::text[])")
+            .bind::<Array<diesel::sql_types::Text>, _>(super::preview::KINDS.to_vec())
+            .bind::<Array<PgUuid>, _>(&marked)
             .execute(conn)
             .await?;
     }

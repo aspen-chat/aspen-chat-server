@@ -222,8 +222,6 @@ pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(),
     }
     crate::push::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
     crate::push::spawn_dispatcher(context.clone());
-    crate::attachment::preview::spawn_maker(context.clone());
-    crate::message::held::spawn_releaser(context.clone());
     crate::plugin::registry::start(context).await?;
     crate::jobs::spawn_runner(context.clone());
     Ok(())

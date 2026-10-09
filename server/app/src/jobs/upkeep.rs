@@ -24,12 +24,14 @@ async fn sweep(state: &GlobalServerContext, sql: &str) -> crate::Result<Outcome>
     })
 }
 
-/// Jobs given up more than `jobs::FAILED_KEPT_DAYS` ago, through `job_failed`.
+/// Jobs given up more than `jobs::FAILED_KEPT_DAYS` ago, through `job_failed`, and previews no
+/// server has made within `preview::GIVEN_UP_AFTER`, as none does of videos where no server can
+/// run `ffmpeg`, through `job_next`.
 pub async fn prune_failed_jobs(
     state: &GlobalServerContext,
     _job: &Claimed,
 ) -> crate::Result<Outcome> {
-    sweep(
+    let failed = sweep(
         state,
         &format!(
             "DELETE FROM job WHERE id IN (SELECT id FROM job \
@@ -37,7 +39,26 @@ pub async fn prune_failed_jobs(
             super::FAILED_KEPT_DAYS
         ),
     )
-    .await
+    .await?;
+    let kinds = crate::attachment::preview::KINDS
+        .iter()
+        .map(|kind| format!("'{kind}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let unmade = sweep(
+        state,
+        &format!(
+            "DELETE FROM job WHERE id IN (SELECT id FROM job \
+             WHERE kind IN ({kinds}) AND failed_at IS NULL \
+               AND not_before < now() - make_interval(secs => {}) LIMIT $1)",
+            crate::attachment::preview::GIVEN_UP_AFTER.as_secs()
+        ),
+    )
+    .await?;
+    Ok(match (failed, unmade) {
+        (Outcome::Done, Outcome::Done) => Outcome::Done,
+        _ => Outcome::Progress(serde_json::Value::Null),
+    })
 }
 
 /// Sessions and sign-ins that have ended: sessions an hour after they expire, and sign-ins (whose

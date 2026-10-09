@@ -1,14 +1,13 @@
 //! Previews: what readers' apps show inline in place of an original sized for a camera rather
 //! than a message list, a smaller copy of a picture, or a video's poster.
 //!
-//! Confirming a picture or video queues it here ([`queue`], in the transaction that confirms it),
-//! and every server whose `[media.previews]` has `make` on makes previews from the queue
-//! ([`spawn_maker`]). A maker claims rows by pushing their `not_before` past the time it needs
-//! for them, under `FOR UPDATE SKIP LOCKED`, as the mail outbox does, so makers never claim one
-//! row twice and a maker that dies leaves its rows to be claimed again. It looks every
-//! [`POLL`], and at once when a server publishes on [`WAKE_SUBJECT`], which confirming does.
-//! A maker without `ffmpeg` claims pictures only. Until the preview is made, or [`HOLD`] has
-//! passed since the upload, messages holding it wait for it (`app::message::held`).
+//! Confirming a picture or video queues a job making its preview ([`queue`], in the transaction
+//! that confirms it): `makePicturePreview` or `makeVideoPoster`, keyed by the attachment
+//! (`app::jobs`). Only servers whose `[media.previews]` has `make` on run them, and only those
+//! that can run `ffmpeg` make posters; on each, at most `concurrency` run at once. Until the
+//! preview is made, or found not worth making, or fails, or until [`HOLD`] has passed since the
+//! upload (the job's `holdUntil`), messages holding the attachment wait for it
+//! (`app::message::held`). A preview no server has made within [`GIVEN_UP_AFTER`] is not made.
 //!
 //! A preview is fitted within [`aspen_previews::BOX`], never enlarged, its aspect ratio kept: 960 pixels is the
 //! tallest a picture is shown inline (320 CSS pixels) on a screen of three device pixels to
@@ -37,20 +36,21 @@
 //! goes to the channels of the messages holding the attachment, as their own events do, or to
 //! its uploader alone while it is in none. Deleting the attachment deletes the preview.
 
-use crate::aspen_config::PreviewConfig;
 use crate::context::GlobalServerContext;
+use crate::jobs::{self, Claimed, JobClass, JobKind, NewJob};
 use crate::{AttachmentId, EventScope, MessageId};
 pub use aspen_previews::{Made, Outcome};
-use aspen_schema::{attachment, attachment_preview_job, message, message_attachment};
+use aspen_schema::{attachment, message, message_attachment};
 use aspen_wire::attachment::AttachmentPreview;
 use aspen_wire::message_enum::server_event::ServerEvent;
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
-use diesel::sql_types::{BigInt, Bool, Integer, Uuid as PgUuid};
+use diesel::sql_types::Uuid as PgUuid;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use futures_util::StreamExt;
-use std::sync::Arc;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use uuid::Uuid;
 
 pub mod picture;
 pub mod video;
@@ -62,27 +62,40 @@ pub const MIN_SAVING_PERCENT: u64 = 10;
 /// uploaded (`app::message::held`).
 pub const HOLD: Duration = Duration::from_secs(20);
 
-/// The subject a server publishes on after queueing previews, which wakes every maker.
-pub const WAKE_SUBJECT: &str = "aspen.previews.wake";
+/// How long a preview may wait for a server to make it, as one may when no server can run
+/// `ffmpeg`, before it is given up (`jobs::upkeep::prune_failed_jobs`).
+pub const GIVEN_UP_AFTER: Duration = Duration::from_secs(7 * 24 * 3600);
 
-/// How often a maker looks for work when nothing wakes it.
-const POLL: Duration = Duration::from_secs(30);
-/// How long a claimed row is held for its maker: longer than the slowest preview, a large
-/// video's download and its poster, may take.
-const CLAIM_SECONDS: i32 = 900;
+/// How many times a preview is tried before it is given up: the waits between them, starting
+/// at a minute and doubling, add up to about an hour.
+pub const MAX_ATTEMPTS: i32 = 6;
 
-/// How many times a row is tried before it is given up: the waits between them, starting at a
-/// minute and doubling, add up to about an hour.
-const MAX_ATTEMPTS: i32 = 6;
+/// The kinds of job that make previews, whose payloads are [`Hold`]s.
+pub const KINDS: [JobKind; 2] = [JobKind::MakePicturePreview, JobKind::MakeVideoPoster];
 
-/// The priority of an attachment just uploaded, ahead of those queued when previews began to be
-/// made (priority 0), which someone may be waiting for less.
-const UPLOADED_PRIORITY: i16 = 10;
+/// Until when messages holding an attachment wait for its preview: a preview job's payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Hold {
+    pub hold_until: DateTime<Utc>,
+}
+
+/// The kind of job that makes a preview of an attachment of `mime_type`, as its uploader named
+/// it, where a preview may be made of one.
+fn kind_of(mime_type: &str) -> Option<JobKind> {
+    if mime_type.starts_with("image/") {
+        Some(JobKind::MakePicturePreview)
+    } else if mime_type.starts_with("video/") {
+        Some(JobKind::MakeVideoPoster)
+    } else {
+        None
+    }
+}
 
 /// Whether an attachment of `mime_type`, as its uploader named it, is one a preview may be made
 /// of. The bytes decide in the end: a picture that is not one is left as it is.
 pub fn wanted(mime_type: &str) -> bool {
-    mime_type.starts_with("image/") || mime_type.starts_with("video/")
+    kind_of(mime_type).is_some()
 }
 
 /// Where an attachment's preview is stored: beside the originals rather than under the
@@ -116,149 +129,39 @@ pub fn of(state: &GlobalServerContext, row: &super::Attachment) -> Option<Attach
     })
 }
 
-/// Queues the making of an attachment's preview, in the transaction that confirms it. Call
-/// [`wake`] once it commits.
-pub async fn queue(conn: &mut AsyncPgConnection, id: AttachmentId) -> crate::Result<()> {
-    diesel::insert_into(attachment_preview_job::table)
-        .values((
-            attachment_preview_job::attachment_id.eq(id),
-            attachment_preview_job::priority.eq(UPLOADED_PRIORITY),
-            attachment_preview_job::hold_until
-                .eq(chrono::Utc::now() + chrono::Duration::from_std(HOLD).unwrap_or_default()),
-        ))
-        .on_conflict_do_nothing()
-        .execute(conn)
-        .await?;
+/// Queues the making of the preview of attachment `id`, of `mime_type`, in the transaction that
+/// confirms it. Call [`jobs::wake`] once it commits.
+pub async fn queue(
+    conn: &mut AsyncPgConnection,
+    id: AttachmentId,
+    mime_type: &str,
+) -> crate::Result<()> {
+    let Some(kind) = kind_of(mime_type) else {
+        return Ok(());
+    };
+    let hold = Hold {
+        hold_until: Utc::now() + chrono::Duration::from_std(HOLD).unwrap_or_default(),
+    };
+    jobs::enqueue(
+        conn,
+        NewJob::new(kind, JobClass::Interactive, &hold)?.keyed(id.0.to_string()),
+    )
+    .await?;
     Ok(())
 }
 
-/// Wakes every maker, after previews were queued.
-pub async fn wake(state: &GlobalServerContext) {
-    if let Err(e) = state
-        .nats_context
-        .client()
-        .publish(WAKE_SUBJECT, bytes::Bytes::new())
-        .await
-    {
-        tracing::warn!(error = %e, "could not wake the preview makers");
-    }
+/// The attachment a preview job makes the preview of.
+fn attachment_of(job: &Claimed) -> crate::Result<AttachmentId> {
+    job.key
+        .as_deref()
+        .and_then(|key| key.parse().ok())
+        .map(AttachmentId)
+        .ok_or_else(|| crate::Error::PreviewUnmade("a preview job names no attachment".into()))
 }
 
-/// A maker's means: this server's settings, and whether it has `ffmpeg`.
-struct Maker {
-    config: PreviewConfig,
-    videos: bool,
-    wake: tokio::sync::Notify,
-}
-
-/// Starts making previews from the queue, for as long as the server runs, where it makes them.
-pub fn spawn_maker(state: GlobalServerContext) {
-    let config = state.config.media.previews.clone();
-    if !config.make {
-        return;
-    }
-    tokio::spawn(async move {
-        let videos = aspen_previews::video::available(&config).await;
-        if !videos {
-            tracing::warn!(
-                ffmpeg = config.ffmpeg,
-                ffprobe = config.ffprobe,
-                "ffmpeg or ffprobe cannot be run, so this server makes previews of pictures only"
-            );
-        }
-        let maker = Arc::new(Maker {
-            config,
-            videos,
-            wake: tokio::sync::Notify::new(),
-        });
-        spawn_wake_listener(state.clone(), maker.clone());
-        loop {
-            match make_batch(&state, &maker).await {
-                // A full batch suggests more is waiting.
-                Ok(claimed) if claimed == maker.config.concurrency.max(1) => continue,
-                Ok(_) => {}
-                Err(e) => tracing::error!(error = %e, "could not make previews"),
-            }
-            tokio::select! {
-                () = maker.wake.notified() => {}
-                () = tokio::time::sleep(POLL) => {}
-            }
-        }
-    });
-}
-
-/// Wakes this server's maker whenever a server says previews were queued.
-fn spawn_wake_listener(state: GlobalServerContext, maker: Arc<Maker>) {
-    tokio::spawn(async move {
-        loop {
-            match state.nats_context.client().subscribe(WAKE_SUBJECT).await {
-                Ok(mut wakes) => {
-                    while wakes.next().await.is_some() {
-                        maker.wake.notify_one();
-                    }
-                }
-                Err(e) => tracing::warn!(error = %e, "could not listen for previews to make"),
-            }
-            tokio::time::sleep(POLL).await;
-        }
-    });
-}
-
-#[derive(QueryableByName)]
-struct Claimed {
-    #[diesel(sql_type = PgUuid)]
-    attachment_id: AttachmentId,
-    #[diesel(sql_type = Integer)]
-    attempts: i32,
-}
-
-/// Claims and makes one batch, as many as this server makes at once, answering how many rows
-/// it claimed.
-async fn make_batch(state: &GlobalServerContext, maker: &Maker) -> crate::Result<usize> {
-    let size = maker.config.concurrency.max(1);
-    let claimed: Vec<Claimed> = {
-        let mut conn = state.connection_pool.get().await?;
-        diesel::sql_query(
-            r#"
-            UPDATE attachment_preview_job
-            SET not_before = now() + make_interval(secs => $1), attempts = attempts + 1
-            WHERE attachment_id IN (
-                SELECT job.attachment_id FROM attachment_preview_job job
-                JOIN attachment ON attachment.id = job.attachment_id
-                WHERE job.not_before <= now()
-                  AND ($3 OR attachment.mime_type NOT LIKE 'video/%')
-                ORDER BY job.priority DESC, job.not_before, job.attachment_id DESC
-                LIMIT $2
-                FOR UPDATE OF job SKIP LOCKED
-            )
-            RETURNING attachment_id, attempts
-            "#,
-        )
-        .bind::<Integer, _>(CLAIM_SECONDS)
-        .bind::<BigInt, _>(size as i64)
-        .bind::<Bool, _>(maker.videos)
-        .load(conn.as_mut())
-        .await?
-    };
-    let count = claimed.len();
-    futures_util::stream::iter(claimed)
-        .for_each_concurrent(size, |row| async move {
-            let id = row.attachment_id;
-            if let Err(e) = make_one(state, maker, id, row.attempts).await {
-                tracing::error!(attachment = %id.0, error = %e, "could not record a preview");
-            }
-        })
-        .await;
-    Ok(count)
-}
-
-/// Makes one attachment's preview and records what became of it.
-async fn make_one(
-    state: &GlobalServerContext,
-    maker: &Maker,
-    id: AttachmentId,
-    attempts: i32,
-) -> crate::Result<()> {
+/// One preview job: makes the attachment's preview and records what became of it.
+pub async fn make_step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<jobs::Outcome> {
+    let id = attachment_of(job)?;
     let row: Option<super::Attachment> = attachment::table
         .select(super::Attachment::as_select())
         .filter(attachment::id.eq(id))
@@ -268,26 +171,26 @@ async fn make_one(
         .await
         .optional()?;
     let Some(row) = row.filter(|row| row.preview_storage_key.is_none()) else {
-        return finish(state, id).await;
+        return finish(state, job).await;
     };
     let Some(original_bytes) = state.media_store.head_object(&row.storage_key).await? else {
-        return finish(state, id).await;
+        return finish(state, job).await;
     };
-    let kind = if row.mime_type.starts_with("image/") {
-        "picture"
-    } else if row.mime_type.starts_with("video/") {
-        "video"
-    } else {
-        return finish(state, id).await;
-    };
+    let config = &state.config.media.previews;
     let started = std::time::Instant::now();
-    let outcome = match kind {
-        "picture" => picture::make(state, &maker.config, &row.storage_key, original_bytes).await,
-        _ => video::make(state, &maker.config, &row.storage_key, original_bytes).await,
+    let (kind, made) = match job.kind {
+        JobKind::MakeVideoPoster => (
+            "video",
+            video::make(state, config, &row.storage_key, original_bytes).await,
+        ),
+        _ => (
+            "picture",
+            picture::make(state, config, &row.storage_key, original_bytes).await,
+        ),
     };
     metrics::histogram!(aspen_metrics::api::ATTACHMENT_PREVIEW_DURATION, "kind" => kind)
         .record(started.elapsed().as_secs_f64());
-    match outcome {
+    match made {
         Outcome::Made(made) if worth_keeping(made.bytes.len() as u64, original_bytes) => {
             tracing::debug!(
                 attachment = %id.0,
@@ -296,21 +199,13 @@ async fn make_one(
                 millis = started.elapsed().as_millis() as u64,
                 "made a preview"
             );
-            match keep(state, &row, made).await {
-                Ok(()) => {
-                    metrics::counter!(aspen_metrics::api::ATTACHMENT_PREVIEWS_MADE, "kind" => kind)
-                        .increment(1);
-                    Ok(())
-                }
-                Err(e) if attempts >= MAX_ATTEMPTS => {
-                    tracing::error!(attachment = %id.0, error = %e, "gave up storing a preview");
-                    finish(state, id).await
-                }
-                Err(e) => {
-                    tracing::warn!(attachment = %id.0, error = %e, "could not store a preview; trying later");
-                    retry_later(state, id, attempts).await
-                }
+            if let Err(e) = keep(state, job, &row, made).await {
+                release_hold(state, job).await;
+                return Err(e);
             }
+            metrics::counter!(aspen_metrics::api::ATTACHMENT_PREVIEWS_MADE, "kind" => kind)
+                .increment(1);
+            Ok(jobs::Outcome::Done)
         }
         Outcome::Made(made) => {
             tracing::debug!(
@@ -319,21 +214,19 @@ async fn make_one(
                 preview_bytes = made.bytes.len() as u64,
                 "a preview was not enough smaller than its original to keep"
             );
-            finish(state, id).await
+            finish(state, job).await
         }
         Outcome::NoPreview(reason) => {
             tracing::debug!(attachment = %id.0, reason, "no preview is made");
-            finish(state, id).await
-        }
-        Outcome::Failed(reason) if attempts >= MAX_ATTEMPTS => {
-            tracing::error!(attachment = %id.0, reason, "gave up making a preview");
-            metrics::counter!(aspen_metrics::api::ATTACHMENT_PREVIEWS_FAILED, "kind" => kind)
-                .increment(1);
-            finish(state, id).await
+            finish(state, job).await
         }
         Outcome::Failed(reason) => {
-            tracing::warn!(attachment = %id.0, reason, "could not make a preview; trying later");
-            retry_later(state, id, attempts).await
+            if jobs::last_attempt(job) {
+                metrics::counter!(aspen_metrics::api::ATTACHMENT_PREVIEWS_FAILED, "kind" => kind)
+                    .increment(1);
+            }
+            release_hold(state, job).await;
+            Err(crate::Error::PreviewUnmade(reason.to_string()))
         }
     }
 }
@@ -341,6 +234,7 @@ async fn make_one(
 /// Stores a preview worth keeping, records it, and announces it.
 async fn keep(
     state: &GlobalServerContext,
+    job: &Claimed,
     row: &super::Attachment,
     made: Made,
 ) -> crate::Result<()> {
@@ -389,10 +283,7 @@ async fn keep(
                 if let Some(preview) = of(state, &updated) {
                     announce(state, conn, id, uploader, preview).await?;
                 }
-                diesel::delete(attachment_preview_job::table)
-                    .filter(attachment_preview_job::attachment_id.eq(id))
-                    .execute(conn)
-                    .await?;
+                settle(conn, job.id, id).await?;
                 Ok(true)
             }
             .scope_boxed()
@@ -400,10 +291,10 @@ async fn keep(
         .await;
     match recorded {
         Ok(true) => {
-            crate::message::held::wake(state).await;
+            jobs::wake(state).await;
             Ok(())
         }
-        // Deleted, or made evidence, while its preview was made; the job went with it.
+        // Deleted, or made evidence, while its preview was made: nothing waits for it.
         Ok(false) => {
             state.media_store.delete(&key).await?;
             Ok(())
@@ -453,35 +344,56 @@ async fn announce(
     Ok(())
 }
 
-/// Takes a row off the queue: its preview is made, or none will be. Messages it held go.
-async fn finish(state: &GlobalServerContext, id: AttachmentId) -> crate::Result<()> {
-    diesel::delete(attachment_preview_job::table)
-        .filter(attachment_preview_job::attachment_id.eq(id))
-        .execute(state.connection_pool.get().await?.as_mut())
+/// Deletes preview job `job` of attachment `id` on `conn`, inside the transaction that recorded
+/// its preview or found none would be made, and sets the messages it held going. The runner's
+/// own deletion of it once the step is done then finds nothing, while what it held never sees
+/// it after its preview is recorded.
+async fn settle(conn: &mut AsyncPgConnection, job: Uuid, id: AttachmentId) -> crate::Result<()> {
+    diesel::sql_query("DELETE FROM job WHERE id = $1")
+        .bind::<PgUuid, _>(job)
+        .execute(&mut *conn)
         .await?;
-    crate::message::held::wake(state).await;
-    Ok(())
+    crate::message::held::wake_holding(conn, id).await
 }
 
-/// Leaves a row to be tried again, waiting twice as long after each attempt. Messages it held
-/// go now, without its preview.
-async fn retry_later(
-    state: &GlobalServerContext,
-    id: AttachmentId,
-    attempts: i32,
-) -> crate::Result<()> {
-    let wait = 60i32.saturating_mul(1 << attempts.clamp(0, 16));
-    diesel::update(attachment_preview_job::table)
-        .filter(attachment_preview_job::attachment_id.eq(id))
-        .set((
-            attachment_preview_job::not_before
-                .eq(chrono::Utc::now() + chrono::Duration::seconds(i64::from(wait))),
-            attachment_preview_job::hold_until.eq(chrono::Utc::now()),
-        ))
-        .execute(state.connection_pool.get().await?.as_mut())
+/// Done with a preview job that made nothing to keep: its preview is not worth making, or its
+/// attachment went.
+async fn finish(state: &GlobalServerContext, job: &Claimed) -> crate::Result<jobs::Outcome> {
+    let id = attachment_of(job)?;
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction::<_, crate::Error, _>(|conn| settle(conn, job.id, id).scope_boxed())
         .await?;
-    crate::message::held::wake(state).await;
-    Ok(())
+    drop(conn);
+    jobs::wake(state).await;
+    Ok(jobs::Outcome::Done)
+}
+
+/// Lets the messages preview job `job` holds go without its preview, as it is to be tried again
+/// later.
+async fn release_hold(state: &GlobalServerContext, job: &Claimed) {
+    let released = async {
+        let id = attachment_of(job)?;
+        let mut conn = state.connection_pool.get().await?;
+        conn.transaction::<_, crate::Error, _>(|conn| {
+            async move {
+                diesel::sql_query(
+                    "UPDATE job SET payload = jsonb_set(payload, '{holdUntil}', to_jsonb(now())) \
+                     WHERE id = $1",
+                )
+                .bind::<PgUuid, _>(job.id)
+                .execute(&mut *conn)
+                .await?;
+                crate::message::held::wake_holding(conn, id).await
+            }
+            .scope_boxed()
+        })
+        .await
+    }
+    .await;
+    match released {
+        Ok(()) => jobs::wake(state).await,
+        Err(e) => tracing::warn!(job = %job.id, error = %e, "could not let held messages go"),
+    }
 }
 
 #[cfg(test)]

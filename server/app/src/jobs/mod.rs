@@ -310,37 +310,88 @@ async fn ensure_recurring(state: &GlobalServerContext) -> crate::Result<()> {
     Ok(())
 }
 
+/// What this server has of what some kinds need beyond its configuration, found out when its
+/// runner starts.
+struct Means {
+    /// Whether it can run `ffmpeg` and `ffprobe`, which videos' posters are taken with.
+    posters: bool,
+}
+
+impl Means {
+    async fn find(state: &GlobalServerContext) -> Self {
+        let previews = &state.config.media.previews;
+        let posters = previews.make && aspen_previews::video::available(previews).await;
+        if previews.make && !posters {
+            tracing::warn!(
+                ffmpeg = previews.ffmpeg,
+                ffprobe = previews.ffprobe,
+                "ffmpeg or ffprobe cannot be run, so this server makes previews of pictures only"
+            );
+        }
+        Self { posters }
+    }
+}
+
 /// Whether this server runs jobs of `kind`: every kind, unless what it needs is not here, as a
 /// server that sends no mail makes no digests.
-fn handles(state: &GlobalServerContext, kind: JobKind) -> bool {
+fn handles(state: &GlobalServerContext, means: &Means, kind: JobKind) -> bool {
     match kind {
         JobKind::MakeDigests | JobKind::SendEmail => {
             state.mailer.as_ref().is_some_and(|mailer| mailer.sends())
         }
+        JobKind::MakePicturePreview => state.config.media.previews.make,
+        JobKind::MakeVideoPoster => means.posters,
         _ => true,
     }
 }
 
+/// The kinds this server runs that share a bound of their own on how many run at once, beyond
+/// the runner's places, with that bound: previews, which take memory and cores in proportion to
+/// what they decode, at most `[media.previews] concurrency` at once.
+fn bounded(state: &GlobalServerContext) -> Vec<(Vec<JobKind>, usize)> {
+    vec![(
+        crate::attachment::preview::KINDS.to_vec(),
+        state.config.media.previews.concurrency.max(1),
+    )]
+}
+
 /// How many times a job of `kind` is claimed without coming further before it is given up. A
 /// piece of mail gives itself up first, once it has been tried as often as mail is
-/// (`outbox::MAX_ATTEMPTS`), so its content is never kept as a job given up.
+/// (`outbox::MAX_ATTEMPTS`), so its content is never kept as a job given up; so does a held
+/// message, dropped with why on its last attempt.
 fn max_attempts(kind: JobKind) -> i32 {
     match kind {
         JobKind::SendEmail => crate::email::outbox::MAX_ATTEMPTS + 1,
+        JobKind::MakePicturePreview | JobKind::MakeVideoPoster => {
+            crate::attachment::preview::MAX_ATTEMPTS
+        }
+        JobKind::ReleaseHeldMessage => crate::message::held::MAX_ATTEMPTS,
         _ => 5,
     }
 }
 
+/// Whether this claim of `job` is its last before it is given up, should its step fail: for a
+/// kind that does something of its own on giving up.
+pub fn last_attempt(job: &Claimed) -> bool {
+    job.attempts >= max_attempts(job.kind)
+}
+
 /// How long a job of `kind` waits after its `attempts`th failure before it is tried again: ten
-/// seconds, doubling, at most an hour; mail a minute, doubling, as mail servers expect.
+/// seconds, doubling, at most an hour; mail and previews a minute, doubling, as mail servers
+/// expect and as a store or `ffmpeg` that failed may take to come back; a held message half a
+/// minute each time, since its author is waiting.
 fn backoff(kind: JobKind, attempts: i32) -> Duration {
-    if kind == JobKind::SendEmail {
-        return crate::email::outbox::retry_wait(attempts)
-            .to_std()
-            .unwrap_or(Duration::from_secs(60));
-    }
     let doublings = u32::try_from(attempts.saturating_sub(1).clamp(0, 9)).unwrap_or(0);
-    Duration::from_secs(10 * 2u64.pow(doublings)).min(Duration::from_secs(3600))
+    match kind {
+        JobKind::SendEmail => crate::email::outbox::retry_wait(attempts)
+            .to_std()
+            .unwrap_or(Duration::from_secs(60)),
+        JobKind::MakePicturePreview | JobKind::MakeVideoPoster => {
+            Duration::from_secs(60 * 2u64.pow(doublings)).min(Duration::from_secs(3600))
+        }
+        JobKind::ReleaseHeldMessage => Duration::from_secs(30),
+        _ => Duration::from_secs(10 * 2u64.pow(doublings)).min(Duration::from_secs(3600)),
+    }
 }
 
 /// One step of `job`.
@@ -364,6 +415,10 @@ async fn step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outco
         JobKind::MoveEvidence => crate::attachment::evidence::move_step(state, job).await,
         JobKind::SendEmail => crate::email::outbox::send_step(state, job).await,
         JobKind::QueueNewsletter => crate::email::newsletter::queue_step(state, job).await,
+        JobKind::MakePicturePreview | JobKind::MakeVideoPoster => {
+            crate::attachment::preview::make_step(state, job).await
+        }
+        JobKind::ReleaseHeldMessage => crate::message::held::release_step(state, job).await,
     }
 }
 
@@ -411,42 +466,84 @@ pub fn spawn_runner(state: GlobalServerContext) {
         let woken = Arc::new(Notify::new());
         listen_for_wakes(state.clone(), woken.clone());
         let places = Places::new(state.config.jobs.concurrency.max(1));
-        let kinds: Vec<JobKind> = JobKind::ALL
-            .iter()
-            .copied()
-            .filter(|kind| handles(&state, *kind))
-            .collect();
+        let means = Means::find(&state).await;
+        let groups = groups(&state, &means);
         loop {
             for class in JobClass::ALL.iter().copied() {
-                let free = places.free(class);
-                if free == 0 {
-                    continue;
-                }
-                let claimed = match claim(&state, &kinds, class, free).await {
-                    Ok(claimed) => claimed,
-                    Err(e) => {
-                        tracing::warn!("could not claim jobs: {e}");
+                for group in &groups {
+                    let free = places.free(class).min(
+                        group
+                            .bound
+                            .as_ref()
+                            .map_or(usize::MAX, |b| b.available_permits()),
+                    );
+                    if free == 0 {
                         continue;
                     }
-                };
-                for job in claimed {
-                    let Some(place) = places.take(class) else {
+                    let claimed = match claim(&state, &group.kinds, class, free).await {
+                        Ok(claimed) => claimed,
+                        Err(e) => {
+                            tracing::warn!("could not claim jobs: {e}");
+                            continue;
+                        }
+                    };
+                    for job in claimed {
                         // Claimed beyond the places free, which no one else took meanwhile: it
                         // waits for its lease, then any runner takes it.
-                        continue;
-                    };
-                    let state = state.clone();
-                    let woken = woken.clone();
-                    tokio::spawn(async move {
-                        run(&state, job).await;
-                        drop(place);
-                        woken.notify_one();
-                    });
+                        let Some(place) = places.take(class) else {
+                            continue;
+                        };
+                        let bound = match &group.bound {
+                            Some(bound) => match bound.clone().try_acquire_owned() {
+                                Ok(permit) => Some(permit),
+                                Err(_) => continue,
+                            },
+                            None => None,
+                        };
+                        let state = state.clone();
+                        let woken = woken.clone();
+                        tokio::spawn(async move {
+                            run(&state, job).await;
+                            drop((place, bound));
+                            woken.notify_one();
+                        });
+                    }
                 }
             }
             let _ = tokio::time::timeout(POLL, woken.notified()).await;
         }
     });
+}
+
+/// Kinds a runner claims together, and the bound they share, if any.
+struct Group {
+    kinds: Vec<JobKind>,
+    bound: Option<Arc<Semaphore>>,
+}
+
+/// The kinds this server runs, in groups: those [`bounded`], each group with its bound, and the
+/// rest together.
+fn groups(state: &GlobalServerContext, means: &Means) -> Vec<Group> {
+    let runs = |kind: &JobKind| handles(state, means, *kind);
+    let bounded = bounded(state);
+    let mut groups: Vec<Group> = bounded
+        .iter()
+        .map(|(kinds, bound)| Group {
+            kinds: kinds.iter().copied().filter(runs).collect(),
+            bound: Some(Arc::new(Semaphore::new(*bound))),
+        })
+        .collect();
+    groups.push(Group {
+        kinds: JobKind::ALL
+            .iter()
+            .copied()
+            .filter(runs)
+            .filter(|kind| !bounded.iter().any(|(kinds, _)| kinds.contains(kind)))
+            .collect(),
+        bound: None,
+    });
+    groups.retain(|group| !group.kinds.is_empty());
+    groups
 }
 
 /// Wakes the runner whenever any server publishes on [`WAKE_SUBJECT`].

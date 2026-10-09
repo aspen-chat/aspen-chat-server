@@ -1,3 +1,21 @@
+DROP INDEX held_message_by_author;
+CREATE INDEX held_message_author_idx ON held_message (author);
+ALTER TABLE held_message ADD COLUMN not_before TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE attachment_preview_job (
+    attachment_id UUID PRIMARY KEY REFERENCES attachment (id) ON DELETE CASCADE,
+    priority SMALLINT NOT NULL DEFAULT 0,
+    not_before TIMESTAMPTZ NOT NULL DEFAULT now(),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    hold_until TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX attachment_preview_job_next_idx
+    ON attachment_preview_job (priority DESC, not_before);
+INSERT INTO attachment_preview_job (attachment_id, priority, not_before, attempts, hold_until)
+SELECT key::uuid, CASE WHEN class <= 1 THEN 10 ELSE 0 END, not_before, attempts,
+       COALESCE((payload->>'holdUntil')::timestamptz, now())
+FROM job WHERE kind IN ('makePicturePreview', 'makeVideoPoster') AND failed_at IS NULL
+  AND EXISTS (SELECT 1 FROM attachment a WHERE a.id = job.key::uuid);
 DROP INDEX job_send_email_user;
 CREATE TABLE email_outbox (
     id UUID PRIMARY KEY,

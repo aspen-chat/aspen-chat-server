@@ -136,6 +136,8 @@ pub enum Error {
     Totp(String),
     #[error("mail could not be sent now: {0}")]
     MailUnsent(String),
+    #[error("a preview could not be made now: {0}")]
+    PreviewUnmade(String),
     #[error("the server is too busy to do this now")]
     Busy,
     /// An upload would take its uploader past the deployment's daily quota
