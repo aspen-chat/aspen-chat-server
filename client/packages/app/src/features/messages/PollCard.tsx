@@ -244,8 +244,9 @@ function ChoiceRow({ poll, choice, open }: { poll: Poll; choice: PollChoice; ope
           {String(sharePercent(poll, index))}%
         </span>
       </ToggleButton>
-      {voters !== null && count > 0 && (
-        <VotersDialog pollId={poll.id} index={index} label={optionName(option)} />
+      {/* Shown on every answer of a poll that names its voters, so the rows line up. */}
+      {voters !== null && (
+        <VotersDialog pollId={poll.id} index={index} label={optionName(option)} count={count} />
       )}
       {canRemove && <RemoveWriteInDialog pollId={poll.id} index={index} label={option.label} />}
     </li>
@@ -314,9 +315,18 @@ function WriteInField({ pollId }: { pollId: string }) {
   );
 }
 
-/** A write-in's remove control and the confirmation it asks for, since its votes go with it. */
 /** A control that lists everyone who voted for one answer, earliest first, a page at a time. */
-function VotersDialog({ pollId, index, label }: { pollId: string; index: number; label: string }) {
+function VotersDialog({
+  pollId,
+  index,
+  label,
+  count,
+}: {
+  pollId: string;
+  index: number;
+  label: string;
+  count: number;
+}) {
   const m = useMessages();
   const name = format(m.poll.seeVoters, { option: label });
   return (
@@ -336,7 +346,12 @@ function VotersDialog({ pollId, index, label }: { pollId: string; index: number;
         <Modal className={modalClass}>
           <Dialog className={dialogClass}>
             <DialogHeading>{format(m.poll.votersHeading, { option: label })}</DialogHeading>
-            <VoterList pollId={pollId} index={index} />
+            {/* The list is read once the answer has a vote, so one that has none asks nothing. */}
+            {count === 0 ? (
+              <NoVoters label={label} />
+            ) : (
+              <VoterList pollId={pollId} index={index} label={label} />
+            )}
           </Dialog>
         </Modal>
       </ModalOverlay>
@@ -344,8 +359,19 @@ function VotersDialog({ pollId, index, label }: { pollId: string; index: number;
   );
 }
 
-/** Everyone who voted for one answer, earliest first, read a page at a time. */
-function VoterList({ pollId, index }: { pollId: string; index: number }) {
+/** What the voter list says of an answer nobody has voted for. */
+function NoVoters({ label }: { label: string }) {
+  const m = useMessages();
+  return (
+    <p className="px-1 text-sm text-ink-muted">{format(m.poll.noVotesFor, { option: label })}</p>
+  );
+}
+
+/**
+ * Everyone who voted for one answer, earliest first, read a page at a time. A read that finds
+ * nobody (the last vote withdrawn as it was asked for) says so.
+ */
+function VoterList({ pollId, index, label }: { pollId: string; index: number; label: string }) {
   const m = useMessages();
   const sync = useSync();
   const community = useChannel(usePoll(pollId)?.channelId ?? "")?.community;
@@ -398,6 +424,7 @@ function VoterList({ pollId, index }: { pollId: string; index: number }) {
           </li>
         ))}
       </ul>
+      {!loading && error === null && ids.length === 0 && <NoVoters label={label} />}
       {loading && <RowsSkeleton count={ids.length === 0 ? 5 : 2} />}
       {error !== null && (
         <p role="alert" className="px-1 text-sm text-danger">
@@ -420,6 +447,7 @@ function VoterList({ pollId, index }: { pollId: string; index: number }) {
   );
 }
 
+/** A write-in's remove control and the confirmation it asks for, since its votes go with it. */
 function RemoveWriteInDialog({
   pollId,
   index,
