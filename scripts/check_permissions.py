@@ -1116,9 +1116,12 @@ def chosen_presence(world: World, check: Checks) -> None:
                         return status["onlineStatus"]
         return None
 
+    heard = len(world.stream.ephemeral)
     world.stream.send({"type": "watchPresence", "userIds": [world.owner["id"]]})
     check("a connection's first watch list is told only of changes, which its client reads whole",
           told() is None)
+    check("and the server says when it took the list up",
+          any(e.get("type") == "presenceWatching" for e in world.stream.ephemeral[heard:]))
     world.stream.send({"type": "watchPresence", "userIds": []})
     world.stream.gather(1.5)
     world.stream.send({"type": "watchPresence", "userIds": [world.owner["id"]]})

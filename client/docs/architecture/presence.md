@@ -36,16 +36,18 @@ those it watches as they happen.
   connection's first list are not told as they are: the whole read below covers them, so a crowd
   reconnecting at once puts that work on requests, which a busy server can refuse, rather than on
   its presence router. `applyStatuses` takes them.
+- The server answers each list it takes up with a `presenceWatching` frame (`#onWatching`).
 
 ### Reading whole
 
 `AspenSync` also asks `GET /users/statuses` for `RecordStore.presenceCandidates()` (the user, the
 members shown for every community, and everyone in a call) in batches of `PRESENCE_BATCH`:
 
-1. on every connection, `WATCH_TAKEN_UP_MS` (a second and a half) after its first
-   `watchPresence`, or when the sync goes live if later: the server takes up a list within
-   `PRESENCE_WINDOW_MS` and tells changes from then, so a change before it is in the read and one
-   after it is told;
+1. on every connection, once `presenceWatching` says the server took up its first
+   `watchPresence`, or when the sync goes live if later: the server tells changes from the
+   take-up, so a change before it is in the read and one after it is told. With no answer within
+   `WATCH_ACK_TIMEOUT_MS` (ten seconds), the list was lost to a busy server: it is sent again,
+   and everyone shown is read anyway;
 2. then at most every `PRESENCE_READ_MS` (two minutes), checked at each `PRESENCE_POLL_MS` while
    the page is visible, and when the page becomes visible again.
 

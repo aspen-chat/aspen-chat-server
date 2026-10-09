@@ -9,7 +9,7 @@ import {
   MemorySessionStore,
   PRESENCE_POLL_MS,
   PRESENCE_READ_MS,
-  WATCH_TAKEN_UP_MS,
+  WATCH_ACK_TIMEOUT_MS,
   TYPING_EXPIRY_MS,
   TYPING_NOTICES,
   TYPING_REFRESH_MS,
@@ -371,14 +371,10 @@ describe("AspenSync", () => {
   it("watches those shown on the stream, applies what it tells, and reads all only now and then", async () => {
     let now = 0;
     const presencePolls: (() => void)[] = [];
-    const takenUp: (() => void)[] = [];
     const { sync, calls } = makeSync(bootstrapResponses(), () => now, {
       setTimeout: ((handler: () => void, ms?: number) => {
         if (ms === PRESENCE_POLL_MS) {
           presencePolls.push(handler);
-        }
-        if (ms === WATCH_TAKEN_UP_MS) {
-          takenUp.push(handler);
         }
         return 0;
       }) as typeof setTimeout,
@@ -398,51 +394,74 @@ describe("AspenSync", () => {
     expect(sync.store.me()?.onlineStatus).toBe("doNotDisturb");
 
     const reads = () => calls.filter((u) => u.pathname === "/api/v1/users/statuses").length;
-    // Everyone shown is read whole only once the server has taken up whom it watches, so a
-    // change before then is in the read and one after it is told.
+    // Everyone shown is read whole only once the server says it took up whom the connection
+    // watches, so a change before then is in the read and one after it is told.
     expect(reads()).toBe(0);
-    expect(takenUp).toHaveLength(1);
-    now = WATCH_TAKEN_UP_MS;
-    takenUp.shift()?.();
+    socket.frame({ type: "ephemeral", event: { type: "presenceWatching" } });
     await settle();
     expect(reads()).toBe(1);
-    now = WATCH_TAKEN_UP_MS + PRESENCE_POLL_MS;
+    // A later list taken up reads nothing.
+    socket.frame({ type: "ephemeral", event: { type: "presenceWatching" } });
+    await settle();
+    expect(reads()).toBe(1);
+    now = PRESENCE_POLL_MS;
     presencePolls.shift()?.();
     await settle();
     expect(reads()).toBe(1);
-    now = WATCH_TAKEN_UP_MS + PRESENCE_READ_MS;
+    now = PRESENCE_READ_MS;
     presencePolls.shift()?.();
     await settle();
     expect(reads()).toBe(2);
     sync.stop();
   });
 
+  it("sends the watch again and reads anyway when the server never says it took it up", async () => {
+    let now = 0;
+    const waits: (() => void)[] = [];
+    const { sync, calls } = makeSync(bootstrapResponses(), () => now, {
+      setTimeout: ((handler: () => void, ms?: number) => {
+        if (ms === WATCH_ACK_TIMEOUT_MS) {
+          waits.push(handler);
+        }
+        return 0;
+      }) as typeof setTimeout,
+    });
+    const socket = await goLive(sync);
+    await settle();
+    const reads = () => calls.filter((u) => u.pathname === "/api/v1/users/statuses").length;
+    const watches = () =>
+      socket.sent.filter((f) => (f as { type: string }).type === "watchPresence").length;
+    expect(reads()).toBe(0);
+    expect(watches()).toBe(1);
+    expect(waits).toHaveLength(1);
+    now = WATCH_ACK_TIMEOUT_MS;
+    waits.shift()?.();
+    await settle();
+    expect(watches()).toBe(2);
+    expect(reads()).toBe(1);
+    sync.stop();
+  });
+
   it("keeps a shown channel's online count current with the presence poll", async () => {
     let online = 3;
-    let now = 0;
     const presencePolls: (() => void)[] = [];
-    const takenUp: (() => void)[] = [];
     const { sync, calls } = makeSync(
       {
         ...bootstrapResponses(),
         [`/api/v1/channels/${general.id}/presence`]: () => json({ online }),
       },
-      () => now,
+      () => 0,
       {
         setTimeout: ((handler: () => void, ms?: number) => {
           if (ms === PRESENCE_POLL_MS) {
             presencePolls.push(handler);
           }
-          if (ms === WATCH_TAKEN_UP_MS) {
-            takenUp.push(handler);
-          }
           return 0;
         }) as typeof setTimeout,
       },
     );
-    await goLive(sync);
-    now = WATCH_TAKEN_UP_MS;
-    takenUp.shift()?.();
+    const socket = await goLive(sync);
+    socket.frame({ type: "ephemeral", event: { type: "presenceWatching" } });
     await settle();
     const reads = () =>
       calls.filter((u) => u.pathname === `/api/v1/channels/${general.id}/presence`).length;

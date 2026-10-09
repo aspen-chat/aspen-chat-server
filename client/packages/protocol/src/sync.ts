@@ -159,14 +159,12 @@ export const PRESENCE_READ_MS = 120_000;
 export const MAX_WATCHED_PRESENCE = 500;
 /** How long changes to whom to watch settle before the server is told. */
 const WATCH_SETTLE_MS = 250;
-/** How long a server gathers presence changes; mirrors the server's `PRESENCE_WINDOW_MILLIS`. */
-export const PRESENCE_WINDOW_MS = 1_000;
 /**
- * How long after a connection's first `watchPresence` everyone shown is read whole: the server
- * tells only of changes to that list's users, from when it takes the list up, at most a window
- * after it is sent. Read later than that, every change is either in the read or told after it.
+ * How long a connection's first whole read of presence waits for the server to say it took up
+ * the connection's first `watchPresence` (`presenceWatching`). Past it the list is taken to be
+ * lost to a busy server: it is sent again, and everyone shown is read anyway.
  */
-export const WATCH_TAKEN_UP_MS = PRESENCE_WINDOW_MS + 500;
+export const WATCH_ACK_TIMEOUT_MS = 10_000;
 
 /**
  * How long reading a channel is gathered before it is reported: one report per channel per
@@ -341,7 +339,10 @@ export class AspenSync {
   #reloadAttempt = 0;
   /** When everyone's presence was last read whole; `null` until it is, and on every connection. */
   #presenceReadAt: number | null = null;
-  /** When this connection's first watch list was sent, which the first whole read waits on. */
+  /**
+   * When this connection's first watch list was sent, while the first whole read waits for the
+   * server to take it up; `null` once it has, or when none was sent.
+   */
   #firstWatchAt: number | null = null;
   /** The watch list the stream was last told of, joined; empty on a fresh connection. */
   #watchSent = "";
@@ -477,6 +478,10 @@ export class AspenSync {
         const kind: string = event.type;
         if (event.type === "presence") {
           this.store.applyStatuses(event.statuses);
+          return;
+        }
+        if (event.type === "presenceWatching") {
+          this.#onWatching();
           return;
         }
         if (kind !== "typing") {
@@ -3516,15 +3521,20 @@ export class AspenSync {
     const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
     const now = this.#now();
     const readDue = this.#presenceReadAt === null || now - this.#presenceReadAt >= PRESENCE_READ_MS;
-    const takenUpIn =
-      this.#firstWatchAt === null ? 0 : this.#firstWatchAt + WATCH_TAKEN_UP_MS - now;
-    if (readDue && takenUpIn > 0) {
-      // Too soon: a change before the server takes up the watch would be in neither.
-      this.#presenceTimer = this.#setTimeout(() => {
-        this.#presenceTimer = null;
-        void this.#pollPresence();
-      }, takenUpIn);
-      return;
+    if (readDue && this.#firstWatchAt !== null) {
+      const waited = now - this.#firstWatchAt;
+      if (waited < WATCH_ACK_TIMEOUT_MS) {
+        // Before the server takes up the watch, a change would be in neither the read nor a
+        // frame; `presenceWatching` polls again at once.
+        this.#presenceTimer = this.#setTimeout(() => {
+          this.#presenceTimer = null;
+          void this.#pollPresence();
+        }, WATCH_ACK_TIMEOUT_MS - waited);
+        return;
+      }
+      this.#firstWatchAt = null;
+      this.#watchSent = "";
+      this.#tellWatching();
     }
     if (!hidden) {
       const ids = readDue ? this.store.presenceCandidates() : [];
@@ -3553,6 +3563,20 @@ export class AspenSync {
         this.#presenceTimer = null;
         void this.#pollPresence();
       }, PRESENCE_POLL_MS);
+    }
+  }
+
+  /**
+   * The server took up a watch list of this connection's: the first whole read, waiting for it,
+   * can be made now, since every change from here on is told.
+   */
+  #onWatching(): void {
+    if (this.#firstWatchAt === null) {
+      return;
+    }
+    this.#firstWatchAt = null;
+    if (this.#isLive()) {
+      void this.#pollPresence();
     }
   }
 
@@ -3682,7 +3706,7 @@ export class AspenSync {
     this.#reportActivity();
     this.#tellViewing();
     // A new connection watches nobody, and what it missed meanwhile is read whole once the
-    // server has taken up whom it watches (`WATCH_TAKEN_UP_MS`).
+    // server says it has taken up whom it watches (`#onWatching`).
     this.#watchSent = "";
     this.#tellWatching();
     this.#firstWatchAt = this.#watchSent === "" ? null : this.#now();

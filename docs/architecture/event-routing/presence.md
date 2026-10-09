@@ -66,7 +66,7 @@ Connected or not:
 ## Reading presence
 
 - Clients ask `GET /users/statuses?ids=…` (at most 100 ids) for the users they show.
-- The reference client does so a second and a half after it connects, once the server has taken up whom its connection watches, and at most every two minutes after, since its event stream tells it of changes.
+- The reference client does so when it connects, once the server says it has taken up whom the connection watches (`presenceWatching`), and at most every two minutes after, since its event stream tells it of changes.
 - Every record that carries `onlineStatus` fills it the same way for the caller: `GET /users/{user}`, the `users` sideloaded with messages, reactors, DMs, blocks, and report cases, members, and bots.
 
 ## Telling of changes
@@ -76,7 +76,7 @@ Connected or not:
 | Logic | `app::presence_feed` |
 | Hints | Core NATS subject `aspen.presence` (`PRESENCE_SUBJECT`), a JSON array of user ids |
 | Watching | The client frame `watchPresence`, at most `MAX_WATCHED_PRESENCE` (500) users |
-| Telling | `ephemeral` frames of type `presence`, each a list of `{id, onlineStatus}` |
+| Telling | `ephemeral` frames of type `presence`, each a list of `{id, onlineStatus}`, and `presenceWatching` for each watch list taken up |
 | Window | `PRESENCE_WINDOW_MILLIS` (one second) |
 
 ### Hints
@@ -104,7 +104,8 @@ A hint says only that someone's presence may have changed. It is made:
    2. decides in one query per 5000 pairs which watchers may learn each (`user_status::presence_visible_pairs`, the same rule as below);
    3. sends each connection one frame holding only what differs from what it was last told of each.
 4. A user that a connection's watch list adds is told to it whatever they are, except the users of its first list, which its client reads whole over REST once the list is taken up (see [Design notes](design-notes.md#presence)). From the take-up on, every change is told.
-5. Someone a watcher may no longer learn the presence of is told to them as `offline`.
+5. Each list taken up is answered with a `presenceWatching` frame, at the telling that takes it up, or the next one when the connection's queue is full. A list dropped from a full queue is never answered, and its client sends it again.
+6. Someone a watcher may no longer learn the presence of is told to them as `offline`.
 
 A lost hint (a full queue, a server that stopped with timers pending, a core NATS message dropped) leaves a watcher behind until the next change or the client's next whole read.
 

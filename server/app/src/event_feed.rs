@@ -1685,7 +1685,8 @@ fn typing_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
     let place = match relay.event {
         crate::typing::EphemeralEvent::Typing { channel_id, .. } => channel_id,
         // Presence is told by each server's own router (`app::presence_feed`), never relayed.
-        crate::typing::EphemeralEvent::Presence { .. } => return Vec::new(),
+        crate::typing::EphemeralEvent::Presence { .. }
+        | crate::typing::EphemeralEvent::PresenceWatching => return Vec::new(),
     };
     match relay.audience {
         Audience::Community {
