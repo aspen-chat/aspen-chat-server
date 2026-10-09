@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod coordination;
+pub mod words;
 
 /// The longest run tag, which also names seeded users (`bench-{run}-{index}`).
 pub const MAX_RUN_TAG: usize = 24;
@@ -50,6 +51,20 @@ pub struct CommunityPlan {
     pub voice_channels: u32,
     /// Messages already in each text channel, spread over the past week.
     pub history_per_channel: u32,
+    /// Of those, how many start a thread, and how many replies each thread holds.
+    #[serde(default)]
+    pub threads_per_channel: u32,
+    #[serde(default)]
+    pub replies_per_thread: u32,
+    /// Polls in each text channel besides its history, about half of them still open, and how
+    /// many members have voted in each (at most every member).
+    #[serde(default)]
+    pub polls_per_channel: u32,
+    #[serde(default)]
+    pub votes_per_poll: u32,
+    /// History messages in each text channel that tag a member.
+    #[serde(default)]
+    pub tagged_per_channel: u32,
 }
 
 /// What was seeded.
@@ -77,6 +92,19 @@ pub struct SeededCommunity {
     pub members: Vec<u32>,
     pub text_channels: Vec<Uuid>,
     pub voice_channels: Vec<Uuid>,
+    /// The threads seeded in its text channels.
+    #[serde(default)]
+    pub threads: Vec<Uuid>,
+    /// Its seeded polls still open, to vote in.
+    #[serde(default)]
+    pub open_polls: Vec<SeededPoll>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeededPoll {
+    pub id: Uuid,
+    pub options: u32,
 }
 
 impl SeedPlan {
@@ -100,6 +128,14 @@ impl SeedPlan {
         for (index, community) in self.communities.iter().enumerate() {
             if community.members.is_empty() {
                 return Err(format!("community {index} has no members"));
+            }
+            if community.threads_per_channel > community.history_per_channel
+                || community.tagged_per_channel > community.history_per_channel
+            {
+                return Err(format!(
+                    "community {index} starts threads from, or tags in, more messages than its {} of history per channel",
+                    community.history_per_channel
+                ));
             }
             for member in &community.members {
                 let count = memberships.get_mut(*member as usize).ok_or_else(|| {
@@ -138,6 +174,11 @@ mod tests {
                 text_channels: 1,
                 voice_channels: 1,
                 history_per_channel: 10,
+                threads_per_channel: 1,
+                replies_per_thread: 3,
+                polls_per_channel: 1,
+                votes_per_poll: 2,
+                tagged_per_channel: 1,
             }],
         }
     }
@@ -165,6 +206,9 @@ mod tests {
                 .unwrap_err()
                 .contains("over the server's limit")
         );
+        let mut threaded = plan();
+        threaded.communities[0].threads_per_channel = 11;
+        assert!(threaded.validate(500).unwrap_err().contains("history"));
         let mut untagged = plan();
         untagged.run = "Has Spaces".into();
         assert!(untagged.validate(500).is_err());

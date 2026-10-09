@@ -16,6 +16,7 @@ mod clock;
 mod coordinator;
 mod engine;
 mod html;
+mod picture;
 mod profile;
 mod report;
 mod scenarios;

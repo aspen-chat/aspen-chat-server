@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 use smart_default::SmartDefault;
 use std::collections::BTreeMap;
 
+/// The longest side of a picture a behaviour posts, in pixels.
+const MAX_IMAGE_SIDE: u32 = 8192;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
@@ -68,6 +71,18 @@ pub struct Population {
     pub voice_channels: u32,
     #[serde(default = "default_history")]
     pub history_per_channel: u32,
+    /// History messages in each text channel that start a thread; one in fifty when left out.
+    pub threads_per_channel: Option<u32>,
+    #[serde(default = "default_replies")]
+    pub replies_per_thread: u32,
+    /// Polls in each text channel besides its history, about half still open; one when left
+    /// out, none without history.
+    pub polls_per_channel: Option<u32>,
+    /// Members who have voted in each seeded poll; a quarter of the community, at most a
+    /// thousand, when left out.
+    pub votes_per_poll: Option<u32>,
+    /// History messages in each text channel that tag a member; one in twenty when left out.
+    pub tagged_per_channel: Option<u32>,
     /// Every seeded user's password; left out, the seeder draws one for the run.
     #[serde(default)]
     pub password: Option<String>,
@@ -123,6 +138,54 @@ pub struct Behaviour {
     /// Share of messages that go to each community's first channel, the busy one.
     #[serde(default)]
     pub hot_channel_share: f64,
+    /// Mentions of a member of the channel's community by name, `<@id>`, which count in their
+    /// unread tags and reach their activity feed and phones.
+    #[serde(default)]
+    pub mentions_per_hour: f64,
+    /// Replying to a thread: one seeded, one this user started, or one heard of.
+    #[serde(default)]
+    pub thread_replies_per_hour: f64,
+    /// Starting a thread from a message by someone else in a community channel.
+    #[serde(default)]
+    pub threads_per_hour: f64,
+    #[serde(default)]
+    pub polls_per_hour: f64,
+    /// Voting in an open poll: one seeded, or one heard of.
+    #[serde(default)]
+    pub poll_votes_per_hour: f64,
+    /// Searching for a word (`GET /messages`), within one of the user's communities half the
+    /// time and everywhere they may read otherwise.
+    #[serde(default)]
+    pub searches_per_hour: f64,
+    /// Opening the activity feed, the messages that tell the user of themselves.
+    #[serde(default)]
+    pub activity_reads_per_hour: f64,
+    /// Saving a message someone else sent, and opening the saved list.
+    #[serde(default)]
+    pub saves_per_hour: f64,
+    #[serde(default)]
+    pub saved_reads_per_hour: f64,
+    /// Posting a picture, a JPEG of `image_width` by `image_height` that the deployment makes
+    /// a preview of; the message is held until the preview is made, as the client asks.
+    #[serde(default)]
+    pub images_per_hour: f64,
+    #[serde(default = "default_image_width")]
+    pub image_width: u32,
+    #[serde(default = "default_image_height")]
+    pub image_height: u32,
+    /// Choosing to show as away, do not disturb, or invisible for ten minutes, or going back
+    /// to showing what the user's connections say.
+    #[serde(default)]
+    pub presence_changes_per_hour: f64,
+    /// How long the user types before each message they write, telling the channel with
+    /// `typing` frames as the client does; 0 sends none.
+    #[serde(default = "default_typing_seconds")]
+    pub typing_seconds: f64,
+    /// The share of these users who have a channel open in front of them: they say so with a
+    /// `viewing` frame, hear who is typing there, and report how far they have read it as new
+    /// messages arrive. The rest have the app in the background.
+    #[serde(default = "default_viewing_share")]
+    pub viewing_share: f64,
     #[serde(default)]
     pub voice: Option<VoiceBehaviour>,
 }
@@ -168,6 +231,13 @@ pub enum EventKind {
     Spike { factor: f64, seconds: f64 },
     /// A shell command the coordinator runs, to restart or break part of the deployment.
     Command { run: String },
+    /// The owner of the community at `community` (an index into the population, largest
+    /// first) tags `@everyone` in its first channel, as only those allowed Mention everyone
+    /// may. Its delivery is measured as `delivery:everyone`.
+    Announcement {
+        #[serde(default)]
+        community: u32,
+    },
 }
 
 /// What counts as keeping up. Every figure is over the steady phase.
@@ -181,6 +251,8 @@ pub struct Slo {
     /// particular routes (`"POST /channels/{channel}/messages" = 300`).
     pub request_p99_ms: Option<f64>,
     pub route_p99_ms: BTreeMap<String, f64>,
+    /// Any other measurement the report names, by its name: `"delivery:everyone" = 2000`.
+    pub metric_p99_ms: BTreeMap<String, f64>,
     /// Signing in, starting up, and opening the event stream.
     pub connect_p99_ms: Option<f64>,
     /// From the server dropping an event stream to its resumption: outages, restarts.
@@ -263,6 +335,21 @@ fn default_seed() -> u64 {
 fn default_lag_limit() -> f64 {
     100.0
 }
+fn default_replies() -> u32 {
+    8
+}
+fn default_image_width() -> u32 {
+    1600
+}
+fn default_image_height() -> u32 {
+    1200
+}
+fn default_typing_seconds() -> f64 {
+    4.0
+}
+fn default_viewing_share() -> f64 {
+    1.0
+}
 fn default_attachment_bytes() -> u64 {
     50_000
 }
@@ -314,12 +401,47 @@ impl Profile {
                     "behaviours.{name}.hot_channel_share is a share between 0 and 1"
                 ));
             }
+            if !(0.0..=1.0).contains(&behaviour.viewing_share) {
+                return Err(format!(
+                    "behaviours.{name}.viewing_share is a share between 0 and 1"
+                ));
+            }
+            if behaviour.typing_seconds < 0.0 {
+                return Err(format!(
+                    "behaviours.{name}.typing_seconds must not be negative"
+                ));
+            }
+            if behaviour.images_per_hour > 0.0
+                && (behaviour.image_width == 0
+                    || behaviour.image_height == 0
+                    || behaviour.image_width > MAX_IMAGE_SIDE
+                    || behaviour.image_height > MAX_IMAGE_SIDE)
+            {
+                return Err(format!(
+                    "behaviours.{name}.image_width and image_height are between 1 and {MAX_IMAGE_SIDE}"
+                ));
+            }
+        }
+        if p.threads_per_channel.unwrap_or(0) > p.history_per_channel
+            || p.tagged_per_channel.unwrap_or(0) > p.history_per_channel
+        {
+            return Err(
+                "population.threads_per_channel and tagged_per_channel are at most history_per_channel"
+                    .into(),
+            );
         }
         for event in &self.events {
-            if let EventKind::ReconnectStorm { fraction } = event.kind
-                && !(0.0..=1.0).contains(&fraction)
-            {
-                return Err("a reconnect storm's fraction is a share between 0 and 1".into());
+            match event.kind {
+                EventKind::ReconnectStorm { fraction } if !(0.0..=1.0).contains(&fraction) => {
+                    return Err("a reconnect storm's fraction is a share between 0 and 1".into());
+                }
+                EventKind::Announcement { community } if community >= p.communities => {
+                    return Err(format!(
+                        "an announcement names community {community}, but there are {}",
+                        p.communities
+                    ));
+                }
+                _ => {}
             }
         }
         if self.limits.suspend {
@@ -372,10 +494,19 @@ impl Profile {
                     .collect();
                 start = (start + u64::from(size)) % u64::from(p.users);
                 CommunityPlan {
-                    members,
                     text_channels: p.text_channels,
                     voice_channels: p.voice_channels,
                     history_per_channel: p.history_per_channel,
+                    threads_per_channel: p
+                        .threads_per_channel
+                        .unwrap_or(p.history_per_channel / 50),
+                    replies_per_thread: p.replies_per_thread,
+                    polls_per_channel: p
+                        .polls_per_channel
+                        .unwrap_or(u32::from(p.history_per_channel > 0)),
+                    votes_per_poll: p.votes_per_poll.unwrap_or((size / 4).min(1000)),
+                    tagged_per_channel: p.tagged_per_channel.unwrap_or(p.history_per_channel / 20),
+                    members,
                 }
             })
             .collect();
@@ -510,6 +641,21 @@ delivery_p99_ms = 250
             bad("[behaviours.a]\nshare = 1\n[limits]\nsuspend = true\nnats_url = \"nats://x\"\n")
                 .contains("networks")
         );
+        assert!(bad("[behaviours.a]\nshare = 1\nviewing_share = 2\n").contains("viewing_share"));
+        assert!(
+            bad("[behaviours.a]\nshare = 1\n[[events]]\nat_seconds = 1\nkind = \"announcement\"\ncommunity = 3\n")
+                .contains("community 3")
+        );
+    }
+
+    #[test]
+    fn seeded_contents_scale_with_history_unless_given() {
+        let plan = profile().seed_plan("r1");
+        let largest = &plan.communities[0];
+        assert_eq!(largest.threads_per_channel, 2);
+        assert_eq!(largest.tagged_per_channel, 5);
+        assert_eq!(largest.polls_per_channel, 1);
+        assert_eq!(largest.votes_per_poll, 150);
     }
 
     #[test]

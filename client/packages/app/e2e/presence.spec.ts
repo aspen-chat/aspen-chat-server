@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { signInToWorld } from "./world";
+import { bob, me, signInToWorld } from "./world";
 
 /**
  * Choosing a status from the user bar, against the stubbed world in `world.ts`, where #roadmap
@@ -7,13 +7,11 @@ import { signInToWorld } from "./world";
  */
 
 const rail = (page: Page) => page.getByRole("navigation", { name: "Communities" });
+const bobName = "Bob With A Rather Long Display Name";
 const statusMenu = (page: Page) => page.getByRole("menu", { name: "Your status" });
 
-test.beforeEach(async ({ page }) => {
-  await signInToWorld(page);
-});
-
 test("do not disturb hides unread marks until the user is online again", async ({ page }) => {
+  await signInToWorld(page);
   await expect(page.getByText("roadmap, unread")).toBeAttached();
   await expect(rail(page).getByRole("row", { name: /^Family, unread/ })).toBeVisible();
   const put = page.waitForRequest(
@@ -56,6 +54,7 @@ test("do not disturb hides unread marks until the user is online again", async (
 });
 
 test("invisible and away last until changed when asked to", async ({ page }) => {
+  await signInToWorld(page);
   await page.getByRole("button", { name: "Change your status: Online" }).click();
   await statusMenu(page)
     .getByRole("menuitem", { name: /^Invisible/ })
@@ -83,4 +82,25 @@ test("invisible and away last until changed when asked to", async ({ page }) => 
     .getByRole("menuitem", { name: "For 15 minutes" })
     .click();
   await expect(page.getByRole("button", { name: "Change your status: Away" })).toBeVisible();
+});
+
+test("the stream watches who is shown and tells of their changes at once", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name.startsWith("phone"), "a phone shows no member list");
+  const publish = await signInToWorld(page);
+  await expect
+    .poll(() =>
+      (publish.sent ?? []).some(
+        (frame) => frame.type === "watchPresence" && (frame.userIds as string[]).includes(me),
+      ),
+    )
+    .toBe(true);
+  const members = page.getByRole("complementary", { name: "Members" });
+  const bobsRow = members.getByRole("button", { name: `Show profile of ${bobName}` });
+  publish.ephemeral?.({
+    type: "presence",
+    statuses: [{ id: bob, onlineStatus: "doNotDisturb" }],
+  });
+  await expect(bobsRow.getByRole("img", { name: "Do not disturb" })).toBeVisible();
 });

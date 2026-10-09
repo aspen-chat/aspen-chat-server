@@ -1,0 +1,55 @@
+name = "threads-and-polls"
+description = """
+A busy evening across ten communities that talk in threads and decide things by poll: replies
+in seeded and new threads, threads started, polls opened and voted in, people tagged. Thread
+replies' delivery is measured on its own."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 3000
+communities = 10
+largest_community = 1500
+smallest_community = 50
+text_channels = 5
+voice_channels = 0
+history_per_channel = 1000
+threads_per_channel = 20
+replies_per_thread = 15
+polls_per_channel = 6
+
+[load]
+online = 0.4
+ramp_up_seconds = 90
+duration_seconds = 600
+
+[behaviours.member]
+share = 0.7
+messages_per_hour = 4
+thread_replies_per_hour = 4
+poll_votes_per_hour = 4
+reactions_per_hour = 4
+history_reads_per_hour = 10
+activity_reads_per_hour = 1
+
+[behaviours.active]
+share = 0.3
+messages_per_hour = 20
+mentions_per_hour = 3
+threads_per_hour = 4
+thread_replies_per_hour = 20
+polls_per_hour = 2
+poll_votes_per_hour = 6
+reactions_per_hour = 10
+history_reads_per_hour = 15
+activity_reads_per_hour = 3
+hot_channel_share = 0.4
+
+[slo]
+delivery_p99_ms = 300
+request_p99_ms = 500
+connect_p99_ms = 5000
+error_rate = 0.001
+metric_p99_ms = { "delivery:thread" = 300 }

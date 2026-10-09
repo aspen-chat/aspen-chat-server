@@ -1,13 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { EventStream, compileValidator, reconnectDelayMs, setPreferredLanguages } from "../src";
+import {
+  EventStream,
+  RECONNECT_CAP_MS,
+  compileValidator,
+  reconnectDelayMs,
+  serverDelayMs,
+  setPreferredLanguages,
+} from "../src";
 
 const uuid = "0190f0a0-0000-7000-8000-000000000001";
 
 describe("reconnectDelayMs", () => {
-  it("retries immediately, then backs off exponentially to a 5s ceiling", () => {
-    expect([0, 1, 2, 3, 4, 5, 6, 40].map(reconnectDelayMs)).toEqual([
-      0, 500, 1000, 2000, 4000, 5000, 5000, 5000,
+  it("spreads each wait over a window that doubles up to a ceiling", () => {
+    const longest = (attempt: number) => reconnectDelayMs(attempt, () => 0.999_999);
+    expect([0, 1, 2, 3, 4, 5, 40].map(longest)).toEqual([
+      999, 1999, 3999, 7999, 15_999, 29_999, 29_999,
     ]);
+    expect(reconnectDelayMs(3, () => 0)).toBe(0);
+    expect(reconnectDelayMs(3, () => 0.5)).toBe(4000);
+    expect(longest(1000)).toBeLessThan(RECONNECT_CAP_MS);
+  });
+
+  it("waits at least what the server asked, and up to as long again", () => {
+    expect(serverDelayMs(10_000, () => 0)).toBe(10_000);
+    expect(serverDelayMs(10_000, () => 0.5)).toBe(15_000);
   });
 });
 
@@ -117,7 +133,10 @@ async function flush(): Promise<void> {
   }
 }
 
-function harness(tokens: (string | null)[] = ["token-1", "token-2", "token-3"]) {
+function harness(
+  tokens: (string | null)[] = ["token-1", "token-2", "token-3"],
+  random: () => number = () => 0,
+) {
   FakeSocket.instances = [];
   const timers = new FakeTimers();
   const log: string[] = [];
@@ -132,6 +151,7 @@ function harness(tokens: (string | null)[] = ["token-1", "token-2", "token-3"]) 
     WebSocket: FakeSocket as unknown as typeof WebSocket,
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
+    random,
     onReady: (info) => log.push(`ready:${String(info.resumed)}`),
     onConnectionLost: (reason) => log.push(`lost:${reason}`),
     onResyncRequired: () => log.push("resync"),
@@ -257,21 +277,51 @@ describe("EventStream", () => {
   });
 
   it("backs off between failed attempts and reports one outage", async () => {
-    const { stream, timers, log, sockets } = harness();
+    const { stream, timers, log, sockets } = harness(undefined, () => 0.5);
     stream.start();
     await flush();
     sockets[0]?.onclose?.({ code: 1006, reason: "" });
-    timers.advance(0);
+    timers.advance(499);
+    await flush();
+    expect(sockets).toHaveLength(1);
+    timers.advance(1);
     await flush();
     expect(sockets).toHaveLength(2);
     sockets[1]?.onclose?.({ code: 1006, reason: "" });
-    timers.advance(499);
+    timers.advance(999);
     await flush();
     expect(sockets).toHaveLength(2);
     timers.advance(1);
     await flush();
     expect(sockets).toHaveLength(3);
     expect(log).toEqual(["lost:connection closed (1006)"]);
+  });
+
+  it("comes back no sooner than a busy server asks", async () => {
+    const { stream, timers, sockets } = harness(undefined, () => 0.5);
+    stream.start();
+    await flush();
+    sockets[0]?.onopen?.();
+    sockets[0]?.onmessage?.({
+      data: JSON.stringify({
+        type: "error",
+        code: "serverBusy",
+        detail: "Busy.",
+        retryAfterSeconds: 10,
+      }),
+    });
+    sockets[0]?.onclose?.({ code: 1013, reason: "serverBusy" });
+    timers.advance(14_999);
+    await flush();
+    expect(sockets).toHaveLength(1);
+    timers.advance(1);
+    await flush();
+    expect(sockets).toHaveLength(2);
+    // The hint applies to the attempt it came with; the next failure backs off as usual.
+    sockets[1]?.onclose?.({ code: 1006, reason: "" });
+    timers.advance(1000);
+    await flush();
+    expect(sockets).toHaveLength(3);
   });
 
   it("asks for a fresh token after the server rejects the current one", async () => {

@@ -23,6 +23,14 @@ For engineers changing `server/app/src/aspen_config.rs` or `voice_server/src/con
   ([Connections](../../operators/configuration/connections.md))
 - **`max_per_network` sits alongside `max_per_ip`.** Whoever holds many addresses in one block
   cannot take the server's connections by spreading over them.
+- **A connection someone has signed in on counts toward `max_per_user` instead.** Behind a
+  carrier-grade NAT thousands of people share an address; counted by address they would be held
+  to one share between them, and an outage at their ISP brings them all back at once. The
+  address limits then bound what has not said who it is, and the user's share what has.
+- **`max_identifying_event_streams` defaults to half the database pool.** Identifying a stream
+  reads the database, and its client then reloads; holding identifies to half the pool keeps the
+  rest for requests while a crowd connects.
+  ([Event routing](../event-routing/design-notes.md#reconnect-storms))
 - **`ipv6_prefix` defaults to 64.** One household holds a whole /64.
   ([Rate limits](../../operators/configuration/rate-limits.md))
 

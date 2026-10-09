@@ -130,7 +130,9 @@ impl SuspensionState {
         }
     }
 
-    fn set(&self, record: Option<Suspension>) {
+    /// Holds `record` as the suspension in force, or none; `watch` calls this as the bucket
+    /// changes.
+    pub fn set(&self, record: Option<Suspension>) {
         let active = record.and_then(|record| match &record.scope {
             Scope::All => Some(Active {
                 record,

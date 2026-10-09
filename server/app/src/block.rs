@@ -109,6 +109,13 @@ pub async fn block(
         .scope_boxed()
     })
     .await
+    .inspect(|_| told_of_block(state, blocker))
+}
+
+/// Tells those watching `blocker`'s presence of what a block made or lifted changes of it:
+/// whoever it is between now learns it as offline, or learns it again (`app::presence_feed`).
+fn told_of_block(state: &GlobalServerContext, blocker: UserId) {
+    state.presence_feed.changed(blocker);
 }
 
 /// Lifts `blocker`'s block of `blocked`, if there is one.
@@ -146,6 +153,7 @@ pub async fn unblock(
         .scope_boxed()
     })
     .await
+    .inspect(|()| told_of_block(state, blocker))
 }
 
 /// Everyone the user has blocked, the most recent first.

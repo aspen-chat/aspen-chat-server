@@ -357,8 +357,12 @@ user = { requests = 20, per_seconds = 60, burst = 10 }
 user_per_domain = { requests = 6, per_seconds = 60, burst = 5 }
 
 [rate_limits.endpoints."GET /events"]
-# Reconnecting event streams; a whole office may share the address.
-ip = { requests = 60, per_seconds = 60, burst = 30 }
+# Reconnecting event streams. The address limit is counted at the upgrade, before anyone has
+# signed in, and many people may share one address (an office, a carrier-grade NAT coming back
+# from an outage all at once), so it only stops one address churning sockets; each account's
+# reconnects are limited when its first frame says who it is.
+ip = { requests = 1200, per_seconds = 60, burst = 600 }
+user = { requests = 30, per_seconds = 60, burst = 20 }
 
 [rate_limits.endpoints."POST /channels/{channel}/messages"]
 user_per_channel = { requests = 5, per_seconds = 5, burst = 10 }

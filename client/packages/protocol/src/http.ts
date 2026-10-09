@@ -694,8 +694,8 @@ export class AspenClient {
     if (response.status !== 429 || retry === null) {
       return response;
     }
-    const waitMs = Number(response.headers.get("retry-after")) * 1000;
-    if (!Number.isFinite(waitMs) || waitMs <= 0 || waitMs > RATE_LIMIT_RETRY_MAX_MS) {
+    const waitMs = retryAfterOf(response);
+    if (waitMs === null || waitMs > RATE_LIMIT_RETRY_MAX_MS) {
       return response;
     }
     await this.#sleep(waitMs);
@@ -816,6 +816,15 @@ export function problemOf(error: unknown, response: Response | undefined): Probl
     statusText.length > 0 ? `${String(status)} ${statusText}` : "no response",
     status,
   );
+}
+
+/**
+ * How long `response`'s `Retry-After` asks to wait, in milliseconds, or `null` when it asks for
+ * no wait. The server gives it in seconds.
+ */
+export function retryAfterOf(response: Response | undefined): number | null {
+  const seconds = Number(response?.headers.get("retry-after") ?? Number.NaN);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
 }
 
 /** Unwraps an openapi-fetch result, throwing `ApiProblemError` instead of returning `error`. */

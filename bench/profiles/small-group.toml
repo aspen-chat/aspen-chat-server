@@ -27,8 +27,17 @@ messages_per_hour = 90
 reactions_per_hour = 40
 edits_per_hour = 5
 history_reads_per_hour = 30
-attachments_per_hour = 3
+attachments_per_hour = 1
 attachment_bytes = 400000
+images_per_hour = 3
+mentions_per_hour = 6
+threads_per_hour = 2
+thread_replies_per_hour = 10
+polls_per_hour = 0.5
+poll_votes_per_hour = 3
+searches_per_hour = 2
+activity_reads_per_hour = 2
+saves_per_hour = 1
 hot_channel_share = 0.6
 voice = { calls_per_hour = 1, call_minutes = 8, screen_share = 0.2, channels_used = 1 }
 

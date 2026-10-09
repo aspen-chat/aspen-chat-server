@@ -258,7 +258,12 @@ async fn run(options: Opt) -> Result<()> {
         let _ = exit_tx.send(());
         info!("Shutdown signal received, shutting down...");
     })?;
-    let Some((app, config)) = app else {
+    let Some(api::Serving {
+        router: app,
+        config,
+        suspension,
+    }) = app
+    else {
         info!("running as a private worker: serving nothing, doing the background work");
         let _ = exit_rx.await;
         return Ok(());
@@ -353,7 +358,7 @@ async fn run(options: Opt) -> Result<()> {
         config.rate_limits.ipv6_prefix,
     )
     .map_err(anyhow::Error::msg)?;
-    let gate = connections::Gate::new(limits, addresses);
+    let gate = connections::Gate::new(limits, addresses, suspension);
     let handshake_timeout = Duration::from_secs(limits.handshake_seconds);
     let idle_timeout = Duration::from_secs(limits.idle_seconds);
     // Without a timer hyper keeps no time at all: a client could take forever over its headers.
@@ -404,6 +409,7 @@ async fn run(options: Opt) -> Result<()> {
         if let Err(e) = socket.set_nodelay(true) {
             warn!("could not turn off Nagle's algorithm for {remote_addr}: {e}");
         }
+        let place = api::rate_limit::Connection(admitted.place());
         // The socket holds its place within the limits until it closes, through an upgrade to
         // a WebSocket too, which keeps it.
         let socket = connections::Counted::new(socket, admitted);
@@ -419,6 +425,7 @@ async fn run(options: Opt) -> Result<()> {
                     request
                         .extensions_mut()
                         .insert(api::rate_limit::PeerAddr(remote_addr));
+                    request.extensions_mut().insert(place.clone());
                     let busy = activity.begin();
                     let response = service.clone().call(request);
                     async move {

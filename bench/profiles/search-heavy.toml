@@ -1,0 +1,43 @@
+name = "search-heavy"
+description = """
+Search over deep history: 2,000 people in a few communities whose channels hold ten thousand
+messages each, a third of them searching constantly for common and rare words, within a
+community and everywhere they may read."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 2000
+communities = 4
+largest_community = 1500
+smallest_community = 300
+text_channels = 6
+voice_channels = 0
+history_per_channel = 10000
+
+[load]
+online = 0.5
+ramp_up_seconds = 60
+duration_seconds = 300
+
+[behaviours.searcher]
+share = 0.3
+searches_per_hour = 60
+history_reads_per_hour = 10
+messages_per_hour = 4
+
+[behaviours.reader]
+share = 0.7
+searches_per_hour = 6
+history_reads_per_hour = 10
+messages_per_hour = 4
+reactions_per_hour = 4
+
+[slo]
+delivery_p99_ms = 300
+request_p99_ms = 800
+connect_p99_ms = 5000
+error_rate = 0.001
+route_p99_ms = { "GET /messages" = 750 }

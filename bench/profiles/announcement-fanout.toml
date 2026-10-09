@@ -1,7 +1,8 @@
 name = "announcement-fanout"
 description = """
-Fan-out: 20,000 people online in one community when something happens, and everyone posts in
-the same channel for two minutes. Every message goes to every connected member."""
+Fan-out: 20,000 people online in one community when something happens: its owner tags
+@everyone, and everyone posts in the same channel for two minutes. Every message goes to every
+connected member, and everyone with the channel open reports reading it."""
 
 [target]
 api = "http://localhost:8000"
@@ -27,6 +28,10 @@ messages_per_hour = 0.5
 reactions_per_hour = 2
 history_reads_per_hour = 4
 hot_channel_share = 1.0
+
+[[events]]
+at_seconds = 55
+kind = "announcement"
 
 [[events]]
 at_seconds = 60

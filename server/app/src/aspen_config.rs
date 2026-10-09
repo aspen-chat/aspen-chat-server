@@ -248,6 +248,13 @@ pub struct ConnectionsConfig {
     /// `[rate_limits] trusted_proxies` count only toward `max`.
     #[default = 4096]
     pub max_per_network: usize,
+    /// The most connections one user holds open at once once they have signed in on them. A
+    /// connection counts toward `max_per_ip` and `max_per_network` until a request on it
+    /// presents a session or its event stream identifies, and then toward its user's share
+    /// instead while the user has room, so many people behind one address (a carrier-grade NAT)
+    /// are each held to their own share rather than all to the address's.
+    #[default = 64]
+    pub max_per_user: usize,
     /// How long a client has to finish its TLS handshake.
     #[default = 10]
     pub handshake_seconds: u64,
@@ -314,11 +321,19 @@ pub struct LimitsConfig {
     #[default = 20]
     pub max_event_streams_per_user: usize,
     /// The most event streams one client address (an IPv6 one by its `[rate_limits]
-    /// ipv6_prefix` network) may hold open on one API server at once, counted from the upgrade,
-    /// before it identifies; one more is closed with `tooManyStreamsFromAddress`. Many people may
-    /// share an address behind one NAT, so it is well above the cap per user.
+    /// ipv6_prefix` network) may hold open on one API server before they identify, counted from
+    /// the upgrade; one more is closed with `tooManyStreamsFromAddress`. An identified stream
+    /// counts toward its user's cap instead, so this bounds only sockets that have not said who
+    /// they are, however many people share the address.
     #[default = 200]
     pub max_event_streams_per_address: usize,
+    /// The most event streams one API server identifies at once; half of the database pool
+    /// when left out. Each identify reads the database, and the stream it opens is soon
+    /// followed by its client reading its state again, so after a mass reconnect this keeps
+    /// requests their share of the pool. A stream that cannot start identifying soon, or that
+    /// arrives while requests already queue for the pool, is closed with `serverBusy` and told
+    /// when to come back (`api::event_stream`).
+    pub max_identifying_event_streams: Option<usize>,
 }
 
 /// Federation: this deployment's name among deployments and how it checks on the users of

@@ -2,9 +2,10 @@
 //! timed events, reporting snapshots as it goes.
 
 use crate::clock::Clock;
+use crate::profile::Behaviour;
 use crate::profile::{EventKind, Profile};
 use crate::stats;
-use crate::user::{User, World, memberships};
+use crate::user::{User, World, memberships, text_channels};
 use aspen_bench_protocol::coordination::{AgentSummary, Assignment, Phase, Snapshot};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -42,6 +43,8 @@ pub fn run(
     let (storms, _) = broadcast::channel(16);
     let world = Arc::new(World {
         memberships: memberships(&assignment.manifest),
+        text_channels: text_channels(&assignment.manifest),
+        images: std::sync::Mutex::new(std::collections::HashMap::new()),
         profile: profile.clone(),
         manifest: assignment.manifest.clone(),
         api,
@@ -96,6 +99,20 @@ pub fn run(
                             world.set_rate_factor(base);
                         });
                     }
+                    // Made once, by the first agent.
+                    EventKind::Announcement { community } if assignment.agent == 0 => {
+                        let community = community as usize;
+                        if let Some(owner) = world
+                            .manifest
+                            .communities
+                            .get(community)
+                            .and_then(|c| c.members.first())
+                        {
+                            let owner = User::new(Arc::clone(&world), *owner, Behaviour::default());
+                            tokio::spawn(Arc::new(owner).announce(community));
+                        }
+                    }
+                    EventKind::Announcement { .. } => {}
                     // Run by the coordinator.
                     EventKind::Command { .. } => {}
                 }

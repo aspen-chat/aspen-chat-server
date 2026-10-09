@@ -13,6 +13,7 @@ use axum::http::{HeaderMap, Method};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use utoipa::openapi::path::Operation;
 use utoipa::openapi::{ContentBuilder, OpenApi, Ref, RefOr, ResponseBuilder};
 
@@ -25,7 +26,30 @@ pub struct PeerAddr(pub SocketAddr);
 #[derive(Clone, Copy, Debug)]
 pub struct ClientIp(pub Option<IpAddr>);
 
-/// The route of the event stream, which is not in the OpenAPI document.
+/// The connection a request arrived on, as the listener counts it against `[connections]`, put
+/// on every request by the connection loop in `main.rs`.
+#[derive(Clone)]
+pub struct Connection(pub Arc<dyn CountedConnection>);
+
+/// A connection the listener counts toward its address's share until someone signs in on it.
+pub trait CountedConnection: Send + Sync {
+    /// `user` presented a session on the connection, or identified its event stream: from now
+    /// it counts toward their share rather than its address's, while they have room.
+    fn signed_in(&self, user: UserId);
+}
+
+impl Connection {
+    /// Tells the connection of `parts` that `user` signed in on it, if it is counted.
+    pub fn signed_in(parts: &Parts, user: UserId) {
+        if let Some(connection) = parts.extensions.get::<Connection>() {
+            connection.0.signed_in(user);
+        }
+    }
+}
+
+/// The route of the event stream, which is not in the OpenAPI document. It is signed in to
+/// by its first frame rather than a header, so its rules that count by user are checked when
+/// that frame arrives ([`limit_event_stream`]).
 const EVENT_STREAM_ROUTE: (&str, &str) = ("GET", "/events");
 /// The passkey handoff page, served outside `API_PREFIX` and not in the OpenAPI document. Its
 /// route key is its path as served.
@@ -64,8 +88,12 @@ pub fn routes() -> Vec<Route> {
             routes.push(Route::new(method, template, access(operation)));
         }
     }
+    routes.push(Route::new(
+        EVENT_STREAM_ROUTE.0,
+        EVENT_STREAM_ROUTE.1,
+        Access::Authenticated,
+    ));
     for (method, template) in [
-        EVENT_STREAM_ROUTE,
         PASSKEY_PAGE,
         WELL_KNOWN,
         UNSUBSCRIBE_PAGE,
@@ -292,6 +320,25 @@ pub async fn limit_session(
     )
 }
 
+/// Checks the rules of the event stream that count by user, once its `identify` frame has said
+/// who it is: whether it is within them.
+pub async fn limit_event_stream(
+    state: &GlobalServerContext,
+    ip: Option<IpAddr>,
+    user: UserId,
+) -> Decision {
+    let identity = Identity {
+        ip,
+        user: Some(user),
+        ..Identity::default()
+    };
+    let route = aspen_app::rate_limit::route_key(EVENT_STREAM_ROUTE.0, EVENT_STREAM_ROUTE.1);
+    state
+        .rate_limiter
+        .check(&state.valkey, &route, Stage::Session, &identity)
+        .await
+}
+
 /// Checks the address and parameter rules of `route` from inside its handler, for a route that
 /// answers a request over its limits with less rather than with `429`: whether the request is
 /// within them.
@@ -464,7 +511,7 @@ mod tests {
             find("POST /channels/{channel}/messages").params,
             ["channel"]
         );
-        assert_eq!(find("GET /events").access, Access::Anonymous);
+        assert_eq!(find("GET /events").access, Access::Authenticated);
         assert_eq!(find("GET /auth/passkey").access, Access::Anonymous);
     }
 }

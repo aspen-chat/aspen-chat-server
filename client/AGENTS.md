@@ -126,6 +126,13 @@ same commit, as with comments.
   throw away cached state and re-bootstrap from REST before applying further events. Supply
   `authenticate` from `AspenClient.freshSessionToken` so a rejected token is refreshed rather
   than retried.
+- Whatever tries the server again after a failure waits a random time in a window that grows
+  with each failure (`reconnectDelayMs`), and at least what the server asked, spread over as long
+  again (`serverDelayMs`): the event stream after a drop, or after an `error` frame with
+  `retryAfterSeconds` (a server too busy to take it, `serverBusy`), and `AspenSync` after a
+  bootstrap fails for a reason that passes (no answer, `408`, `429`, `5xx`, honouring
+  `Retry-After`). Never retry at a fixed interval or at once: when a server restarts, or an ISP's
+  customers come back from an outage, every client would return at the same moment.
 - Reads that accept `include` (community reads, the user's community list, message reads) return
   `{ data, included }` whether or not you asked for anything, and `included` holds the same
   record types the event stream carries, keyed by type (`channels`, `users`, ...). Pass

@@ -24,6 +24,9 @@ share = 0.8
 messages_per_hour = 4
 reactions_per_hour = 4
 history_reads_per_hour = 8
+poll_votes_per_hour = 1
+activity_reads_per_hour = 1
+searches_per_hour = 0.5
 reconnects_per_hour = 0.5
 
 [behaviours.chatter]
@@ -33,6 +36,17 @@ dm_messages_per_hour = 5
 edits_per_hour = 2
 deletes_per_hour = 1
 attachments_per_hour = 0.5
+images_per_hour = 0.5
+mentions_per_hour = 2
+threads_per_hour = 0.5
+thread_replies_per_hour = 4
+polls_per_hour = 0.2
+poll_votes_per_hour = 2
+searches_per_hour = 1
+activity_reads_per_hour = 2
+saves_per_hour = 0.5
+saved_reads_per_hour = 0.5
+presence_changes_per_hour = 0.5
 reconnects_per_hour = 0.5
 
 [slo]

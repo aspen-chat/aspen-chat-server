@@ -47,7 +47,8 @@ pub mod api {
     pub const EVENT_STREAMS: &str = "aspen_event_streams";
     /// Event frames sent to clients.
     pub const EVENTS_DELIVERED: &str = "aspen_events_delivered_total";
-    /// Event stream connections, by `outcome`: `resumed`, `replayed`, `rejected`.
+    /// Event stream connections, by `outcome`: `resumed`, `replayed`, `rejected`, or `busy` (turned
+    /// away to come back later, `app::stream_admission`).
     pub const EVENT_STREAM_CONNECTS: &str = "aspen_event_stream_connects_total";
     /// Event streams the server closed, by `reason`: `slow` (the client fell a queue behind)
     /// or `gap` (the server's feed missed events, so every stream must resume).

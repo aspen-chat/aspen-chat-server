@@ -24,6 +24,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -32,7 +33,7 @@ import uuid
 import zlib
 from pathlib import Path
 
-from stack import REPO, Failed, Ports, Stack, WebSocket, psql, start_services, wait_for, wait_for_services
+from stack import REPO, Failed, Ports, Stack, WebSocket, compose, psql, start_services, wait_for, wait_for_services
 
 PORTS = Ports(nats=14322, api=18100, voice=19101, api_metrics=19564, voice_metrics=19565, rtc_min=45200, rtc_max=45399,
               transfer=13578, relay_min=46100, relay_max=46199)
@@ -1052,6 +1053,37 @@ def presence(world: World, check: Checks) -> None:
           status_of(world.member["token"], world.owner["id"]) == "offline")
 
 
+def lost_presence_keys(world: World, check: Checks) -> None:
+    say("an invisible user whose presence keys Valkey lost, coming back, is never shown online")
+
+    def status_of(token: str) -> str:
+        return world.stack.api("GET", f"/users/statuses?ids={world.owner['id']}", token=token)[0]["onlineStatus"]
+
+    world.as_owner("PUT", "/users/@me/presence-override", {"presenceOverride": "invisible"})
+    keys = [f"user:{world.owner['id']}:{kind}" for kind in ("online", "active", "override", "listed")]
+    compose("exec", "-T", "valkey", "valkey-cli", "DEL", *keys)
+    # Past MARK_EVERY, so the server marks the owner online afresh when they come back.
+    time.sleep(16)
+    seen: list[str] = []
+    stop = threading.Event()
+
+    def poll() -> None:
+        while not stop.is_set():
+            seen.append(status_of(world.member["token"]))
+
+    poller = threading.Thread(target=poll)
+    poller.start()
+    stream = world.stack.events(world.owner["token"])
+    time.sleep(3)
+    stop.set()
+    poller.join()
+    check("the member reads them as offline throughout, before and after the copy of what they chose",
+          bool(seen) and all(s == "offline" for s in seen), {s: seen.count(s) for s in set(seen)})
+    check("and they read themself as invisible once back", status_of(world.owner["token"]) == "invisible")
+    stream.close()
+    world.as_owner("DELETE", "/users/@me/presence-override")
+
+
 def chosen_presence(world: World, check: Checks) -> None:
     say("a chosen status: what it was reaches only its chooser, and invisible is offline to the rest")
 
@@ -1071,6 +1103,34 @@ def chosen_presence(world: World, check: Checks) -> None:
 
     world.as_owner("GET", "/users/@me")
     world.stream.gather(0.5)
+
+    def told(seconds: float = 2.5) -> str | None:
+        """What the member's stream, watching the owner, is told of them next, within `seconds`."""
+        seen = len(world.stream.ephemeral)
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            world.stream.gather(0.2)
+            for event in world.stream.ephemeral[seen:]:
+                for status in event.get("statuses", []) if event.get("type") == "presence" else []:
+                    if status["id"] == world.owner["id"]:
+                        return status["onlineStatus"]
+        return None
+
+    world.stream.send({"type": "watchPresence", "userIds": [world.owner["id"]]})
+    first = told()
+    check("a member watching the owner is told their presence at once", first not in (None, "offline"), first)
+    world.as_owner("PUT", "/users/@me/presence-override", {"presenceOverride": "doNotDisturb"})
+    check("and of their choosing do not disturb within moments", told() == "doNotDisturb")
+    world.as_owner("PUT", f"/users/@me/blocks/{world.member['id']}")
+    check("once the owner blocks them, they are told the owner is offline", told() == "offline")
+    world.as_owner("DELETE", f"/users/@me/blocks/{world.member['id']}")
+    check("and unblocked, of their presence again", told() == "doNotDisturb")
+    world.as_owner("PUT", "/users/@me/presence-override", {"presenceOverride": "invisible", "durationSeconds": 2})
+    check("a timed status is told", told() == "offline")
+    ended = told(5)
+    check("and so is its running out", ended not in (None, "offline"), ended)
+    world.as_owner("DELETE", "/users/@me/presence-override")
+    told()
     before = online_in()
     owner_counted = 1 if status_of(world.member["token"], world.owner["id"]) == "online" else 0
     chosen({"presenceOverride": "invisible"})
@@ -2513,7 +2573,7 @@ def plugin_removal(world: World, check: Checks) -> None:
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, calls, attachments,
-             operators, deployment_settings, sign_ins, removal, presence, chosen_presence, typing, name_colours, dual_invites, device_links,
+             operators, deployment_settings, sign_ins, removal, presence, chosen_presence, lost_presence_keys, typing, name_colours, dual_invites, device_links,
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed]

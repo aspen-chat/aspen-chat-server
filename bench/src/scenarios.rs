@@ -2,7 +2,7 @@
 //! command line instead of a file. Each targets a deployment on this machine; override with
 //! `--api` and `--metrics`, or copy one and edit it.
 
-pub const ALL: [(&str, &str); 10] = [
+pub const ALL: [(&str, &str); 13] = [
     ("smoke", include_str!("../profiles/smoke.toml")),
     ("small-group", include_str!("../profiles/small-group.toml")),
     (
@@ -28,6 +28,18 @@ pub const ALL: [(&str, &str); 10] = [
     (
         "voice-evening",
         include_str!("../profiles/voice-evening.toml"),
+    ),
+    (
+        "mention-storm",
+        include_str!("../profiles/mention-storm.toml"),
+    ),
+    (
+        "search-heavy",
+        include_str!("../profiles/search-heavy.toml"),
+    ),
+    (
+        "threads-and-polls",
+        include_str!("../profiles/threads-and-polls.toml"),
     ),
     ("soak", include_str!("../profiles/soak.toml")),
     ("chaos", include_str!("../profiles/chaos.toml")),
