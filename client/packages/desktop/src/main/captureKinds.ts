@@ -28,7 +28,6 @@ export const NOTHING_OFFERED: Offered = {
   testMedia: null,
 };
 
-/** What a listing offers. */
 export function offeredKinds(listing: {
   kinds: readonly { kind: string; audio: { kind: string } | null }[];
   applicationAudio: { kind: string } | null;

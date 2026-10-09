@@ -463,7 +463,6 @@ pub async fn try_token_refresh(
         Err(crate::Error::DeploymentBanned { .. }) => return Ok(TokenRefreshOutcome::InvalidToken),
         Err(e) => return Err(e),
     }
-    // If we got here then the token is valid. Issue a refresh.
     let new_token = make_token();
     let session_token_expires = Utc::now() + SESSION_TOKEN_LIFETIME;
     diesel::insert_into(session::table)

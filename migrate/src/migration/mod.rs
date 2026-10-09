@@ -41,7 +41,7 @@ pub trait Migration: Send + Sync {
 }
 
 /// Helper for pure-DDL migrations whose bodies live in adjacent
-/// `up.sql` / `down.sql` files. Future migrations that need real Rust
+/// `up.sql` / `down.sql` files. Migrations that need real Rust
 /// work skip this helper and `impl Migration` directly.
 pub struct SqlMigration {
     pub id: &'static str,

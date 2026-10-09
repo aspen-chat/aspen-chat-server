@@ -316,7 +316,6 @@ async fn run(options: Opt) -> Result<()> {
 
     let tls_acceptor = (!options.no_https)
         .then(|| -> Result<TlsAcceptor> {
-            // Setup TLS config
             let mut server_config = ServerConfig::builder()
                 .with_no_client_auth()
                 .with_single_cert(certs, key)?;
@@ -467,7 +466,6 @@ async fn run(options: Opt) -> Result<()> {
                     }
                 }
                 None => {
-                    // no_https enabled, send unencrypted.
                     handle_stream!(socket)
                 }
             }

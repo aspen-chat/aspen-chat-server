@@ -143,7 +143,6 @@ export const MessageItem = memo(function MessageItem({
   const toolbar = useRef<HTMLDivElement>(null);
   // A touch screen offers the actions under a long press; a pointer, at the corner.
   const touchOnly = useMediaQuery(TOUCH_ONLY);
-  // What the press has open: the actions, or what one of them opened in their place.
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const row = useRef<HTMLElement>(null);
   // Whether the message has been pressed long, from when its sheets are drawn: they stay drawn

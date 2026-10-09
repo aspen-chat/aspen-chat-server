@@ -121,7 +121,6 @@ export type PeerConnectionFactory = (configuration: RTCConfiguration) => RTCPeer
 export interface FileTransfersOptions {
   /** Sends a frame to the voice server. */
   send: (frame: ClientMessage) => void;
-  /** Called when the state changes. */
   onChange: () => void;
   createPeerConnection?: PeerConnectionFactory;
   now?: () => number;

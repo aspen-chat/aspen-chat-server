@@ -815,7 +815,6 @@ function KeyDialog({
   );
 }
 
-/** Confirms forgetting a deployment. */
 function ForgetDialog({
   deployment,
   onClose,

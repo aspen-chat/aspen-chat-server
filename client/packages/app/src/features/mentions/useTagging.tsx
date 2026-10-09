@@ -26,7 +26,6 @@ import { displayNameOf, handleOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
-/** The most suggestions shown at once. */
 const MAX_SUGGESTIONS = 8;
 
 interface Tag extends Suggestion {
@@ -236,9 +235,9 @@ export function useTagging({
     list: suggestionList,
     /** What a polite status beside the box says of the suggestions: how many, how to pick. */
     announcement,
-    /** The text as it is sent, picked tags and all. */
     /** The tags picked, which a draft keeps with its text. */
     picks,
+    /** The text as it is sent, picked tags and all. */
     encode: (text: string) => encodeTags(text, picks),
     /** Forgets the picks, once what they were for is sent. */
     reset: () => {

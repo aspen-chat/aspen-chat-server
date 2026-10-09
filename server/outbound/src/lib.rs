@@ -203,7 +203,6 @@ mod tests {
     #[test]
     fn only_public_addresses_are_public() {
         for (address, public) in [
-            // IPv4
             ("1.1.1.1", true),
             ("8.8.8.8", true),
             ("100.63.255.255", true),
@@ -236,7 +235,6 @@ mod tests {
             ("239.255.255.250", false),
             ("240.0.0.1", false),
             ("255.255.255.255", false),
-            // IPv6
             ("2606:4700::1111", true),
             ("2a00:1450:4001::200e", true),
             ("2001:4860:4860::8888", true),

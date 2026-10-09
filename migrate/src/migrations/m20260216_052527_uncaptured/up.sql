@@ -1,6 +1,3 @@
--- Your SQL goes here
-
-
 ALTER TABLE "community" DROP COLUMN "icon_mime_type";
 ALTER TABLE "community" DROP COLUMN "icon";
 ALTER TABLE "community" ADD COLUMN "icon" UUID;

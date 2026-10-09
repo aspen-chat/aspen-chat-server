@@ -51,8 +51,6 @@ import { format } from "@/i18n/messages";
 import { PersonAvatar, PersonName } from "@/features/users/PersonName";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
 
-/** The emoji picker is a sizeable chunk, fetched the first time anyone opens it. */
-
 const chipClass =
   "flex items-center gap-1 rounded-full border px-2 py-0.5 text-sm outline-none " +
   "pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50";

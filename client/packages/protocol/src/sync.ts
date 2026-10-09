@@ -155,13 +155,13 @@ export const PRESENCE_POLL_MS = 30_000;
  */
 export const READ_REPORT_MS = 1_000;
 
-/** How many people a page of a reaction list holds. */
 /**
  * How far before this sync began a message may say it was posted and still notify, allowing for
  * the server's clock and the device's disagreeing; well inside the minute a connection replays.
  */
 const NOTIFY_CLOCK_SLACK_MS = 5_000;
 
+/** How many people a page of a reaction list holds. */
 export const REACTORS_PAGE = 50;
 
 /** How many voters one read of an answer's voters asks for. */
@@ -255,15 +255,15 @@ export interface AspenSyncOptions {
 
 export type SyncListener = () => void;
 
-/**
- * Another deployment the user signs in to says they are now in a DM there (the home's
- * `foreignDmJoined` event). `channel` is that deployment's id.
- */
 /** A plugin's own event, for its views. */
 export type PluginEvent = Extract<ServerEvent, { serverEvent: "pluginEvent" }>;
 /** What a plugin tells the user of. */
 export type PluginNotice = Extract<ServerEvent, { serverEvent: "pluginNotice" }>;
 
+/**
+ * Another deployment the user signs in to says they are now in a DM there (the home's
+ * `foreignDmJoined` event). `channel` is that deployment's id.
+ */
 export interface ForeignDmNotice {
   readonly domain: string;
   readonly channel: string;
@@ -328,7 +328,6 @@ export class AspenSync {
   readonly #viewing = new Map<string, number>();
   /** When the next of those shown typing runs out. */
   #typingTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Users the server said do not exist; asked once, not again. */
   readonly #attachmentLoads = new Map<string, Promise<void>>();
   readonly #pollLoads = new Map<string, Promise<void>>();
   /** Per channel, the furthest message read and not yet reported. */
@@ -1339,12 +1338,10 @@ export class AspenSync {
 
   /**
    * Creates a channel at the end of its community's sort order, filed under `parentCategory`
-   * when given. The result is cached at once; the matching event is then a no-op.
-   */
-  /**
-   * Makes a channel, with the overrides it starts with. Those are applied as their events would
-   * be, so a channel its creator has shut themselves out of leaves the store again at once,
-   * whichever of the response and the events arrives first.
+   * when given. The result is cached at once; the matching event is then a no-op. The overrides
+   * it starts with are applied as their events would be, so a channel its creator has shut
+   * themselves out of leaves the store again at once, whichever of the response and the events
+   * arrives first.
    */
   async createChannel(
     communityId: string,
@@ -1518,7 +1515,6 @@ export class AspenSync {
     this.store.setMyVote(pollId, option, true);
   }
 
-  /** Withdraws the caller's vote for an option. */
   async unvote(pollId: string, option: number): Promise<void> {
     const result = await this.#client.api.DELETE("/api/v1/polls/{poll}/votes/{option}/@me", {
       params: { path: { poll: pollId, option } },
@@ -1550,7 +1546,6 @@ export class AspenSync {
     return option;
   }
 
-  /** Removes a written-in answer, and every vote for it. */
   /**
    * Records that the caller has seen `messageId` in `channelId`, a channel, DM, or thread: at
    * once in the store, and to the server within `READ_REPORT_MS`, together with whatever else
@@ -1794,6 +1789,7 @@ export class AspenSync {
     }
   }
 
+  /** Removes a written-in answer, and every vote for it. */
   async removeWriteIn(pollId: string, option: number): Promise<void> {
     const result = await this.#client.api.DELETE("/api/v1/polls/{poll}/write-ins/{option}", {
       params: { path: { poll: pollId, option } },
@@ -1910,7 +1906,6 @@ export class AspenSync {
     }
   }
 
-  /** Lifts the caller's block of someone. */
   async unblockUser(userId: string): Promise<void> {
     const result = await this.#client.api.DELETE("/api/v1/users/@me/blocks/{user}", {
       params: { path: { user: userId } },
@@ -2497,10 +2492,9 @@ export class AspenSync {
     }
   }
 
-  /** Renames a role or sets its permissions; its update event changes the cache. */
   /**
    * Changes a role as a merge patch: what `patch` leaves out is unchanged, and a `hue` of `null`
-   * takes the role's colour away.
+   * takes the role's colour away. Its update event changes the cache.
    */
   async updateRole(
     roleId: string,
@@ -2741,7 +2735,6 @@ export class AspenSync {
     }
   }
 
-  /** Pins a message in its channel, or unpins it. */
   async setPinned(messageId: string, pinned: boolean): Promise<void> {
     const params = { path: { message: messageId } };
     const result = pinned
@@ -3163,8 +3156,6 @@ export class AspenSync {
     await Promise.all(ids.flatMap((id) => this.#userLoads.get(id) ?? []));
     return ids.map((id) => this.store.user(id));
   }
-
-  // ---------------------------------------------------------------------------------------
 
   #setStatus(status: SyncStatus): void {
     if (this.#status === status) {
@@ -3832,11 +3823,6 @@ export class AspenSync {
     }, this.#random() * ACCESS_RELOAD_SPREAD_MS);
   }
 
-  /**
-   * Takes in what a message read sideloaded, with `messages` when the read's own are to be
-   * stored too. Its memberships say which roles the authors hold and what they are called
-   * there, for drawing their names in their roles' colours and by their nicknames; they are not the community's member sample, which they leave alone.
-   */
   /** Caches a list of messages read from outside any one channel, and what came with them. */
   #ingestListed(read: { data: NonNullable<Included["messages"]>; included: Included }): void {
     this.#ingestMessageRead(read.included, read.data);
@@ -3846,6 +3832,12 @@ export class AspenSync {
     );
   }
 
+  /**
+   * Takes in what a message read sideloaded, with `messages` when the read's own are to be
+   * stored too. Its memberships say which roles the authors hold and what they are called
+   * there, for drawing their names in their roles' colours and by their nicknames; they are not
+   * the community's member sample, which they leave alone.
+   */
   #ingestMessageRead(included: Included, messages?: Included["messages"]): void {
     const { userCommunities, ...rest } = included;
     this.store.ingest(messages === undefined ? rest : { ...rest, messages: [...messages] });

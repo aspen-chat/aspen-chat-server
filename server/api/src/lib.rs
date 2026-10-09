@@ -2,11 +2,11 @@
 //! document, the event stream, rate limits by route, and the web client and pages each server
 //! serves. What each request does is `aspen_app`'s.
 
-// The catalogue `t!` reads, which `aspen_locale` holds.
 use crate::error::{ApiError, ProblemCode};
 use aspen_app as app;
 use aspen_app::aspen_config::AspenConfig;
 use aspen_app::context::{GlobalServerContext, Role};
+// The catalogue `t!` reads, which `aspen_locale` holds.
 use aspen_locale::{_rust_i18n_try_translate, t};
 pub use aspen_wire::API_PREFIX;
 use axum::http::Method;

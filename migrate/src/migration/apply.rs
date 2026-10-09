@@ -1,6 +1,4 @@
-//! `apply <ids...>` — apply a selected subset of migrations by id,
-//! in registry order, refusing unknown ids up-front so a typo can't
-//! leave a half-applied subset behind.
+//! `apply <ids...>` — apply a selected subset of migrations by id.
 
 use anyhow::{Context, Result, bail};
 use diesel::sql_query;

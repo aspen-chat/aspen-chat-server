@@ -398,7 +398,6 @@ function PreferencesSection({
   onChange,
 }: {
   account: api.EmailAccount;
-  /** Whether the deployment has a newsletter. */
   newsletter: boolean;
   onChange: (account: api.EmailAccount) => void;
 }) {

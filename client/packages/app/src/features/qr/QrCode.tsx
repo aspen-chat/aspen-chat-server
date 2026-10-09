@@ -62,7 +62,6 @@ export function QrCode({
   );
 }
 
-/** The PNG of a code, drawn from its SVG document. */
 async function pngOf(svg: string): Promise<Blob> {
   const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
   try {

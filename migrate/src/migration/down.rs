@@ -9,7 +9,6 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 
 use super::{AppliedMigration, Migration, ensure_migrations_table, list_applied};
 
-/// Roll back the most recently applied `steps` migrations, newest first.
 pub async fn run_down(
     conn: &mut AsyncPgConnection,
     migrations: &[&dyn Migration],

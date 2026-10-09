@@ -9,7 +9,6 @@ const host = "0290f0a0-0000-7000-8000-000000000002";
 export const foreignCommunity = "0290f0a0-0000-7000-8000-000000000010";
 /** The one message a search there finds. */
 export const foreignSearchText = "The lemonade stand on beta opens at noon.";
-/** An invite to its community. */
 export const foreignInviteCode = "BetaClub7";
 const foreignChannel = "0290f0a0-0000-7000-8000-000000000011";
 const foreignDm = "0290f0a0-0000-7000-8000-000000000012";

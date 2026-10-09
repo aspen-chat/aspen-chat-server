@@ -99,7 +99,6 @@ export type CommandLine =
       readonly kind: "command";
       readonly bot: string;
       readonly command: Command;
-      /** Where the arguments begin. */
       readonly argumentsAt: number;
     };
 

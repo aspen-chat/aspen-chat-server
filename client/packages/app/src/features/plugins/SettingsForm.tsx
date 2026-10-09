@@ -61,7 +61,6 @@ function same(a: Draft, b: Draft): boolean {
   return a === b;
 }
 
-/** Whether a draft is a list. */
 function isList(draft: Draft): draft is readonly string[] {
   return Array.isArray(draft);
 }

@@ -114,7 +114,6 @@ impl Room {
         }
     }
 
-    /// How many transfers `user` is part of.
     fn transfers_of(&self, user: Uuid) -> usize {
         self.transfers
             .lock()

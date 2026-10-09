@@ -39,12 +39,10 @@ pub fn partition(key: Uuid) -> u8 {
     key.as_bytes()[15] % REPORT_PARTITIONS
 }
 
-/// The subject of a report in lane `partition` from `server`.
 pub fn report_subject(partition: u8, server: Uuid) -> String {
     format!("{REPORT_SUBJECT_ROOT}.{partition}.{server}")
 }
 
-/// The subject of a speaking change in lane `partition` from `server`.
 pub fn speaking_subject(partition: u8, server: Uuid) -> String {
     format!("{SPEAKING_SUBJECT_ROOT}.{partition}.{server}")
 }

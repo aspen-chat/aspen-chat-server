@@ -51,8 +51,6 @@ interface Option {
   readonly choice: CaptureChoice;
 }
 
-/** No application's sound chosen. */
-
 /**
  * What the desktop shell can share as a game. Where libobs captures games (Windows and macOS)
  * the dialog lists the windows its capture source can be pointed at, with a checkbox to take

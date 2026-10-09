@@ -15,7 +15,6 @@ function list(count: number): HTMLElement {
   return box;
 }
 
-/** The `index`th row of `box`. */
 function rowOf(box: HTMLElement, index: number): HTMLElement {
   const row = box.children[index];
   if (!(row instanceof HTMLElement)) {

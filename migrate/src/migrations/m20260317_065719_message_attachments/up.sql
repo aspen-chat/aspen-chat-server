@@ -1,4 +1,3 @@
--- Your SQL goes here
 CREATE TABLE message_attachment(
     message_id UUID NOT NULL,
     attachment_id UUID NOT NULL,

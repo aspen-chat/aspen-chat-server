@@ -44,7 +44,6 @@ import {
   type Offered,
 } from "./commandLine";
 
-/** The most suggestions shown at once. */
 const MAX_SUGGESTIONS = 8;
 
 /** A completion: the text it puts in the box, and for a value, what that text stands for. */

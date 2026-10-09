@@ -1,8 +1,3 @@
--- Your SQL goes here
-
-
-
-
 ALTER TABLE "message" ADD COLUMN "content" TEXT NOT NULL;
 
 

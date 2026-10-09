@@ -26,7 +26,6 @@ pub struct PollOption {
     pub emoji: Option<String>,
 }
 
-/// One of the calling user's votes: the option they chose on a poll.
 /// An answer a voter added to a poll.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "camelCase")]

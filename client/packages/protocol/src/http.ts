@@ -474,14 +474,11 @@ export class AspenClient {
   }
 
   /**
-   * Creates an account. Registration does not sign the user in; callers typically follow it
-   * with `login`. Throws `ApiProblemError` (`usernameTaken`, `validation`,
-   * `passwordRequirementsNotMet`) on failure.
-   */
-  /**
    * Creates an account. `inviteCode` is the registration invite, which some servers require;
    * `email` an address for it, which some require too, mailed a code to verify it; and
-   * `newsletter` whether that address receives the deployment's newsletter.
+   * `newsletter` whether that address receives the deployment's newsletter. Registration does
+   * not sign the user in; callers typically follow it with `login`. Throws `ApiProblemError`
+   * (`usernameTaken`, `validation`, `passwordRequirementsNotMet`) on failure.
    */
   async register(
     name: string,

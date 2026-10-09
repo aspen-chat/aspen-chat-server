@@ -65,7 +65,6 @@ impl LoadedPlugin {
         )
     }
 
-    /// Its name in `locale`.
     pub fn name(&self, locale: &str) -> String {
         self.render(
             locale,

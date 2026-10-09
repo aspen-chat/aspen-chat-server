@@ -48,7 +48,6 @@ pub const MAX_OPTIONS: usize = 10;
 pub const MAX_QUESTION_CHARS: usize = 300;
 pub const MAX_OPTION_CHARS: usize = 100;
 pub const MIN_DURATION_SECONDS: u32 = 10;
-/// Four weeks.
 pub const MAX_DURATION_SECONDS: u32 = 4 * 7 * 24 * 60 * 60;
 /// The most answers voters may add to one poll, removed ones included, since each keeps its
 /// index.

@@ -306,7 +306,6 @@ pub async fn run_call(
     Ok(())
 }
 
-/// Aborts a task when dropped.
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
 
 impl Drop for AbortOnDrop {

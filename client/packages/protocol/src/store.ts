@@ -832,10 +832,6 @@ export class RecordStore {
   }
 
   /**
-   * Topic `commands:<channelId>`: each bot that can see the channel and has commands, with
-   * them, or `undefined` until loaded or once something that may change them has happened.
-   */
-  /**
    * What the plugins the deployment runs say about a message, oldest first. An annotation of a
    * plugin it no longer runs is passed over.
    */
@@ -881,6 +877,10 @@ export class RecordStore {
     });
   }
 
+  /**
+   * Topic `commands:<channelId>`: each bot that can see the channel and has commands, with
+   * them, or `undefined` until loaded or once something that may change them has happened.
+   */
   commands(channelId: string): readonly BotCommands[] | undefined {
     return this.#commands.get(channelId);
   }
@@ -1456,10 +1456,6 @@ export class RecordStore {
   }
 
   /**
-   * Topic `dms`: the caller's DMs and group DMs, those with activity seen since they were
-   * listed first (newest first), then the rest in the server's order.
-   */
-  /**
    * How recently a DM was active, as the id of a message in it: the newest seen arrive, or, for
    * one only listed so far, the newer of its newest message by someone else and where the
    * caller read up to, which their own posts move. Message ids are UUIDv7s, ordered by time, so
@@ -1479,6 +1475,10 @@ export class RecordStore {
     );
   }
 
+  /**
+   * Topic `dms`: the caller's DMs and group DMs, those with activity seen since they were
+   * listed first (newest first), then the rest in the server's order.
+   */
   dms(): readonly Channel[] {
     return this.#memoized("dms", () => {
       const list: Channel[] = [];
@@ -1997,7 +1997,6 @@ export class RecordStore {
     });
   }
 
-  /** Records that the caller's write-in at `option` was added or removed. */
   /**
    * Records that the caller has read `channelId` up to `messageId`, ahead of the server's
    * `channelRead`. A position only moves forward.
@@ -2011,10 +2010,6 @@ export class RecordStore {
     });
   }
 
-  /**
-   * Replaces every mute held with `mutes`, the complete list a bootstrap read, so a mute lifted
-   * while the stream was away does not linger.
-   */
   /** Replaces every notification setting held with `settings`, the complete list a bootstrap read. */
   replaceNotificationSettings(settings: readonly NotificationSetting[]): void {
     this.#batch(() => {
@@ -2031,6 +2026,10 @@ export class RecordStore {
     });
   }
 
+  /**
+   * Replaces every mute held with `mutes`, the complete list a bootstrap read, so a mute lifted
+   * while the stream was away does not linger.
+   */
   replaceMutes(mutes: readonly ChannelMute[]): void {
     this.#batch(() => {
       for (const channelId of Array.from(this.#mutes.keys())) {
@@ -2111,6 +2110,7 @@ export class RecordStore {
     });
   }
 
+  /** Records that the caller's write-in at `option` was added or removed. */
   setMyWriteIn(pollId: string, option: number, mine: boolean): void {
     this.#batch(() => {
       const next = new Set(this.myWriteIns(pollId));
@@ -2186,7 +2186,6 @@ export class RecordStore {
     });
   }
 
-  /** Forgets everything, for sign-out. */
   /**
    * Installs the first page of the caller's DMs as the server listed them, most recently active
    * first, dropping any the cache held that the page does not have; `complete` says whether it
@@ -2237,6 +2236,7 @@ export class RecordStore {
     return this.#dmOrder.at(-1);
   }
 
+  /** Forgets everything, for sign-out. */
   clear(): void {
     this.#batch(() => {
       for (const topic of this.#listeners.keys()) {
@@ -3664,10 +3664,6 @@ export class RecordStore {
   }
 
   /**
-   * Installs the reactions a message read brought for `messageIds`, replacing what was held for
-   * each; a message the read brought no summary for has none.
-   */
-  /**
    * Installs what plugins say about `messageIds`, as a read that asked for annotations
    * returned them: every message it read has exactly the annotations listed for it.
    */
@@ -3749,6 +3745,10 @@ export class RecordStore {
     this.#touch(`annotations:${messageId}`);
   }
 
+  /**
+   * Installs the reactions a message read brought for `messageIds`, replacing what was held for
+   * each; a message the read brought no summary for has none.
+   */
   setReactions(messageIds: readonly string[], summaries: readonly ReactionSummary[]): void {
     this.#batch(() => {
       const byMessage = new Map<string, Map<string, EmojiReactions>>();

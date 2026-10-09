@@ -118,7 +118,6 @@ impl Domain {
                 .is_some_and(|sub| sub.ends_with('.'))
     }
 
-    /// Where the deployment publishes its document.
     pub fn document_url(&self) -> String {
         format!("https://{}{WELL_KNOWN_PATH}", self.0)
     }

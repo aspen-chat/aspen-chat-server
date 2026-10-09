@@ -208,9 +208,6 @@ fn participant_record(
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Reads
-
 /// The calls on `channel`, if any, with who is in them.
 pub async fn read_channel_voice(
     state: &GlobalServerContext,

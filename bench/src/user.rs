@@ -854,7 +854,6 @@ impl Stream {
             .send(WsMessage::Text(identify.to_string().into()))
             .await
             .map_err(|_| Failed)?;
-        // Wait for `ready`.
         loop {
             match tokio::time::timeout(Duration::from_secs(15), socket.next()).await {
                 Ok(Some(Ok(WsMessage::Text(text)))) => {

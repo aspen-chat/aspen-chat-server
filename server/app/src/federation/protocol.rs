@@ -32,7 +32,6 @@ pub struct Protocol {
 }
 
 impl Protocol {
-    /// This deployment's.
     pub fn ours() -> Self {
         Protocol {
             version: PROTOCOL_VERSION,
@@ -90,7 +89,6 @@ pub struct Software {
 }
 
 impl Software {
-    /// This deployment's.
     pub fn ours() -> Self {
         Software {
             name: "aspen".into(),

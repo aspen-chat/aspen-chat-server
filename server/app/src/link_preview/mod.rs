@@ -89,7 +89,6 @@ use url::Url;
 /// S3 key prefix under which preview-image blobs live inside the media store.
 pub const IMAGE_STORAGE_PREFIX: &str = "link-preview-images";
 
-/// Build the S3 object key for a given preview image id.
 pub fn image_storage_key(id: LinkPreviewImageId) -> String {
     format!("{IMAGE_STORAGE_PREFIX}/{}", id.0)
 }
@@ -151,10 +150,6 @@ impl Drop for AuthorPlace {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// DB row types
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Queryable, Selectable)]
 #[diesel(table_name = message_link_preview)]
@@ -244,10 +239,6 @@ struct NewLinkPreviewRow<'a> {
     image_height: Option<i32>,
 }
 
-// ---------------------------------------------------------------------------
-// Preview images
-// ---------------------------------------------------------------------------
-
 /// Download a preview image and push it through the media store.
 ///
 /// Failures are intentionally swallowed (logged at `warn`): the text preview
@@ -335,10 +326,6 @@ async fn fetch_and_store_image(
     })
 }
 
-// ---------------------------------------------------------------------------
-// Entry points for the rest of the app
-// ---------------------------------------------------------------------------
-
 /// Spawn a background task to materialise previews for a message.
 ///
 /// This is fire-and-forget: callers publish the `Create` event with an empty
@@ -396,7 +383,6 @@ async fn run_preview_fetch(
     content: &str,
     urls: Vec<Url>,
 ) -> crate::Result<()> {
-    // Fetch metadata for each URL concurrently.
     let metadata_results: Vec<(Url, Option<ParsedMetadata>)> =
         futures_util::future::join_all(urls.into_iter().map(|url| async move {
             let meta = fetch_metadata(&url).await;
@@ -404,8 +390,7 @@ async fn run_preview_fetch(
         }))
         .await;
 
-    // Download images in parallel too. Each preview owns its image, so we
-    // mint a fresh `LinkPreviewImageId` per row.
+    // Each preview owns its image, so each row gets a fresh `LinkPreviewImageId`.
     let with_images = futures_util::future::join_all(metadata_results.into_iter().map(
         |(url, metadata)| async move {
             let metadata = metadata?;

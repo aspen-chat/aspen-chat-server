@@ -478,7 +478,6 @@ function NicknameCase({
   );
 }
 
-/** Whether a reported message is in a DM, or a thread of one. */
 /**
  * The attachments taken off a reported message, which only a review reads, at links that work
  * for a few minutes.
@@ -496,6 +495,7 @@ function RemovedAttachments({ ids }: { ids: readonly string[] }) {
   );
 }
 
+/** Whether a reported message is in a DM, or a thread of one. */
 function isDmOf(reported: ReviewedMessage, named: Named): boolean {
   const channel = named.channels.get(reported.message.channelId);
   return channel !== undefined && channel.community == null;

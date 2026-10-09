@@ -1130,7 +1130,6 @@ async fn standings(
         .collect())
 }
 
-/// The `Standing` of one subject.
 async fn standing_of(conn: &mut AsyncPgConnection, subject: UserId) -> crate::Result<Standing> {
     Ok(standings(conn, &[subject])
         .await?
