@@ -28,12 +28,24 @@ export function MessageSkeleton({ index = 0 }: { index?: number }) {
   );
 }
 
-/** A channel's history on its way: messages to fill the view, the newest at the bottom. */
-export function HistorySkeleton({ count = 8 }: { count?: number }) {
+/**
+ * A channel's history on its way: messages to fill the view, the newest at the bottom, standing
+ * from the top where the history will (`MessageList`'s `fromTop`).
+ */
+export function HistorySkeleton({
+  count = 8,
+  fromTop = false,
+}: {
+  count?: number;
+  fromTop?: boolean;
+}) {
   return (
     <div
       aria-busy="true"
-      className="flex min-h-0 flex-1 flex-col justify-end gap-1 overflow-hidden px-4 py-3"
+      className={
+        "flex min-h-0 flex-1 flex-col gap-1 overflow-hidden px-4 py-3" +
+        (fromTop ? "" : " justify-end")
+      }
     >
       <LoadingLabel />
       {Array.from({ length: count }, (_, index) => (

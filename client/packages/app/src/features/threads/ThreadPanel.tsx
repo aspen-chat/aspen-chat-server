@@ -122,11 +122,13 @@ export function ThreadPanel({
         <>
           <div className="relative flex min-h-0 flex-1 flex-col">
             {/* The starter heads the replies and scrolls with them, so a long one never
-                  crowds them out of the panel. */}
+                  crowds them out of the panel; a short thread reads down from the panel's top,
+                  as the thread not made yet does. */}
             <MessageList
               channelId={threadId}
               home={home}
               highlightId={undefined}
+              fromTop
               start={
                 <div className="border-b border-line pb-2">
                   {starterGone ? (

@@ -95,6 +95,7 @@ export function MessageList({
   home,
   highlightId,
   start,
+  fromTop = false,
 }: {
   channelId: string;
   home: ChannelHome;
@@ -104,6 +105,11 @@ export function MessageList({
    * beginning, once the window reaches it: a thread's starter, which scrolls with its replies.
    */
   start?: ReactNode;
+  /**
+   * Whether a window shorter than the view stands at its top, as a thread's replies under their
+   * starter do, rather than at its bottom by the composer, as a channel's history does.
+   */
+  fromTop?: boolean;
 }) {
   const m = useMessages();
   const sync = useSync();
@@ -215,7 +221,7 @@ export function MessageList({
   );
 
   if (window === undefined) {
-    return <HistorySkeleton />;
+    return <HistorySkeleton fromTop={fromTop} />;
   }
 
   const leavingAfter = new Map<string | null, Departing[]>();
@@ -267,7 +273,10 @@ export function MessageList({
               scroller.focusMoved(heading);
             }
           }}
-          className="message-text flex min-h-full flex-col justify-end gap-1 px-4 py-3"
+          className={
+            "message-text flex min-h-full flex-col gap-1 px-4 py-3" +
+            (fromTop ? "" : " justify-end")
+          }
         >
           <MessageRowsContext.Provider value={messageRows}>
             {window.hasOlder ? (
