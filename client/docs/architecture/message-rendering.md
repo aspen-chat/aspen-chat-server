@@ -159,6 +159,10 @@
   in the window and the message before it is still its author's with nothing between: read
   afresh, a page of older history arriving above the view would move group boundaries all the
   way down into it. Resizing the list decides them all again. A grouped message keeps its author and time for assistive technology
-  (visually hidden); on a computer its time shows after its text (`MessageBody`'s `trailing`)
-  while the pointer is over it or focus is in it, and on a touch screen its actions' sheet
-  says when it was sent, as every message's does.
+  (visually hidden); on a computer its time shows after whatever it ends with (`MessageBody`'s
+  `trailing`) while the pointer is over it or focus is in it, and on a touch screen its
+  actions' sheet says when it was sent, as every message's does. After text it follows the
+  last line; beside a picture, poll, or card (`Trailed`) it sits level with the block's top
+  where the line has room and under the block where it has not. Where it would reach under
+  the hover actions, `MessageItem` measures them on hover and starts it just below their
+  bottom edge (`trailingDrop`).

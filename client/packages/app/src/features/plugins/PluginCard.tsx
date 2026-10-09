@@ -1,7 +1,8 @@
 import { pluginText, type Message, type PluginInfo } from "@aspen/protocol";
 import { useState } from "react";
 import { Button } from "react-aria-components";
-import { usePlugin, useSync } from "@/api/hooks";
+import { useSync } from "@/api/hooks";
+import { useCardPlugin } from "@/features/plugins/cardPlugin";
 import {
   accentButtonClass,
   dangerButtonClass,
@@ -33,7 +34,7 @@ const BUTTON_CLASS: Record<CardButton["style"], string> = {
  */
 export function PluginCard({ message, still }: { message: Message; still: boolean }) {
   const card = message.card;
-  const plugin = usePlugin(card?.plugin ?? "");
+  const plugin = useCardPlugin(message);
   if (card == null || plugin === undefined) {
     return null;
   }

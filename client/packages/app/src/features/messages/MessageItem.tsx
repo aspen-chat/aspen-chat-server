@@ -51,7 +51,7 @@ import { useNameIn } from "@/features/users/nameIn";
 import { useRowProps } from "@/features/messages/messageRows";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
-/** The time a grouped message shows after its text, its day being its group's. */
+/** The time a grouped message shows after what it ends with, its day being its group's. */
 const TIME_OF_DAY: Intl.DateTimeFormatOptions = { timeStyle: "short" };
 
 /** How long a finger is held on a message before its actions are offered under it. */
@@ -62,6 +62,9 @@ type Sheet = "actions" | MessageSheet;
 
 /** How far the pointer's actions rise above their message's top, over the message before. */
 const TOOLBAR_RISE_PX = 20;
+
+/** The room between the bottom of the pointer's actions and a grouped message's time under them. */
+const TRAILING_CLEARANCE_PX = 2;
 
 /** How soon after a message arrives that it is drawn arriving. */
 const ARRIVING_MS = 1000;
@@ -75,8 +78,8 @@ const ARRIVING_MS = 1000;
  * A message that continues its author's group (`grouped`, `messageGroups`) is drawn without
  * their picture, name, and time, under the message before it, which the list says is
  * `continued` by it; a little padding still parts the two. Its author and time are kept for
- * assistive technology, a pointer over it or focus in it shows its time after its text, and
- * a touch screen's actions say when it was sent.
+ * assistive technology, a pointer over it or focus in it shows its time after whatever it ends
+ * with (`MessageBody`'s `trailing`), and a touch screen's actions say when it was sent.
  *
  * Its actions (`MessageActions`) show in a bar rising over its top corner while the pointer is
  * over it or focus is in it, kept out of the layout so the header and body sit where they
@@ -125,6 +128,10 @@ export const MessageItem = memo(function MessageItem({
   const rowProps = useRowProps(id);
   // How far the pointer's actions rise above the row: all the way, or as far as there is room.
   const [toolbarRise, setToolbarRise] = useState(TOOLBAR_RISE_PX);
+  // How far under the top of what the body ends with its time and saved mark start, when they
+  // sit beside it, so the actions never cover them (`MessageBody`'s `trailingDrop`).
+  const [trailingDrop, setTrailingDrop] = useState<number | undefined>(undefined);
+  const toolbar = useRef<HTMLDivElement>(null);
   // A touch screen offers the actions under a long press; a pointer, at the corner.
   const touchOnly = useMediaQuery(TOUCH_ONLY);
   // What the press has open: the actions, or what one of them opened in their place.
@@ -254,14 +261,42 @@ export const MessageItem = memo(function MessageItem({
   };
   // The pointer's actions rise over the message before, but no further than the top of the
   // list, or of whatever holds the row, where they would be cut off or cover what is above.
+  // Its time and saved mark, beside the top of a picture or card, start under them where they
+  // would reach across under them; elsewhere, and under the block where the line has no room
+  // beside it, they are clear of the actions already.
   const placeToolbar = () => {
     const el = row.current;
     if (el === null) {
       return;
     }
     const room = el.closest<HTMLElement>("[data-message-list]") ?? el.parentElement;
-    const above = el.getBoundingClientRect().top - (room?.getBoundingClientRect().top ?? 0);
-    setToolbarRise(Math.min(TOOLBAR_RISE_PX, Math.max(0, Math.floor(above))));
+    const top = el.getBoundingClientRect().top;
+    const rise = Math.min(
+      TOOLBAR_RISE_PX,
+      Math.max(0, Math.floor(top - (room?.getBoundingClientRect().top ?? 0))),
+    );
+    setToolbarRise(rise);
+    const trailing = el.querySelector<HTMLElement>(`[data-trailing="${CSS.escape(id)}"]`);
+    const block = trailing?.previousElementSibling;
+    if (trailing == null || block == null || toolbar.current === null) {
+      setTrailingDrop(undefined);
+      return;
+    }
+    const blockBox = block.getBoundingClientRect();
+    const trailingBox = trailing.getBoundingClientRect();
+    const toolbarBox = toolbar.current.getBoundingClientRect();
+    // Where its line starts, whatever drop it has now: the block's top beside it, its bottom
+    // under it.
+    const lineTop = trailingBox.top - parseFloat(getComputedStyle(trailing).marginTop);
+    const beside = lineTop < blockBox.bottom;
+    // Only what reaches across under the actions needs to dodge them.
+    const underToolbar = trailingBox.right > toolbarBox.left && trailingBox.left < toolbarBox.right;
+    const toolbarBottom = top - rise + toolbarBox.height;
+    setTrailingDrop(
+      beside && underToolbar
+        ? Math.max(0, toolbarBottom + TRAILING_CLEARANCE_PX - blockBox.top)
+        : undefined,
+    );
   };
   // A message that tags the reader stands out, with a bar at its edge in place of padding.
   const tagsMe = sync.store.mentionsMe(message);
@@ -371,6 +406,7 @@ export const MessageItem = memo(function MessageItem({
           <div
             role="group"
             aria-label={m.messageActionsLabel}
+            ref={toolbar}
             className="pointer-events-none absolute end-2 z-10 flex gap-0.5 rounded-lg border border-line bg-surface-raised p-0.5 opacity-0 shadow-sm group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
             style={{ top: -toolbarRise }}
           >
@@ -396,6 +432,7 @@ export const MessageItem = memo(function MessageItem({
             message={message}
             home={home}
             hideText={editing || (message.kind === "threadEcho" && message.echoOf != null)}
+            {...(trailingDrop === undefined ? {} : { trailingDrop })}
             {...(grouped && !touchOnly
               ? {
                   // Read out with the author above, so shown alone.

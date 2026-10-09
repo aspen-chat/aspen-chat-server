@@ -8,6 +8,7 @@ import type { ChannelHome } from "@/features/messages/links";
 import { Markdown } from "@/features/messages/Markdown";
 import { PollCard } from "@/features/messages/PollCard";
 import { AlteredBy } from "@/features/plugins/Annotations";
+import { useCardPlugin } from "@/features/plugins/cardPlugin";
 import { PluginCard } from "@/features/plugins/PluginCard";
 import { VideoCard } from "@/features/messages/VideoCard";
 import { playerSrc } from "@/features/messages/video";
@@ -28,8 +29,10 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
  * nothing but links to pictures the server has previews of shows the pictures alone. `hideText` leaves the text out where something takes its place (the editor,
  * an echo's reply); `onRemoveAttachment` offers each attachment's removal to those who may.
  * `still` draws it for reference only, as another message shows it: no poll to vote in, no
- * card's buttons to press. `trailing` follows the text, after its edited mark. A message that fails to draw shows its text alone, plainly, rather
- * than taking the list it is in down with it.
+ * card's buttons to press. The reader's mark on a message they saved, then `trailing`, follow
+ * whatever the message ends with: its text, after its edited mark, or beside its last card or
+ * its pictures where the line has room, and under them where it has not (`Trailed`). A message that fails to draw shows its text alone,
+ * plainly, rather than taking the list it is in down with it.
  */
 export function MessageBody(props: MessageBodyProps) {
   const { message, hideText = false } = props;
@@ -52,6 +55,12 @@ interface MessageBodyProps {
   still?: boolean;
   onRemoveAttachment?: (attachmentId: string) => void;
   trailing?: ReactNode;
+  /**
+   * How far below the top of the block it trails the saved mark and `trailing` start, in
+   * pixels, while they sit beside it, to clear what covers that corner (`MessageItem`'s
+   * actions); level with the block's top edge without it.
+   */
+  trailingDrop?: number;
 }
 
 function MessageBodyContent({
@@ -61,6 +70,7 @@ function MessageBodyContent({
   still = false,
   onRemoveAttachment,
   trailing,
+  trailingDrop,
 }: MessageBodyProps) {
   const m = useMessages();
   const timeFormat = useDateFormat(TIME);
@@ -105,6 +115,33 @@ function MessageBodyContent({
   const pictureOnly = onlyImageLinks(message.content, (url) =>
     previewImages.some((picture) => picture.name === url),
   );
+  const pollId = still || message.kind !== "poll" ? null : (message.poll ?? null);
+  const pluginCard = useCardPlugin(message) !== undefined;
+  const media = message.attachments.length > 0 || previewImages.length > 0;
+  const last =
+    cards.length > 0
+      ? "cards"
+      : media
+        ? "media"
+        : pluginCard
+          ? "pluginCard"
+          : pollId !== null
+            ? "poll"
+            : "text";
+  const saved = useIsSaved(message.id);
+  const tail =
+    saved || trailing !== undefined ? (
+      <>
+        {saved && <SavedMark />}
+        {trailing}
+      </>
+    ) : undefined;
+  const trailingAfter = (block: typeof last) => (block === last ? tail : undefined);
+  const trailed = (block: typeof last) => ({
+    trailing: trailingAfter(block),
+    drop: trailingDrop,
+    messageId: message.id,
+  });
   return (
     <>
       {!hideText && (
@@ -126,23 +163,77 @@ function MessageBodyContent({
             </span>
           )}
           <AlteredBy pluginIds={message.alteredBy} />
-          <SavedMark messageId={message.id} />
-          {trailing}
+          {trailingAfter("text")}
         </div>
       )}
-      {!still && message.kind === "poll" && message.poll != null && (
-        <PollCard pollId={message.poll} />
+      {pollId !== null && (
+        <Trailed {...trailed("poll")} card>
+          <PollCard pollId={pollId} />
+        </Trailed>
       )}
-      <PluginCard message={message} still={still} />
-      <MessageMedia
-        attachmentIds={message.attachments}
-        previewImages={previewImages}
-        {...(onRemoveAttachment === undefined ? {} : { onRemove: onRemoveAttachment })}
-      />
-      {cards.map((preview) => (
-        <LinkPreviewCard key={preview.url} preview={preview} />
+      <Trailed {...trailed("pluginCard")} card>
+        <PluginCard message={message} still={still} />
+      </Trailed>
+      <Trailed {...trailed("media")}>
+        <MessageMedia
+          attachmentIds={message.attachments}
+          previewImages={previewImages}
+          {...(onRemoveAttachment === undefined ? {} : { onRemove: onRemoveAttachment })}
+        />
+      </Trailed>
+      {cards.map((preview, i) => (
+        <Trailed
+          key={preview.url}
+          {...trailed("cards")}
+          trailing={i === cards.length - 1 ? trailingAfter("cards") : undefined}
+          card
+        >
+          <LinkPreviewCard preview={preview} />
+        </Trailed>
       ))}
     </>
+  );
+}
+
+/**
+ * A block of a message with what trails it (its saved mark and `MessageBodyProps.trailing`),
+ * kept together, beside its top where the line has room, so a tall picture does not leave it
+ * far from the text above, and under the block where it has not. A `card` keeps the width it
+ * has alone (`w-full max-w-lg`, so as wide as the line up to 32rem) and gives way only when the
+ * line is narrower than that and the trailing together; anything else is as wide as what it
+ * holds. Beside the block, the trailing starts `drop` pixels below its top edge where given;
+ * under it, it keeps the gap every block opens with. It is marked with its message's id
+ * (`data-trailing`), by which `MessageItem` finds and measures it. Without `trailing` the
+ * block is drawn as it is.
+ */
+function Trailed({
+  trailing,
+  drop,
+  messageId,
+  card = false,
+  children,
+}: {
+  trailing: ReactNode;
+  drop: number | undefined;
+  messageId: string;
+  card?: boolean;
+  children: ReactNode;
+}) {
+  if (trailing === undefined) {
+    return children;
+  }
+  return (
+    <div className="flex flex-wrap items-start gap-x-2">
+      <div className={card ? "min-w-0 flex-[0_1_32rem]" : "min-w-0"}>{children}</div>
+      {/* `mt-1` is level with the block's top edge, below the margin every block opens with. */}
+      <span
+        data-trailing={messageId}
+        className="mt-1 flex items-center gap-x-1"
+        style={drop === undefined ? undefined : { marginTop: drop }}
+      >
+        {trailing}
+      </span>
+    </div>
   );
 }
 
@@ -245,12 +336,8 @@ function CardPicture({
 }
 
 /** A quiet mark on a message the reader saved, which their saved messages list. */
-function SavedMark({ messageId }: { messageId: string }) {
+function SavedMark() {
   const m = useMessages();
-  const saved = useIsSaved(messageId);
-  if (!saved) {
-    return null;
-  }
   return (
     <span className="inline-flex self-center text-ink-faint" title={m.saved.marker}>
       <BookmarkSimpleIcon size="1em" weight="fill" aria-hidden="true" />

@@ -24,8 +24,8 @@ lost, takes its rows with it.
   current by `savedMessageChanged`. `AspenSync.setSaved` saves and unsaves, following at once.
   Every message's actions offer Save message or Remove from saved (`SaveButton`, in the hover
   bar and the long-press sheet alike), a refusal (the deployment keeps as many as it will)
-  said in a toast; a saved message carries a quiet bookmark after its text (`SavedMark` in
-  `MessageBody`), named for assistive technology. `SavedScreen` merges every deployment's saves
+  said in a toast; a saved message carries a quiet bookmark after whatever it ends with, kept
+  with a grouped message's time (`SavedMark` in `MessageBody`), named for assistive technology. `SavedScreen` merges every deployment's saves
   by their ids (UUIDv7s, which compare by time across deployments), shows `SAVED_PAGE` at a time
   with Show more, and reads each deployment's messages a page at a time
   (`AspenSync.loadSavedMessages`) as far as its saves among those shown; each row removes its
