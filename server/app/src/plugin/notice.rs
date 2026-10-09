@@ -20,7 +20,7 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 /// How long a notice is kept for phones to read.
-const KEPT: Duration = Duration::days(7);
+pub const KEPT: Duration = Duration::days(7);
 
 /// The channel whose settings and mute decide for `channel_id`: a thread's parent, or itself,
 /// with its kind and community.
@@ -133,11 +133,6 @@ pub async fn notify(
     conn.transaction(|conn| {
         let text = text.clone();
         async move {
-            diesel::delete(
-                plugin_notice::table.filter(plugin_notice::created_at.lt(Utc::now() - KEPT)),
-            )
-            .execute(conn.as_mut())
-            .await?;
             diesel::insert_into(plugin_notice::table)
                 .values((
                     plugin_notice::id.eq(id),
@@ -213,6 +208,8 @@ pub async fn read(
             plugin_notice::created_at,
         ))
         .filter(plugin_notice::id.eq(id).and(plugin_notice::user.eq(caller)))
+        // One past its time is read as gone, though the sweep may not have taken it yet.
+        .filter(plugin_notice::created_at.gt(Utc::now() - KEPT))
         .first(conn.as_mut())
         .await?;
     channel_access(state, conn.as_mut(), caller, channel_id).await?;

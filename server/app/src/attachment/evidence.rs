@@ -5,12 +5,16 @@
 //! attachment is taken off its message and is in no other ([`keep_removed`], which records the
 //! message as `removed_from`), the attachment becomes evidence (`evidence_at`), in the
 //! transaction that makes the change: from then on it is read only in reviewing a report, its
-//! preview is no longer made, and no message may take it up again. Soon after, every API server's
-//! mover ([`spawn_mover`]) moves its object and its preview from the anonymous read path to
-//! `media_store::EVIDENCE_PREFIX`, which that path never serves, and records the new keys. Reviewers read
-//! them through URLs signed for [`URL_LIFETIME`] ([`signed_urls`]) when a case shows the message
-//! they belong to. Nothing deletes evidence but an operator's [`purge`]
-//! (`aspen-chat-server attachments purge`), which the moderation log records.
+//! preview is no longer made, and no message may take it up again. Soon after, the recurring job
+//! `moveEvidence` ([`move_step`]) moves its object and its preview from the anonymous read path
+//! to `media_store::EVIDENCE_PREFIX`, which that path never serves, and records the new keys.
+//! Reviewers read them through URLs signed for [`URL_LIFETIME`] ([`signed_urls`]) when a case
+//! shows the message they belong to. Evidence is deleted by an operator's [`purge`]
+//! (`aspen-chat-server attachments purge`), which the moderation log records, and by the
+//! recurring job `purgeEvidence` ([`purge_step`]) once the deployment's
+//! `evidence_retention_days` have passed since it became evidence, unless a report case about
+//! its message is open or closed within as long ([`HELD_SQL`]); the same job deletes the
+//! pictures of deleted messages' link previews on the same terms.
 
 use crate::context::GlobalServerContext;
 use crate::media_store::{MediaStore, evidence_key};
@@ -433,13 +437,8 @@ pub async fn purge(
         .await?;
     let mut purged = Vec::new();
     for (row, message) in rows {
-        let mut keys = vec![row.storage_key.clone(), evidence_key(&row.storage_key)];
-        if let Some(key) = &row.preview_storage_key {
-            keys.extend([key.clone(), evidence_key(key)]);
-        }
-        keys.dedup();
         let mut failed_objects = Vec::new();
-        for key in keys {
+        for key in object_keys(&row) {
             if let Err(e) = store.delete(&key).await {
                 tracing::warn!(key, error = %e, "could not delete purged evidence");
                 failed_objects.push(key);
@@ -471,4 +470,101 @@ async fn place_of(
         Some((channel, community)) => (community, Some(channel)),
         None => (None, None),
     })
+}
+
+/// Whether the report case `c` holds what it is about: it is open, or closed on or after `$1`,
+/// the time retention reaches back to.
+pub const HELD_SQL: &str = "c.closed_at IS NULL OR c.closed_at >= $1";
+
+/// How many attachments, and how many link preview pictures, one step of a purge deletes.
+const PURGE_BATCH: i64 = 100;
+
+/// One step of the recurring job `purgeEvidence`: deletes up to [`PURGE_BATCH`] attachments that
+/// became evidence before the deployment's `evidence_retention_days` (none when it is 0), oldest
+/// first through `attachment_evidence_at`, skipping those of a message a case holds
+/// ([`HELD_SQL`], through `report_case_message`), with their objects wherever they are; then as
+/// many pictures of deleted messages' link previews (`link_preview::purge_kept_pictures`). It is
+/// not logged as an operator's purge is, being the deployment's policy rather than anyone's act.
+pub async fn purge_step(
+    state: &GlobalServerContext,
+    _job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    use crate::jobs::Outcome;
+    let days = state.settings().evidence_retention_days;
+    if days == 0 {
+        return Ok(Outcome::Done);
+    }
+    let before = chrono::Utc::now() - chrono::Duration::days(i64::from(days));
+    let mut conn = state.connection_pool.get().await?;
+    let rows: Vec<super::Attachment> = conn
+        .transaction::<_, crate::Error, _>(|conn| {
+            async move {
+                let ids: Vec<Marked> = diesel::sql_query(format!(
+                    r#"
+                    SELECT a.id FROM attachment a
+                    WHERE a.evidence_at < $1
+                      AND NOT EXISTS (
+                          SELECT 1 FROM message_attachment ma
+                          JOIN report_case c ON c.message = ma.message_id
+                          WHERE ma.attachment_id = a.id AND ({HELD_SQL}))
+                      AND NOT EXISTS (
+                          SELECT 1 FROM report_case c
+                          WHERE c.message = a.removed_from AND ({HELD_SQL}))
+                    ORDER BY a.evidence_at
+                    LIMIT $2
+                    FOR UPDATE SKIP LOCKED
+                    "#
+                ))
+                .bind::<diesel::sql_types::Timestamptz, _>(before)
+                .bind::<diesel::sql_types::BigInt, _>(PURGE_BATCH)
+                .load(conn)
+                .await?;
+                let ids: Vec<AttachmentId> = ids.into_iter().map(|m| AttachmentId(m.id)).collect();
+                if ids.is_empty() {
+                    return Ok(Vec::new());
+                }
+                diesel::delete(message_attachment::table)
+                    .filter(message_attachment::attachment_id.eq_any(&ids))
+                    .execute(conn)
+                    .await?;
+                Ok(diesel::delete(attachment::table)
+                    .filter(attachment::id.eq_any(&ids))
+                    .filter(attachment::evidence_at.is_not_null())
+                    .returning(super::Attachment::as_returning())
+                    .load(conn)
+                    .await?)
+            }
+            .scope_boxed()
+        })
+        .await?;
+    drop(conn);
+    let attachments = rows.len();
+    for row in rows {
+        for key in object_keys(&row) {
+            if let Err(e) = state.media_store.delete(&key).await {
+                tracing::warn!(key, error = %e, "could not delete expired evidence");
+            }
+        }
+    }
+    let pictures = crate::link_preview::purge_kept_pictures(state, before, PURGE_BATCH).await?;
+    if attachments > 0 || pictures > 0 {
+        tracing::info!(attachments, pictures, "deleted evidence past its retention");
+    }
+    Ok(
+        if attachments as i64 >= PURGE_BATCH || pictures as i64 >= PURGE_BATCH {
+            Outcome::Progress(serde_json::Value::Null)
+        } else {
+            Outcome::Done
+        },
+    )
+}
+
+/// Every key an attachment's original and preview may be at, before its move or after.
+fn object_keys(row: &super::Attachment) -> Vec<String> {
+    let mut keys = vec![row.storage_key.clone(), evidence_key(&row.storage_key)];
+    if let Some(key) = &row.preview_storage_key {
+        keys.extend([key.clone(), evidence_key(key)]);
+    }
+    keys.dedup();
+    keys
 }

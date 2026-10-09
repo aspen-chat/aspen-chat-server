@@ -281,6 +281,26 @@ fn recurring(state: &GlobalServerContext) -> Vec<Recurring> {
             every: crate::email::digest::TICK,
         },
         Recurring {
+            kind: JobKind::SweepExpired,
+            class: JobClass::Maintenance,
+            every: HOUR,
+        },
+        Recurring {
+            kind: JobKind::RecountMembers,
+            class: JobClass::Maintenance,
+            every: HOUR,
+        },
+        Recurring {
+            kind: JobKind::RecordStats,
+            class: JobClass::Maintenance,
+            every: HOUR,
+        },
+        Recurring {
+            kind: JobKind::PurgeEvidence,
+            class: JobClass::Maintenance,
+            every: 24 * HOUR,
+        },
+        Recurring {
             kind: JobKind::ConfirmStanding,
             class: JobClass::Normal,
             every: crate::federation::standing::pass_every(&state.config.federation),
@@ -421,6 +441,11 @@ async fn step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outco
         }
         JobKind::ReleaseHeldMessage => crate::message::held::release_step(state, job).await,
         JobKind::FirePluginTimer => crate::plugin::timer::fire_step(state, job).await,
+        JobKind::SweepExpired => upkeep::sweep_expired(state, job).await,
+        JobKind::RecountMembers => upkeep::recount_members(state, job).await,
+        JobKind::RecordStats => upkeep::record_stats(state, job).await,
+        JobKind::ForgetIcon => crate::icon::forget_step(state, job).await,
+        JobKind::PurgeEvidence => crate::attachment::evidence::purge_step(state, job).await,
     }
 }
 

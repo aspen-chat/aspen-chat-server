@@ -247,6 +247,9 @@ export const admin = {
   uploadQuotaGib: "GiB each person may upload a day",
   uploadQuotaGibHint:
     "Files and pictures together, over any 24 hours. Past it, uploads wait until there is room. 0 sets no limit.",
+  evidenceRetentionDays: "Days deleted messages' files are kept for reports",
+  evidenceRetentionDaysHint:
+    "Kept out of everyone's reach for reviewing reports, and as long again after a report about them closes. 0 keeps them for good.",
   fileTransfersAllowed: "People may send files in calls",
   fileTransfersAllowedHint:
     "Off, no one may, whatever a channel's permissions say. Calls in progress follow at once.",

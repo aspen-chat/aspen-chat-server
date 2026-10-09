@@ -1201,9 +1201,11 @@ pub async fn soft_delete(
     if deleted.kind != MessageKind::ThreadEcho {
         thread::delete_echo_of(state, conn, id).await?;
     }
-    // Its files leave the public read path, kept for reviewing reports.
+    // Its files leave the public read path, kept for reviewing reports, and its link previews'
+    // pictures are kept as long.
     crate::attachment::evidence::keep_deleted(conn, id).await?;
     crate::saved_message::forget(state, conn, id).await?;
+    crate::link_preview::note_deleted(conn, &[id]).await?;
     publish_event(
         state,
         conn,
@@ -1270,8 +1272,10 @@ pub async fn soft_delete_many(
         .returning((message::id, message::channel))
         .load(conn)
         .await?;
-    // Their files leave the public read path, kept for reviewing reports.
+    // Their files leave the public read path, kept for reviewing reports, and their link
+    // previews' pictures are kept as long.
     crate::attachment::evidence::keep_deleted_many(conn, &gone).await?;
+    crate::link_preview::note_deleted(conn, &gone).await?;
     let mut events: Vec<(EventScope, ServerEvent)> = deleted
         .iter()
         .map(|m| (*m.channel.id(), m.id))

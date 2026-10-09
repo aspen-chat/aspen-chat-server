@@ -127,6 +127,16 @@ pub enum JobKind {
     ReleaseHeldMessage,
     /// Handing a plugin one of its timers once it falls due.
     FirePluginTimer,
+    /// Sweeping ended community bans, old plugin notices, and old voice failure reports.
+    SweepExpired,
+    /// Recounting each community's members.
+    RecountMembers,
+    /// Writing the deployment's totals for the day.
+    RecordStats,
+    /// Deleting an icon nothing uses any more.
+    ForgetIcon,
+    /// Deleting the files of deleted messages kept past the deployment's retention.
+    PurgeEvidence,
 }
 
 crate::wire_name_traits!(JobKind);

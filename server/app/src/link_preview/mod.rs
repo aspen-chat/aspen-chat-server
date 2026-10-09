@@ -29,9 +29,13 @@
 //! 3. [`load_previews`] batches preview rows back out for REST reads,
 //!    templating each row's `image_id` into a public download URL via
 //!    [`MediaStore::public_url`].
-//! 4. [`delete_images_for_message`] tears down the S3 objects for a message
-//!    before `delete_message` / the content-edit refetch path lets the row
-//!    itself go away, so we don't leak image blobs.
+//! 4. [`delete_images_for_message`] deletes a message's previews and their
+//!    pictures when an edit changes its content, which fetches them again.
+//!    Deleting a message keeps its previews, for the warnings and report
+//!    reviews that show it; [`note_deleted`] records when, and the recurring
+//!    job `purgeEvidence` deletes their pictures once the deployment's
+//!    `evidence_retention_days` have passed and no report case holds them
+//!    ([`purge_kept_pictures`]).
 //!
 //! Every fetch, of a page, its picture, or a redirect either leads to, reaches only public
 //! addresses (`app::outbound`), and only their ports 80 and 443 (`fetch::may_fetch`), so a
@@ -623,13 +627,9 @@ pub async fn load_previews(
     Ok(out)
 }
 
-/// Delete S3 objects for all previews attached to a message, then remove the
-/// rows themselves.
-///
-/// Invoked by `delete_message` (before the soft-delete so the FK cascade
-/// doesn't race us to the rows) and by the content-edit refetch path. The
-/// media-store delete is best-effort; a transient S3 failure is logged and
-/// swallowed, matching the pattern used in `attachment::delete_attachment`.
+/// Deletes the previews of `message_id` and their pictures, inside the transaction of the edit
+/// that changed its content. Deleting a picture is best-effort: one storage fails to delete is
+/// logged, not retried.
 pub async fn delete_images_for_message(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -654,4 +654,74 @@ pub async fn delete_images_for_message(
         }
     }
     Ok(())
+}
+
+/// Records that `messages` were deleted, inside the transaction that deletes them, on those of
+/// their previews that have a picture, which `purgeEvidence` then finds through
+/// `message_link_preview_kept`.
+pub async fn note_deleted(
+    conn: &mut AsyncPgConnection,
+    messages: &[MessageId],
+) -> crate::Result<()> {
+    diesel::update(message_link_preview::table)
+        .filter(message_link_preview::message_id.eq_any(messages))
+        .filter(message_link_preview::image_id.is_not_null())
+        .set(message_link_preview::message_deleted_at.eq(diesel::dsl::now))
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Deletes up to `limit` pictures of the previews of messages deleted before `before` that no
+/// report case holds (`attachment::evidence::HELD_SQL`), oldest first, keeping the previews'
+/// text: each preview loses its picture in the database before its object is deleted, so none
+/// is ever shown without one. Answers how many went.
+pub async fn purge_kept_pictures(
+    state: &GlobalServerContext,
+    before: chrono::DateTime<chrono::Utc>,
+    limit: i64,
+) -> crate::Result<usize> {
+    #[derive(diesel::QueryableByName)]
+    struct Taken {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        image_id: LinkPreviewImageId,
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let taken: Vec<Taken> = diesel::sql_query(format!(
+        r#"
+        WITH due AS (
+            SELECT p.message_id, p.position, p.image_id FROM message_link_preview p
+            WHERE p.message_deleted_at < $1 AND p.image_id IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM report_case c
+                              WHERE c.message = p.message_id AND ({held}))
+            ORDER BY p.message_deleted_at
+            LIMIT $2
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE message_link_preview p
+        SET image_id = NULL, image_mime_type = NULL, image_width = NULL, image_height = NULL
+        FROM due WHERE p.message_id = due.message_id AND p.position = due.position
+        RETURNING due.image_id
+        "#,
+        held = crate::attachment::evidence::HELD_SQL,
+    ))
+    .bind::<diesel::sql_types::Timestamptz, _>(before)
+    .bind::<diesel::sql_types::BigInt, _>(limit)
+    .load(conn.as_mut())
+    .await?;
+    drop(conn);
+    for Taken { image_id } in &taken {
+        if let Err(e) = state
+            .media_store
+            .delete(&image_storage_key(*image_id))
+            .await
+        {
+            warn!(
+                error = e.to_string(),
+                id = image_id.0.to_string(),
+                "could not delete a deleted message's link preview picture"
+            );
+        }
+    }
+    Ok(taken.len())
 }

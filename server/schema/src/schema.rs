@@ -152,6 +152,7 @@ diesel::table! {
         deleted_at -> Nullable<Timestamptz>,
         owner -> Nullable<Uuid>,
         everyone_limited_at -> Nullable<Timestamptz>,
+        member_count -> Int4,
     }
 }
 
@@ -261,6 +262,16 @@ diesel::table! {
         email_verification_required -> Bool,
         newsletter_enabled -> Bool,
         upload_quota_gib -> Int4,
+        evidence_retention_days -> Int4,
+    }
+}
+
+diesel::table! {
+    deployment_stats (day) {
+        day -> Date,
+        taken_at -> Timestamptz,
+        users -> Int8,
+        communities -> Int8,
     }
 }
 
@@ -469,6 +480,7 @@ diesel::table! {
         video_height -> Nullable<Int4>,
         image_width -> Nullable<Int4>,
         image_height -> Nullable<Int4>,
+        message_deleted_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -1106,6 +1118,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     custom_emoji,
     deployment_role,
     deployment_settings,
+    deployment_stats,
     dm_recipient,
     federated_deployment,
     federation_key,
