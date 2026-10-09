@@ -4,10 +4,7 @@
 use crate::ASPEN_NATS_STREAM_NAME;
 use crate::aspen_config::{AspenConfig, load_config};
 use async_nats::jetstream::stream::{ConsumerLimits, DiscardPolicy, StorageType};
-use diesel_async::{
-    AsyncPgConnection,
-    pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool},
-};
+use diesel_async::{AsyncPgConnection, pooled_connection::deadpool::Pool};
 use fred::prelude::ClientLike;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -99,8 +96,8 @@ impl GlobalServerContext {
         );
         let rate_limiter = crate::rate_limit::RateLimiter::compile(&config.rate_limits, routes)
             .map_err(|message| crate::Error::Config(config::ConfigError::Message(message)))?;
-        let client =
-            async_nats::connect_with_options(&config.nats_url, config.nats_options()).await?;
+        let client = config.connect_nats().await?;
+        aspen_tls::warn_if_nats_unencrypted(&config.nats_url, config.nats.tls.as_ref(), &client);
         aspen_limits::suspension::watch(client.clone(), rate_limiter.suspension().clone(), "api");
         let context = async_nats::jetstream::new(client);
         context
@@ -119,7 +116,15 @@ impl GlobalServerContext {
                 ..Default::default()
             })
             .await?;
-        let valkey_config = fred::prelude::Config::from_url(&config.valkey_url)?;
+        let mut valkey_config = fred::prelude::Config::from_url(&config.valkey_url)?;
+        // A `rediss://` URL alone trusts the system's authorities; `check_valkey` refused
+        // `[valkey.tls]` without one.
+        if let Some(tls) = &config.valkey.tls {
+            let client = tls
+                .rustls_client_config("valkey.tls")
+                .map_err(|message| crate::Error::Config(config::ConfigError::Message(message)))?;
+            valkey_config.tls = Some(client.into());
+        }
         // Commands are small and many are in flight at once; with Nagle's algorithm on, one sent
         // while another is unacknowledged waits for Valkey's delayed ACK.
         let valkey_connection = fred::types::config::ConnectionConfig {
@@ -146,9 +151,11 @@ impl GlobalServerContext {
             .transpose()?
             .map(Arc::new);
         let connection_pool = {
-            let conn_manager =
-                AsyncDieselConnectionManager::<AsyncPgConnection>::new(&config.database_url);
-            let pool = Pool::builder(conn_manager)
+            let database: crate::database::Database = config
+                .database_url
+                .parse()
+                .map_err(|e: crate::database::Error| config::ConfigError::Message(e.to_string()))?;
+            let pool = Pool::builder(database.manager())
                 .runtime(::deadpool::Runtime::Tokio1)
                 .wait_timeout(Some(Duration::from_secs(config.database_pool_wait_seconds)));
             match config.database_pool_size {

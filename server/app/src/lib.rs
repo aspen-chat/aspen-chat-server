@@ -61,6 +61,7 @@ pub mod message_link;
 pub mod moderation_log;
 pub mod notification_setting;
 pub mod open_graph;
+pub use aspen_database as database;
 pub use aspen_outbound as outbound;
 pub mod passkey;
 pub mod permissions;

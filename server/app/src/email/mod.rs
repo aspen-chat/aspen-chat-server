@@ -49,6 +49,7 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use fred::prelude::KeysInterface;
 use fred::types::Expiration;
 use lettre::message::Mailbox;
+use lettre::transport::smtp::client::{Certificate, Identity, Tls, TlsParameters};
 use lettre::{AsyncSmtpTransport, Tokio1Executor};
 use rand::RngExt;
 use std::str::FromStr;
@@ -62,6 +63,39 @@ pub const ADDRESS_MAX_LENGTH: usize = 254;
 const VERIFICATION_LIFETIME: Duration = Duration::from_secs(60 * 60);
 /// How many wrong verification codes end the code, so a new one must be sent.
 const VERIFICATION_ATTEMPTS: i64 = 5;
+
+/// The NATS subject a server publishes to when it queues mail someone waits for, which every
+/// sending server listens on (`outbox::spawn_sender`). Plain NATS, not the event stream: a
+/// wake-up missed costs only the time to the sender's next look.
+pub const WAKE_SUBJECT: &str = "aspen.email.wake";
+
+/// The TLS `smtp_url` asks for, checked against `[email.tls]`'s authorities besides the system's
+/// and presenting its client certificate: from the start for `smtps://`, else STARTTLS, which
+/// `EmailConfig::validate` has made sure `smtp_url` requires.
+fn smtp_tls(smtp_url: &str, tls: &crate::aspen_config::TlsFiles) -> Result<Tls, String> {
+    let url = url::Url::parse(smtp_url).map_err(|e| format!("smtp_url: {e}"))?;
+    let host = url.host_str().ok_or("smtp_url names no host")?;
+    let read = |path: &std::path::Path| {
+        std::fs::read(path).map_err(|e| format!("could not read {}: {e}", path.display()))
+    };
+    let mut parameters = TlsParameters::builder(host.to_string());
+    if let Some(ca) = &tls.ca_file {
+        let authorities =
+            Certificate::from_pem(&read(ca)?).map_err(|e| format!("{}: {e}", ca.display()))?;
+        parameters = parameters.add_root_certificate(authorities);
+    }
+    if let Some((cert, key)) = tls.identity("email.tls")? {
+        let identity = Identity::from_pem(&read(cert)?, &read(key)?)
+            .map_err(|e| format!("email.tls's client certificate: {e}"))?;
+        parameters = parameters.identify_with(identity);
+    }
+    let parameters = parameters.build().map_err(|e| format!("email.tls: {e}"))?;
+    Ok(if url.scheme() == "smtps" {
+        Tls::Wrapper(parameters)
+    } else {
+        Tls::Required(parameters)
+    })
+}
 
 /// What a server knows of mail, made when `[email]` is configured: every such server takes
 /// addresses and queues mail, and those with `send` on also send it.
@@ -84,11 +118,14 @@ impl Mailer {
             )))
         };
         let transport = match (&config.smtp_url, config.send) {
-            (Some(url), true) => Some(
-                AsyncSmtpTransport::<Tokio1Executor>::from_url(url)
-                    .map_err(|e| invalid(format!("smtp_url: {e}")))?
-                    .build(),
-            ),
+            (Some(url), true) => {
+                let mut builder = AsyncSmtpTransport::<Tokio1Executor>::from_url(url)
+                    .map_err(|e| invalid(format!("smtp_url: {e}")))?;
+                if let Some(tls) = &config.tls {
+                    builder = builder.tls(smtp_tls(url, tls).map_err(invalid)?);
+                }
+                Some(builder.build())
+            }
             _ => None,
         };
         let from = config

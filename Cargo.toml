@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["server", "server/app", "server/api", "server/previews", "server/schema", "server/locale", "server/wire", "server/plugin_runtime", "server/outbound", "server/link_preview", "server/webpush", "server/federation_core", "server/email_templates", "message_gen", "migrate", "voice_protocol", "voice_server", "limits", "metrics", "bench_protocol", "bench"]
+members = ["server", "server/app", "server/api", "server/previews", "server/schema", "server/database", "server/locale", "server/wire", "server/plugin_runtime", "server/outbound", "server/link_preview", "server/webpush", "server/federation_core", "server/email_templates", "message_gen", "migrate", "voice_protocol", "voice_server", "limits", "tls", "metrics", "bench_protocol", "bench"]
 # The desktop shell's libobs addon links libobs, which nothing else needs; it is its own
 # workspace and built by `pnpm build:native` in client/packages/desktop. The example plugins are
 # built for `wasm32-wasip2`, each its own workspace too.
@@ -11,3 +11,9 @@ exclude = [
   "plugins/calendar",
 ]
 default-members = ["server"]
+
+# mediasoup's worker, built from this fork, links the system's OpenSSL (its `system-openssl`
+# feature, which voice_server turns on) rather than the copy of OpenSSL 3.0.8 its Meson build
+# otherwise compiles in statically.
+[patch.crates-io]
+mediasoup-sys = { git = "https://github.com/Xaeroxe/mediasoup", rev = "9f0eb611b2f516a1dfc4514cc4fc506d669dfe10" }

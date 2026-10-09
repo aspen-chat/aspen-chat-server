@@ -1,0 +1,13 @@
+[package]
+name = "aspen_tls"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "The certificate files an operator gives for TLS to a service, and NATS connections made with them, shared by the API and voice servers."
+
+[dependencies]
+async-nats = { version = "0.46.0", features = ["aws-lc-rs"], default-features = false }
+rustls = "0.23.26"
+rustls-native-certs = "0.8.3"
+serde = { version = "1.0.219", features = ["derive"] }
+tracing = "0.1.41"

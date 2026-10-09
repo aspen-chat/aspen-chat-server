@@ -2,7 +2,7 @@
 //! made, each on its subject (`VoiceReport::subject`), and commands for this server come in on
 //! its own subject.
 
-use crate::config::{NatsAuth, NatsUser};
+use crate::config::{NatsAuth, NatsUser, VoiceServerConfig};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -26,7 +26,16 @@ pub struct Reporter {
 }
 
 impl Reporter {
-    pub async fn connect(url: &str, auth: NatsAuth, server: Uuid) -> anyhow::Result<Self> {
+    /// What the subjects of this server's replies start with, rather than NATS's shared
+    /// `_INBOX`, so a NATS user for the server may be allowed its own replies and no one else's.
+    pub fn inbox_prefix(server: Uuid) -> String {
+        format!("_INBOX_voice.{server}")
+    }
+
+    /// Connects to NATS as `config` says, signing in with `auth`, and warns when the connection
+    /// is unencrypted beyond this machine.
+    pub async fn connect(config: &VoiceServerConfig, auth: NatsAuth) -> anyhow::Result<Self> {
+        let server = config.id;
         let reconnected = Arc::new(Notify::new());
         let connected_before = Arc::new(AtomicBool::new(false));
         let options = match auth {
@@ -35,8 +44,8 @@ impl Reporter {
             }
             NatsAuth::Token(token) => async_nats::ConnectOptions::with_token(token),
         };
-        let options = options
-            .custom_inbox_prefix(voice_protocol::control::inbox_prefix(server))
+        let options = aspen_tls::nats_options(options, config.nats.tls.as_ref())
+            .custom_inbox_prefix(Self::inbox_prefix(server))
             .event_callback({
                 let reconnected = Arc::clone(&reconnected);
                 move |event| {
@@ -52,7 +61,8 @@ impl Reporter {
                     }
                 }
             });
-        let client = async_nats::connect_with_options(url, options).await?;
+        let client = async_nats::connect_with_options(&config.nats_url, options).await?;
+        aspen_tls::warn_if_nats_unencrypted(&config.nats_url, config.nats.tls.as_ref(), &client);
         let (queue, mut waiting) = mpsc::unbounded_channel::<VoiceReport>();
         let stream = async_nats::jetstream::new(client.clone());
         tokio::spawn(async move {

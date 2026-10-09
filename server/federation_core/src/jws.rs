@@ -3,9 +3,9 @@
 //! verified, so a statement of one kind is never accepted as another.
 
 use aspen_wire::FederationKeyId;
+use aws_lc_rs::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ring::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -121,8 +121,8 @@ impl Unverified<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ring::rand::SystemRandom;
-    use ring::signature::KeyPair;
+    use aws_lc_rs::rand::SystemRandom;
+    use aws_lc_rs::signature::KeyPair;
 
     fn key() -> Ed25519KeyPair {
         let document = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();

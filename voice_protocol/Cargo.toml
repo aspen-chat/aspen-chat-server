@@ -8,7 +8,7 @@ description = "What the API server and the voice servers agree on: the join toke
 [dependencies]
 base64 = "0.22.1"
 hmac = "0.12.1"
-ring = "0.17.14"
+aws-lc-rs = "1.13"
 schemars = { version = "1.2.1", features = ["uuid1"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"

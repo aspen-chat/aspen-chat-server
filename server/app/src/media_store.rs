@@ -153,13 +153,40 @@ pub struct MediaStore {
     upload_url_ttl: StdDuration,
 }
 
+/// The S3 client's HTTPS client, trusting the authorities in the PEM file at `ca` besides the
+/// system's (`[media.s3.tls] ca_file`).
+fn https_client_trusting(
+    ca: &std::path::Path,
+) -> crate::error::Result<aws_sdk_s3::config::SharedHttpClient> {
+    use aws_smithy_http_client::tls::{self, TlsContext, TrustStore, rustls_provider::CryptoMode};
+    let config_error = |detail: String| {
+        crate::Error::Config(config::ConfigError::Message(format!(
+            "media.s3.tls.ca_file {}: {detail}",
+            ca.display()
+        )))
+    };
+    let pem = std::fs::read(ca).map_err(|e| config_error(e.to_string()))?;
+    let context = TlsContext::builder()
+        .with_trust_store(TrustStore::default().with_pem_certificate(pem))
+        .build()
+        .map_err(|e| config_error(e.to_string()))?;
+    Ok(aws_smithy_http_client::Builder::new()
+        .tls_provider(tls::Provider::Rustls(CryptoMode::AwsLc))
+        .tls_context(context)
+        .build_https())
+}
+
 impl MediaStore {
     pub async fn new(config: &AspenConfig) -> crate::error::Result<Self> {
         Self::from_s3(&config.media.s3).await
     }
 
     async fn from_s3(s3: &MediaS3Config) -> crate::error::Result<Self> {
-        let sdk_config = aws_config::defaults(BehaviorVersion::latest())
+        let mut sdk_config = aws_config::defaults(BehaviorVersion::latest());
+        if let Some(ca) = s3.tls.as_ref().and_then(|tls| tls.ca_file.as_ref()) {
+            sdk_config = sdk_config.http_client(https_client_trusting(ca)?);
+        }
+        let sdk_config = sdk_config
             .region(Region::new(s3.region.clone()))
             .credentials_provider(Credentials::new(
                 s3.access_key.clone(),

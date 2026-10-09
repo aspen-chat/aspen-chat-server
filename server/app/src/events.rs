@@ -290,8 +290,7 @@ pub struct Publisher {
 impl Publisher {
     /// Connects to the event stream `config` names.
     pub async fn connect(config: &crate::aspen_config::AspenConfig) -> crate::Result<Self> {
-        let client =
-            async_nats::connect_with_options(&config.nats_url, config.nats_options()).await?;
+        let client = config.connect_nats().await?;
         Ok(Publisher {
             nats: async_nats::jetstream::new(client),
             channel_homes: Mutex::default(),

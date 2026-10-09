@@ -11,7 +11,7 @@ ctrlc = { version = "3.4.6", features = ["termination"] }
 diesel = { version = "2.2.10", features = ["uuid", "chrono", "postgres", "r2d2", "serde_json"] }
 directories-next = "2.0.0"
 futures-util = "0.3.31"
-rcgen = "0.14.7"
+rcgen = { version = "0.14.7", default-features = false, features = ["aws_lc_rs", "pem"] }
 rustls = "0.23.26"
 rustls-pemfile = "2.2.0"
 serde = { version = "1.0.219", features = ["derive"] }

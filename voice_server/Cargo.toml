@@ -8,6 +8,7 @@ description = "An Aspen voice server: a mediasoup SFU that carries the media of 
 [dependencies]
 anyhow = "1.0.102"
 aspen_limits = { version = "0.1.0", path = "../limits" }
+aspen_tls = { version = "0.1.0", path = "../tls" }
 aspen_metrics = { version = "0.1.0", path = "../metrics", features = ["jemalloc"] }
 # The global allocator, replacing malloc for the whole process (C and C++ libraries included),
 # so its statistics describe all of the process's memory.
@@ -23,6 +24,8 @@ tower = { version = "0.5.2", features = ["util"] }
 libc = "0.2"
 local-ip-address = "0.6"
 mediasoup = "0.28.1"
+# Named only to turn on linking the system OpenSSL; see `[patch.crates-io]` in the workspace.
+mediasoup-sys = { version = "0.18.1", features = ["system-openssl"] }
 metrics = "0.24"
 num_cpus = "1.17.0"
 schemars = { version = "1.2.1", features = ["uuid1"] }

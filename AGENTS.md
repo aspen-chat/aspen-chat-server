@@ -23,10 +23,11 @@ Federation, letting a user of one deployment use others, is built in five phases
 - **Serialization:** Serde + `serde_json`
 - **OpenAPI generation:** utoipa
 - **JSON Schema generation:** schemars
-- **TLS:** rustls (with self-signed cert generation via `rcgen` for development)
-- **Federation signatures:** `ring` (Ed25519 keys, compact JWS with EdDSA)
+- **TLS:** rustls (with self-signed cert generation via `rcgen` for development); PostgreSQL over TLS through OpenSSL (`postgres-openssl`, as libpq does), every other service over rustls
+- **Signatures and keys:** `aws-lc-rs`, the crypto rustls uses too (Ed25519 federation keys and compact JWS with EdDSA, join-token keys, Web Push's ECDH, HKDF, AES-GCM, and VAPID signatures)
 - **Email:** `lettre` over SMTP, written from `askama` templates (`server/templates/email/`), with `chrono-tz` for each digest's time zone; see Email
 - **Attachment previews:** `image` (decoders written in Rust), `fast_image_resize`, `moxcms` (colour profiles), and `webp` (libwebp, built from source) for pictures, and the operator's `ffmpeg` and `ffprobe`, run as processes of their own, for videos' posters; see Attachment previews
+- **Voice media:** mediasoup, from the fork `[patch.crates-io]` names, whose `system-openssl` feature builds its worker against the system OpenSSL rather than the 3.0.8 its Meson build compiles in
 - **File transfers:** WebRTC data channels between clients, with STUN and a TURN relay in the voice server (`turn`, from webrtc-rs)
 - **Plugins:** `wasmtime` running WebAssembly components (`spec/plugin.wit`), with `wasmtime-wasi` giving a component's standard library empty system interfaces; see Plugins
 - **Metrics:** `metrics` with the Prometheus exporter (`aspen_metrics`)
@@ -61,11 +62,12 @@ Federation, letting a user of one deployment use others, is built in five phases
    A deployment is one origin: each API server serves the web client too (`api::web_client`), and refuses to start without a built one. The server reads configuration from `aspen.toml` and from environment variables with the `ASPEN_` prefix, which override the file (`__` separates nested keys: `ASPEN_VOICE__IDLE_SESSION_SECONDS`). Key config values:
    - `public_url` — the deployment's one address (`https://chat.example.org`, an origin alone), its API and web client together; required. Every link to the deployment is built on it (`GET /deployment` gives it to clients as `webClientUrl`), and what else names the deployment follows from it: passkeys belong to its host (offered over `https`, or at `localhost` and names under it), and over `https` its host, with `:port` when not 443, is the federation domain, which never changes, since other deployments pin the key they find there: the first server to start with it pins it in the database, and a server started with another refuses to start. An `http` address takes no part in federation. In development it is the Vite dev server's, `http://localhost:5173`, which proxies the server's own paths to it
    - `[web_client] dir` — the built web client (`client/packages/app/dist` by default), which this server serves at `public_url`, answering every path the API does not own with its `index.html` and Open Graph tags (see The web client)
-   - `database_url` — PostgreSQL connection string
+   - `database_url` — PostgreSQL connection string, a URL or libpq's `key=value` pairs, taking libpq's `sslmode` (`disable`, `prefer` by default, `require`, `verify-ca`, `verify-full`), `sslrootcert` (a file or `system`), `sslcert`, and `sslkey` (`aspen_database`)
    - `database_pool_size` — the most database connections the server holds (two per logical CPU by default); every write holds one until its event is acknowledged
    - `database_pool_wait_seconds` — how long a request or task waits for a database connection before it is refused with `serverBusy` (ten by default). Do not hold one connection while waiting for another (give it back first, as `app::message` does around plugins): when every connection is held that way the pool has none to give, and every waiter is refused
    - `nats_url` — NATS server address
-   - `nats_auth_token` — NATS authentication token, or `[nats]` `user` and `password` when NATS has users, as it does once each voice server signs in as a user of its own allowed only its own subjects (see Voice)
+   - `nats_auth_token` — NATS authentication token, or `[nats_user]` `user` and `password` when NATS has users, as it does once each voice server signs in as a user of its own allowed only its own subjects (see Voice)
+   - `[nats.tls]`, `[valkey.tls]`, `[media.s3.tls]`, `[email.tls]` — each service's TLS files (`aspen_tls::TlsFiles`): `ca_file`, authorities trusted besides the system's, and `cert_file` and `key_file`, a client certificate (not for S3). Each is refused where its address would not use TLS; `[nats.tls]` makes TLS required. Both servers warn at startup when NATS on another machine is reached without TLS, and the API server refuses a Valkey password in a `redis://` address to another machine
    - `[voice]` — the failure threshold and window, the join token lifetime, the candidate cap, the two silence limits, and the idle call limit. The voice servers themselves are rows of `voice_server`, registered from the dashboard or with `aspen-chat-server voice-servers add` (see Voice)
    - `[media.s3]` — the object storage for attachments, icons, and preview images: `endpoint` (the S3 API as this server reaches it), `public_endpoint` (the same API as clients reach it, which the presigned upload URLs they are handed name; left out, they name `endpoint`, which only suits clients on this machine), `public_base_url` (where clients download objects), `bucket`, `region`, the credentials, and `upload_url_ttl_seconds`. Clients upload straight to storage, so `public_endpoint` must be reachable from every client and allow their origins (`public_url`'s, and the desktop and mobile apps') by CORS.
    - `[media] max_attachment_bytes` — the largest attachment anyone may upload (256 MiB by default), which upload URLs are signed for; files a browser could run are stored and served as `application/octet-stream` (`app::attachment::INLINE_TYPES`)
@@ -193,6 +195,8 @@ The server is split into three layers, each a crate of its own:
 - `aspen_locale` (`server/locale/`): the catalogue, `t!`, and each request's language (`app::locale`).
 - `aspen_previews` (`server/previews/`): decoding, resizing, and encoding attachments' previews, and videos' posters.
 - `aspen_plugin_runtime` (`server/plugin_runtime/`): the bindings `spec/plugin.wit` generates, the engine and its epoch, and a call's limits.
+- `aspen_database` (`server/database/`, `app::database`): connecting to PostgreSQL as `database_url` says, with libpq's TLS parameters over OpenSSL (`postgres-openssl`), for the pool, the operator commands, `aspen-migrate`, and tests. Connect through it, never `AsyncPgConnection::establish`, which cannot use TLS.
+- `aspen_tls` (`tls/`, shared with the voice server): each service's TLS files, NATS connections made with them, and the warning for NATS reached without TLS.
 - `aspen_outbound` (`server/outbound/`, `app::outbound`) and `aspen_link_preview` (`server/link_preview/`): requests to other hosts, and fetching and reading pages for link previews.
 - `aspen_webpush` (`server/webpush/`, `app::push::webpush`), `aspen_federation_core` (`server/federation_core/`, `app::federation::jws` and `policy`), and `aspen_email_templates` (`server/email_templates/`).
 

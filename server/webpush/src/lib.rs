@@ -2,13 +2,13 @@
 //! phone (RFC 8291, `aes128gcm` content coding, RFC 8188) and signed with the deployment's push
 //! key (RFC 8292, VAPID), as `spec/push.md` describes.
 
+use aws_lc_rs::aead::{AES_128_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
+use aws_lc_rs::agreement::{ECDH_P256, EphemeralPrivateKey, UnparsedPublicKey};
+use aws_lc_rs::hkdf::{HKDF_SHA256, KeyType, Salt};
+use aws_lc_rs::rand::{SecureRandom, SystemRandom};
+use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ring::aead::{AES_128_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
-use ring::agreement::{ECDH_P256, EphemeralPrivateKey, UnparsedPublicKey};
-use ring::hkdf::{HKDF_SHA256, KeyType, Salt};
-use ring::rand::{SecureRandom, SystemRandom};
-use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -58,9 +58,10 @@ pub fn encrypt(
     let as_public = private
         .compute_public_key()
         .map_err(|_| WebPushError::Random)?;
-    ring::agreement::agree_ephemeral(
+    aws_lc_rs::agreement::agree_ephemeral(
         private,
-        &UnparsedPublicKey::new(&ECDH_P256, ua_public),
+        UnparsedPublicKey::new(&ECDH_P256, ua_public),
+        WebPushError::PublicKey,
         |ecdh_secret| {
             seal(
                 plaintext,
@@ -72,7 +73,6 @@ pub fn encrypt(
             )
         },
     )
-    .map_err(|_| WebPushError::PublicKey)?
 }
 
 /// Everything encryption does after the key agreement, which is what RFC 8291's example lets
@@ -162,16 +162,12 @@ impl PushKey {
     }
 
     pub fn from_pkcs8(document: &[u8]) -> Result<Self, WebPushError> {
-        EcdsaKeyPair::from_pkcs8(
-            &ECDSA_P256_SHA256_FIXED_SIGNING,
-            document,
-            &SystemRandom::new(),
-        )
-        .map(|pair| PushKey {
-            pair,
-            tokens: Mutex::default(),
-        })
-        .map_err(|_| WebPushError::Key)
+        EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, document)
+            .map(|pair| PushKey {
+                pair,
+                tokens: Mutex::default(),
+            })
+            .map_err(|_| WebPushError::Key)
     }
 
     /// The public key, as an uncompressed point: what subscriptions are bound to.
@@ -260,7 +256,7 @@ impl PushKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ring::signature::{ECDSA_P256_SHA256_FIXED, UnparsedPublicKey as SignaturePublicKey};
+    use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED, UnparsedPublicKey as SignaturePublicKey};
 
     fn b64(value: &str) -> Vec<u8> {
         URL_SAFE_NO_PAD.decode(value).unwrap()

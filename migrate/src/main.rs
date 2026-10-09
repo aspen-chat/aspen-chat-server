@@ -15,7 +15,6 @@ use aspen_migrate::{
     MIGRATIONS, run_apply, run_down, run_import_diesel, run_redo, run_revert, run_status, run_up,
 };
 use clap::{Parser, Subcommand};
-use diesel_async::{AsyncConnection, AsyncPgConnection};
 use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
 
@@ -116,9 +115,9 @@ async fn main() -> Result<()> {
 
     let url = resolve_database_url(cli.database_url.as_deref())?;
 
-    let mut conn = AsyncPgConnection::establish(&url)
+    let mut conn = aspen_database::connect(&url)
         .await
-        .with_context(|| format!("failed to connect to {url}"))?;
+        .context("failed to connect to the database")?;
 
     match cli.cmd {
         Cmd::Up => run_up(&mut conn, MIGRATIONS).await?,
