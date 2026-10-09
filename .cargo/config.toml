@@ -1,0 +1,4 @@
+[build]
+# sccache when it is installed, the compiler alone when it is not (see the script).
+# `client/.cargo/config.toml` turns this off for the client's Rust, which is also built on Windows.
+rustc-wrapper = "scripts/sccache.sh"
