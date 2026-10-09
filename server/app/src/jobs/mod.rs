@@ -225,6 +225,24 @@ pub async fn checkpoint(
     Ok(())
 }
 
+/// Wakes every runner from outside a server, as an operator command does once it has run, so a
+/// job it saved starts within moments rather than at a runner's next look. A failure is only
+/// logged: the runners look every [`POLL`] anyway.
+pub async fn wake_from(config: &crate::aspen_config::AspenConfig) {
+    let woken = async {
+        let client =
+            async_nats::connect_with_options(&config.nats_url, config.nats_options()).await?;
+        client.publish(WAKE_SUBJECT, bytes::Bytes::new()).await?;
+        client.flush().await?;
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    };
+    match tokio::time::timeout(Duration::from_secs(2), woken).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::debug!("could not wake the job runners: {e}"),
+        Err(_) => tracing::debug!("waking the job runners took too long"),
+    }
+}
+
 /// Wakes every runner to look for jobs at once, rather than at its next look: for a job
 /// someone is waiting on, published once what saved it has committed.
 pub async fn wake(state: &GlobalServerContext) {
@@ -308,7 +326,9 @@ fn recurring(state: &GlobalServerContext) -> Vec<Recurring> {
     ]
 }
 
-/// Makes sure of every recurring job: saved once, its class and period as the code now says.
+/// Makes sure of every recurring job: saved once, its class and period as the code and this
+/// server's configuration now say. A period made shorter takes effect at once: a job waiting
+/// longer than its new period is due within it.
 async fn ensure_recurring(state: &GlobalServerContext) -> crate::Result<()> {
     let mut conn = state.connection_pool.get().await?;
     for job in recurring(state) {
@@ -317,7 +337,12 @@ async fn ensure_recurring(state: &GlobalServerContext) -> crate::Result<()> {
             INSERT INTO job (id, kind, key, class, due, not_before, every, payload)
             VALUES ($1, $2, '', $3, now(), now(), make_interval(secs => $4), '{}')
             ON CONFLICT (kind, key) DO UPDATE
-            SET class = excluded.class, every = excluded.every
+            SET class = excluded.class, every = excluded.every,
+                due = CASE WHEN job.running_since IS NULL
+                           THEN LEAST(job.due, now() + excluded.every) ELSE job.due END,
+                not_before = CASE WHEN job.running_since IS NULL
+                                  THEN LEAST(job.not_before, now() + excluded.every)
+                                  ELSE job.not_before END
             "#,
         )
         .bind::<diesel::sql_types::Uuid, _>(Uuid::now_v7())

@@ -39,7 +39,7 @@ use diesel::prelude::*;
 use diesel::sql_types::{Array, Bool, Nullable, Text, Uuid as PgUuid};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use fred::prelude::{KeysInterface as _, SetsInterface as _};
+use fred::prelude::{KeysInterface as _, LuaInterface as _, SetsInterface as _};
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -67,9 +67,20 @@ const FIRST_LOOK_AGAIN: Duration = Duration::from_millis(50);
 const REMEMBERED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// How long a push is worth delivering to a phone that cannot be reached now.
 const TIME_TO_LIVE: Duration = Duration::from_secs(24 * 60 * 60);
-/// Above this many people woken by one message, the badge count is left out: working it out
-/// is a query per person.
+/// Above this many people woken by one message, the badge count is left out: working out one
+/// not kept (`badge_of`) is several queries per person.
 const MAX_BADGED: usize = 100;
+/// How long a person's badge, once counted, is kept and adjusted rather than counted again
+/// (`badge_of`). A change no push follows (a role taken away, a channel hidden from them) shows
+/// on their phone within it.
+const BADGE_KEPT: Duration = Duration::from_secs(300);
+/// Adds one to a kept badge, answering it, or nothing when none is kept.
+const BADGE_ADD: &str = r#"
+if redis.call('EXISTS', KEYS[1]) == 1 then
+    return redis.call('INCR', KEYS[1])
+end
+return false
+"#;
 /// The longest endpoint URL taken.
 const MAX_ENDPOINT_CHARS: usize = 2048;
 /// The most phones one account has woken. Subscribing another lets go of the oldest beyond it,
@@ -682,6 +693,10 @@ fn woken_key(user: UserId, channel: ChannelId) -> String {
     format!("push:woken:{}:{}", user.0, channel.0)
 }
 
+fn badge_key(user: UserId) -> String {
+    format!("push:badge:{}", user.0)
+}
+
 fn message_key(message: MessageId) -> String {
     format!("push:message:{}", message.0)
 }
@@ -716,10 +731,19 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> crate::R
     }
     let channel_id = *found.channel.id();
     let author = *found.author.id();
-    let recipients = recipients(state, &found, channel_id, author).await?;
+    let (recipients, in_community) = recipients(state, &found, channel_id, author).await?;
     if recipients.is_empty() {
         return Ok(());
     }
+    // Whom it tags, in a community: their kept badges grow by one, the message being unread
+    // and tagging them. A DM's people's are counted afresh, since a DM already unread counts
+    // once however many of its messages are.
+    let tagged: HashSet<UserId> = recipients
+        .iter()
+        .filter(|(_, tagged)| *tagged && in_community)
+        .map(|(user, _)| *user)
+        .collect();
+    let recipients: Vec<UserId> = recipients.into_iter().map(|(user, _)| user).collect();
     let pointer = Pointer::Message {
         channel: channel_id,
         message: id,
@@ -740,6 +764,7 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> crate::R
         .expire(message_key(id), REMEMBERED.as_secs() as i64, None)
         .await?;
     let phones = &phones_of(state, &recipients).await?;
+    let tagged = &tagged;
     futures_util::stream::iter(recipients)
         .for_each_concurrent(FAN_OUT, |user| async move {
             let _: Result<(), _> = state
@@ -752,10 +777,19 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> crate::R
                     false,
                 )
                 .await;
-            let badge = if badge {
-                badge_of(state, user).await.ok()
+            // A kept badge follows the message whether or not this push carries it.
+            let grown = if tagged.contains(&user) {
+                grow_badge(state, user).await
             } else {
+                if !in_community {
+                    forget_badge(state, user).await;
+                }
                 None
+            };
+            let badge = match (badge, grown) {
+                (false, _) => None,
+                (true, Some(grown)) => Some(grown),
+                (true, None) => badge_of(state, user).await.ok(),
             };
             wake(
                 state,
@@ -794,6 +828,17 @@ async fn message_deleted(state: &GlobalServerContext, id: MessageId) -> crate::R
         message: id,
     };
     let phones = phones_of(state, &woken).await?;
+    // The message no longer counts toward their badges, which are counted afresh when next
+    // shown.
+    let _: () = state
+        .valkey
+        .del(
+            woken
+                .iter()
+                .map(|user| badge_key(*user))
+                .collect::<Vec<_>>(),
+        )
+        .await?;
     // Forgotten only now, so that a failure before here leaves it for the event's next delivery.
     let _: () = state.valkey.del(message_key(id)).await?;
     futures_util::stream::iter(phones.values())
@@ -818,6 +863,7 @@ async fn channel_read(
         return Ok(());
     }
     let _: () = state.valkey.del(woken_key(user, channel)).await?;
+    forget_badge(state, user).await;
     // The badge is counted once the position has moved.
     once_committed(|| async move {
         let mut conn = state.connection_pool.get().await?;
@@ -864,7 +910,7 @@ async fn recipients(
     found: &Message,
     channel_id: ChannelId,
     author: UserId,
-) -> crate::Result<Vec<UserId>> {
+) -> crate::Result<(Vec<(UserId, bool)>, bool)> {
     let mut conn = state.connection_pool.get().await?;
     let posted_in: Channel = channel::table
         .select(Channel::as_select())
@@ -885,7 +931,7 @@ async fn recipients(
     };
     let community = place.community.as_ref().map(|c| *c.id());
     let mentions = &found.mentions;
-    let mut candidates: HashSet<UserId> = diesel::sql_query(RECIPIENTS_SQL)
+    let mut candidates: HashMap<UserId, bool> = diesel::sql_query(RECIPIENTS_SQL)
         .bind::<Nullable<PgUuid>, _>(community.map(|c| c.0))
         .bind::<PgUuid, _>(place.id.0)
         .bind::<PgUuid, _>(author.0)
@@ -897,33 +943,34 @@ async fn recipients(
         .load::<Recipient>(conn.as_mut())
         .await?
         .into_iter()
-        .map(|r| r.user)
+        .map(|r| (r.user, r.tagged))
         .collect();
     if let Some(community) = community
         && !candidates.is_empty()
     {
-        let viewers = viewers(conn.as_mut(), community, &candidates, place.id).await?;
-        candidates.retain(|user| viewers.contains(user));
+        let users: HashSet<UserId> = candidates.keys().copied().collect();
+        let viewers = viewers(conn.as_mut(), community, &users, place.id).await?;
+        candidates.retain(|user, _| viewers.contains(user));
     }
     drop(conn);
-    let listed: Vec<UserId> = candidates.into_iter().collect();
+    let listed: Vec<(UserId, bool)> = candidates.into_iter().collect();
     // Those using Aspen right now are not woken; asked in batches, so a message to a whole
     // community never sends Valkey one command naming every member.
     let mut asleep = Vec::with_capacity(listed.len());
     for batch in listed.chunks(ACTIVE_BATCH) {
         let keys: Vec<String> = batch
             .iter()
-            .map(|user| crate::user_status::active_key(*user))
+            .map(|(user, _)| crate::user_status::active_key(*user))
             .collect();
         let active: Vec<Option<i64>> = state.valkey.mget(keys).await?;
         asleep.extend(
             batch
                 .iter()
                 .zip(active)
-                .filter_map(|(user, active)| active.is_none().then_some(*user)),
+                .filter_map(|(recipient, active)| active.is_none().then_some(*recipient)),
         );
     }
-    Ok(asleep)
+    Ok((asleep, community.is_some()))
 }
 
 /// How many people's activity one Valkey command asks about.
@@ -933,6 +980,9 @@ const ACTIVE_BATCH: usize = 1000;
 struct Recipient {
     #[diesel(sql_type = PgUuid)]
     user: UserId,
+    /// Whether the message tags them, by name, a role, or everyone.
+    #[diesel(sql_type = Bool)]
+    tagged: bool,
 }
 
 /// Who a message wakes, before who may view it and who is using Aspen are decided: `$1` the
@@ -982,7 +1032,7 @@ const RECIPIENTS_SQL: &str = r#"
         WHERE "user" <> $3
         GROUP BY "user"
     )
-    SELECT p."user" FROM person p
+    SELECT p."user", p.tagged FROM person p
     CROSS JOIN LATERAL (
         SELECT COALESCE(
             (SELECT level FROM notification_setting
@@ -1005,8 +1055,55 @@ const RECIPIENTS_SQL: &str = r#"
 "#;
 
 /// What the phone's badge shows for this deployment: the unread messages tagging the person,
-/// and their unread DMs.
+/// and their unread DMs. Once counted it is kept for [`BADGE_KEPT`] in Valkey, grown by one for
+/// each new message tagging them in a community ([`grow_badge`]) and forgotten when they read,
+/// when a DM speaks, or when a message that woke them is deleted ([`forget_badge`]), so a busy
+/// community's tags cost a person one count, not one per message.
 async fn badge_of(state: &GlobalServerContext, user: UserId) -> crate::Result<i64> {
+    let kept: Option<i64> = state.valkey.get(badge_key(user)).await?;
+    if let Some(kept) = kept {
+        return Ok(kept);
+    }
+    let counted = count_badge(state, user).await?;
+    let _: Result<(), _> = state
+        .valkey
+        .set(
+            badge_key(user),
+            counted,
+            Some(fred::types::Expiration::EX(BADGE_KEPT.as_secs() as i64)),
+            None,
+            false,
+        )
+        .await;
+    Ok(counted)
+}
+
+/// Grows `user`'s kept badge by one more unread message tagging them, answering it; `None` when
+/// none is kept, and a count afresh then finds the message, already committed.
+async fn grow_badge(state: &GlobalServerContext, user: UserId) -> Option<i64> {
+    match state
+        .valkey
+        .eval::<Option<i64>, _, _, _>(BADGE_ADD, badge_key(user), Vec::<String>::new())
+        .await
+    {
+        Ok(grown) => grown,
+        Err(e) => {
+            tracing::warn!("growing a badge failed: {e}");
+            forget_badge(state, user).await;
+            None
+        }
+    }
+}
+
+/// Forgets `user`'s kept badge, so it is counted afresh when next shown.
+async fn forget_badge(state: &GlobalServerContext, user: UserId) {
+    if let Err(e) = state.valkey.del::<(), _>(badge_key(user)).await {
+        tracing::warn!("forgetting a badge failed: {e}");
+    }
+}
+
+/// `user`'s badge, counted from the database.
+async fn count_badge(state: &GlobalServerContext, user: UserId) -> crate::Result<i64> {
     let mut conn = state.connection_pool.get().await?;
     let communities: Vec<CommunityId> = community_user::table
         .select(community_user::community)
