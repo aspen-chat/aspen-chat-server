@@ -17,7 +17,7 @@ export function MessageSkeleton({ index = 0 }: { index?: number }) {
   const lines = LINES[index % LINES.length] ?? LINES[0] ?? [];
   return (
     <div className="flex gap-3 px-2 py-1.5">
-      <Skeleton className="h-9 w-9 shrink-0 rounded-full" />
+      <Skeleton className="h-11 w-11 shrink-0 rounded-full" />
       <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
         <Skeleton className={index % 2 === 0 ? "h-3.5 w-28" : "h-3.5 w-20"} />
         {lines.map((width, line) => (

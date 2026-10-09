@@ -56,7 +56,7 @@ export function PersonAvatar({
   const user = useUser(id);
   const loading = useUserLoading(id);
   if (user === undefined && loading) {
-    const dimensions = size === "lg" ? "h-12 w-12" : size === "md" ? "h-9 w-9" : "h-6 w-6";
+    const dimensions = size === "lg" ? "h-12 w-12" : size === "md" ? "h-11 w-11" : "h-6 w-6";
     return <Skeleton className={`${dimensions} shrink-0 rounded-full`} />;
   }
   return (

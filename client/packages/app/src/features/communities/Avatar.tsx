@@ -27,7 +27,7 @@ export function Avatar({
   // around them is drawn (`type-scale` in `styles.css`).
   const dimensions = {
     lg: "h-12 w-12 text-[1rem]",
-    md: "h-9 w-9 text-[0.875rem]",
+    md: "h-11 w-11 text-[0.9375rem]",
     sm: "h-7 w-7 text-[0.75rem]",
     xs: "h-5 w-5 text-[0.5rem]",
   }[size];

@@ -363,10 +363,10 @@ export const MessageItem = memo(function MessageItem({
         </>
       )}
       {grouped ? (
-        <div className="w-9 shrink-0" aria-hidden="true" />
+        <div className="w-11 shrink-0" aria-hidden="true" />
       ) : author === undefined ? (
         authorLoading ? (
-          <Skeleton className="h-9 w-9 shrink-0 rounded-full" />
+          <Skeleton className="h-11 w-11 shrink-0 rounded-full" />
         ) : (
           <Avatar name="?" />
         )

@@ -56,7 +56,7 @@ export function ChannelSkeleton() {
  * the picture `size` like the rows it stands for.
  */
 export function RowsSkeleton({ count = 5, size = "sm" }: { count?: number; size?: "sm" | "md" }) {
-  const picture = size === "md" ? "h-9 w-9" : "h-6 w-6";
+  const picture = size === "md" ? "h-11 w-11" : "h-6 w-6";
   return (
     <div aria-busy="true" className="flex flex-col gap-0.5">
       <LoadingLabel />
