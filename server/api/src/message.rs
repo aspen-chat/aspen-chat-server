@@ -539,10 +539,50 @@ pub async fn create_message(
     Path(channel): Path<ChannelId>,
     Json(request): Json<MessageCreateRequest>,
 ) -> ApiResult<Response> {
+    post(&state, user.id, app::message::To::Channel(channel), request).await
+}
+
+/// Posts a reply to the thread a message starts, making the thread when this is its first reply,
+/// in the same transaction, so a thread is made with the reply that starts it. The reply is
+/// posted (or held) as `POST /channels/{channel}/messages` posts one to the thread, and its
+/// `channelId` names the thread; once the thread is made, posting there is the same. Making it
+/// takes Start threads, as opening it does (`PUT /messages/{message}/thread`).
+#[utoipa::path(
+    post,
+    path = "/messages/{message}/thread/messages",
+    tag = TAG_MESSAGES,
+    params(("message" = MessageId, Path, description = "The message the thread starts from")),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, body = Message, headers(("Location" = String, description = "URL of the new message"))),
+        (status = ACCEPTED, description = "Held, when `mayHold` was given, while a preview of one of its attachments is being made; it is posted later, and the thread is made now", body = HeldMessage),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (the text is over `app::message::MAX_CONTENT_CHARS` characters, an attachment is not ready, or the message is in a thread, is an echo, or is in a voice channel)", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
+        (status = NOT_FOUND, description = "No such message, or one in a DM the caller is not in", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn reply_in_thread(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(message): Path<MessageId>,
+    Json(request): Json<MessageCreateRequest>,
+) -> ApiResult<Response> {
+    post(&state, user.id, app::message::To::ThreadOf(message), request).await
+}
+
+/// Posts `request` where `to` says, answering the message made (`201`) or held (`202`).
+async fn post(
+    state: &GlobalServerContext,
+    author: UserId,
+    to: app::message::To,
+    request: MessageCreateRequest,
+) -> ApiResult<Response> {
     let posted = app::message::held::post(
-        &state,
-        user.id,
-        channel,
+        state,
+        author,
+        to,
         request.content,
         request.attachments.clone(),
         request.echo_to_parent.unwrap_or(false),

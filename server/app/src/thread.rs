@@ -1,8 +1,10 @@
 //! Threads: a channel of replies to one message of a text channel, DM, or group DM. A thread is
-//! made when it is first opened (`open_thread`), belongs wherever its parent does (the same
-//! community, or the same DM's recipients), and cannot have threads of its own. The message it
-//! started names it (`Message.thread`), and it names that message (`Channel.starterMessage`);
-//! both are written in the transaction that makes it. Its `replyCount` and `lastReplyAt` are
+//! made in the transaction that posts its first reply (`app::message::To::ThreadOf`), so a
+//! thread starts with a reply in it; `open_thread` also makes one with none, for clients that
+//! open a thread before replying. It belongs wherever its parent does (the same community, or
+//! the same DM's recipients), and cannot have threads of its own. The message it started names
+//! it (`Message.thread`), and it names that message (`Channel.starterMessage`); both are written
+//! in the transaction that makes it. Its `replyCount` and `lastReplyAt` are
 //! kept exact under the thread row's lock as replies come and go.
 //!
 //! A reply may also be echoed to the parent channel, as it is posted or later by its author: a
@@ -16,7 +18,7 @@ use crate::channel::{Channel, record};
 use crate::context::GlobalServerContext;
 use crate::message::Message;
 use crate::message::MessageKind;
-use crate::permissions::{Permissions, channel_access};
+use crate::permissions::{ChannelAccess, Permissions, channel_access};
 use crate::t;
 use crate::{ChannelId, EventScope, MaybeLoaded, MessageId, UserId, publish_event};
 use aspen_schema::{channel, message};
@@ -35,115 +37,183 @@ pub async fn open_thread(
 ) -> crate::Result<(Channel, bool)> {
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
-        async move {
-            // The starter is locked so two first openings make one thread.
-            let (parent_id, kind, existing, starter_author): (
-                ChannelId,
-                MessageKind,
-                Option<ChannelId>,
-                UserId,
-            ) = message::table
-                .select((
-                    message::channel,
-                    message::kind,
-                    message::thread,
-                    message::author,
-                ))
-                .filter(message::id.eq(starter).and(message::deleted_at.is_null()))
-                .for_update()
-                .first(conn.as_mut())
-                .await?;
-            let access = channel_access(state, conn.as_mut(), caller, parent_id).await?;
-            if let Some(thread) = existing {
-                let thread: Channel = channel::table
-                    .select(Channel::as_select())
-                    .filter(channel::id.eq(thread))
-                    .first(conn.as_mut())
-                    .await?;
-                return Ok((thread, false));
-            }
-            if kind == MessageKind::ThreadEcho {
-                return Err(crate::Error::Validation(t!("threadFromEcho")));
-            }
-            // Opening an existing thread is reading; making one takes Start threads.
-            access.require(Permissions::START_THREADS)?;
-            let parent: Channel = channel::table
-                .select(Channel::as_select())
-                .filter(channel::id.eq(parent_id).and(channel::deleted_at.is_null()))
-                .first(conn.as_mut())
-                .await?;
-            match parent.ty {
-                ChannelType::Text | ChannelType::Dm | ChannelType::GroupDm => {}
-                ChannelType::Thread => {
-                    return Err(crate::Error::Validation(t!("threadInThread")));
-                }
-                ChannelType::Voice | ChannelType::Plugin => {
-                    return Err(crate::Error::Validation(t!("threadNotHere")));
-                }
-            }
-            let thread = Channel {
-                id: ChannelId::new(),
-                // In a community the thread records it, so routing and listings need not look
-                // at the parent; in a DM there is none, and routing follows the parent.
-                community: parent.community.clone(),
-                parent_category: None,
-                name: String::new(),
-                ty: ChannelType::Thread,
-                sort_index: 0,
-                deleted_at: None,
-                parent_channel: Some(parent_id),
-                starter_message: Some(starter),
-                reply_count: 0,
-                last_reply_at: None,
-                dm_key: None,
-                plugin_type: None,
-            };
-            diesel::insert_into(channel::table)
-                .values(&thread)
-                .execute(conn.as_mut())
-                .await?;
-            diesel::update(message::table)
-                .set(message::thread.eq(Some(thread.id)))
-                .filter(message::id.eq(starter))
-                .execute(conn.as_mut())
-                .await?;
-            publish_event(
-                state,
-                conn.as_mut(),
-                EventScope::ChannelDefinition {
-                    channel: thread.id,
-                    departed: None,
-                },
-                &ServerEvent::Channel(ChannelEvent::Create(record(&thread, Vec::new()))),
-            )
-            .await?;
-            publish_event(
-                state,
-                conn.as_mut(),
-                EventScope::Message(starter),
-                &ServerEvent::Message(MessageEvent::Update {
-                    id: starter,
-                    content: None,
-                    attachments: None,
-                    edited_at: None,
-                    link_previews: None,
-                    thread: Some(Some(thread.id)),
-                    mentions: None,
-                    linked_messages: None,
-                    altered_by: None,
-                    card: None,
-                    echo: None,
-                }),
-            )
-            .await?;
-            // Whoever wrote the message replies are to is told of them.
-            crate::thread_follow::took_part(state, conn.as_mut(), &[starter_author], thread.id)
-                .await?;
-            Ok((thread, true))
-        }
-        .scope_boxed()
+        async move { open_in(state, conn.as_mut(), caller, starter, ChannelId::new()).await }
+            .scope_boxed()
     })
     .await
+}
+
+/// Where a reply to the thread `starter` starts goes: that thread, or, while it has none, the
+/// channel the thread will be made in.
+pub enum ReplyPlace {
+    Thread(ChannelId),
+    Unmade { parent: ChannelId },
+}
+
+/// Where a reply to `starter`'s thread goes now. Read without a lock, so the thread may be made
+/// before the reply is posted; [`open_in`] answers that.
+pub async fn reply_place(
+    conn: &mut AsyncPgConnection,
+    starter: MessageId,
+) -> crate::Result<ReplyPlace> {
+    let (parent, thread): (ChannelId, Option<ChannelId>) = message::table
+        .select((message::channel, message::thread))
+        .filter(message::id.eq(starter).and(message::deleted_at.is_null()))
+        .first(conn)
+        .await?;
+    Ok(match thread {
+        Some(thread) => ReplyPlace::Thread(thread),
+        None => ReplyPlace::Unmade { parent },
+    })
+}
+
+/// Checks that `caller` may start a thread from `starter` in `parent`, as [`open_in`] will when
+/// it makes it, answering their access to `parent`; for checking a reply that makes its thread
+/// before the transaction that makes it opens.
+pub(crate) async fn check_startable(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    caller: UserId,
+    starter: MessageId,
+    parent: ChannelId,
+) -> crate::Result<ChannelAccess> {
+    let kind: MessageKind = message::table
+        .select(message::kind)
+        .filter(
+            message::id
+                .eq(starter)
+                .and(message::channel.eq(parent))
+                .and(message::deleted_at.is_null()),
+        )
+        .first(conn)
+        .await?;
+    let access = channel_access(state, conn, caller, parent).await?;
+    startable(conn, &access, kind, parent).await?;
+    Ok(access)
+}
+
+/// Checks that a thread may be started from a message of `kind` in `parent_id` by the holder of
+/// `access` to it, answering the parent.
+async fn startable(
+    conn: &mut AsyncPgConnection,
+    access: &ChannelAccess,
+    kind: MessageKind,
+    parent_id: ChannelId,
+) -> crate::Result<Channel> {
+    if kind == MessageKind::ThreadEcho {
+        return Err(crate::Error::Validation(t!("threadFromEcho")));
+    }
+    // Opening an existing thread is reading; making one takes Start threads.
+    access.require(Permissions::START_THREADS)?;
+    let parent: Channel = channel::table
+        .select(Channel::as_select())
+        .filter(channel::id.eq(parent_id).and(channel::deleted_at.is_null()))
+        .first(conn)
+        .await?;
+    match parent.ty {
+        ChannelType::Text | ChannelType::Dm | ChannelType::GroupDm => Ok(parent),
+        ChannelType::Thread => Err(crate::Error::Validation(t!("threadInThread"))),
+        ChannelType::Voice | ChannelType::Plugin => {
+            Err(crate::Error::Validation(t!("threadNotHere")))
+        }
+    }
+}
+
+/// [`open_thread`] in the caller's transaction, making the thread as `id` when the message has
+/// none; and whether this call made it. Posting the reply that makes a thread
+/// (`app::message::To::ThreadOf`) makes it here, in the transaction that posts the reply.
+pub(crate) async fn open_in(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    caller: UserId,
+    starter: MessageId,
+    id: ChannelId,
+) -> crate::Result<(Channel, bool)> {
+    // The starter is locked so two first openings make one thread.
+    let (parent_id, kind, existing, starter_author): (
+        ChannelId,
+        MessageKind,
+        Option<ChannelId>,
+        UserId,
+    ) = message::table
+        .select((
+            message::channel,
+            message::kind,
+            message::thread,
+            message::author,
+        ))
+        .filter(message::id.eq(starter).and(message::deleted_at.is_null()))
+        .for_update()
+        .first(conn)
+        .await?;
+    let access = channel_access(state, conn, caller, parent_id).await?;
+    if let Some(thread) = existing {
+        let thread: Channel = channel::table
+            .select(Channel::as_select())
+            .filter(channel::id.eq(thread))
+            .first(conn)
+            .await?;
+        return Ok((thread, false));
+    }
+    let parent = startable(conn, &access, kind, parent_id).await?;
+    let thread = Channel {
+        id,
+        // In a community the thread records it, so routing and listings need not look at the
+        // parent; in a DM there is none, and routing follows the parent.
+        community: parent.community.clone(),
+        parent_category: None,
+        name: String::new(),
+        ty: ChannelType::Thread,
+        sort_index: 0,
+        deleted_at: None,
+        parent_channel: Some(parent_id),
+        starter_message: Some(starter),
+        reply_count: 0,
+        last_reply_at: None,
+        dm_key: None,
+        plugin_type: None,
+    };
+    diesel::insert_into(channel::table)
+        .values(&thread)
+        .execute(conn)
+        .await?;
+    diesel::update(message::table)
+        .set(message::thread.eq(Some(thread.id)))
+        .filter(message::id.eq(starter))
+        .execute(conn)
+        .await?;
+    publish_event(
+        state,
+        conn,
+        EventScope::ChannelDefinition {
+            channel: thread.id,
+            departed: None,
+        },
+        &ServerEvent::Channel(ChannelEvent::Create(record(&thread, Vec::new()))),
+    )
+    .await?;
+    publish_event(
+        state,
+        conn,
+        EventScope::Message(starter),
+        &ServerEvent::Message(MessageEvent::Update {
+            id: starter,
+            content: None,
+            attachments: None,
+            edited_at: None,
+            link_previews: None,
+            thread: Some(Some(thread.id)),
+            mentions: None,
+            linked_messages: None,
+            altered_by: None,
+            card: None,
+            echo: None,
+        }),
+    )
+    .await?;
+    // Whoever wrote the message replies are to is told of them.
+    crate::thread_follow::took_part(state, conn, &[starter_author], thread.id).await?;
+    Ok((thread, true))
 }
 
 /// The live threads among `ids`, as wire records.

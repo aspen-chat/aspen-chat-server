@@ -31,6 +31,9 @@ pub struct Draft<'a> {
     pub attachments: &'a [AttachmentId],
     /// The message being edited, for `message.edit`.
     pub editing: Option<MessageId>,
+    /// For a reply that makes its thread, the channel the thread is made in: the thread,
+    /// `access.channel`, is stored only with the reply, after the plugins have decided it.
+    pub unmade_thread_of: Option<crate::ChannelId>,
 }
 
 /// What the plugins left of a draft: its text, and who rewrote it.
@@ -94,7 +97,12 @@ pub async fn decide(
         let mut conn = state.connection_pool.get().await?;
         (
             host::person(conn.as_mut(), draft.author, community).await?,
-            host::place(conn.as_mut(), draft.access.channel).await?,
+            match draft.unmade_thread_of {
+                Some(parent) => {
+                    host::unmade_thread_place(conn.as_mut(), draft.access.channel, parent).await?
+                }
+                None => host::place(conn.as_mut(), draft.access.channel).await?,
+            },
             host::attachments(conn.as_mut(), draft.attachments).await?,
         )
     };

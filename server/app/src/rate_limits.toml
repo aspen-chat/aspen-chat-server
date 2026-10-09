@@ -400,6 +400,12 @@ user = { requests = 30, per_seconds = 60, burst = 10 }
 [rate_limits.endpoints."PUT /messages/{message}/thread"]
 user = { requests = 20, per_seconds = 60, burst = 10 }
 
+# Posts a message, and makes a thread when it is the first reply. Clients post later replies to
+# the thread itself, so the limits are those of making threads, with a thread's flood besides.
+[rate_limits.endpoints."POST /messages/{message}/thread/messages"]
+user = { requests = 20, per_seconds = 60, burst = 10 }
+per_message = { requests = 50, per_seconds = 10, burst = 50 }
+
 # An echo posts in the parent channel, and deleting it frees the reply to be echoed again.
 [rate_limits.endpoints."PUT /messages/{message}/echo"]
 user = { requests = 20, per_seconds = 60, burst = 10 }

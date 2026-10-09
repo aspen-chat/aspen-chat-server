@@ -182,6 +182,7 @@ pub async fn create_poll(
                 content: shown_text(&row.question, &options),
                 attachments: &[],
                 editing: None,
+                unmade_thread_of: None,
             },
         )
         .await?;
@@ -819,6 +820,7 @@ pub async fn write_in(
                 content: label.clone(),
                 attachments: &[],
                 editing: None,
+                unmade_thread_of: None,
             },
         )
         .await?;

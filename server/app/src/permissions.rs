@@ -277,8 +277,9 @@ pub fn describe(permission: Permissions) -> std::borrow::Cow<'static, str> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Checked;
 
-/// What the caller may do in one channel, which they may view: only `channel_access` makes one,
-/// and it refuses a channel they may not view, so holding one proves the check was made. A
+/// What the caller may do in one channel, which they may view: only `channel_access` makes one
+/// (and `into_unmade_thread`, from the parent's, for a thread its first reply makes), and it
+/// refuses a channel they may not view, so holding one proves the check was made. A
 /// function that reads or writes a channel's contents for someone takes theirs, or checks it
 /// itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,6 +306,18 @@ pub struct ChannelAccess {
 }
 
 impl ChannelAccess {
+    /// The access to `thread`, a thread of this channel not stored yet, which is made in the
+    /// transaction that posts its first reply (`app::thread::open_in`): a thread's permissions
+    /// are its parent's, as `channel_access` reads them for one that is stored.
+    pub(crate) fn into_unmade_thread(self, thread: ChannelId) -> ChannelAccess {
+        ChannelAccess {
+            channel: thread,
+            thread: true,
+            ty: crate::channel::ChannelType::Thread,
+            ..self
+        }
+    }
+
     pub fn has(&self, permission: Permissions) -> bool {
         self.permissions.contains(permission)
     }

@@ -400,6 +400,58 @@ def deleted_parents(world: World, check: Checks) -> None:
                        member) == 404)
 
 
+def first_replies(world: World, check: Checks) -> None:
+    say("a thread made by its first reply")
+    stack, member = world.stack, world.member["token"]
+    talk = world.channel("first-replies")
+    starter = world.post(talk, "start a thread by replying")
+
+    def reply(content: str, echo: bool = False) -> int:
+        return stack.status("POST", f"/messages/{starter}/thread/messages",
+                            {"content": content, "attachments": [], "echoToParent": echo}, member)
+
+    def thread_of(message: str) -> str | None:
+        return world.as_owner("GET", f"/messages/{message}")["data"]["thread"]
+
+    def thread_of_starter() -> str | None:
+        return thread_of(starter)
+
+    world.as_owner("PUT", f"/channels/{talk}/overrides/{world.everyone}", {"allow": [], "deny": ["startThreads"]})
+    world.stream.gather(0.8)
+    check("without Start threads, the first reply is refused and makes no thread",
+          reply("refused") == 403 and thread_of_starter() is None)
+    world.as_owner("PUT", f"/channels/{talk}/overrides/{world.everyone}", {"allow": [], "deny": ["sendInThreads"]})
+    world.stream.gather(0.8)
+    check("nor without Send in threads", reply("refused") == 403 and thread_of_starter() is None)
+    world.as_owner("PUT", f"/channels/{talk}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    world.stream.gather(0.8)
+    check("nor echoed to a channel they may not send in",
+          reply("refused", echo=True) == 403 and thread_of_starter() is None)
+    world.as_owner("DELETE", f"/channels/{talk}/overrides/{world.everyone}")
+    world.stream.gather(0.8)
+    posted = stack.api("POST", f"/messages/{starter}/thread/messages",
+                       {"content": "the first reply", "attachments": []}, member)
+    thread = posted["channelId"]
+    got = world.stream.gather(1.0)
+    made = [e for e in got if e.get("serverEvent") in ("channel", "message") and e.get("type") == "create"]
+    check("given them, the reply makes its thread, heard as the thread and then the reply",
+          thread_of_starter() == thread
+          and [(e["serverEvent"], e["id"]) for e in made] == [("channel", thread), ("message", posted["id"])], got)
+    again = stack.api("POST", f"/messages/{starter}/thread/messages",
+                      {"content": "a second reply", "attachments": []}, member)
+    check("a later reply goes to the same thread",
+          again["channelId"] == thread and stack.api("GET", f"/channels/{thread}", token=member)["replyCount"] == 2)
+    world.as_owner("PUT", f"/channels/{talk}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.8)
+    other = world.post(talk, "out of sight")
+    check("a message the member may not see starts no thread for them",
+          stack.status("POST", f"/messages/{other}/thread/messages",
+                       {"content": "hidden", "attachments": []}, member) == 404
+          and thread_of(other) is None)
+    world.as_owner("DELETE", f"/channels/{talk}/overrides/{world.everyone}")
+    world.stream.gather(0.8)
+
+
 def thread_echoes(world: World, check: Checks) -> None:
     say("a thread reply echoed to its channel after it was posted")
     member = world.member["token"]
@@ -723,6 +775,22 @@ def previews(world: World, check: Checks) -> None:
     check("and then they hear of it, with its preview on the attachment",
           bool(of(first, "message", content="held"))
           and "preview" in stack.api("GET", f"/attachments/{mine}", token=world.member["token"]))
+
+    starter = world.post(shared, "a thread whose first reply waits")
+    waiting = upload_picture(world, world.owner["token"], png)
+    status, body = stack.request("POST", f"/messages/{starter}/thread/messages",
+                                 {"content": "held first reply", "attachments": [waiting], "mayHold": True},
+                                 world.owner["token"])
+    thread = json.loads(body).get("channelId") if status == 202 else None
+    starter_thread = stack.api("GET", f"/messages/{starter}", token=world.member["token"])["data"]["thread"]
+    check("a first reply held for its preview makes its thread, and waits in it",
+          status == 202 and thread is not None and starter_thread == thread, (status, body))
+    replies = []
+    soon(lambda: bool(replies.extend(world.stream.gather(0.2))
+                      or of(replies, "message", content="held first reply")), 30)
+    check("and is posted there once the preview is made",
+          bool(of(replies, "message", content="held first reply", channelId=thread)),
+          [e["serverEvent"] for e in replies])
 
     theirs = upload_picture(world, world.member["token"], png)
     status, body = stack.request("POST", f"/channels/{shared}/messages",
@@ -1736,6 +1804,11 @@ def plugins(world: World, check: Checks) -> None:
     poll = world.as_owner("POST", f"/channels/{watched}/polls", ballot)["id"]
     check("and an answer written in",
           stack.status("POST", f"/polls/{poll}/write-ins", {"label": "durian"}, world.member["token"]) == 422)
+    first = stack.api("POST", f"/messages/{world.post(watched, 'a thread to start')}/thread/messages",
+                      {"content": "durian in the thread", "attachments": []}, world.member["token"])
+    check("it decides the reply that makes a thread, where the thread will be",
+          "durian" not in first["content"] and first["alteredBy"] == [WORD_FILTER_ID]
+          and stack.status("GET", f"/channels/{first['channelId']}", token=world.member["token"]) == 200, first)
 
     world.as_owner("PUT", f"/channels/{watched}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
     world.stream.gather(1.0)
@@ -2270,7 +2343,7 @@ def activity_feed(world: World, check: Checks) -> None:
 
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
-             poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
+             poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, typing, name_colours, dual_invites, device_links,
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,

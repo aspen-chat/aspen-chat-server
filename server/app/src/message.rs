@@ -213,9 +213,6 @@ async fn check_posting(
     echo_to_parent: bool,
 ) -> Result<(Channel, ChannelAccess), crate::Error> {
     let (target, access) = may_post(state, conn, author, channel_id).await?;
-    if !attachments.is_empty() {
-        access.require(Permissions::ATTACH_FILES)?;
-    }
     if echo_to_parent {
         let Some(parent) = target.parent_channel else {
             return Err(crate::Error::Validation(t!("echoOutsideThread")));
@@ -225,8 +222,113 @@ async fn check_posting(
             .await?
             .require(Permissions::SEND_MESSAGES)?;
     }
-    ensure_attachments_ready(conn, author, None, attachments).await?;
+    check_attachments(conn, author, &access, attachments).await?;
     Ok((target, access))
+}
+
+/// Checks that `author` may post the reply that makes `unmade`, as `check_posting` checks a
+/// reply to a thread already made, answering their access to the thread. The transaction that
+/// makes the thread checks again (`thread::open_in`, then `check_posting`); this refuses what it
+/// would before the plugins see the reply, and before the thread is announced only to be rolled
+/// back.
+async fn check_first_reply(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    unmade: &Unmade,
+    attachments: &[AttachmentId],
+    echo_to_parent: bool,
+) -> Result<ChannelAccess, crate::Error> {
+    let parent = thread::check_startable(state, conn, author, unmade.starter, unmade.parent).await?;
+    // An echo is posted in the parent channel, so it takes sending there.
+    if echo_to_parent {
+        parent.require(Permissions::SEND_MESSAGES)?;
+    }
+    let access = parent.into_unmade_thread(unmade.id);
+    access.require(access.send_permission())?;
+    check_attachments(conn, author, &access, attachments).await?;
+    Ok(access)
+}
+
+/// Checks that `author` may post `attachments` where `access` is, and that each is theirs and
+/// ready.
+async fn check_attachments(
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    access: &ChannelAccess,
+    attachments: &[AttachmentId],
+) -> Result<(), crate::Error> {
+    if !attachments.is_empty() {
+        access.require(Permissions::ATTACH_FILES)?;
+    }
+    ensure_attachments_ready(conn, author, None, attachments).await
+}
+
+/// Where a message is posted.
+#[derive(Debug, Clone, Copy)]
+pub enum To {
+    /// A channel, threads among them.
+    Channel(ChannelId),
+    /// The thread a message starts, which posting the first reply to it makes, in the
+    /// transaction that posts the reply, so a thread is never made by replying to it without
+    /// the reply.
+    ThreadOf(MessageId),
+}
+
+/// A thread not made yet, which the reply posted to it makes.
+struct Unmade {
+    /// Chosen before the plugins decide the reply, so they are told where it goes.
+    id: ChannelId,
+    /// The message it starts from.
+    starter: MessageId,
+    /// The channel it is made in.
+    parent: ChannelId,
+}
+
+/// Where a message posted `to` goes as things stand: its channel, and, for a reply to a thread
+/// not made yet, that thread, which the reply's transaction makes with the id named here, or
+/// finds made since (`thread::open_in`).
+async fn resolve(
+    conn: &mut AsyncPgConnection,
+    to: To,
+) -> Result<(ChannelId, Option<Unmade>), crate::Error> {
+    Ok(match to {
+        To::Channel(channel) => (channel, None),
+        To::ThreadOf(starter) => match thread::reply_place(conn, starter).await? {
+            thread::ReplyPlace::Thread(thread) => (thread, None),
+            thread::ReplyPlace::Unmade { parent } => {
+                let id = ChannelId::new();
+                (
+                    id,
+                    Some(Unmade {
+                        id,
+                        starter,
+                        parent,
+                    }),
+                )
+            }
+        },
+    })
+}
+
+/// Makes the thread `unmade` names in the caller's transaction, or finds it made since it was
+/// resolved, answering its id; with none, `channel_id`.
+async fn made(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    channel_id: ChannelId,
+    unmade: Option<&Unmade>,
+) -> Result<ChannelId, crate::Error> {
+    Ok(match unmade {
+        Some(unmade) => {
+            thread::open_in(state, conn, author, unmade.starter, unmade.id)
+                .await?
+                .0
+                .id
+        }
+        None => channel_id,
+    })
 }
 
 /// The longest a message's text may be, in characters (Unicode scalar values, as Rust counts
@@ -303,7 +405,7 @@ pub async fn create_message(
     post(
         state,
         author,
-        channel_id,
+        To::Channel(channel_id),
         content,
         attachments,
         echo_to_parent,
@@ -313,14 +415,15 @@ pub async fn create_message(
     .await
 }
 
-/// Posts a message as [`create_message`] does; `released` names the held message it posts
-/// (`held`), which goes in the same transaction, so that it is posted once however many servers
-/// try, and its author's apps learn which message it became.
+/// Posts a message as [`create_message`] does, where `to` says; `released` names the held
+/// message it posts (`held`), which goes in the same transaction, so that it is posted once
+/// however many servers try, and its author's apps learn which message it became. Only text is
+/// posted to a thread not made yet (`To::ThreadOf`).
 #[allow(clippy::too_many_arguments)]
 async fn post(
     state: &GlobalServerContext,
     author: UserId,
-    channel_id: ChannelId,
+    to: To,
     content: String,
     attachments: Vec<AttachmentId>,
     echo_to_parent: bool,
@@ -335,16 +438,35 @@ async fn post(
     };
     check_content(&content)?;
     let mut conn = state.connection_pool.get().await?;
+    let (channel_id, unmade) = resolve(conn.as_mut(), to).await?;
+    // Commands are checked against their channel before it is made; only `held::post`, which
+    // posts text, names a thread not made yet.
+    debug_assert!(unmade.is_none() || (command.is_none() && warning.is_none() && card.is_none()));
+    let unmade_access = match &unmade {
+        Some(unmade) => Some(
+            check_first_reply(
+                state,
+                conn.as_mut(),
+                author,
+                unmade,
+                &attachments,
+                echo_to_parent,
+            )
+            .await?,
+        ),
+        None => None,
+    };
     // Plugins decide text before the transaction that saves it opens, so a slow one holds no
     // lock; what the author may not post, and attachments that are not theirs to post, never
     // reach them. A command is decided as the text it shows, with the files it takes. Warnings
     // are not theirs to decide, nor the system account's notices.
     let (content, altered_by) = if warning.is_none() {
+        // A thread not made yet is where its parent is, whose plugins decide its replies.
         let running = intercept::wanted(
             state,
             conn.as_mut(),
             InterceptHook::MessageCreate,
-            channel_id,
+            unmade.as_ref().map_or(channel_id, |unmade| unmade.parent),
         )
         .await?;
         if running.is_empty() || system_account::is(conn.as_mut(), author).await? {
@@ -352,15 +474,21 @@ async fn post(
         } else {
             // Checked as the saving transaction checks again: the right to post, and that
             // every attachment is the author's own upload, so no plugin is shown another's.
-            let (_, access) = check_posting(
-                state,
-                conn.as_mut(),
-                author,
-                channel_id,
-                &attachments,
-                echo_to_parent,
-            )
-            .await?;
+            let access = match unmade_access {
+                Some(access) => access,
+                None => {
+                    check_posting(
+                        state,
+                        conn.as_mut(),
+                        author,
+                        channel_id,
+                        &attachments,
+                        echo_to_parent,
+                    )
+                    .await?
+                    .1
+                }
+            };
             let shown = match &command {
                 Some(invocation) => {
                     let (checked, arguments) = bot_command::check(
@@ -394,6 +522,7 @@ async fn post(
                             content: shown,
                             attachments: &attachments,
                             editing: None,
+                            unmade_thread_of: unmade.as_ref().map(|unmade| unmade.parent),
                         },
                     )
                     .await?;
@@ -410,6 +539,7 @@ async fn post(
                             content,
                             attachments: &attachments,
                             editing: None,
+                            unmade_thread_of: unmade.as_ref().map(|unmade| unmade.parent),
                         },
                     )
                     .await?;
@@ -429,6 +559,8 @@ async fn post(
                 if let Some(held) = released {
                     held::take(conn.as_mut(), held).await?;
                 }
+                let channel_id =
+                    made(state, conn.as_mut(), author, channel_id, unmade.as_ref()).await?;
                 let (target, access) = check_posting(
                     state,
                     conn.as_mut(),
@@ -828,6 +960,7 @@ pub async fn update_message(
                     content,
                     attachments: &attachments,
                     editing: Some(id),
+                    unmade_thread_of: None,
                 },
             )
             .await?;

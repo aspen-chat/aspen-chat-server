@@ -305,6 +305,21 @@ pub(super) async fn place(
     })
 }
 
+/// The place of `thread`, a thread of `parent` that is not stored yet: it is made with the reply
+/// the plugins are deciding (`intercept::Draft::unmade_thread_of`).
+pub(super) async fn unmade_thread_place(
+    conn: &mut AsyncPgConnection,
+    thread: ChannelId,
+    parent: ChannelId,
+) -> crate::Result<wit::Place> {
+    let parent = place(conn, parent).await?;
+    Ok(wit::Place {
+        channel: thread.0.to_string(),
+        thread_of: Some(parent.channel),
+        ..parent
+    })
+}
+
 /// The records of `ids`, in the order given.
 pub(super) async fn attachments(
     conn: &mut AsyncPgConnection,

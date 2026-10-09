@@ -74,13 +74,14 @@ pub enum Posted {
     Held(HeldMessage),
 }
 
-/// Posts a message, or holds it while one of its attachments' previews is being made when
-/// `may_hold`, as its client said it may. A message held has been checked as it would have been
-/// posted; its job posts it.
+/// Posts a message where `to` says, or holds it while one of its attachments' previews is being
+/// made when `may_hold`, as its client said it may. A message held has been checked as it would
+/// have been posted; its job posts it. A reply that makes its thread makes it whether it is
+/// posted or held, and one held waits in the thread.
 pub async fn post(
     state: &GlobalServerContext,
     author: UserId,
-    channel: ChannelId,
+    to: super::To,
     content: String,
     attachments: Vec<AttachmentId>,
     echo_to_parent: bool,
@@ -90,67 +91,86 @@ pub async fn post(
     if may_hold && !attachments.is_empty() {
         let mut conn = state.connection_pool.get().await?;
         if held_back(conn.as_mut(), &attachments).await? {
-            super::check_posting(
-                state,
-                conn.as_mut(),
-                author,
-                channel,
-                &attachments,
-                echo_to_parent,
-            )
-            .await?;
-            let held = HeldMessage {
-                id: HeldMessageId::new(),
-                author,
-                channel,
-                content,
-                attachments,
-                echo_to_parent,
-                locale: crate::locale::current().to_string(),
-                held_at: Utc::now(),
-            };
-            let values = (
-                held_message::id.eq(held.id),
-                held_message::author.eq(held.author),
-                held_message::channel.eq(held.channel),
-                held_message::content.eq(&held.content),
-                held_message::attachments.eq(held
-                    .attachments
-                    .iter()
-                    .copied()
-                    .map(Some)
-                    .collect::<Vec<_>>()),
-                held_message::echo_to_parent.eq(held.echo_to_parent),
-                held_message::locale.eq(&held.locale),
-                held_message::held_at.eq(held.held_at),
-            );
+            let (channel, unmade) = super::resolve(conn.as_mut(), to).await?;
+            if let Some(unmade) = &unmade {
+                super::check_first_reply(
+                    state,
+                    conn.as_mut(),
+                    author,
+                    unmade,
+                    &attachments,
+                    echo_to_parent,
+                )
+                .await?;
+            }
+            let id = HeldMessageId::new();
+            let locale = crate::locale::current().to_string();
+            let held_at = Utc::now();
             let job = NewJob::new(JobKind::ReleaseHeldMessage, JobClass::Interactive, &())?
-                .keyed(held.id.0.to_string());
-            conn.transaction::<_, crate::Error, _>(|conn| {
-                async move {
-                    diesel::insert_into(held_message::table)
-                        .values(values)
-                        .execute(conn)
+                .keyed(id.0.to_string());
+            let held = conn
+                .transaction::<_, crate::Error, _>(|conn| {
+                    async move {
+                        let channel =
+                            super::made(state, conn.as_mut(), author, channel, unmade.as_ref())
+                                .await?;
+                        super::check_posting(
+                            state,
+                            conn.as_mut(),
+                            author,
+                            channel,
+                            &attachments,
+                            echo_to_parent,
+                        )
                         .await?;
-                    jobs::enqueue(conn, job).await?;
-                    Ok(())
-                }
-                .scope_boxed()
-            })
-            .await?;
+                        let held = HeldMessage {
+                            id,
+                            author,
+                            channel,
+                            content,
+                            attachments,
+                            echo_to_parent,
+                            locale,
+                            held_at,
+                        };
+                        diesel::insert_into(held_message::table)
+                            .values((
+                                held_message::id.eq(held.id),
+                                held_message::author.eq(held.author),
+                                held_message::channel.eq(held.channel),
+                                held_message::content.eq(&held.content),
+                                held_message::attachments.eq(held
+                                    .attachments
+                                    .iter()
+                                    .copied()
+                                    .map(Some)
+                                    .collect::<Vec<_>>()),
+                                held_message::echo_to_parent.eq(held.echo_to_parent),
+                                held_message::locale.eq(&held.locale),
+                                held_message::held_at.eq(held.held_at),
+                            ))
+                            .execute(conn.as_mut())
+                            .await?;
+                        jobs::enqueue(conn.as_mut(), job).await?;
+                        Ok(held)
+                    }
+                    .scope_boxed()
+                })
+                .await?;
             drop(conn);
             jobs::wake(state).await;
             return Ok(Posted::Held(held));
         }
     }
-    super::create_message(
+    super::post(
         state,
         author,
-        channel,
+        to,
         content,
         attachments,
         echo_to_parent,
         super::Posting::Text,
+        None,
     )
     .await
     .map(|message| Posted::Sent(Box::new(message)))
@@ -353,7 +373,7 @@ async fn release(
         crate::events::noting(super::post(
             state,
             row.author,
-            row.channel,
+            super::To::Channel(row.channel),
             row.content,
             row.attachments,
             row.echo_to_parent,
