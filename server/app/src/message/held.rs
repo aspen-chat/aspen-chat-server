@@ -214,18 +214,28 @@ async fn held_back(
     Ok(held_until(conn, attachments).await?.is_some())
 }
 
-/// The held messages of `author`, oldest first, for their apps to show waiting.
+/// A page of the held messages of `author`, oldest first, for their apps to show waiting: `limit`
+/// of them (at most [`crate::LIST_PAGE`]) after `after`, through `held_message_by_author`.
 pub async fn read_held(
     state: &GlobalServerContext,
     author: UserId,
+    after: Option<HeldMessageId>,
+    limit: i64,
 ) -> crate::Result<Vec<HeldMessage>> {
     Ok(diesel::sql_query(
         r#"
         SELECT id, author, channel, content, attachments, echo_to_parent, locale, held_at
-        FROM held_message WHERE author = $1 ORDER BY held_at
+        FROM held_message
+        WHERE author = $1
+          AND ($2::uuid IS NULL OR (held_at, id) > (
+              SELECT held_at, id FROM held_message WHERE author = $1 AND id = $2))
+        ORDER BY held_at, id
+        LIMIT $3
         "#,
     )
     .bind::<PgUuid, _>(author)
+    .bind::<diesel::sql_types::Nullable<PgUuid>, _>(after)
+    .bind::<diesel::sql_types::BigInt, _>(limit.clamp(1, crate::LIST_PAGE))
     .load(state.connection_pool.get().await?.as_mut())
     .await?)
 }

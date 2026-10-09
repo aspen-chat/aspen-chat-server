@@ -2,6 +2,7 @@ import { ApiProblemError } from "@aspen/protocol";
 import { useState } from "react";
 import { Button } from "react-aria-components";
 import { useSync, useVoiceMutes } from "@/api/hooks";
+import { ShowMore } from "@/features/layout/ShowMore";
 import { alertClass, hintClass } from "@/features/auth/styles";
 import { planeClass, planeSurfaceClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
@@ -13,12 +14,13 @@ import { format } from "@/i18n/messages";
 const WHEN: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
 /**
- * The people a moderator muted in the community's calls, newest first, each with a button that
- * lifts the mute, whether or not they are in a call. Shown to holders of Manage calls, whose
- * events keep it current.
+ * The people a moderator muted in the community's calls, newest first, a page at a time, each
+ * with a button that lifts the mute, whether or not they are in a call. Shown to holders of
+ * Manage calls, whose events keep it current.
  */
 export function VoiceMutedList({ communityId }: { communityId: string }) {
   const m = useMessages();
+  const sync = useSync();
   const mutes = useVoiceMutes(communityId);
   return (
     <section className={planeClass} aria-labelledby="voice-muted-heading">
@@ -41,6 +43,10 @@ export function VoiceMutedList({ communityId }: { communityId: string }) {
           ))}
         </ul>
       )}
+      <ShowMore
+        topic={`voiceMutes:${communityId}`}
+        load={() => sync.loadVoiceMutes(communityId, true)}
+      />
     </section>
   );
 }

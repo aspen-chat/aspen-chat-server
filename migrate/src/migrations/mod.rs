@@ -113,3 +113,4 @@ pub mod m20261008_170000_jobs;
 pub mod m20261009_072442_held_message_channel_index;
 pub mod m20261009_080000_upkeep;
 pub mod m20261009_080100_evidence_retention;
+pub mod m20261009_080200_paging;

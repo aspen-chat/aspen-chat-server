@@ -2,6 +2,7 @@ import { ApiProblemError } from "@aspen/protocol";
 import { useState } from "react";
 import { Button } from "react-aria-components";
 import { useBans, useSync } from "@/api/hooks";
+import { ShowMore } from "@/features/layout/ShowMore";
 import { alertClass, hintClass } from "@/features/auth/styles";
 import { planeClass, planeSurfaceClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
@@ -17,12 +18,13 @@ const WHEN: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
 const EXPIRY_CHECK_MS = 30_000;
 
 /**
- * The community's standing bans, newest first, each with its reason and end, and a button
- * that lifts it. Shown to holders of Ban members, whose events keep it current; a ban whose
+ * The community's standing bans, newest first, a page at a time, each with its reason and end,
+ * and a button that lifts it. Shown to holders of Ban members, whose events keep it current; a ban whose
  * end passes leaves the list by this device's clock.
  */
 export function BannedList({ communityId }: { communityId: string }) {
   const m = useMessages();
+  const sync = useSync();
   const now = useNow(EXPIRY_CHECK_MS);
   const bans = useBans(communityId)?.filter(
     (ban) => ban.until == null || Date.parse(ban.until) > now,
@@ -49,6 +51,7 @@ export function BannedList({ communityId }: { communityId: string }) {
           ))}
         </ul>
       )}
+      <ShowMore topic={`bans:${communityId}`} load={() => sync.loadBans(communityId, true)} />
     </section>
   );
 }

@@ -5,7 +5,7 @@
 use crate::TAG_BANS;
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
-use crate::extract::{Json, NoContent, Path};
+use crate::extract::{Json, NoContent, Path, Query};
 use crate::message_enum::CommunityBan;
 use aspen_app as app;
 use aspen_app::ban::BanRequest;
@@ -15,7 +15,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 /// What a ban asks for.
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -44,12 +44,28 @@ pub struct CommunityBanOutcome {
     pub deleted_messages: u32,
 }
 
-/// The community's standing bans, newest first. Takes Ban members.
+/// A page of a list each of whose records names one person (bans, server mutes), newest first.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct UserPageQuery {
+    /// Continue after the record of this person, the last of the previous page.
+    pub before: Option<UserId>,
+    /// How many to return, at most 100; 100 when absent. A shorter page is the last.
+    pub limit: Option<i64>,
+}
+
+impl UserPageQuery {
+    pub fn limit(&self) -> i64 {
+        self.limit.unwrap_or(app::LIST_PAGE)
+    }
+}
+
+/// A page of the community's standing bans, newest first. Takes Ban members.
 #[utoipa::path(
     get,
     path = "/communities/{community}/bans",
     tag = TAG_BANS,
-    params(("community" = CommunityId, Path)),
+    params(("community" = CommunityId, Path), UserPageQuery),
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = Vec<CommunityBan>),
@@ -63,8 +79,11 @@ pub async fn read_community_bans(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
+    Query(page): Query<UserPageQuery>,
 ) -> ApiResult<Json<Vec<CommunityBan>>> {
-    Ok(Json(app::ban::read_bans(&state, user.id, community).await?))
+    Ok(Json(
+        app::ban::read_bans(&state, user.id, community, page.before, page.limit()).await?,
+    ))
 }
 
 /// Bans a person from the community: their membership ends, every way back in refuses them

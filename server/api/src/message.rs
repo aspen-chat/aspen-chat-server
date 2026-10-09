@@ -611,12 +611,23 @@ async fn post(
     .into_response())
 }
 
-/// The caller's messages held for their attachments' previews, oldest first, which their apps
-/// show waiting until each is posted.
+/// A page of the caller's held messages, oldest first.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct HeldPageQuery {
+    /// Continue after this held message, the last of the previous page.
+    pub after: Option<HeldMessageId>,
+    /// How many to return, at most 100; 100 when absent. A shorter page is the last.
+    pub limit: Option<i64>,
+}
+
+/// A page of the caller's messages held for their attachments' previews, oldest first, which
+/// their apps show waiting until each is posted.
 #[utoipa::path(
     get,
     path = "/users/@me/held-messages",
     tag = TAG_MESSAGES,
+    params(HeldPageQuery),
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = Vec<HeldMessage>),
@@ -627,8 +638,15 @@ async fn post(
 pub async fn list_held_messages(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
+    Query(page): Query<HeldPageQuery>,
 ) -> ApiResult<Json<Vec<HeldMessage>>> {
-    let held = app::message::held::read_held(&state, user.id).await?;
+    let held = app::message::held::read_held(
+        &state,
+        user.id,
+        page.after,
+        page.limit.unwrap_or(app::LIST_PAGE),
+    )
+    .await?;
     Ok(Json(held.into_iter().map(HeldMessage::from).collect()))
 }
 

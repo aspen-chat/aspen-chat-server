@@ -36,7 +36,8 @@
   members, Ban: `BanDialog` takes a
   reason, how long for, and, for a banner who also holds Manage messages, whether their messages
   from the last hour or day go too, and `BannedList` beneath the members shows the standing
-  bans (`RecordStore.bans`, topic `bans:<communityId>`, read on first use by `useBans` and kept
+  bans (`RecordStore.bans`, topic `bans:<communityId>`, read a page on first use by `useBans`,
+  with `ShowMore` reading the next while `RecordStore.listComplete` says there is one, and kept
   by `communityBan` events, which reach holders of Ban members) with Lift ban; someone banned
   who tries an invite is answered `banned` with the reason, which the invite screen shows), and
   `AccessDialog`, opened from a channel's menu or a

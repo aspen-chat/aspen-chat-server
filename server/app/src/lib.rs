@@ -218,5 +218,9 @@ where
 
 pub const ASPEN_NATS_STREAM_NAME: &str = "aspen_omni_stream";
 
+/// The most records one page of a moderator's or an owner's list holds (bans, server mutes,
+/// invites, held messages), and how many it holds when the read does not say.
+pub const LIST_PAGE: i64 = 100;
+
 pub mod events;
 pub use events::{EventScope, publish_event};

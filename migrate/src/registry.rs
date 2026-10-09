@@ -113,4 +113,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261009_072442_held_message_channel_index::M,
     &migrations::m20261009_080000_upkeep::M,
     &migrations::m20261009_080100_evidence_retention::M,
+    &migrations::m20261009_080200_paging::M,
 ];

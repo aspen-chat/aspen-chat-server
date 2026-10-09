@@ -98,16 +98,20 @@ pub async fn check_not_banned(
     }
 }
 
-/// The community's standing bans, newest first, for a holder of Ban members.
+/// A page of the community's standing bans, newest first, for a holder of Ban members: `limit`
+/// of them (at most [`crate::LIST_PAGE`]) after the ban of `before`, through
+/// `community_ban_listed`.
 pub async fn read_bans(
     state: &GlobalServerContext,
     caller: UserId,
     community: CommunityId,
+    before: Option<UserId>,
+    limit: i64,
 ) -> crate::Result<Vec<message_enum::CommunityBan>> {
     let mut conn = state.connection_pool.get().await?;
     let access = require_member(conn.as_mut(), caller, community).await?;
     access.require(Permissions::BAN_MEMBERS)?;
-    let rows: Vec<CommunityBanRow> = community_ban::table
+    let mut query = community_ban::table
         .select(CommunityBanRow::as_select())
         .filter(community_ban::community.eq(community))
         .filter(
@@ -115,7 +119,28 @@ pub async fn read_bans(
                 .is_null()
                 .or(community_ban::until.gt(Utc::now())),
         )
-        .order(community_ban::banned_at.desc())
+        .into_boxed();
+    if let Some(before) = before {
+        let Some((at, user)) = community_ban::table
+            .select((community_ban::banned_at, community_ban::user))
+            .filter(community_ban::community.eq(community))
+            .filter(community_ban::user.eq(before))
+            .first::<(DateTime<Utc>, UserId)>(conn.as_mut())
+            .await
+            .optional()?
+        else {
+            // The ban the page continues after was lifted meanwhile; the caller reads again.
+            return Ok(Vec::new());
+        };
+        query = query.filter(
+            community_ban::banned_at.lt(at).or(community_ban::banned_at
+                .eq(at)
+                .and(community_ban::user.lt(user))),
+        );
+    }
+    let rows: Vec<CommunityBanRow> = query
+        .order((community_ban::banned_at.desc(), community_ban::user.desc()))
+        .limit(limit.clamp(1, crate::LIST_PAGE))
         .load(conn.as_mut())
         .await?;
     Ok(rows.iter().map(message_enum::CommunityBan::from).collect())

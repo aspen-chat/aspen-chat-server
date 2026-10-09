@@ -715,8 +715,9 @@ export function useVoiceMutes(communityId: string): readonly VoiceMute[] | undef
 }
 
 /**
- * Whether a moderator's mute of `userId` stands in `communityId`'s calls, from the community's
- * mutes, which are read when `load` (the caller holds Manage calls); `undefined` while unknown.
+ * Whether a moderator's mute of `userId` stands in `communityId`'s calls, read for that one
+ * person when `load` (the caller holds Manage calls) and kept by events; `undefined` while
+ * unknown.
  */
 export function useVoiceMuted(
   communityId: string | null,
@@ -725,15 +726,23 @@ export function useVoiceMuted(
 ): boolean | undefined {
   const sync = useSync();
   const id = communityId ?? "";
-  const mutes = useTopic(`voiceMutes:${id}`, (s) =>
-    communityId === null ? undefined : s.voiceMutes(communityId),
+  const muted = useTopic(`voiceMute:${id}:${userId}`, (s) =>
+    communityId === null ? undefined : s.voiceMuted(communityId, userId),
   );
   useEffect(() => {
-    if (load && communityId !== null && mutes === undefined) {
-      void sync.loadVoiceMutes(communityId).catch(() => undefined);
+    if (load && communityId !== null && muted === undefined) {
+      void sync.loadVoiceMute(communityId, userId).catch(() => undefined);
     }
-  }, [sync, communityId, mutes, load]);
-  return mutes?.some((mute) => mute.user === userId);
+  }, [sync, communityId, userId, muted, load]);
+  return muted;
+}
+
+/**
+ * Whether the paged list of `topic` (`bans:<id>`, `voiceMutes:<id>`, `invites:<id>`) holds
+ * every record, so there is no further page to offer.
+ */
+export function useListComplete(topic: string): boolean {
+  return useTopic(topic, (s) => s.listComplete(topic));
 }
 
 /** The roles a member holds besides everyone's, or `undefined` while unknown. */
