@@ -1,3 +1,29 @@
+CREATE TABLE plugin_timer (
+    plugin TEXT NOT NULL REFERENCES plugin (id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    due TIMESTAMPTZ NOT NULL,
+    payload TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    claimed_until TIMESTAMPTZ,
+    scope_kind TEXT CHECK (scope_kind IN ('community', 'channel', 'user')),
+    scope UUID,
+    owner_kind TEXT NOT NULL DEFAULT 'deployment'
+        CHECK (owner_kind IN ('deployment', 'community', 'direct', 'user')),
+    owner UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    PRIMARY KEY (plugin, key),
+    CONSTRAINT plugin_timer_scope_whole CHECK ((scope_kind IS NULL) = (scope IS NULL))
+);
+CREATE INDEX plugin_timer_by_due ON plugin_timer (due);
+CREATE INDEX plugin_timer_by_scope ON plugin_timer (scope_kind, scope) WHERE scope IS NOT NULL;
+CREATE INDEX plugin_timer_by_owner ON plugin_timer (plugin, owner_kind, owner);
+INSERT INTO plugin_timer (plugin, key, due, payload, attempts, scope_kind, scope, owner_kind, owner)
+SELECT payload->>'plugin', payload->>'key', due, payload->>'payload', attempts,
+       payload->>'scopeKind', (payload->>'scope')::uuid, payload->>'ownerKind',
+       (payload->>'owner')::uuid
+FROM job WHERE kind = 'firePluginTimer' AND failed_at IS NULL
+  AND EXISTS (SELECT 1 FROM plugin p WHERE p.id = job.payload->>'plugin');
+DROP INDEX job_plugin_timer_owner;
+DROP INDEX job_plugin_timer_scope;
 DROP INDEX held_message_by_author;
 CREATE INDEX held_message_author_idx ON held_message (author);
 ALTER TABLE held_message ADD COLUMN not_before TIMESTAMPTZ NOT NULL DEFAULT now(),

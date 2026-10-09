@@ -116,3 +116,23 @@ FROM held_message;
 ALTER TABLE held_message DROP COLUMN not_before, DROP COLUMN attempts;
 DROP INDEX held_message_author_idx;
 CREATE INDEX held_message_by_author ON held_message (author, held_at, id);
+
+-- Each plugin's timer is a job of its own (`firePluginTimer`), keyed by its plugin and its key
+-- (`plugin/key`), due when the timer is, whose payload names the plugin, the key, what it hands
+-- the plugin, the scope it was set in, and the owner whose share it counts in. The timer table
+-- goes.
+INSERT INTO job (id, kind, key, class, due, not_before, payload, attempts)
+SELECT gen_random_uuid(), 'firePluginTimer', plugin || '/' || key, 2, due, due,
+       jsonb_strip_nulls(jsonb_build_object(
+           'plugin', plugin, 'key', key, 'payload', payload, 'scopeKind', scope_kind,
+           'scope', scope, 'ownerKind', owner_kind, 'owner', owner)),
+       attempts
+FROM plugin_timer;
+DROP TABLE plugin_timer;
+-- A plugin's timers in one owner's share, which setting one counts and purging the plugin walks.
+CREATE INDEX job_plugin_timer_owner
+    ON job ((payload->>'plugin'), (payload->>'ownerKind'), (payload->>'owner'))
+    WHERE kind = 'firePluginTimer';
+-- The timers set in a scope, which go with what the plugin keeps there.
+CREATE INDEX job_plugin_timer_scope ON job ((payload->>'scopeKind'), (payload->>'scope'))
+    WHERE kind = 'firePluginTimer' AND payload ? 'scope';

@@ -82,6 +82,7 @@ it missed rather than running them all at once.
 | `makePicturePreview` | interactive, or bulk for what the migration queued | Making one picture's preview, keyed by its attachment (see Attachment previews), on servers whose `[media.previews]` has `make` on, at most `concurrency` previews at once; a failure waits a minute, doubling, six times, and one no server made within seven days is deleted by `pruneFailedJobs`. Its payload holds until when the messages holding the attachment wait for it (`holdUntil`). |
 | `makeVideoPoster` | as `makePicturePreview` | Taking one video's poster, as `makePicturePreview` makes a picture's, on the servers among those that can run `ffmpeg` and `ffprobe`. |
 | `releaseHeldMessage` | interactive | Posting one held message, keyed by it, once no preview job holds it and no message its author sent before it is still held (see Attachment previews); a failure waits thirty seconds, and the tenth drops the message and tells its author why. |
+| `firePluginTimer` | normal | Handing a plugin one of its timers when it falls due (`plugin::timer::fire_step`), keyed `plugin/key`; set again, the job is replaced under a new id. A timer of a plugin that is off waits until it is turned on; three failures give it up (see Plugins). |
 
 ## Watching jobs
 

@@ -482,13 +482,15 @@ pub async fn purge_step(
     if !still_removed(conn.as_mut(), &id).await? {
         return Ok(Outcome::Done);
     }
-    for table in [
-        "plugin_storage",
-        "plugin_storage_usage",
-        "plugin_timer",
-        "plugin_capability",
-        "community_plugin",
-    ] {
+    for table in ["plugin_storage", "plugin_storage_usage"] {
+        if delete_batch(conn.as_mut(), table, &id).await? {
+            return Ok(Outcome::Progress(serde_json::Value::Null));
+        }
+    }
+    if super::timer::forget_batch(conn.as_mut(), &id, RETIRE_BATCH).await? >= RETIRE_BATCH {
+        return Ok(Outcome::Progress(serde_json::Value::Null));
+    }
+    for table in ["plugin_capability", "community_plugin"] {
         if delete_batch(conn.as_mut(), table, &id).await? {
             return Ok(Outcome::Progress(serde_json::Value::Null));
         }
@@ -545,6 +547,9 @@ pub async fn update(
         ))
         .execute(conn)
         .await?;
+    if enabled == Some(true) && !installed.enabled {
+        super::timer::wake(conn, id).await?;
+    }
     find(conn, id).await
 }
 

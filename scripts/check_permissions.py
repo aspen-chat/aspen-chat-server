@@ -1878,14 +1878,14 @@ def calendar_channels(world: World, check: Checks) -> None:
     check("but may delete their own",
           stack.status("DELETE", f"{events}/{mine}", token=member) == 204)
     check("and its reminder goes with it",
-          psql(f"SELECT count(*) FROM plugin_timer WHERE key = 'remind:{mine}'", stack.database) == "0")
+          psql(f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND key = '{CALENDAR_ID}/remind:{mine}'", stack.database) == "0")
     # Deleting the calendar deletes the reminders set in it, with its events.
     check("an event's reminder is kept in the calendar's scope",
-          psql(f"SELECT count(*) FROM plugin_timer WHERE scope = '{calendar}'", stack.database) != "0")
+          psql(f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND payload->>'scope' = '{calendar}'", stack.database) != "0")
     world.as_owner("DELETE", f"/channels/{calendar}")
     # What a plugin kept in a deleted channel is forgotten by a job (`forgetPluginScope`).
     check("deleting the calendar deletes its reminders, shortly after", eventually(
-        lambda: psql(f"SELECT count(*) FROM plugin_timer WHERE scope = '{calendar}'", stack.database) == "0"))
+        lambda: psql(f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND payload->>'scope' = '{calendar}'", stack.database) == "0"))
     stack.command("plugins", "disable", CALENDAR_ID)
 
 

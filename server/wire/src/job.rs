@@ -125,6 +125,8 @@ pub enum JobKind {
     MakeVideoPoster,
     /// Posting a message held for its previews once nothing holds it.
     ReleaseHeldMessage,
+    /// Handing a plugin one of its timers once it falls due.
+    FirePluginTimer,
 }
 
 crate::wire_name_traits!(JobKind);

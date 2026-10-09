@@ -366,6 +366,7 @@ fn max_attempts(kind: JobKind) -> i32 {
             crate::attachment::preview::MAX_ATTEMPTS
         }
         JobKind::ReleaseHeldMessage => crate::message::held::MAX_ATTEMPTS,
+        JobKind::FirePluginTimer => crate::plugin::timer::MAX_ATTEMPTS,
         _ => 5,
     }
 }
@@ -419,6 +420,7 @@ async fn step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outco
             crate::attachment::preview::make_step(state, job).await
         }
         JobKind::ReleaseHeldMessage => crate::message::held::release_step(state, job).await,
+        JobKind::FirePluginTimer => crate::plugin::timer::fire_step(state, job).await,
     }
 }
 

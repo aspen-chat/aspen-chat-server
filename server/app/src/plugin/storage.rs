@@ -14,7 +14,7 @@
 use super::host::wit;
 use crate::context::GlobalServerContext;
 use crate::{ChannelId, CommunityId, UserId};
-use aspen_schema::{plugin_storage, plugin_storage_usage, plugin_timer};
+use aspen_schema::{plugin_storage, plugin_storage_usage};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -537,13 +537,13 @@ async fn forget_in(
         #[diesel(sql_type = diesel::sql_types::BigInt)]
         values: i64,
     }
-    diesel::delete(
-        plugin_timer::table.filter(
-            plugin_timer::scope_kind
-                .eq(kind)
-                .and(plugin_timer::scope.eq_any(ids)),
-        ),
+    diesel::sql_query(
+        "DELETE FROM job WHERE kind = $1 AND payload ? 'scope' \
+         AND payload->>'scopeKind' = $2 AND payload->>'scope' = ANY($3::uuid[]::text[])",
     )
+    .bind::<diesel::sql_types::Text, _>(crate::jobs::JobKind::FirePluginTimer)
+    .bind::<diesel::sql_types::Text, _>(kind)
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(ids)
     .execute(conn)
     .await?;
     // What went is summed per plugin in the statement that deletes it.

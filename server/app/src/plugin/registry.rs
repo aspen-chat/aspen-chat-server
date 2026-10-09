@@ -579,7 +579,6 @@ impl Plugins {
 pub async fn start(state: &GlobalServerContext) -> crate::Result<()> {
     host::start_ticker(state.plugins.engine.clone());
     state.plugins.reload(state).await?;
-    super::timer::spawn(state.clone());
     let client = state.nats_context.client();
     let state = state.clone();
     tokio::spawn(async move {
