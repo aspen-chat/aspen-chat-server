@@ -54,7 +54,7 @@ fn key_error(message: &str) -> crate::Error {
 /// (`app::voice::spawn_token_key_answerer`), so a voice server taken over can check tokens but
 /// not make them.
 #[derive(Clone)]
-pub struct JoinTokenKey(std::sync::Arc<ring::signature::Ed25519KeyPair>);
+pub struct JoinTokenKey(std::sync::Arc<aws_lc_rs::signature::Ed25519KeyPair>);
 
 impl std::fmt::Debug for JoinTokenKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -67,22 +67,24 @@ impl JoinTokenKey {
     pub async fn load(conn: &mut AsyncPgConnection) -> crate::Result<Self> {
         let invalid = |_| key_error("the join token key is not an Ed25519 key");
         let document = load_or_make(conn, JOIN_TOKENS, || {
-            ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
-                .map(|document| document.as_ref().to_vec())
-                .map_err(|_| key_error("could not make a join token key"))
+            aws_lc_rs::signature::Ed25519KeyPair::generate_pkcs8(
+                &aws_lc_rs::rand::SystemRandom::new(),
+            )
+            .map(|document| document.as_ref().to_vec())
+            .map_err(|_| key_error("could not make a join token key"))
         })
         .await?;
-        let pair = ring::signature::Ed25519KeyPair::from_pkcs8(&document).map_err(invalid)?;
+        let pair = aws_lc_rs::signature::Ed25519KeyPair::from_pkcs8(&document).map_err(invalid)?;
         Ok(Self(std::sync::Arc::new(pair)))
     }
 
-    pub fn pair(&self) -> &ring::signature::Ed25519KeyPair {
+    pub fn pair(&self) -> &aws_lc_rs::signature::Ed25519KeyPair {
         &self.0
     }
 
     /// Its public half, as voice servers are given it.
     pub fn public(&self) -> voice_protocol::control::TokenKey {
-        use ring::signature::KeyPair;
+        use aws_lc_rs::signature::KeyPair;
         let public = self.0.public_key().as_ref();
         voice_protocol::control::TokenKey {
             key_id: voice_protocol::token::key_id(public),
@@ -95,7 +97,7 @@ impl JoinTokenKey {
 /// could be reversed by trying every code, by whoever reads Valkey, while its HMAC under a key
 /// only the database holds cannot.
 #[derive(Clone)]
-pub struct CodeKey(ring::hmac::Key);
+pub struct CodeKey(aws_lc_rs::hmac::Key);
 
 impl std::fmt::Debug for CodeKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -125,13 +127,16 @@ impl CodeKey {
     }
 
     fn from_secret(secret: &[u8]) -> Self {
-        Self(ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret))
+        Self(aws_lc_rs::hmac::Key::new(
+            aws_lc_rs::hmac::HMAC_SHA256,
+            secret,
+        ))
     }
 
     /// What `code` is kept as: its HMAC, with surrounding space taken off, as the person may have
     /// typed it.
     pub fn digest(&self, code: &str) -> String {
-        BASE64_URL_SAFE_NO_PAD.encode(ring::hmac::sign(&self.0, code.trim().as_bytes()))
+        BASE64_URL_SAFE_NO_PAD.encode(aws_lc_rs::hmac::sign(&self.0, code.trim().as_bytes()))
     }
 }
 

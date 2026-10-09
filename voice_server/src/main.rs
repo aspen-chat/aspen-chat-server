@@ -136,10 +136,10 @@ async fn main() -> anyhow::Result<()> {
     if matches!(config.nats_auth()?, config::NatsAuth::Token(_)) {
         tracing::warn!(
             "signing in to NATS with the deployment's token, which lets this server do anything \
-             the API servers can; give it a NATS user of its own ([nats])"
+             the API servers can; give it a NATS user of its own ([nats_user])"
         );
     }
-    let reporter = reporter::Reporter::connect(&config.nats_url, config.nats_auth()?, config.id)
+    let reporter = reporter::Reporter::connect(&config, config.nats_auth()?)
         .await
         .context("failed to connect to NATS")?;
     aspen_limits::suspension::watch(reporter.client(), limits.suspension().clone(), "voice");

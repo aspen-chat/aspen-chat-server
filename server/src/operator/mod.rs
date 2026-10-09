@@ -62,8 +62,7 @@ async fn publisher(config: &AspenConfig) -> Result<aspen_app::events::Publisher>
 }
 
 async fn database(config: &AspenConfig) -> Result<diesel_async::AsyncPgConnection> {
-    use diesel_async::AsyncConnection;
-    diesel_async::AsyncPgConnection::establish(&config.database_url)
+    aspen_app::database::connect(&config.database_url)
         .await
         .context("could not connect to the database")
 }

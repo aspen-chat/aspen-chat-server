@@ -815,8 +815,8 @@ async fn end_stay(
 mod tests {
     use super::*;
     use crate::FederationKeyId;
-    use ring::rand::SystemRandom;
-    use ring::signature::Ed25519KeyPair;
+    use aws_lc_rs::rand::SystemRandom;
+    use aws_lc_rs::signature::Ed25519KeyPair;
 
     /// The longest domain there can be: a 253-byte name and a five-digit port.
     fn longest_domain(first: char) -> Domain {

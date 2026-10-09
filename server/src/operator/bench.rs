@@ -23,8 +23,7 @@ pub enum BenchCommand {
 }
 
 pub async fn bench(config: &AspenConfig, command: BenchCommand) -> Result<()> {
-    use diesel_async::AsyncConnection;
-    let mut conn = diesel_async::AsyncPgConnection::establish(&config.database_url)
+    let mut conn = aspen_app::database::connect(&config.database_url)
         .await
         .context("could not connect to the database")?;
     match command {

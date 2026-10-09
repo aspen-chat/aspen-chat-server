@@ -76,14 +76,6 @@ const MEDIASOUP: readonly NativeLibrary[] = [
   },
   {
     component: "server",
-    name: "OpenSSL",
-    license: "Apache-2.0",
-    url: "https://www.openssl.org",
-    texts: ["openssl-LICENSE.txt"],
-    version: { wrap: "openssl", directory: "openssl-3.0.8", version: "3.0.8" },
-  },
-  {
-    component: "server",
     name: "unordered_dense",
     license: "MIT",
     url: "https://github.com/martinus/unordered_dense",
@@ -93,10 +85,11 @@ const MEDIASOUP: readonly NativeLibrary[] = [
 ];
 
 /**
- * The wraps mediasoup has that no shipped build compiles: its tests' framework, and Windows'
- * `getopt`, the voice server running on Linux alone.
+ * The wraps mediasoup has that no shipped build compiles: its tests' framework, Windows'
+ * `getopt`, the voice server running on Linux alone, and OpenSSL, since the voice server builds
+ * the worker against the system's (`system-openssl`).
  */
-export const UNSHIPPED_WRAPS: readonly string[] = ["catch2", "wingetopt"];
+export const UNSHIPPED_WRAPS: readonly string[] = ["catch2", "openssl", "wingetopt"];
 
 const OBS_VERSION = "32.2.2";
 

@@ -115,8 +115,8 @@ pub fn key_id(public_key: &[u8]) -> String {
 
 /// Signs `claims` with the API servers' join token key: the key's id, the base64url claims, and
 /// the base64url Ed25519 signature of the first two parts as they stand, joined by dots.
-pub fn sign(claims: &JoinClaims, key: &ring::signature::Ed25519KeyPair) -> String {
-    use ring::signature::KeyPair;
+pub fn sign(claims: &JoinClaims, key: &aws_lc_rs::signature::Ed25519KeyPair) -> String {
+    use aws_lc_rs::signature::KeyPair;
     let payload = serde_json::to_vec(claims).expect("claims serialize");
     let signed = format!(
         "{}.{}",
@@ -156,7 +156,7 @@ pub fn verify(
     let signature = URL_SAFE_NO_PAD
         .decode(signature)
         .map_err(|_| TokenError::Malformed)?;
-    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public_key)
+    aws_lc_rs::signature::UnparsedPublicKey::new(&aws_lc_rs::signature::ED25519, public_key)
         .verify(signed.as_bytes(), &signature)
         .map_err(|_| TokenError::BadSignature)?;
     let (_, payload) = signed.split_once('.').ok_or(TokenError::Malformed)?;
@@ -225,16 +225,17 @@ mod tests {
         }
     }
 
-    fn key() -> ring::signature::Ed25519KeyPair {
-        let document =
-            ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
-                .unwrap();
-        ring::signature::Ed25519KeyPair::from_pkcs8(document.as_ref()).unwrap()
+    fn key() -> aws_lc_rs::signature::Ed25519KeyPair {
+        let document = aws_lc_rs::signature::Ed25519KeyPair::generate_pkcs8(
+            &aws_lc_rs::rand::SystemRandom::new(),
+        )
+        .unwrap();
+        aws_lc_rs::signature::Ed25519KeyPair::from_pkcs8(document.as_ref()).unwrap()
     }
 
     #[test]
     fn signed_tokens_round_trip_and_refuse_what_they_should() {
-        use ring::signature::KeyPair;
+        use aws_lc_rs::signature::KeyPair;
         let (key, other) = (key(), key());
         let public = key.public_key().as_ref().to_vec();
         let claims = claims();

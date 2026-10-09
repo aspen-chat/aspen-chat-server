@@ -506,6 +506,7 @@ mod tests {
                 send,
                 max_per_second,
                 from: "Aspen <noreply@example.org>".to_string(),
+                tls: None,
             },
             "https://chat.example.org",
         )

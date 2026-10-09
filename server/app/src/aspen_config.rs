@@ -5,6 +5,8 @@ use smart_default::SmartDefault;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
+pub use aspen_tls::TlsFiles;
+
 /// Its `Debug` leaves out the secrets it holds (`AspenConfig`'s own impl, below), so a config
 /// written to a log gives none away.
 #[derive(Clone, Deserialize)]
@@ -33,14 +35,22 @@ pub struct AspenConfig {
     pub database_pool_wait_seconds: u64,
     pub nats_url: String,
     /// The token NATS was started with, when it signs everyone in by one token. Exactly one of
-    /// this and `[nats]` is given (`AspenConfig::nats_options`).
+    /// this and `[nats_user]` is given (`AspenConfig::nats_options`).
     #[serde(default)]
     pub nats_auth_token: Option<String>,
     /// A NATS user for the API servers, when NATS has users: so that each voice server signs
     /// in as a user allowed only its own subjects (`docs/operators/installing.md`).
     #[serde(default)]
-    pub nats: Option<NatsUser>,
+    pub nats_user: Option<NatsUser>,
+    /// TLS to NATS: `[nats.tls]`'s certificate files, which also make TLS required.
+    #[serde(default)]
+    pub nats: NatsConfig,
+    /// Valkey, as `redis://` or, over TLS, `rediss://`. A password in it is refused unencrypted
+    /// to anything but this machine (`AspenConfig::check_valkey`).
     pub valkey_url: String,
+    /// TLS to Valkey: `[valkey.tls]`'s certificate files, which need a `rediss://` `valkey_url`.
+    #[serde(default)]
+    pub valkey: ValkeyConfig,
     #[serde(default)]
     pub media: MediaConfig,
     #[serde(default)]
@@ -429,6 +439,20 @@ pub struct NatsUser {
     pub password: String,
 }
 
+/// `[nats]`: how NATS is reached besides its address and credentials.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NatsConfig {
+    pub tls: Option<TlsFiles>,
+}
+
+/// `[valkey]`: how Valkey is reached besides its address.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ValkeyConfig {
+    pub tls: Option<TlsFiles>,
+}
+
 /// Stands for a secret in a `Debug` impl.
 struct Redacted;
 
@@ -467,8 +491,10 @@ impl std::fmt::Debug for AspenConfig {
             database_pool_wait_seconds,
             nats_url,
             nats_auth_token,
+            nats_user,
             nats,
             valkey_url,
+            valkey,
             media,
             voice,
             limits,
@@ -496,8 +522,10 @@ impl std::fmt::Debug for AspenConfig {
                 "nats_auth_token",
                 &nats_auth_token.as_ref().map(|_| Redacted),
             )
+            .field("nats_user", nats_user)
             .field("nats", nats)
             .field("valkey_url", &RedactedUrl(valkey_url))
+            .field("valkey", valkey)
             .field("media", media)
             .field("voice", voice)
             .field("limits", limits)
@@ -526,29 +554,69 @@ impl std::fmt::Debug for NatsUser {
 }
 
 impl AspenConfig {
-    /// How to sign in to NATS: as the `[nats]` user or with `nats_auth_token`, whichever is
-    /// given (`load_config` refuses both or neither).
+    /// How to reach NATS: signing in as the `[nats_user]` user or with `nats_auth_token`,
+    /// whichever is given (`load_config` refuses both or neither), over TLS as `[nats.tls]` says.
     pub fn nats_options(&self) -> async_nats::ConnectOptions {
-        match (&self.nats, &self.nats_auth_token) {
+        let options = match (&self.nats_user, &self.nats_auth_token) {
             (Some(NatsUser { user, password }), _) => {
                 async_nats::ConnectOptions::with_user_and_password(user.clone(), password.clone())
             }
             (None, token) => {
                 async_nats::ConnectOptions::with_token(token.clone().unwrap_or_default())
             }
-        }
+        };
+        aspen_tls::nats_options(options, self.nats.tls.as_ref())
+    }
+
+    /// Connects to NATS as `nats_options` says.
+    pub async fn connect_nats(&self) -> Result<async_nats::Client, async_nats::ConnectError> {
+        async_nats::connect_with_options(&self.nats_url, self.nats_options()).await
     }
 
     fn check_nats(&self) -> Result<(), config::ConfigError> {
-        match (&self.nats, &self.nats_auth_token) {
+        if let Some(tls) = &self.nats.tls {
+            tls.identity("nats.tls")
+                .map_err(config::ConfigError::Message)?;
+        }
+        match (&self.nats_user, &self.nats_auth_token) {
             (Some(_), None) | (None, Some(_)) => Ok(()),
             (None, None) => Err(config::ConfigError::Message(
-                "give nats_auth_token, or [nats] user and password".to_string(),
+                "give nats_auth_token, or [nats_user] user and password".to_string(),
             )),
             (Some(_), Some(_)) => Err(config::ConfigError::Message(
-                "give either nats_auth_token or [nats] user and password, not both".to_string(),
+                "give either nats_auth_token or [nats_user] user and password, not both"
+                    .to_string(),
             )),
         }
+    }
+
+    /// Refuses `[valkey.tls]` with a `valkey_url` that does not use TLS, which would ignore it,
+    /// and a password in a `valkey_url` without TLS to anything but this machine, where whoever
+    /// reads the network would read it.
+    fn check_valkey(&self) -> Result<(), config::ConfigError> {
+        let message = |text: &str| Err(config::ConfigError::Message(text.to_string()));
+        let Ok(url) = url::Url::parse(&self.valkey_url) else {
+            // fred reports what is wrong with it when the client is made.
+            return Ok(());
+        };
+        let encrypted = matches!(url.scheme(), "rediss" | "valkeys");
+        if let Some(tls) = &self.valkey.tls {
+            tls.identity("valkey.tls")
+                .map_err(config::ConfigError::Message)?;
+            if !encrypted {
+                return message(
+                    "[valkey.tls] is given but valkey_url does not use TLS; name it with rediss://",
+                );
+            }
+        }
+        let loopback = url.host().is_some_and(|host| is_loopback_host(&host));
+        if url.password().is_some() && !encrypted && !loopback {
+            return message(
+                "valkey_url would send its password unencrypted; name Valkey with rediss:// and \
+                 give it a certificate (tls-port, tls-cert-file, tls-key-file)",
+            );
+        }
+        Ok(())
     }
 }
 
@@ -585,6 +653,9 @@ pub struct EmailConfig {
     pub max_per_second: Option<u32>,
     /// Who mail comes from, such as `Aspen <noreply@chat.example.org>`.
     pub from: String,
+    /// `[email.tls]`: authorities to trust besides the system's, and a client certificate, for
+    /// an `smtp_url` that uses TLS.
+    pub tls: Option<TlsFiles>,
 }
 
 impl std::fmt::Debug for EmailConfig {
@@ -594,12 +665,14 @@ impl std::fmt::Debug for EmailConfig {
             send,
             max_per_second,
             from,
+            tls,
         } = self;
         f.debug_struct("EmailConfig")
             .field("smtp_url", &smtp_url.as_deref().map(RedactedUrl))
             .field("send", send)
             .field("max_per_second", max_per_second)
             .field("from", from)
+            .field("tls", tls)
             .finish()
     }
 }
@@ -618,10 +691,7 @@ impl EmailConfig {
             return Ok(());
         };
         let has_credentials = !url.username().is_empty() || url.password().is_some();
-        let encrypted = url.scheme() == "smtps"
-            || url
-                .query_pairs()
-                .any(|(key, value)| key == "tls" && value == "required");
+        let encrypted = Self::encrypts(&url);
         let loopback = url.host().is_some_and(|host| is_loopback_host(&host));
         if has_credentials && !encrypted && !loopback {
             return Err(
@@ -633,7 +703,15 @@ impl EmailConfig {
         Ok(())
     }
 
-    /// Checks `from`, `smtp_url`, and `max_per_second`.
+    /// Whether `smtp_url` always uses TLS: `smtps://`, or STARTTLS with `tls=required`.
+    pub fn encrypts(smtp_url: &url::Url) -> bool {
+        smtp_url.scheme() == "smtps"
+            || smtp_url
+                .query_pairs()
+                .any(|(key, value)| key == "tls" && value == "required")
+    }
+
+    /// Checks `from`, `smtp_url`, `max_per_second`, and `[email.tls]`.
     fn validate(&self) -> Result<(), config::ConfigError> {
         let message = |text: String| config::ConfigError::Message(text);
         if self.send && self.smtp_url.is_none() {
@@ -645,6 +723,21 @@ impl EmailConfig {
         }
         if let Some(smtp_url) = &self.smtp_url {
             Self::check_smtp_encrypted(smtp_url).map_err(message)?;
+        }
+        if let Some(tls) = &self.tls {
+            tls.identity("email.tls").map_err(message)?;
+            let encrypted = self
+                .smtp_url
+                .as_deref()
+                .and_then(|url| url::Url::parse(url).ok())
+                .is_some_and(|url| Self::encrypts(&url));
+            if !encrypted {
+                return Err(message(
+                    "[email.tls] is given but email.smtp_url does not always use TLS; use \
+                     smtps:// or add ?tls=required"
+                        .to_string(),
+                ));
+            }
         }
         if self.max_per_second == Some(0) {
             return Err(message(
@@ -710,6 +803,9 @@ pub struct MediaS3Config {
     /// later.
     #[default = 900]
     pub upload_url_ttl_seconds: u64,
+    /// `[media.s3.tls]`: authorities to trust besides the system's for an `https` `endpoint`
+    /// (`ca_file` alone; the S3 client presents no client certificate).
+    pub tls: Option<TlsFiles>,
 }
 
 impl std::fmt::Debug for MediaS3Config {
@@ -723,6 +819,7 @@ impl std::fmt::Debug for MediaS3Config {
             secret_key: _,
             public_base_url,
             upload_url_ttl_seconds,
+            tls,
         } = self;
         f.debug_struct("MediaS3Config")
             .field("endpoint", endpoint)
@@ -733,7 +830,28 @@ impl std::fmt::Debug for MediaS3Config {
             .field("secret_key", &Redacted)
             .field("public_base_url", public_base_url)
             .field("upload_url_ttl_seconds", upload_url_ttl_seconds)
+            .field("tls", tls)
             .finish()
+    }
+}
+
+impl MediaS3Config {
+    /// Refuses `[media.s3.tls]` with an `endpoint` that is not `https`, which would ignore it, and
+    /// a client certificate, which the S3 client cannot present.
+    fn check_tls(&self) -> Result<(), config::ConfigError> {
+        let Some(tls) = &self.tls else {
+            return Ok(());
+        };
+        let message = |text: &str| Err(config::ConfigError::Message(text.to_string()));
+        if tls.cert_file.is_some() || tls.key_file.is_some() {
+            return message(
+                "[media.s3.tls] takes only ca_file: the S3 client presents no client certificate",
+            );
+        }
+        if !self.endpoint.starts_with("https://") {
+            return message("[media.s3.tls] is given but media.s3.endpoint is not https://");
+        }
+        Ok(())
     }
 }
 
@@ -773,6 +891,8 @@ pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
         RateLimitConfig::built_in()?.overlay(std::mem::take(&mut loaded.rate_limit_overrides))?;
     loaded.derive_from_public_url()?;
     loaded.check_nats()?;
+    loaded.check_valkey()?;
+    loaded.media.s3.check_tls()?;
     loaded.check_development_credentials()?;
     loaded.check_federation_development()?;
     if let Some(email) = &loaded.email {
@@ -795,17 +915,7 @@ const DEVELOPMENT_S3_KEYS: &[&str] = &[
 pub fn is_loopback_host(host: &url::Host<&str>) -> bool {
     match host {
         // A URL of a scheme `url` does not know (`smtp:`) holds even an address as a name.
-        url::Host::Domain(name) => match name
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<std::net::IpAddr>()
-        {
-            Ok(address) => address.is_loopback(),
-            Err(_) => {
-                let name = name.trim_end_matches('.').to_ascii_lowercase();
-                name == "localhost" || name.ends_with(".localhost")
-            }
-        },
+        url::Host::Domain(name) => aspen_tls::is_loopback(name),
         url::Host::Ipv4(address) => address.is_loopback(),
         url::Host::Ipv6(address) => address.is_loopback(),
     }
@@ -855,16 +965,13 @@ impl AspenConfig {
                  an https address needs one of its own, a long random string"
             )))
         };
-        let database_password = match url::Url::parse(&self.database_url) {
-            Ok(url) => url.password().map(str::to_string),
-            // libpq's `key=value` form.
-            Err(_) => self
-                .database_url
-                .split_whitespace()
-                .find_map(|pair| pair.strip_prefix("password="))
-                .map(|password| password.trim_matches('\'').to_string()),
-        };
-        if database_password.is_some_and(|password| DEVELOPMENT_PASSWORDS.contains(&&*password)) {
+        let database_password = crate::database::password(&self.database_url)
+            .map_err(|e| config::ConfigError::Message(e.to_string()))?;
+        if database_password.is_some_and(|password| {
+            DEVELOPMENT_PASSWORDS
+                .iter()
+                .any(|development| development.as_bytes() == password)
+        }) {
             return refuse("database_url's password");
         }
         if self
@@ -875,11 +982,11 @@ impl AspenConfig {
             return refuse("nats_auth_token");
         }
         if self
-            .nats
+            .nats_user
             .as_ref()
             .is_some_and(|nats| DEVELOPMENT_PASSWORDS.contains(&&*nats.password))
         {
-            return refuse("[nats] password");
+            return refuse("[nats_user] password");
         }
         let s3 = &self.media.s3;
         if DEVELOPMENT_S3_KEYS.contains(&&*s3.access_key) {
@@ -1058,7 +1165,7 @@ mod tests {
                 .try_deserialize()
                 .unwrap()
         };
-        let user = "[nats]\nuser = \"aspen\"\npassword = \"p\"";
+        let user = "[nats_user]\nuser = \"aspen\"\npassword = \"p\"";
         assert!(config("nats_auth_token = \"t\"").check_nats().is_ok());
         assert!(config(user).check_nats().is_ok());
         assert!(config("").check_nats().is_err());
@@ -1067,6 +1174,81 @@ mod tests {
                 .check_nats()
                 .is_err()
         );
+    }
+
+    /// Certificate files for a service are refused where its address would not use them, and a
+    /// client certificate without its key; Valkey's password travels only encrypted, except to
+    /// this machine; and `[nats]` takes only `tls`, a NATS user being `[nats_user]`.
+    #[test]
+    fn tls_files_go_with_tls() {
+        let parse = |toml: &str| -> Result<AspenConfig, String> {
+            config::Config::builder()
+                .add_source(config::File::from_str(
+                    &format!(
+                        "public_url = \"http://localhost\"\ndatabase_url = \"postgres://x\"\n\
+                         nats_url = \"nats://x\"\nnats_auth_token = \"t\"\n{toml}"
+                    ),
+                    config::FileFormat::Toml,
+                ))
+                .build()
+                .and_then(|built| built.try_deserialize())
+                .map_err(|e| e.to_string())
+        };
+        let valkey = |toml: &str| parse(toml).unwrap().check_valkey();
+        assert!(valkey("valkey_url = \"redis://localhost:6379\"").is_ok());
+        assert!(valkey("valkey_url = \"redis://:pw@127.0.0.1:6379\"").is_ok());
+        assert!(valkey("valkey_url = \"redis://valkey.internal:6379\"").is_ok());
+        assert!(valkey("valkey_url = \"redis://:pw@valkey.internal:6379\"").is_err());
+        assert!(valkey("valkey_url = \"rediss://:pw@valkey.internal:6379\"").is_ok());
+        let ca = "[valkey.tls]\nca_file = \"/ca.pem\"";
+        assert!(valkey(&format!("valkey_url = \"rediss://valkey.internal\"\n{ca}")).is_ok());
+        assert!(valkey(&format!("valkey_url = \"redis://valkey.internal\"\n{ca}")).is_err());
+        assert!(
+            valkey(
+                "valkey_url = \"rediss://valkey.internal\"\n[valkey.tls]\ncert_file = \"/c.pem\""
+            )
+            .is_err()
+        );
+
+        let nats = |toml: &str| {
+            parse(&format!("valkey_url = \"redis://x\"\n{toml}"))
+                .unwrap()
+                .check_nats()
+        };
+        assert!(nats("[nats.tls]\ncert_file = \"/c.pem\"\nkey_file = \"/k.pem\"").is_ok());
+        assert!(nats("[nats.tls]\nkey_file = \"/k.pem\"").is_err());
+        assert!(
+            parse("valkey_url = \"redis://x\"\n[nats]\nuser = \"a\"\npassword = \"p\"").is_err()
+        );
+
+        let s3 = |toml: &str| {
+            parse(&format!("valkey_url = \"redis://x\"\n[media.s3]\n{toml}"))
+                .unwrap()
+                .media
+                .s3
+                .check_tls()
+        };
+        assert!(s3("endpoint = \"https://s3.internal\"\ntls = { ca_file = \"/ca.pem\" }").is_ok());
+        assert!(s3("endpoint = \"http://s3.internal\"\ntls = { ca_file = \"/ca.pem\" }").is_err());
+        assert!(
+            s3("endpoint = \"https://s3.internal\"\ntls = { cert_file = \"/c\", key_file = \"/k\" }")
+                .is_err()
+        );
+
+        let email = |smtp_url: &str| {
+            parse(&format!(
+                "valkey_url = \"redis://x\"\n[email]\nfrom = \"a@example.org\"\n\
+                 smtp_url = \"{smtp_url}\"\n[email.tls]\nca_file = \"/ca.pem\""
+            ))
+            .unwrap()
+            .email
+            .unwrap()
+            .validate()
+        };
+        assert!(email("smtps://mail.internal").is_ok());
+        assert!(email("smtp://mail.internal?tls=required").is_ok());
+        assert!(email("smtp://mail.internal?tls=opportunistic").is_err());
+        assert!(email("smtp://localhost:1025").is_err());
     }
 
     /// A server that sends needs an SMTP server; one that only queues does not.
@@ -1212,7 +1394,7 @@ mod tests {
                 nats_url = "nats://x"
                 nats_auth_token = "nats-secret"
                 valkey_url = "redis://:valkey-secret@valkey:6379"
-                [nats]
+                [nats_user]
                 user = "aspen"
                 password = "nats-user-secret"
                 [media.s3]

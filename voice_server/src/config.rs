@@ -24,13 +24,16 @@ pub struct VoiceServerConfig {
     #[serde(default)]
     pub development: bool,
     pub nats_url: String,
-    /// How this server signs in to NATS: a user of its own (`[nats]`), allowed only this
+    /// How this server signs in to NATS: a user of its own (`[nats_user]`), allowed only this
     /// server's subjects, or the deployment's token, which lets it do anything the API servers
     /// can. Exactly one is given.
     #[serde(default)]
-    pub nats: Option<NatsUser>,
+    pub nats_user: Option<NatsUser>,
     #[serde(default)]
     pub nats_auth_token: Option<String>,
+    /// TLS to NATS: `[nats.tls]`'s certificate files, which also make TLS required.
+    #[serde(default)]
+    pub nats: NatsConfig,
     /// Where the HTTP server, health check, and signalling socket listen.
     #[serde(default = "default_listen_addr")]
     pub listen_addr: SocketAddr,
@@ -61,6 +64,13 @@ pub struct NatsUser {
     pub password: String,
 }
 
+/// `[nats]`: how NATS is reached besides its address and credentials.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NatsConfig {
+    pub tls: Option<aspen_tls::TlsFiles>,
+}
+
 /// How a voice server signs in to NATS.
 pub enum NatsAuth {
     User(NatsUser),
@@ -70,14 +80,19 @@ pub enum NatsAuth {
 impl VoiceServerConfig {
     /// The one way of signing in to NATS the settings give.
     pub fn nats_auth(&self) -> anyhow::Result<NatsAuth> {
-        match (&self.nats, &self.nats_auth_token) {
+        if let Some(tls) = &self.nats.tls {
+            tls.identity("nats.tls").map_err(anyhow::Error::msg)?;
+        }
+        match (&self.nats_user, &self.nats_auth_token) {
             (Some(user), None) => Ok(NatsAuth::User(user.clone())),
             (None, Some(token)) => Ok(NatsAuth::Token(token.clone())),
             (None, None) => anyhow::bail!(
-                "give [nats] user and password (a NATS user for voice servers), or nats_auth_token"
+                "give [nats_user] user and password (a NATS user for voice servers), or nats_auth_token"
             ),
             (Some(_), Some(_)) => {
-                anyhow::bail!("give either [nats] user and password or nats_auth_token, not both")
+                anyhow::bail!(
+                    "give either [nats_user] user and password or nats_auth_token, not both"
+                )
             }
         }
     }

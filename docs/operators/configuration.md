@@ -36,18 +36,20 @@ by each API server, at the same origin.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `database_url` | required | PostgreSQL, as `postgres://user:password@host/database`. |
+| `database_url` | required | PostgreSQL, as `postgres://user:password@host/database` or libpq's `host=… user=…` pairs, with libpq's TLS parameters: `sslmode` (`disable`; `prefer`, the default, and `require`, which encrypt without checking the certificate unless `sslrootcert` names a file; `verify-ca`; `verify-full`), `sslrootcert` (a PEM file of the authorities to trust, or `system`), and `sslcert` and `sslkey` (a client certificate and its key). `aspen-migrate` and the operator commands read it the same way. See [Network exposure](installing.md#network-exposure). |
 | `database_pool_size` | two per logical CPU | The most PostgreSQL connections this server holds at once. Every write holds one until NATS acknowledges its event, so a busy server may run out of connections before PostgreSQL runs out of CPU; the database connections metric shows requests waiting. Keep the total over every API server below PostgreSQL's `max_connections`. |
 | `database_pool_wait_seconds` | `10` | How long a request or background task waits for one of those connections before it is refused with `serverBusy`. A pool that runs dry, because NATS is slow to acknowledge or the server has more work than connections, then refuses work rather than holding it until it frees. |
-| `nats_url` | required | NATS with JetStream, as `host:4222`. |
+| `nats_url` | required | NATS with JetStream, as `host:4222`, or `tls://host:4222` over TLS. The server warns at startup when NATS on another machine is reached without TLS. |
 | `nats_auth_token` | | The token NATS was started with, when NATS takes one token from everyone. |
-| `[nats] user`, `password` | | The API servers' NATS user, when NATS has users, as it does once each voice server has one of its own ([Installing](installing.md#6-voice-servers)). Give exactly one of this and `nats_auth_token`. |
-| `valkey_url` | required | Valkey, as `redis://host:6379`. |
+| `[nats_user] user`, `password` | | The API servers' NATS user, when NATS has users, as it does once each voice server has one of its own ([Installing](installing.md#6-voice-servers)). Give exactly one of this and `nats_auth_token`. |
+| `[nats.tls]` | | `ca_file` (PEM authorities to trust besides the system's), `cert_file` and `key_file` (a PEM client certificate and its key, both or neither), for NATS. Given, TLS is required whatever `nats_url` names. |
+| `valkey_url` | required | Valkey, as `redis://host:6379`, or `rediss://host:6380` over TLS. The server refuses to start with a password in a `redis://` address unless the host is this machine. |
+| `[valkey.tls]` | | `ca_file` (PEM authorities to trust besides the system's), `cert_file` and `key_file` (a PEM client certificate and its key, both or neither), for Valkey; needs a `rediss://` `valkey_url`. |
 
 `docker-compose.yaml` and the development scripts publish passwords and keys in Aspen's repository
 (`aspen_test`, the storage keys, and `[media.s3]`'s defaults). A server whose `public_url` is
 `https` at a host other than `localhost` (or a name under it) refuses to start with any of them as
-`database_url`'s password, `nats_auth_token`, `[nats] password`, or `[media.s3] access_key` or
+`database_url`'s password, `nats_auth_token`, `[nats_user] password`, or `[media.s3] access_key` or
 `secret_key`, and says which to change.
 
 ## Event delivery
@@ -114,6 +116,7 @@ no harm.
 | `region` | `garage` | Whatever your storage expects; many accept any. |
 | `access_key`, `secret_key` | development values | A key pair that may read, write, delete, and list in the bucket. A server at a public `https` address refuses the development values. |
 | `upload_url_ttl_seconds` | `900` | How long an upload URL works. |
+| `[media.s3.tls] ca_file` | | PEM authorities this server trusts besides the system's for an `https` `endpoint`, such as storage on a private network with a certificate from your own authority. Clients reach `public_endpoint` and `public_base_url` with their own trust, so give those certificates clients trust. The S3 client presents no client certificate. |
 
 ## `[media.previews]`
 
@@ -223,6 +226,7 @@ and the rest need only `from`. Links in mail, unsubscribing included, go to `pub
 | `send` | `true` | Whether this server sends mail and makes daily digests. With it off, the server still takes addresses and queues mail, and tells the senders at once (over NATS) when someone waits for it; at least one server of the deployment must send, or mail waits until one does. |
 | `smtp_url` | required where `send` is on | The SMTP server mail is handed to: `smtps://user:password@smtp.example.org` (TLS from the start, port 465), `smtp://user:password@smtp.example.org?tls=required` (STARTTLS, port 587), or `smtp://localhost:1025` for a development mail catcher such as the `mailpit` service in `docker-compose.yaml` (its inbox is at http://localhost:8025). Percent-encode characters in the user and password that a URL reserves. The server refuses to start with a user or password in an `smtp://` address without `?tls=required` (`tls=opportunistic` can be stripped by whoever sits between) unless the host is this machine. Any provider that takes SMTP works (Amazon SES, Postmark, Mailgun, your own Postfix). |
 | `from` | required | Who mail comes from, such as `Example Chat <noreply@chat.example.org>`. Its domain should publish SPF and DKIM records for the SMTP server you use, or mail lands in spam. |
+| `[email.tls]` | | `ca_file` (PEM authorities to trust besides the system's), `cert_file` and `key_file` (a PEM client certificate and its key, both or neither), for an `smtp_url` that always uses TLS (`smtps://` or `?tls=required`). |
 | `max_per_second` | none | The most mail the whole deployment hands to the SMTP server in a second, however many servers send, counted in Valkey; set it under your provider's sending quota (Amazon SES starts accounts at 14 a second). A second's worth may go back to back. Left out, each sending server sends up to eight at once. |
 
 Mail the SMTP server refuses for good (an address that does not exist) is dropped and logged;
@@ -353,9 +357,10 @@ add, change, disable, and remove them in the dashboard. From the terminal:
 | `id` | required | The server's id in the registry (`SELECT id FROM voice_server WHERE name = '…'` once the API server has registered it). |
 | `token_secret` | | Only while upgrading from API servers that signed join tokens with a shared secret ([Upgrading](installing.md#from-shared-secret-join-tokens)): the server then also takes tokens signed with it, and warns at startup. Leave it out otherwise: join tokens are signed with the API servers' key, which the server asks them for over NATS. It refuses to start with the old development value or one shorter than 32 bytes, unless `development` is set. |
 | `development` | `false` | Lets the server start with a development or short `token_secret`. Never on a deployment people use: whoever knows the secret can join any call. |
-| `nats_url` | required | The same NATS as the API servers. |
-| `[nats] user`, `password` | | This voice server's own NATS user, allowed only its own subjects ([Installing](installing.md#6-voice-servers) gives its permissions). |
-| `nats_auth_token` | | The API servers' token instead, which lets this server do anything they can; the server warns at startup. Give exactly one of this and `[nats]`. |
+| `nats_url` | required | The same NATS as the API servers; `tls://` over TLS. The server warns at startup when NATS on another machine is reached without TLS. |
+| `[nats_user] user`, `password` | | This voice server's own NATS user, allowed only its own subjects ([Installing](installing.md#6-voice-servers) gives its permissions). |
+| `nats_auth_token` | | The API servers' token instead, which lets this server do anything they can; the server warns at startup. Give exactly one of this and `[nats_user]`. |
+| `[nats.tls]` | | As the API servers' `[nats.tls]`. |
 | `listen_addr` | `0.0.0.0:9001` | Where the health check and signalling listen, as plain HTTP; put a TLS proxy in front, and list it in `[rate_limits] trusted_proxies`, or every client counts as the proxy's address. The server warns at startup when this is a loopback address and no proxy is trusted. |
 | `workers` | one per CPU | Media worker processes, each using at most one core. If one dies the server stops, sending everyone in its calls to rejoin, and exits with an error: run it under a supervisor that restarts it (`Restart=on-failure`, `restart: unless-stopped`). |
 

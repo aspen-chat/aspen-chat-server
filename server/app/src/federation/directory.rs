@@ -448,7 +448,7 @@ mod tests {
             eprintln!("DATABASE_URL is not set; skipped");
             return;
         };
-        let mut conn = AsyncPgConnection::establish(&url).await.unwrap();
+        let mut conn = crate::database::connect(&url).await.unwrap();
         conn.begin_test_transaction().await.unwrap();
         conn.batch_execute(
             "INSERT INTO federated_deployment (domain, origin, created_at, note) VALUES

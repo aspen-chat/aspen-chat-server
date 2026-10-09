@@ -34,8 +34,10 @@ None of the four belongs on the internet: see [Network exposure](#network-exposu
 cargo build --release -p aspen-chat-server -p aspen-migrate -p voice_server
 ```
 
-The API server links the system's OpenSSL (for passkeys), so it needs OpenSSL's development
-files. To show videos inline with a poster, it runs `ffmpeg` and `ffprobe`, which it finds on
+Both servers link the system's OpenSSL (the API server for passkeys and PostgreSQL's TLS, the
+voice server for its calls' encryption), so building them needs OpenSSL 3's development files
+and `pkg-config`, and running them needs OpenSSL 3's libraries (`libssl3`), whose security
+updates then reach them with the system's. To show videos inline with a poster, it runs `ffmpeg` and `ffprobe`, which it finds on
 `PATH`; without them it shows pictures inline and offers videos for download (see
 [`[media.previews]`](configuration.md#mediapreviews)). The voice server builds mediasoup's C++ worker, which needs a C++ compiler, `make`, and
 Python 3. The binaries land in `target/release/`.
@@ -237,7 +239,7 @@ id = "…"
 nats_url = "nats.internal:4222"
 listen_addr = "127.0.0.1:9000"
 
-[nats]
+[nats_user]
 user = "voice-1"
 password = "…"
 
@@ -258,7 +260,7 @@ whoever holds it read and write every event of the deployment. NATS then signs e
 user, so the API servers get one too: replace their `nats_auth_token` with
 
 ```toml
-[nats]
+[nats_user]
 user = "aspen"
 password = "…"
 ```
@@ -400,17 +402,41 @@ of `ufw` and `firewalld`, whatever those say. Publish services only on loopback 
 address (`127.0.0.1:5432:5432`, as `docker-compose.yaml` does), leave them unpublished on a
 Docker network the servers share, or filter in the `DOCKER-USER` chain.
 
+**PostgreSQL** is reached in plaintext unless `database_url` asks for TLS, and a server in the
+middle can read every query and, unless the certificate is checked, ask for the password in the
+clear. When the database is on another machine, give PostgreSQL a certificate (`ssl = on` with
+`ssl_cert_file` and `ssl_key_file`, and `hostssl` lines in `pg_hba.conf` so it refuses plaintext)
+and check it from every server:
+`postgres://aspen:…@db.internal/aspen?sslmode=verify-full&sslrootcert=/etc/aspen/db-ca.pem`, or
+`sslrootcert=system` for a certificate from a public authority (a managed database's usually needs
+its provider's bundle as the file). `verify-ca` checks the authority but not the name, for a
+database reached by an address its certificate does not name. Where PostgreSQL authenticates by
+certificate (`cert` in `pg_hba.conf`), add `&sslcert=…&sslkey=…`. The servers sign in with SCRAM
+bound to the TLS session whenever PostgreSQL offers it; `&channel_binding=require` refuses any
+other sign-in.
+
 **Valkey** has no password by default. Set one (`requirepass`, or an ACL user) and give it in
-`valkey_url` (`redis://:password@valkey.internal:6379`, or `redis://user:password@…`). The API
-servers speak to Valkey without TLS, so keep it on the same machine or a private network; across
-anything else, carry it over a VPN such as WireGuard.
+`valkey_url` (`redis://:password@valkey.internal:6379`, or `redis://user:password@…`). Without TLS
+the password and everything stored cross the network readable, so the servers refuse a password
+in a `redis://` address to another machine: give Valkey a certificate (`tls-port`,
+`tls-cert-file`, `tls-key-file`, and `port 0` to refuse plaintext) and name it with `rediss://`.
+`[valkey.tls]` adds an authority to trust, for a certificate from your own, and a client
+certificate, for a Valkey that asks for one (`tls-auth-clients yes`).
 
 **NATS** must have a token or users ([Voice servers](#6-voice-servers) gives the users), and is
 reached by voice servers, which often run elsewhere. When a voice server reaches NATS across a
 network you do not control, give NATS a certificate (`tls { cert_file: …, key_file: … }` in its
 configuration; one from a public authority, or one the voice server's machine trusts) and name it
 with `tls://` in every `nats_url`, or connect the machines over a VPN. Without either, the NATS
-password and every event cross the network readable.
+password and every event cross the network readable, and every server warns at startup. With a
+certificate from your own authority, give `[nats.tls] ca_file` (in `aspen.toml` and each
+`voice_server.toml`); with `verify: true` in NATS's `tls` block, give each server `cert_file`
+and `key_file` too. `[nats.tls]` also makes TLS required, so no one between can strip it.
+
+**Object storage and SMTP** are reached over `https://` and `smtps://` (or `?tls=required`) like
+any other service; for a certificate from your own authority, give `[media.s3.tls] ca_file` and
+`[email.tls] ca_file`, and for an SMTP server that asks for a client certificate,
+`[email.tls] cert_file` and `key_file`.
 
 ### The storage's read path
 

@@ -7,6 +7,7 @@ license = "MPL-2.0"
 [dependencies]
 diesel = { version = "2.2.10", features = ["postgres", "chrono"] }
 diesel-async = { version = "0.7.4", features = ["postgres", "deadpool"] }
+aspen_database = { path = "../server/database" }
 tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }
 async-trait = "0.1.89"
 clap = { version = "4.5.37", features = ["derive"] }
