@@ -145,10 +145,20 @@ export const EVENT_REPLAY_WINDOW_MS = 60_000;
  */
 const BOOTSTRAP_STALE_AFTER_MS = EVENT_REPLAY_WINDOW_MS - 10_000;
 /**
- * How often presence is asked for while the sync is live and the page is visible. Presence is
- * pulled for the users on screen rather than pushed to everyone.
+ * How often the online counts of the channels shown are read while the sync is live and the
+ * page is visible.
  */
 export const PRESENCE_POLL_MS = 30_000;
+/**
+ * How often, at most, the presence of everyone shown is read whole. The event stream tells of
+ * changes to those watched as they happen (`watchPresence`); this read catches what it could
+ * not: a change lost on the way, and those beyond what one connection may watch.
+ */
+export const PRESENCE_READ_MS = 120_000;
+/** The most users one connection watches; mirrors the server's `MAX_WATCHED_PRESENCE`. */
+export const MAX_WATCHED_PRESENCE = 500;
+/** How long changes to whom to watch settle before the server is told. */
+const WATCH_SETTLE_MS = 250;
 
 /**
  * How long reading a channel is gathered before it is reported: one report per channel per
@@ -317,6 +327,11 @@ export class AspenSync {
   readonly #channelLoads = new Map<string, Promise<void>>();
   readonly #setTimeout: typeof globalThis.setTimeout;
   #presenceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When everyone's presence was last read whole; `null` until it is, and on every connection. */
+  #presenceReadAt: number | null = null;
+  /** The watch list the stream was last told of, joined; empty on a fresh connection. */
+  #watchSent = "";
+  #watchTimer: ReturnType<typeof setTimeout> | null = null;
   /** When the user last did something in the app, and when the server was last told. */
   #lastActivityAt = Number.NEGATIVE_INFINITY;
   #activityReportedAt = Number.NEGATIVE_INFINITY;
@@ -387,6 +402,17 @@ export class AspenSync {
       this.voice.refreshVolumes();
     });
     this.#setTimeout = options.setTimeout ?? globalThis.setTimeout.bind(globalThis);
+    // Whom to watch follows the members shown, the calls, and the caller.
+    this.store.onChange((topics) => {
+      if (
+        topics.some(
+          (t) =>
+            t === "me" || t === "communities" || t.startsWith("members:") || t.startsWith("voice:"),
+        )
+      ) {
+        this.#scheduleWatching();
+      }
+    });
     if (typeof document !== "undefined") {
       // A page coming back into view gets fresh presence at once rather than at the next tick.
       document.addEventListener("visibilitychange", () => {
@@ -435,6 +461,10 @@ export class AspenSync {
       onEphemeral: (event) => {
         // A newer server may tell of what this client does not know, which changes nothing.
         const kind: string = event.type;
+        if (event.type === "presence") {
+          this.store.applyStatuses(event.statuses);
+          return;
+        }
         if (kind !== "typing") {
           return;
         }
@@ -592,6 +622,10 @@ export class AspenSync {
     if (this.#chosenPresenceTimer !== null) {
       clearTimeout(this.#chosenPresenceTimer);
       this.#chosenPresenceTimer = null;
+    }
+    if (this.#watchTimer !== null) {
+      clearTimeout(this.#watchTimer);
+      this.#watchTimer = null;
     }
     this.store.clear();
     this.#setStatus("stopped");
@@ -3337,6 +3371,8 @@ export class AspenSync {
   watchChannelPresence(channelId: string): () => void {
     const watchers = this.#presenceChannels.get(channelId) ?? 0;
     this.#presenceChannels.set(channelId, watchers + 1);
+    // Its community's members come first among those watched.
+    this.#scheduleWatching();
     if (watchers === 0 && this.#isLive()) {
       void this.#loadChannelPresence(channelId).catch(() => undefined);
     }
@@ -3360,9 +3396,41 @@ export class AspenSync {
   }
 
   /**
-   * Asks the server for the presence of everyone on screen and the online count of each channel
-   * shown, then again after
-   * `PRESENCE_POLL_MS` for as long as the sync stays live. A hidden page skips the request.
+   * Tells the stream whom to watch once changes to it settle (`#tellWatching`).
+   */
+  #scheduleWatching(): void {
+    if (this.#watchTimer !== null) {
+      return;
+    }
+    this.#watchTimer = setTimeout(() => {
+      this.#watchTimer = null;
+      this.#tellWatching();
+    }, WATCH_SETTLE_MS);
+  }
+
+  /**
+   * Tells the stream whose presence to watch, those of the communities with a channel shown
+   * first (`RecordStore.presenceWatchList`), when that differs from what it was last told.
+   */
+  #tellWatching(): void {
+    const focus = new Set<string>();
+    for (const channelId of this.#presenceChannels.keys()) {
+      const community = this.store.channel(channelId)?.community;
+      if (community != null) {
+        focus.add(community);
+      }
+    }
+    const watched = this.store.presenceWatchList(Array.from(focus), MAX_WATCHED_PRESENCE);
+    const key = watched.join(",");
+    if (key !== this.#watchSent && this.#stream.sendWatchPresence(watched)) {
+      this.#watchSent = key;
+    }
+  }
+
+  /**
+   * Asks the server for the online count of each channel shown, and, at most every
+   * `PRESENCE_READ_MS`, the presence of everyone shown, then again after `PRESENCE_POLL_MS` for
+   * as long as the sync stays live. A hidden page skips the requests.
    */
   async #pollPresence(): Promise<void> {
     if (this.#presenceTimer !== null) {
@@ -3373,8 +3441,13 @@ export class AspenSync {
       return;
     }
     const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    const now = this.#now();
+    const readDue = this.#presenceReadAt === null || now - this.#presenceReadAt >= PRESENCE_READ_MS;
     if (!hidden) {
-      const ids = this.store.presenceCandidates();
+      const ids = readDue ? this.store.presenceCandidates() : [];
+      if (readDue) {
+        this.#presenceReadAt = now;
+      }
       const batches: string[][] = [];
       for (let i = 0; i < ids.length; i += PRESENCE_BATCH) {
         batches.push(ids.slice(i, i + PRESENCE_BATCH));
@@ -3525,6 +3598,10 @@ export class AspenSync {
   #onReady(resumed: boolean): void {
     this.#reportActivity();
     this.#tellViewing();
+    // A new connection watches nobody, and what it missed meanwhile is read whole.
+    this.#watchSent = "";
+    this.#tellWatching();
+    this.#presenceReadAt = null;
     if (this.#status === "resyncing" || this.#status === "failed") {
       return;
     }

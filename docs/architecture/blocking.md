@@ -50,6 +50,7 @@ The server does what the client cannot.
 ### Presence
 
 - The blocker's presence reads as `offline` to the blocked user everywhere it is given (`app::user_status::presence_visible`).
+- A block, and lifting it, tells a blocked user whose stream watches the blocker of the change within a second (`app::presence_feed`).
 - The blocker is left out of every channel's count of who is online for the blocked user (`app::channel_presence`).
 - So a block keeps the blocked user from watching when the blocker is about.
 - The blocker still sees the blocked user's presence, which their client may hide.

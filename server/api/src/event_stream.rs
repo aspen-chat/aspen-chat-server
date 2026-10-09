@@ -15,8 +15,10 @@
 //! repair from REST.
 //!
 //! Besides events, the stream carries what happens and is never kept (`ephemeral` frames: who
-//! is typing, `app::typing`), which has no sequence and is not replayed; the client says what
-//! its user is typing on the same connection, and its closing ends it.
+//! is typing, `app::typing`, and changes to the presence of those the client watches,
+//! `app::presence_feed`), which has no sequence and is not replayed; the client says what its
+//! user is typing, and whose presence it shows, on the same connection, and its closing ends
+//! both.
 //!
 //! Errors are written in the language `?locale=` names on the upgrade URL, which the client
 //! sets from its own language setting as it would `Accept-Language` (which a browser does not
@@ -107,6 +109,13 @@ pub enum ClientMessage {
     /// list when none is open. Each replaces the last. Nothing answers it.
     #[serde(rename_all = "camelCase")]
     Viewing { channel_ids: Vec<ChannelId> },
+    /// The users whose presence the client shows, at most `MAX_WATCHED_PRESENCE` (500), the
+    /// most wanted first: it is told by `ephemeral` `presence` frames of each as it is now, and
+    /// then of each change, gathered for up to `PRESENCE_WINDOW_MILLIS`. Send it on every
+    /// `ready` and whenever they change. Each replaces the last, and the server takes up at most
+    /// one per window. Nothing else answers it.
+    #[serde(rename_all = "camelCase")]
+    WatchPresence { user_ids: Vec<UserId> },
 }
 
 /// The least time between two `activity` frames that count; clients send them at most this
@@ -576,6 +585,8 @@ async fn pump_events(
     let mut last_activity: Option<tokio::time::Instant> = None;
     // Dropped with the connection, which says the user stopped wherever they were typing.
     let typist = Typist::spawn(state.clone(), user);
+    // Dropped with the connection, which ends its watch.
+    let mut presence = state.presence_feed.watch(user);
     loop {
         tokio::select! {
             delivery = subscription.deliveries.recv() => {
@@ -623,6 +634,12 @@ async fn pump_events(
                     return;
                 }
             },
+            Some(statuses) = presence.next() => {
+                if let Err(e) = send_presence(&mut socket, statuses).await {
+                    log_send_error(&e);
+                    return;
+                }
+            },
             () = async {
                 match expires {
                     Some(at) => tokio::time::sleep_until(at).await,
@@ -661,7 +678,7 @@ async fn pump_events(
                 }
             },
             // Drive the read side of the socket too. After `identify` the client sends only
-            // `activity` and typing frames, but the WebSocket protocol's control frames (Close, Ping, Pong)
+            // `activity`, typing, and watching frames, but the WebSocket protocol's control frames (Close, Ping, Pong)
             // arrive on this same channel. Tungstenite only reacts to them while the stream is
             // being polled, so without this arm a client-initiated close frame would sit unread
             // indefinitely and pongs would never be counted.
@@ -695,6 +712,7 @@ async fn pump_events(
                         Ok(ClientMessage::Viewing { channel_ids }) => {
                             subscription.viewing(channel_ids);
                         }
+                        Ok(ClientMessage::WatchPresence { user_ids }) => presence.set(user_ids),
                         // Anything else (a second `identify`, an unknown frame) is dropped
                         // rather than tearing the connection down.
                         Ok(ClientMessage::Identify { .. }) | Err(_) => {}
@@ -711,6 +729,16 @@ async fn pump_events(
             },
         }
     }
+}
+
+/// Writes a `presence` frame telling of `statuses`.
+async fn send_presence(
+    socket: &mut WebSocket,
+    statuses: Vec<crate::user::UserStatusRecord>,
+) -> Result<(), axum::Error> {
+    let event = serde_json::value::to_raw_value(&EphemeralEvent::Presence { statuses })
+        .map_err(axum::Error::new)?;
+    send_json(socket, &ServerMessage::Ephemeral { event: &event }).await
 }
 
 async fn send_json(socket: &mut WebSocket, message: &ServerMessage<'_>) -> Result<(), axum::Error> {

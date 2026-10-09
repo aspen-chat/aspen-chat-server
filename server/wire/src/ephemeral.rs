@@ -1,6 +1,7 @@
 //! What the event stream tells of as it happens and never keeps: no sequence, no replay, and
 //! nothing in the database.
 
+use crate::user::UserStatusRecord;
 use crate::{ChannelId, UserId};
 use serde::{Deserialize, Serialize};
 
@@ -26,4 +27,18 @@ pub enum EphemeralEvent {
         user_id: UserId,
         typing: bool,
     },
+    /// The presence of users the connection watches (`watchPresence`), each as the reader may
+    /// learn it, for those whose presence changed or who were newly watched. Changes are
+    /// gathered for up to `PRESENCE_WINDOW_MILLIS` and told together, and only what differs
+    /// from what the connection was last told of each.
+    #[serde(rename_all = "camelCase")]
+    Presence { statuses: Vec<UserStatusRecord> },
 }
+
+/// How long a server gathers changes to presence before telling its connections of them
+/// together.
+pub const PRESENCE_WINDOW_MILLIS: u64 = 1_000;
+
+/// The most users one connection may watch the presence of (`watchPresence`); a longer list is
+/// cut to this many, the first kept.
+pub const MAX_WATCHED_PRESENCE: usize = 500;

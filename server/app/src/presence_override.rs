@@ -11,6 +11,9 @@
 //! and again whenever the user comes online, so a Valkey that lost it has it back by the time
 //! anyone could be shown it.
 //!
+//! Every change, and the end of a timed one, is told to those watching the user's presence
+//! (`app::presence_feed`).
+//!
 //! Do not disturb also holds whether or not the user is connected: no phone is woken for them
 //! (`app::push`) and no DM call rings them (`app::voice::ring`), both decided from the row.
 
@@ -146,11 +149,16 @@ async fn write(
             .scope_boxed()
         })
         .await;
-    if written.is_err() {
-        // The copy may have been written before the commit failed; put back what is committed.
-        drop(conn);
-        if let Err(e) = restore(state, user_id).await {
-            tracing::warn!(error = %e, "failed to restore a presence override after a rollback");
+    match &written {
+        // Those watching the user are told of what it makes them, once it is committed.
+        Ok(_) => state.presence_feed.changed(user_id),
+        Err(_) => {
+            // The copy may have been written before the commit failed; put back what is
+            // committed.
+            drop(conn);
+            if let Err(e) = restore(state, user_id).await {
+                tracing::warn!(error = %e, "failed to restore a presence override after a rollback");
+            }
         }
     }
     written
@@ -199,7 +207,8 @@ pub(crate) async fn copy_row_to_valkey(
     copy_to_valkey(state, user_id, chosen).await
 }
 
-/// Sets `user:{uuid}:override` to `chosen`, expiring when it does, or removes it for `None`.
+/// Sets `user:{uuid}:override` to `chosen`, expiring when it does, or removes it for `None`. A
+/// timed one's end is told to those watching the user when it comes (`app::presence_feed`).
 async fn copy_to_valkey(
     state: &GlobalServerContext,
     user_id: UserId,
@@ -221,6 +230,13 @@ async fn copy_to_valkey(
                     false,
                 )
                 .await?;
+            if let Some(until) = chosen.until {
+                state.presence_feed.expires(
+                    user_id,
+                    crate::presence_feed::Expiry::Chosen,
+                    (until - Utc::now()).to_std().unwrap_or_default(),
+                );
+            }
         }
         None => {
             let () = state.valkey.del(key).await?;

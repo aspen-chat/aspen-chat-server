@@ -10,7 +10,7 @@ use aspen_app as app;
 use aspen_app::UserId;
 use aspen_app::context::GlobalServerContext;
 use aspen_app::login::ChangePasswordOutcome;
-pub use aspen_wire::user::{CustomStatus, UserOnlineStatus};
+pub use aspen_wire::user::{CustomStatus, UserOnlineStatus, UserStatusRecord};
 use axum::extract::State;
 use diesel::result::DatabaseErrorKind;
 use serde::{Deserialize, Serialize};
@@ -389,14 +389,6 @@ pub struct StatusesQuery {
     pub ids: String,
 }
 
-/// One user's presence, as `GET /users/statuses` returns it.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct UserStatusRecord {
-    pub id: UserId,
-    pub online_status: UserOnlineStatus,
-}
-
 #[utoipa::path(
     get,
     path = "/users/statuses",
@@ -404,7 +396,7 @@ pub struct UserStatusRecord {
     params(StatusesQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, description = "The presence of each asked-for user, in the order asked; presence is pulled, never pushed. A user the caller shares no community or DM with, or who blocked the caller, reads as `offline`", body = Vec<UserStatusRecord>),
+        (status = OK, description = "The presence of each asked-for user, in the order asked; an event stream that watches them (`watchPresence`) is told of changes as they happen. A user the caller shares no community or DM with, or who blocked the caller, reads as `offline`", body = Vec<UserStatusRecord>),
         (status = BAD_REQUEST, description = "A malformed id, or too many", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),

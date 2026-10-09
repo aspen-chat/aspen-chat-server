@@ -59,6 +59,8 @@ pub struct GlobalServerContext {
     /// Each community's recent set of members with a connection (`app::user_status`).
     pub connected_members:
         Arc<crate::recent::Recent<crate::CommunityId, Arc<HashSet<crate::UserId>>>>,
+    /// Telling event stream connections of presence as it changes (`app::presence_feed`).
+    pub presence_feed: crate::presence_feed::PresenceFeed,
     /// The server's one reading of the event stream, which every event stream connection
     /// registers with.
     pub event_feed: crate::event_feed::EventFeed,
@@ -192,6 +194,12 @@ impl GlobalServerContext {
             voice_session_homes: Arc::default(),
             connected_members: Arc::default(),
             presence_marked: crate::user_status::presence_marked(),
+            presence_feed: crate::presence_feed::PresenceFeed::start(
+                context.client(),
+                valkey.clone(),
+                connection_pool.clone(),
+                role == Role::Public,
+            ),
             connection_pool,
             event_feed: match role {
                 Role::Public => crate::event_feed::EventFeed::start(

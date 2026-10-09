@@ -1071,6 +1071,34 @@ def chosen_presence(world: World, check: Checks) -> None:
 
     world.as_owner("GET", "/users/@me")
     world.stream.gather(0.5)
+
+    def told(seconds: float = 2.5) -> str | None:
+        """What the member's stream, watching the owner, is told of them next, within `seconds`."""
+        seen = len(world.stream.ephemeral)
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            world.stream.gather(0.2)
+            for event in world.stream.ephemeral[seen:]:
+                for status in event.get("statuses", []) if event.get("type") == "presence" else []:
+                    if status["id"] == world.owner["id"]:
+                        return status["onlineStatus"]
+        return None
+
+    world.stream.send({"type": "watchPresence", "userIds": [world.owner["id"]]})
+    first = told()
+    check("a member watching the owner is told their presence at once", first not in (None, "offline"), first)
+    world.as_owner("PUT", "/users/@me/presence-override", {"presenceOverride": "doNotDisturb"})
+    check("and of their choosing do not disturb within moments", told() == "doNotDisturb")
+    world.as_owner("PUT", f"/users/@me/blocks/{world.member['id']}")
+    check("once the owner blocks them, they are told the owner is offline", told() == "offline")
+    world.as_owner("DELETE", f"/users/@me/blocks/{world.member['id']}")
+    check("and unblocked, of their presence again", told() == "doNotDisturb")
+    world.as_owner("PUT", "/users/@me/presence-override", {"presenceOverride": "invisible", "durationSeconds": 2})
+    check("a timed status is told", told() == "offline")
+    ended = told(5)
+    check("and so is its running out", ended not in (None, "offline"), ended)
+    world.as_owner("DELETE", "/users/@me/presence-override")
+    told()
     before = online_in()
     owner_counted = 1 if status_of(world.member["token"], world.owner["id"]) == "online" else 0
     chosen({"presenceOverride": "invisible"})

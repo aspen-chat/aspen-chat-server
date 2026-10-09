@@ -186,6 +186,21 @@ export class EventStream {
     return true;
   }
 
+  /**
+   * Tells the server whose presence the app shows, the most wanted first, the only ones it is
+   * then told of changes to. Sent only on a connection that has identified; returns whether it
+   * was.
+   */
+  sendWatchPresence(userIds: readonly string[]): boolean {
+    const socket = this.#socket;
+    if (this.#status !== "open" || socket === null || socket.readyState !== socket.OPEN) {
+      return false;
+    }
+    const frame: ClientMessage = { type: "watchPresence", userIds: [...userIds] };
+    socket.send(JSON.stringify(frame));
+    return true;
+  }
+
   start(): void {
     if (this.#status !== "closed") {
       return;
