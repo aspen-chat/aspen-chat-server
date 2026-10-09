@@ -1,0 +1,5 @@
+[build]
+# The desktop app's capture helper (`packages/desktop/native/obs-capture`) is built on Windows,
+# which cannot run the shell script the repository's `.cargo/config.toml` names, so the
+# client's Rust is compiled by rustc alone.
+rustc-wrapper = ""
