@@ -52,6 +52,7 @@ export const poll = {
   votedByMore: "Voted: {names} and {count} more",
   seeVoters: "See who voted for {option}",
   votersHeading: "Who voted for {option}",
+  noVotesFor: "Nobody voted for {option}.",
   votesTotal: "{count} votes",
   voteSingular: "1 vote",
   anonymousTag: "Anonymous",
