@@ -3,8 +3,11 @@ import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 
-/** When a mute ends: the date and time, which a mute of a week at most needs no year for. */
-const UNTIL: Intl.DateTimeFormatOptions = {
+/**
+ * When a mute or a presence override ends: the date and time, which the lengths offered, a week
+ * at most, need no year for.
+ */
+export const UNTIL: Intl.DateTimeFormatOptions = {
   month: "short",
   day: "numeric",
   hour: "numeric",

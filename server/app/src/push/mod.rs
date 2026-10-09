@@ -494,8 +494,8 @@ fn reaches_inside(state: &GlobalServerContext, endpoint: &reqwest::Url) -> bool 
         && !(loopback && state.config.federation.development.allow_private_addresses)
 }
 
-/// Wakes `user`'s phones for a plugin's notice to them, unless they are using Aspen now, as
-/// for a message (`spec/push.md`).
+/// Wakes `user`'s phones for a plugin's notice to them, unless they are using Aspen now or are
+/// in do not disturb, as for a message (`spec/push.md`).
 pub async fn notice(
     state: &GlobalServerContext,
     user: UserId,
@@ -510,7 +510,13 @@ pub async fn notice(
             .valkey
             .get(crate::user_status::active_key(user))
             .await?;
-        if active.is_some() {
+        if active.is_some()
+            || crate::presence_override::do_not_disturb(
+                state.connection_pool.get().await?.as_mut(),
+                user,
+            )
+            .await?
+        {
             return Ok(());
         }
         let phones = phones_of(state, &[user]).await?;
@@ -893,7 +899,7 @@ async fn channel_read(
             channel,
             message: last_read,
         },
-        badge_of(state, user).await.ok(),
+        shown_badge(state, user).await.ok(),
     )
     .await;
     Ok(())
@@ -997,9 +1003,10 @@ struct Recipient {
 /// asks for every message (`notification_setting_all_*`), a DM's people, and the thread's
 /// followers (`thread_follow_by_thread`), a DM's thread's only while they are still its people.
 /// Each one's level is the channel's setting, else the community's, else `$7`, and a follower is
-/// told whatever theirs; those with a phone who neither blocked the author nor muted the channel
-/// remain.
-const RECIPIENTS_SQL: &str = r#"
+/// told whatever theirs; those with a phone who neither blocked the author, muted the channel,
+/// nor are in do not disturb (`app::presence_override`) remain.
+const RECIPIENTS_SQL: &str = concat!(
+    r#"
     WITH candidate AS (
         SELECT cu."user", true AS tagged, false AS following FROM community_user cu
         WHERE cu.community = $1 AND cu."user" = ANY($4)
@@ -1055,7 +1062,29 @@ const RECIPIENTS_SQL: &str = r#"
           WHERE m."user" = p."user" AND m.channel = $2
             AND (m.until IS NULL OR m.until > now())
       )
-"#;
+      AND NOT EXISTS (
+          SELECT 1 FROM "user" u WHERE u.id = p."user" AND "#,
+    crate::presence_override::do_not_disturb_sql!("u"),
+    r#"
+      )
+"#
+);
+
+/// The badge a push that takes notifications down carries: none at all while the person is in
+/// do not disturb, which hides badges (`app::presence_override`), and [`badge_of`] otherwise.
+/// Pushes that tell of something new never reach them then, so only these need it.
+async fn shown_badge(state: &GlobalServerContext, user: UserId) -> crate::Result<i64> {
+    let chosen: Option<String> = state
+        .valkey
+        .get(crate::presence_override::override_key(user))
+        .await?;
+    if chosen.and_then(|c| c.parse().ok())
+        == Some(crate::presence_override::PresenceOverride::DoNotDisturb)
+    {
+        return Ok(0);
+    }
+    badge_of(state, user).await
+}
 
 /// What the phone's badge shows for this deployment: the unread messages tagging the person,
 /// and their unread DMs. Once counted it is kept for [`BADGE_KEPT`] in Valkey, grown by one for

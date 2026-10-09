@@ -1,4 +1,4 @@
-import { shownApartRole, type Role, type User, type UserOnlineStatus } from "@aspen/protocol";
+import { shownApartRole, type Role, type User } from "@aspen/protocol";
 import { PaneEdge } from "@/features/layout/ResizablePane";
 import { ProhibitIcon } from "@phosphor-icons/react";
 import { Button } from "react-aria-components";
@@ -8,7 +8,8 @@ import { BotBadge } from "@/features/users/BotBadge";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { useNameColor } from "@/features/users/nameColor";
 import { useNameIn } from "@/features/users/nameIn";
-import { PresenceMark } from "@/features/users/PresenceMark";
+import { StatusDot } from "@/features/users/PresenceMark";
+import { knownStatus, showsConnected } from "@/features/users/presenceStatus";
 import { displayNameOf, statusLine } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -57,7 +58,7 @@ export function MemberGroups({
   const online: User[] = [];
   const offline: User[] = [];
   for (const user of members) {
-    if (user.onlineStatus === "offline") {
+    if (!showsConnected(user.onlineStatus)) {
       offline.push(user);
       continue;
     }
@@ -129,7 +130,7 @@ function MemberGroup({
 
 function MemberRow({ user, communityId }: { user: User; communityId: string }) {
   const m = useMessages();
-  const offline = user.onlineStatus === "offline";
+  const offline = !showsConnected(user.onlineStatus);
   const blocked = useBlocked(user.id);
   const name = useNameIn(user, communityId) ?? displayNameOf(user);
   // An offline row is dimmed, and a dimmed colour would no longer read against the list, so an
@@ -144,7 +145,10 @@ function MemberRow({ user, communityId }: { user: User; communityId: string }) {
         >
           <span className="relative">
             <Avatar name={name} iconId={user.icon} size="md" />
-            <StatusDot status={user.onlineStatus} label={m.status[user.onlineStatus]} />
+            <StatusDot
+              status={user.onlineStatus}
+              label={m.status[knownStatus(user.onlineStatus)]}
+            />
           </span>
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex min-w-0 items-center gap-1.5">
@@ -167,14 +171,5 @@ function MemberRow({ user, communityId }: { user: User; communityId: string }) {
         </Button>
       </ProfilePopover>
     </li>
-  );
-}
-
-/** The status over a member's picture, on a disc of the list's ground so it stands clear of it. */
-function StatusDot({ status, label }: { status: UserOnlineStatus; label: string }) {
-  return (
-    <span className="absolute -end-0.5 -bottom-0.5 flex rounded-full bg-surface-raised p-0.5">
-      <PresenceMark status={status} label={label} className="h-2.5 w-2.5" />
-    </span>
   );
 }

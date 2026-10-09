@@ -35,6 +35,7 @@ import type {
   BotCommands,
   FrequentEmojiEntry,
   ChannelMute,
+  ChosenPresence,
   ChannelVoice,
   EmojiReactions,
   Icon,
@@ -228,6 +229,8 @@ export class RecordStore {
   readonly #myWriteIns = new Map<string, ReadonlySet<number>>();
   readonly #readStates = new Map<string, ReadState>();
   readonly #mutes = new Map<string, ChannelMute>();
+  /** What the caller chose to show of their presence, while it lasts. */
+  #chosenPresence: ChosenPresence | null = null;
   /** The caller's notification settings: per channel, and per community. */
   readonly #channelLevels = new Map<string, NotificationLevel>();
   readonly #communityLevels = new Map<string, NotificationLevel>();
@@ -1052,6 +1055,28 @@ export class RecordStore {
     }
     const { level } = this.notificationLevel(message.channelId);
     return level === "all" || (level === "tags" && this.mentionsMe(message));
+  }
+
+  /**
+   * Topic `presence`: what the caller chose to show of their presence in place of what their
+   * connections say, while it lasts, if anything.
+   */
+  chosenPresence(): ChosenPresence | null {
+    return this.#chosenPresence;
+  }
+
+  /**
+   * Topic `presence`: whether the caller is in do not disturb, which keeps every notification,
+   * ring, and unread mark from them.
+   */
+  doNotDisturb(): boolean {
+    return this.#chosenPresence?.presenceOverride === "doNotDisturb";
+  }
+
+  /** When the caller's timed presence override ends, as milliseconds since the epoch; `null` with none. */
+  chosenPresenceEnd(): number | null {
+    const until = this.#chosenPresence?.until;
+    return until == null ? null : Date.parse(until);
   }
 
   /** Topic `mute:<channelId>`: the caller's mute of the channel while it lasts, if any. */
@@ -2031,6 +2056,37 @@ export class RecordStore {
     });
   }
 
+  /** Holds what the caller chose to show of their presence, as the server says it, or nothing. */
+  setChosenPresence(chosen: ChosenPresence | null): void {
+    this.#batch(() => {
+      this.#putChosenPresence(chosen);
+    });
+  }
+
+  /** Ends the caller's presence override if its time is up at `now` (milliseconds since the epoch). */
+  expireChosenPresence(now: number): void {
+    const end = this.chosenPresenceEnd();
+    if (end !== null && end <= now) {
+      this.setChosenPresence(null);
+    }
+  }
+
+  /**
+   * Holds `chosen`, and shows the caller's own status by it at once rather than at the next
+   * presence poll: the caller, connected here, is what they chose, or online.
+   */
+  #putChosenPresence(chosen: ChosenPresence | null): void {
+    this.#chosenPresence = chosen;
+    this.#touch("presence");
+    const me = this.me();
+    if (me !== null) {
+      const onlineStatus: UserOnlineStatus = chosen?.presenceOverride ?? "online";
+      if (me.onlineStatus !== onlineStatus) {
+        this.#putUser({ ...me, onlineStatus });
+      }
+    }
+  }
+
   replaceMutes(mutes: readonly ChannelMute[]): void {
     this.#batch(() => {
       for (const channelId of Array.from(this.#mutes.keys())) {
@@ -2268,6 +2324,7 @@ export class RecordStore {
       this.#myWriteIns.clear();
       this.#readStates.clear();
       this.#mutes.clear();
+      this.#chosenPresence = null;
       this.#collapsed.clear();
       this.#blocked.clear();
       this.#roles.clear();
@@ -2614,6 +2671,13 @@ export class RecordStore {
             event.level ?? null,
           );
           break;
+        case "presenceOverrideChanged":
+          this.#putChosenPresence(
+            event.presenceOverride == null
+              ? null
+              : { presenceOverride: event.presenceOverride, until: event.until ?? null },
+          );
+          break;
         case "channelMuteChanged":
           if (event.muted) {
             this.#putMute({ channel: event.channel, until: event.until ?? null });
@@ -2865,11 +2929,14 @@ export class RecordStore {
   }
 
   /**
-   * The users whose presence is worth asking for: the members shown for every community the
-   * user is in, and everyone in a call.
+   * The users whose presence is worth asking for: the caller, whose own is shown in the user
+   * bar, the members shown for every community the user is in, and everyone in a call.
    */
   presenceCandidates(): string[] {
     const ids = new Set<string>();
+    if (this.#myUserId !== null) {
+      ids.add(this.#myUserId);
+    }
     for (const community of this.communities()) {
       for (const id of this.memberIds(community.id)) {
         ids.add(id);

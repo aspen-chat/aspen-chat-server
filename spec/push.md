@@ -282,6 +282,8 @@ tags them (by name, a role they hold, or everyone), unless:
 - the channel is muted for them (a thread's messages count as its parent's);
 - they are using Aspen right now on any device (their `active` presence key is set), since that
   device shows it.
+- they are in do not disturb on this deployment, which also gives the `read` pointers sent them
+  meanwhile a `badge` of 0.
 
 Their own notification settings, per community and channel ("all messages", "only tags",
 "nothing"), are part of notifications in general, not of this protocol, and narrow this further.

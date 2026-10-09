@@ -140,6 +140,10 @@ for (const { palette, scheme, contrast } of combinations) {
       if (await back.isVisible()) {
         await back.click();
       }
+      await page.getByRole("button", { name: /^Change your status/ }).click();
+      await expect(page.getByRole("menu", { name: "Your status" })).toBeVisible();
+      await expectAccessible(page, "status menu", { popover: true });
+      await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Settings", exact: true }).click();
       const settings = page.getByRole("dialog", { name: "Settings", exact: true });
       await settings.getByText("Developer mode", { exact: true }).last().click();

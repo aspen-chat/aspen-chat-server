@@ -1052,6 +1052,73 @@ def presence(world: World, check: Checks) -> None:
           status_of(world.member["token"], world.owner["id"]) == "offline")
 
 
+def chosen_presence(world: World, check: Checks) -> None:
+    say("a chosen status: what it was reaches only its chooser, and invisible is offline to the rest")
+
+    def status_of(token: str, user: str) -> str:
+        return world.stack.api("GET", f"/users/statuses?ids={user}", token=token)[0]["onlineStatus"]
+
+    def chosen(body: dict | None) -> None:
+        if body is None:
+            world.as_owner("DELETE", "/users/@me/presence-override")
+        else:
+            world.as_owner("PUT", "/users/@me/presence-override", body)
+
+    counted = world.channel("chosen-presence-count")
+
+    def online_in() -> int:
+        return world.stack.api("GET", f"/channels/{counted}/presence", token=world.member["token"])["online"]
+
+    world.as_owner("GET", "/users/@me")
+    world.stream.gather(0.5)
+    before = online_in()
+    owner_counted = 1 if status_of(world.member["token"], world.owner["id"]) == "online" else 0
+    chosen({"presenceOverride": "invisible"})
+    check("an invisible owner reads as offline to a member, alone and in their profile",
+          status_of(world.member["token"], world.owner["id"]) == "offline"
+          and world.stack.api("GET", f"/users/{world.owner['id']}", token=world.member["token"])["onlineStatus"]
+          == "offline")
+    check("and as invisible to themself", status_of(world.owner["token"], world.owner["id"]) == "invisible")
+    check("and is counted online in no channel", online_in() == before - owner_counted,
+          (before, owner_counted, online_in()))
+    check("nor does the member's stream hear what they chose",
+          not of(world.stream.gather(1.0), "presenceOverrideChanged"))
+    chosen({"presenceOverride": "doNotDisturb"})
+    check("in do not disturb, the member sees it", status_of(world.member["token"], world.owner["id"]) == "doNotDisturb")
+    made = world.stack.api("POST", "/users/@me/dms", {"recipients": [world.owner["id"]]}, world.member["token"])
+    dm = made.get("id") or made["data"]["id"]
+
+    def call_rings_owner() -> bool:
+        """Whether the member's starting a call in their DM rings the owner; the call then ends."""
+        wait_for("a voice server offer", lambda: world.stack.status(
+            "POST", f"/channels/{dm}/voice/join", {}, world.member["token"]) == 200, 90)
+        world.stream.gather(0.5)
+        call = join(world.stack.api("POST", f"/channels/{dm}/voice/join", {}, world.member["token"])["token"])
+        frame_of(call, "ready")
+        events = world.stream.gather(2.0)
+        call.close()
+        wait_for("the call to end", lambda: bool(of(world.stream.gather(1.0), "voiceSessionEnded")), 30)
+        return bool(of(events, "voiceRing", type="create", user=world.owner["id"]))
+
+    check("a DM call rings no one in do not disturb", not call_rings_owner())
+    chosen(None)
+    check("and rings them once it ends", call_rings_owner())
+    chosen({"presenceOverride": "doNotDisturb"})
+    chosen({"presenceOverride": "away", "durationSeconds": 1})
+    check("a timed status shows while it lasts", status_of(world.member["token"], world.owner["id"]) == "away")
+    world.as_owner("GET", "/users/@me")
+    check("and ends by itself", eventually(
+        lambda: status_of(world.member["token"], world.owner["id"]) in ("online", "away")
+        and world.as_owner("GET", "/users/@me/presence-override")["presenceOverride"] is None, 5))
+    check("thirty days is the longest asked for",
+          world.stack.status("PUT", "/users/@me/presence-override",
+                             {"presenceOverride": "away", "durationSeconds": 30 * 86400 + 1},
+                             world.owner["token"]) == 400)
+    chosen({"presenceOverride": "invisible"})
+    chosen(None)
+    check("ending it shows them connected again", status_of(world.member["token"], world.owner["id"]) != "offline")
+
+
 def typing(world: World, check: Checks) -> None:
     say("typing, told only to those who may view the channel, and only by those who may send there")
     owner = world.stack.events(world.owner["token"])
@@ -2446,7 +2513,7 @@ def plugin_removal(world: World, check: Checks) -> None:
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, calls, attachments,
-             operators, deployment_settings, sign_ins, removal, presence, typing, name_colours, dual_invites, device_links,
+             operators, deployment_settings, sign_ins, removal, presence, chosen_presence, typing, name_colours, dual_invites, device_links,
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed]

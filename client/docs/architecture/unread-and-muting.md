@@ -37,6 +37,11 @@ for the DMs. They drive the rail's dots, which sit half under the entry's icon.
 - An unread channel's icon and name, or a whole unread DM row, are marked with
   `unreadMarkClass`: an accent outline over a faint accent fill, padded so nothing moves.
 - Every unread row's accessible name says so.
+- In do not disturb nothing is drawn unread and no tag is counted: `useUnread`, `useMentions`,
+  `usePlaceMentions`, and `useUnreadPlaces` answer as if all were read, and the rail, which reads
+  the stores itself, does the same. The read states are untouched, so it all shows again when it
+  ends, and the "New Messages" line, which says where reading left off, still shows (see
+  [Presence](presence.md#do-not-disturb)).
 
 ### Marking read
 

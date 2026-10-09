@@ -13,6 +13,7 @@ import type {
   Channel,
   ChannelMute,
   ChannelOverride,
+  ChosenPresence,
   ChannelVoice,
   Community,
   CommunityBan,
@@ -56,7 +57,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useBlockedAnywhere } from "./identity";
-import { AspenSyncContext } from "./syncContext";
+import { AspenSyncContext, HomeSyncContext } from "./syncContext";
 
 export function useSync(): AspenSync {
   const sync = useContext(AspenSyncContext);
@@ -83,6 +84,35 @@ function useTopic<T>(topic: Topic, read: (store: RecordStore) => T): T {
     [store, topic],
   );
   return useSyncExternalStore(subscribe, () => read(store));
+}
+
+/**
+ * As `useTopic`, of the home's store wherever it is read, beside another deployment's lists
+ * too; `fallback` before the home's sync exists.
+ */
+function useHomeTopic<T>(topic: Topic, read: (store: RecordStore) => T, fallback: T): T {
+  const store = useContext(HomeSyncContext)?.store ?? null;
+  const subscribe = useCallback(
+    (listener: () => void) => (store === null ? () => undefined : store.subscribe(topic, listener)),
+    [store, topic],
+  );
+  return useSyncExternalStore(subscribe, () => (store === null ? fallback : read(store)));
+}
+
+/**
+ * What the user chose to show of their presence, while it lasts. It is the user's own, set on
+ * every deployment they use alike, so the home's answer holds everywhere.
+ */
+export function useChosenPresence(): ChosenPresence | null {
+  return useHomeTopic("presence", (s) => s.chosenPresence(), null);
+}
+
+/**
+ * Whether the user is in do not disturb, which keeps every notification and ring from them and
+ * hides unread marks and tag counts, on every deployment, by the home's answer.
+ */
+export function useDoNotDisturb(): boolean {
+  return useHomeTopic("presence", (s) => s.doNotDisturb(), false);
 }
 
 export function useMe(): User | null {
@@ -517,24 +547,43 @@ export function useCommunityNotificationLevel(communityId: string): Notification
   return useTopic("notifications", (s) => s.communityNotificationLevel(communityId));
 }
 
-/** How many unread messages in a channel tag the caller. */
+/** How many unread messages in a channel tag the caller; none shown in do not disturb. */
 export function useMentions(channelId: string): number {
-  return useTopic(`read:${channelId}`, (s) => s.mentions(channelId));
+  const hidden = useDoNotDisturb();
+  const count = useTopic(`read:${channelId}`, (s) => s.mentions(channelId));
+  return hidden ? 0 : count;
 }
 
-/** How many unread messages tag the caller across a community, or their DMs (`UNREAD_DMS`). */
+/**
+ * How many unread messages tag the caller across a community, or their DMs (`UNREAD_DMS`);
+ * none shown in do not disturb.
+ */
 export function usePlaceMentions(place: string): number {
-  return useTopic("unread", (s) => s.placeMentions(place));
+  const hidden = useDoNotDisturb();
+  const count = useTopic("unread", (s) => s.placeMentions(place));
+  return hidden ? 0 : count;
 }
 
-/** Whether a channel holds a message by someone else that the caller has not read. */
+/**
+ * Whether a channel holds a message by someone else that the caller has not read; never shown
+ * so in do not disturb.
+ */
 export function useUnread(channelId: string): boolean {
-  return useTopic(`read:${channelId}`, (s) => s.unread(channelId));
+  const hidden = useDoNotDisturb();
+  const unread = useTopic(`read:${channelId}`, (s) => s.unread(channelId));
+  return unread && !hidden;
 }
 
-/** The communities with an unread channel, and `UNREAD_DMS` when a DM is unread. */
+const NOTHING_UNREAD: ReadonlySet<string> = new Set();
+
+/**
+ * The communities with an unread channel, and `UNREAD_DMS` when a DM is unread; none in do not
+ * disturb.
+ */
 export function useUnreadPlaces(): ReadonlySet<string> {
-  return useTopic("unread", (s) => s.unreadPlaces());
+  const hidden = useDoNotDisturb();
+  const places = useTopic("unread", (s) => s.unreadPlaces());
+  return hidden ? NOTHING_UNREAD : places;
 }
 
 /** The options on a poll that are the caller's own write-ins. */
