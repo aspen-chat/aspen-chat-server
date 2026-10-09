@@ -68,6 +68,7 @@ pub mod permissions;
 pub mod plugin;
 pub mod poll;
 pub mod preferences;
+pub mod presence_override;
 pub mod push;
 pub mod rate_limit;
 pub mod react;

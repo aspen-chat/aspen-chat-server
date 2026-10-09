@@ -114,4 +114,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261009_080000_upkeep::M,
     &migrations::m20261009_080100_evidence_retention::M,
     &migrations::m20261009_080200_paging::M,
+    &migrations::m20261009_094225_presence_override::M,
 ];

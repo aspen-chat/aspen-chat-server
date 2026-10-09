@@ -1,10 +1,9 @@
 import { useCallSource } from "@/api/calls";
 import { HomeScope, SourceScope } from "@/api/deployments";
 import { useMe } from "@/api/hooks";
-import { Avatar } from "@/features/communities/Avatar";
 import { SettingsDialog } from "@/features/settings/SettingsDialog";
 import { EditProfileDialog } from "@/features/users/EditProfileDialog";
-import { displayNameOf, statusLine } from "@/features/users/profile";
+import { PresenceMenu } from "@/features/users/PresenceMenu";
 import { CallBar } from "@/features/voice/CallBar";
 import { VoiceEndedDialog } from "@/features/voice/VoiceEndedDialog";
 
@@ -14,12 +13,17 @@ const footerButtonClass =
 
 /**
  * The foot of every list sidebar, the channel list's and the DM list's alike: the user's call,
- * when they are in one on any deployment, and the signed-in user with their profile and
+ * when they are in one on any deployment, and the signed-in user, with their status, which
+ * their picture and name open the menu to choose (`PresenceMenu`), and their profile and
  * settings controls. The dialog that says why a call ended lives here too, so it shows wherever
- * the user is. The user,
- * their profile, and their settings are their home's, even beside another deployment's lists.
+ * the user is. The user, their profile, and their settings are their home's, even beside
+ * another deployment's lists. `groundClassName` is the background it sits on.
  */
-export function SidebarFooter() {
+export function SidebarFooter({
+  groundClassName = "bg-surface-raised",
+}: {
+  groundClassName?: string;
+}) {
   const callSource = useCallSource();
   return (
     <>
@@ -31,25 +35,21 @@ export function SidebarFooter() {
         </SourceScope>
       )}
       <HomeScope>
-        <UserFooter />
+        <UserFooter groundClassName={groundClassName} />
       </HomeScope>
     </>
   );
 }
 
-function UserFooter() {
+function UserFooter({ groundClassName }: { groundClassName: string }) {
   const me = useMe();
   return (
-    <div className="flex items-center gap-3 border-t border-line py-5 ps-3 pe-5">
-      {me !== null && <Avatar name={displayNameOf(me)} iconId={me.icon} size="lg" />}
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-base font-medium">
-          {me === null ? "…" : displayNameOf(me)}
-        </span>
-        {me?.status != null && (
-          <span className="truncate text-sm text-ink-muted">{statusLine(me.status)}</span>
-        )}
-      </span>
+    <div className="flex items-center gap-2 border-t border-line py-4 ps-2 pe-5">
+      {me === null ? (
+        <span className="flex-1 p-1 text-base font-medium">…</span>
+      ) : (
+        <PresenceMenu me={me} groundClassName={groundClassName} />
+      )}
       {me !== null && <EditProfileDialog user={me} triggerClassName={footerButtonClass} />}
       <SettingsDialog triggerClassName={footerButtonClass} />
     </div>

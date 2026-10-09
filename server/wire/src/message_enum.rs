@@ -7,7 +7,7 @@ use crate::permissions::Permission;
 use crate::plugin::PluginText;
 use crate::plugin::annotation::Severity;
 use crate::poll::{PollOption, PollOptionResult, PollWriteIn};
-use crate::user::{CustomStatus, UserOnlineStatus};
+use crate::user::{CustomStatus, PresenceOverride, UserOnlineStatus};
 use crate::voice::VoiceSessionEndReason;
 use crate::{
     AnnotationId, AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId, HeldMessageId,
@@ -221,6 +221,14 @@ enum MessageEnumSource {
     ChannelMuteChanged {
         channel: ChannelId,
         muted: bool,
+        until: Option<chrono::DateTime<Utc>>,
+    },
+    // The user chose what to show of their presence, or stopped, on one of their devices; the
+    // others follow. `presenceOverride` is `null` when they stopped; one with no `until` lasts
+    // until they change it. See `app::presence_override`.
+    #[message_gen(custom_event)]
+    PresenceOverrideChanged {
+        presence_override: Option<PresenceOverride>,
         until: Option<chrono::DateTime<Utc>>,
     },
     // The user changed what they want to be told of a community or a channel, on one of their

@@ -43,6 +43,7 @@ Every push is Web Push.
 - While kept, it grows by one for each new message tagging the person in a community.
 - It is forgotten when the person reads, when a DM of theirs speaks, or when a message that woke them is deleted.
 - A change no push follows (a role or a channel taken from them) shows on the badge within those five minutes.
+- A `read` push to someone in do not disturb carries 0 (`shown_badge`, which reads their presence override's Valkey copy). Pushes that tell of something new never reach them then.
 
 ## Subscriptions
 
@@ -83,6 +84,7 @@ provided they may view its channel. It never wakes:
 - its author;
 - anyone who blocked the author here;
 - anyone who muted the channel (a thread counting as its parent);
+- anyone in do not disturb (see [Presence](event-routing/presence.md#choosing-a-status));
 - anyone active on Aspen at that moment.
 
 ### Finding them
@@ -95,7 +97,7 @@ provided they may view its channel. It never wakes:
    - a DM's people;
    - the thread's followers, and a DM's thread's only while they are still its people.
 2. The same query resolves each one's level from the channel's setting, then the community's, then the default. A follower is told whatever theirs.
-3. It leaves out those who blocked the author, muted the channel, or have no phone.
+3. It leaves out those who blocked the author, muted the channel, are in do not disturb, or have no phone.
 4. Who may view the channel is decided once for the candidates (`visibility::viewers`).
 5. Who is active is asked of Valkey, `ACTIVE_BATCH` (1000) at a time.
 

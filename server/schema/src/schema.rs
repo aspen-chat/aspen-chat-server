@@ -845,6 +845,8 @@ diesel::table! {
         name_hue -> Nullable<Int2>,
         plugin -> Nullable<Text>,
         public_email -> Nullable<Text>,
+        presence_override -> Nullable<Text>,
+        presence_override_until -> Nullable<Timestamptz>,
     }
 }
 

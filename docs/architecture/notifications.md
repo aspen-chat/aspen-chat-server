@@ -29,6 +29,8 @@ A setting applies to a whole community, or to one text channel, DM, or channel a
 
 Every reply in a thread the user follows tells them whatever the level, though a mute of the parent still silences it (see [Threads and DMs](threads-and-dms/index.md)).
 
+Do not disturb outranks them all: while the user is in it, nothing tells them, and no phone is woken (see [Presence](event-routing/presence.md#choosing-a-status)). The activity feed still lists what would have.
+
 ## Endpoints
 
 | Endpoint | Does |

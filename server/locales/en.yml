@@ -181,6 +181,7 @@ problemStrongerSignInRequired: "This server needs you to have signed in at home 
 problemPluginRefused: "A plugin of this server did not allow it."
 problemPluginUnavailable: "A plugin of this server could not check it."
 channelMuteDuration: "A mute can last at most %{max} days, or until you lift it."
+presenceOverrideDuration: "A status can last at most %{max} days, or until you change it."
 channelMuteKind: "Only text channels, DMs, and channels a plugin shows can be muted; a thread follows its channel."
 problemRegistrationInviteRequired: "This server takes new accounts by invite only. Ask its administrators for one."
 problemRegistrationInviteInvalid: "That invite isn't valid. It may have expired, been revoked, or been used up."

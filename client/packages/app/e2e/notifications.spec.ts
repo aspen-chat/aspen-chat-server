@@ -91,6 +91,28 @@ test("a tag elsewhere shows a system notification and plays the sound", async ({
   expect(await page.evaluate(() => window.shownNotifications.length)).toBe(1);
 });
 
+test("do not disturb keeps every notification and sound from the user", async ({ page }) => {
+  const publish = await signInToWorld(page);
+  await turnOnSystemNotifications(page);
+  await page.getByRole("button", { name: /^Change your status/ }).click();
+  await page
+    .getByRole("menu", { name: "Your status" })
+    .getByRole("menuitem", { name: /^Do not disturb/ })
+    .click();
+  await page
+    .getByRole("menu", { name: "Do not disturb" })
+    .getByRole("menuitem", { name: "Until I change it" })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Change your status: Do not disturb" }),
+  ).toBeVisible();
+  const before = await page.evaluate(() => window.soundsPlayed);
+  post(publish, `<@${me}> can you look at this?`, [me]);
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => window.shownNotifications)).toEqual([]);
+  expect(await page.evaluate(() => window.soundsPlayed)).toBe(before);
+});
+
 test("a channel's menu sets what it tells of", async ({ page }) => {
   const publish = await signInToWorld(page);
   await turnOnSystemNotifications(page);

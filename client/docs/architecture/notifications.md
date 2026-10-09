@@ -45,6 +45,8 @@ It tells of plugins' notices (`onPluginNotice`) the same way (see [Plugins](plug
 Exceptions:
 
 - It does nothing for the conversation in view.
+- It does nothing at all in do not disturb, by the home's answer (`RecordStore.doNotDisturb`; see
+  [Presence](presence.md#do-not-disturb)).
 - It shows no system notification in the mobile app, whose phone push wakes.
 
 ## Sounds

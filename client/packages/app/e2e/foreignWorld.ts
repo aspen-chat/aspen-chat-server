@@ -207,6 +207,17 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
     if (path === "/users/statuses") {
       return json(route, []);
     }
+    // The user's chosen presence, set on every deployment alike, starts unset here too.
+    if (path === "/users/@me/presence-override") {
+      if (method === "DELETE") {
+        return route.fulfill({ status: 204 });
+      }
+      const asked =
+        method === "PUT"
+          ? { ...(route.request().postDataJSON() as object), until: null }
+          : { presenceOverride: null, until: null };
+      return json(route, asked, method === "PUT" ? 201 : 200);
+    }
     if (method === "POST" && path === "/auth/logout") {
       return route.fulfill({ status: 204 });
     }

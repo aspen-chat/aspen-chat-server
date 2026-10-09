@@ -175,6 +175,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::EmailAccountChanged { .. }
         | ServerEvent::ChannelRead { .. }
         | ServerEvent::ChannelMuteChanged { .. }
+        | ServerEvent::PresenceOverrideChanged { .. }
         | ServerEvent::NotificationSettingChanged { .. }
         | ServerEvent::SavedMessageChanged { .. }
         | ServerEvent::ThreadFollowChanged { .. }
@@ -707,6 +708,7 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         | ServerEvent::EmailAccountChanged { .. }
         | ServerEvent::ChannelRead { .. }
         | ServerEvent::ChannelMuteChanged { .. }
+        | ServerEvent::PresenceOverrideChanged { .. }
         | ServerEvent::NotificationSettingChanged { .. }
         | ServerEvent::SavedMessageChanged { .. }
         | ServerEvent::ThreadFollowChanged { .. }

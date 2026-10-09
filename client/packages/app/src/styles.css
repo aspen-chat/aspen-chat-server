@@ -55,6 +55,8 @@
   --color-danger-soft: var(--palette-danger-soft);
   --color-online: var(--palette-online);
   --color-away: var(--palette-away);
+  /* Do not disturb: each palette's danger, which reads as "stop" and already reaches contrast. */
+  --color-busy: var(--palette-danger);
   --color-code-keyword: var(--palette-code-keyword);
   --color-code-string: var(--palette-code-string);
   --color-code-comment: var(--palette-code-comment);

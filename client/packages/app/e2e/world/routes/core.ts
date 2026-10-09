@@ -370,6 +370,32 @@ export function coreRoutes({
         return reply(null, 204);
       },
     ],
+    // A chosen presence starts unset, and answers as the server does, by event too.
+    ["GET", /^\/users\/@me\/presence-override$/, () => ({ presenceOverride: null, until: null })],
+    [
+      "PUT",
+      /^\/users\/@me\/presence-override$/,
+      () => {
+        const { presenceOverride, durationSeconds } = request.postDataJSON() as {
+          presenceOverride: string;
+          durationSeconds: number | null;
+        };
+        const until =
+          durationSeconds === null
+            ? null
+            : new Date(Date.now() + durationSeconds * 1000).toISOString();
+        publish({ serverEvent: "presenceOverrideChanged", presenceOverride, until });
+        return reply({ presenceOverride, until }, 201);
+      },
+    ],
+    [
+      "DELETE",
+      /^\/users\/@me\/presence-override$/,
+      () => {
+        publish({ serverEvent: "presenceOverrideChanged", presenceOverride: null, until: null });
+        return reply(null, 204);
+      },
+    ],
     // Muting answers as the server does, and tells the caller's devices by event.
     [
       "PUT",

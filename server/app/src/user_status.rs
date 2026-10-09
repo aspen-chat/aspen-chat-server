@@ -12,8 +12,13 @@
 //! A bot's `active` key is set with its `online` key and lives as long, so a connected bot is
 //! online and never away: it uses Aspen through the API, not as a person does.
 //!
-//! A user is online while both exist, away while only the first does, and offline otherwise.
-//! Because both keys are the user's, not a connection's, any active device keeps them online and
+//! A third, `user:{uuid}:override`, holds what the user chose to show instead, while it is in
+//! force (`app::presence_override`): while they are connected, it makes them invisible, away,
+//! or do not disturb, whatever the second key says.
+//!
+//! A user is online while both exist, away while only the first does, and offline otherwise,
+//! unless the third says otherwise while they are connected. Someone invisible is offline to
+//! everyone but themself, and is neither counted nor listed as online. Because the keys are the user's, not a connection's, any active device keeps them online and
 //! any connected one keeps them from going offline, whichever API server each device talks to.
 //! Nothing announces a change: clients ask for the status of the users they show
 //! (`GET /users/statuses`) when they need it.
@@ -29,6 +34,7 @@
 //! (`connected_members`) confirm each one by their keys.
 
 use crate::context::GlobalServerContext;
+use crate::presence_override::PresenceOverride;
 use crate::user::UserPg;
 use crate::{CommunityId, UserId};
 use aspen_wire::user::UserOnlineStatus;
@@ -86,12 +92,30 @@ fn community_set_lifetime(state: &GlobalServerContext) -> i64 {
     ttl.saturating_add(listing_margin(ttl))
 }
 
-/// A user's status from the values of their two keys.
-pub fn status(online: Option<i64>, active: Option<i64>) -> UserOnlineStatus {
-    match (online, active) {
-        (Some(_), Some(_)) => UserOnlineStatus::Online,
-        (Some(_), None) => UserOnlineStatus::Away,
-        (None, _) => UserOnlineStatus::Offline,
+/// A user's status from the values of their three keys, as they themself are told it: an
+/// invisible user is `Invisible` here, and `Offline` to everyone else ([`seen_by_others`]).
+pub fn status(
+    online: Option<&str>,
+    active: Option<&str>,
+    chosen: Option<&str>,
+) -> UserOnlineStatus {
+    if online.is_none() {
+        return UserOnlineStatus::Offline;
+    }
+    match chosen.and_then(|chosen| chosen.parse().ok()) {
+        Some(PresenceOverride::Invisible) => UserOnlineStatus::Invisible,
+        Some(PresenceOverride::Away) => UserOnlineStatus::Away,
+        Some(PresenceOverride::DoNotDisturb) => UserOnlineStatus::DoNotDisturb,
+        None if active.is_some() => UserOnlineStatus::Online,
+        None => UserOnlineStatus::Away,
+    }
+}
+
+/// A status as anyone but the user it belongs to is told it: invisible is offline.
+pub fn seen_by_others(status: UserOnlineStatus) -> UserOnlineStatus {
+    match status {
+        UserOnlineStatus::Invisible => UserOnlineStatus::Offline,
+        status => status,
     }
 }
 
@@ -223,7 +247,7 @@ pub async fn online_candidates(
 /// How many people's presence keys one read asks for.
 const STATUS_BATCH: usize = 1_000;
 
-/// Which of `users` have a status `keep` accepts, by their presence keys, in batches read at
+/// Which of `users` have a status `keep` accepts, as others see it, by their presence keys, in batches read at
 /// once rather than one after another.
 async fn having_status(
     state: &GlobalServerContext,
@@ -239,23 +263,27 @@ async fn having_status(
     Ok(batches
         .into_iter()
         .flatten()
-        .filter(|(_, status)| keep(*status))
+        .filter(|(_, status)| keep(seen_by_others(*status)))
         .map(|(user, _)| user)
         .collect())
 }
 
-/// Which of `users` are online, not away.
+/// Which of `users` are online, not away: those online or in do not disturb.
 pub async fn online_among(
     state: &GlobalServerContext,
     users: Vec<UserId>,
 ) -> crate::Result<HashSet<UserId>> {
     having_status(state, users, |status| {
-        matches!(status, UserOnlineStatus::Online)
+        matches!(
+            status,
+            UserOnlineStatus::Online | UserOnlineStatus::DoNotDisturb
+        )
     })
     .await
 }
 
-/// The members of `community` who are online or away: everyone with a connection. Each server
+/// The members of `community` who are online, away, or in do not disturb: everyone with a
+/// connection who is not invisible. Each server
 /// reuses a recent answer (`app::recent`), since a community's member sample asks on every read.
 pub async fn connected_members(
     state: &GlobalServerContext,
@@ -325,7 +353,8 @@ pub async fn presence_visible(
 }
 
 /// The presence of each of `users` as `viewer` may learn it (`presence_visible`), in the order
-/// given: `offline` for anyone whose presence is not theirs to learn.
+/// given: `offline` for anyone whose presence is not theirs to learn, and for anyone invisible
+/// but the viewer themself.
 pub async fn statuses_for(
     state: &GlobalServerContext,
     viewer: UserId,
@@ -354,14 +383,20 @@ pub async fn statuses_for(
                 .get(&user)
                 .copied()
                 .unwrap_or(UserOnlineStatus::Offline);
+            let status = if user == viewer {
+                status
+            } else {
+                seen_by_others(status)
+            };
             (user, status)
         })
         .collect())
 }
 
-/// The presence of each user (`app::user_status`), read in one round trip, whoever asks: for
-/// counting and ordering members (`online_among`, `connected_members`). What a person is told of
-/// someone's presence goes through `statuses_for`.
+/// The presence of each user (`app::user_status`) as they themself are told it, read in one
+/// round trip, whoever asks: for counting and ordering members (`online_among`,
+/// `connected_members`, through [`seen_by_others`]). What a person is told of someone's presence
+/// goes through `statuses_for`.
 async fn users_online_status(
     state: &GlobalServerContext,
     user_ids: Vec<UserId>,
@@ -374,18 +409,23 @@ async fn users_online_status(
         .iter()
         .flat_map(|user_id| {
             [
-                crate::user_status::online_key(*user_id),
-                crate::user_status::active_key(*user_id),
+                online_key(*user_id),
+                active_key(*user_id),
+                crate::presence_override::override_key(*user_id),
             ]
         })
         .collect();
-    let values: Vec<Option<i64>> = state.valkey.mget(keys).await?;
+    let values: Vec<Option<String>> = state.valkey.mget(keys).await?;
     Ok(user_ids
         .into_iter()
         .zip(
             values
-                .chunks(2)
-                .map(|pair| crate::user_status::status(pair[0], pair.get(1).copied().flatten())),
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|[online, active, chosen]| {
+                    status(online.as_deref(), active.as_deref(), chosen.as_deref())
+                }),
         )
         .collect())
 }
@@ -402,7 +442,8 @@ pub fn mark_user_online(state: &GlobalServerContext, user: &UserPg) {
 /// keys are set together.
 ///
 /// When the `online` key was not already set, the user has just come online, and their
-/// `last_seen_at` is written: it is when they last came online.
+/// `last_seen_at` is written: it is when they last came online. Their presence override is
+/// copied to Valkey then too (`app::presence_override`), in case Valkey has lost it.
 ///
 /// Each server marks one user at most every [`MARK_EVERY`]: a client making many requests, or
 /// many of a user's devices on one server, cost a write each quarter of the key's life rather
@@ -447,14 +488,23 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
 }
 
 /// Writes `user`'s `last_seen_at` as now, on their account and on each of their memberships,
-/// which their communities' member samples are read by (`app::community::read_community_members`).
+/// which their communities' member samples are read by (`app::community::read_community_members`),
+/// and copies their presence override, read back by the same statement, to Valkey.
 async fn record_seen(state: &GlobalServerContext, user: UserId) -> crate::Result<()> {
     use aspen_schema::{community_user, user};
     let mut conn = state.connection_pool.get().await?;
-    diesel::update(user::table.filter(user::id.eq(user)))
+    let chosen: Option<(
+        Option<PresenceOverride>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = diesel::update(user::table.filter(user::id.eq(user)))
         .set(user::last_seen_at.eq(diesel::dsl::now))
-        .execute(conn.as_mut())
-        .await?;
+        .returning((user::presence_override, user::presence_override_until))
+        .get_result(conn.as_mut())
+        .await
+        .optional()?;
+    if let Some((presence_override, until)) = chosen {
+        crate::presence_override::copy_row_to_valkey(state, user, presence_override, until).await?;
+    }
     diesel::update(community_user::table.filter(community_user::user.eq(user)))
         .set(community_user::last_seen_at.eq(diesel::dsl::now))
         .execute(conn.as_mut())
@@ -487,10 +537,35 @@ mod tests {
 
     #[test]
     fn a_connection_without_recent_activity_is_away() {
-        assert!(matches!(status(Some(1), Some(1)), UserOnlineStatus::Online));
-        assert!(matches!(status(Some(1), None), UserOnlineStatus::Away));
-        assert!(matches!(status(None, None), UserOnlineStatus::Offline));
+        let set = || Some("1");
+        assert_eq!(status(set(), set(), None), UserOnlineStatus::Online);
+        assert_eq!(status(set(), None, None), UserOnlineStatus::Away);
+        assert_eq!(status(None, None, None), UserOnlineStatus::Offline);
         // Activity outliving the last connection does not keep anyone online.
-        assert!(matches!(status(None, Some(1)), UserOnlineStatus::Offline));
+        assert_eq!(status(None, set(), None), UserOnlineStatus::Offline);
+    }
+
+    #[test]
+    fn a_chosen_presence_holds_only_while_connected() {
+        let set = || Some("1");
+        assert_eq!(status(set(), set(), Some("away")), UserOnlineStatus::Away);
+        assert_eq!(
+            status(set(), None, Some("doNotDisturb")),
+            UserOnlineStatus::DoNotDisturb
+        );
+        assert_eq!(
+            status(set(), set(), Some("invisible")),
+            UserOnlineStatus::Invisible
+        );
+        assert_eq!(
+            status(None, None, Some("doNotDisturb")),
+            UserOnlineStatus::Offline
+        );
+        // A value this version does not know is no override.
+        assert_eq!(status(set(), set(), Some("busy")), UserOnlineStatus::Online);
+        assert_eq!(
+            seen_by_others(UserOnlineStatus::Invisible),
+            UserOnlineStatus::Offline
+        );
     }
 }

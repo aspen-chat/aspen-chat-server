@@ -42,6 +42,7 @@ import { search } from "./en/search";
 import { selfLinks } from "./en/selfLinks";
 import { security } from "./en/security";
 import { settings } from "./en/settings";
+import { presence } from "./en/presence";
 import { status } from "./en/status";
 import { syncStatus } from "./en/syncStatus";
 import { system } from "./en/system";
@@ -236,6 +237,7 @@ export const en = {
   onlineGroup: "Online — {count}",
   offlineGroup: "Offline — {count}",
   status,
+  presence,
   noChannels: "This community has no text channels yet.",
   communityNotFound: "That community is not one you belong to, or it no longer exists.",
   channelNotFound: "That channel does not exist or was deleted.",

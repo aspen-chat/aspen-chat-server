@@ -13,7 +13,7 @@ A DM or group DM holds a call as a voice channel does: through the same join, vo
 Code: `app::voice::ring`, table `voice_ring`.
 
 1. The first person to join becomes `voice_session.started_by`.
-2. Everyone else in the DM is rung for `app::voice::ring::RING_SECONDS` (fifteen). Each ring is a row of `voice_ring`, announced as a `voiceRing` create.
+2. Everyone else in the DM is rung for `app::voice::ring::RING_SECONDS` (fifteen), but those in do not disturb (see [Presence](../event-routing/presence.md#choosing-a-status)), whom the call reaches only as the DM shows it. Each ring is a row of `voice_ring`, announced as a `voiceRing` create.
 3. A ring ends with its `delete` when its person joins the call or declines it (`DELETE /channels/{channel}/voice/rings/@me`).
 4. The call's end ends every ring of it.
 

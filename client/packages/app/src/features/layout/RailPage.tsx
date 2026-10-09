@@ -51,7 +51,7 @@ export function RailPage({
         <div className={contentClassName}>{children}</div>
       </div>
       <div className="shrink-0 bg-surface-sunken md:col-start-1 md:row-start-2 md:w-0 md:min-w-full md:border-e md:border-line">
-        <SidebarFooter />
+        <SidebarFooter groundClassName="bg-surface-sunken" />
       </div>
     </main>
   );

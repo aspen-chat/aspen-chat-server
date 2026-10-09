@@ -49,6 +49,7 @@ pub mod notification_setting;
 pub mod passkey_page;
 pub mod plugin;
 pub mod poll;
+pub mod presence_override;
 pub mod push;
 pub mod rate_limit;
 pub mod react;
@@ -224,6 +225,11 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         ))
         .routes(routes!(user::get_preferences, user::update_preferences))
         .routes(routes!(user::get_statuses))
+        .routes(routes!(
+            presence_override::read_presence_override,
+            presence_override::put_presence_override,
+            presence_override::delete_presence_override
+        ))
         .routes(routes!(user::list_user_communities))
         .routes(routes!(user::change_password))
         .routes(routes!(security::get_security))

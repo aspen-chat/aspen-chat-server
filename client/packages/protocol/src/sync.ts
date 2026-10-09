@@ -19,6 +19,7 @@ import type {
   CommunityPlugin,
   CustomEmoji,
   Message as EventMessage,
+  PresenceOverride,
   ServerEvent,
 } from "./generated/events";
 import type { components } from "./generated/openapi";
@@ -335,6 +336,7 @@ export class AspenSync {
   readonly #unreported = new Map<string, string>();
   #readTimer: ReturnType<typeof setTimeout> | null = null;
   #muteTimer: ReturnType<typeof setTimeout> | null = null;
+  #chosenPresenceTimer: ReturnType<typeof setTimeout> | null = null;
   readonly #iconLoads = new Map<string, Promise<void>>();
   readonly #random: () => number;
   /** Communities waiting to be read again because the caller's access in them may have grown. */
@@ -587,6 +589,10 @@ export class AspenSync {
     if (this.#muteTimer !== null) {
       clearTimeout(this.#muteTimer);
       this.#muteTimer = null;
+    }
+    if (this.#chosenPresenceTimer !== null) {
+      clearTimeout(this.#chosenPresenceTimer);
+      this.#chosenPresenceTimer = null;
     }
     this.store.clear();
     this.#setStatus("stopped");
@@ -1588,6 +1594,34 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
+  }
+
+  /**
+   * Shows the caller as invisible, away, or in do not disturb, for `durationSeconds` or, with
+   * `null`, until they change it; with `presenceOverride` `null`, ends the override instead.
+   * The store follows at once; the `presenceOverrideChanged` event that follows changes nothing
+   * more.
+   */
+  async setChosenPresence(
+    presenceOverride: PresenceOverride | null,
+    durationSeconds: number | null,
+  ): Promise<void> {
+    if (presenceOverride === null) {
+      const result = await this.#client.api.DELETE("/api/v1/users/@me/presence-override");
+      if (result.error !== undefined) {
+        throw new ApiProblemError(problemOf(result.error, result.response));
+      }
+      this.store.setChosenPresence(null);
+    } else {
+      const result = await this.#client.api.PUT("/api/v1/users/@me/presence-override", {
+        body: { presenceOverride, durationSeconds },
+      });
+      if (result.data === undefined) {
+        throw new ApiProblemError(problemOf(result.error, result.response));
+      }
+      this.store.setChosenPresence({ presenceOverride, until: result.data.until ?? null });
+    }
+    this.#scheduleChosenPresenceEnd();
   }
 
   /**
@@ -3184,45 +3218,56 @@ export class AspenSync {
     this.#held = [];
     const startedAt = this.#now();
     try {
-      const [me, communities, dms, admin, blocks, plugins, heldMessages, saves, follows] =
-        await Promise.all([
-          this.#client.api.GET("/api/v1/users/{user}", { params: { path: { user: "@me" } } }),
-          this.#client.api.GET("/api/v1/users/{user}/communities", {
-            params: {
-              path: { user: "@me" },
-              query: {
-                include: [
-                  "channels",
-                  "categories",
-                  "members",
-                  "voice",
-                  "readStates",
-                  "mutes",
-                  "collapses",
-                  "roles",
-                  "notifications",
-                  "emoji",
-                ],
-              },
+      const [
+        me,
+        communities,
+        dms,
+        admin,
+        blocks,
+        plugins,
+        heldMessages,
+        saves,
+        follows,
+        chosenPresence,
+      ] = await Promise.all([
+        this.#client.api.GET("/api/v1/users/{user}", { params: { path: { user: "@me" } } }),
+        this.#client.api.GET("/api/v1/users/{user}/communities", {
+          params: {
+            path: { user: "@me" },
+            query: {
+              include: [
+                "channels",
+                "categories",
+                "members",
+                "voice",
+                "readStates",
+                "mutes",
+                "collapses",
+                "roles",
+                "notifications",
+                "emoji",
+              ],
             },
-          }),
-          this.#client.api.GET("/api/v1/users/@me/dms", {
-            params: {
-              query: {
-                include: ["users", "readStates", "mutes", "notifications", "voice"],
-                limit: DM_PAGE,
-              },
+          },
+        }),
+        this.#client.api.GET("/api/v1/users/@me/dms", {
+          params: {
+            query: {
+              include: ["users", "readStates", "mutes", "notifications", "voice"],
+              limit: DM_PAGE,
             },
-          }),
-          this.#client.api.GET("/api/v1/users/@me/admin"),
-          this.#client.api.GET("/api/v1/users/@me/blocks", {
-            params: { query: { include: ["users"] } },
-          }),
-          this.#client.api.GET("/api/v1/plugins"),
-          this.#readHeldMessages(),
-          this.#client.api.GET("/api/v1/users/@me/saved-messages"),
-          this.#client.api.GET("/api/v1/users/@me/thread-follows"),
-        ]);
+          },
+        }),
+        this.#client.api.GET("/api/v1/users/@me/admin"),
+        this.#client.api.GET("/api/v1/users/@me/blocks", {
+          params: { query: { include: ["users"] } },
+        }),
+        this.#client.api.GET("/api/v1/plugins"),
+        this.#readHeldMessages(),
+        this.#client.api.GET("/api/v1/users/@me/saved-messages"),
+        this.#client.api.GET("/api/v1/users/@me/thread-follows"),
+        this.#client.api.GET("/api/v1/users/@me/presence-override"),
+      ]);
       if (generation !== this.#generation) {
         return false;
       }
@@ -3246,6 +3291,14 @@ export class AspenSync {
         ...(dms.data.included.channelMutes ?? []),
       ]);
       this.#scheduleMuteEnd();
+      // A deployment that keeps no presence overrides has none.
+      const chosen = chosenPresence.data?.presenceOverride;
+      this.store.setChosenPresence(
+        chosen == null
+          ? null
+          : { presenceOverride: chosen, until: chosenPresence.data?.until ?? null },
+      );
+      this.#scheduleChosenPresenceEnd();
       this.store.replaceNotificationSettings([
         ...(communities.data.included.notificationSettings ?? []),
         ...(dms.data.included.notificationSettings ?? []),
@@ -3624,6 +3677,9 @@ export class AspenSync {
     if (event.serverEvent === "channelMuteChanged") {
       this.#scheduleMuteEnd();
     }
+    if (event.serverEvent === "presenceOverrideChanged") {
+      this.#scheduleChosenPresenceEnd();
+    }
     if (event.serverEvent === "react" && event.type === "delete") {
       // One of the few a summary names left; the next to have reacted is read again.
       const summary = this.store.reactions(event.messageId).get(event.emoji);
@@ -3883,6 +3939,24 @@ export class AspenSync {
       this.#muteTimer = null;
       this.store.expireMutes(Date.now());
       this.#scheduleMuteEnd();
+    }, delay);
+  }
+
+  /** Ends the caller's timed presence override when its time comes, by this device's clock, as a mute's. */
+  #scheduleChosenPresenceEnd(): void {
+    if (this.#chosenPresenceTimer !== null) {
+      clearTimeout(this.#chosenPresenceTimer);
+      this.#chosenPresenceTimer = null;
+    }
+    const end = this.store.chosenPresenceEnd();
+    if (end === null) {
+      return;
+    }
+    const delay = Math.min(Math.max(end - Date.now(), 0), MAX_TIMER_MS);
+    this.#chosenPresenceTimer = setTimeout(() => {
+      this.#chosenPresenceTimer = null;
+      this.store.expireChosenPresence(Date.now());
+      this.#scheduleChosenPresenceEnd();
     }, delay);
   }
 

@@ -47,6 +47,9 @@ The reasons behind the [event routing](index.md) design.
 
 - **Presence is pulled, not pushed.** Nothing announces a change. See [Presence](presence.md).
 - **A bot is never away.** It uses Aspen through the API rather than as a person does.
+- **A chosen status is kept on the `user` row, with a copy in Valkey.** Statuses are read for whole member lists at once; a third key in the same `MGET` costs nothing more, where reading the row would add a query to every read. The row is what push and rings decide by, since do not disturb holds while the user is offline too, when nothing renews a Valkey key.
+- **Do not disturb hides unread marks and counts, not just alerts.** It is for not being drawn back in: a badge draws as a chime does. Read positions are untouched, so nothing is lost when it ends.
+- **A DM call does not ring someone in do not disturb at all.** A silent ring would still show others they are being rung; with none, the call shows in the DM like any other, for them to join if they look.
 - **Presence answers `offline` to strangers and the blocked.** It does not tell them when a person is about.
 - **Online counts are made on the server.** No client knows every member of a large community.
 - **A sorted set of listed members per community.** Reading every member's keys would cost as much as the community is large; the set makes a count cost as much as the number connected.

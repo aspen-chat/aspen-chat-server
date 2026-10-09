@@ -22,8 +22,9 @@ import { playSound } from "./sounds";
  * those settings would tell of a message that tags them), on every deployment they use: a sound
  * (`NOTIFICATION_SOUNDS`), and, where they turned it on (`DESKTOP_NOTIFICATIONS`) and the browser
  * allows, the system's notification, which opens the message (or a notice's channel) when
- * clicked. Nothing for the conversation the user is looking at, and no system notification in
- * the mobile app, whose phone is woken by push instead.
+ * clicked. Nothing for the conversation the user is looking at, nothing at all in do not
+ * disturb (the home's, which holds on every deployment), and no system notification in the
+ * mobile app, whose phone is woken by push instead.
  */
 export function NotifyOnMessages() {
   const m = useMessages();
@@ -46,6 +47,9 @@ export function NotifyOnMessages() {
       channelId: string,
       describe: () => { title: string; body: string; tag: string; open: () => void },
     ) => {
+      if (home.store.doNotDisturb()) {
+        return;
+      }
       const looking =
         document.visibilityState === "visible" &&
         document.hasFocus() &&

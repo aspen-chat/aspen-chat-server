@@ -35,11 +35,15 @@ interface Ringing {
 /**
  * Rings the user for a DM call they are not in, on any deployment they use: the first ring
  * still in force shows as `IncomingCall`. A ring ends when they join or decline, when its
- * call ends, or at its `until`, which the clock here decides, as every device does.
+ * call ends, or at its `until`, which the clock here decides, as every device does. Nothing
+ * rings in do not disturb, by the home's answer: the servers ring no one in it, and a ring from
+ * a deployment that does not know it is kept quiet here.
  */
 export function IncomingCalls() {
-  const rings = useEverywhere<readonly Ringing[]>(["rings"], (sources) =>
-    sources.flatMap((source) => source.sync.store.myRings().map((ring) => ({ ring, source }))),
+  const rings = useEverywhere<readonly Ringing[]>(["rings", "presence"], (sources) =>
+    sources.find((source) => source.domain === null)?.sync.store.doNotDisturb() === true
+      ? []
+      : sources.flatMap((source) => source.sync.store.myRings().map((ring) => ({ ring, source }))),
   );
   const now = useNow(500, rings.length > 0);
   const current = rings.find(({ ring }) => Date.parse(ring.until) > now);

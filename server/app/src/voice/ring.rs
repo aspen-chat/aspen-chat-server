@@ -8,7 +8,7 @@ use crate::message::MessageKind;
 use crate::permissions::channel_access;
 use crate::{ChannelId, EventScope, UserId, VoiceSessionId, publish_event};
 use crate::{MaybeLoaded, MessageId};
-use aspen_schema::{channel, dm_recipient, message, voice_ring, voice_session};
+use aspen_schema::{channel, dm_recipient, message, user, voice_ring, voice_session};
 use aspen_wire::message_enum;
 use aspen_wire::message_enum::server_event::{MessageEvent, ServerEvent, VoiceRingEvent};
 use chrono::{DateTime, Duration, Utc};
@@ -42,7 +42,8 @@ fn ring_record(ring: &VoiceRing, channel: ChannelId) -> message_enum::VoiceRing 
 }
 
 /// Notes who started a call, its first participant, and, in a DM or group DM, rings everyone
-/// else in it for `RING_SECONDS`.
+/// else in it for `RING_SECONDS`, but those in do not disturb (`app::presence_override`), whom
+/// the call reaches only as the DM shows it.
 pub(super) async fn start_call(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -63,9 +64,16 @@ pub(super) async fn start_call(
         return Ok(());
     }
     let others: Vec<UserId> = dm_recipient::table
+        .inner_join(user::table)
         .select(dm_recipient::user)
         .filter(dm_recipient::channel.eq(session.channel))
         .filter(dm_recipient::user.ne(caller))
+        .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(concat!(
+            // `IS NOT TRUE`, since the condition is `NULL` for someone with no override.
+            "(",
+            crate::presence_override::do_not_disturb_sql!("\"user\""),
+            ") IS NOT TRUE"
+        )))
         .load(conn)
         .await?;
     let now = Utc::now();

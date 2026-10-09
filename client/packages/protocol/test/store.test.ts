@@ -753,6 +753,49 @@ describe("RecordStore mutes", () => {
   });
 });
 
+describe("RecordStore chosen presence", () => {
+  it("follows the caller's devices and shows their own status by it at once", () => {
+    const store = bootstrapped();
+    expect(store.chosenPresence()).toBeNull();
+    expect(store.doNotDisturb()).toBe(false);
+    store.applyEvent({
+      serverEvent: "presenceOverrideChanged",
+      presenceOverride: "doNotDisturb",
+      until: "2026-10-09T12:00:00Z",
+    });
+    expect(store.chosenPresence()).toEqual({
+      presenceOverride: "doNotDisturb",
+      until: "2026-10-09T12:00:00Z",
+    });
+    expect(store.doNotDisturb()).toBe(true);
+    expect(store.me()?.onlineStatus).toBe("doNotDisturb");
+    store.applyEvent({ serverEvent: "presenceOverrideChanged", presenceOverride: "invisible" });
+    expect(store.chosenPresence()).toEqual({ presenceOverride: "invisible", until: null });
+    expect(store.doNotDisturb()).toBe(false);
+    expect(store.me()?.onlineStatus).toBe("invisible");
+    store.applyEvent({ serverEvent: "presenceOverrideChanged", presenceOverride: null });
+    expect(store.chosenPresence()).toBeNull();
+    expect(store.me()?.onlineStatus).toBe("online");
+  });
+
+  it("ends a timed override when its time is up, and only then", () => {
+    const store = bootstrapped();
+    store.setChosenPresence({ presenceOverride: "away", until: "2026-10-09T12:00:00Z" });
+    expect(store.chosenPresenceEnd()).toBe(Date.parse("2026-10-09T12:00:00Z"));
+    store.expireChosenPresence(Date.parse("2026-10-09T11:59:59Z"));
+    expect(store.chosenPresence()?.presenceOverride).toBe("away");
+    store.expireChosenPresence(Date.parse("2026-10-09T12:00:00Z"));
+    expect(store.chosenPresence()).toBeNull();
+    expect(store.chosenPresenceEnd()).toBeNull();
+  });
+
+  it("asks for the caller's own presence with everyone else's", () => {
+    const store = new RecordStore();
+    store.setBootstrap(me, [], {});
+    expect(store.presenceCandidates()).toEqual([me.id]);
+  });
+});
+
 describe("RecordStore collapsed categories", () => {
   it("follows the caller's devices and replaces what a bootstrap read", () => {
     const store = bootstrapped();

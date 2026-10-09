@@ -157,29 +157,34 @@ export function CommunityRail() {
   const folders = usePreference(RAIL_FOLDERS);
   // Shown at once while the new arrangement is on its way to the server.
   const [moved, setMoved] = useState<RailLayout | null>(null);
-  const { entries, dmsUnread, dmTags } = useEverywhere(["communities", "unread"], (sources) => {
-    const found: RailEntry[] = [];
-    let unread = false;
-    let tags = 0;
-    for (const source of sources) {
-      const store = source.sync.store;
-      const places = store.unreadPlaces();
-      unread ||= places.has(UNREAD_DMS);
-      tags += store.placeMentions(UNREAD_DMS);
-      for (const community of store.communities()) {
-        const place = { domain: source.domain, communityId: community.id };
-        found.push({
-          ...place,
-          key: railKey(place),
-          community,
-          source,
-          unread: places.has(community.id),
-          tags: store.placeMentions(community.id),
-        });
+  const { entries, dmsUnread, dmTags } = useEverywhere(
+    ["communities", "unread", "presence"],
+    (sources) => {
+      const found: RailEntry[] = [];
+      let unread = false;
+      let tags = 0;
+      // Do not disturb hides every unread mark and tag count, by the home's answer.
+      const hidden = sources.find((source) => source.domain === null)?.sync.store.doNotDisturb();
+      for (const source of sources) {
+        const store = source.sync.store;
+        const places = store.unreadPlaces();
+        unread ||= places.has(UNREAD_DMS);
+        tags += store.placeMentions(UNREAD_DMS);
+        for (const community of store.communities()) {
+          const place = { domain: source.domain, communityId: community.id };
+          found.push({
+            ...place,
+            key: railKey(place),
+            community,
+            source,
+            unread: !hidden && places.has(community.id),
+            tags: hidden ? 0 : store.placeMentions(community.id),
+          });
+        }
       }
-    }
-    return { entries: found, dmsUnread: unread, dmTags: tags };
-  });
+      return { entries: found, dmsUnread: !hidden && unread, dmTags: hidden ? 0 : tags };
+    },
+  );
   const units = arrangeRail(entries, moved ?? { order, folders });
   const rows = railRows(units);
   const { communityId: current, domain: currentDomain } = useParams({ strict: false });

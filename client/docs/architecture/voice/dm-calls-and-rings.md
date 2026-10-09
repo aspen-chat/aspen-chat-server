@@ -30,6 +30,9 @@ While it shows:
   once per ring (`ringNotifications.ts`). **Why:** a desktop may refuse a notification posted again
   in quick succession, which an effect run twice would do.
 - A muted DM rings silently.
+- Nothing rings in do not disturb (`IncomingCalls`, by the home's answer; see
+  [Presence](../presence.md#do-not-disturb)): the servers ring no one in it, and a ring from a
+  deployment that does not know it is left unshown.
 - A ring ends at its `until` by the clock (`useNow`).
 
 ## Ringing out

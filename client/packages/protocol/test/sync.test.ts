@@ -92,6 +92,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
     "/api/v1/users/@me/held-messages": () => json([]),
     "/api/v1/users/@me/saved-messages": () => json([]),
     "/api/v1/users/@me/thread-follows": () => json([]),
+    "/api/v1/users/@me/presence-override": () => json({ presenceOverride: null, until: null }),
     "/api/v1/users/statuses": (url) =>
       json(
         (url.searchParams.get("ids") ?? "")
@@ -388,6 +389,40 @@ describe("AspenSync", () => {
     sync.stop();
   });
 
+  it("reads the caller's chosen presence at bootstrap, and sets and ends it", async () => {
+    const writes: { method: string; body: unknown }[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/presence-override": async (_url, request) => {
+        if (request.method === "GET") {
+          return json({ presenceOverride: "away", until: null });
+        }
+        const body: unknown = request.method === "PUT" ? await request.json() : null;
+        writes.push({ method: request.method, body });
+        return request.method === "PUT"
+          ? json({ presenceOverride: "doNotDisturb", until: "2099-01-01T00:00:00Z" }, 201)
+          : new Response(null, { status: 204 });
+      },
+    });
+    await goLive(sync);
+    expect(sync.store.chosenPresence()).toEqual({ presenceOverride: "away", until: null });
+
+    await sync.setChosenPresence("doNotDisturb", 900);
+    expect(writes).toEqual([
+      { method: "PUT", body: { presenceOverride: "doNotDisturb", durationSeconds: 900 } },
+    ]);
+    expect(sync.store.chosenPresence()).toEqual({
+      presenceOverride: "doNotDisturb",
+      until: "2099-01-01T00:00:00Z",
+    });
+    expect(sync.store.doNotDisturb()).toBe(true);
+
+    await sync.setChosenPresence(null, null);
+    expect(writes.at(-1)).toEqual({ method: "DELETE", body: null });
+    expect(sync.store.chosenPresence()).toBeNull();
+    sync.stop();
+  });
+
   it("bootstraps from REST before connecting the stream, then applies events", async () => {
     const { sync, calls } = makeSync(bootstrapResponses());
     expect(FakeSocket.instances).toHaveLength(0);
@@ -402,6 +437,7 @@ describe("AspenSync", () => {
       "/api/v1/users/@me/held-messages",
       "/api/v1/users/@me/saved-messages",
       "/api/v1/users/@me/thread-follows",
+      "/api/v1/users/@me/presence-override",
       "/api/v1/users/%40me/preferences",
       "/api/v1/users/statuses",
     ]);
