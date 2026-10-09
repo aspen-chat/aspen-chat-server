@@ -9,7 +9,7 @@ plugin rides on a maintained Aspen and declares what it adds.
 This document is the design and the contract plugins and hosts keep. The interface between them
 is `spec/plugin.wit` (the WebAssembly component interface, package `aspen:plugin`), and a
 plugin's manifest is described by `spec/plugin_manifest.schema.json`. Every phase below is
-built (`docs/architecture/plugins.md` describes how).
+built (`docs/architecture/plugins/index.md` describes how).
 
 ## Who is trusted with what
 

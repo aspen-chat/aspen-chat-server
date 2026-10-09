@@ -61,7 +61,7 @@ fn print_setup(server: &VoiceServer) {
     );
     println!(
         "If it signs in to NATS as a user of its own, that user's permissions name the same id \
-         (docs/operators/installing.md, section 6):\n"
+         (docs/operators/installing/6-voice-servers.md):\n"
     );
     println!("    publish:   {}", publish.join(", "));
     println!("    subscribe: {}", subscribe.join(", "));

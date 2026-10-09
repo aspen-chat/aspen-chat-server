@@ -2,7 +2,7 @@
 
 What one Aspen deployment says to another, and what a client of one deployment says to another
 deployment's API, and how both change over time without breaking deployments that run other
-versions or forks of Aspen. `docs/architecture/federation.md` describes how this implementation does it;
+versions or forks of Aspen. `docs/architecture/federation/index.md` describes how this implementation does it;
 this document is the contract any implementation keeps.
 
 The payloads deployments exchange are described by `federation_schema.json` (root type

@@ -1,36 +1,107 @@
 # Unread and muting
 
-- Unread is `RecordStore` state from the `readStates` sideload of the community list and the
-  DM list, one `ReadState` per channel (topic `read:<channelId>`; `useReadState`, `useUnread`),
-  kept current by events: someone else's new message moves `lastMessage`, the caller's own
-  moves `lastRead`, `channelRead` brings another device's reading, and a deleted message that
-  was a channel's `lastMessage` makes `AspenSync` read that channel's state again. A channel is
-  unread while `lastMessage` sorts after `lastRead`. `unreadPlaces()` (topic `unread`,
-  `useUnreadPlaces`) names the communities with something unread, and `UNREAD_DMS` for the DMs,
-  for the rail's dots, which sit half under the entry's icon. An unread channel's icon and name,
-  or a whole unread DM row, are marked with `unreadMarkClass` (an accent outline over a faint
-  accent fill, padded so nothing moves), and every unread row's accessible name says so. `MessageList` marks the newest message on screen read through
-  `AspenSync.markRead`, which updates the store at once and reports to the server at most every
-  `READ_REPORT_MS` per channel, and only while the page is visible and focused; leaving the
-  channel or hiding the page flushes the report. A thread's list marks it the same way: a
-  thread's position is kept apart (`threadRead`, topic `read:<threadId>`, from a read that
-  sideloads it and `channelRead`, and moved by the caller's own replies), so it never counts
-  toward what the lists show unread; the activity feed reads it. The "New Messages" line is placed where the
-  read position was when the channel opened, and only if it was unread then, and stays there
-  while the channel is open; posting removes it.
-- Muting is store state from the `mutes` sideload of the community and DM lists (replaced
-  whole at each bootstrap by `replaceMutes`), kept current by `channelMuteChanged` events;
-  `AspenSync` ends timed mutes by the device's clock (`nextMuteEnd`, `expireMutes`), since the
-  server announces no end it did not make. A muted channel or DM (`useMute`) is drawn in
-  `text-ink-faint` with a muted bell (`MuteBell`, a focusable image whose tooltip says until
-  when, in the words of the Mute submenu: `useMuteEnd`; in the DM list it sits beside the
-  options button rather than in the row's link, which may hold nothing focusable), is never
-  marked unread, and does not count toward
-  `unreadPlaces`; its read position is kept, so it is unread again once the mute ends, and the
-  "New Messages" line still shows inside it. `ChannelMenu` (`src/features/channels`) holds two
-  submenus, Mute (one of the offered lengths, or, while muted, until when and Unmute) and
-  Notifications (naming the level in force), above the channel's other actions; it opens on a
-  right click on the row of a text channel, a DM, or a channel of a plugin's kind (whose plugin's
-  notices its mute and level govern), or from the row's `ChannelMenuButton`, which
-  keyboards and touch screens use, since a long press on a row starts dragging it. It opens
-  beside the row, and below it on a one-pane screen, where there is no room beside it.
+## Where it lives
+
+| Part | Where |
+| --- | --- |
+| Read states | `RecordStore` (topic `read:<channelId>`), `useReadState`, `useUnread` |
+| Unread places | `unreadPlaces()` (topic `unread`), `useUnreadPlaces`, `UNREAD_DMS` |
+| Marking read | `MessageList`, `AspenSync.markRead` |
+| Thread positions | `threadRead` (topic `read:<threadId>`) |
+| Mutes | `replaceMutes`, `useMute`, `MuteBell`, `useMuteEnd`, `nextMuteEnd`, `expireMutes` |
+| The channel menu | `ChannelMenu`, `ChannelMenuButton` (`src/features/channels`) |
+
+## Unread
+
+### Read states
+
+Unread is `RecordStore` state, one `ReadState` per channel. It comes from the `readStates`
+sideload of the community list and the DM list.
+
+A channel is unread while `lastMessage` sorts after `lastRead`.
+
+| Event | Effect |
+| --- | --- |
+| Someone else's new message | Moves `lastMessage` |
+| The caller's own new message | Moves `lastRead` |
+| `channelRead` | Brings another device's reading |
+| A deleted message that was a channel's `lastMessage` | `AspenSync` reads that channel's state again |
+
+### Unread places
+
+`unreadPlaces()` (`useUnreadPlaces`) names the communities with something unread, and `UNREAD_DMS`
+for the DMs. They drive the rail's dots, which sit half under the entry's icon.
+
+### Drawing unread
+
+- An unread channel's icon and name, or a whole unread DM row, are marked with
+  `unreadMarkClass`: an accent outline over a faint accent fill, padded so nothing moves.
+- Every unread row's accessible name says so.
+
+### Marking read
+
+`MessageList` marks the newest message on screen read through `AspenSync.markRead`.
+
+- It updates the store at once.
+- It reports to the server at most every `READ_REPORT_MS` per channel.
+- It reports only while the page is visible and focused.
+- Leaving the channel or hiding the page flushes the report.
+
+### Threads
+
+A thread's list marks it read the same way. A thread's position is kept apart (`threadRead`,
+topic `read:<threadId>`):
+
+- It comes from a read that sideloads it, and from `channelRead`.
+- The caller's own replies move it.
+- It never counts toward what the lists show unread.
+- The activity feed reads it.
+
+### The "New Messages" line
+
+- It is placed where the read position was when the channel opened, and only if the channel was
+  unread then.
+- It stays there while the channel is open.
+- Posting removes it.
+
+## Muting
+
+### Store state
+
+- Mutes come from the `mutes` sideload of the community and DM lists, replaced whole at each
+  bootstrap by `replaceMutes`.
+- `channelMuteChanged` events keep them current.
+- `AspenSync` ends timed mutes by the device's clock (`nextMuteEnd`, `expireMutes`), since the
+  server announces no end it did not make.
+
+### A muted channel or DM
+
+A muted channel or DM (`useMute`):
+
+- is drawn in `text-ink-faint`;
+- shows a muted bell (`MuteBell`): a focusable image whose tooltip says until when, in the words
+  of the Mute submenu (`useMuteEnd`). In the DM list the bell sits beside the options button
+  rather than in the row's link, which may hold nothing focusable;
+- is never marked unread;
+- does not count toward `unreadPlaces`.
+
+Its read position is kept, so it is unread again once the mute ends. The "New Messages" line
+still shows inside it.
+
+### The channel menu
+
+`ChannelMenu` (`src/features/channels`) holds two submenus above the channel's other actions:
+
+| Submenu | Offers |
+| --- | --- |
+| Mute | One of the offered lengths; or, while muted, until when and Unmute |
+| Notifications | Names the level in force |
+
+It opens:
+
+- on a right click on the row of a text channel, a DM, or a channel of a plugin's kind (whose
+  plugin's notices its mute and level govern);
+- from the row's `ChannelMenuButton`, which keyboards and touch screens use, since a long press on
+  a row starts dragging it.
+
+It opens beside the row, and below it on a one-pane screen, where there is no room beside it.

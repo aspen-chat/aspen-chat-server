@@ -56,9 +56,10 @@ pub struct VoiceServerConfig {
     pub rate_limits: LimitSettings,
 }
 
-/// A NATS user for this voice server alone. `docs/operators/installing.md` gives the
-/// permissions it needs: publishing this server's reports, reading its commands and the rate
-/// limit suspension, and replies to its own inbox (`voice_protocol::control::inbox_prefix`).
+/// A NATS user for this voice server alone. `docs/operators/installing/6-voice-servers.md`
+/// gives the permissions it needs: publishing this server's reports, reading its commands and
+/// the rate limit suspension, and replies to its own inbox
+/// (`voice_protocol::control::inbox_prefix`).
 #[derive(Clone, Debug, Deserialize)]
 pub struct NatsUser {
     pub user: String,

@@ -8,7 +8,7 @@ Once complete, Aspen will have rigorous test suites, hardware benchmarking progr
 
 Aspen aims to be horizontally scalable, providing a user experience suitable for millions of users, and also to be just as suitable for communities containing less than a dozen users.
 
-Federation, letting a user of one deployment use others, is built in five phases, all in place: each deployment's identity, key, policy, and directory of other deployments; signing in abroad; a client holding sessions on several deployments; DMs across deployments; and revocation, deletion notices, and moderating foreign users. See `docs/architecture/federation.md`. Extend it only with explicit direction.
+Federation, letting a user of one deployment use others, is built in five phases, all in place: each deployment's identity, key, policy, and directory of other deployments; signing in abroad; a client holding sessions on several deployments; DMs across deployments; and revocation, deletion notices, and moderating foreign users. See `docs/architecture/federation/index.md`. Extend it only with explicit direction.
 
 ## Tech Stack
 
@@ -35,7 +35,7 @@ Federation, letting a user of one deployment use others, is built in five phases
 
 ## Building and Running
 
-`docs/operators/` is the guide for people who run a deployment: installing, every setting, federation, backups, and troubleshooting by problem code. It describes the code as it stands, like every comment: a change to a setting (`aspen_config.rs`, `voice_server/src/config.rs`), an operator command, a `ProblemCode`, or what an operator must open, route, or back up updates it in the same commit.
+`docs/operators/` is the guide for people who run a deployment: installing, every setting, federation, backups, and troubleshooting by problem code. It says how, not why: the reasons go in `docs/architecture/operations/`. It describes the code as it stands, like every comment: a change to a setting (`aspen_config.rs`, `voice_server/src/config.rs`), an operator command, a `ProblemCode`, or what an operator must open, route, or back up updates it in the same commit.
 
 1. Start infrastructure services:
    ```
@@ -135,7 +135,7 @@ Federation, letting a user of one deployment use others, is built in five phases
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`, `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the example plugins' format, lints, tests, and builds for `wasm32-wasip2` (`plugins/word_filter`, `plugins/forum`, `plugins/calendar`, and `plugins/blackjack`, each a workspace of its own); the client's typecheck, lint, and tests against the schemas that job writes; the Android app's build, its unit tests, and its device tests on an emulator; `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the debug build; the Android app's build and JVM tests (`client/packages/mobile/android`; the push handler's end-to-end test needs a device and runs locally); an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts; `scripts/check_permissions.py` runs in the x86-64 job against its debug build, and builds and installs the example plugins. Every job runs the toolchain `rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the example plugins need, so rustup installs both wherever the repository is built. Clippy warnings fail the build.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`, `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the example plugins' format, lints, tests, and builds for `wasm32-wasip2` (`plugins/word_filter`, `plugins/forum`, `plugins/calendar`, and `plugins/blackjack`, each a workspace of its own); the client's typecheck, lint, and tests against the schemas that job writes; the Android app's build, its unit tests, and its device tests on an emulator; `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the debug build; an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts; `scripts/check_permissions.py` runs in the x86-64 job against its debug build, and builds and installs the example plugins. Every job runs the toolchain `rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the example plugins need, so rustup installs both wherever the repository is built. Clippy warnings fail the build.
 
 `.github/workflows/emoji-font.yml` runs every week: when `googlefonts/noto-emoji` has changed its fonts, it rebuilds the client's bundled emoji fonts with `client/scripts/noto_emoji.py update` and opens a pull request (see `client/docs/architecture/fonts.md`). Its pull requests start CI only when the repository has an `EMOJI_FONT_TOKEN` secret; the workflow file says why.
 
@@ -209,12 +209,12 @@ Client REST request → API handler (validate, parse) → App function (permissi
 
 ### Architecture reference
 
-How each feature works is written up in `docs/architecture/`, one file per feature. Before working on a feature, read its file, and keep it describing the code as it stands in the same commit, as every comment must. Where this file or one of those says "see Bots" or "described under Voice", it means the file of that title.
+How each feature works is written up in `docs/architecture/`: one file per feature, or a folder (`index.md` and a page per subtopic) for the larger ones. The reasons behind a feature's design are kept apart from how it works, in `design-notes.md` in its folder or `<feature>-design-notes.md` beside its file; `docs/architecture/operations/` holds those for the operator guide. Before working on a feature, read its file or folder, and its design notes before changing a choice they explain, and keep it describing the code as it stands in the same commit, as every comment must. Where this file or one of those says "see Bots" or "described under Voice", it means the file of that title.
 
 - `docs/architecture/background-tasks.md` — the poll closer, the voice report listener and reaper, closing polls, message kinds, and poll write-ins
 - `docs/architecture/reactions.md` — reactions, their canonical emoji, summaries, and reactor lists
-- `docs/architecture/threads-and-dms.md` — threads, following them, echoes, DMs and group DMs, their calls and rings, and the system account
-- `docs/architecture/sign-in-and-security.md` — password sign-in, second factors, recovery codes, reverification, password hashing limits, passkeys, and signing in from another device by a QR code
+- `docs/architecture/threads-and-dms/index.md` — threads, following them, echoes, DMs and group DMs, their calls and rings, and the system account
+- `docs/architecture/sign-in-and-security/index.md` — password sign-in, second factors, recovery codes, reverification, password hashing limits, passkeys, and signing in from another device by a QR code
 - `docs/architecture/user-preferences.md` — account-scoped preferences stored as one JSON object
 - `docs/architecture/read-positions.md` — read positions, threads' among them, unread, and unread tag counts
 - `docs/architecture/saved-messages.md` — saving messages for oneself, the saved list, and what losing access does to a save
@@ -224,25 +224,25 @@ How each feature works is written up in `docs/architecture/`, one file per featu
 - `docs/architecture/search.md` — message search and its indexes
 - `docs/architecture/notifications.md` — notification levels and what the apps tell of
 - `docs/architecture/tagging.md` — tagging members, roles, and everyone, and what counts
-- `docs/architecture/bots.md` — bots, their tokens, links, roles, and commands
+- `docs/architecture/bots/index.md` — bots, their tokens, links, roles, and commands
 - `docs/architecture/custom-emoji.md` — a community's own emoji in text and reactions
 - `docs/architecture/blocking.md` — what a block does on the server
-- `docs/architecture/administration.md` — deployment roles, deployment moderation and its log, bans from the deployment, registration invites and dual invites, the deployment settings, and fleet health
-- `docs/architecture/voice.md` — voice servers, sessions, reports, the reaper, and the voice server's media, signalling, and limits
+- `docs/architecture/administration/index.md` — deployment roles, deployment moderation and its log, bans from the deployment, registration invites and dual invites, the deployment settings, and fleet health
+- `docs/architecture/voice/index.md` — voice servers, sessions, reports, the reaper, and the voice server's media, signalling, and limits
 - `docs/architecture/file-transfers.md` — file transfers in calls, the STUN and TURN relay, and their record
-- `docs/architecture/federation.md` — every phase of federation: identity and keys, gates and lists, the directory, signing in abroad, protocol versions, DMs across deployments, and standing
+- `docs/architecture/federation/index.md` — every phase of federation: identity and keys, gates and lists, the directory, signing in abroad, protocol versions, DMs across deployments, and standing
 - `docs/architecture/push.md` — waking phones through Web Push
-- `docs/architecture/attachment-previews.md` — previews of pictures and videos' posters, how they are made and queued, and messages held for them
-- `docs/architecture/email.md` — email addresses and their verification, the shown address, password reset by email, the outbox, the daily digest, the newsletter, and unsubscribing
-- `docs/architecture/event-routing.md` — event subjects, the event feed and its shards, visibility, `publish_event` scopes, and presence
+- `docs/architecture/attachment-previews/index.md` — previews of pictures and videos' posters, how they are made and queued, and messages held for them
+- `docs/architecture/email/index.md` — email addresses and their verification, the shown address, password reset by email, the outbox, the daily digest, the newsletter, and unsubscribing
+- `docs/architecture/event-routing/index.md` — event subjects, the event feed and its shards, visibility, `publish_event` scopes, and presence
 - `docs/architecture/typing.md` — who is typing: the event stream's typing frames, the core NATS subject they are published on, their routing, and their expiry
-- `docs/architecture/jobs.md` — background jobs: the `job` table, steps and checkpoints, claiming, classes and their places, failing, recurring jobs, each kind, and the dashboard's preview
+- `docs/architecture/jobs/index.md` — background jobs: the `job` table, steps and checkpoints, claiming, classes and their places, failing, recurring jobs, each kind, and the dashboard's preview
 - `docs/architecture/benchmarking.md` — `aspen-bench`, seeding and purging runs, suspending rate limits, and the metrics both servers export
-- `docs/architecture/reports.md` — reports of messages, profiles, and nicknames, their categories, cases and their review, warnings, what deleting a message keeps, and the evidence kept of its files
+- `docs/architecture/reports/index.md` — reports of messages, profiles, and nicknames, their categories, cases and their review, warnings, what deleting a message keeps, and the evidence kept of its files
 - `docs/architecture/message-links.md` — links between messages, what each reader finds at them, and how they are sideloaded
-- `docs/architecture/roles-and-permissions.md` — community permissions, roles, overrides, ranking, bans, the everyone mention limit, and member search
-- `docs/architecture/web-client.md` — the web client every API server serves at `public_url`, its files and caching, and its pages' Open Graph tags: the deployment's, and an invite's community's
-- `docs/architecture/plugins.md` — installing plugins, where they run, the sandbox, intercepting and observing, what the host answers and as whom, annotations, storage, routes, plugin events, principals, channel types and views, timers, notices, cards, and capability URLs
+- `docs/architecture/roles-and-permissions/index.md` — community permissions, roles, overrides, ranking, bans, the everyone mention limit, and member search
+- `docs/architecture/web-client/index.md` — the web client every API server serves at `public_url`, its files and caching, and its pages' Open Graph tags: the deployment's, and an invite's community's
+- `docs/architecture/plugins/index.md` — installing plugins, where they run, the sandbox, intercepting and observing, what the host answers and as whom, annotations, storage, routes, plugin events, principals, channel types and views, timers, notices, cards, and capability URLs
 
 ### Event Ordering Guarantee
 

@@ -44,7 +44,8 @@ pub struct AspenConfig {
     #[serde(default)]
     pub nats_auth_token: Option<String>,
     /// A NATS user for the API servers, when NATS has users: so that each voice server signs
-    /// in as a user allowed only its own subjects (`docs/operators/installing.md`).
+    /// in as a user allowed only its own subjects
+    /// (`docs/operators/installing/6-voice-servers.md`).
     #[serde(default)]
     pub nats_user: Option<NatsUser>,
     /// TLS to NATS: `[nats.tls]`'s certificate files, which also make TLS required.
@@ -811,9 +812,10 @@ pub struct MediaConfig {
 /// same address the server does. `public_base_url` is what clients download objects from, an
 /// anonymous read path the operator sets up that allows reading objects and nothing else, no
 /// listing and no writes (Garage's `s3_web` website endpoint, an AWS bucket whose policy allows
-/// `s3:GetObject` alone, or a CDN before either; `docs/operators/installing.md`). The addresses
-/// may name different hosts; the read path need not be reachable from the server itself. The
-/// defaults are a development storage's, which a public deployment refuses
+/// `s3:GetObject` alone, or a CDN before either;
+/// `docs/operators/installing/storage-read-path.md`). The addresses may name different hosts;
+/// the read path need not be reachable from the server itself. The defaults are a development
+/// storage's, which a public deployment refuses
 /// (`AspenConfig::check_development_credentials`). Its `Debug` leaves out `secret_key`.
 #[derive(Clone, Deserialize, SmartDefault)]
 #[serde(default)]
