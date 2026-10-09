@@ -3,8 +3,9 @@
 //! - `user:{uuid}:online` exists while the user has a connection: it is set with a short expiry
 //!   when they connect the event stream (or make any authenticated request) and refreshed by the
 //!   stream's pings, so it expires shortly after their last connection goes; each server sets it
-//!   for one user at most every `MARK_EVERY`, a quarter of its life. Setting it when it was not
-//!   set is their coming online, which writes their `last_seen_at`.
+//!   for one user at most every `MARK_EVERY`, a quarter of its life. Finding it not set is their
+//!   coming online, which writes their `last_seen_at` and copies their override before setting it
+//!   (`app::presence_upkeep`).
 //! - `user:{uuid}:active` exists while they are using Aspen: a client sends an `activity` frame
 //!   on its event stream while its user interacts with it, and each sets the key to expire after
 //!   `[presence] away_after_seconds`.
@@ -44,7 +45,7 @@ use aspen_wire::user::UserOnlineStatus;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use fred::interfaces::{KeysInterface, SortedSetsInterface};
-use fred::types::Expiration;
+use fred::types::{Expiration, SetOptions};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -438,12 +439,12 @@ pub fn mark_user_online(state: &GlobalServerContext, user: &UserPg) {
 /// the API rather than as a person does, so being connected is being active, and both of its
 /// keys are set together.
 ///
-/// When the `online` key was not already set, the user has just come online, and their
-/// `last_seen_at` is written: it is when they last came online. Their presence override is
-/// copied to Valkey then too (`app::presence_override`), in case Valkey has lost it. Their coming
-/// online, and their going offline once the key runs out, are told to those watching them
-/// (`app::presence_feed`). The writes, the copy, and their listings are batched with others'
-/// (`app::presence_upkeep`).
+/// When the `online` key is not set, the user is coming online: their `last_seen_at` is written,
+/// it being when they last came online, and their presence override is copied to Valkey
+/// (`app::presence_override`), in case Valkey has lost it, before the key is set, so the key
+/// never stands without the copy beside it. Their coming online, and their going offline once
+/// the key runs out, are told to those watching them (`app::presence_feed`). The writes, the
+/// copy, and their listings are batched with others' (`app::presence_upkeep`).
 ///
 /// Each server marks one user at most every [`MARK_EVERY`]: a client making many requests, or
 /// many of a user's devices on one server, cost a write each quarter of the key's life rather
@@ -457,11 +458,18 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
     let state_for_task = state.clone();
     tokio::spawn(async move {
         let state = state_for_task;
-        let expiry = Some(Expiration::EX(ONLINE_TTL_SECONDS));
-        // Setting the key answers its previous value, which says whether they were online.
-        let previous: Option<i64> = match state
+        // Renewed only if it is set: answering its previous value says whether it was. A user
+        // not online yet is brought online by their arrival, which sets the key once their
+        // override is copied (`app::presence_upkeep`).
+        let renewed: Option<i64> = match state
             .valkey
-            .set(online_key(user), 1, expiry.clone(), None, true)
+            .set(
+                online_key(user),
+                1,
+                Some(Expiration::EX(ONLINE_TTL_SECONDS)),
+                Some(SetOptions::XX),
+                true,
+            )
             .await
         {
             Ok(previous) => previous,
@@ -470,6 +478,10 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
                 return;
             }
         };
+        if renewed.is_none() {
+            state.presence_upkeep.arriving(user, bot);
+            return;
+        }
         state.presence_feed.expires(
             user,
             Expiry::Connection,
@@ -478,16 +490,42 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
         if bot
             && let Err(e) = state
                 .valkey
-                .set::<(), _, i64>(active_key(user), 1, expiry, None, false)
+                .set::<(), _, i64>(
+                    active_key(user),
+                    1,
+                    Some(Expiration::EX(ONLINE_TTL_SECONDS)),
+                    None,
+                    false,
+                )
                 .await
         {
             tracing::warn!(error = %e, "failed to record the user as online");
         }
-        if previous.is_none() {
-            state.presence_upkeep.arrived(user);
-        }
     });
     state.presence_upkeep.list(user);
+}
+
+/// Sets `user`'s `online` key, and a bot's `active` key with it, for [`ONLINE_TTL_SECONDS`]: their
+/// arrival, once their override is copied (`app::presence_upkeep`).
+pub(crate) async fn set_online_keys(
+    valkey: &fred::clients::Client,
+    feed: &crate::presence_feed::PresenceFeed,
+    user: UserId,
+    bot: bool,
+) -> crate::Result<()> {
+    let expiry = Some(Expiration::EX(ONLINE_TTL_SECONDS));
+    let () = valkey
+        .set(online_key(user), 1, expiry.clone(), None, false)
+        .await?;
+    feed.expires(
+        user,
+        Expiry::Connection,
+        Duration::from_secs(ONLINE_TTL_SECONDS as u64),
+    );
+    if bot {
+        let () = valkey.set(active_key(user), 1, expiry, None, false).await?;
+    }
+    Ok(())
 }
 
 /// How long a presence key lives; the event stream refreshes it while the user is connected.

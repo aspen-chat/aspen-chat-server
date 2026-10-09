@@ -21,7 +21,7 @@ A chosen status holds only while they are connected: offline is offline whatever
 | `user:{uuid}:online` | Connecting the event stream, or any authenticated request. Refreshed by the stream's pings. Each server marks one user at most every fifteen seconds (`user_status::MARK_EVERY`, a quarter of the key's minute). | Refreshed while connected |
 | `user:{uuid}:active` | Each `activity` frame a client sends on its event stream while its user interacts with it. At most once a minute; the stream ignores closer ones. | `[presence] away_after_seconds` (ten minutes) |
 
-- Setting `online` when it was not set is the user coming online, and writes `user.last_seen_at`.
+- Finding `online` not set is the user coming online. Their arrival writes `user.last_seen_at`, copies their override (below), and only then sets `online`, so until it is done they show as offline to everyone. A mark that finds the key set renews it (`SET … XX`), and one that finds it not set leaves it to the arrival.
 - What follows from either key being set is done in batches by one task per server (`app::presence_upkeep`), at most 100 people to a statement, on one database connection at a time: coming online's writes and override copy (below), and listing them in their communities. A person waits there at most once, so what waits is bounded by those this server marked online. Rows are locked in key order, since another server may write some of the same people's at once.
 - Both keys belong to the user rather than a connection. Any active device keeps them online, and any connected one keeps them from going offline.
 - A bot is never away. Whatever marks it connected sets its `active` key too, for as long.
@@ -45,7 +45,7 @@ A user may show invisible, away, or do not disturb in place of what their connec
 
 - An override that runs out ends on each device by its own clock, with no event. Valkey lets its copy go at the same moment, and the row's `until` has passed, so neither is read back.
 - The copy is written while the transaction that changes the row holds it locked, so concurrent changes reach Valkey in the order they commit. A transaction that fails after writing it puts back what is committed.
-- Coming online copies the row again (the same statement that writes `last_seen_at` reads it back), so a Valkey that lost the copy has it again. Those watching the user are told of their coming online only after the copy. A read between their `online` key being set and the copy (moments, or longer while a crowd comes online) finds no override, and answers as if they had chosen none.
+- Coming online copies the row again (the same statement that writes `last_seen_at` reads it back), so a Valkey that lost the copy has it again, and sets `online` only after the copy. Wherever `online` exists the copy does too, so someone who chose invisible is never shown online, even right after Valkey lost its keys. An arrival that cannot read the row, or write the copy, leaves `online` unset: the user shows offline, and the next mark, at most fifteen seconds later while they stay connected, tries again.
 - Deleting an account clears both.
 - Clients set it on every deployment they use alike, since it is the person's, not one deployment's.
 
@@ -93,7 +93,7 @@ A hint says only that someone's presence may have changed. It is made:
 
 - The timers are kept by the server that set what runs out (`PresenceFeed::expires`), one per user and kind, the latest replacing the last, a second after the expiry. A key renewed by another server meanwhile makes a hint that changes nothing.
 - One task per server gathers the hints made meanwhile into one message, at most 4096 users.
-- A user's coming online is hinted once their override is copied (`app::presence_upkeep`).
+- A user's coming online is hinted once their override is copied and their `online` key set (`app::presence_upkeep`).
 
 ### Watching and telling
 

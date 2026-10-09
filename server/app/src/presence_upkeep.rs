@@ -1,11 +1,13 @@
 //! What follows from someone's presence keys being set (`app::user_status`), done for many
 //! people at once by one task per server rather than by a task of its own for each:
 //!
-//! - **Arriving.** When their `online` key was not set, they have just come online: their
-//!   `last_seen_at` is written on their account and on each membership, which the member samples
-//!   are read by, their presence override is copied to Valkey from the same statement, and those
-//!   watching them are told (`app::presence_feed`), after the copy, so they are told what the
-//!   user chose.
+//! - **Arriving.** When their `online` key was not set, they are coming online. Their
+//!   `last_seen_at` is written on their account, and their presence override, read back by the
+//!   same statement, is copied to Valkey; only then is their `online` key set, and those watching
+//!   them told (`app::presence_feed`). Whenever the key exists, so does the copy of what they
+//!   chose, even after Valkey lost its keys, so someone who chose invisible is never shown online
+//!   in between: until their arrival is done, they show as offline to everyone. Their
+//!   `last_seen_at` is then written on each membership, which the member samples are read by.
 //! - **Listing.** Each community they belong to lists them as someone who may be online, renewed
 //!   once per margin however often their keys are set (`user:{uuid}:listed`).
 //!
@@ -17,8 +19,10 @@
 //!
 //! Each person is waiting at most once, so what waits is bounded by the people this server
 //! marked online, and so by its connections and the users of its requests. Work that fails is
-//! logged and not tried again, as when it was done one at a time: the next time their keys are
-//! set does it.
+//! logged and not tried again here. An arrival that fails before its copy leaves the `online` key
+//! unset, so the next mark, at most `user_status::MARK_EVERY` later while they stay connected,
+//! is an arrival again; while the database cannot be read, those coming online show as offline.
+//! A listing that fails is made at the next mark too.
 
 use crate::presence_feed::PresenceFeed;
 use crate::presence_override::PresenceOverride;
@@ -58,22 +62,39 @@ pub struct PresenceUpkeep {
 
 #[derive(Default)]
 struct Waiting {
-    arrived: HashSet<UserId>,
+    /// Those coming online, and whether each is a bot.
+    arriving: HashMap<UserId, bool>,
     to_list: HashSet<UserId>,
 }
 
 impl Waiting {
-    fn take(&mut self) -> (Vec<UserId>, Vec<UserId>) {
-        (take_some(&mut self.arrived), take_some(&mut self.to_list))
+    fn take(&mut self) -> (HashMap<UserId, bool>, Vec<UserId>) {
+        let arriving: HashMap<UserId, bool> = self
+            .arriving
+            .iter()
+            .take(BATCH)
+            .map(|(user, bot)| (*user, *bot))
+            .collect();
+        for user in arriving.keys() {
+            self.arriving.remove(user);
+        }
+        let to_list: Vec<UserId> = self.to_list.iter().take(BATCH).copied().collect();
+        for user in &to_list {
+            self.to_list.remove(user);
+        }
+        (arriving, to_list)
     }
 }
 
-fn take_some(set: &mut HashSet<UserId>) -> Vec<UserId> {
-    let taken: Vec<UserId> = set.iter().take(BATCH).copied().collect();
-    for user in &taken {
-        set.remove(user);
-    }
-    taken
+/// A user's row as their arrival wrote it.
+#[derive(QueryableByName)]
+struct Arrived {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    id: uuid::Uuid,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    presence_override: Option<PresenceOverride>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
+    presence_override_until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// What the task works with.
@@ -105,9 +126,10 @@ impl PresenceUpkeep {
         upkeep
     }
 
-    /// `user` has just come online.
-    pub fn arrived(&self, user: UserId) {
-        self.add(|waiting| waiting.arrived.insert(user));
+    /// `user` is coming online: their `online` key was not set, and is set once their arrival
+    /// is recorded. A bot's `active` key is set with it.
+    pub fn arriving(&self, user: UserId, bot: bool) {
+        self.add(|waiting| waiting.arriving.insert(user, bot).is_none());
     }
 
     /// One of `user`'s keys was set: they are listed in their communities unless a listing made
@@ -127,22 +149,16 @@ impl PresenceUpkeep {
         loop {
             self.wake.notified().await;
             loop {
-                let (arrived, to_list) = self
+                let (arriving, to_list) = self
                     .waiting
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .take();
-                if arrived.is_empty() && to_list.is_empty() {
+                if arriving.is_empty() && to_list.is_empty() {
                     break;
                 }
-                if !arrived.is_empty() {
-                    if let Err(e) = upkeep.record_arrivals(&arrived).await {
-                        tracing::warn!(error = %e, "failed to record when users came online");
-                    }
-                    // After the overrides are copied, so those told read what each user chose.
-                    for user in arrived {
-                        upkeep.feed.changed(user);
-                    }
+                if !arriving.is_empty() {
+                    upkeep.arrive(&arriving).await;
                 }
                 if !to_list.is_empty() {
                     upkeep.list(&to_list).await;
@@ -153,24 +169,50 @@ impl PresenceUpkeep {
 }
 
 impl Upkeep {
-    /// Writes `users`' `last_seen_at` as now, on their accounts and on each of their
-    /// memberships, and copies their presence overrides, read back by the same statement, to
-    /// Valkey. The rows are locked in key order first: another server may write some of the same
-    /// people's at once (their other devices), and rows locked in any order could deadlock.
-    async fn record_arrivals(&self, users: &[UserId]) -> crate::Result<()> {
-        use diesel::sql_types::{Array, Nullable, Text, Timestamptz, Uuid};
-        #[derive(QueryableByName)]
-        struct Arrived {
-            #[diesel(sql_type = Uuid)]
-            id: uuid::Uuid,
-            #[diesel(sql_type = Nullable<Text>)]
-            presence_override: Option<PresenceOverride>,
-            #[diesel(sql_type = Nullable<Timestamptz>)]
-            presence_override_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Brings `arriving` online: writes their `last_seen_at`, copies their overrides to Valkey,
+    /// sets the `online` key of each whose copy landed, tells those watching them, and writes
+    /// `last_seen_at` on their memberships. The rows are locked in key order first: another
+    /// server may write some of the same people's at once (their other devices), and rows locked
+    /// in any order could deadlock.
+    async fn arrive(&self, arriving: &HashMap<UserId, bool>) {
+        let ids: Vec<uuid::Uuid> = arriving.keys().map(|user| user.0).collect();
+        let rows = match self.record_arrivals(&ids).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to record when users came online");
+                return;
+            }
+        };
+        let online = rows.into_iter().map(|row| async move {
+            let user = UserId(row.id);
+            let bot = arriving.get(&user).copied().unwrap_or(false);
+            let came = async {
+                crate::presence_override::copy_row_to_valkey(
+                    &self.valkey,
+                    &self.feed,
+                    user,
+                    row.presence_override,
+                    row.presence_override_until,
+                )
+                .await?;
+                crate::user_status::set_online_keys(&self.valkey, &self.feed, user, bot).await
+            };
+            match came.await {
+                // After the override is copied, so those told read what the user chose.
+                Ok(()) => self.feed.changed(user),
+                Err(e) => tracing::warn!(error = %e, "failed to bring a user online"),
+            }
+        });
+        futures_util::future::join_all(online).await;
+        if let Err(e) = self.record_memberships_seen(&ids).await {
+            tracing::warn!(error = %e, "failed to record when users came online");
         }
-        let ids: Vec<uuid::Uuid> = users.iter().map(|user| user.0).collect();
-        let mut conn = self.pool.get().await?;
-        let arrived: Vec<Arrived> = diesel::sql_query(
+    }
+
+    /// Writes `ids`' `last_seen_at` as now and reads back their presence overrides.
+    async fn record_arrivals(&self, ids: &[uuid::Uuid]) -> crate::Result<Vec<Arrived>> {
+        use diesel::sql_types::{Array, Uuid};
+        Ok(diesel::sql_query(
             r#"
             UPDATE "user" u SET last_seen_at = now()
             FROM (SELECT id FROM "user" WHERE id = ANY($1) ORDER BY id FOR UPDATE) locked
@@ -178,9 +220,14 @@ impl Upkeep {
             RETURNING u.id, u.presence_override, u.presence_override_until
             "#,
         )
-        .bind::<Array<Uuid>, _>(&ids)
-        .load(conn.as_mut())
-        .await?;
+        .bind::<Array<Uuid>, _>(ids)
+        .load(self.pool.get().await?.as_mut())
+        .await?)
+    }
+
+    /// Writes `ids`' `last_seen_at` as now on each of their memberships.
+    async fn record_memberships_seen(&self, ids: &[uuid::Uuid]) -> crate::Result<()> {
+        use diesel::sql_types::{Array, Uuid};
         diesel::sql_query(
             r#"
             UPDATE community_user cu SET last_seen_at = now()
@@ -193,22 +240,9 @@ impl Upkeep {
             WHERE cu."user" = locked."user" AND cu.community = locked.community
             "#,
         )
-        .bind::<Array<Uuid>, _>(&ids)
-        .execute(conn.as_mut())
+        .bind::<Array<Uuid>, _>(ids)
+        .execute(self.pool.get().await?.as_mut())
         .await?;
-        drop(conn);
-        let copies = arrived.into_iter().map(|row| {
-            crate::presence_override::copy_row_to_valkey(
-                &self.valkey,
-                &self.feed,
-                UserId(row.id),
-                row.presence_override,
-                row.presence_override_until,
-            )
-        });
-        for copied in futures_util::future::join_all(copies).await {
-            copied?;
-        }
         Ok(())
     }
 
