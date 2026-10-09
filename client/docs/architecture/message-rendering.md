@@ -162,7 +162,8 @@
   (visually hidden); on a computer its time shows after whatever it ends with (`MessageBody`'s
   `trailing`) while the pointer is over it or focus is in it, and on a touch screen its
   actions' sheet says when it was sent, as every message's does. After text it follows the
-  last line; beside a picture, poll, or card (`Trailed`) it sits level with the block's top
+  edited mark, level with the text's top: on its first line's baseline, or at the top edge of
+  a code block or table the text opens with (`.message-text-row`); beside a picture, poll, or card (`Trailed`) it sits level with the block's top
   where the line has room and under the block where it has not. Where it would reach under
   the hover actions, `MessageItem` measures them on hover and starts it just below their
   bottom edge (`trailingDrop`).

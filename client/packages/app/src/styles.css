@@ -542,6 +542,12 @@ body {
   max-width: 100%;
   overflow-wrap: anywhere;
 }
+/* A message's text and the marks after it (`MessageBody`) share its first line's baseline; a
+   body opening with a boxed block has no line at its top, so the marks keep to the box's top
+   edge instead of dropping to the first line inside it. */
+.message-text-row:has(> .message-body > :is(pre, table):first-child) {
+  align-items: flex-start;
+}
 /* Paragraphs stand apart by what a line's height adds to its text, half the text's size at the
    normal spacing, so they part further as the line spacing grows. */
 .message-body > * + * {
