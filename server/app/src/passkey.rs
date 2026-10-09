@@ -47,6 +47,9 @@ use webauthn_rs::prelude::{
     Url, Webauthn, WebauthnBuilder,
 };
 
+/// The most passkeys one account may hold.
+pub const MAX_PASSKEYS: i64 = 50;
+
 const CEREMONY_PREFIX: &str = "auth:ceremony";
 /// Long enough to find a security key or a phone.
 const CEREMONY_LIFETIME_SECONDS: i64 = 5 * 60;
@@ -325,11 +328,17 @@ pub async fn start(
                 .filter(user::id.eq(caller.user))
                 .first(&mut conn)
                 .await?;
-            let existing = credentials(&mut conn, caller.user)
+            let existing: Vec<_> = credentials(&mut conn, caller.user)
                 .await?
                 .into_iter()
                 .map(|(_, key)| key.cred_id().clone())
                 .collect();
+            if existing.len() as i64 >= MAX_PASSKEYS {
+                return Err(crate::Error::Validation(t!(
+                    "passkeyLimit",
+                    max = MAX_PASSKEYS
+                )));
+            }
             let (challenge, registration) = webauthn.start_passkey_registration(
                 caller.user.0,
                 &user_name,
@@ -615,6 +624,25 @@ async fn take_effect(
             let (passkey, recovery_codes) = conn
                 .transaction(|conn| {
                     async move {
+                        // The account's row is held so two ceremonies finishing at once cannot
+                        // both pass the count.
+                        user::table
+                            .select(user::id)
+                            .filter(user::id.eq(user_id))
+                            .for_no_key_update()
+                            .first::<UserId>(conn)
+                            .await?;
+                        let held: i64 = passkey::table
+                            .filter(passkey::user.eq(user_id))
+                            .count()
+                            .get_result(conn)
+                            .await?;
+                        if held >= MAX_PASSKEYS {
+                            return Err(crate::Error::Validation(t!(
+                                "passkeyLimit",
+                                max = MAX_PASSKEYS
+                            )));
+                        }
                         let first = !two_factor::methods(conn, user_id).await?.any_factor();
                         let summary = PasskeySummary {
                             id: PasskeyId::new(),

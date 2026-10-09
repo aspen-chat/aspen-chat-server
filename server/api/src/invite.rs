@@ -69,7 +69,7 @@ pub async fn create_invite(
     get,
     path = "/communities/{community}/invites",
     tag = TAG_INVITES,
-    params(("community" = CommunityId, Path)),
+    params(("community" = CommunityId, Path), InvitePageQuery),
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = Vec<message_enum::Invite>),
@@ -83,11 +83,29 @@ pub async fn list_community_invites(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
+    Query(page): Query<InvitePageQuery>,
 ) -> ApiResult<Json<Vec<message_enum::Invite>>> {
-    let invites = app::invite::read_community_invites(&state, user.id, community).await?;
+    let invites = app::invite::read_community_invites(
+        &state,
+        user.id,
+        community,
+        page.before.as_deref(),
+        page.limit.unwrap_or(app::LIST_PAGE),
+    )
+    .await?;
     Ok(Json(
         invites.iter().map(message_enum::Invite::from).collect(),
     ))
+}
+
+/// A page of a community's invites, newest first.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct InvitePageQuery {
+    /// Continue after this invite, by its code, the last of the previous page.
+    pub before: Option<String>,
+    /// How many to return, at most 100; 100 when absent. A shorter page is the last.
+    pub limit: Option<i64>,
 }
 
 /// Relationships an invite read can sideload.

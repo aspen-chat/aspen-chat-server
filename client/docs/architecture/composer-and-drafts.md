@@ -34,7 +34,10 @@
   box tells the server as its user writes (`AspenSync.noteTyping`, at most every
   `TYPING_REFRESH_MS`, and never while `TYPING_NOTICES` is off), and that they stopped
   (`stopTyping`) when the box empties, a message is sent, or the box goes; a draft it opens
-  with is not typing. What the stream tells of others is kept in `RecordStore.typers` (topic
+  with is not typing. The stream tells of others only in channels the app says it shows typing for: `useTypers`
+  registers its channel with `AspenSync.watchTyping` while it is used, and sync sends the open set
+  as a `viewing` frame on every change and every `ready`. What it tells is kept in
+  `RecordStore.typers` (topic
   `typing:<channelId>`, leaving out the user and whoever they block on any deployment), each
   for `TYPING_EXPIRY_MS` after the last word, gone at once when they stop or a message of
   theirs arrives, and all of it forgotten when the stream's connection drops. See

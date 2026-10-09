@@ -1,0 +1,16 @@
+DELETE FROM job WHERE kind IN ('forgetIcon', 'sweepExpired', 'recountMembers', 'recordStats');
+DROP TRIGGER icon_confirmed ON icon;
+DROP TRIGGER deployment_settings_icon_let_go ON deployment_settings;
+DROP TRIGGER community_icon_let_go ON community;
+DROP TRIGGER user_icon_let_go ON "user";
+DROP FUNCTION aspen_icon_confirmed();
+DROP FUNCTION aspen_icon_let_go();
+DROP FUNCTION aspen_forget_icon(uuid, interval);
+DROP INDEX community_deleted;
+DROP INDEX user_deleted;
+DROP INDEX user_created;
+DROP TABLE deployment_stats;
+DROP INDEX community_by_members;
+ALTER TABLE community DROP COLUMN member_count;
+DROP INDEX voice_server_failure_reported;
+DROP INDEX community_ban_until;

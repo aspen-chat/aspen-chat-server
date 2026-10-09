@@ -28,13 +28,19 @@ type Toggle =
   | "emailRequired"
   | "emailVerificationRequired"
   | "newsletterEnabled";
-type Count = "botsMaxPerUser" | "everyoneMentionLimit" | "customEmojiLimit" | "uploadQuotaGib";
+type Count =
+  | "botsMaxPerUser"
+  | "everyoneMentionLimit"
+  | "customEmojiLimit"
+  | "uploadQuotaGib"
+  | "evidenceRetentionDays";
 
 /**
  * The deployment's policies, for holders of Manage deployment settings: whether registering
  * takes an invite, whether every account needs a second factor, email (an address to register, a
  * verified one to use the server, and a newsletter, each offered only where the server can send
- * mail), bots, the limits on communities and on uploads, and files in calls. A change reaches every server at
+ * mail), bots, the limits on communities and on uploads, how long deleted messages' files are
+ * kept for reports, and files in calls. A change reaches every server at
  * once.
  */
 export function DeploymentSettingsSection() {
@@ -166,6 +172,11 @@ function PoliciesForm({ initial }: { initial: DeploymentSettings }) {
         )}
         {count("customEmojiLimit", m.admin.customEmojiLimit)}
         {count("uploadQuotaGib", m.admin.uploadQuotaGib, m.admin.uploadQuotaGibHint)}
+        {count(
+          "evidenceRetentionDays",
+          m.admin.evidenceRetentionDays,
+          m.admin.evidenceRetentionDaysHint,
+        )}
       </div>
       {error !== null && (
         <p role="alert" className={alertClass}>

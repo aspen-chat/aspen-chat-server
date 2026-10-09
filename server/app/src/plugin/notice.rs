@@ -20,7 +20,7 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 /// How long a notice is kept for phones to read.
-const KEPT: Duration = Duration::days(7);
+pub const KEPT: Duration = Duration::days(7);
 
 /// The channel whose settings and mute decide for `channel_id`: a thread's parent, or itself,
 /// with its kind and community.
@@ -133,11 +133,6 @@ pub async fn notify(
     conn.transaction(|conn| {
         let text = text.clone();
         async move {
-            diesel::delete(
-                plugin_notice::table.filter(plugin_notice::created_at.lt(Utc::now() - KEPT)),
-            )
-            .execute(conn.as_mut())
-            .await?;
             diesel::insert_into(plugin_notice::table)
                 .values((
                     plugin_notice::id.eq(id),
@@ -213,6 +208,8 @@ pub async fn read(
             plugin_notice::created_at,
         ))
         .filter(plugin_notice::id.eq(id).and(plugin_notice::user.eq(caller)))
+        // One past its time is read as gone, though the sweep may not have taken it yet.
+        .filter(plugin_notice::created_at.gt(Utc::now() - KEPT))
         .first(conn.as_mut())
         .await?;
     channel_access(state, conn.as_mut(), caller, channel_id).await?;
@@ -229,4 +226,45 @@ pub async fn read(
         message: message_id,
         created_at,
     })
+}
+
+/// Takes one of `plugin`'s turns at telling `user` of something: at most `[plugins]
+/// notify_per_minute` in a minute and `notify_per_day` in a day, counted in Valkey across every
+/// server. Past either, the notice is refused. While Valkey cannot be reached, notices are let
+/// through, as other limits are.
+pub async fn take_turn(
+    state: &GlobalServerContext,
+    plugin: &str,
+    user: UserId,
+) -> Result<(), super::host::wit::Error> {
+    let config = &state.config.plugins;
+    for (per, requests, seconds) in [
+        ("minute", config.notify_per_minute, 60.0),
+        ("day", config.notify_per_day, 86_400.0),
+    ] {
+        if requests == 0 {
+            continue;
+        }
+        let rate = aspen_limits::Limit {
+            requests,
+            per_seconds: seconds,
+            burst: None,
+            bucket: None,
+        }
+        .rate();
+        let key = format!("aspen:plugin_notify:{per}:{plugin}:{}", user.0);
+        match crate::rate_limit::take(&state.valkey, &key, rate).await {
+            Ok(None) => {}
+            Ok(Some(_)) => {
+                return Err(super::host::wit::Error::Limit(format!(
+                    "a plugin may tell one person of at most {requests} things a {per}"
+                )));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "could not count a plugin's notices; letting it through");
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
 }

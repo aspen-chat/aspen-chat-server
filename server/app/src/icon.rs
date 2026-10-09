@@ -353,6 +353,20 @@ pub async fn delete_if_unused(state: &GlobalServerContext, id: IconId) -> crate:
     Ok(true)
 }
 
+/// One `forgetIcon` job: deletes its icon if nothing uses it. The database queues one a day
+/// after an icon's upload is confirmed, and one whenever a user, a community, or the deployment
+/// lets go of its icon or is deleted (`aspen_icon_let_go`), so an icon never put to use and one
+/// replaced both go, without a sweep reading every icon.
+pub async fn forget_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    if let Some(id) = job.key.as_deref().and_then(|key| key.parse().ok()) {
+        delete_if_unused(state, IconId(id)).await?;
+    }
+    Ok(crate::jobs::Outcome::Done)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -952,9 +952,33 @@ impl Call {
     ) -> Result<(), wit::Error> {
         self.require(PluginPermission::Storage)?;
         let scope = self.scope(scope).await?;
-        let quota = self.plugin.manifest.storage_quota.unwrap_or(0);
+        let (quota, full) = self.storage_quota().await?;
         let mut conn = self.conn().await?;
-        storage::set(conn.as_mut(), &self.plugin.id, quota, &scope, &key, &value).await
+        let set = storage::set(conn.as_mut(), &self.plugin.id, quota, &scope, &key, &value).await;
+        self.name_total(set, full)
+    }
+
+    /// The bytes one owner's share may hold: the manifest's quota, or none past what it holds
+    /// while the plugin keeps as much as the deployment allows in all (`storage::total_full`),
+    /// which lets a write shrink or delete but not grow; and whether that is why.
+    async fn storage_quota(&self) -> Result<(u64, bool), wit::Error> {
+        let full = storage::total_full(&self.server, &self.plugin.id)
+            .await
+            .map_err(|e| self.fail(e))?;
+        let quota = self.plugin.manifest.storage_quota.unwrap_or(0);
+        Ok((if full { 0 } else { quota }, full))
+    }
+
+    /// `result`, its refusal for want of room naming the deployment's limit when that is what
+    /// refused it.
+    fn name_total<T>(&self, result: Result<T, wit::Error>, full: bool) -> Result<T, wit::Error> {
+        match result {
+            Err(wit::Error::Limit(_)) if full => Err(wit::Error::Limit(format!(
+                "the plugin keeps {} GiB in all, the most this deployment allows",
+                self.server.config.plugins.storage_total_gib
+            ))),
+            other => other,
+        }
     }
 
     async fn storage_delete(&mut self, scope: wit::Scope, key: String) -> Result<(), wit::Error> {
@@ -975,9 +999,9 @@ impl Call {
     ) -> Result<bool, wit::Error> {
         self.require(PluginPermission::Storage)?;
         let scope = self.scope(scope).await?;
-        let quota = self.plugin.manifest.storage_quota.unwrap_or(0);
+        let (quota, full) = self.storage_quota().await?;
         let mut conn = self.conn().await?;
-        storage::swap(
+        let swapped = storage::swap(
             conn.as_mut(),
             &self.plugin.id,
             quota,
@@ -986,7 +1010,8 @@ impl Call {
             expected.as_deref(),
             value.as_deref(),
         )
-        .await
+        .await;
+        self.name_total(swapped, full)
     }
 
     async fn storage_list(
@@ -1275,6 +1300,7 @@ impl Call {
     ) -> Result<bool, wit::Error> {
         self.require(PluginPermission::Notify)?;
         let user = UserId(parse_id(&user)?);
+        super::notice::take_turn(&self.server, &self.plugin.id, user).await?;
         let channel_id = ChannelId(parse_id(&channel_id)?);
         let message_id = message_id
             .map(|m| parse_id(&m).map(MessageId))

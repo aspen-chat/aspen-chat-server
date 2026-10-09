@@ -537,3 +537,6 @@ uploadQuotaExceededMinutes: "You can upload at most %{limit} GiB a day, and you 
 uploadQuotaFileTooLarge: "You can upload at most %{limit} GiB a day, and this file alone is larger. Send a smaller one, or ask the deployment's administrators to raise the limit."
 savedMessagesFull: "You can keep at most %{max} saved messages here. Remove some you no longer need, then save this one."
 threadFollowKind: "Only threads can be followed."
+pinLimit: "This channel already has %{max} pinned messages, the most it may. Unpin one to pin another."
+blockLimit: "You have blocked %{max} people, the most anyone may. Unblock someone to block another."
+passkeyLimit: "Your account already has %{max} passkeys, the most it may. Remove one you no longer use to add another."

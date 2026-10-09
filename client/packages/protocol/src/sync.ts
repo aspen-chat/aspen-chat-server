@@ -170,6 +170,15 @@ export const VOTERS_PAGE = 50;
 /** How many DMs one read of the DM list asks for, the most the server lists at once. */
 export const DM_PAGE = 100;
 
+/**
+ * How many records a page of a moderator's or owner's list holds (bans, server mutes, invites,
+ * held messages); a shorter page is the last.
+ */
+export const LIST_PAGE = 100;
+
+/** The most channels the server sends typing for on one connection (`viewing`). */
+const MAX_VIEWING = 8;
+
 /** The longest delay `setTimeout` keeps; a longer one fires at once. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 /**
@@ -312,6 +321,11 @@ export class AspenSync {
   #activityReportedAt = Number.NEGATIVE_INFINITY;
   /** The channels the server was told the user is typing in, and when it was last told. */
   readonly #typingSent = new Map<string, number>();
+  /**
+   * The channels open where someone typing is shown, each with how many places show it; the
+   * server is told of them (`#tellViewing`), since it sends typing only where it is shown.
+   */
+  readonly #viewing = new Map<string, number>();
   /** When the next of those shown typing runs out. */
   #typingTimer: ReturnType<typeof setTimeout> | null = null;
   /** Users the server said do not exist; asked once, not again. */
@@ -2174,6 +2188,27 @@ export class AspenSync {
   }
 
   /**
+   * Every message of the caller's held for its previews, a page at a time; they are few, since
+   * each is posted within seconds. A page that cannot be read ends the reading with what came.
+   */
+  async #readHeldMessages(): Promise<HeldMessage[]> {
+    const held: HeldMessage[] = [];
+    for (;;) {
+      const after = held.at(-1)?.id;
+      const page = await this.#client.api.GET("/api/v1/users/@me/held-messages", {
+        params: { query: after === undefined ? { limit: LIST_PAGE } : { after, limit: LIST_PAGE } },
+      });
+      if (page.data === undefined) {
+        return held;
+      }
+      held.push(...page.data);
+      if (page.data.length < LIST_PAGE) {
+        return held;
+      }
+    }
+  }
+
+  /**
    * Reads again what the server leaves blocked users out of: every read state, and the
    * reactions of each held message window, one read per window (a window never holds more than
    * a read returns on each side of its middle).
@@ -2296,26 +2331,71 @@ export class AspenSync {
     this.store.applyEvent({ serverEvent: "poll", type: "update", ...result.data });
   }
 
-  /** Reads a community's standing bans into the store, for a holder of Ban members. */
-  async loadBans(communityId: string): Promise<void> {
+  /**
+   * Reads the first page of a community's standing bans into the store, for a holder of Ban
+   * members, or, with `more`, the page after those held.
+   */
+  async loadBans(communityId: string, more = false): Promise<void> {
+    const before = more ? this.store.bans(communityId)?.at(-1)?.user : undefined;
+    if (more && (before === undefined || this.store.listComplete(`bans:${communityId}`))) {
+      return;
+    }
     const result = await this.#client.api.GET("/api/v1/communities/{community}/bans", {
-      params: { path: { community: communityId } },
+      params: {
+        path: { community: communityId },
+        query: before === undefined ? { limit: LIST_PAGE } : { before, limit: LIST_PAGE },
+      },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.replaceBans(communityId, result.data);
+    const complete = result.data.length < LIST_PAGE;
+    if (more) {
+      this.store.appendBans(communityId, result.data, complete);
+    } else {
+      this.store.replaceBans(communityId, result.data, complete);
+    }
   }
 
-  /** Reads a community's standing server mutes into the store, for a holder of Manage calls. */
-  async loadVoiceMutes(communityId: string): Promise<void> {
+  /**
+   * Reads the first page of a community's standing server mutes into the store, for a holder
+   * of Manage calls, or, with `more`, the page after those held.
+   */
+  async loadVoiceMutes(communityId: string, more = false): Promise<void> {
+    const before = more ? this.store.voiceMutes(communityId)?.at(-1)?.user : undefined;
+    if (more && (before === undefined || this.store.listComplete(`voiceMutes:${communityId}`))) {
+      return;
+    }
     const result = await this.#client.api.GET("/api/v1/communities/{community}/voice-mutes", {
-      params: { path: { community: communityId } },
+      params: {
+        path: { community: communityId },
+        query: before === undefined ? { limit: LIST_PAGE } : { before, limit: LIST_PAGE },
+      },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.replaceVoiceMutes(communityId, result.data);
+    const complete = result.data.length < LIST_PAGE;
+    if (more) {
+      this.store.appendVoiceMutes(communityId, result.data, complete);
+    } else {
+      this.store.replaceVoiceMutes(communityId, result.data, complete);
+    }
+  }
+
+  /** Reads whether a moderator's mute of one person stands, for a holder of Manage calls. */
+  async loadVoiceMute(communityId: string, userId: string): Promise<void> {
+    const result = await this.#client.api.GET(
+      "/api/v1/communities/{community}/voice-mutes/{user}",
+      { params: { path: { community: communityId, user: userId } } },
+    );
+    if (result.data !== undefined) {
+      this.store.setVoiceMuted(communityId, userId, true);
+    } else if (result.response.status === 404) {
+      this.store.setVoiceMuted(communityId, userId, false);
+    } else {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
   }
 
   /** Lifts someone's server mute in a community; its deletion event changes the cache. */
@@ -2926,15 +3006,27 @@ export class AspenSync {
     return result.data;
   }
 
-  /** Loads a community's invites into the store. */
-  async loadInvites(communityId: string): Promise<void> {
+  /** Loads the first page of a community's invites into the store, or, with `more`, the next. */
+  async loadInvites(communityId: string, more = false): Promise<void> {
+    const before = more ? this.store.invites(communityId).at(-1)?.code : undefined;
+    if (more && (before === undefined || this.store.listComplete(`invites:${communityId}`))) {
+      return;
+    }
     const result = await this.#client.api.GET("/api/v1/communities/{community}/invites", {
-      params: { path: { community: communityId } },
+      params: {
+        path: { community: communityId },
+        query: before === undefined ? { limit: LIST_PAGE } : { before, limit: LIST_PAGE },
+      },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.replaceInvites(communityId, result.data);
+    const complete = result.data.length < LIST_PAGE;
+    if (more) {
+      this.store.appendInvites(communityId, result.data, complete);
+    } else {
+      this.store.replaceInvites(communityId, result.data, complete);
+    }
   }
 
   /** Creates an invite. `expiresAt` is an RFC 3339 timestamp, or `null` for a permanent invite. */
@@ -3127,7 +3219,7 @@ export class AspenSync {
             params: { query: { include: ["users"] } },
           }),
           this.#client.api.GET("/api/v1/plugins"),
-          this.#client.api.GET("/api/v1/users/@me/held-messages"),
+          this.#readHeldMessages(),
           this.#client.api.GET("/api/v1/users/@me/saved-messages"),
           this.#client.api.GET("/api/v1/users/@me/thread-follows"),
         ]);
@@ -3165,7 +3257,7 @@ export class AspenSync {
       this.store.setPlugins(plugins.data ?? []);
       // Read before the events held back meanwhile, applied below, which settle any posted
       // since; a deployment that does not hold messages has none.
-      this.store.replaceHeldMessages(heldMessages.data ?? []);
+      this.store.replaceHeldMessages(heldMessages);
       // A deployment that keeps no saves or follows has none.
       this.store.replaceSaves(saves.data ?? []);
       this.store.replaceFollows((follows.data ?? []).map((follow) => follow.thread));
@@ -3294,6 +3386,29 @@ export class AspenSync {
   }
 
   /**
+   * Shows who is typing in a channel while the returned function is not yet called: the server
+   * sends typing only for channels the app says it shows (`viewing`), at most `MAX_VIEWING`.
+   */
+  watchTyping(channelId: string): () => void {
+    this.#viewing.set(channelId, (this.#viewing.get(channelId) ?? 0) + 1);
+    this.#tellViewing();
+    return () => {
+      const held = (this.#viewing.get(channelId) ?? 1) - 1;
+      if (held > 0) {
+        this.#viewing.set(channelId, held);
+      } else {
+        this.#viewing.delete(channelId);
+      }
+      this.#tellViewing();
+    };
+  }
+
+  /** Tells the server which channels are shown, the latest first when there are too many. */
+  #tellViewing(): void {
+    this.#stream.sendViewing(Array.from(this.#viewing.keys()).reverse().slice(0, MAX_VIEWING));
+  }
+
+  /**
    * The user wrote in a channel's message box. The server hears that they are typing there at
    * most every `TYPING_REFRESH_MS`, and not at all while the user has turned typing notices off
    * (`TYPING_NOTICES`).
@@ -3365,6 +3480,7 @@ export class AspenSync {
 
   #onReady(resumed: boolean): void {
     this.#reportActivity();
+    this.#tellViewing();
     if (this.#status === "resyncing" || this.#status === "failed") {
       return;
     }

@@ -429,14 +429,44 @@ describe("RecordStore invites", () => {
 
   it("lists a community's invites newest first and replaces them on reload", () => {
     const store = bootstrapped();
-    store.replaceInvites(aspen.id, [
-      invite("old", aspen.id, "2026-09-24T12:00:00Z"),
-      invite("new"),
-    ]);
+    store.replaceInvites(
+      aspen.id,
+      [invite("old", aspen.id, "2026-09-24T12:00:00Z"), invite("new")],
+      true,
+    );
     expect(store.invites(aspen.id).map((i) => i.code)).toEqual(["new", "old"]);
-    store.replaceInvites(aspen.id, [invite("only")]);
+    store.replaceInvites(aspen.id, [invite("only")], true);
     expect(store.invites(aspen.id).map((i) => i.code)).toEqual(["only"]);
     expect(store.invite("old")).toBeUndefined();
+  });
+
+  it("adds later pages of a paged list and says when it is whole", () => {
+    const store = bootstrapped();
+    store.replaceInvites(aspen.id, [invite("new")], false);
+    expect(store.listComplete(`invites:${aspen.id}`)).toBe(false);
+    store.appendInvites(aspen.id, [invite("old", aspen.id, "2026-09-24T12:00:00Z")], true);
+    expect(store.invites(aspen.id).map((i) => i.code)).toEqual(["new", "old"]);
+    expect(store.listComplete(`invites:${aspen.id}`)).toBe(true);
+  });
+
+  it("answers whether one person is server-muted from a read of them or a whole list", () => {
+    const store = bootstrapped();
+    expect(store.voiceMuted(aspen.id, "u1")).toBeUndefined();
+    store.setVoiceMuted(aspen.id, "u1", false);
+    expect(store.voiceMuted(aspen.id, "u1")).toBe(false);
+    store.applyEvent({
+      serverEvent: "voiceMute",
+      type: "create",
+      community: aspen.id,
+      user: "u1",
+      mutedBy: null,
+      mutedAt: "2026-10-09T00:00:00Z",
+    });
+    expect(store.voiceMuted(aspen.id, "u1")).toBe(true);
+    store.replaceVoiceMutes(aspen.id, [], false);
+    expect(store.voiceMuted(aspen.id, "u2")).toBeUndefined();
+    store.replaceVoiceMutes(aspen.id, [], true);
+    expect(store.voiceMuted(aspen.id, "u2")).toBe(false);
   });
 
   it("applies invite events for whatever community they name, since the server routes them", () => {
@@ -1369,7 +1399,7 @@ describe("RecordStore roles and access", () => {
       id: moderator.id,
       permissions: ["banMembers"],
     });
-    store.replaceBans(aspen.id, []);
+    store.replaceBans(aspen.id, [], true);
     expect(store.bans(aspen.id)).toEqual([]);
     store.applyEvent({
       serverEvent: "role",

@@ -51,6 +51,10 @@ pub struct SettingsArgs {
     /// How many GiB one person may upload in any 24 hours; 0 sets no limit.
     #[clap(long)]
     upload_quota_gib: Option<u32>,
+    /// How many days the files of deleted messages are kept for reviewing reports, past any
+    /// report case about them; 0 keeps them for good.
+    #[clap(long)]
+    evidence_retention_days: Option<u32>,
     /// Whether people may offer files to one another in calls.
     #[clap(long)]
     file_transfers: Option<bool>,
@@ -106,6 +110,7 @@ impl From<SettingsArgs> for SettingsChange {
             everyone_mention_limit: args.everyone_mention_limit,
             custom_emoji_limit: args.custom_emoji_limit,
             upload_quota_gib: args.upload_quota_gib,
+            evidence_retention_days: args.evidence_retention_days,
             file_transfers: args.file_transfers,
             email_required: args.email_required,
             email_verification_required: args.email_verification_required,
@@ -135,6 +140,7 @@ impl From<&DeploymentSettings> for SettingsArgs {
             everyone_mention_limit: Some(settings.everyone_mention_limit),
             custom_emoji_limit: Some(settings.custom_emoji_limit),
             upload_quota_gib: Some(settings.upload_quota_gib),
+            evidence_retention_days: Some(settings.evidence_retention_days),
             file_transfers: Some(settings.file_transfers),
             email_required: Some(settings.email_required),
             email_verification_required: Some(settings.email_verification_required),

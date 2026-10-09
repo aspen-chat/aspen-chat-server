@@ -58,6 +58,7 @@ by each API server, at the same origin.
 | --- | --- | --- |
 | `event_queue_size` | `512` | How many events one connection may have waiting to be written. A connection that falls this far behind (a very slow network) is dropped, and its client reconnects and catches up. |
 | `event_feed_shards` | one per CPU | How many tasks deliver events to this server's connections. |
+| `event_retained_mib` | `256` | How much of the last minute's events, by the size of their text, this server keeps for catching reconnecting clients up. Past it the oldest are let go early, and a client that would have resumed from before them reloads its state instead. |
 
 ## `[connections]`
 
@@ -201,6 +202,9 @@ How plugins run; which are installed, and their settings, are in the database (s
 | `memory_mib` | `64` | The most memory one call of a plugin may use, all its memories together. |
 | `concurrency` | two per logical CPU | The most calls of plugins this server runs at once. A call waits for a place within its own time limit and counts as failed when none comes, so a refusing filter (`failure: closed`) refuses messages while the server is this busy. A quarter of the places (at least one, from two up) are kept for deciding messages, which routes and observers cannot take. With `memory_mib` it bounds what plugins can take of the server's memory. |
 | `concurrency_per_plugin` | one per logical CPU | The most calls of any one plugin this server runs at once, so one busy plugin leaves room for the rest. A quarter of them are likewise kept for deciding messages. |
+| `notify_per_minute` | `10` | The most notices one plugin may give one person in a minute, counted across every server. |
+| `notify_per_day` | `100` | The same, in a day. |
+| `storage_total_gib` | `16` | The most one plugin may keep, every community's, DM's, and person's share together, in GiB. Each share is also held to the plugin's own quota. `0` sets no limit beyond the shares'. |
 
 ## `[jobs]`
 

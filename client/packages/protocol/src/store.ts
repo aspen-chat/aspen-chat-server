@@ -206,6 +206,17 @@ export class RecordStore {
   /** The standing bans of the communities whose bans a read has brought, by community then user. */
   readonly #bans = new Map<string, Map<string, CommunityBan>>();
   /**
+   * Whether each paged list read is whole, by its topic (`bans:<id>`, `voiceMutes:<id>`,
+   * `invites:<id>`): `false` while the server has a further page, which a list then offers to
+   * read. A list never read is taken as whole.
+   */
+  readonly #listComplete = new Map<string, boolean>();
+  /**
+   * Whether a moderator's mute of someone stands, by `<communityId>:<userId>`, as read for that
+   * one person (`AspenSync.loadVoiceMute`) and kept by events.
+   */
+  readonly #voiceMuteOf = new Map<string, boolean>();
+  /**
    * The standing server mutes of the communities whose mutes a read has brought, by community
    * then user.
    */
@@ -543,18 +554,85 @@ export class RecordStore {
     });
   }
 
-  /** Keeps a read's whole list of a community's standing server mutes. */
-  replaceVoiceMutes(communityId: string, mutes: readonly VoiceMute[]): void {
+  /**
+   * Whether the list of `topic` (`bans:<id>`, `voiceMutes:<id>`, `invites:<id>`) holds every
+   * record the server has, so there is no further page to read.
+   */
+  listComplete(topic: string): boolean {
+    return this.#listComplete.get(topic) ?? true;
+  }
+
+  /**
+   * Keeps the first page of a community's standing server mutes in place of what was held;
+   * `complete` says whether it was the last.
+   */
+  replaceVoiceMutes(communityId: string, mutes: readonly VoiceMute[], complete: boolean): void {
     this.#batch(() => {
       this.#voiceMutes.set(communityId, new Map(mutes.map((m) => [m.user, m])));
+      this.#listComplete.set(`voiceMutes:${communityId}`, complete);
       this.#touch(`voiceMutes:${communityId}`);
     });
   }
 
-  /** Keeps a read's whole list of a community's standing bans. */
-  replaceBans(communityId: string, bans: readonly CommunityBan[]): void {
+  /** Adds a later page of a community's standing server mutes to what is held. */
+  appendVoiceMutes(communityId: string, mutes: readonly VoiceMute[], complete: boolean): void {
+    this.#batch(() => {
+      const held = this.#voiceMutes.get(communityId) ?? new Map<string, VoiceMute>();
+      for (const mute of mutes) {
+        held.set(mute.user, mute);
+      }
+      this.#voiceMutes.set(communityId, held);
+      this.#listComplete.set(`voiceMutes:${communityId}`, complete);
+      this.#touch(`voiceMutes:${communityId}`);
+    });
+  }
+
+  /**
+   * Topic `voiceMute:<communityId>:<userId>`: whether a moderator's mute of `userId` stands in
+   * `communityId`, from the community's mutes when they say, or from a read of that one
+   * person's; `undefined` while unknown.
+   */
+  voiceMuted(communityId: string, userId: string): boolean | undefined {
+    const held = this.#voiceMutes.get(communityId);
+    if (held?.has(userId) === true) {
+      return true;
+    }
+    const known = this.#voiceMuteOf.get(`${communityId}:${userId}`);
+    if (known !== undefined) {
+      return known;
+    }
+    return held !== undefined && this.listComplete(`voiceMutes:${communityId}`) ? false : undefined;
+  }
+
+  /** Keeps whether a moderator's mute of `userId` stands in `communityId`, as read. */
+  setVoiceMuted(communityId: string, userId: string, muted: boolean): void {
+    this.#batch(() => {
+      this.#voiceMuteOf.set(`${communityId}:${userId}`, muted);
+      this.#touch(`voiceMute:${communityId}:${userId}`);
+    });
+  }
+
+  /**
+   * Keeps the first page of a community's standing bans in place of what was held; `complete`
+   * says whether it was the last.
+   */
+  replaceBans(communityId: string, bans: readonly CommunityBan[], complete: boolean): void {
     this.#batch(() => {
       this.#bans.set(communityId, new Map(bans.map((b) => [b.user, b])));
+      this.#listComplete.set(`bans:${communityId}`, complete);
+      this.#touch(`bans:${communityId}`);
+    });
+  }
+
+  /** Adds a later page of a community's standing bans to what is held. */
+  appendBans(communityId: string, bans: readonly CommunityBan[], complete: boolean): void {
+    this.#batch(() => {
+      const held = this.#bans.get(communityId) ?? new Map<string, CommunityBan>();
+      for (const ban of bans) {
+        held.set(ban.user, ban);
+      }
+      this.#bans.set(communityId, held);
+      this.#listComplete.set(`bans:${communityId}`, complete);
       this.#touch(`bans:${communityId}`);
     });
   }
@@ -1546,6 +1624,15 @@ export class RecordStore {
         this.#touch(`voiceMutes:${id}`);
       }
       this.#voiceMutes.clear();
+      for (const one of this.#voiceMuteOf.keys()) {
+        this.#touch(`voiceMute:${one}`);
+      }
+      this.#voiceMuteOf.clear();
+      for (const topic of Array.from(this.#listComplete.keys())) {
+        if (!topic.startsWith("invites:")) {
+          this.#listComplete.delete(topic);
+        }
+      }
       const listed = new Set(communities.map((c) => c.id));
       for (const id of this.#myCommunities) {
         if (!listed.has(id)) {
@@ -2055,8 +2142,11 @@ export class RecordStore {
     }
   }
 
-  /** Installs a community's invite list as read from the server, replacing what was held. */
-  replaceInvites(communityId: string, invites: readonly Invite[]): void {
+  /**
+   * Installs the first page of a community's invites as read from the server, replacing what
+   * was held; `complete` says whether it was the last.
+   */
+  replaceInvites(communityId: string, invites: readonly Invite[], complete: boolean): void {
     this.#batch(() => {
       for (const invite of Array.from(this.#invites.values())) {
         if (invite.community === communityId) {
@@ -2066,6 +2156,19 @@ export class RecordStore {
       for (const invite of invites) {
         this.#putInvite(invite);
       }
+      this.#listComplete.set(`invites:${communityId}`, complete);
+      this.#touch(`invites:${communityId}`);
+    });
+  }
+
+  /** Adds a later page of a community's invites to what is held. */
+  appendInvites(communityId: string, invites: readonly Invite[], complete: boolean): void {
+    this.#batch(() => {
+      for (const invite of invites) {
+        this.#putInvite(invite);
+      }
+      this.#listComplete.set(`invites:${communityId}`, complete);
+      this.#touch(`invites:${communityId}`);
     });
   }
 
@@ -2171,6 +2274,8 @@ export class RecordStore {
       this.#customEmoji.clear();
       this.#bans.clear();
       this.#voiceMutes.clear();
+      this.#voiceMuteOf.clear();
+      this.#listComplete.clear();
       this.#pins.clear();
       this.#saved.clear();
       this.#follows.clear();
@@ -2246,6 +2351,11 @@ export class RecordStore {
           break;
         }
         case "voiceMute": {
+          const one = `${event.community}:${event.user}`;
+          if (this.#voiceMuteOf.has(one)) {
+            this.#voiceMuteOf.set(one, event.type === "create");
+          }
+          this.#touch(`voiceMute:${one}`);
           // Only a community whose mutes were read is followed; the rest are read when shown.
           const held = this.#voiceMutes.get(event.community);
           if (held !== undefined) {

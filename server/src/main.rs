@@ -223,7 +223,7 @@ fn main() {
 async fn run(options: Opt) -> Result<()> {
     if let Some(command) = options.command {
         let config = aspen_config::load_config()?;
-        return match command {
+        let ran = match command {
             Command::Limits { action } => operator::limits(&config, action).await,
             Command::Bench { action } => operator::bench(&config, action).await,
             Command::Admin { action } => operator::admin(&config, action).await,
@@ -236,6 +236,12 @@ async fn run(options: Opt) -> Result<()> {
             Command::VoiceServers { action } => operator::voice_servers(&config, action).await,
             Command::Plugins { action } => operator::plugins(&config, action).await,
         };
+        // What the command decided may be a job (a plugin's purge, signing out a blocked
+        // deployment's users), which the servers start at once rather than at their next look.
+        if ran.is_ok() {
+            app::jobs::wake_from(&config).await;
+        }
+        return ran;
     }
     let role = if options.private_worker {
         app::context::Role::PrivateWorker

@@ -196,18 +196,42 @@ async fn audience(
             recipients: dm_recipients(conn.as_mut(), dm).await?,
         },
     };
-    let mut unseen_by = blocked_by(conn.as_mut(), user).await?;
+    let mut unseen_by = blocked_in(conn.as_mut(), user, &audience).await?;
     unseen_by.push(user);
     Ok((audience, unseen_by))
 }
 
-/// Everyone `user` blocks.
-async fn blocked_by(conn: &mut AsyncPgConnection, user: UserId) -> crate::Result<Vec<UserId>> {
-    Ok(user_block::table
+/// Those `user` blocks whom `audience` holds: the members of its community, or the people of
+/// its DM. A relay is published every few seconds while someone types, so it names only those
+/// it could reach rather than everyone they block.
+async fn blocked_in(
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    audience: &Audience,
+) -> crate::Result<Vec<UserId>> {
+    let blocked = user_block::table
         .select(user_block::blocked)
-        .filter(user_block::blocker.eq(user))
-        .load(conn)
-        .await?)
+        .filter(user_block::blocker.eq(user));
+    Ok(match audience {
+        Audience::Community { community, .. } => {
+            blocked
+                .filter(diesel::dsl::exists(
+                    aspen_schema::community_user::table.filter(
+                        aspen_schema::community_user::community
+                            .eq(*community)
+                            .and(aspen_schema::community_user::user.eq(user_block::blocked)),
+                    ),
+                ))
+                .load(conn)
+                .await?
+        }
+        Audience::Direct { recipients } => {
+            blocked
+                .filter(user_block::blocked.eq_any(recipients))
+                .load(conn)
+                .await?
+        }
+    })
 }
 
 /// Tells every API server. Best-effort: a word lost is said again at the next refresh, or

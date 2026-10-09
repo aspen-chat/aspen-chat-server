@@ -26,6 +26,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import zlib
@@ -1069,11 +1070,24 @@ def typing(world: World, check: Checks) -> None:
     def type_in(stream, channel: str, typing: bool = True) -> None:
         stream.send({"type": "typing" if typing else "stoppedTyping", "channelId": channel})
 
+    def view(stream, *channels: str) -> None:
+        # A client hears typing only in the channels it says it has open.
+        stream.send({"type": "viewing", "channelIds": list(channels)})
+        stream.gather(0.2)
+
+    view(world.stream, general, hidden, quiet)
+    view(owner, general, hidden, quiet)
     type_in(owner, general)
     check("a member hears the owner typing", heard(world.stream, general, world.owner["id"]) == [True])
     check("the owner is not told of their own typing", heard(owner, general, world.owner["id"], 0.3) == [])
     type_in(owner, general, False)
     check("and hears them stop", heard(world.stream, general, world.owner["id"]) == [False])
+    view(world.stream, hidden, quiet)
+    type_in(owner, general)
+    check("a member without the channel open hears nobody typing there",
+          heard(world.stream, general, world.owner["id"]) == [])
+    type_in(owner, general, False)
+    view(world.stream, general, hidden, quiet)
     type_in(owner, hidden)
     check("typing in a channel the member may not view does not reach them",
           heard(world.stream, hidden, world.owner["id"]) == [])
@@ -1088,6 +1102,7 @@ def typing(world: World, check: Checks) -> None:
     dm = world.as_owner("POST", "/users/@me/dms", {"recipients": [world.member["id"]]})
     dm = dm.get("id") or dm["data"]["id"]
     world.stream.gather(0.5)
+    view(world.stream, general, dm)
     type_in(owner, dm)
     check("the other person of a DM hears the owner typing there", heard(world.stream, dm, world.owner["id"]) == [True])
     type_in(owner, dm, False)
@@ -2366,12 +2381,74 @@ def activity_feed(world: World, check: Checks) -> None:
               "GET", "/users/@me/activity", token=outsider["token"])["data"])))
 
 
+def emoji_deletions(world: World, check: Checks) -> None:
+    say("a deleted custom emoji is gone at once, and its reactions by a job soon after")
+    stack, member = world.stack, world.member
+    icon = upload_icon(world, world.owner["token"], picture(32, 32))
+    emoji = world.as_owner("POST", f"/communities/{world.community}/emoji", {"name": "soon_gone", "icon": icon})["id"]
+    channel = world.channel("emoji")
+    post = world.post(channel, "react with it")
+    key = urllib.parse.quote(f"<:{emoji}>", safe="")
+    stack.api("PUT", f"/messages/{post}/reactions/{key}/@me", token=member["token"])
+    world.stream.gather(0.5)
+    world.as_owner("DELETE", f"/emoji/{emoji}")
+    got = world.stream.gather(1.0)
+    check("deleting it reaches the member at once", bool(of(got, "customEmoji", type="delete", id=emoji)),
+          [e["serverEvent"] for e in got])
+    check("and it is listed no more",
+          all(e["id"] != emoji for e in stack.api("GET", f"/communities/{world.community}/emoji",
+                                                    token=member["token"])))
+    check("nobody may react with it after",
+          stack.status("PUT", f"/messages/{post}/reactions/{key}/@me", token=world.owner["token"]) in (400, 404))
+    # The reactions go by a job (`purgeCustomEmoji`), and then the emoji and its picture.
+    check("its reactions are taken off, shortly after", eventually(
+        lambda: psql(f"SELECT count(*) FROM react WHERE custom_emoji = '{emoji}'", stack.database) == "0"))
+    check("and then it goes, with its picture", eventually(
+        lambda: psql(f"SELECT count(*) FROM custom_emoji WHERE id = '{emoji}'", stack.database) == "0"
+        and psql(f"SELECT count(*) FROM icon WHERE id = '{icon}'", stack.database) == "0"))
+
+
+def plugin_removal(world: World, check: Checks) -> None:
+    say("a removed plugin stops at once, and its account, timers, and storage go by jobs")
+    stack, member = world.stack, world.member
+    stack.command("plugins", "enable", CALENDAR_ID)
+    running(world, CALENDAR_ID)
+    world.as_owner("PUT", f"/communities/{world.community}/plugins/{CALENDAR_ID}",
+                   {"settings": {}, "grant": ["viewChannel", "sendMessages"]})
+    principal = next(p["principal"] for p in stack.api("GET", "/plugins", token=member["token"])
+                     if p["id"] == CALENDAR_ID)
+    calendar = world.as_owner("POST", "/channels", {
+        "name": "removed", "ty": "plugin", "pluginType": f"{CALENDAR_ID}:calendar",
+        "community": world.community, "sortIndex": 3})["id"]
+    events = f"/plugins/{CALENDAR_ID}/routes/calendars/{calendar}/events"
+    later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 7200))
+    world.as_owner("POST", events, {"title": "Never", "start": later})
+    timers = f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND payload->>'plugin' = '{CALENDAR_ID}'"
+    check("its event set a timer", psql(timers, stack.database) != "0")
+    world.stream.gather(0.5)
+    stack.command("plugins", "remove", CALENDAR_ID, "--yes")
+    check("removed, it is listed nowhere", eventually(
+        lambda: all(p["id"] != CALENDAR_ID for p in stack.api("GET", "/plugins", token=member["token"]))))
+    check("and its routes answer nobody", eventually(
+        lambda: stack.status("GET", events, token=world.owner["token"]) == 404))
+    # Its account leaves each community by a job (`retirePlugin`), announced as any leaving is.
+    heard: list[dict] = []
+    check("its account leaves the community, which the member hears", eventually(
+        lambda: heard.extend(world.stream.gather(0.5)) or bool(of(heard, "userCommunity", user=principal))))
+    check("and the owner finds it gone",
+          stack.status("GET", f"/communities/{world.community}/members/{principal}", token=world.owner["token"]) == 404)
+    stack.command("plugins", "purge", CALENDAR_ID, "--yes")
+    check("purging it deletes its timers and what it kept, shortly after", eventually(
+        lambda: psql(timers, stack.database) == "0"
+        and psql(f"SELECT count(*) FROM plugin_storage WHERE plugin = '{CALENDAR_ID}'", stack.database) == "0"))
+
+
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, typing, name_colours, dual_invites, device_links,
-             nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji,
-             group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,
+             nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
+             group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed]
 
 

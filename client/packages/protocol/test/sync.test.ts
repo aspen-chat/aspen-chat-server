@@ -287,6 +287,24 @@ describe("AspenSync", () => {
     sync.stop();
   });
 
+  it("tells the server which channels show typing, as they open and close", async () => {
+    const { sync } = makeSync(bootstrapResponses());
+    const socket = await goLive(sync);
+    const viewing = () =>
+      socket.sent.filter((f) => (f as { type: string }).type === "viewing") as {
+        channelIds: string[];
+      }[];
+    const sent = viewing().length;
+    const shown = sync.watchTyping(general.id);
+    const again = sync.watchTyping(general.id);
+    expect(viewing()[sent]).toEqual({ type: "viewing", channelIds: [general.id] });
+    shown();
+    expect(viewing().at(-1)).toEqual({ type: "viewing", channelIds: [general.id] });
+    again();
+    expect(viewing().at(-1)).toEqual({ type: "viewing", channelIds: [] });
+    sync.stop();
+  });
+
   it("shows others typing until they stop, post, run out, or the connection goes", async () => {
     let now = 0;
     const { sync } = makeSync(bootstrapResponses(), () => now);

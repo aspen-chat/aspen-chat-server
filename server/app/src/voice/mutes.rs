@@ -18,7 +18,10 @@ use aspen_wire::message_enum::server_event::{ServerEvent, VoiceMuteEvent};
 use aspen_wire::message_enum::{self};
 use chrono::{DateTime, Utc};
 use diesel::SelectableHelper;
-use diesel::{ExpressionMethods, Insertable, OptionalExtension, QueryDsl, Queryable, Selectable};
+use diesel::{
+    BoolExpressionMethods, ExpressionMethods, Insertable, OptionalExtension, QueryDsl, Queryable,
+    Selectable,
+};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 
@@ -58,22 +61,68 @@ pub async fn is_muted(
     .await?)
 }
 
-/// The community's standing mutes, newest first, for a holder of Manage calls.
+/// A page of the community's standing server mutes, newest first, for a holder of Manage calls:
+/// `limit` of them (at most [`crate::LIST_PAGE`]) after the mute of `before`, through
+/// `voice_mute_listed`.
 pub async fn read_mutes(
     state: &GlobalServerContext,
     caller: UserId,
     community: CommunityId,
+    before: Option<UserId>,
+    limit: i64,
 ) -> crate::Result<Vec<message_enum::VoiceMute>> {
     let mut conn = state.connection_pool.get().await?;
     let access = require_member(conn.as_mut(), caller, community).await?;
     access.require(Permissions::MANAGE_CALLS)?;
-    let rows: Vec<VoiceMuteRow> = voice_mute::table
+    let mut query = voice_mute::table
         .select(VoiceMuteRow::as_select())
         .filter(voice_mute::community.eq(community))
-        .order(voice_mute::muted_at.desc())
+        .into_boxed();
+    if let Some(before) = before {
+        let Some((at, user)) = voice_mute::table
+            .select((voice_mute::muted_at, voice_mute::user))
+            .filter(voice_mute::community.eq(community))
+            .filter(voice_mute::user.eq(before))
+            .first::<(chrono::DateTime<chrono::Utc>, UserId)>(conn.as_mut())
+            .await
+            .optional()?
+        else {
+            // The mute the page continues after was lifted meanwhile; the caller reads again.
+            return Ok(Vec::new());
+        };
+        query = query.filter(
+            voice_mute::muted_at
+                .lt(at)
+                .or(voice_mute::muted_at.eq(at).and(voice_mute::user.lt(user))),
+        );
+    }
+    let rows: Vec<VoiceMuteRow> = query
+        .order((voice_mute::muted_at.desc(), voice_mute::user.desc()))
+        .limit(limit.clamp(1, crate::LIST_PAGE))
         .load(conn.as_mut())
         .await?;
     Ok(rows.iter().map(message_enum::VoiceMute::from).collect())
+}
+
+/// `user`'s standing server mute in `community`, if they have one, for a holder of Manage
+/// calls.
+pub async fn read_mute(
+    state: &GlobalServerContext,
+    caller: UserId,
+    community: CommunityId,
+    user: UserId,
+) -> crate::Result<Option<message_enum::VoiceMute>> {
+    let mut conn = state.connection_pool.get().await?;
+    let access = require_member(conn.as_mut(), caller, community).await?;
+    access.require(Permissions::MANAGE_CALLS)?;
+    let row: Option<VoiceMuteRow> = voice_mute::table
+        .select(VoiceMuteRow::as_select())
+        .filter(voice_mute::community.eq(community))
+        .filter(voice_mute::user.eq(user))
+        .first(conn.as_mut())
+        .await
+        .optional()?;
+    Ok(row.as_ref().map(message_enum::VoiceMute::from))
 }
 
 /// Refuses `caller` muting or lifting the mute of `user` in `community` unless they hold

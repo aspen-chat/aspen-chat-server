@@ -110,6 +110,7 @@ export function administration() {
     botsMaxPerUser: 25,
     everyoneMentionLimit: 200,
     customEmojiLimit: 1000,
+    evidenceRetentionDays: 365,
     fileTransfers: true,
   };
   return {

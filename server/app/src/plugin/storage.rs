@@ -150,6 +150,40 @@ async fn count_usage(
     Ok(counted > 0)
 }
 
+/// Whether `plugin_id` keeps as much as `[plugins] storage_total_gib` allows, every owner's
+/// share together (0 sets no limit). The sum is read through `plugin_storage_usage`'s key and
+/// kept by each server for a few seconds (`Plugins::storage_totals`), so servers writing at once
+/// may together pass the limit by what they write in that time.
+pub async fn total_full(state: &GlobalServerContext, plugin_id: &str) -> crate::Result<bool> {
+    let limit = state
+        .config
+        .plugins
+        .storage_total_gib
+        .saturating_mul(1 << 30);
+    if limit == 0 {
+        return Ok(false);
+    }
+    let total = match state.plugins.storage_totals.get(plugin_id) {
+        Some(total) => total,
+        None => {
+            let mut conn = state.connection_pool.get().await?;
+            let total: i64 = plugin_storage_usage::table
+                .filter(plugin_storage_usage::plugin.eq(plugin_id))
+                .select(diesel::dsl::sql::<diesel::sql_types::BigInt>(
+                    "COALESCE(sum(bytes), 0)::bigint",
+                ))
+                .first(conn.as_mut())
+                .await?;
+            state
+                .plugins
+                .storage_totals
+                .insert(plugin_id.to_owned(), total);
+            total
+        }
+    };
+    Ok(u64::try_from(total).unwrap_or(0) >= limit)
+}
+
 /// How much each plugin keeps, every owner's share together, summed through
 /// `plugin_storage_usage`'s key; a plugin keeping nothing is absent.
 pub async fn totals(conn: &mut AsyncPgConnection) -> crate::Result<HashMap<String, i64>> {

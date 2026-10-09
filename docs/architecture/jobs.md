@@ -39,7 +39,9 @@ class in that order every round, into the places it has free: one each class kee
 and `[jobs] concurrency` that any class may take, the earlier classes first. So urgent work is
 never queued behind a newsletter, and upkeep, holding its own place, is never starved. A runner
 looks for jobs every second, and at once when any server publishes on `aspen.jobs.wake`
-(`jobs::wake`, for a job someone is waiting on, once what saved it commits) or one of its own jobs
+(`jobs::wake`, for a job someone is waiting on, once what saved it
+commits; `jobs::wake_from` after every operator command that succeeds, since what it decided
+may be a job) or one of its own jobs
 ends.
 
 ## Failing
@@ -55,7 +57,8 @@ backoff and runs again.
 
 A recurring job is declared in code (`jobs::recurring`, its period from the configuration where
 there is one), saved by each server as it starts, with `every` and its class brought up to what
-the code says. Once done it is due a period after it was last due (`due`), as many periods on as
+the code says; a period made shorter takes effect at once, a job waiting longer than its new
+period being made due within it. Once done it is due a period after it was last due (`due`), as many periods on as
 put it in the future, so a run that took long, or a deployment that was down, skips the periods
 it missed rather than running them all at once.
 
@@ -83,6 +86,11 @@ it missed rather than running them all at once.
 | `makeVideoPoster` | as `makePicturePreview` | Taking one video's poster, as `makePicturePreview` makes a picture's, on the servers among those that can run `ffmpeg` and `ffprobe`. |
 | `releaseHeldMessage` | interactive | Posting one held message, keyed by it, once no preview job holds it and no message its author sent before it is still held (see Attachment previews); a failure waits thirty seconds, and the tenth drops the message and tells its author why. |
 | `firePluginTimer` | normal | Handing a plugin one of its timers when it falls due (`plugin::timer::fire_step`), keyed `plugin/key`; set again, the job is replaced under a new id. A timer of a plugin that is off waits until it is turned on; three failures give it up (see Plugins). |
+| `sweepExpired` | maintenance, hourly | Deleting community bans past their `until`, plugins' notices past a week (`plugin::notice::KEPT`), and voice failure reports older than `failure_window_seconds`, a thousand of each a step, each through an index on when it ends or was made (`jobs::upkeep::sweep_expired`). Reads already leave out what it deletes. |
+| `recountMembers` | maintenance, hourly | Recounting each community's members into `community.member_count`, which the dashboard lists and sorts by, five hundred communities a step in order of id, writing only counts that changed. |
+| `recordStats` | maintenance, hourly | Writing today's row of `deployment_stats` (UTC) from the latest row and what was made and deleted since (`admin::current_totals`), for the dashboard's overview and growth (see Administration). |
+| `forgetIcon` | maintenance | Deleting one icon and its picture if nothing uses it (`icon::forget_step`), keyed by the icon. The database queues it: a day after an icon's upload is confirmed, for one never put to use, and as soon as a user, community, or the deployment lets go of its icon or is deleted (the triggers of `aspen_icon_let_go` and `aspen_icon_confirmed`), so neither a sweep of every icon nor every path that changes a picture needs to remember it. |
+| `purgeEvidence` | maintenance, daily | Deleting the files of deleted messages, and their link previews' pictures, once the deployment setting `evidence_retention_days` has passed and no report case about them is open or closed within as long, a hundred of each a step (`attachment::evidence::purge_step`; see Reports). |
 
 ## Watching jobs
 

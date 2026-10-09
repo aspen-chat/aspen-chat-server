@@ -171,6 +171,21 @@ export class EventStream {
     return true;
   }
 
+  /**
+   * Tells the server which channels the app has open where it shows who is typing, the only
+   * ones it then hears typing in. Sent only on a connection that has identified; returns
+   * whether it was.
+   */
+  sendViewing(channelIds: readonly string[]): boolean {
+    const socket = this.#socket;
+    if (this.#status !== "open" || socket === null || socket.readyState !== socket.OPEN) {
+      return false;
+    }
+    const frame: ClientMessage = { type: "viewing", channelIds: [...channelIds] };
+    socket.send(JSON.stringify(frame));
+    return true;
+  }
+
   start(): void {
     if (this.#status !== "closed") {
       return;

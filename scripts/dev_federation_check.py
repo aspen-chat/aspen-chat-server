@@ -154,6 +154,17 @@ def abroad_alive(token: str) -> bool:
     return request("GET", f"https://{BETA.domain}/api/v1/users/@me", token=token)[0] == 200
 
 
+def signed_out_soon(token: str, seconds: float = 10) -> bool:
+    """Whether a session at beta ends within `seconds`: signing out the users of a deployment the
+    gates no longer admit is a job (`shutOut`), which a server starts within moments."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not abroad_alive(token):
+            return True
+        time.sleep(0.25)
+    return False
+
+
 def wait_until(what: str, done, seconds: float = 30) -> None:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -219,7 +230,7 @@ def check_gates_live(traveller: str) -> None:
     closed = api(BETA, "PATCH", "/admin/federation", {"usersImmigration": "closed", "usersSharedList": False},
                  token=beta_admin)
     expect(closed["users"]["immigration"] == "closed", "beta's administrator closes beta's immigration gate")
-    expect(not abroad_alive(visit["sessionToken"]), "closing the gate ends the traveller's session at beta at once")
+    expect(signed_out_soon(visit["sessionToken"]), "closing the gate ends the traveller's session at beta within moments")
     expect(problem(*sign_in_abroad(assertion_for(traveller))) == "403 federationRefused",
            "and beta refuses them while it is closed")
     api(BETA, "PATCH", "/admin/federation", {"usersImmigration": "blockList", "usersSharedList": True},
@@ -318,7 +329,7 @@ def check_abroad(admin: str) -> None:
     api(ALPHA, "PUT", f"{beta_path}/lists/usersEmigrationAllow", token=admin, expect=(201,))
     expect(abroad_alive(abroad), "the traveller is signed in at beta")
     terminal(BETA, "federation", "list-add", ALPHA.domain, "usersSharedBlock")
-    expect(not abroad_alive(abroad), "putting alpha on beta's block list signs its users out of beta at once")
+    expect(signed_out_soon(abroad), "putting alpha on beta's block list signs its users out of beta within moments")
     expect(problem(*sign_in_abroad(assertion_for(traveller))) == "403 federationRefused",
            "on beta's block list, alpha's users are turned away")
     status, text = subprocess_status(BETA, "federation", "remove", ALPHA.domain)
@@ -338,8 +349,8 @@ def check_abroad(admin: str) -> None:
     status, visit = sign_in_abroad(assertion_for(traveller))
     expect(status == 200 and abroad_alive(visit["sessionToken"]), "the traveller is signed in at beta again")
     api(BETA, "PUT", f"{bare_path}/lists/usersSharedBlock", token=beta_admin, expect=(201,))
-    expect(not abroad_alive(visit["sessionToken"]),
-           f"blocking {bare} signs out the users of {ALPHA.domain}, on another port, at once")
+    expect(signed_out_soon(visit["sessionToken"]),
+           f"blocking {bare} signs out the users of {ALPHA.domain}, on another port, within moments")
     expect(problem(*sign_in_abroad(assertion_for(traveller))) == "403 federationRefused",
            f"and {ALPHA.domain} stays blocked while {bare} is")
     api(BETA, "DELETE", bare_path, token=beta_admin, expect=(409,))
@@ -358,7 +369,7 @@ def check_abroad(admin: str) -> None:
     expect(problem(*sign_in_abroad(assertion_for(traveller))) == "401 assertionInvalid"
            and f"offers a new key {compromised}" in terminal(BETA, "federation", "list"),
            "after alpha replaces a compromised key, beta refuses it and holds it as offered")
-    expect(not abroad_alive(abroad), "and signs alpha's users out until the new key is accepted")
+    expect(signed_out_soon(abroad), "and signs alpha's users out until the new key is accepted")
     terminal(BETA, "federation", "accept-key", ALPHA.domain, "--fingerprint", compromised)
     status, _ = sign_in_abroad(assertion_for(traveller))
     expect(status == 200, "once beta's operator accepts the new key, alpha's users sign in again")

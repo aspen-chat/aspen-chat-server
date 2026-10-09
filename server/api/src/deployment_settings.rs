@@ -164,6 +164,10 @@ pub struct DeploymentSettings {
     /// How many GiB one person may upload, attachments and pictures together, in any 24 hours;
     /// 0 sets no limit.
     pub upload_quota_gib: u32,
+    /// How many days the files of deleted messages, and their link previews' pictures, are
+    /// kept for reviewing reports, and as long after any report case about them closes; 0
+    /// keeps them for good.
+    pub evidence_retention_days: u32,
     /// Whether people may offer files to one another in calls. Off, no one may, whatever a
     /// channel's permissions say.
     pub file_transfers: bool,
@@ -193,6 +197,7 @@ impl DeploymentSettings {
             everyone_mention_limit: settings.everyone_mention_limit,
             custom_emoji_limit: settings.custom_emoji_limit,
             upload_quota_gib: settings.upload_quota_gib,
+            evidence_retention_days: settings.evidence_retention_days,
             file_transfers: settings.file_transfers,
             email_required: settings.email_required,
             email_verification_required: settings.email_verification_required,
@@ -214,6 +219,7 @@ pub struct DeploymentSettingsUpdateRequest {
     pub everyone_mention_limit: Option<u32>,
     pub custom_emoji_limit: Option<u32>,
     pub upload_quota_gib: Option<u32>,
+    pub evidence_retention_days: Option<u32>,
     pub file_transfers: Option<bool>,
     pub email_required: Option<bool>,
     pub email_verification_required: Option<bool>,
@@ -230,6 +236,7 @@ impl From<DeploymentSettingsUpdateRequest> for SettingsChange {
             everyone_mention_limit: request.everyone_mention_limit,
             custom_emoji_limit: request.custom_emoji_limit,
             upload_quota_gib: request.upload_quota_gib,
+            evidence_retention_days: request.evidence_retention_days,
             file_transfers: request.file_transfers,
             email_required: request.email_required,
             email_verification_required: request.email_verification_required,

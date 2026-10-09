@@ -4,8 +4,9 @@
 
 use crate::admin::AdminUser;
 use crate::auth::SessionUser;
+use crate::ban::UserPageQuery;
 use crate::error::{ApiResult, Problem};
-use crate::extract::{Created, Json, NoContent, Path};
+use crate::extract::{Created, Json, NoContent, Path, Query};
 use crate::message_enum::{VoiceMute, VoiceParticipant, VoiceSession};
 use crate::{API_PREFIX, TAG_VOICE};
 use aspen_app as app;
@@ -454,12 +455,12 @@ pub async fn kick_voice_participant(
     Ok(StatusCode::ACCEPTED)
 }
 
-/// The community's standing server mutes, newest first. Takes Manage calls.
+/// A page of the community's standing server mutes, newest first. Takes Manage calls.
 #[utoipa::path(
     get,
     path = "/communities/{community}/voice-mutes",
     tag = TAG_VOICE,
-    params(("community" = CommunityId, Path)),
+    params(("community" = CommunityId, Path), UserPageQuery),
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = Vec<VoiceMute>),
@@ -473,10 +474,39 @@ pub async fn read_voice_mutes(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
+    Query(page): Query<UserPageQuery>,
 ) -> ApiResult<Json<Vec<VoiceMute>>> {
     Ok(Json(
-        app::voice::mutes::read_mutes(&state, user.id, community).await?,
+        app::voice::mutes::read_mutes(&state, user.id, community, page.before, page.limit())
+            .await?,
     ))
+}
+
+/// Someone's standing server mute in the community; not found when they have none. Takes
+/// Manage calls.
+#[utoipa::path(
+    get,
+    path = "/communities/{community}/voice-mutes/{user}",
+    tag = TAG_VOICE,
+    params(("community" = CommunityId, Path), ("user" = UserId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = VoiceMute),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: lacks Manage calls", body = Problem),
+        (status = NOT_FOUND, description = "No such community, or no mute of them stands", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn read_voice_mute(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user: caller, .. }: SessionUser,
+    Path((community, user)): Path<(CommunityId, UserId)>,
+) -> ApiResult<Json<VoiceMute>> {
+    app::voice::mutes::read_mute(&state, caller.id, community, user)
+        .await?
+        .map(Json)
+        .ok_or_else(|| app::Error::Diesel(diesel::result::Error::NotFound).into())
 }
 
 /// Server-mutes someone in every call of the community until a moderator lifts it, whether or

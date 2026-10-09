@@ -46,7 +46,9 @@ database whose bucket was lost shows every picture and file as missing, and the 
 posted them would have to post them again.
 
 The bucket also holds, under `evidence/`, the files of deleted messages and of attachments taken
-off their messages, kept for reviewing reports. Nothing deletes them but
+off their messages, kept for reviewing reports. They are deleted once the
+deployment setting `evidence_retention_days` (365 by default; 0 keeps them for good) has passed,
+unless a report about their message is open or closed within as long, and at once by
 `aspen-chat-server attachments purge --message <id>` (or `--attachment <id>`), which deletes them
 from the database and the bucket and writes the purge to the moderation log; a backup made before
 a purge still holds what was purged, so restoring one brings it back until it is purged again.

@@ -25,6 +25,7 @@ import { useCan, useDeploymentCan, useInvites, useMe, useSync } from "@/api/hook
 import { useScopeDomain } from "@/api/identity";
 import { inputClass, labelClass, primaryButtonClass } from "@/features/auth/styles";
 import { headerIconButtonClass } from "@/features/layout/headerButton";
+import { ShowMore } from "@/features/layout/ShowMore";
 import { Tooltip } from "@/features/layout/Tooltip";
 import {
   dialogClass,
@@ -239,6 +240,12 @@ export function InviteManager({ communityId }: { communityId: string }) {
             />
           ))}
         </ul>
+      )}
+      {loadError === null && (
+        <ShowMore
+          topic={`invites:${communityId}`}
+          load={() => sync.loadInvites(communityId, true)}
+        />
       )}
     </div>
   );

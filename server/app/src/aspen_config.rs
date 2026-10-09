@@ -24,6 +24,11 @@ pub struct AspenConfig {
     /// by default (`app::event_feed`).
     #[serde(default = "default_event_feed_shards")]
     pub event_feed_shards: usize,
+    /// The most of the last minute's events, in MiB of their text, each API server keeps for
+    /// catching connections up (`app::event_feed`); past it the oldest are let go early, and a
+    /// client resuming from before them reads its state again.
+    #[serde(default = "default_event_retained_mib")]
+    pub event_retained_mib: usize,
     pub database_url: String,
     /// The most database connections this server holds at once; left out, two per logical CPU. Every
     /// write holds one until its event is acknowledged, so a busy server may want more, within
@@ -411,6 +416,16 @@ pub struct PluginsConfig {
     /// intercepting calls.
     #[default(_code = "default_event_feed_shards()")]
     pub concurrency_per_plugin: usize,
+    /// The most notices one plugin may give one person in a minute (`notify`).
+    #[default = 10]
+    pub notify_per_minute: u32,
+    /// The most notices one plugin may give one person in a day.
+    #[default = 100]
+    pub notify_per_day: u32,
+    /// The most one plugin may keep, every community's, DM's, and person's share together, in
+    /// GiB; 0 sets no limit beyond each share's.
+    #[default = 16]
+    pub storage_total_gib: u64,
 }
 
 /// Voice calls. The voice servers themselves are rows of `voice_server`, added from the
@@ -503,6 +518,7 @@ impl std::fmt::Debug for AspenConfig {
             public_url,
             event_queue_size,
             event_feed_shards,
+            event_retained_mib,
             database_url,
             database_pool_size,
             database_pool_wait_seconds,
@@ -532,6 +548,7 @@ impl std::fmt::Debug for AspenConfig {
             .field("public_url", public_url)
             .field("event_queue_size", event_queue_size)
             .field("event_feed_shards", event_feed_shards)
+            .field("event_retained_mib", event_retained_mib)
             .field("database_url", &RedactedUrl(database_url))
             .field("database_pool_size", database_pool_size)
             .field("database_pool_wait_seconds", database_pool_wait_seconds)
@@ -884,6 +901,10 @@ pub fn default_database_pool_wait_seconds() -> u64 {
 
 pub fn default_event_queue_size() -> usize {
     512
+}
+
+pub fn default_event_retained_mib() -> usize {
+    256
 }
 
 /// The built-in rate limits, beneath whatever `aspen.toml` sets.

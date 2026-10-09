@@ -24,6 +24,9 @@ use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 
+/// The most people one person may block.
+pub const MAX_BLOCKS: i64 = 10_000;
+
 /// Someone the user has blocked, and since when.
 #[derive(Debug, Clone, PartialEq, Eq, Queryable, Selectable)]
 #[diesel(table_name = user_block)]
@@ -54,6 +57,13 @@ pub async fn block(
     }
     conn.transaction(|conn| {
         async move {
+            // The blocker's row is held so two blocks at once cannot both pass the count.
+            user::table
+                .select(user::id)
+                .filter(user::id.eq(blocker))
+                .for_no_key_update()
+                .first::<UserId>(conn.as_mut())
+                .await?;
             let inserted: Option<UserBlock> = diesel::insert_into(user_block::table)
                 .values((
                     user_block::blocker.eq(blocker),
@@ -76,6 +86,14 @@ pub async fn block(
                     .await?;
                 return Ok((existing, true));
             };
+            let held: i64 = user_block::table
+                .filter(user_block::blocker.eq(blocker))
+                .count()
+                .get_result(conn.as_mut())
+                .await?;
+            if held > MAX_BLOCKS {
+                return Err(crate::Error::Validation(t!("blockLimit", max = MAX_BLOCKS)));
+            }
             publish_event(
                 state,
                 conn.as_mut(),

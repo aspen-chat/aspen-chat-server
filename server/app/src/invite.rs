@@ -9,8 +9,8 @@ use aspen_wire::message_enum;
 use aspen_wire::message_enum::server_event::{InviteEvent, ServerEvent};
 use chrono::Utc;
 use diesel::{
-    AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
-    Selectable, SelectableHelper,
+    AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, OptionalExtension, QueryDsl,
+    Queryable, Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -307,14 +307,17 @@ pub async fn read_invite(state: &GlobalServerContext, code: &str) -> crate::Resu
         .map_err(Into::into)
 }
 
-/// A community's invites, newest first: every one for those with Manage invites, and only
-/// their own for other members. Revoked ones are gone; expired ones are listed for
+/// A page of a community's invites, newest first: every one for those with Manage invites, and
+/// only their own for other members, `limit` of them (at most [`crate::LIST_PAGE`]) after the
+/// invite `before`, through `invite_listed` and `invite_listed_by_creator`. Revoked ones are gone; expired ones are listed for
 /// `STALE_AFTER_DAYS` after they expire, so a link that just stopped working can still be seen
 /// for what it was.
 pub async fn read_community_invites(
     state: &GlobalServerContext,
     caller: UserId,
     community: CommunityId,
+    before: Option<&str>,
+    limit: i64,
 ) -> crate::Result<Vec<Invite>> {
     let mut conn = state.connection_pool.get().await?;
     let access = require_member(conn.as_mut(), caller, community).await?;
@@ -322,6 +325,23 @@ pub async fn read_community_invites(
     let mut query = invite::table.select(Invite::as_select()).into_boxed();
     if !access.has(Permissions::MANAGE_INVITES) {
         query = query.filter(invite::created_by.eq(caller));
+    }
+    if let Some(before) = before {
+        let Some((at, code)) = invite::table
+            .select((invite::created_at, invite::code))
+            .filter(invite::community.eq(community))
+            .filter(invite::code.eq(before))
+            .first::<(chrono::DateTime<Utc>, String)>(conn.as_mut())
+            .await
+            .optional()?
+        else {
+            return Ok(Vec::new());
+        };
+        query = query.filter(
+            invite::created_at
+                .lt(at)
+                .or(invite::created_at.eq(at).and(invite::code.lt(code))),
+        );
     }
     let invites = query
         .filter(
@@ -334,7 +354,8 @@ pub async fn read_community_invites(
                         .or(invite::expires_at.gt(cutoff)),
                 ),
         )
-        .order_by(invite::created_at.desc())
+        .order_by((invite::created_at.desc(), invite::code.desc()))
+        .limit(limit.clamp(1, crate::LIST_PAGE))
         .load(conn.as_mut())
         .await?;
     Ok(invites)

@@ -6,8 +6,8 @@ use crate::aspen_config::{AspenConfig, load_config};
 use async_nats::jetstream::stream::{ConsumerLimits, DiscardPolicy, StorageType};
 use diesel_async::{AsyncPgConnection, pooled_connection::deadpool::Pool};
 use fred::prelude::ClientLike;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// What an API server is started as.
@@ -32,7 +32,7 @@ pub struct GlobalServerContext {
     pub rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     /// Where each channel belongs (`app::events::channel_home`), filled as it is asked; a
     /// channel never moves.
-    pub channel_homes: Arc<Mutex<HashMap<crate::ChannelId, crate::events::ChannelHome>>>,
+    pub channel_homes: crate::events::ChannelHomes,
     /// Which deployments this server found failing in its standing passes
     /// (`app::federation::standing`).
     pub standing_backoff: Arc<tokio::sync::Mutex<crate::federation::standing::StandingBackoff>>,
@@ -53,6 +53,9 @@ pub struct GlobalServerContext {
             Option<(crate::VoiceServerId, crate::ChannelId)>,
         >,
     >,
+    /// The users this server marked online lately, which it does not mark again yet
+    /// (`app::user_status::mark_user_online_id`).
+    pub presence_marked: crate::user_status::PresenceMarked,
     /// Each community's recent set of members with a connection (`app::user_status`).
     pub connected_members:
         Arc<crate::recent::Recent<crate::CommunityId, Arc<HashSet<crate::UserId>>>>,
@@ -179,7 +182,7 @@ impl GlobalServerContext {
         };
 
         Ok(Self {
-            channel_homes: Arc::new(Mutex::new(HashMap::new())),
+            channel_homes: crate::events::channel_homes(),
             channel_presence: Arc::default(),
             standing_backoff: Arc::new(tokio::sync::Mutex::new(
                 crate::federation::standing::StandingBackoff::new(&config.federation),
@@ -188,12 +191,14 @@ impl GlobalServerContext {
             community_online: Arc::default(),
             voice_session_homes: Arc::default(),
             connected_members: Arc::default(),
+            presence_marked: crate::user_status::presence_marked(),
             connection_pool,
             event_feed: match role {
                 Role::Public => crate::event_feed::EventFeed::start(
                     context.clone(),
                     config.event_queue_size,
                     config.event_feed_shards,
+                    config.event_retained_mib.saturating_mul(1 << 20),
                     crate::event_feed::StreamCaps::new(&config.limits),
                 ),
                 Role::PrivateWorker => crate::event_feed::EventFeed::idle(),

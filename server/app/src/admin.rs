@@ -9,11 +9,11 @@
 use crate::context::GlobalServerContext;
 use crate::t;
 use crate::{CommunityId, IconId, UserId};
-use aspen_schema::{community, user};
+use aspen_schema::user;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::sql_types::{BigInt, Nullable, Text, Timestamptz, Uuid as PgUuid};
-use diesel_async::RunQueryDsl;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
 /// The most rows one page of a list returns.
 pub const MAX_PAGE: i64 = 100;
@@ -64,12 +64,7 @@ pub struct Overview {
 
 pub async fn overview(state: &GlobalServerContext) -> crate::Result<Overview> {
     let mut conn = state.connection_pool.get().await?;
-    let users: i64 = user::table
-        .filter(user::deleted_at.is_null())
-        .filter(user::system.eq(false))
-        .count()
-        .get_result(conn.as_mut())
-        .await?;
+    let totals = current_totals(conn.as_mut()).await?;
     let new_users_this_week: i64 = user::table
         .filter(user::deleted_at.is_null())
         .filter(user::system.eq(false))
@@ -77,16 +72,56 @@ pub async fn overview(state: &GlobalServerContext) -> crate::Result<Overview> {
         .count()
         .get_result(conn.as_mut())
         .await?;
-    let communities: i64 = community::table
-        .filter(community::deleted_at.is_null())
-        .count()
-        .get_result(conn.as_mut())
-        .await?;
     Ok(Overview {
-        users,
+        users: totals.users,
         new_users_this_week,
-        communities,
+        communities: totals.communities,
     })
+}
+
+/// The deployment's people and communities now, neither deleted, the system account left out.
+#[derive(Debug, Clone, QueryableByName)]
+pub struct Totals {
+    #[diesel(sql_type = Timestamptz)]
+    pub at: DateTime<Utc>,
+    #[diesel(sql_type = BigInt)]
+    pub users: i64,
+    #[diesel(sql_type = BigInt)]
+    pub communities: i64,
+}
+
+/// The totals now: the latest row of `deployment_stats`, which `recordStats` writes each hour,
+/// with what was made and deleted since it was taken, each found through an index of its own
+/// (`user_created`, `user_deleted`, `community`'s UUIDv7 ids, `community_deleted`), so the cost
+/// follows what changed in an hour, not the size of the deployment. Without a row yet, it counts
+/// from the beginning.
+pub async fn current_totals(conn: &mut AsyncPgConnection) -> crate::Result<Totals> {
+    Ok(diesel::sql_query(
+        r#"
+        WITH last AS (
+            SELECT taken_at, users, communities FROM deployment_stats ORDER BY day DESC LIMIT 1
+        ),
+        since AS (
+            SELECT COALESCE((SELECT taken_at FROM last), '-infinity') AS at
+        )
+        SELECT now() AS at,
+               COALESCE((SELECT users FROM last), 0)
+               + (SELECT count(*) FROM "user"
+                  WHERE NOT system AND created_at > (SELECT at FROM since)
+                    AND deleted_at IS NULL)
+               - (SELECT count(*) FROM "user"
+                  WHERE NOT system AND deleted_at > (SELECT at FROM since)
+                    AND created_at <= (SELECT at FROM since)) AS users,
+               COALESCE((SELECT communities FROM last), 0)
+               + (SELECT count(*) FROM community
+                  WHERE id >= aspen_uuid_floor((SELECT at FROM since)) AND deleted_at IS NULL)
+               - (SELECT count(*) FROM community
+                  WHERE deleted_at > (SELECT at FROM since)
+                    AND id < aspen_uuid_floor((SELECT at FROM since))) AS communities
+        "#,
+    )
+    .get_result(conn)
+    .await?)
 }
 
 /// The longest name search, in characters, longer than any name it could match a part of.
@@ -234,7 +269,8 @@ pub async fn search_communities(
     let mut conn = state.connection_pool.get().await?;
     let column = match sort.column {
         CommunityColumn::Name => "lower(name)",
-        CommunityColumn::Members => "members",
+        // Recounted by `recountMembers`, and sorted through `community_by_members`.
+        CommunityColumn::Members => "member_count",
         // UUIDv7 ids order by creation.
         CommunityColumn::Created => "id",
     };
@@ -242,7 +278,7 @@ pub async fn search_communities(
         r#"
         SELECT * FROM (
             SELECT c.id, c.name, c.icon,
-                   (SELECT count(*) FROM community_user cu WHERE cu.community = c.id) AS members,
+                   c.member_count::bigint AS members,
                    {COMMUNITY_CREATED_AT} AS created_at
             FROM community c
             WHERE c.deleted_at IS NULL
@@ -322,11 +358,11 @@ struct Earliest {
 /// milliseconds it was made; communities keep no time of their own.
 const COMMUNITY_CREATED_AT: &str = "to_timestamp(('x' || lpad(substr(replace(id::text, '-', ''), 1, 12), 16, '0'))::bit(64)::bigint / 1000.0)";
 
-/// How many users and communities there were at each step of `range`, counting each from its
-/// creation until its deletion, and leaving out the system account as `overview` does. The
-/// steps are days, weeks, or months (`GrowthUnit::for_span`), so a range is a few dozen to a few
-/// hundred points. It reads the whole of both tables, once, as events of +1 and -1 grouped by
-/// step, and sums them in order.
+/// How many users and communities there were at each step of `range`, as `overview` counts
+/// them: each step's figure is that of the last day recorded before it ends
+/// (`deployment_stats`, one row a day), and the last step's is the totals now. The steps are
+/// days, weeks, or months (`GrowthUnit::for_span`), so a range is a few dozen to a few hundred
+/// points, each found through the table's key.
 pub async fn growth(
     state: &GlobalServerContext,
     range: GrowthRange,
@@ -339,49 +375,41 @@ pub async fn growth(
         GrowthRange::OneYear => now - chrono::Months::new(12),
         GrowthRange::FiveYears => now - chrono::Months::new(60),
         GrowthRange::AllTime => {
-            let earliest: Earliest = diesel::sql_query(format!(
-                r#"SELECT LEAST((SELECT min(created_at) FROM "user" WHERE NOT system),
-                               (SELECT min({COMMUNITY_CREATED_AT}) FROM community)) AS earliest"#
-            ))
+            let earliest: Earliest = diesel::sql_query(
+                "SELECT (SELECT min(day) FROM deployment_stats)::timestamp AT TIME ZONE 'UTC' \
+                 AS earliest",
+            )
             .get_result(conn.as_mut())
             .await?;
             earliest.earliest.unwrap_or(now)
         }
     };
     let unit = GrowthUnit::for_span((now - start).num_days());
-    let points = diesel::sql_query(format!(
+    let totals = current_totals(conn.as_mut()).await?;
+    let mut points: Vec<GrowthPoint> = diesel::sql_query(
         r#"
-        WITH user_events AS (
-            SELECT date_trunc($1, created_at) AS at, count(*) AS delta FROM "user"
-            WHERE NOT system GROUP BY 1
-            UNION ALL
-            SELECT date_trunc($1, deleted_at), -count(*) FROM "user"
-            WHERE deleted_at IS NOT NULL AND NOT system GROUP BY 1
-        ),
-        community_events AS (
-            SELECT date_trunc($1, {COMMUNITY_CREATED_AT}) AS at, count(*) AS delta
-            FROM community GROUP BY 1
-            UNION ALL
-            SELECT date_trunc($1, deleted_at), -count(*) FROM community
-            WHERE deleted_at IS NOT NULL GROUP BY 1
-        ),
-        steps AS (
+        WITH steps AS (
             SELECT generate_series(date_trunc($1, $2::timestamptz), date_trunc($1, now()),
                                    ('1 ' || $1)::interval) AS at
         )
-        SELECT steps.at,
-               COALESCE((SELECT sum(delta) FROM user_events e WHERE e.at <= steps.at), 0)::bigint
-                   AS users,
-               COALESCE((SELECT sum(delta) FROM community_events e WHERE e.at <= steps.at), 0)::bigint
-                   AS communities
+        SELECT steps.at, COALESCE(d.users, 0) AS users, COALESCE(d.communities, 0) AS communities
         FROM steps
+        LEFT JOIN LATERAL (
+            SELECT users, communities FROM deployment_stats
+            WHERE day < ((steps.at + ('1 ' || $1)::interval) AT TIME ZONE 'UTC')::date
+            ORDER BY day DESC LIMIT 1
+        ) d ON true
         ORDER BY steps.at
-        "#
-    ))
+        "#,
+    )
     .bind::<Text, _>(unit.sql())
     .bind::<Timestamptz, _>(start)
     .load(conn.as_mut())
     .await?;
+    if let Some(last) = points.last_mut() {
+        last.users = totals.users;
+        last.communities = totals.communities;
+    }
     Ok((unit, points))
 }
 

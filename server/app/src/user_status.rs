@@ -2,8 +2,9 @@
 //!
 //! - `user:{uuid}:online` exists while the user has a connection: it is set with a short expiry
 //!   when they connect the event stream (or make any authenticated request) and refreshed by the
-//!   stream's pings, so it expires shortly after their last connection goes. Setting it when it
-//!   was not set is their coming online, which writes their `last_seen_at`.
+//!   stream's pings, so it expires shortly after their last connection goes; each server sets it
+//!   for one user at most every `MARK_EVERY`, a quarter of its life. Setting it when it was not
+//!   set is their coming online, which writes their `last_seen_at`.
 //! - `user:{uuid}:active` exists while they are using Aspen: a client sends an `activity` frame
 //!   on its event stream while its user interacts with it, and each sets the key to expire after
 //!   `[presence] away_after_seconds`.
@@ -204,14 +205,15 @@ pub async fn online_candidates(
     let key = community_online_key(community);
     // Scores are bounded as floats: fred reads an integer bound as a rank.
     let now = chrono::Utc::now().timestamp() as f64;
-    let () = state
-        .valkey
+    // Pruning and reading go in one round trip.
+    let pipeline = state.valkey.pipeline();
+    let () = pipeline
         .zremrangebyscore(&key, f64::NEG_INFINITY, now - 1.0)
         .await?;
-    let listed: Vec<String> = state
-        .valkey
+    let () = pipeline
         .zrangebyscore(&key, now, f64::INFINITY, false, None)
         .await?;
+    let (_, listed): (i64, Vec<String>) = pipeline.all().await?;
     Ok(listed
         .iter()
         .filter_map(|id| uuid::Uuid::parse_str(id).ok().map(UserId))
@@ -221,23 +223,25 @@ pub async fn online_candidates(
 /// How many people's presence keys one read asks for.
 const STATUS_BATCH: usize = 1_000;
 
-/// Which of `users` have a status `keep` accepts, by their presence keys, a batch at a time.
+/// Which of `users` have a status `keep` accepts, by their presence keys, in batches read at
+/// once rather than one after another.
 async fn having_status(
     state: &GlobalServerContext,
     users: Vec<UserId>,
     keep: impl Fn(UserOnlineStatus) -> bool,
 ) -> crate::Result<HashSet<UserId>> {
-    let mut kept = HashSet::new();
-    for batch in users.chunks(STATUS_BATCH) {
-        kept.extend(
-            users_online_status(state, batch.to_vec())
-                .await?
-                .into_iter()
-                .filter(|(_, status)| keep(*status))
-                .map(|(user, _)| user),
-        );
-    }
-    Ok(kept)
+    let batches = futures_util::future::try_join_all(
+        users
+            .chunks(STATUS_BATCH)
+            .map(|batch| users_online_status(state, batch.to_vec())),
+    )
+    .await?;
+    Ok(batches
+        .into_iter()
+        .flatten()
+        .filter(|(_, status)| keep(*status))
+        .map(|(user, _)| user)
+        .collect())
 }
 
 /// Which of `users` are online, not away.
@@ -399,7 +403,16 @@ pub fn mark_user_online(state: &GlobalServerContext, user: &UserPg) {
 ///
 /// When the `online` key was not already set, the user has just come online, and their
 /// `last_seen_at` is written: it is when they last came online.
+///
+/// Each server marks one user at most every [`MARK_EVERY`]: a client making many requests, or
+/// many of a user's devices on one server, cost a write each quarter of the key's life rather
+/// than one each, and the key, living [`ONLINE_TTL_SECONDS`], is always renewed before it runs
+/// out.
 pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool) {
+    if state.presence_marked.get(&user).is_some() {
+        return;
+    }
+    state.presence_marked.insert(user, ());
     let state_for_task = state.clone();
     tokio::spawn(async move {
         let state = state_for_task;
@@ -451,6 +464,22 @@ async fn record_seen(state: &GlobalServerContext, user: UserId) -> crate::Result
 
 /// How long a presence key lives; the event stream refreshes it while the user is connected.
 pub const ONLINE_TTL_SECONDS: i64 = 60;
+
+/// The least time between two of one server's marks of a user as online
+/// (`mark_user_online_id`): a quarter of the key's life.
+pub const MARK_EVERY: std::time::Duration =
+    std::time::Duration::from_secs(ONLINE_TTL_SECONDS as u64 / 4);
+
+/// The users this server marked online within [`MARK_EVERY`], which it does not mark again.
+pub type PresenceMarked = moka::sync::Cache<UserId, ()>;
+
+/// An empty [`PresenceMarked`], forgetting each user [`MARK_EVERY`] after their mark.
+pub fn presence_marked() -> PresenceMarked {
+    moka::sync::Cache::builder()
+        .max_capacity(1_000_000)
+        .time_to_live(MARK_EVERY)
+        .build()
+}
 
 #[cfg(test)]
 mod tests {
