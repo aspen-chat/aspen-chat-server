@@ -286,9 +286,9 @@ impl User {
                 .local_address(source)
                 .pool_idle_timeout(Duration::from_secs(90))
                 // Over plain HTTP each request at once takes a connection of its own, and the
-                // startup reads would leave ten per user open, all from the generator's address,
-                // which the listener caps (`[connections] max_per_ip`). Over HTTPS they share
-                // one HTTP/2 connection, as a browser's do.
+                // startup reads would leave ten per user open: sockets the generator and the
+                // listener both hold for every user. Over HTTPS they share one HTTP/2
+                // connection, as a browser's do.
                 .pool_max_idle_per_host(IDLE_CONNECTIONS)
                 // A request unanswered this long has failed, and must not hold the run open.
                 .timeout(Duration::from_secs(30))

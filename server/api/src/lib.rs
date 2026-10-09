@@ -605,13 +605,20 @@ async fn api_response_headers(mut response: axum::response::Response) -> axum::r
     response
 }
 
+/// What a [`Role::Public`] server's listener needs.
+pub struct Serving {
+    /// Serves the deployment.
+    pub router: axum::Router,
+    pub config: Arc<AspenConfig>,
+    /// The rate limit suspension in force, which also lifts the listener's address limits for
+    /// the networks it covers.
+    pub suspension: aspen_limits::suspension::SuspensionState,
+}
+
 /// Starts the server's work: connects to the services, starts the metrics listener and the
 /// background tasks, and, for a [`Role::Public`] server, which refuses to start without the web
-/// client, returns the router that serves the deployment.
-pub async fn start(
-    write_schema: bool,
-    role: Role,
-) -> Result<Option<(axum::Router, Arc<AspenConfig>)>, app::Error> {
+/// client, returns what its listener needs to serve the deployment.
+pub async fn start(write_schema: bool, role: Role) -> Result<Option<Serving>, app::Error> {
     if write_schema {
         schema::write_schemas_and_exit()?;
     }
@@ -698,13 +705,15 @@ pub async fn start(
     // Every other path is the web client's: a file of it, or its page.
     let files = web_client::files(context.clone());
     let config = context.config.clone();
-    Ok(Some((
-        axum::Router::from(router.with_state(context))
+    let suspension = context.rate_limiter.suspension().clone();
+    Ok(Some(Serving {
+        router: axum::Router::from(router.with_state(context))
             .fallback_service(files)
             .layer(axum::middleware::from_fn(app::locale::layer))
             .layer(cors_layer()),
         config,
-    )))
+        suspension,
+    }))
 }
 
 #[cfg(test)]

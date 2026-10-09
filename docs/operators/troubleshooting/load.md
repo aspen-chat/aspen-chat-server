@@ -8,7 +8,8 @@
 
 1. Check `[rate_limits] trusted_proxies` first. Behind a proxy that is not listed, everyone
    counts as the proxy.
-2. To lift the per-address limits for a network for a while:
+2. To lift the per-address limits for a network for a while, the listener's
+   `[connections] max_per_ip` and `max_per_network` among them:
 
    ```
    aspen-chat-server limits suspend --scope networks --network <cidr> --reason …

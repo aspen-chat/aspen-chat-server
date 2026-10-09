@@ -258,7 +258,12 @@ async fn run(options: Opt) -> Result<()> {
         let _ = exit_tx.send(());
         info!("Shutdown signal received, shutting down...");
     })?;
-    let Some((app, config)) = app else {
+    let Some(api::Serving {
+        router: app,
+        config,
+        suspension,
+    }) = app
+    else {
         info!("running as a private worker: serving nothing, doing the background work");
         let _ = exit_rx.await;
         return Ok(());
@@ -353,7 +358,7 @@ async fn run(options: Opt) -> Result<()> {
         config.rate_limits.ipv6_prefix,
     )
     .map_err(anyhow::Error::msg)?;
-    let gate = connections::Gate::new(limits, addresses);
+    let gate = connections::Gate::new(limits, addresses, suspension);
     let handshake_timeout = Duration::from_secs(limits.handshake_seconds);
     let idle_timeout = Duration::from_secs(limits.idle_seconds);
     // Without a timer hyper keeps no time at all: a client could take forever over its headers.

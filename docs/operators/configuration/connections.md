@@ -48,6 +48,9 @@ NATS, Valkey, and storage:
   signing in, that some are closed: the log says when.
 - Reverse proxies listed in `[rate_limits] trusted_proxies` count only toward `max`, not toward
   `max_per_ip` or `max_per_network`.
+- While the rate limits are suspended (`aspen-chat-server limits suspend`), connections from the
+  suspension's networks, or from anywhere with `--scope all`, count only toward `max` too, so a
+  load test's generators are not closed for holding many people's connections.
 - So when every client arrives through one proxy, limit connections per client at the proxy.
 
 ### Idle connections

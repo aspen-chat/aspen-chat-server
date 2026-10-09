@@ -9,6 +9,11 @@
 //! the total; an IPv6 address counts by its `[rate_limits] ipv6_prefix` network, as rate limits
 //! count it.
 //!
+//! While an operator suspends the rate limits (`aspen_limits::suspension`), connections from
+//! the networks the suspension covers, or from anywhere when it covers everyone, skip the address
+//! and network limits, as their requests skip the rate limits that count by address: a load
+//! generator's many users share its few addresses. They still count toward the total.
+//!
 //! Once someone signs in on a connection (a request presents a session, or its event stream
 //! identifies), it counts toward its user's share (`max_per_user`) instead of its address's and
 //! network's, while the user has room. The address limits then bound only connections nobody
@@ -20,6 +25,7 @@ use aspen_api::rate_limit::CountedConnection;
 use aspen_app::UserId;
 use aspen_app::aspen_config::ConnectionsConfig;
 use aspen_limits::ClientAddresses;
+use aspen_limits::suspension::{Exemption, SuspensionState};
 use hyper::body::{Body, Frame, SizeHint};
 use std::collections::HashMap;
 use std::io;
@@ -43,6 +49,7 @@ pub struct Gate {
     max_per_network: usize,
     max_per_user: usize,
     addresses: ClientAddresses,
+    suspension: SuspensionState,
     held: Mutex<Held>,
     last_refusal_logged: AtomicU64,
 }
@@ -88,7 +95,8 @@ fn network(ip: IpAddr) -> IpAddr {
 
 /// Whose share one connection counts toward, besides the total.
 enum Share {
-    /// A trusted proxy's, or one given back.
+    /// A trusted proxy's, one exempt from the address limits while they are suspended, or
+    /// one given back.
     None,
     /// Its address's and its network's.
     Address(String, IpAddr),
@@ -109,13 +117,18 @@ pub struct Place {
 }
 
 impl Gate {
-    pub fn new(config: &ConnectionsConfig, addresses: ClientAddresses) -> Arc<Self> {
+    pub fn new(
+        config: &ConnectionsConfig,
+        addresses: ClientAddresses,
+        suspension: SuspensionState,
+    ) -> Arc<Self> {
         Arc::new(Self {
             open: Arc::new(Semaphore::new(config.max.min(Semaphore::MAX_PERMITS))),
             max_per_ip: config.max_per_ip,
             max_per_network: config.max_per_network,
             max_per_user: config.max_per_user,
             addresses,
+            suspension,
             held: Mutex::new(Held::default()),
             last_refusal_logged: AtomicU64::new(0),
         })
@@ -127,7 +140,9 @@ impl Gate {
             self.log_refusal("the server holds [connections] max connections");
             return None;
         };
-        let share = if self.addresses.is_trusted(peer) {
+        let share = if self.addresses.is_trusted(peer)
+            || self.suspension.exemption(Some(peer)) != Exemption::None
+        {
             Share::None
         } else {
             let key = self.addresses.key(peer);
@@ -382,7 +397,55 @@ mod tests {
         Gate::new(
             &config,
             ClientAddresses::new(&["10.0.0.1".to_string()], 64).unwrap(),
+            no_suspension(),
         )
+    }
+
+    fn no_suspension() -> SuspensionState {
+        SuspensionState::new(Duration::from_secs(3600))
+    }
+
+    #[test]
+    fn a_suspension_lifts_the_address_limits_for_its_networks() {
+        let config = ConnectionsConfig {
+            max: 4,
+            max_per_ip: 1,
+            max_per_network: 1,
+            ..ConnectionsConfig::default()
+        };
+        let suspension = no_suspension();
+        let gate = Gate::new(
+            &config,
+            ClientAddresses::new(&[], 64).unwrap(),
+            suspension.clone(),
+        );
+        let generator: IpAddr = "203.0.113.1".parse().unwrap();
+        let other: IpAddr = "198.51.100.1".parse().unwrap();
+        let first = gate.admit(generator).unwrap();
+        assert!(gate.admit(generator).is_none());
+        let now = aspen_limits::suspension::now_ms();
+        suspension.set(Some(aspen_limits::suspension::Suspension {
+            started_at: now,
+            until: now + 60_000,
+            scope: aspen_limits::suspension::Scope::Networks {
+                networks: vec!["203.0.113.0/28".to_string()],
+            },
+            reason: "load test".to_string(),
+            by: "test".to_string(),
+        }));
+        // The generator's further connections skip its address's and network's shares, but
+        // not the total.
+        let held: Vec<_> = (0..3).map(|_| gate.admit(generator).unwrap()).collect();
+        assert!(gate.admit(generator).is_none());
+        drop(held);
+        // Another address is still held to its share.
+        let _other = gate.admit(other).unwrap();
+        assert!(gate.admit(other).is_none());
+        // Once it ends, the generator is held to its share again, which `first` still takes.
+        suspension.set(None);
+        assert!(gate.admit(generator).is_none());
+        drop(first);
+        assert!(gate.admit(generator).is_some());
     }
 
     #[test]
@@ -451,7 +514,11 @@ mod tests {
             max_per_user: 2,
             ..ConnectionsConfig::default()
         };
-        let gate = Gate::new(&config, ClientAddresses::new(&[], 64).unwrap());
+        let gate = Gate::new(
+            &config,
+            ClientAddresses::new(&[], 64).unwrap(),
+            no_suspension(),
+        );
         let nat: IpAddr = "203.0.113.1".parse().unwrap();
         let (alice, bob) = (UserId::new(), UserId::new());
         let first = gate.admit(nat).unwrap();

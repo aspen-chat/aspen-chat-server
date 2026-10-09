@@ -64,11 +64,10 @@ A profile has these sections:
   `source_addresses` spreads users' connections over several local addresses: one address has
   only the system's ephemeral port range (about 28,000 ports on Linux) toward one server
   address, so a machine playing more than about ten thousand users needs several. The deployment
-  also caps the connections one address holds (`[connections] max_per_ip`, 512 by default),
-  which the rate limit suspension does not lift: each user holds its event stream and up to two
-  idle HTTP connections (one HTTP/2 connection over HTTPS), so a generator playing more than a
-  couple of hundred users over plain HTTP needs several addresses, or a higher cap on the
-  deployment it tests.
+  also caps the connections one address holds before anyone signs in on them (`[connections]
+  max_per_ip`, 512 by default); the suspension below lifts that cap for the generators'
+  networks, so without it a reconnect storm of more users than that from one address is
+  refused.
 - `[population]` — how many users and communities to seed, the community size range (sizes fall
   off by rank, Zipf-like), channels per community, and history messages per channel. Of the
   history, `threads_per_channel` messages start a thread of `replies_per_thread` replies (one in
@@ -125,8 +124,9 @@ nats_url = "nats://nats.staging:4222"
 nats_token = "…"
 ```
 
-With `scope = "networks"` only requests from those networks skip the limits that count by address;
-every per-user and global limit stays, so the run still measures a deployment with its limits on.
+With `scope = "networks"` only requests and connections from those networks skip the limits that
+count by address; every per-user and global limit stays, so the run still measures a deployment
+with its limits on.
 
 The same suspension is available by hand:
 
