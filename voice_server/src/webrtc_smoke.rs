@@ -25,7 +25,7 @@ use stun::integrity::MessageIntegrity;
 use stun::message::{BINDING_REQUEST, BINDING_SUCCESS, Message, Setter};
 use stun::textattrs::TextAttribute;
 use tokio::net::UdpSocket;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, watch};
 use tokio::time::timeout;
 use webrtc_srtp::context::Context as SrtpContext;
 use webrtc_srtp::protection_profile::ProtectionProfile;
@@ -103,6 +103,12 @@ async fn round_trip(router: &Router, offered: SrtpProtectionProfile, profile: Pr
         ))
         .await
         .expect("transport");
+    // The worker reports its DTLS state in a notification, which may arrive after the client
+    // has finished its side of the handshake.
+    let (dtls_state_tx, mut dtls_state) = watch::channel(transport.dtls_state());
+    let _dtls_state_handler = transport.on_dtls_state_change(move |state| {
+        let _ = dtls_state_tx.send(state);
+    });
     let candidate = transport
         .ice_candidates()
         .iter()
@@ -208,7 +214,13 @@ async fn round_trip(router: &Router, offered: SrtpProtectionProfile, profile: Pr
         .unwrap_or_else(|_| panic!("{offered:?}: the handshake took too long"))
         .unwrap_or_else(|e| panic!("{offered:?}: the handshake failed: {e}"));
     assert_eq!(dtls.selected_srtpprotection_profile(), offered);
-    assert_eq!(transport.dtls_state(), DtlsState::Connected);
+    timeout(
+        STEP,
+        dtls_state.wait_for(|state| *state == DtlsState::Connected),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("{offered:?}: the worker never reported the handshake done"))
+    .expect("transport open");
 
     let mut keys = webrtc_srtp::config::Config {
         profile,

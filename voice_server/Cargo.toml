@@ -23,9 +23,9 @@ hyper-util = { version = "0.1.12", features = ["http1", "server", "tokio"] }
 tower = { version = "0.5.2", features = ["util"] }
 libc = "0.2"
 local-ip-address = "0.6"
-mediasoup = "0.28.1"
+mediasoup = "0.30.0"
 # Named only to turn on linking the system OpenSSL; see `[patch.crates-io]` in the workspace.
-mediasoup-sys = { version = "0.18.1", features = ["system-openssl"] }
+mediasoup-sys = { version = "0.20.0", features = ["system-openssl"] }
 metrics = "0.24"
 num_cpus = "1.17.0"
 schemars = { version = "1.2.1", features = ["uuid1"] }

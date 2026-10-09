@@ -27,7 +27,7 @@ Federation, letting a user of one deployment use others, is built in five phases
 - **Signatures and keys:** `aws-lc-rs`, the crypto rustls uses too (Ed25519 federation keys and compact JWS with EdDSA, join-token keys, Web Push's ECDH, HKDF, AES-GCM, and VAPID signatures)
 - **Email:** `lettre` over SMTP, written from `askama` templates (`server/templates/email/`), with `chrono-tz` for each digest's time zone; see Email
 - **Attachment previews:** `image` (decoders written in Rust), `fast_image_resize`, `moxcms` (colour profiles), and `webp` (libwebp, built from source) for pictures, and the operator's `ffmpeg` and `ffprobe`, run as processes of their own, for videos' posters; see Attachment previews
-- **Voice media:** mediasoup, from the fork `[patch.crates-io]` names, whose `system-openssl` feature builds its worker against the system OpenSSL rather than the 3.0.8 its Meson build compiles in
+- **Voice media:** mediasoup, from the fork `[patch.crates-io]` names, whose `system-openssl` feature builds its worker against the system OpenSSL rather than the 3.0.10 its Meson build compiles in
 - **File transfers:** WebRTC data channels between clients, with STUN and a TURN relay in the voice server (`turn`, from webrtc-rs)
 - **Plugins:** `wasmtime` running WebAssembly components (`spec/plugin.wit`), with `wasmtime-wasi` giving a component's standard library empty system interfaces; see Plugins
 - **Metrics:** `metrics` with the Prometheus exporter (`aspen_metrics`)

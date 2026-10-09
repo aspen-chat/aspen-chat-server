@@ -13,7 +13,7 @@ exclude = [
 default-members = ["server"]
 
 # mediasoup's worker, built from this fork, links the system's OpenSSL (its `system-openssl`
-# feature, which voice_server turns on) rather than the copy of OpenSSL 3.0.8 its Meson build
+# feature, which voice_server turns on) rather than the copy of OpenSSL 3.0.10 its Meson build
 # otherwise compiles in statically.
 [patch.crates-io]
-mediasoup-sys = { git = "https://github.com/Xaeroxe/mediasoup", rev = "9f0eb611b2f516a1dfc4514cc4fc506d669dfe10" }
+mediasoup-sys = { git = "https://github.com/Xaeroxe/mediasoup", rev = "6024426e4c25434647ad35ac3cb6f1178e28a490" }
