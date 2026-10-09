@@ -21,7 +21,9 @@
 //! the held row goes in the same transaction, so it is posted once however its job is run, and
 //! `heldMessagePosted` tells the author's apps which message it became. One that can no longer
 //! be posted (the author lost the right to post there, the channel went), or whose posting has
-//! failed [`MAX_ATTEMPTS`] times, is dropped, and `heldMessageFailed` tells them why.
+//! failed [`MAX_ATTEMPTS`] times, is dropped, and `heldMessageFailed` tells them why. A first
+//! reply that made its thread as it was held takes the thread with it when it is dropped, if
+//! nothing else was posted or waits there.
 
 use super::Message;
 use crate::attachment::preview;
@@ -431,7 +433,10 @@ async fn still_held(state: &GlobalServerContext, id: HeldMessageId) -> bool {
     .unwrap_or(true)
 }
 
-/// Drops a held message that will not be posted and tells its author's apps why.
+/// Drops a held message that will not be posted and tells its author's apps why. When it was the
+/// first reply of a thread, which it made as it was held (`post`), and nothing else was posted
+/// or waits there, the thread goes with it (`thread::remove_if_unreplied`), in the same
+/// transaction.
 async fn drop_held(
     state: &GlobalServerContext,
     id: HeldMessageId,
@@ -455,7 +460,9 @@ async fn drop_held(
                     detail: detail.into_owned(),
                 },
             )
-            .await
+            .await?;
+            crate::thread::remove_if_unreplied(state, conn, channel).await?;
+            Ok(())
         }
         .scope_boxed()
     })

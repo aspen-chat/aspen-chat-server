@@ -798,14 +798,39 @@ def previews(world: World, check: Checks) -> None:
                                  world.member["token"])
     held = json.loads(body) if status == 202 else {}
     check("the member's own is held too", status == 202, status)
-    world.as_owner("PUT", f"/channels/{shared}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    # A first reply held, which makes its thread; and a reply held in a thread that has one.
+    lone_starter = world.post(shared, "a thread only a held reply is in")
+    status, body = stack.request("POST", f"/messages/{lone_starter}/thread/messages",
+                                 {"content": "lone reply", "attachments": [upload_picture(world, world.member["token"], png)],
+                                  "mayHold": True}, world.member["token"])
+    lone_thread = json.loads(body).get("channelId") if status == 202 else None
+    kept_starter = world.post(shared, "a thread with a reply in it")
+    kept_thread = world.as_owner("POST", f"/messages/{kept_starter}/thread/messages",
+                                 {"content": "posted reply", "attachments": []})["channelId"]
+    status, body = stack.request("POST", f"/channels/{kept_thread}/messages",
+                                 {"content": "second reply", "attachments": [upload_picture(world, world.member["token"], png)],
+                                  "mayHold": True}, world.member["token"])
+    kept_held = json.loads(body) if status == 202 else {}
+    check("held first replies make their threads", lone_thread is not None and kept_held != {}, body)
+    world.as_owner("PUT", f"/channels/{shared}/overrides/{world.everyone}",
+                   {"allow": [], "deny": ["sendMessages", "sendInThreads"]})
     owner_stream = stack.events(world.owner["token"])
     seen = []
     dropped = soon(lambda: bool(seen.extend(world.stream.gather(0.2))
-                                or of(seen, "heldMessageFailed", held=held.get("id"))), 30)
+                                or (of(seen, "heldMessageFailed", held=held.get("id"))
+                                    and len(of(seen, "heldMessageFailed")) >= 3)), 30)
     check("losing the right to post drops it, and its author is told why",
           dropped and bool(of(seen, "heldMessageFailed", held=held.get("id"))[0].get("detail")),
           [e["serverEvent"] for e in seen])
+    check("a dropped first reply takes the thread it made, and every client hears so",
+          bool(of(seen, "channel", type="delete", id=lone_thread))
+          and bool(of(seen, "message", type="update", id=lone_starter, thread=None))
+          and stack.status("GET", f"/channels/{lone_thread}", token=world.owner["token"]) == 404
+          and world.as_owner("GET", f"/messages/{lone_starter}")["data"]["thread"] is None,
+          [(e["serverEvent"], e.get("type")) for e in seen])
+    check("a dropped reply leaves a thread that has another",
+          not of(seen, "channel", type="delete", id=kept_thread)
+          and stack.status("GET", f"/channels/{kept_thread}", token=world.owner["token"]) == 200)
     check("and nobody else ever sees it", not of(owner_stream.gather(1.0), "message", content="not allowed"))
     owner_stream.close()
     check("nor is it in the channel",

@@ -190,6 +190,7 @@ pub async fn create_poll(
     }
     conn.transaction(|conn| {
         async move {
+            crate::message::hold_channel(conn.as_mut(), channel).await?;
             diesel::insert_into(poll::table)
                 .values(&row)
                 .execute(conn.as_mut())

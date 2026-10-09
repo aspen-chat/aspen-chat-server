@@ -21,7 +21,7 @@ use crate::message::MessageKind;
 use crate::permissions::{ChannelAccess, Permissions, channel_access};
 use crate::t;
 use crate::{ChannelId, EventScope, MaybeLoaded, MessageId, UserId, publish_event};
-use aspen_schema::{channel, message};
+use aspen_schema::{channel, held_message, message, thread_follow};
 use aspen_wire::message_enum::server_event::{ChannelEvent, MessageEvent, ServerEvent};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
@@ -214,6 +214,124 @@ pub(crate) async fn open_in(
     // Whoever wrote the message replies are to is told of them.
     crate::thread_follow::took_part(state, conn, &[starter_author], thread.id).await?;
     Ok((thread, true))
+}
+
+/// Removes `thread` in the caller's transaction when nothing was ever posted in it and nothing
+/// waits to be, answering whether it did: for the thread a held first reply made, once that
+/// reply is dropped (`app::message::held`), so no thread is left empty by it. The starter is
+/// locked first, as [`open_in`] locks it, and then the thread, which every posting holds from
+/// its check until it commits (`app::message::hold_channel`), so a reply or poll posted or held
+/// at the same time either is seen here and keeps the thread, or waits and finds the thread
+/// gone; a first reply racing it makes a new thread. Its followers (the starter's author, and
+/// anyone who followed it by hand while it stood) are told they follow it no longer.
+pub(crate) async fn remove_if_unreplied(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    thread: ChannelId,
+) -> crate::Result<bool> {
+    let starter: Option<Option<MessageId>> = channel::table
+        .select(channel::starter_message)
+        .filter(
+            channel::id
+                .eq(thread)
+                .and(channel::ty.eq(ChannelType::Thread)),
+        )
+        .first(conn)
+        .await
+        .optional()?;
+    let Some(Some(starter)) = starter else {
+        return Ok(false);
+    };
+    let names: Option<Option<ChannelId>> = message::table
+        .select(message::thread)
+        .filter(message::id.eq(starter))
+        .for_update()
+        .first(conn)
+        .await
+        .optional()?;
+    if names != Some(Some(thread)) {
+        return Ok(false);
+    }
+    let locked: Option<ChannelId> = channel::table
+        .select(channel::id)
+        .filter(channel::id.eq(thread))
+        .for_update()
+        .first(conn)
+        .await
+        .optional()?;
+    if locked.is_none() {
+        return Ok(false);
+    }
+    // Any message, a deleted one too: a thread that held a reply stays, as any thread does.
+    let used: bool = diesel::select(
+        diesel::dsl::exists(message::table.filter(message::channel.eq(thread))).or(
+            diesel::dsl::exists(held_message::table.filter(held_message::channel.eq(thread))),
+        ),
+    )
+    .get_result(conn)
+    .await?;
+    if used {
+        return Ok(false);
+    }
+    let followers: Vec<UserId> = diesel::delete(thread_follow::table)
+        .filter(thread_follow::thread.eq(thread))
+        .returning(thread_follow::user)
+        .get_results(conn)
+        .await?;
+    for user in followers {
+        publish_event(
+            state,
+            conn,
+            EventScope::User(user),
+            &ServerEvent::ThreadFollowChanged {
+                thread,
+                following: false,
+            },
+        )
+        .await?;
+    }
+    diesel::update(message::table)
+        .set(message::thread.eq(None::<ChannelId>))
+        .filter(message::id.eq(starter))
+        .execute(conn)
+        .await?;
+    publish_event(
+        state,
+        conn,
+        EventScope::Message(starter),
+        &ServerEvent::Message(MessageEvent::Update {
+            id: starter,
+            content: None,
+            attachments: None,
+            edited_at: None,
+            link_previews: None,
+            thread: Some(None),
+            mentions: None,
+            linked_messages: None,
+            altered_by: None,
+            card: None,
+            echo: None,
+        }),
+    )
+    .await?;
+    // Announced while the thread is there to route it by.
+    publish_event(
+        state,
+        conn,
+        EventScope::ChannelDefinition {
+            channel: thread,
+            departed: None,
+        },
+        &ServerEvent::Channel(ChannelEvent::Delete { id: thread }),
+    )
+    .await?;
+    crate::plugin::storage::forget(conn, crate::plugin::storage::Scope::Channel(thread)).await?;
+    // What else names it (read positions, mutes, notification settings) goes with it.
+    diesel::delete(channel::table)
+        .filter(channel::id.eq(thread))
+        .execute(conn)
+        .await?;
+    Ok(true)
 }
 
 /// The live threads among `ids`, as wire records.

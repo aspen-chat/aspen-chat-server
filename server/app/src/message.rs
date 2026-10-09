@@ -177,22 +177,14 @@ async fn ensure_attachments_ready(
 
 /// Checks that `author` may post text in `channel_id`, answering the channel and the author's
 /// access to it: that it holds messages, and that they may send there. Saying they are typing
-/// there (`app::typing`) takes the same.
+/// there (`app::typing`) takes the same. In a transaction it holds the channel ([`hold_channel`]).
 pub(crate) async fn may_post(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     author: UserId,
     channel_id: ChannelId,
 ) -> Result<(Channel, ChannelAccess), crate::Error> {
-    let target: Channel = channel::table
-        .select(Channel::as_select())
-        .filter(
-            channel::id
-                .eq(channel_id)
-                .and(channel::deleted_at.is_null()),
-        )
-        .first(conn)
-        .await?;
+    let target = hold_channel(conn, channel_id).await?;
     // A plugin's channel holds the plugin's contents, not messages.
     if target.ty == ChannelType::Plugin {
         return Err(crate::Error::Validation(t!("pluginChannelHasNoMessages")));
@@ -200,6 +192,26 @@ pub(crate) async fn may_post(
     let access = channel_access(state, conn, author, channel_id).await?;
     access.require(access.send_permission())?;
     Ok((target, access))
+}
+
+/// The live channel `channel_id`, whose row a transaction posting in it holds against removal
+/// from here until it commits, as the message's reference to it would from its insert on: a
+/// thread removed for being empty (`thread::remove_if_unreplied`) either waits for the posting
+/// and sees it, or is gone before the posting reads it, which then finds no channel.
+pub(crate) async fn hold_channel(
+    conn: &mut AsyncPgConnection,
+    channel_id: ChannelId,
+) -> Result<Channel, crate::Error> {
+    Ok(channel::table
+        .select(Channel::as_select())
+        .filter(
+            channel::id
+                .eq(channel_id)
+                .and(channel::deleted_at.is_null()),
+        )
+        .for_key_share()
+        .first(conn)
+        .await?)
 }
 
 /// Checks that `author` may post in `channel_id` with `attachments`, as `create_message` and
@@ -239,7 +251,8 @@ async fn check_first_reply(
     attachments: &[AttachmentId],
     echo_to_parent: bool,
 ) -> Result<ChannelAccess, crate::Error> {
-    let parent = thread::check_startable(state, conn, author, unmade.starter, unmade.parent).await?;
+    let parent =
+        thread::check_startable(state, conn, author, unmade.starter, unmade.parent).await?;
     // An echo is posted in the parent channel, so it takes sending there.
     if echo_to_parent {
         parent.require(Permissions::SEND_MESSAGES)?;

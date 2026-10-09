@@ -569,7 +569,13 @@ pub async fn reply_in_thread(
     Path(message): Path<MessageId>,
     Json(request): Json<MessageCreateRequest>,
 ) -> ApiResult<Response> {
-    post(&state, user.id, app::message::To::ThreadOf(message), request).await
+    post(
+        &state,
+        user.id,
+        app::message::To::ThreadOf(message),
+        request,
+    )
+    .await
 }
 
 /// Posts `request` where `to` says, answering the message made (`201`) or held (`202`).
