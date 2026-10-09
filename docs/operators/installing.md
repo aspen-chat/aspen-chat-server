@@ -328,7 +328,14 @@ it. A voice server that cannot reach an API server at startup keeps asking every
 turns joins away until one answers. The API servers apply a
 report only when it came on a subject naming the server it is about, and only when the call or
 channel it is about is that server's, so a voice server taken over can misreport its own calls and
-no one else's. A voice server still given `nats_auth_token` works, and warns at startup.
+no one else's. It can still cause some trouble beyond its own calls, because NATS lets a request
+name any subject for its reply: it can have NATS publish its own answers on the API servers'
+subjects, making every API server reload its plugins or redo background passes, and replacing a
+suspension of rate limits with a value that is not read. It cannot make anything it says believed
+that way. The API servers refuse to answer anywhere but the asking server's own inbox, and log
+`refused to answer a request for the join token key` when one tries, which means that voice
+server is compromised. Firewalling NATS from everything but the deployment's own machines remains
+the main defence (below). A voice server still given `nats_auth_token` works, and warns at startup.
 
 Clients reach a voice server in two ways, and both must be open to them:
 

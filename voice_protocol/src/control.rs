@@ -93,7 +93,22 @@ pub fn command_subject(server: Uuid) -> String {
 /// What the subjects of a voice server's replies start with, rather than NATS's shared `_INBOX`,
 /// so a NATS user for the server may be allowed its own replies and no one else's.
 pub fn inbox_prefix(server: Uuid) -> String {
-    format!("_INBOX_voice.{server}")
+    format!("{VOICE_INBOXES}.{server}")
+}
+
+/// What every voice server's inbox prefix (`inbox_prefix`) starts with.
+const VOICE_INBOXES: &str = "_INBOX_voice";
+
+/// Whether `subject` is a reply subject in some voice server's inbox, or in `server`'s when it is
+/// given. NATS lets a requester name any reply subject, whatever its own permissions, so an API
+/// server answers a voice server only where this holds: otherwise a voice server could have it
+/// publish, with its wider permissions, on any subject at all.
+pub fn is_voice_inbox(subject: &str, server: Option<Uuid>) -> bool {
+    let rest = match server {
+        Some(server) => subject.strip_prefix(&inbox_prefix(server)),
+        None => subject.strip_prefix(VOICE_INBOXES),
+    };
+    rest.is_some_and(|rest| rest.len() > 1 && rest.starts_with('.'))
 }
 
 /// The subjects naming `server` that its NATS user must be allowed: those it publishes on, and
@@ -337,6 +352,28 @@ mod tests {
         // Every one.
         assert!(ends(None, None, Some("a")));
         assert!(ends(None, None, None));
+    }
+
+    #[test]
+    fn replies_go_only_to_voice_servers_inboxes() {
+        let server = Uuid::from_u128(1);
+        let other = Uuid::from_u128(2);
+        let reply = format!("{}.abc.1", inbox_prefix(server));
+        assert!(is_voice_inbox(&reply, Some(server)));
+        assert!(is_voice_inbox(&reply, None));
+        assert!(!is_voice_inbox(&reply, Some(other)));
+        // A prefix alone, or one running into another server's id, is no inbox.
+        assert!(!is_voice_inbox(&inbox_prefix(server), Some(server)));
+        assert!(!is_voice_inbox(
+            &format!("{}0.x", inbox_prefix(server)),
+            Some(server)
+        ));
+        assert!(!is_voice_inbox("_INBOX_voice", None));
+        assert!(!is_voice_inbox("_INBOX_voicex.y", None));
+        // The subjects the API servers act on are refused.
+        assert!(!is_voice_inbox("aspen.plugins.changed", None));
+        assert!(!is_voice_inbox("$KV.aspen_rate_limits.suspension", None));
+        assert!(!is_voice_inbox("_INBOX.abc", None));
     }
 
     #[test]
