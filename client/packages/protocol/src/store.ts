@@ -323,6 +323,7 @@ export class RecordStore {
   readonly #removedChannels = new Set<string>();
 
   readonly #listeners = new Map<Topic, Set<Listener>>();
+  readonly #changeListeners = new Set<(topics: readonly Topic[]) => void>();
   readonly #memo = new Map<Topic, unknown>();
   readonly #dirty = new Set<Topic>();
   #batchDepth = 0;
@@ -2911,6 +2912,11 @@ export class RecordStore {
         }
       }
     }
+    if (topics.length > 0) {
+      for (const listener of Array.from(this.#changeListeners)) {
+        listener(topics);
+      }
+    }
   }
 
   /**
@@ -2926,6 +2932,50 @@ export class RecordStore {
         }
       }
     });
+  }
+
+  /**
+   * The users whose presence to watch on the event stream, at most `limit`, the most wanted
+   * first: the caller, whose own is shown in the user bar, everyone in a call, the members shown
+   * for the `focus` communities (those on screen), then those of every other community.
+   */
+  presenceWatchList(focus: readonly string[], limit: number): string[] {
+    const ids = new Set<string>();
+    if (this.#myUserId !== null) {
+      ids.add(this.#myUserId);
+    }
+    const communities = this.communities();
+    for (const community of communities) {
+      for (const channel of this.channels(community.id)) {
+        for (const participant of this.channelVoice(channel.id).participants) {
+          ids.add(participant.user);
+        }
+      }
+    }
+    const focused = new Set(focus);
+    for (const community of [
+      ...communities.filter((c) => focused.has(c.id)),
+      ...communities.filter((c) => !focused.has(c.id)),
+    ]) {
+      if (ids.size >= limit) {
+        break;
+      }
+      for (const id of this.memberIds(community.id)) {
+        ids.add(id);
+      }
+    }
+    return Array.from(ids).slice(0, limit);
+  }
+
+  /**
+   * Calls `listener` with the topics each change touched, after their own listeners; returns
+   * what stops it. For work that follows many topics at once, such as which users to watch.
+   */
+  onChange(listener: (topics: readonly Topic[]) => void): () => void {
+    this.#changeListeners.add(listener);
+    return () => {
+      this.#changeListeners.delete(listener);
+    };
   }
 
   /**

@@ -1,6 +1,6 @@
 # Event routing
 
-Every event is published on a NATS subject that names whose it is. Each API server reads the stream once and routes each event to the event stream connections allowed to see it. Presence, which is pulled rather than pushed, is described here too.
+Every event is published on a NATS subject that names whose it is. Each API server reads the stream once and routes each event to the event stream connections allowed to see it. Presence, which clients read and which watching connections are told of as it changes, is described here too.
 
 ## Parts
 
@@ -9,7 +9,7 @@ Every event is published on a NATS subject that names whose it is. Each API serv
 | Subjects, publishing, settling | `app::events` |
 | The event feed: dispatcher, shards, catch-up | `app::event_feed` |
 | Who may view a channel or category | `app::visibility` (`CommunityModel`, `Visibility`, `viewers`) |
-| Presence | `app::user_status` |
+| Presence | `app::user_status`, `app::presence_feed` |
 | Online count of a channel | `app::channel_presence` |
 | The WebSocket endpoint | `server/api/src/event_stream.rs` |
 

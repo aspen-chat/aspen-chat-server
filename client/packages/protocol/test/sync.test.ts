@@ -8,6 +8,7 @@ import {
   MESSAGE_PAGE_SIZE,
   MemorySessionStore,
   PRESENCE_POLL_MS,
+  PRESENCE_READ_MS,
   TYPING_EXPIRY_MS,
   TYPING_NOTICES,
   TYPING_REFRESH_MS,
@@ -341,6 +342,44 @@ describe("AspenSync", () => {
     typing(bob.id, true);
     socket.onclose?.({ code: 1006, reason: "" });
     expect(sync.store.typers(general.id)).toEqual([]);
+    sync.stop();
+  });
+
+  it("watches those shown on the stream, applies what it tells, and reads all only now and then", async () => {
+    let now = 0;
+    const presencePolls: (() => void)[] = [];
+    const { sync, calls } = makeSync(bootstrapResponses(), () => now, {
+      setTimeout: ((handler: () => void, ms?: number) => {
+        if (ms === PRESENCE_POLL_MS) {
+          presencePolls.push(handler);
+        }
+        return 0;
+      }) as typeof setTimeout,
+    });
+    const socket = await goLive(sync);
+    await settle();
+    const watches = () =>
+      socket.sent.filter((f) => (f as { type: string }).type === "watchPresence") as {
+        userIds: string[];
+      }[];
+    // The caller first, whose own status the user bar shows.
+    expect(watches()).toEqual([{ type: "watchPresence", userIds: [me.id] }]);
+    socket.frame({
+      type: "ephemeral",
+      event: { type: "presence", statuses: [{ id: me.id, onlineStatus: "doNotDisturb" }] },
+    });
+    expect(sync.store.me()?.onlineStatus).toBe("doNotDisturb");
+
+    const reads = () => calls.filter((u) => u.pathname === "/api/v1/users/statuses").length;
+    expect(reads()).toBe(1);
+    now = PRESENCE_POLL_MS;
+    presencePolls.shift()?.();
+    await settle();
+    expect(reads()).toBe(1);
+    now = PRESENCE_READ_MS;
+    presencePolls.shift()?.();
+    await settle();
+    expect(reads()).toBe(2);
     sync.stop();
   });
 

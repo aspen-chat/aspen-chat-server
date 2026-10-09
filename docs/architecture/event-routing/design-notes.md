@@ -45,7 +45,12 @@ The reasons behind the [event routing](index.md) design.
 
 ## Presence
 
-- **Presence is pulled, not pushed.** Nothing announces a change. See [Presence](presence.md).
+- **Presence is told only to those who watch it.** Every member being told of every member's changes costs as the square of a community; a connection names the few hundred users it shows, and only changes to those reach it. See [Presence](presence.md#telling-of-changes).
+- **A hint names a user, not a status.** Hints from several servers can arrive out of order; the router reads each user's presence when it tells, so what it tells is what is true then, and a hint that changes nothing tells nobody.
+- **Changes are gathered for a second.** A burst (a server restarting, a community's evening) is told in a few reads, queries, and frames rather than one each, and a second is too short to notice.
+- **Who may learn it is decided when telling, not when watching.** A block or a community left takes effect at the next telling, which tells the watcher `offline`.
+- **Expiries are hinted by timers on the server that set the key.** Valkey's notices of expired keys are lazy and cost every server a subscription to every expiry; a timer costs nothing beyond the one entry, and a key renewed elsewhere only makes a hint that changes nothing.
+- **Clients still read presence whole now and then.** It catches what a lost hint or the 500-user cap left behind.
 - **A bot is never away.** It uses Aspen through the API rather than as a person does.
 - **A chosen status is kept on the `user` row, with a copy in Valkey.** Statuses are read for whole member lists at once; a third key in the same `MGET` costs nothing more, where reading the row would add a query to every read. The row is what push and rings decide by, since do not disturb holds while the user is offline too, when nothing renews a Valkey key.
 - **Do not disturb hides unread marks and counts, not just alerts.** It is for not being drawn back in: a badge draws as a chime does. Read positions are untouched, so nothing is lost when it ends.

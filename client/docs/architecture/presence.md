@@ -1,12 +1,14 @@
 # Presence
 
-Presence is pulled. The server pushes no status events.
+The client reads presence for the users it shows, and its event stream tells it of changes to
+those it watches as they happen.
 
 ## Where it lives
 
 | Part | Where |
 | --- | --- |
-| Polling statuses | `AspenSync`, `RecordStore.presenceCandidates()`, `applyStatuses` |
+| Reading statuses | `AspenSync`, `RecordStore.presenceCandidates()`, `applyStatuses` |
+| Watching statuses | `AspenSync`'s `#tellWatching`, `RecordStore.presenceWatchList`, `RecordStore.onChange`, `EventStream.sendWatchPresence` |
 | Reporting activity | `AspenSync.noteActivity`, `src/api/activity.ts`, `SyncProvider` |
 | A channel's online count | `OnlineCount` in `ChannelHeader`, `useChannelOnline`, `AspenSync.watchChannelPresence` |
 | Drawing a status | `PresenceMark` and `StatusDot` (`src/features/users/PresenceMark.tsx`), `knownStatus` (`presenceStatus.ts`) |
@@ -15,12 +17,34 @@ Presence is pulled. The server pushes no status events.
 
 ## Reading statuses
 
-`AspenSync` asks `GET /users/statuses` for `RecordStore.presenceCandidates()`: the user, whose own
-status the user bar shows, the members shown for every community, and everyone in a call. It asks in batches of `PRESENCE_BATCH`:
+### Watching
 
-1. when the sync goes live;
-2. every `PRESENCE_POLL_MS` while the page is visible;
-3. when the page becomes visible again.
+`AspenSync` tells its event stream whose presence it shows with a `watchPresence` frame
+(`RecordStore.presenceWatchList`), at most `MAX_WATCHED_PRESENCE` (500), the most wanted first:
+
+1. the user, whose own status the user bar shows;
+2. everyone in a call;
+3. the members shown for the communities with a channel on screen (`watchChannelPresence`);
+4. the members shown for every other community.
+
+- It sends it on every `ready`, since a new connection watches nobody.
+- It sends it again, `WATCH_SETTLE_MS` after the members shown, the calls, the communities, or the
+  user change (`RecordStore.onChange`, which hears every topic a change touched), when the list
+  differs from the last sent.
+- The server answers with `presence` frames (`ephemeral`): each watched user as they are now, then
+  each change, gathered for up to a second. `applyStatuses` takes them.
+
+### Reading whole
+
+`AspenSync` also asks `GET /users/statuses` for `RecordStore.presenceCandidates()` (the user, the
+members shown for every community, and everyone in a call) in batches of `PRESENCE_BATCH`:
+
+1. when the sync goes live, on every connection;
+2. then at most every `PRESENCE_READ_MS` (two minutes), checked at each `PRESENCE_POLL_MS` while
+   the page is visible, and when the page becomes visible again.
+
+It catches what the stream could not tell: a change lost on the way, and those beyond the 500
+watched.
 
 `applyStatuses` is the only way someone else's `onlineStatus` changes after the bootstrap. The
 user's own also follows what they choose at once (below).
@@ -44,7 +68,8 @@ online status's mark (`OnlineCount` in `ChannelHeader`).
   (`GET /channels/{channel}/presence`).
 - `useChannelOnline` asks `AspenSync.watchChannelPresence` to keep the count current while the
   header is shown.
-- The count is read at once, then with every presence poll, into `RecordStore.channelOnline`.
+- The count is read at once, then every `PRESENCE_POLL_MS` (thirty seconds), into
+  `RecordStore.channelOnline`.
 
 ## Drawing a status
 

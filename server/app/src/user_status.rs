@@ -34,6 +34,7 @@
 //! (`connected_members`) confirm each one by their keys.
 
 use crate::context::GlobalServerContext;
+use crate::presence_feed::Expiry;
 use crate::presence_override::PresenceOverride;
 use crate::user::UserPg;
 use crate::{CommunityId, UserId};
@@ -44,6 +45,7 @@ use fred::interfaces::{KeysInterface, SortedSetsInterface};
 use fred::types::{Expiration, SetOptions};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 const KEY_PREFIX: &str = "user:";
 const ONLINE_KEY_SUFFIX: &str = ":online";
@@ -120,17 +122,27 @@ pub fn seen_by_others(status: UserOnlineStatus) -> UserOnlineStatus {
 }
 
 /// Records that the user is using Aspen, for `[presence] away_after_seconds`. Fire and forget:
-/// presence is best effort.
+/// presence is best effort. Their becoming active again, and their going away once it runs out,
+/// are told to those watching them (`app::presence_feed`).
 pub fn mark_active(state: &GlobalServerContext, user: UserId) {
+    let feed = state.presence_feed.clone();
     let valkey = state.valkey.clone();
     let key = active_key(user);
-    let ttl = i64::try_from(state.config.presence.away_after_seconds).unwrap_or(i64::MAX);
+    let seconds = state.config.presence.away_after_seconds;
+    let ttl = i64::try_from(seconds).unwrap_or(i64::MAX);
     tokio::spawn(async move {
-        if let Err(e) = valkey
-            .set::<(), _, i64>(key, 1, Some(Expiration::EX(ttl)), None, false)
+        // Setting the key answers its previous value, which says whether they were away.
+        match valkey
+            .set::<Option<i64>, _, i64>(key, 1, Some(Expiration::EX(ttl)), None, true)
             .await
         {
-            tracing::warn!(error = %e, "failed to record the user as active");
+            Ok(previous) => {
+                if previous.is_none() {
+                    feed.changed(user);
+                }
+                feed.expires(user, Expiry::Activity, Duration::from_secs(seconds));
+            }
+            Err(e) => tracing::warn!(error = %e, "failed to record the user as active"),
         }
     });
     list_in_communities(state, user, listing_ttl(state));
@@ -257,7 +269,7 @@ async fn having_status(
     let batches = futures_util::future::try_join_all(
         users
             .chunks(STATUS_BATCH)
-            .map(|batch| users_online_status(state, batch.to_vec())),
+            .map(|batch| users_online_status(&state.valkey, batch.to_vec())),
     )
     .await?;
     Ok(batches
@@ -311,45 +323,64 @@ pub async fn presence_visible(
     viewer: UserId,
     users: &[UserId],
 ) -> crate::Result<HashSet<UserId>> {
+    let pairs: Vec<(UserId, UserId)> = users.iter().map(|user| (viewer, *user)).collect();
+    Ok(presence_visible_pairs(conn, &pairs)
+        .await?
+        .into_iter()
+        .map(|(_, user)| user)
+        .collect())
+}
+
+/// Which of `pairs`, each a viewer and someone whose presence they ask for, the viewer may learn
+/// it of, as [`presence_visible`] decides, in one query however many viewers there are.
+pub async fn presence_visible_pairs(
+    conn: &mut AsyncPgConnection,
+    pairs: &[(UserId, UserId)],
+) -> crate::Result<HashSet<(UserId, UserId)>> {
     use diesel::sql_types::{Array, Uuid};
     #[derive(QueryableByName)]
     struct Row {
         #[diesel(sql_type = Uuid)]
-        id: uuid::Uuid,
+        viewer: uuid::Uuid,
+        #[diesel(sql_type = Uuid)]
+        asked: uuid::Uuid,
     }
-    if users.is_empty() {
+    if pairs.is_empty() {
         return Ok(HashSet::new());
     }
     let rows: Vec<Row> = diesel::sql_query(
         r#"
-        SELECT asked.id
-        FROM unnest($2::uuid[]) AS asked(id)
-        WHERE asked.id = $1
+        SELECT p.viewer, p.asked
+        FROM unnest($1::uuid[], $2::uuid[]) AS p(viewer, asked)
+        WHERE p.asked = p.viewer
            OR ((EXISTS (
                     SELECT 1 FROM community_user mine
                     JOIN community_user theirs ON theirs.community = mine.community
                     JOIN community shared ON shared.id = mine.community
-                    WHERE mine."user" = $1 AND theirs."user" = asked.id
+                    WHERE mine."user" = p.viewer AND theirs."user" = p.asked
                       AND shared.deleted_at IS NULL
                 )
                 OR EXISTS (
                     SELECT 1 FROM dm_recipient mine
                     JOIN dm_recipient theirs ON theirs.channel = mine.channel
-                    WHERE mine."user" = $1 AND theirs."user" = asked.id
+                    WHERE mine."user" = p.viewer AND theirs."user" = p.asked
                 )
                 OR EXISTS (
-                    SELECT 1 FROM "user" bot WHERE bot.id = asked.id AND bot.bot_owner = $1
+                    SELECT 1 FROM "user" bot WHERE bot.id = p.asked AND bot.bot_owner = p.viewer
                 ))
                AND NOT EXISTS (
-                    SELECT 1 FROM user_block WHERE blocker = asked.id AND blocked = $1
+                    SELECT 1 FROM user_block WHERE blocker = p.asked AND blocked = p.viewer
                ))
         "#,
     )
-    .bind::<Uuid, _>(viewer.0)
-    .bind::<Array<Uuid>, _>(users.iter().map(|u| u.0).collect::<Vec<_>>())
+    .bind::<Array<Uuid>, _>(pairs.iter().map(|(viewer, _)| viewer.0).collect::<Vec<_>>())
+    .bind::<Array<Uuid>, _>(pairs.iter().map(|(_, asked)| asked.0).collect::<Vec<_>>())
     .load(conn)
     .await?;
-    Ok(rows.into_iter().map(|row| UserId(row.id)).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| (UserId(row.viewer), UserId(row.asked)))
+        .collect())
 }
 
 /// The presence of each of `users` as `viewer` may learn it (`presence_visible`), in the order
@@ -372,10 +403,7 @@ pub async fn statuses_for(
         .copied()
         .filter(|user| visible.contains(user))
         .collect();
-    let known: HashMap<UserId, UserOnlineStatus> = users_online_status(state, asked)
-        .await?
-        .into_iter()
-        .collect();
+    let known = raw_statuses(&state.valkey, asked).await?;
     Ok(users
         .into_iter()
         .map(|user| {
@@ -393,12 +421,28 @@ pub async fn statuses_for(
         .collect())
 }
 
+/// The presence of each of `users` as they themself are told it, whoever asks, read
+/// [`STATUS_BATCH`] at a time, the batches at once. What a person is told of someone else's
+/// goes through [`seen_by_others`] and a check that it is theirs to learn.
+pub async fn raw_statuses(
+    valkey: &fred::clients::Client,
+    users: Vec<UserId>,
+) -> crate::Result<HashMap<UserId, UserOnlineStatus>> {
+    let batches = futures_util::future::try_join_all(
+        users
+            .chunks(STATUS_BATCH)
+            .map(|batch| users_online_status(valkey, batch.to_vec())),
+    )
+    .await?;
+    Ok(batches.into_iter().flatten().collect())
+}
+
 /// The presence of each user (`app::user_status`) as they themself are told it, read in one
 /// round trip, whoever asks: for counting and ordering members (`online_among`,
 /// `connected_members`, through [`seen_by_others`]). What a person is told of someone's presence
 /// goes through `statuses_for`.
 async fn users_online_status(
-    state: &GlobalServerContext,
+    valkey: &fred::clients::Client,
     user_ids: Vec<UserId>,
 ) -> crate::Result<Vec<(UserId, UserOnlineStatus)>> {
     // MGET with no keys is a protocol error, so an empty batch is answered locally.
@@ -415,7 +459,7 @@ async fn users_online_status(
             ]
         })
         .collect();
-    let values: Vec<Option<String>> = state.valkey.mget(keys).await?;
+    let values: Vec<Option<String>> = valkey.mget(keys).await?;
     Ok(user_ids
         .into_iter()
         .zip(
@@ -443,7 +487,9 @@ pub fn mark_user_online(state: &GlobalServerContext, user: &UserPg) {
 ///
 /// When the `online` key was not already set, the user has just come online, and their
 /// `last_seen_at` is written: it is when they last came online. Their presence override is
-/// copied to Valkey then too (`app::presence_override`), in case Valkey has lost it.
+/// copied to Valkey then too (`app::presence_override`), in case Valkey has lost it. Their coming
+/// online, and their going offline once the key runs out, are told to those watching them
+/// (`app::presence_feed`).
 ///
 /// Each server marks one user at most every [`MARK_EVERY`]: a client making many requests, or
 /// many of a user's devices on one server, cost a write each quarter of the key's life rather
@@ -470,6 +516,11 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
                 return;
             }
         };
+        state.presence_feed.expires(
+            user,
+            Expiry::Connection,
+            Duration::from_secs(ONLINE_TTL_SECONDS as u64),
+        );
         if bot
             && let Err(e) = state
                 .valkey
@@ -478,10 +529,12 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
         {
             tracing::warn!(error = %e, "failed to record the user as online");
         }
-        if previous.is_none()
-            && let Err(e) = record_seen(&state, user).await
-        {
-            tracing::warn!(error = %e, "failed to record when the user came online");
+        if previous.is_none() {
+            if let Err(e) = record_seen(&state, user).await {
+                tracing::warn!(error = %e, "failed to record when the user came online");
+            }
+            // After the override is copied, so those told read what the user chose.
+            state.presence_feed.changed(user);
         }
     });
     list_in_communities(state, user, listing_ttl(state));

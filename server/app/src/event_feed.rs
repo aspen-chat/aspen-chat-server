@@ -1685,6 +1685,8 @@ fn typing_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
     let unseen_by = Arc::new(relay.unseen_by.into_iter().collect::<HashSet<_>>());
     let place = match relay.event {
         crate::typing::EphemeralEvent::Typing { channel_id, .. } => channel_id,
+        // Presence is told by each server's own router (`app::presence_feed`), never relayed.
+        crate::typing::EphemeralEvent::Presence { .. } => return Vec::new(),
     };
     match relay.audience {
         Audience::Community {

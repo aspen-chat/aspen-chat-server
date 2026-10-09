@@ -37,6 +37,15 @@ pub enum UserOnlineStatus {
     Invisible,
 }
 
+/// One user's presence, as `GET /users/statuses` answers it and an `ephemeral` `presence`
+/// frame tells of a change to it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UserStatusRecord {
+    pub id: crate::UserId,
+    pub online_status: UserOnlineStatus,
+}
+
 /// What a user may choose to show of their presence in place of what their connections say
 /// (`app::presence_override`).
 #[derive(

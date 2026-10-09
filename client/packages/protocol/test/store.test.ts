@@ -789,6 +789,24 @@ describe("RecordStore chosen presence", () => {
     expect(store.chosenPresenceEnd()).toBeNull();
   });
 
+  it("watches the caller, those in calls, and the communities on screen first, up to a limit", () => {
+    const store = bootstrapped();
+    expect(store.presenceWatchList([], 10)).toEqual([me.id, bob.id]);
+    expect(store.presenceWatchList([birch.id], 10)[0]).toBe(me.id);
+    expect(store.presenceWatchList([], 1)).toEqual([me.id]);
+  });
+
+  it("tells whoever follows every change of the topics it touched", () => {
+    const store = bootstrapped();
+    const seen: (readonly string[])[] = [];
+    const stop = store.onChange((topics) => seen.push(topics));
+    store.applyStatuses([{ id: bob.id, onlineStatus: "away" }]);
+    expect(seen.at(-1)).toContain(`user:${bob.id}`);
+    stop();
+    store.applyStatuses([{ id: bob.id, onlineStatus: "online" }]);
+    expect(seen).toHaveLength(1);
+  });
+
   it("asks for the caller's own presence with everyone else's", () => {
     const store = new RecordStore();
     store.setBootstrap(me, [], {});

@@ -1,6 +1,6 @@
 # Presence
 
-Presence is pulled, not pushed (`app::user_status`). Nothing announces a change; clients ask.
+Presence is kept in Valkey (`app::user_status`). Clients read it for the users they show, and an event stream connection that watches users is told of changes to them as they happen, gathered for up to a second (`app::presence_feed`; see [Telling of changes](#telling-of-changes)).
 
 ## States
 
@@ -65,8 +65,52 @@ Connected or not:
 ## Reading presence
 
 - Clients ask `GET /users/statuses?ids=…` (at most 100 ids) for the users they show.
-- The reference client does so every thirty seconds while the page is visible.
+- The reference client does so when it connects, and at most every two minutes after, since its event stream tells it of changes.
 - Every record that carries `onlineStatus` fills it the same way for the caller: `GET /users/{user}`, the `users` sideloaded with messages, reactors, DMs, blocks, and report cases, members, and bots.
+
+## Telling of changes
+
+| Part | Where |
+| --- | --- |
+| Logic | `app::presence_feed` |
+| Hints | Core NATS subject `aspen.presence` (`PRESENCE_SUBJECT`), a JSON array of user ids |
+| Watching | The client frame `watchPresence`, at most `MAX_WATCHED_PRESENCE` (500) users |
+| Telling | `ephemeral` frames of type `presence`, each a list of `{id, onlineStatus}` |
+| Window | `PRESENCE_WINDOW_MILLIS` (one second) |
+
+### Hints
+
+A hint says only that someone's presence may have changed. It is made:
+
+| By | When |
+| --- | --- |
+| `user_status::mark_user_online_id` | Their `online` key was not set: they came online |
+| `user_status::mark_active` | Their `active` key was not set: they were away and used Aspen again |
+| `presence_override` | They chose a status or ended one, once it is committed |
+| `block` | They blocked someone or lifted a block, once it is committed |
+| A timer at each expiry | Their `online` key, `active` key, or timed override ran out |
+
+- The timers are kept by the server that set what runs out (`PresenceFeed::expires`), one per user and kind, the latest replacing the last, a second after the expiry. A key renewed by another server meanwhile makes a hint that changes nothing.
+- One task per server gathers the hints made meanwhile into one message, at most 4096 users.
+
+### Watching and telling
+
+1. A connection names the users it shows with `watchPresence`. Each replaces the last; the router takes up at most one per window.
+2. One router per API server keeps who watches whom. It reads every hint and keeps those for users watched here.
+3. From the first hint or watch list kept, it waits one window, then:
+   1. reads the presence of every user to tell of in batched `MGET`s (`user_status::raw_statuses`);
+   2. decides in one query per 5000 pairs which watchers may learn each (`user_status::presence_visible_pairs`, the same rule as below);
+   3. sends each connection one frame holding only what differs from what it was last told of each.
+4. A user newly watched by a connection is told to it whatever they are.
+5. Someone a watcher may no longer learn the presence of is told to them as `offline`.
+
+A lost hint (a full queue, a server that stopped with timers pending, a core NATS message dropped) leaves a watcher behind until the next change or the client's next whole read.
+
+### Cost
+
+- Nothing is done for a change no connection here watches but reading its hint.
+- A telling costs one batched read and one query per window per server, whatever the number of changes in it.
+- Memory is one entry per connection per user watched, at most 500 per connection, and one timer per user and kind marked on this server.
 
 ## Who may see it
 
@@ -115,5 +159,15 @@ It costs as much as the number connected.
 ### The member sample
 
 The member sample (see [Roles and permissions](../roles-and-permissions/index.md)) reads the same set. It keeps those whose keys say they are online, away, or in do not disturb, but not the invisible. Each server keeps a community's for ten seconds the same way.
+
+
+## When access is given or taken away
+
+1. **Who can observe it, and by which routes?** Those who may learn it (above), by REST (`GET /users/statuses`, and every record carrying `onlineStatus`) and by `presence` frames on an event stream that watches them. It is never pushed to a phone, searched, or carried by a stored event.
+2. **What decides it, and where is that checked?** `presence_visible`, for REST reads in `statuses_for`, and for frames by `presence_visible_pairs` at each telling, never when a connection names whom it watches.
+3. **When the deciding permission is lost, what happens to what is already open?** A block hints the blocker, so the blocked watcher is told `offline` within a window. Leaving a community, a removal, a ban, or a DM ending takes effect at the next change to that person, which the watcher is told as `offline`; meanwhile the watcher's client drops the member with the community's events, and so stops watching them. A sign-out, a password change, a ban from the deployment, or an account deleted closes the watcher's streams, which ends their watches.
+4. **When it is gained, how does a client already open find out without a reload?** It watches whom it now shows, and is told each of them at the next telling, as a newly watched user is.
+5. **Does every path that changes it announce it?** Every change to a key or override hints, at once or by a timer at its expiry. A change to who may learn it hints only for a block; the rest are caught at the next change, or the client's next whole read.
+6. **Is it published inside the transaction that makes the change?** Hints from overrides and blocks are made once the transaction commits; the rest change Valkey, which has no transaction. A hint is published on core NATS and lost with no harm beyond lateness.
 
 [Design notes](design-notes.md#presence)
