@@ -262,12 +262,25 @@ pub enum ChannelHome {
     Direct(ChannelId),
 }
 
+/// How many channels' homes one process remembers; the least used go first, and are read
+/// again when next asked.
+const CHANNEL_HOMES_KEPT: u64 = 100_000;
+
+/// Where each channel belongs, as it is learned ([`channel_home`]); bounded, since every
+/// channel, thread, and DM published to would otherwise stay for the process's life.
+pub type ChannelHomes = moka::sync::Cache<ChannelId, ChannelHome>;
+
+/// An empty [`ChannelHomes`].
+pub fn channel_homes() -> ChannelHomes {
+    moka::sync::Cache::new(CHANNEL_HOMES_KEPT)
+}
+
 /// What publishing events needs: the event stream, and where each channel belongs, which is
 /// kept as it is learned since a channel never moves. The server has it in its context; an
 /// operator command, which has no server context, makes a `Publisher`.
 pub trait Publishing: Sync {
     fn nats(&self) -> &async_nats::jetstream::Context;
-    fn channel_homes(&self) -> &Mutex<HashMap<ChannelId, ChannelHome>>;
+    fn channel_homes(&self) -> &ChannelHomes;
 }
 
 impl Publishing for GlobalServerContext {
@@ -275,7 +288,7 @@ impl Publishing for GlobalServerContext {
         &self.nats_context
     }
 
-    fn channel_homes(&self) -> &Mutex<HashMap<ChannelId, ChannelHome>> {
+    fn channel_homes(&self) -> &ChannelHomes {
         &self.channel_homes
     }
 }
@@ -284,7 +297,7 @@ impl Publishing for GlobalServerContext {
 /// as the server does and announces it the same way.
 pub struct Publisher {
     nats: async_nats::jetstream::Context,
-    channel_homes: Mutex<HashMap<ChannelId, ChannelHome>>,
+    channel_homes: ChannelHomes,
 }
 
 impl Publisher {
@@ -293,7 +306,7 @@ impl Publisher {
         let client = config.connect_nats().await?;
         Ok(Publisher {
             nats: async_nats::jetstream::new(client),
-            channel_homes: Mutex::default(),
+            channel_homes: channel_homes(),
         })
     }
 }
@@ -303,29 +316,22 @@ impl Publishing for Publisher {
         &self.nats
     }
 
-    fn channel_homes(&self) -> &Mutex<HashMap<ChannelId, ChannelHome>> {
+    fn channel_homes(&self) -> &ChannelHomes {
         &self.channel_homes
     }
 }
 
-/// Where a channel belongs. It never changes, so the answer is kept for the process's life.
+/// Where a channel belongs. It never changes, so the answer is kept while there is room
+/// ([`ChannelHomes`]).
 pub async fn channel_home(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     channel_id: ChannelId,
 ) -> crate::Result<ChannelHome> {
-    let cached = |id: ChannelId| {
-        state
-            .channel_homes()
-            .lock()
-            .expect("channel home cache")
-            .get(&id)
-            .copied()
-    };
+    let cached = |id: ChannelId| state.channel_homes().get(&id);
     let remember = |ids: &[ChannelId], home: ChannelHome| {
-        let mut homes = state.channel_homes().lock().expect("channel home cache");
         for id in ids {
-            homes.insert(*id, home);
+            state.channel_homes().insert(*id, home);
         }
     };
     // A thread's parent is a community channel or a DM, never another thread, so at most two

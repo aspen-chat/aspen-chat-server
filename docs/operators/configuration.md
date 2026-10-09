@@ -58,6 +58,7 @@ by each API server, at the same origin.
 | --- | --- | --- |
 | `event_queue_size` | `512` | How many events one connection may have waiting to be written. A connection that falls this far behind (a very slow network) is dropped, and its client reconnects and catches up. |
 | `event_feed_shards` | one per CPU | How many tasks deliver events to this server's connections. |
+| `event_retained_mib` | `256` | How much of the last minute's events, by the size of their text, this server keeps for catching reconnecting clients up. Past it the oldest are let go early, and a client that would have resumed from before them reloads its state instead. |
 
 ## `[connections]`
 

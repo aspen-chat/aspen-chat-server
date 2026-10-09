@@ -58,6 +58,8 @@ pub mod api {
     pub const EVENT_FEED_RETAINED_BYTES: &str = "aspen_event_feed_retained_bytes";
     /// Time for one routing shard to hand one event to each of its connections that reads it.
     pub const EVENT_ROUTE_DURATION: &str = "aspen_event_route_duration_seconds";
+    /// Time for a routing shard to judge what one connection missed before it registered.
+    pub const EVENT_CATCH_UP_DURATION: &str = "aspen_event_catch_up_duration_seconds";
     /// Time for one request's rate limit check against Valkey.
     pub const RATE_LIMIT_CHECK_DURATION: &str = "aspen_rate_limit_check_duration_seconds";
     /// Requests refused for going too fast, by `route`.

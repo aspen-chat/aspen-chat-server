@@ -463,14 +463,25 @@ async fn identify(
 /// without one connection holding the task for long.
 const FLUSH_EVERY: usize = 64;
 
+/// `event`'s frame, serialized by the first connection to write it and shared by the rest
+/// (`FeedEvent::frame`): an `event` frame, or an `ephemeral` one for what is never kept.
 fn event_frame(event: &FeedEvent) -> Result<Message, axum::Error> {
-    let frame = ServerMessage::Event {
-        sequence: event.sequence,
-        event_id: event.event_id.as_deref(),
-        event: &event.payload,
-    };
-    let text = serde_json::to_string(&frame).map_err(axum::Error::new)?;
-    Ok(Message::Text(text.into()))
+    let bytes = event.frame(|event| {
+        let frame = if event.is_ephemeral() {
+            ServerMessage::Ephemeral {
+                event: &event.payload,
+            }
+        } else {
+            ServerMessage::Event {
+                sequence: event.sequence,
+                event_id: event.event_id.as_deref(),
+                event: &event.payload,
+            }
+        };
+        serde_json::to_string(&frame).map_err(axum::Error::new)
+    })?;
+    let text = axum::extract::ws::Utf8Bytes::try_from(bytes).map_err(axum::Error::new)?;
+    Ok(Message::Text(text))
 }
 
 /// What writing a delivery did: how many frames, and whether one of them ends the connection.
@@ -507,11 +518,7 @@ async fn feed_delivery(socket: &mut WebSocket, delivery: Delivery) -> Result<Fed
             })
         }
         Delivery::Ephemeral(event) => {
-            let frame = ServerMessage::Ephemeral {
-                event: &event.payload,
-            };
-            let text = serde_json::to_string(&frame).map_err(axum::Error::new)?;
-            socket.feed(Message::Text(text.into())).await?;
+            socket.feed(event_frame(&event)?).await?;
             Ok(Fed {
                 written: 1,
                 ends: None,
