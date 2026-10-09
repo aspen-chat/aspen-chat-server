@@ -411,6 +411,16 @@ pub struct PluginsConfig {
     /// intercepting calls.
     #[default(_code = "default_event_feed_shards()")]
     pub concurrency_per_plugin: usize,
+    /// The most notices one plugin may give one person in a minute (`notify`).
+    #[default = 10]
+    pub notify_per_minute: u32,
+    /// The most notices one plugin may give one person in a day.
+    #[default = 100]
+    pub notify_per_day: u32,
+    /// The most one plugin may keep, every community's, DM's, and person's share together, in
+    /// GiB; 0 sets no limit beyond each share's.
+    #[default = 16]
+    pub storage_total_gib: u64,
 }
 
 /// Voice calls. The voice servers themselves are rows of `voice_server`, added from the

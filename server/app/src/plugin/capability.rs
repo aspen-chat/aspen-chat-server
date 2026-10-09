@@ -18,6 +18,9 @@ use rand::RngExt;
 
 /// The longest a capability's name may be.
 const MAX_NAME: usize = 200;
+/// The most names one plugin keeps for one person. Two asked for at once may each find room, so
+/// a person may hold one or two more.
+pub const MAX_PER_USER: i64 = 100;
 
 /// Where the plugin's capabilities are served, beneath the API.
 pub fn path_of(plugin: &str, secret: &str) -> String {
@@ -37,6 +40,21 @@ pub async fn path(
     if name.is_empty() || name.len() > MAX_NAME {
         return Err(crate::Error::Validation(
             format!("a capability's name is 1 to {MAX_NAME} bytes").into(),
+        ));
+    }
+    let held: Vec<String> = plugin_capability::table
+        .select(plugin_capability::name)
+        .filter(
+            plugin_capability::plugin
+                .eq(plugin)
+                .and(plugin_capability::user.eq(caller)),
+        )
+        .limit(MAX_PER_USER + 1)
+        .load(conn)
+        .await?;
+    if held.len() as i64 >= MAX_PER_USER && !held.iter().any(|held| held == name) {
+        return Err(crate::Error::Validation(
+            format!("a plugin keeps at most {MAX_PER_USER} private URLs for one person").into(),
         ));
     }
     let fresh = BASE64_URL_SAFE_NO_PAD

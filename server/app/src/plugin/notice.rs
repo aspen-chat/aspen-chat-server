@@ -227,3 +227,44 @@ pub async fn read(
         created_at,
     })
 }
+
+/// Takes one of `plugin`'s turns at telling `user` of something: at most `[plugins]
+/// notify_per_minute` in a minute and `notify_per_day` in a day, counted in Valkey across every
+/// server. Past either, the notice is refused. While Valkey cannot be reached, notices are let
+/// through, as other limits are.
+pub async fn take_turn(
+    state: &GlobalServerContext,
+    plugin: &str,
+    user: UserId,
+) -> Result<(), super::host::wit::Error> {
+    let config = &state.config.plugins;
+    for (per, requests, seconds) in [
+        ("minute", config.notify_per_minute, 60.0),
+        ("day", config.notify_per_day, 86_400.0),
+    ] {
+        if requests == 0 {
+            continue;
+        }
+        let rate = aspen_limits::Limit {
+            requests,
+            per_seconds: seconds,
+            burst: None,
+            bucket: None,
+        }
+        .rate();
+        let key = format!("aspen:plugin_notify:{per}:{plugin}:{}", user.0);
+        match crate::rate_limit::take(&state.valkey, &key, rate).await {
+            Ok(None) => {}
+            Ok(Some(_)) => {
+                return Err(super::host::wit::Error::Limit(format!(
+                    "a plugin may tell one person of at most {requests} things a {per}"
+                )));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "could not count a plugin's notices; letting it through");
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}

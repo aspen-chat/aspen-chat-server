@@ -123,6 +123,9 @@ pub struct MessageAttachment {
 /// The most attachments one message may carry, whoever sends it.
 pub const MAX_ATTACHMENTS: usize = 50;
 
+/// The most messages one channel keeps pinned.
+pub const MAX_PINS: i64 = 250;
+
 /// Verify every id in `attachments` corresponds to a confirmed (`ready_at IS
 /// NOT NULL`) row that `author` uploaded, or that is already in `message`,
 /// before linking it to a message. The `attachment` table admits
@@ -1419,6 +1422,15 @@ pub async fn set_pinned(
             }
             if let Some(existing) = existing {
                 return Ok((Some(existing), false));
+            }
+            // The channel's row, locked above, keeps two pins at once from both passing.
+            let pins: i64 = pin::table
+                .filter(pin::channel.eq(channel_id))
+                .count()
+                .get_result(conn.as_mut())
+                .await?;
+            if pins >= MAX_PINS {
+                return Err(crate::Error::Validation(t!("pinLimit", max = MAX_PINS)));
             }
             let last: Option<i32> = pin::table
                 .select(diesel::dsl::max(pin::sort_index))

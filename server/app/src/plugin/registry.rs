@@ -23,6 +23,10 @@ use std::time::{Duration, Instant};
 
 /// How long a community's use of plugins is trusted without hearing of a change.
 const COMMUNITY_TTL: Duration = Duration::from_secs(60);
+/// The most communities whose plugins one server remembers; the least used go first.
+const COMMUNITIES_CACHED: u64 = 10_000;
+/// How long a server trusts its sum of what one plugin keeps (`storage::has_room_in_total`).
+const TOTAL_TTL: Duration = Duration::from_secs(10);
 
 /// An installed plugin this server runs.
 pub struct LoadedPlugin {
@@ -94,7 +98,11 @@ pub struct Plugins {
     pub(super) linker: wasmtime::component::Linker<CallState>,
     /// The plugins that are on, in the operator's order.
     loaded: RwLock<Arc<Vec<Arc<LoadedPlugin>>>>,
-    communities: Mutex<HashMap<CommunityId, (Instant, Arc<CommunityUse>)>>,
+    /// What each community lately read uses, for [`COMMUNITY_TTL`], at most
+    /// [`COMMUNITIES_CACHED`] of them.
+    communities: moka::sync::Cache<CommunityId, Arc<CommunityUse>>,
+    /// What each plugin keeps in all, every owner's share together, for [`TOTAL_TTL`].
+    pub(super) storage_totals: moka::sync::Cache<String, i64>,
     /// Each observing plugin's consumer task, by id, with the revision it runs.
     observers: Mutex<HashMap<String, (DateTime<Utc>, tokio::task::AbortHandle)>>,
     /// Serializes reloads, so two announcements close together load in order.
@@ -194,7 +202,14 @@ impl Plugins {
             engine,
             linker,
             loaded: RwLock::default(),
-            communities: Mutex::default(),
+            communities: moka::sync::Cache::builder()
+                .max_capacity(COMMUNITIES_CACHED)
+                .time_to_live(COMMUNITY_TTL)
+                .build(),
+            storage_totals: moka::sync::Cache::builder()
+                .max_capacity(1_000)
+                .time_to_live(TOTAL_TTL)
+                .build(),
             observers: Mutex::default(),
             reloading: tokio::sync::Mutex::new(()),
             calls: Places::new(config.concurrency),
@@ -262,12 +277,9 @@ impl Plugins {
 
     /// Forgets what is cached of `community`, or of every community.
     fn forget(&self, community: Option<CommunityId>) {
-        let mut communities = self.communities.lock().expect("plugin communities");
         match community {
-            Some(community) => {
-                communities.remove(&community);
-            }
-            None => communities.clear(),
+            Some(community) => self.communities.invalidate(&community),
+            None => self.communities.invalidate_all(),
         }
     }
 
@@ -276,14 +288,8 @@ impl Plugins {
         conn: &mut AsyncPgConnection,
         community: CommunityId,
     ) -> crate::Result<Arc<CommunityUse>> {
-        if let Some((at, found)) = self
-            .communities
-            .lock()
-            .expect("plugin communities")
-            .get(&community)
-            && at.elapsed() < COMMUNITY_TTL
-        {
-            return Ok(found.clone());
+        if let Some(found) = self.communities.get(&community) {
+            return Ok(found);
         }
         let rows: Vec<(String, bool, Value)> = community_plugin::table
             .select((
@@ -306,10 +312,7 @@ impl Plugins {
                 })
                 .collect(),
         });
-        self.communities
-            .lock()
-            .expect("plugin communities")
-            .insert(community, (Instant::now(), found.clone()));
+        self.communities.insert(community, found.clone());
         Ok(found)
     }
 
@@ -355,13 +358,7 @@ impl Plugins {
         if plugin.mode == Mode::Everywhere {
             return Ok(true);
         }
-        let cached = self
-            .communities
-            .lock()
-            .expect("plugin communities")
-            .get(&community)
-            .filter(|(at, _)| at.elapsed() < COMMUNITY_TTL)
-            .map(|(_, found)| found.clone());
+        let cached = self.communities.get(&community);
         let used = match cached {
             Some(used) => used,
             None => {
