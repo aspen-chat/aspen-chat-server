@@ -595,6 +595,7 @@ dependencies = [
  "clap",
  "futures-util",
  "hdrhistogram",
+ "image",
  "rand 0.10.3",
  "reqwest",
  "rtcp",

@@ -277,6 +277,13 @@ pub fn judge(
             metric(&format!("http:{route}")).map(|m| m.p99_ms),
         );
     }
+    for (name, target) in &slo.metric_p99_ms {
+        at_most(
+            &format!("{name} p99 (ms)"),
+            Some(*target),
+            metric(name).map(|m| m.p99_ms),
+        );
+    }
     // Connections are mostly made in the ramp, so it counts too.
     let connect = across(&[phases.get(&Phase::Ramp), steady], "connect");
     at_most(

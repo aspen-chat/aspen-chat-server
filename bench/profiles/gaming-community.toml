@@ -27,7 +27,11 @@ share = 0.7
 history_reads_per_hour = 12
 reactions_per_hour = 6
 messages_per_hour = 1
+poll_votes_per_hour = 1
+activity_reads_per_hour = 1
+searches_per_hour = 0.5
 reconnects_per_hour = 0.5
+viewing_share = 0.6
 
 [behaviours.chatter]
 share = 0.25
@@ -37,7 +41,18 @@ reactions_per_hour = 20
 edits_per_hour = 3
 deletes_per_hour = 0.5
 history_reads_per_hour = 20
-attachments_per_hour = 1
+attachments_per_hour = 0.5
+images_per_hour = 2
+mentions_per_hour = 4
+threads_per_hour = 1
+thread_replies_per_hour = 6
+polls_per_hour = 0.5
+poll_votes_per_hour = 2
+searches_per_hour = 1
+activity_reads_per_hour = 3
+saves_per_hour = 0.5
+saved_reads_per_hour = 0.5
+presence_changes_per_hour = 0.5
 hot_channel_share = 0.4
 reconnects_per_hour = 1
 

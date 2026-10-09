@@ -9,19 +9,26 @@
 //!
 //! Every message a user sends carries a marker, `⟦bench:<kind>:<sender>:<ns>⟧`, with the
 //! coordinator-clock time it was sent; every user who receives it on their event stream records
-//! the difference as its delivery time. Messages sent before the receiver's stream was ready
-//! arrive as the stream's replay of the past minute, and are counted as `replayed` instead.
+//! the difference as its delivery time, under the name `delivery_metric` gives its kind.
+//! Messages sent before the receiver's stream was ready arrive as the stream's replay of the
+//! past minute, and are counted as `replayed` instead.
+//!
+//! Besides what its behaviour names, a user does what the client does on its own: polls
+//! presence, sends activity, and, when it has a channel open (`Behaviour::viewing_share`), names
+//! it in a `viewing` frame, types before each message it writes there, and reports how far it
+//! has read as messages arrive.
 
 use crate::clock::Clock;
 use crate::profile::{Behaviour, Profile};
 use crate::stats::Recorder;
 use aspen_bench_protocol::Manifest;
+use aspen_bench_protocol::words;
 use futures_util::{SinkExt, StreamExt};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use serde_json::{Value, json};
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
@@ -35,8 +42,36 @@ const PRESENCE_INTERVAL: Duration = Duration::from_secs(30);
 const ACTIVITY_INTERVAL: Duration = Duration::from_secs(60);
 /// The most user ids one presence request names.
 const PRESENCE_BATCH: usize = 100;
-/// Messages remembered per user for reactions, edits, and deletions.
+/// The connections each user keeps open between requests.
+const IDLE_CONNECTIONS: usize = 2;
+/// How long the client gathers read positions before reporting them (`READ_REPORT_MS`).
+const READ_REPORT_DELAY: Duration = Duration::from_secs(1);
+/// How often the client repeats `typing` while its user goes on (`TYPING_REFRESH_MS`).
+const TYPING_REFRESH: Duration = Duration::from_secs(3);
+/// How long a presence override a user chooses lasts.
+const PRESENCE_OVERRIDE_SECONDS: u32 = 600;
+const PRESENCE_OVERRIDES: [&str; 3] = ["away", "doNotDisturb", "invisible"];
+/// Messages, threads, and polls remembered per user to act on.
 const RECENT: usize = 50;
+/// The client's page sizes (`client/packages/protocol/src/sync.ts`), so reads ask for what its
+/// reads do.
+const MESSAGE_PAGE: u32 = 50;
+const DM_PAGE: u32 = 100;
+const LIST_PAGE: u32 = 100;
+const SEARCH_PAGE: u32 = 25;
+const ACTIVITY_PAGE: u32 = 25;
+const SAVED_PAGE: u32 = 50;
+/// What the client sideloads with each read, comma separated as it sends them.
+const COMMUNITY_INCLUDES: &str =
+    "channels,categories,members,voice,readStates,mutes,collapses,roles,notifications,emoji";
+const DM_INCLUDES: &str = "users,readStates,mutes,notifications,voice";
+const WINDOW_INCLUDES: &str =
+    "authors,memberships,attachments,polls,threads,echoes,reactions,linked,warnings,annotations";
+const SEARCH_INCLUDES: &str = "authors,memberships,attachments,polls,channels,reactions";
+/// `LISTED_INCLUDES`: the activity feed's and the saved list's.
+const LISTED_INCLUDES: &str = "authors,memberships,attachments,polls,channels,reactions,readStates";
+/// How long a poll a user opens stays open.
+const POLL_SECONDS: u32 = 3600;
 const MARKER_OPEN: &str = "⟦bench:";
 const MARKER_CLOSE: char = '⟧';
 const EMOJI: [&str; 4] = [
@@ -59,6 +94,10 @@ pub struct World {
     pub recorder: Recorder,
     /// Each user's communities, by index into `manifest.communities`.
     pub memberships: Vec<Vec<usize>>,
+    /// Every community text channel, where a thread may start.
+    pub text_channels: HashSet<Uuid>,
+    /// The pictures users post, JPEG, by width and height, made once.
+    pub images: Mutex<HashMap<(u32, u32), bytes::Bytes>>,
     /// Multiplies every action rate; spikes raise it for a while.
     pub rate_factor: AtomicU64,
     /// Reconnect storms: the share of users who drop their stream.
@@ -75,6 +114,14 @@ impl World {
     pub fn set_rate_factor(&self, factor: f64) {
         self.rate_factor.store(factor.to_bits(), Ordering::Relaxed);
     }
+}
+
+pub fn text_channels(manifest: &Manifest) -> HashSet<Uuid> {
+    manifest
+        .communities
+        .iter()
+        .flat_map(|c| c.text_channels.iter().copied())
+        .collect()
 }
 
 pub fn memberships(manifest: &Manifest) -> Vec<Vec<usize>> {
@@ -99,6 +146,17 @@ enum Action {
     Reconnect,
     Attachment,
     Call,
+    Mention,
+    ThreadReply,
+    ThreadStart,
+    Poll,
+    Vote,
+    Search,
+    Activity,
+    Save,
+    SavedRead,
+    Image,
+    Presence,
 }
 
 fn rates(behaviour: &Behaviour) -> Vec<(Action, f64)> {
@@ -115,11 +173,40 @@ fn rates(behaviour: &Behaviour) -> Vec<(Action, f64)> {
             Action::Call,
             behaviour.voice.as_ref().map_or(0.0, |v| v.calls_per_hour),
         ),
+        (Action::Mention, behaviour.mentions_per_hour),
+        (Action::ThreadReply, behaviour.thread_replies_per_hour),
+        (Action::ThreadStart, behaviour.threads_per_hour),
+        (Action::Poll, behaviour.polls_per_hour),
+        (Action::Vote, behaviour.poll_votes_per_hour),
+        (Action::Search, behaviour.searches_per_hour),
+        (Action::Activity, behaviour.activity_reads_per_hour),
+        (Action::Save, behaviour.saves_per_hour),
+        (Action::SavedRead, behaviour.saved_reads_per_hour),
+        (Action::Image, behaviour.images_per_hour),
+        (Action::Presence, behaviour.presence_changes_per_hour),
     ]
     .into_iter()
     .filter(|(_, per_hour)| *per_hour > 0.0)
     .map(|(action, per_hour)| (action, per_hour / 3600.0))
     .collect()
+}
+
+/// Kinds of marked message, each with its own delivery time.
+const CHANNEL: char = 'c';
+const DM: char = 'd';
+const THREAD: char = 't';
+const IMAGE: char = 'i';
+const EVERYONE: char = 'e';
+
+/// The delivery measurement a kind of message counts toward.
+fn delivery_metric(kind: char) -> &'static str {
+    match kind {
+        DM => "delivery:dm",
+        THREAD => "delivery:thread",
+        IMAGE => "delivery:image",
+        EVERYONE => "delivery:everyone",
+        _ => "delivery",
+    }
 }
 
 /// The marker a message carries.
@@ -146,13 +233,26 @@ struct State {
     /// Coordinator-clock nanoseconds when the current event stream became ready.
     /// A message sent before then reaches this user as replay, not as a live delivery.
     ready_ns: AtomicI64,
-    /// Recent messages by others (for reactions) and by this user (to edit or delete).
-    seen: Mutex<VecDeque<Uuid>>,
+    /// Recent messages by others, with their channels (to react to, save, or start a thread
+    /// from), and by this user (to edit or delete).
+    seen: Mutex<VecDeque<(Uuid, Uuid)>>,
     own: Mutex<VecDeque<Uuid>>,
     /// DM channels by the other person's index.
     dms: Mutex<HashMap<u32, Uuid>>,
+    /// Threads and open polls (with their answer counts) heard of or made, beside those seeded.
+    threads: Mutex<VecDeque<Uuid>>,
+    polls: Mutex<VecDeque<(Uuid, u32)>>,
     /// Whether the user is in a call; one at a time.
-    in_call: std::sync::atomic::AtomicBool,
+    in_call: AtomicBool,
+    /// The channel the user has open, for a user who has one (`Behaviour::viewing_share`).
+    viewing: Mutex<Option<Uuid>>,
+    /// Frames for the open event stream to send.
+    outbox: Mutex<Option<mpsc::UnboundedSender<WsMessage>>>,
+    /// The latest message read and not yet reported, and whether a report is due.
+    unreported: Mutex<Option<(Uuid, Uuid)>>,
+    report_due: AtomicBool,
+    /// Whether the user has chosen a presence override.
+    presence_override: AtomicBool,
 }
 
 pub struct User {
@@ -177,7 +277,7 @@ impl User {
     pub fn new(world: Arc<World>, index: u32, behaviour: Behaviour) -> Self {
         let seed = world.profile.load.seed ^ (u64::from(index) << 20);
         let source = source_address(&world, index);
-        Self {
+        let user = Self {
             world,
             index,
             behaviour,
@@ -185,6 +285,11 @@ impl User {
             http: reqwest::Client::builder()
                 .local_address(source)
                 .pool_idle_timeout(Duration::from_secs(90))
+                // Over plain HTTP each request at once takes a connection of its own, and the
+                // startup reads would leave ten per user open, all from the generator's address,
+                // which the listener caps (`[connections] max_per_ip`). Over HTTPS they share
+                // one HTTP/2 connection, as a browser's do.
+                .pool_max_idle_per_host(IDLE_CONNECTIONS)
                 // A request unanswered this long has failed, and must not hold the run open.
                 .timeout(Duration::from_secs(30))
                 .build()
@@ -196,10 +301,112 @@ impl User {
                 seen: Mutex::new(VecDeque::new()),
                 own: Mutex::new(VecDeque::new()),
                 dms: Mutex::new(HashMap::new()),
-                in_call: std::sync::atomic::AtomicBool::new(false),
+                threads: Mutex::new(VecDeque::new()),
+                polls: Mutex::new(VecDeque::new()),
+                in_call: AtomicBool::new(false),
+                viewing: Mutex::new(None),
+                outbox: Mutex::new(None),
+                unreported: Mutex::new(None),
+                report_due: AtomicBool::new(false),
+                presence_override: AtomicBool::new(false),
             }),
             rng: Mutex::new(StdRng::seed_from_u64(seed)),
+        };
+        if user.random() < user.behaviour.viewing_share {
+            // The busy first channel of their first community, until they open another.
+            let first = user.world.memberships[index as usize]
+                .first()
+                .and_then(|c| user.world.manifest.communities[*c].text_channels.first())
+                .copied();
+            *user.state.viewing.lock().expect("viewing lock") = first;
         }
+        user
+    }
+
+    fn viewing(&self) -> Option<Uuid> {
+        *self.state.viewing.lock().expect("viewing lock")
+    }
+
+    /// Sends a frame on the open event stream, if there is one.
+    fn send_frame(&self, frame: Value) {
+        if let Some(outbox) = self.state.outbox.lock().expect("outbox lock").as_ref() {
+            let _ = outbox.send(WsMessage::Text(frame.to_string().into()));
+        }
+    }
+
+    /// Names the open channel to the server, as the client does on every `ready` and whenever
+    /// it changes, so the user hears who is typing there.
+    fn send_viewing(&self) {
+        if let Some(channel) = self.viewing() {
+            self.send_frame(json!({ "type": "viewing", "channelIds": [channel] }));
+        }
+    }
+
+    /// Opens a channel: it becomes the one the user views, for a user who views one.
+    fn open_channel(&self, channel: Uuid) {
+        let mut viewing = self.state.viewing.lock().expect("viewing lock");
+        if viewing.is_some() && *viewing != Some(channel) {
+            *viewing = Some(channel);
+            drop(viewing);
+            self.send_viewing();
+        }
+    }
+
+    /// Notes that the user has read up to `message` in `channel`, reporting it a moment later
+    /// with whatever else is read meanwhile, as the client gathers its reports.
+    fn read(self: &Arc<Self>, channel: Uuid, message: Uuid) {
+        *self.state.unreported.lock().expect("unreported lock") = Some((channel, message));
+        if self.state.report_due.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let user = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(READ_REPORT_DELAY).await;
+            user.state.report_due.store(false, Ordering::Relaxed);
+            let read = user
+                .state
+                .unreported
+                .lock()
+                .expect("unreported lock")
+                .take();
+            if let Some((channel, message)) = read {
+                let _ = user
+                    .request(
+                        "PUT /channels/{channel}/read-states/@me",
+                        reqwest::Method::PUT,
+                        &format!("/channels/{channel}/read-states/@me"),
+                        Some(json!({ "lastRead": message })),
+                        Instant::now(),
+                    )
+                    .await;
+            }
+        });
+    }
+
+    /// Types in `channel` for the behaviour's typing time from `due`, saying so as the client
+    /// does, and returns when the message is to be sent. A user with the app in the background
+    /// (no channel open) sends no typing frames.
+    async fn type_in(&self, channel: Uuid, due: Instant) -> Instant {
+        let seconds = self.behaviour.typing_seconds;
+        if seconds <= 0.0 {
+            return due;
+        }
+        let send_at = due + Duration::from_secs_f64(seconds);
+        let shown = self.viewing().is_some();
+        let mut at = due;
+        while at < send_at {
+            tokio::time::sleep_until(at).await;
+            if shown {
+                self.send_frame(json!({ "type": "typing", "channelId": channel }));
+                self.world.recorder.count("typing_sent", 1);
+            }
+            at += TYPING_REFRESH;
+        }
+        tokio::time::sleep_until(send_at).await;
+        if shown {
+            self.send_frame(json!({ "type": "stoppedTyping", "channelId": channel }));
+        }
+        send_at
     }
 
     fn random(&self) -> f64 {
@@ -405,56 +612,106 @@ impl User {
     /// Signs in (unless `resume`), starts up, and opens the event stream.
     async fn connect(self: Arc<Self>, resume: bool) -> Result<Stream, Failed> {
         if !resume {
-            let name = &self.world.manifest.users[self.index as usize].name;
-            let answer = self
-                .request(
-                    "POST /auth/login",
-                    reqwest::Method::POST,
-                    "/auth/login",
-                    Some(json!({ "username": name, "password": self.world.manifest.password })),
-                    Instant::now(),
-                )
-                .await?;
-            let token = answer["sessionToken"].as_str().ok_or(Failed)?.to_string();
-            *self.state.token.lock().expect("token lock") = token;
+            self.sign_in().await?;
             let now = Instant::now();
-            let (me, communities, dms, preferences) = tokio::join!(
-                self.request(
-                    "GET /users/{user}",
-                    reqwest::Method::GET,
-                    "/users/@me",
-                    None,
-                    now
-                ),
-                self.request(
+            // What the client reads at startup (`AspenSync#bootstrap`), at once.
+            let get = |route: &'static str, path: String| {
+                let user = Arc::clone(&self);
+                async move {
+                    user.request(route, reqwest::Method::GET, &path, None, now)
+                        .await
+                }
+            };
+            let reads = futures_util::future::join_all([
+                get("GET /users/{user}", "/users/@me".into()),
+                get(
                     "GET /users/{user}/communities",
-                    reqwest::Method::GET,
-                    "/users/@me/communities?include=channels,categories,members,voice",
-                    None,
-                    now
+                    format!("/users/@me/communities?include={COMMUNITY_INCLUDES}"),
                 ),
-                self.request(
+                get(
                     "GET /users/@me/dms",
-                    reqwest::Method::GET,
-                    "/users/@me/dms?include=users",
-                    None,
-                    now
+                    format!("/users/@me/dms?include={DM_INCLUDES}&limit={DM_PAGE}"),
                 ),
-                self.request(
-                    "GET /users/{user}/preferences",
-                    reqwest::Method::GET,
-                    "/users/@me/preferences",
-                    None,
-                    now
+                get("GET /users/@me/admin", "/users/@me/admin".into()),
+                get(
+                    "GET /users/@me/blocks",
+                    "/users/@me/blocks?include=users".into(),
                 ),
-            );
-            me?;
-            communities?;
-            dms?;
-            preferences?;
+                get("GET /plugins", "/plugins".into()),
+                get(
+                    "GET /users/@me/held-messages",
+                    format!("/users/@me/held-messages?limit={LIST_PAGE}"),
+                ),
+                get(
+                    "GET /users/@me/saved-messages",
+                    "/users/@me/saved-messages".into(),
+                ),
+                get(
+                    "GET /users/@me/thread-follows",
+                    "/users/@me/thread-follows".into(),
+                ),
+                get(
+                    "GET /users/@me/presence-override",
+                    "/users/@me/presence-override".into(),
+                ),
+            ])
+            .await;
+            for read in reads {
+                read?;
+            }
+            // Read once the rest are in, as the client's preferences load.
+            self.request(
+                "GET /users/{user}/preferences",
+                reqwest::Method::GET,
+                "/users/@me/preferences",
+                None,
+                now,
+            )
+            .await?;
             self.world.recorder.latency("bootstrap", now.elapsed());
         }
         Stream::open(self, resume).await
+    }
+
+    async fn sign_in(&self) -> Result<(), Failed> {
+        let name = &self.world.manifest.users[self.index as usize].name;
+        let answer = self
+            .request(
+                "POST /auth/login",
+                reqwest::Method::POST,
+                "/auth/login",
+                Some(json!({ "username": name, "password": self.world.manifest.password })),
+                Instant::now(),
+            )
+            .await?;
+        let token = answer["sessionToken"].as_str().ok_or(Failed)?.to_string();
+        *self.state.token.lock().expect("token lock") = token;
+        Ok(())
+    }
+
+    /// For an `announcement` event: signs in as this user, the owner of the community at
+    /// `community`, and tags `@everyone` in its first channel.
+    pub async fn announce(self: Arc<Self>, community: usize) {
+        let Some(channel) = self.world.manifest.communities[community]
+            .text_channels
+            .first()
+            .copied()
+        else {
+            return;
+        };
+        if self.sign_in().await.is_err() {
+            return;
+        }
+        self.world.recorder.count("announcements", 1);
+        self.post(
+            "POST /channels/{channel}/messages",
+            &format!("/channels/{channel}/messages"),
+            EVERYONE,
+            "@everyone benchmark announcement",
+            Vec::new(),
+            Instant::now(),
+        )
+        .await;
     }
 
     /// After the server drops the stream: tries again with backoff, as the reference client
@@ -496,6 +753,18 @@ impl User {
     }
 
     async fn poll_presence(&self) {
+        if let Some(channel) = self.viewing() {
+            // The open channel's header shows how many of its people are online.
+            let _ = self
+                .request(
+                    "GET /channels/{channel}/presence",
+                    reqwest::Method::GET,
+                    &format!("/channels/{channel}/presence"),
+                    None,
+                    Instant::now(),
+                )
+                .await;
+        }
         let Some(community) = self.world.memberships[self.index as usize].first() else {
             return;
         };
@@ -527,46 +796,78 @@ impl User {
         }
     }
 
-    async fn post_message(&self, channel: Uuid, kind: char, attachments: Vec<Uuid>, due: Instant) {
+    /// Posts a marked message, `content` before the marker, to `path` (a channel's messages,
+    /// or a message's thread), recorded under `route`. Returns the posted (or held) message.
+    async fn post(
+        &self,
+        route: &str,
+        path: &str,
+        kind: char,
+        content: &str,
+        attachments: Vec<Uuid>,
+        due: Instant,
+    ) -> Option<Value> {
         let sent = self.world.clock.now_ns();
-        let content = format!("benchmark message {}", marker(kind, self.index, sent));
-        if let Ok(message) = self
+        let content = format!("{content} {}", marker(kind, self.index, sent));
+        let message = self
             .request(
-                "POST /channels/{channel}/messages",
+                route,
                 reqwest::Method::POST,
-                &format!("/channels/{channel}/messages"),
-                Some(json!({ "content": content, "attachments": attachments })),
+                path,
+                Some(json!({ "content": content, "attachments": attachments, "mayHold": true })),
                 due,
             )
             .await
-        {
-            self.world.recorder.count("messages_sent", 1);
-            if let Some(id) = message["id"].as_str().and_then(|s| s.parse().ok()) {
-                let mut own = self.state.own.lock().expect("own lock");
-                own.push_back(id);
-                if own.len() > RECENT {
-                    own.pop_front();
-                }
-            }
+            .ok()?;
+        self.world.recorder.count("messages_sent", 1);
+        if let Some(id) = message["id"].as_str().and_then(|s| s.parse().ok()) {
+            remember(&self.state.own, id);
         }
+        Some(message)
     }
 
-    async fn act(&self, action: Action, due: Instant) {
+    /// Writes a message where the user has it open, as a person does: the channel becomes the
+    /// one they view, for a user who views one.
+    async fn post_message(&self, channel: Uuid, kind: char, content: &str, due: Instant) {
+        self.open_channel(channel);
+        let due = self.type_in(channel, due).await;
+        self.post(
+            "POST /channels/{channel}/messages",
+            &format!("/channels/{channel}/messages"),
+            kind,
+            content,
+            Vec::new(),
+            due,
+        )
+        .await;
+    }
+
+    /// A recent message by someone else, and its channel.
+    fn seen_message(&self) -> Option<(Uuid, Uuid)> {
+        let items: Vec<(Uuid, Uuid)> = self
+            .state
+            .seen
+            .lock()
+            .expect("seen lock")
+            .iter()
+            .copied()
+            .collect();
+        self.pick(&items)
+    }
+
+    async fn act(self: &Arc<Self>, action: Action, due: Instant) {
         match action {
             Action::Message => {
                 if let Some(channel) = self.channel() {
-                    self.post_message(channel, 'c', Vec::new(), due).await;
+                    self.post_message(channel, CHANNEL, "benchmark message", due)
+                        .await;
                 }
             }
+            Action::Mention => self.mention(due).await,
             Action::Dm => self.send_dm(due).await,
             Action::React => {
-                let target = {
-                    let seen = self.state.seen.lock().expect("seen lock");
-                    let items: Vec<Uuid> = seen.iter().copied().collect();
-                    drop(seen);
-                    self.pick(&items)
-                };
-                if let (Some(message), Some(emoji)) = (target, self.pick(&EMOJI)) {
+                let target = self.seen_message();
+                if let (Some((message, _)), Some(emoji)) = (target, self.pick(&EMOJI)) {
                     let _ = self
                         .request(
                             "PUT /messages/{message}/reactions/{emoji}/@me",
@@ -608,23 +909,283 @@ impl User {
             }
             Action::History => {
                 if let Some(channel) = self.channel() {
-                    let _ = self
+                    self.open_channel(channel);
+                    if let Ok(page) = self
                         .request(
                             "GET /channels/{channel}/messages",
                             reqwest::Method::GET,
                             &format!(
-                                "/channels/{channel}/messages?limit=50&include=authors,attachments,polls,threads,echoes"
+                                "/channels/{channel}/messages?limit={MESSAGE_PAGE}&include={WINDOW_INCLUDES}"
                             ),
+                            None,
+                            due,
+                        )
+                        .await
+                        && self.viewing() == Some(channel)
+                        && let Some(latest) = ids(&page["data"]).max()
+                    {
+                        self.read(channel, latest);
+                    }
+                }
+            }
+            Action::ThreadReply => self.reply_in_thread(due).await,
+            Action::ThreadStart => self.start_thread(due).await,
+            Action::Poll => self.open_poll(due).await,
+            Action::Vote => self.vote(due).await,
+            Action::Search => self.search(due).await,
+            Action::Activity => {
+                let _ = self
+                    .request(
+                        "GET /users/@me/activity",
+                        reqwest::Method::GET,
+                        &format!(
+                            "/users/@me/activity?filter[dms]=true&filter[unread]=false&limit={ACTIVITY_PAGE}&include={LISTED_INCLUDES}"
+                        ),
+                        None,
+                        due,
+                    )
+                    .await;
+            }
+            Action::Save => {
+                if let Some((message, _)) = self.seen_message() {
+                    let _ = self
+                        .request(
+                            "PUT /users/@me/saved-messages/{message}",
+                            reqwest::Method::PUT,
+                            &format!("/users/@me/saved-messages/{message}"),
                             None,
                             due,
                         )
                         .await;
                 }
             }
+            Action::SavedRead => {
+                let _ = self
+                    .request(
+                        "GET /users/@me/saved-messages/messages",
+                        reqwest::Method::GET,
+                        &format!(
+                            "/users/@me/saved-messages/messages?limit={SAVED_PAGE}&include={LISTED_INCLUDES}"
+                        ),
+                        None,
+                        due,
+                    )
+                    .await;
+            }
             Action::Attachment => self.send_attachment(due).await,
+            Action::Image => self.send_image(due).await,
+            Action::Presence => self.change_presence(due).await,
             Action::Call => self.call(due).await,
             Action::Reconnect => {}
         }
+    }
+
+    /// A message tagging a member of the channel's community by name.
+    async fn mention(&self, due: Instant) {
+        let Some(community) = self.pick(&self.world.memberships[self.index as usize]) else {
+            return;
+        };
+        let community = &self.world.manifest.communities[community];
+        let channel = if self.random() < self.behaviour.hot_channel_share {
+            community.text_channels.first().copied()
+        } else {
+            self.pick(&community.text_channels)
+        };
+        let (Some(channel), Some(peer)) = (channel, self.pick(&community.members)) else {
+            return;
+        };
+        let peer = self.world.manifest.users[peer as usize].id;
+        self.world.recorder.count("mentions_sent", 1);
+        self.post_message(
+            channel,
+            CHANNEL,
+            &format!("<@{peer}> benchmark mention"),
+            due,
+        )
+        .await;
+    }
+
+    /// A reply in a thread of one of the user's communities: one seeded, or one heard of.
+    async fn reply_in_thread(&self, due: Instant) {
+        let heard: Vec<Uuid> = self
+            .state
+            .threads
+            .lock()
+            .expect("threads lock")
+            .iter()
+            .copied()
+            .collect();
+        let thread = if !heard.is_empty() && self.random() < 0.5 {
+            self.pick(&heard)
+        } else {
+            self.pick(&self.world.memberships[self.index as usize])
+                .and_then(|c| self.pick(&self.world.manifest.communities[c].threads))
+                .or_else(|| self.pick(&heard))
+        };
+        if let Some(thread) = thread {
+            self.post_message(thread, THREAD, "benchmark reply", due)
+                .await;
+        }
+    }
+
+    /// Starts a thread from a message someone else posted in a community channel, with its
+    /// first reply.
+    async fn start_thread(&self, due: Instant) {
+        let candidates: Vec<Uuid> = self
+            .state
+            .seen
+            .lock()
+            .expect("seen lock")
+            .iter()
+            .filter(|(_, channel)| self.world.text_channels.contains(channel))
+            .map(|(message, _)| *message)
+            .collect();
+        let Some(starter) = self.pick(&candidates) else {
+            return;
+        };
+        if let Some(reply) = self
+            .post(
+                "POST /messages/{message}/thread/messages",
+                &format!("/messages/{starter}/thread/messages"),
+                THREAD,
+                "benchmark thread",
+                Vec::new(),
+                due,
+            )
+            .await
+            && let Some(thread) = reply["channelId"].as_str().and_then(|s| s.parse().ok())
+        {
+            remember(&self.state.threads, thread);
+        }
+    }
+
+    async fn open_poll(&self, due: Instant) {
+        let Some(channel) = self.channel() else {
+            return;
+        };
+        let options = 2 + (self.random() * 3.0) as usize;
+        let question = format!("benchmark poll {}", self.words(4));
+        let body = json!({
+            "question": question,
+            "options": (0..options).map(|_| json!({ "label": self.words(1) })).collect::<Vec<_>>(),
+            "durationSeconds": POLL_SECONDS,
+            "multipleChoice": false,
+            "anonymous": false,
+            "allowWriteIns": false,
+        });
+        if let Ok(poll) = self
+            .request(
+                "POST /channels/{channel}/polls",
+                reqwest::Method::POST,
+                &format!("/channels/{channel}/polls"),
+                Some(body),
+                due,
+            )
+            .await
+            && let Some(id) = poll["id"].as_str().and_then(|s| s.parse().ok())
+        {
+            self.world.recorder.count("polls_opened", 1);
+            remember(&self.state.polls, (id, u32::try_from(options).unwrap_or(2)));
+        }
+    }
+
+    /// Votes in an open poll of one of the user's communities: one seeded, or one heard of.
+    async fn vote(&self, due: Instant) {
+        let heard: Vec<(Uuid, u32)> = self
+            .state
+            .polls
+            .lock()
+            .expect("polls lock")
+            .iter()
+            .copied()
+            .collect();
+        let poll = if !heard.is_empty() && self.random() < 0.5 {
+            self.pick(&heard)
+        } else {
+            self.pick(&self.world.memberships[self.index as usize])
+                .and_then(|c| {
+                    let open = &self.world.manifest.communities[c].open_polls;
+                    self.pick(open).map(|p| (p.id, p.options))
+                })
+                .or_else(|| self.pick(&heard))
+        };
+        let Some((poll, options)) = poll else {
+            return;
+        };
+        let option = (self.random() * f64::from(options.max(1))) as u32;
+        let _ = self
+            .request(
+                "PUT /polls/{poll}/votes/{option}/@me",
+                reqwest::Method::PUT,
+                &format!("/polls/{poll}/votes/{option}/@me"),
+                None,
+                due,
+            )
+            .await;
+    }
+
+    /// Searches for a word the seeded history and messages are written in, within one of the
+    /// user's communities half the time, everywhere they may read otherwise.
+    async fn search(&self, due: Instant) {
+        let text = self.words(1 + usize::from(self.random() < 0.3));
+        let mut path = format!(
+            "/messages?filter[text]={}&limit={SEARCH_PAGE}&include={SEARCH_INCLUDES}",
+            percent_encode(&text)
+        );
+        if self.random() < 0.5
+            && let Some(community) = self.pick(&self.world.memberships[self.index as usize])
+        {
+            path.push_str(&format!(
+                "&filter[community]={}",
+                self.world.manifest.communities[community].id
+            ));
+        }
+        let _ = self
+            .request("GET /messages", reqwest::Method::GET, &path, None, due)
+            .await;
+    }
+
+    /// Chooses a presence override, or takes the one chosen away.
+    async fn change_presence(&self, due: Instant) {
+        let chosen = self.state.presence_override.load(Ordering::Relaxed);
+        let outcome = if chosen && self.random() < 0.5 {
+            self.request(
+                "DELETE /users/@me/presence-override",
+                reqwest::Method::DELETE,
+                "/users/@me/presence-override",
+                None,
+                due,
+            )
+            .await
+            .map(|_| false)
+        } else {
+            let presence = self.pick(&PRESENCE_OVERRIDES).unwrap_or("away");
+            self.request(
+                "PUT /users/@me/presence-override",
+                reqwest::Method::PUT,
+                "/users/@me/presence-override",
+                Some(json!({
+                    "presenceOverride": presence,
+                    "durationSeconds": PRESENCE_OVERRIDE_SECONDS,
+                })),
+                due,
+            )
+            .await
+            .map(|_| true)
+        };
+        if let Ok(chosen) = outcome {
+            self.state
+                .presence_override
+                .store(chosen, Ordering::Relaxed);
+        }
+    }
+
+    /// `count` words drawn as seeded history's are.
+    fn words(&self, count: usize) -> String {
+        (0..count)
+            .map(|_| words::word(self.random()))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// A DM to someone the user shares a community with, opening it the first time.
@@ -670,7 +1231,8 @@ impl User {
                 channel
             }
         };
-        self.post_message(channel, 'd', Vec::new(), due).await;
+        self.post_message(channel, DM, "benchmark message", due)
+            .await;
     }
 
     /// Joins a call in one of the first `channels_used` voice channels of one of the user's
@@ -729,34 +1291,84 @@ impl User {
         let Some(channel) = self.channel() else {
             return;
         };
-        let Ok(handle) = self
+        let size = usize::try_from(self.behaviour.attachment_bytes).unwrap_or(0);
+        let body = bytes::Bytes::from(vec![0x5a_u8; size]);
+        if let Some(id) = self
+            .upload("benchmark.bin", "application/octet-stream", body, due)
+            .await
+        {
+            self.post(
+                "POST /channels/{channel}/messages",
+                &format!("/channels/{channel}/messages"),
+                CHANNEL,
+                "benchmark attachment",
+                vec![id],
+                due,
+            )
+            .await;
+        }
+    }
+
+    /// Uploads a picture and posts it. The server holds the message until it has made the
+    /// picture's preview, so its delivery (`delivery:image`) includes making the preview.
+    async fn send_image(&self, due: Instant) {
+        let Some(channel) = self.channel() else {
+            return;
+        };
+        let size = (self.behaviour.image_width, self.behaviour.image_height);
+        let picture = {
+            let mut images = self.world.images.lock().expect("images lock");
+            images
+                .entry(size)
+                .or_insert_with(|| crate::picture::jpeg(size.0, size.1))
+                .clone()
+        };
+        if let Some(id) = self
+            .upload("benchmark.jpg", "image/jpeg", picture, due)
+            .await
+        {
+            self.post(
+                "POST /channels/{channel}/messages",
+                &format!("/channels/{channel}/messages"),
+                IMAGE,
+                "benchmark picture",
+                vec![id],
+                due,
+            )
+            .await;
+        }
+    }
+
+    /// Uploads a file to object storage as the client does: asks for an upload URL, puts the
+    /// file there, and confirms it. Returns the attachment.
+    async fn upload(
+        &self,
+        file_name: &str,
+        mime_type: &str,
+        body: bytes::Bytes,
+        due: Instant,
+    ) -> Option<Uuid> {
+        let handle = self
             .request(
                 "POST /attachments",
                 reqwest::Method::POST,
                 "/attachments",
                 Some(json!({
-                    "fileName": "benchmark.bin",
-                    "mimeType": "application/octet-stream",
-                    "byteSize": self.behaviour.attachment_bytes,
+                    "fileName": file_name,
+                    "mimeType": mime_type,
+                    "byteSize": body.len(),
                 })),
                 due,
             )
             .await
-        else {
-            return;
-        };
-        let (Some(id), Some(url)) = (
-            handle["id"].as_str().and_then(|s| s.parse::<Uuid>().ok()),
-            handle["uploadUrl"].as_str(),
-        ) else {
-            return;
-        };
-        let body = vec![0x5a_u8; usize::try_from(self.behaviour.attachment_bytes).unwrap_or(0)];
+            .ok()?;
+        let id = handle["id"].as_str().and_then(|s| s.parse::<Uuid>().ok())?;
+        let url = handle["uploadUrl"].as_str()?;
         let upload_started = Instant::now();
         let uploaded = self
             .http
             .put(url)
-            .header("content-type", "application/octet-stream")
+            .header("content-type", mime_type)
             .body(body)
             .send()
             .await
@@ -768,21 +1380,18 @@ impl User {
         if !uploaded {
             self.world.recorder.count("errors", 1);
             self.world.recorder.count("upload_failures", 1);
-            return;
+            return None;
         }
-        if self
-            .request(
-                "POST /attachments/{attachment}/confirm",
-                reqwest::Method::POST,
-                &format!("/attachments/{id}/confirm"),
-                None,
-                due,
-            )
-            .await
-            .is_ok()
-        {
-            self.post_message(channel, 'c', vec![id], due).await;
-        }
+        self.request(
+            "POST /attachments/{attachment}/confirm",
+            reqwest::Method::POST,
+            &format!("/attachments/{id}/confirm"),
+            None,
+            due,
+        )
+        .await
+        .ok()?;
+        Some(id)
     }
 }
 
@@ -880,6 +1489,8 @@ impl Stream {
         let (close, mut closing) = tokio::sync::oneshot::channel::<()>();
         let (mut sink, mut source) = socket.split();
         let (outbox, mut outbox_rx) = mpsc::unbounded_channel::<WsMessage>();
+        *user.state.outbox.lock().expect("outbox lock") = Some(outbox.clone());
+        user.send_viewing();
         tokio::spawn(async move {
             let mut activity = tokio::time::interval(ACTIVITY_INTERVAL);
             loop {
@@ -923,11 +1534,16 @@ impl Stream {
 
 impl User {
     /// One frame from the event stream.
-    fn on_frame(&self, text: &str) {
+    fn on_frame(self: &Arc<Self>, text: &str) {
+        let recorder = &self.world.recorder;
+        if text.starts_with("{\"type\":\"ephemeral\"") {
+            // Who is typing in the channel the user has open.
+            recorder.count("ephemeral", 1);
+            return;
+        }
         if !text.starts_with("{\"type\":\"event\"") {
             return;
         }
-        let recorder = &self.world.recorder;
         recorder.count("events", 1);
         // The sequence comes right after the type; it is cheap to read without parsing.
         if let Some(sequence) = text
@@ -940,12 +1556,47 @@ impl User {
                 .last_sequence
                 .fetch_max(sequence, Ordering::Relaxed);
         }
+        // Only these are parsed, which keeps a generator playing many users light.
+        let message = text.contains("\"serverEvent\":\"message\"");
+        let created = text.contains("\"type\":\"create\"");
+        let poll_created = created && text.contains("\"serverEvent\":\"poll\"");
+        let thread_started =
+            message && text.contains("\"type\":\"update\"") && text.contains("\"thread\":\"");
+        if !(message && created || poll_created || thread_started) {
+            return;
+        }
+        let Ok(frame) = serde_json::from_str::<Value>(text) else {
+            return;
+        };
+        let event = &frame["event"];
+        let uuid = |field: &str| event[field].as_str().and_then(|s| s.parse::<Uuid>().ok());
+        if poll_created {
+            if let (Some(poll), Some(options)) = (uuid("id"), event["options"].as_array()) {
+                remember(
+                    &self.state.polls,
+                    (poll, u32::try_from(options.len()).unwrap_or(0)),
+                );
+            }
+            return;
+        }
+        if thread_started {
+            if let Some(thread) = uuid("thread") {
+                remember(&self.state.threads, thread);
+            }
+            return;
+        }
+        let (Some(id), Some(channel)) = (uuid("id"), uuid("channelId")) else {
+            return;
+        };
+        if uuid("author") != Some(self.world.manifest.users[self.index as usize].id) {
+            remember(&self.state.seen, (id, channel));
+            if self.viewing() == Some(channel) {
+                self.read(channel, id);
+            }
+        }
         let Some((kind, sender, sent_ns)) = read_marker(text) else {
             return;
         };
-        if !text.contains("\"serverEvent\":\"message\"") || !text.contains("\"type\":\"create\"") {
-            return;
-        }
         if self.state.ready_ns.load(Ordering::Relaxed) > sent_ns {
             recorder.count("replayed", 1);
             return;
@@ -953,25 +1604,40 @@ impl User {
         if sender != self.index {
             let delay = self.world.clock.now_ns() - sent_ns;
             let micros = u64::try_from((delay / 1000).max(1)).unwrap_or(u64::MAX);
-            recorder.latency_micros(
-                if kind == 'd' {
-                    "delivery:dm"
-                } else {
-                    "delivery"
-                },
-                micros,
-            );
-            if let Ok(frame) = serde_json::from_str::<Value>(text)
-                && let Some(id) = frame["event"]["id"].as_str().and_then(|s| s.parse().ok())
-            {
-                let mut seen = self.state.seen.lock().expect("seen lock");
-                seen.push_back(id);
-                if seen.len() > RECENT {
-                    seen.pop_front();
-                }
-            }
+            recorder.latency_micros(delivery_metric(kind), micros);
         }
     }
+}
+
+/// Adds `item` to a list of recent things, forgetting the oldest past `RECENT`.
+fn remember<T>(list: &Mutex<VecDeque<T>>, item: T) {
+    let mut list = list.lock().expect("recent lock");
+    list.push_back(item);
+    if list.len() > RECENT {
+        list.pop_front();
+    }
+}
+
+/// The ids of a list of records.
+fn ids(records: &Value) -> impl Iterator<Item = Uuid> + '_ {
+    records
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|record| record["id"].as_str().and_then(|s| s.parse().ok()))
+}
+
+/// `text` as a query string value.
+fn percent_encode(text: &str) -> String {
+    let mut encoded = String::with_capacity(text.len() * 3);
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 #[cfg(test)]

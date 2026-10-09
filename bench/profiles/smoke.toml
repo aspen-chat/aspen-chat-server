@@ -1,7 +1,7 @@
 name = "smoke"
 description = """
-A quick check that a deployment works under light load: 200 users, half online, for a minute.
-Run it first, and after every deployment change."""
+A quick check that a deployment works under light load: 200 users, half online, for a minute,
+doing a little of everything the bench can do. Run it first, and after every deployment change."""
 
 [target]
 api = "http://localhost:8000"
@@ -26,6 +26,10 @@ share = 0.7
 history_reads_per_hour = 20
 reactions_per_hour = 10
 messages_per_hour = 2
+poll_votes_per_hour = 4
+searches_per_hour = 4
+activity_reads_per_hour = 4
+viewing_share = 0.5
 
 [behaviours.chatter]
 share = 0.3
@@ -35,6 +39,18 @@ edits_per_hour = 4
 deletes_per_hour = 1
 history_reads_per_hour = 20
 reactions_per_hour = 20
+mentions_per_hour = 10
+threads_per_hour = 10
+thread_replies_per_hour = 12
+polls_per_hour = 6
+poll_votes_per_hour = 10
+searches_per_hour = 10
+activity_reads_per_hour = 10
+saves_per_hour = 6
+saved_reads_per_hour = 6
+attachments_per_hour = 4
+images_per_hour = 6
+presence_changes_per_hour = 6
 hot_channel_share = 0.5
 
 [slo]

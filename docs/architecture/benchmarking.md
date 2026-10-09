@@ -24,6 +24,8 @@ A run is plan, seed, run, purge.
 `aspen-chat-server bench seed` writes the population straight into the database (`app::benchmark::seed`).
 
 - Writes are batched, and history is backdated with UUIDv7 ids.
+- History is written as posting would write it: some messages tag a member (with their `mention` rows), some start threads (the thread channel, its replies, its counts, and its followers), and polls sit among it, some closed (with the message the poll closer posts) and some open, with votes. Its words come from `aspen_bench_protocol::words`, drawn by Zipf's law, which the tool searches for too.
+- The manifest names each community's seeded threads and open polls, for the run to reply in and vote in.
 - Every user and community it made is recorded against the run in `benchmark_run`, `benchmark_user`, and `benchmark_community`.
 - Benchmark users are ordinary users named `bench-<run>-<n>` with one shared password.
 - The password is the plan's, or else one drawn at random for the run. `bench seed` prints it and the manifest carries it. The run's record in `benchmark_run` leaves it out.
@@ -32,7 +34,9 @@ A run is plan, seed, run, purge.
 
 `aspen-bench run` plays the users over the real API and event stream, the way the client does.
 
+- Users start up as the client does, with its requests and the records it sideloads, and the client's own traffic goes on beside their actions: presence polls, activity, and, for those with a channel open, the `viewing` frame, typing, and read position reports.
 - Actions are open-model Poisson, with latency measured from when each action was due.
+- Delivery is measured per kind of message: channel messages, DMs, thread replies, pictures (held for their previews), and `@everyone` announcements.
 - A coordinator can spread users over agents on other machines (`aspen-bench agent`). Clocks are synchronised by Cristian's algorithm, so delivery latency is measured across machines.
 - Calls use real SRTP through `produceRtp` and `consumeRtp`, measuring loss, RFC 3550 jitter, and round-trip time.
 - It samples the `[target] metrics` endpoints and names what ran short in the report (`report.json`, `report.html`).

@@ -1,0 +1,63 @@
+name = "mention-storm"
+description = """
+Tags: a 5,000-member community whose owner tags @everyone three times while members tag one
+another. Each tag is a row to count in unread tags, an entry in an activity feed, and a phone
+to wake, so this measures announcements' delivery, the activity feed, and read reports under
+them."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 5000
+communities = 1
+largest_community = 5000
+smallest_community = 5000
+text_channels = 4
+voice_channels = 0
+history_per_channel = 500
+tagged_per_channel = 50
+
+[load]
+online = 0.8
+ramp_up_seconds = 120
+duration_seconds = 300
+
+[behaviours.member]
+share = 0.9
+messages_per_hour = 2
+mentions_per_hour = 1
+reactions_per_hour = 2
+history_reads_per_hour = 6
+activity_reads_per_hour = 6
+hot_channel_share = 0.8
+
+[behaviours.regular]
+share = 0.1
+messages_per_hour = 20
+mentions_per_hour = 10
+reactions_per_hour = 10
+history_reads_per_hour = 10
+activity_reads_per_hour = 6
+hot_channel_share = 0.6
+
+[[events]]
+at_seconds = 30
+kind = "announcement"
+
+[[events]]
+at_seconds = 120
+kind = "announcement"
+
+[[events]]
+at_seconds = 210
+kind = "announcement"
+
+[slo]
+delivery_p99_ms = 1000
+request_p99_ms = 800
+connect_p99_ms = 5000
+error_rate = 0.002
+metric_p99_ms = { "delivery:everyone" = 2000 }
+route_p99_ms = { "GET /users/@me/activity" = 500, "PUT /channels/{channel}/read-states/@me" = 300 }
