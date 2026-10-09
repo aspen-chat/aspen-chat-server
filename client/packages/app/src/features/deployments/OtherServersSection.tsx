@@ -18,7 +18,7 @@ export function OtherServersSection() {
   }
   return (
     <section aria-labelledby="settings-servers" className={planeClass}>
-      <h3 id="settings-servers" className="text-sm font-semibold text-ink-muted">
+      <h3 id="settings-servers" className="text-lg font-semibold text-ink-muted">
         {m.deployments.otherServers}
       </h3>
       <ul className="flex flex-col gap-1">

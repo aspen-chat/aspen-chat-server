@@ -11,7 +11,7 @@ export function PrivacySection() {
   const typing = usePreference(TYPING_NOTICES);
   return (
     <section aria-labelledby="settings-privacy" className={planeClass}>
-      <h3 id="settings-privacy" className="text-sm font-semibold text-ink-muted">
+      <h3 id="settings-privacy" className="text-lg font-semibold text-ink-muted">
         {m.settings.privacy}
       </h3>
       <ChoiceCheckbox
