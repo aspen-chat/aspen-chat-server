@@ -84,7 +84,6 @@ impl FederationPolicy {
         self.users.immigration != Gate::Closed || self.bots.immigration != Gate::Closed
     }
 
-    /// The rules for `subject`.
     pub fn rules(&self, subject: Subject) -> &MigrationRules {
         match subject {
             Subject::Users => &self.users,

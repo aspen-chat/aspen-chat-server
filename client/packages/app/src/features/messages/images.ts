@@ -40,7 +40,6 @@ export function inlinePreview(
     : { src, width: preview.width, height: preview.height };
 }
 
-/** Whether a MIME type is a video's. */
 export function isVideoType(mimeType: string): boolean {
   return mimeType.toLowerCase().startsWith("video/");
 }

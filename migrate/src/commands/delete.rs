@@ -1,9 +1,5 @@
 //! `delete <name>` — discard a locally-authored migration that has
-//! never been shipped. Rewrites `migrations/mod.rs` and `registry.rs`
-//! to drop the references, then removes the migration's directory from
-//! disk. Intentionally does NOT touch the database; deleting a
-//! migration that has already been applied anywhere would orphan its
-//! `__aspen_migrations` row.
+//! never been shipped.
 
 use std::io::{self, Write as _};
 use std::path::PathBuf;

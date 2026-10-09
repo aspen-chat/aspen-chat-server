@@ -616,7 +616,6 @@ fn limit_of(
         .map(|limit| limit.cloned())
 }
 
-/// Whether a dimension can count requests to `route` at all.
 /// The default limits that apply to `route`, which is wherever they can: a user limit where
 /// users sign in, a per-parameter limit where the path has the parameter.
 fn defaults_for(
@@ -635,6 +634,7 @@ fn defaults_for(
     Ok(defaults)
 }
 
+/// Whether a dimension can count requests to `route` at all.
 fn applies(dimension: &Dimension, route: &Route) -> bool {
     (!dimension.needs_user() || route.access != Access::Anonymous)
         && dimension

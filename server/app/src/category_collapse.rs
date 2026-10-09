@@ -20,7 +20,6 @@ pub async fn collapse(
     set(state, user, category_id, true).await
 }
 
-/// Expands `category_id` for the user.
 pub async fn expand(
     state: &GlobalServerContext,
     user: UserId,

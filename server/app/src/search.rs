@@ -38,11 +38,9 @@ pub enum Holding {
     Attachment,
     /// An attachment that is a picture.
     Image,
-    /// A poll.
     Poll,
 }
 
-/// Where to search.
 #[derive(Debug, Clone, Copy)]
 pub enum SearchScope {
     /// Everything the user may read.

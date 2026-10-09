@@ -271,7 +271,6 @@ const CHANNEL_HOMES_KEPT: u64 = 100_000;
 /// channel, thread, and DM published to would otherwise stay for the process's life.
 pub type ChannelHomes = moka::sync::Cache<ChannelId, ChannelHome>;
 
-/// An empty [`ChannelHomes`].
 pub fn channel_homes() -> ChannelHomes {
     moka::sync::Cache::new(CHANNEL_HOMES_KEPT)
 }
@@ -427,8 +426,6 @@ async fn to_channel(conn: &mut AsyncPgConnection, scope: EventScope) -> crate::R
     })
 }
 
-/// The community channel whose View channel permission decides who receives an event with
-/// this scope, if it is about one.
 /// The category whose own overrides decide who receives `event` (`CATEGORY_HEADER`): the one a
 /// category's own event, or one of its overrides', is about.
 fn governing_category(event: &ServerEvent) -> Option<CategoryId> {
@@ -450,6 +447,8 @@ fn governing_category(event: &ServerEvent) -> Option<CategoryId> {
     }
 }
 
+/// The community channel whose View channel permission decides who receives an event with
+/// this scope, if it is about one.
 async fn governing_channel(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,

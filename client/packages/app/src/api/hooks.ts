@@ -296,7 +296,6 @@ export function useAttachment(id: string): Attachment | undefined {
   return attachment;
 }
 
-/** An icon record by id, fetched on demand when the cache lacks it. `undefined` id reads nothing. */
 /**
  * Several icons at once, by id, those the cache lacks fetched; the map is the same object
  * while none of them changes.
@@ -340,6 +339,7 @@ export function useIcons(ids: readonly string[]): ReadonlyMap<string, Icon> {
   return icons;
 }
 
+/** An icon record by id, fetched on demand when the cache lacks it. `undefined` id reads nothing. */
 export function useIcon(id: string | undefined): Icon | undefined {
   const sync = useSync();
   const icon = useTopic(`icon:${id ?? ""}`, (s) => (id === undefined ? undefined : s.icon(id)));
@@ -375,7 +375,6 @@ export function usePollLoading(id: string): boolean {
   return useTopic(`poll:${id}`, (s) => s.poll(id) === undefined && !s.missing("poll", id));
 }
 
-/** The options the caller has voted for on a poll. */
 export function useMyVotes(pollId: string): ReadonlySet<number> {
   return useTopic(`poll:${pollId}`, (s) => s.myVotes(pollId));
 }
@@ -385,13 +384,11 @@ export function useReadState(channelId: string): ReadState | undefined {
   return useTopic(`read:${channelId}`, (s) => s.readState(channelId));
 }
 
-/** Whether the caller may open the Administration Dashboard. */
 /** What the caller may do across the deployment. */
 export function useDeploymentPermissions(): ReadonlySet<DeploymentPermission> {
   return useTopic("admin", (s) => s.deploymentPermissions());
 }
 
-/** Whether the caller may do something across the deployment. */
 export function useDeploymentCan(permission: DeploymentPermission): boolean {
   return useDeploymentPermissions().has(permission);
 }
@@ -469,7 +466,6 @@ export function useShownWhenCollapsed(channelIds: readonly string[]): ReadonlySe
   return useMemo(() => new Set(shown === "" ? [] : shown.split("\n")), [shown]);
 }
 
-/** Whether the caller has blocked `userId`. */
 /**
  * Whether the caller blocked `userId`, here or on any other deployment they use
  * (`useBlockedAnywhere`), as the client hides a blocked person everywhere.
@@ -508,7 +504,6 @@ export function useOwnedBots(): readonly User[] {
   return useTopic("bots", (s) => s.ownedBots());
 }
 
-/** Everyone the caller has blocked. */
 export function useBlockedUsers(): readonly string[] {
   return useTopic("blocks", (s) => s.blockedUsers());
 }
@@ -681,12 +676,10 @@ export function useMessageOnDemand(
   return { message, missing };
 }
 
-/** Whether the caller saved a message. */
 export function useIsSaved(messageId: string): boolean {
   return useTopic(`saved:${messageId}`, (s) => s.isSaved(messageId));
 }
 
-/** Whether the caller follows a thread. */
 export function useFollowing(threadId: string): boolean {
   return useTopic(`follow:${threadId}`, (s) => s.follows(threadId));
 }
@@ -861,7 +854,6 @@ export function useChannelAccess(channelId: string): PermissionSet {
   return useTopic(`channelAccess:${channelId}`, (s) => s.channelAccess(channelId));
 }
 
-/** Whether the caller may do something in a channel. */
 export function useChannelCan(channelId: string, permission: Permission): boolean {
   return useChannelAccess(channelId).has(permission);
 }

@@ -139,7 +139,6 @@ fn certificate_failure(domain: &str, error: &rustls::Error) -> std::borrow::Cow<
     }
 }
 
-/// `domain`'s published document.
 pub async fn document(
     client: &reqwest::Client,
     domain: &Domain,

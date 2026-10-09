@@ -425,7 +425,6 @@ impl Drop for StreamHold {
 struct Register {
     id: u64,
     user: UserId,
-    /// The sign-in the connection belongs to.
     sign_in: SignIn,
     communities: Vec<CommunityId>,
     roles: HashMap<CommunityId, Vec<RoleId>>,

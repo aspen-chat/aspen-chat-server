@@ -585,7 +585,6 @@ async fn joined_there(state: &GlobalServerContext, user: UserId, server: VoiceSe
     }
 }
 
-/// The outcome of a failure report.
 pub struct FailureOutcome {
     /// Distinct users whose reports about this server count within the window, this one
     /// included when it counted.

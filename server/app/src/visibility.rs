@@ -209,7 +209,6 @@ impl CommunityModel {
         }
     }
 
-    /// Applies one change.
     pub fn apply(&mut self, change: &ModelChange) {
         match change {
             ModelChange::Owner(owner) => self.owner = *owner,

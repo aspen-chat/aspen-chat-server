@@ -65,13 +65,13 @@ enum Cmd {
     /// Print applied + pending migrations.
     Status,
     /// One-shot: import `__diesel_schema_migrations` history into
-    /// `__aspen_migrations` (positionally, by row count) and drop the
+    /// `__aspen_migrations` (each Diesel version mapped to the registry
+    /// id with the same timestamp) and drop the
     /// Diesel bookkeeping table. Refuses to run if `__aspen_migrations`
     /// is already populated.
     ImportDiesel,
-    /// Scaffold a new migration directory (does NOT edit
-    /// migrations/mod.rs or registry.rs — those edits stay manual so
-    /// they show up in code review).
+    /// Scaffold a new migration directory and register it in
+    /// migrations/mod.rs and registry.rs.
     New { slug: String },
     /// Delete a migration: remove its `migrate/src/migrations/m<id>/`
     /// directory, its `pub mod` declaration in `migrations/mod.rs`, and

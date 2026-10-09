@@ -1,6 +1,3 @@
--- This file should undo anything in `up.sql`
-
-
 ALTER TABLE "community" DROP COLUMN "icon";
 ALTER TABLE "community" ADD COLUMN "icon_mime_type" TEXT;
 ALTER TABLE "community" ADD COLUMN "icon" BYTEA;

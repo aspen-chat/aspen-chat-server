@@ -253,10 +253,8 @@ mod tests {
 
     #[test]
     fn append_mod_declaration_handles_missing_trailing_newline() {
-        // The raw-string predecessor had to paper over missing trailing
-        // newlines by hand; the syn-based rewrite parses the file and
-        // prettyplease always emits a well-terminated Rust file, so this
-        // test guards that property in addition to the new-item push.
+        // A source without a trailing newline still comes back
+        // well-terminated, since prettyplease emits a whole file.
         let before = "pub mod m20260101_000000_first;";
         let after = append_mod_declaration(before, "m20260102_000000_second").unwrap();
         assert!(

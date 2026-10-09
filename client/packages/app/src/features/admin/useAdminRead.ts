@@ -9,7 +9,6 @@ export interface AdminRead<T> {
   error: string | null;
   /** When the last answer arrived, in milliseconds since the epoch; for "how long ago". */
   at: number;
-  /** Reads again. */
   reload: () => void;
 }
 

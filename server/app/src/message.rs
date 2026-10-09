@@ -1083,13 +1083,13 @@ pub async fn update_message(
                     .load(conn.as_mut())
                     .await?;
 
+                if let Some(mentions) = &mentions {
+                    mention::replace(conn.as_mut(), id, channel_id, mentions).await?;
+                }
                 // A content edit invalidates the old link previews. Clear
                 // them (and schedule the S3 objects for deletion) inside the
                 // same transaction as the content change so nobody reads
                 // "new content + stale previews" in between.
-                if let Some(mentions) = &mentions {
-                    mention::replace(conn.as_mut(), id, channel_id, mentions).await?;
-                }
                 let mut previews_cleared = false;
                 if content_changed {
                     delete_images_for_message(state, conn.as_mut(), id).await?;

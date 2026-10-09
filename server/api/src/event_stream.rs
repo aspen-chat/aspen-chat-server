@@ -62,7 +62,6 @@ const PING_INTERVAL: Duration = Duration::from_secs(30);
 /// Consecutive unanswered pings after which the peer is presumed gone.
 const MAX_MISSED_PONGS: u32 = 2;
 
-/// The socket's read buffer.
 const READ_BUFFER_BYTES: usize = 4 * 1024;
 /// Frames are written through once this much is buffered, and on every flush.
 const WRITE_BUFFER_BYTES: usize = 16 * 1024;

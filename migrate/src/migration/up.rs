@@ -9,8 +9,6 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 
 use super::{Migration, ensure_migrations_table, list_applied};
 
-/// Apply every registered migration whose id is not already in
-/// `__aspen_migrations`, in registry order.
 pub async fn run_up(conn: &mut AsyncPgConnection, migrations: &[&dyn Migration]) -> Result<()> {
     ensure_migrations_table(conn).await?;
     let applied: std::collections::HashSet<String> = list_applied(conn)

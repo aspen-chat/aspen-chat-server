@@ -438,7 +438,6 @@ async fn recheck_seat(
     send_command(state, server, &mute).await
 }
 
-/// Sends `command` to the voice server `server`.
 async fn send_command(
     state: &impl Publishing,
     server: VoiceServerId,

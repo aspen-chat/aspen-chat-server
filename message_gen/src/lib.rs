@@ -89,7 +89,8 @@ pub fn message_enum_source(
         // Server authoritative fields the server may change after creation; carried by update
         // events so clients can follow them. Also present in `server_authoritative_fields`.
         let mut server_mutable_fields = Vec::new();
-        // Basically exists just for the user password.
+        // Accepted on create but kept out of records and events: secrets, and inputs the server
+        // transforms rather than stores.
         let mut secret_fields = Vec::new();
         // Fields a create request may leave out, taking their type's default.
         let mut create_defaults = Vec::new();

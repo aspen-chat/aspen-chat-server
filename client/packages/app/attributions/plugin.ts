@@ -177,7 +177,6 @@ const COMPONENTS: readonly ComponentId[] = ["app", "desktop", "mobile", "server"
 /** The platforms the servers are built for (`scripts/cross_aarch64.py` makes the ARM ones). */
 const SERVER_PLATFORMS = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"];
 
-/** The platforms the desktop app is packaged for. */
 const DESKTOP_PLATFORMS = [
   "x86_64-pc-windows-msvc",
   "x86_64-unknown-linux-gnu",

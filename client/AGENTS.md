@@ -1,8 +1,8 @@
 # Aspen client — agent instructions
 
 This directory is a pnpm workspace containing the cross-platform Aspen client. The root
-`AGENTS.md` applies here in full (comments describe the current code, seek clarification, do not
-commit to `main`). The rules below are specific to the client.
+`AGENTS.md` applies here in full (comments describe the current code and say only what it
+cannot, seek clarification, do not commit to `main`). The rules below are specific to the client.
 
 ## Layout and dependency direction
 

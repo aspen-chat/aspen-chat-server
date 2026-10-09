@@ -23,7 +23,6 @@ pub fn valid_run_tag(run: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// The name of a seeded user.
 pub fn user_name(run: &str, index: u32) -> String {
     format!("bench-{run}-{index}")
 }

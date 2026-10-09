@@ -440,7 +440,6 @@ fn backoff(kind: JobKind, attempts: i32) -> Duration {
     }
 }
 
-/// One step of `job`.
 async fn step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outcome> {
     match job.kind {
         JobKind::DeleteMessagesBy => delete_messages::step(state, job).await,

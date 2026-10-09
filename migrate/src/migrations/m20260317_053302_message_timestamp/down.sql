@@ -1,4 +1,3 @@
--- This file should undo anything in `up.sql`
 ALTER TABLE message DROP COLUMN timestamp;
 ALTER TABLE message ADD COLUMN time TIMESTAMP NOT NULL;
 ALTER TABLE attachment DROP COLUMN timestamp;

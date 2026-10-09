@@ -845,7 +845,6 @@ body {
   }
 }
 
-/* A modal's backdrop. */
 @utility motion-backdrop {
   &[data-entering] {
     animation: aspen-fade-in var(--motion-base) var(--motion-ease-out);

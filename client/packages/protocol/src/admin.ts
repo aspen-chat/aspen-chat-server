@@ -75,9 +75,7 @@ export interface AdminListQuery<S extends string> {
   banned?: boolean;
   /** The order; newest first when absent. */
   sort?: S;
-  /** How many rows to skip. */
   offset?: number;
-  /** How many rows the page holds. */
   limit?: number;
 }
 
@@ -180,7 +178,7 @@ export class AdminApi {
     );
   }
 
-  /** One report case. */
+  /** One report case, in the shape of a list of cases. */
   async reportCase(caseId: string): Promise<ReportCaseList> {
     return adminRead(
       await this.#client.api.GET("/api/v1/admin/reports/{case}", {
@@ -272,7 +270,6 @@ export class AdminApi {
     return adminRead(await this.#client.api.GET("/api/v1/admin/registration-invites"));
   }
 
-  /** Makes a registration invite. */
   async createRegistrationInvite(request: RegistrationInviteRequest): Promise<RegistrationInvite> {
     return adminRead(
       await this.#client.api.POST("/api/v1/admin/registration-invites", { body: request }),

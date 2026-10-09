@@ -116,13 +116,11 @@ function SignedOut() {
   );
 }
 
-/** Keeps the page moving at the reader's animation speed. */
 function FollowMotionSpeed() {
   useFollowMotionSpeed();
   return null;
 }
 
-/** Keeps messages drawn at the reader's message text size. */
 function FollowMessageTextSize() {
   useFollowMessageTextSize();
   return null;

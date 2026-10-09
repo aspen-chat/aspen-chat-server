@@ -328,6 +328,10 @@ scrutiny from the most talented software professionals in the world. Consider th
 If you receive a request which is ambiguous, you will seek clarification. If you receive a request which is ill advised, you will recommend against it. Time is precious, and you'd rather
 do it right the first time. You will always check your work by running `cargo clippy` and fixing any new problems.
 
+### Check that each edit did what you meant
+
+After every edit, read the changed region back (or its diff) and confirm the file says what you intended: the text landed where you meant it, nothing beside it was duplicated, dropped, or left behind, and the file still reads as one coherent whole. A replacement that matched somewhere other than you expected, an insertion one item too high, or a block moved without its comment all compile cleanly, so the compiler, clippy, and the type checker never catch them. The commonest result is a doc comment stranded on the wrong item: when you add, move, or delete an item, its comment goes with it, and the item above and below still carry their own. Shell edits (`sed`, heredocs, scripts) report nothing about what they changed, so check their result with `git diff` before moving on.
+
 ### When access is given or taken away
 
 Most security holes in a chat server are stale state: someone loses a permission, or a session, and something already open keeps acting on the old answer. Every feature that shows something to someone, or lets them do something, answers these in its architecture file in the commit that adds it, and `scripts/check_permissions.py` gains a scenario checking the answers:
@@ -386,6 +390,22 @@ Concretely, while editing:
 - The one narrow exception is historical context that a reader genuinely needs in order to understand why a rule is load-bearing (for example, "we had this exact freeze once, don't reintroduce it"). Even then, describe the *bug*, not the removed code that caused it.
 
 If you catch a stale "previously / used to / legacy / the old X / the client used to scrape this" comment while you're editing nearby code, fix it. Do not wait for a dedicated cleanup pass — those do not happen.
+
+## Comments say what the code cannot
+
+The people who read this code can read code. A comment earns its place by telling them something the code beside it does not already say plainly: why it is this way, an invariant it relies on or keeps, what would break if it changed, a unit, a limit and where it comes from, what a caller must do, a non-obvious consequence, or a pointer to the code or document that explains the rest. A comment that only restates what the code plainly says is removed.
+
+Comments that add nothing look like these:
+
+- Narrating the next line: `// Increment the counter` over `count += 1`, `// Return the result`, `// Commit the transaction` over `tx.commit()`, `// Loop over the members`.
+- Repeating a name: `/// The user's id.` on `user_id: UserId`, `/// Creates a new Foo.` on `fn new() -> Foo`, `/** Props for Button. */` on `ButtonProps`, `// Imports` over the imports.
+- Restating a signature: `/// Takes a channel id and returns its messages.` on `fn messages(channel: ChannelId) -> Vec<Message>`, a docstring listing parameters by name and type with nothing more about them.
+- Section labels the structure already shows: `// Tests` over `mod tests`, `// Handlers` over a block of handlers whose names say so, `// --- state ---` over a component's `useState` calls.
+- Commented-out code. Version control keeps it.
+
+Keep a comment when trimming it would lose something: a docstring on a public item whose name and type leave a question open (what `None` means, which unit, whether it is clamped, who may call it, what it costs) answers that question and nothing more. Rewrite rather than delete when a comment narrates the code but buries one useful fact; keep the fact. Doc comments the tooling requires (`#[utoipa::path]` descriptions shown in the OpenAPI document, schemars descriptions in the JSON schemas, `spec/plugin.wit` docs plugin authors read) are read by people who never see the code, so they are judged by what they tell that reader, not by what the code beside them says.
+
+When a comment is needed because the code is unclear, first try making the code clear: a better name, a named constant, a smaller function, a type that cannot hold the wrong value. Then comment what is still not plain.
 
 ## Localization
 

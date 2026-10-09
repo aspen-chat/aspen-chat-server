@@ -13,7 +13,6 @@ export const EMOJI_REFERENCE = new RegExp(`<:(${UUID})>`, "g");
 /** A `:name:` the message box writes, its name captured: a word with no space or colon. */
 const SHOWN = /:([^\s:]{2,32}):/g;
 
-/** The reference that names the emoji. */
 export function referenceOf(id: string): string {
   return `<:${id.toLowerCase()}>`;
 }

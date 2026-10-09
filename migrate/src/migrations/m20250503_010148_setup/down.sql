@@ -1,4 +1,3 @@
--- This file should undo anything in `up.sql`.
 -- Drop in child-first order so foreign-key dependents go before their
 -- parents: community_user / category / channel all reference user and/or
 -- community, so user and community come last.

@@ -101,7 +101,6 @@ pub async fn ensure_key(conn: &mut AsyncPgConnection) -> crate::Result<()> {
     Ok(())
 }
 
-/// This deployment's current key.
 pub async fn current_key(conn: &mut AsyncPgConnection) -> crate::Result<Option<PublicKey>> {
     Ok(federation_key::table
         .select(PublicKey::as_select())
@@ -199,10 +198,6 @@ pub async fn rotate_key(
     })
     .await
 }
-
-// ---------------------------------------------------------------------------
-// The published document
-// ---------------------------------------------------------------------------
 
 /// What a deployment publishes at [`super::WELL_KNOWN_PATH`]: its name, its keys, and its
 /// gates.

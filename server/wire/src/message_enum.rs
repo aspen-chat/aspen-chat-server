@@ -448,8 +448,6 @@ enum MessageEnumSource {
         #[message_gen(server_authoritative = "mutable")]
         owner: Option<UserId>,
     },
-    // A role in a community (`app::permissions`). Roles rank by `position`; the everyone role,
-    // every member's, is at 0.
     /// A community's own emoji: a named picture used in its messages as `<:id>` and as a
     /// reaction. Changed only by holders of Manage custom emoji; a rename is announced as its
     /// `update`, and deleting it takes its reactions with it.
@@ -468,6 +466,8 @@ enum MessageEnumSource {
         #[message_gen(server_authoritative)]
         created_by: Option<UserId>,
     },
+    // A role in a community (`app::permissions`). Roles rank by `position`; the everyone role,
+    // every member's, is at 0.
     Role {
         #[message_gen(id)]
         id: RoleId,
@@ -697,9 +697,6 @@ enum MessageEnumSource {
         #[message_gen(server_authoritative = "mutable")]
         secrets_set: Vec<String>,
     },
-    // A plugin's own event: `kind` and `payload` are the plugin's, published to whoever may
-    // view `channel`, to `community`'s members, or with neither to one user. See
-    // `spec/plugins.md`.
     // A plugin told the person of something in `channel`, about `message` if given; only they
     // receive it, and their apps show it as a notification. `text` is the plugin's, drawn from
     // its catalogue. See `app::plugin::notice`.
@@ -714,6 +711,9 @@ enum MessageEnumSource {
         text: PluginText,
         message: Option<MessageId>,
     },
+    // A plugin's own event: `kind` and `payload` are the plugin's, published to whoever may
+    // view `channel`, to `community`'s members, or with neither to one user. See
+    // `spec/plugins.md`.
     #[message_gen(custom_event)]
     PluginEvent {
         plugin: String,

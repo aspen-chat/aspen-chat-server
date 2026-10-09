@@ -12,7 +12,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// From an agent.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AgentMessage {
@@ -39,7 +38,6 @@ pub enum AgentMessage {
     },
 }
 
-/// From the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum CoordinatorMessage {
@@ -104,7 +102,6 @@ pub struct Snapshot {
     pub phase: Option<Phase>,
     /// Latencies in microseconds, by metric name, as base64 HdrHistogram V2.
     pub histograms: BTreeMap<String, String>,
-    /// Counts, by name.
     pub counters: BTreeMap<String, u64>,
     /// Users connected at the interval's end.
     pub connected: u64,

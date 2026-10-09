@@ -23,16 +23,6 @@ export function canChooseOutput(): boolean {
   return typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
 }
 
-/**
- * One playing consumer: the element that plays it and, when the browser has Web Audio, the
- * gain node that scales it. Web Audio is used because an element's own volume stops at 1 and
- * a quiet person needs more.
- */
-/**
- * A shared screen is captured at its own full resolution, up to 4K, and 60 frames a second:
- * the best the screen gives, which the encoder and each viewer's bandwidth then carry as far
- * as they can.
- */
 /** A camera is opened at up to 1080p and 30 frames a second, the most most cameras give. */
 const CAMERA_QUALITY: MediaTrackConstraints = {
   width: { ideal: 1920 },
@@ -40,12 +30,22 @@ const CAMERA_QUALITY: MediaTrackConstraints = {
   frameRate: { ideal: 30 },
 };
 
+/**
+ * A shared screen is captured at its own full resolution, up to 4K, and 60 frames a second:
+ * the best the screen gives, which the encoder and each viewer's bandwidth then carry as far
+ * as they can.
+ */
 const SCREEN_QUALITY: MediaTrackConstraints = {
   width: { max: 3840 },
   height: { max: 2160 },
   frameRate: { ideal: 60, max: 60 },
 };
 
+/**
+ * One playing consumer: the element that plays it and, when the browser has Web Audio, the
+ * gain node that scales it. Web Audio is used because an element's own volume stops at 1 and
+ * a quiet person needs more.
+ */
 interface Player {
   audio: HTMLAudioElement;
   /**

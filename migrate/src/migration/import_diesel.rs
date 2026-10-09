@@ -202,10 +202,6 @@ pub(super) fn aspen_id_to_diesel_version(id: &str) -> Option<String> {
     Some(out)
 }
 
-/// Helpers for the ad-hoc catalog / count / row queries used by
-/// `run_import_diesel`. Kept module-private; the public API exposes
-/// `AppliedMigration`, which is the row shape callers actually care
-/// about.
 #[derive(QueryableByName)]
 struct RelationName {
     #[diesel(sql_type = Nullable<Text>)]
@@ -253,7 +249,6 @@ mod tests {
         assert!(aspen_id_to_diesel_version("2025050A_010148_x").is_none());
         // Non-digit in the time portion.
         assert!(aspen_id_to_diesel_version("20250503_01014Z_x").is_none());
-        // Empty.
         assert!(aspen_id_to_diesel_version("").is_none());
     }
 
