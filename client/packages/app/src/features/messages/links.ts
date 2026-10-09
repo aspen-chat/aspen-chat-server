@@ -138,6 +138,34 @@ export function threadLink(home: ChannelHome, channelId: string, threadId: strin
 }
 
 /**
+ * The route of a channel with a thread of one of its messages open beside it before the thread
+ * is made: its first reply makes it (`AspenSync.replyInThread`).
+ */
+export function newThreadLink(home: ChannelHome, channelId: string, starterId: string) {
+  const { domain, community } = home;
+  if (community === null) {
+    return domain === null
+      ? linkOptions({
+          to: "/dms/$channelId/messages/$starterId/thread",
+          params: { channelId, starterId },
+        })
+      : linkOptions({
+          to: "/at/$domain/dms/$channelId/messages/$starterId/thread",
+          params: { domain, channelId, starterId },
+        });
+  }
+  return domain === null
+    ? linkOptions({
+        to: "/communities/$communityId/channels/$channelId/messages/$starterId/thread",
+        params: { communityId: community, channelId, starterId },
+      })
+    : linkOptions({
+        to: "/at/$domain/communities/$communityId/channels/$channelId/messages/$starterId/thread",
+        params: { domain, communityId: community, channelId, starterId },
+      });
+}
+
+/**
  * The link to share for a message of the deployment at `baseUrl`, which the server reads as a
  * link to it and every client opens: its route on the deployment's own address, whatever shell
  * copies it.

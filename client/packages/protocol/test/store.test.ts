@@ -1873,7 +1873,9 @@ describe("RecordStore previews and held messages", () => {
   it("shows a held message until it is posted", () => {
     const store = new RecordStore();
     store.putHeldMessage(held);
-    expect(store.heldMessages(general.id)).toEqual([{ message: held, failure: null }]);
+    expect(store.heldMessages(general.id)).toEqual([
+      { message: held, failure: null, startsThreadOf: null },
+    ]);
     expect(store.heldMessages(dev.id)).toEqual([]);
     store.applyEvent({
       serverEvent: "heldMessagePosted",
@@ -1907,9 +1909,38 @@ describe("RecordStore previews and held messages", () => {
     });
     store.replaceHeldMessages([]);
     expect(store.heldMessages(general.id)).toEqual([
-      { message: held, failure: "You can no longer post here." },
+      { message: held, failure: "You can no longer post here.", startsThreadOf: null },
     ]);
     store.forgetHeldMessage(held.id);
     expect(store.heldMessages(general.id)).toEqual([]);
+  });
+
+  it("moves a dropped first reply to its starter when its thread goes with it", () => {
+    const store = new RecordStore();
+    const starter = id(6301);
+    const thread: Channel = {
+      ...general,
+      id: id(6300),
+      name: "",
+      ty: "thread",
+      parentChannel: general.id,
+      starterMessage: starter,
+    };
+    store.ingest({ channels: [thread] });
+    const reply = { ...held, channelId: thread.id };
+    store.putHeldMessage(reply);
+    store.applyEvent({
+      serverEvent: "heldMessageFailed",
+      held: reply.id,
+      channel: thread.id,
+      detail: "You can no longer post here.",
+    });
+    store.applyEvent({ serverEvent: "channel", type: "delete", id: thread.id });
+    expect(store.heldMessages(thread.id)).toEqual([]);
+    expect(store.heldMessages(`thread-of:${starter}`)).toEqual([
+      { message: reply, failure: "You can no longer post here.", startsThreadOf: starter },
+    ]);
+    store.forgetHeldMessage(reply.id);
+    expect(store.heldMessages(`thread-of:${starter}`)).toEqual([]);
   });
 });

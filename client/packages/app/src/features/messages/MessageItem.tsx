@@ -33,7 +33,13 @@ import {
   ReactionsDialog,
 } from "@/features/messages/Reactions";
 import { DeleteMessageModal } from "@/features/messages/DeleteMessageDialog";
-import { messageLink, messageUrl, threadLink, type ChannelHome } from "@/features/messages/links";
+import {
+  messageLink,
+  messageUrl,
+  newThreadLink,
+  threadLink,
+  type ChannelHome,
+} from "@/features/messages/links";
 import { LinkedMessages } from "@/features/messages/EmbeddedMessage";
 import { WarningBody } from "@/features/messages/WarningBody";
 import { ReportModal } from "@/features/reports/ReportDialog";
@@ -185,16 +191,12 @@ export const MessageItem = memo(function MessageItem({
     message.kind !== "call" &&
     message.kind !== "missedCall" &&
     (message.thread != null || permissions.has("startThreads"));
+  // A thread not made yet opens empty, and its first reply makes it.
   const openThread = () => {
-    if (message.thread != null) {
-      void navigate(threadLink(home, channelId, message.thread));
-      return;
-    }
-    sync.openThread(id).then(
-      (thread) => {
-        void navigate(threadLink(home, channelId, thread.id));
-      },
-      () => undefined,
+    void navigate(
+      message.thread != null
+        ? threadLink(home, channelId, message.thread)
+        : newThreadLink(home, channelId, id),
     );
   };
   // A message is edited only by its author, and deleted by its author or by someone who may

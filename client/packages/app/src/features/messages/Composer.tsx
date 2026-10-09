@@ -90,12 +90,13 @@ const toolButtonClass =
  * in a thread, sending in threads) the box gives way to a note saying so, in a DM with
  * someone the caller blocked, to a note offering to unblock them, and in the system account's
  * DM, to a note that its notices are not answered. Above it, a line kept for who else is
- * typing there (`TypingIndicator`), whether or not the caller may write.
+ * typing there (`TypingIndicator`), whether or not the caller may write. With `startsThreadOf`
+ * it writes the first reply of a thread not made yet, which sending makes.
  */
 export function Composer(props: ComposerProps) {
   return (
     <>
-      <TypingIndicator channelId={props.channelId} />
+      {props.startsThreadOf === undefined && <TypingIndicator channelId={props.channelId} />}
       <MessageBox {...props} />
     </>
   );
@@ -105,16 +106,26 @@ interface ComposerProps {
   channelId: string;
   placeholder: string;
   echoTarget?: string;
+  /**
+   * The message whose thread this box starts: `channelId` is then the channel the thread is
+   * made in, whose permissions are the thread's, and sending the first reply makes the thread
+   * (`AspenSync.replyInThread`). Until then no one is told the caller is typing, since there is
+   * nowhere yet for them to be typing in, and polls wait for the thread.
+   */
+  startsThreadOf?: string;
 }
 
-function MessageBox({ channelId, placeholder, echoTarget }: ComposerProps) {
+function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: ComposerProps) {
   const m = useMessages();
   const touchOnly = useMediaQuery(TOUCH_ONLY);
   const sync = useSync();
   const me = useMe();
   // What was written here and not sent, kept on this device (`drafts.ts`). The box is made
-  // afresh for each channel, so it reads its own.
-  const [saved] = useState(() => (me === null ? null : readDraft(me.id, channelId)));
+  // afresh for each channel, so it reads its own; a thread not made yet keeps its first reply
+  // under the message it starts from, where a first reply dropped with its thread waits too
+  // (`heldPlace`).
+  const draftKey = startsThreadOf === undefined ? channelId : `thread-of:${startsThreadOf}`;
+  const [saved] = useState(() => (me === null ? null : readDraft(me.id, draftKey)));
   const [draft, setDraft] = useState(saved?.text ?? "");
   const [echo, setEcho] = useState(saved?.echo ?? false);
   const [pending, setPending] = useState<Pending[]>(() =>
@@ -137,7 +148,11 @@ function MessageBox({ channelId, placeholder, echoTarget }: ComposerProps) {
   const describedEarly = useRef(new Map<number, string>());
   const channel = useChannel(channelId);
   const permissions = useChannelAccess(channelId);
-  const mayPost = permissions.has(channel?.ty === "thread" ? "sendInThreads" : "sendMessages");
+  const starting = startsThreadOf !== undefined;
+  const mayPost =
+    permissions.has(starting || channel?.ty === "thread" ? "sendInThreads" : "sendMessages") &&
+    (!starting || permissions.has("startThreads"));
+  const mayPoll = !starting && permissions.has("createPolls");
   const blockedPeer = useBlockedDmPeer(channelId);
   const systemPeer = useSystemDmPeer(channelId);
   const commands = useCommandLine({ channelId, draft, setDraft });
@@ -166,9 +181,9 @@ function MessageBox({ channelId, placeholder, echoTarget }: ComposerProps) {
       attachments: pending.flatMap((p) => (p.state.kind === "ready" ? [p.state.attachment] : [])),
       echo,
     };
-    noteDraft(me.id, channelId, current);
+    noteDraft(me.id, draftKey, current);
     keep.current = () => {
-      writeDraft(me.id, channelId, current);
+      writeDraft(me.id, draftKey, current);
     };
   });
   useEffect(() => {
@@ -192,7 +207,7 @@ function MessageBox({ channelId, placeholder, echoTarget }: ComposerProps) {
   // empty or gone. A draft the box opens with is not typing; only a change to it is.
   const typedDraft = useRef(draft);
   useEffect(() => {
-    if (draft === typedDraft.current) {
+    if (starting || draft === typedDraft.current) {
       return;
     }
     typedDraft.current = draft;
@@ -201,12 +216,14 @@ function MessageBox({ channelId, placeholder, echoTarget }: ComposerProps) {
     } else {
       sync.noteTyping(channelId);
     }
-  }, [sync, channelId, draft]);
+  }, [sync, channelId, draft, starting]);
   useEffect(
     () => () => {
-      sync.stopTyping(channelId);
+      if (!starting) {
+        sync.stopTyping(channelId);
+      }
     },
-    [sync, channelId],
+    [sync, channelId, starting],
   );
 
   const uploading = pending.some((p) => p.state.kind === "uploading");
@@ -363,18 +380,31 @@ function MessageBox({ channelId, placeholder, echoTarget }: ComposerProps) {
         setError(prepared.reason);
         return;
       }
+      const options = { echoToParent: echoTarget !== undefined && echo };
       if (prepared.kind === "command") {
-        await sync.invokeCommand(channelId, prepared.invocation);
+        // A command is checked against the channel it is invoked in, so a thread not made yet
+        // is made for it first.
+        const target =
+          startsThreadOf === undefined ? channelId : (await sync.openThread(startsThreadOf)).id;
+        await sync.invokeCommand(target, prepared.invocation);
+      } else if (startsThreadOf !== undefined) {
+        await sync.replyInThread(
+          startsThreadOf,
+          emoji.encode(tagging.encode(text)),
+          readyIds,
+          options,
+        );
       } else {
-        await sync.sendMessage(channelId, emoji.encode(tagging.encode(text)), readyIds, {
-          echoToParent: echoTarget !== undefined && echo,
-        });
+        await sync.sendMessage(channelId, emoji.encode(tagging.encode(text)), readyIds, options);
       }
       setDraft("");
       tagging.reset();
       commands.reset();
       if (me !== null) {
-        writeDraft(me.id, channelId, null);
+        // A box that started a thread gives way to the thread's as soon as the thread is known,
+        // perhaps before it draws again, so what it would keep on going is forgotten now.
+        keep.current = null;
+        writeDraft(me.id, draftKey, null);
       }
       setPending([]);
       setEcho(false);
@@ -414,7 +444,7 @@ function MessageBox({ channelId, placeholder, echoTarget }: ComposerProps) {
       }}
       className="flex flex-col gap-2 border-t border-line px-4 py-3"
     >
-      <HeldMessages channelId={channelId} />
+      <HeldMessages place={draftKey} />
       {error !== null && (
         <p role="alert" className="text-sm text-danger">
           {error}
@@ -509,12 +539,12 @@ function MessageBox({ channelId, placeholder, echoTarget }: ComposerProps) {
                 </Button>
               </Tooltip>
             )}
-            {permissions.has("createPolls") && (
+            {mayPoll && (
               <CreatePollDialog channelId={channelId} triggerClassName={toolButtonClass} />
             )}
           </>
         ) : (
-          (permissions.has("attachFiles") || permissions.has("createPolls")) && (
+          (permissions.has("attachFiles") || mayPoll) && (
             // On a narrow screen the box's other controls share one button, leaving it room.
             <MenuTrigger>
               <Button aria-label={m.composerMore} className={toolButtonClass}>
@@ -537,7 +567,7 @@ function MessageBox({ channelId, placeholder, echoTarget }: ComposerProps) {
                       {m.attachFile}
                     </MenuItem>
                   )}
-                  {permissions.has("createPolls") && (
+                  {mayPoll && (
                     <MenuItem id="poll" textValue={m.poll.open} className={menuItemClass}>
                       <ChartBarIcon size={18} aria-hidden="true" />
                       {m.poll.open}

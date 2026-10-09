@@ -4,10 +4,21 @@
   and its replies arrive as ordinary message events. A message that started one names it in
   `thread`, and the thread record carries `replyCount` and `lastReplyAt`, which
   `MessageItem` shows as a summary under the starter; message reads sideload `threads` for
-  those summaries. "Reply in thread" calls `AspenSync.openThread`, which the server answers with
-  the thread it makes the first time, and routes to `.../threads/{thread}`, where
-  `ChannelScreen` shows `ThreadPanel` (`src/features/threads`) beside the channel, in place of
-  it on small screens: the starter, heading the replies in one `MessageList` (its `start`, shown
+  those summaries. "Reply in thread" on a message with a thread routes to
+  `.../threads/{thread}`, where `ChannelScreen` shows `ThreadPanel` (`src/features/threads`)
+  beside the channel, in place of it on small screens. On one with none it asks the server for
+  nothing: it routes to `.../messages/{message}/thread`, where `NewThreadPanel` shows the
+  starter and a `Composer` with `startsThreadOf`, which keeps its draft under the starter, tells
+  no one the caller is typing, and offers no polls. Its first reply goes through
+  `AspenSync.replyInThread` (`POST /messages/{message}/thread/messages`), which makes the
+  thread with the reply, posted or held, and sets the starter's `thread` at once; a starter
+  that names a thread, by that reply or by anyone's, takes the panel to the thread itself. A
+  command sent as the first reply is invoked in a thread `AspenSync.openThread` makes first,
+  since commands are checked against the channel they run in. A first reply held for its
+  previews makes the thread as it is held; dropped, it takes the thread with it when nothing
+  else is there, and `ThreadPanel`, seeing its thread removed and its starter naming none, gives
+  way to `NewThreadPanel`, whose composer shows the dropped reply to be sent again (see Composer
+  and drafts). `ThreadPanel` shows the starter, heading the replies in one `MessageList` (its `start`, shown
   once the window reaches the thread's beginning) so the two scroll together however long the
   starter is, and a `Composer` whose `echoTarget` offers to
   also show the reply in the parent channel (`echoToParent`). Its header's bell (`FollowButton`,

@@ -9,13 +9,14 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
 /**
- * The caller's messages in a channel that the server holds while a preview of one of their
- * files is made, above the message box: each waits, said so, until it is posted (and appears in
- * the list) or dropped, when it says why and offers to send it again or let it go.
+ * The caller's messages that the server holds while a preview of one of their files is made,
+ * above the message box of `place` (`heldPlace`: a channel, or a thread not made yet): each
+ * waits, said so, until it is posted (and appears in the list) or dropped, when it says why and
+ * offers to send it again or let it go.
  */
-export function HeldMessages({ channelId }: { channelId: string }) {
+export function HeldMessages({ place }: { place: string }) {
   const m = useMessages();
-  const held = useHeldMessages(channelId);
+  const held = useHeldMessages(place);
   if (held.length === 0) {
     return null;
   }

@@ -892,7 +892,8 @@ export class AspenSync {
 
   /**
    * Sends a held message the server dropped once more, as it was written, and lets the dropped
-   * one go once the server has it.
+   * one go once the server has it. A first reply whose thread went with it makes the thread
+   * anew.
    */
   async sendHeldAgain(heldId: string): Promise<Sent | undefined> {
     const entry = this.store.heldMessage(heldId);
@@ -900,8 +901,53 @@ export class AspenSync {
       return undefined;
     }
     const { channelId, content, attachments, echoToParent } = entry.message;
-    const sent = await this.sendMessage(channelId, content, attachments, { echoToParent });
+    const sent =
+      entry.startsThreadOf === null
+        ? await this.sendMessage(channelId, content, attachments, { echoToParent })
+        : await this.replyInThread(entry.startsThreadOf, content, attachments, { echoToParent });
     this.store.forgetHeldMessage(heldId);
+    return sent;
+  }
+
+  /**
+   * Posts a reply to the thread a message starts, which the server makes with its first reply,
+   * held or posted as `sendMessage` says; the reply's `channelId` names the thread. The message
+   * learns its thread at once, as the events that follow would say.
+   */
+  async replyInThread(
+    starterId: string,
+    content: string,
+    attachments: readonly string[] = [],
+    options: { echoToParent?: boolean } = {},
+  ): Promise<Sent> {
+    const result = await this.#client.api.POST("/api/v1/messages/{message}/thread/messages", {
+      params: { path: { message: starterId } },
+      body: {
+        content,
+        attachments: [...attachments],
+        ...(options.echoToParent === true ? { echoToParent: true } : {}),
+        mayHold: true,
+      },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    let sent: Sent;
+    if (result.response.status === 202) {
+      const held = result.data as HeldMessage;
+      this.store.putHeldMessage(held);
+      sent = { kind: "held", held };
+    } else {
+      const message = result.data as Message;
+      this.store.addMessage(message);
+      sent = { kind: "posted", message };
+    }
+    this.store.applyEvent({
+      serverEvent: "message",
+      type: "update",
+      id: starterId,
+      thread: sent.kind === "held" ? sent.held.channelId : sent.message.channelId,
+    });
     return sent;
   }
 

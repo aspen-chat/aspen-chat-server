@@ -13,12 +13,16 @@ export type HeldMessage = components["schemas"]["HeldMessage"];
 
 /**
  * A held message of the caller's as their app shows it until it is posted: waiting, or dropped
- * with `failure` saying why, kept so they can send it again or let it go.
+ * with `failure` saying why, kept so they can send it again or let it go. A dropped first reply
+ * whose thread went with it waits on the message the thread started from, `startsThreadOf`,
+ * and is sent again as a reply that makes the thread anew.
  */
 export interface HeldEntry {
   message: HeldMessage;
   failure: string | null;
+  startsThreadOf: string | null;
 }
+
 export type Included = components["schemas"]["Included"];
 /**
  * What the caller finds at a message another links to: `available` (its record is held as any

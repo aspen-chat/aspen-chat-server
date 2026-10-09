@@ -85,6 +85,16 @@ import { identityOf } from "./identity";
 type UserOnlineStatus = components["schemas"]["UserOnlineStatus"];
 
 /**
+ * Where a held message is shown: its channel's id, or, for the first reply of a thread not made
+ * yet, `thread-of:<message>`.
+ */
+export function heldPlace(entry: HeldEntry): string {
+  return entry.startsThreadOf === null
+    ? entry.message.channelId
+    : `thread-of:${entry.startsThreadOf}`;
+}
+
+/**
  * The most messages a channel's window holds. Extending it past this at one end drops
  * messages, and their records, from the other end, so a long scroll through history never
  * holds more than this many messages in memory; what was dropped is read again on the way back.
@@ -409,12 +419,13 @@ export class RecordStore {
     return this.#attachments.get(id);
   }
 
-  /** Topic `held:<channelId>`: the caller's messages there held for their previews. */
-  heldMessages(channelId: string): readonly HeldEntry[] {
-    return this.#memoized(`held:${channelId}`, () =>
-      Array.from(this.#heldMessages.values()).filter(
-        (entry) => entry.message.channelId === channelId,
-      ),
+  /**
+   * Topic `held:<place>`: the caller's messages held for their previews where `place` is
+   * (`heldPlace`), a channel or a thread not made yet.
+   */
+  heldMessages(place: string): readonly HeldEntry[] {
+    return this.#memoized(`held:${place}`, () =>
+      Array.from(this.#heldMessages.values()).filter((entry) => heldPlace(entry) === place),
     );
   }
 
@@ -428,7 +439,7 @@ export class RecordStore {
     if (this.#settledHeld.has(message.id)) {
       return;
     }
-    this.#heldMessages.set(message.id, { message, failure: null });
+    this.#heldMessages.set(message.id, { message, failure: null, startsThreadOf: null });
     this.#touch(`held:${message.channelId}`);
   }
 
@@ -441,7 +452,7 @@ export class RecordStore {
       for (const [id, entry] of this.#heldMessages) {
         if (entry.failure === null) {
           this.#heldMessages.delete(id);
-          this.#touch(`held:${entry.message.channelId}`);
+          this.#touch(`held:${heldPlace(entry)}`);
         }
       }
       for (const message of messages) {
@@ -455,7 +466,7 @@ export class RecordStore {
     const entry = this.#heldMessages.get(id);
     if (entry !== undefined) {
       this.#heldMessages.delete(id);
-      this.#touch(`held:${entry.message.channelId}`);
+      this.#touch(`held:${heldPlace(entry)}`);
     }
   }
 
@@ -2639,7 +2650,7 @@ export class RecordStore {
           const entry = this.#heldMessages.get(event.held);
           if (entry !== undefined) {
             this.#heldMessages.set(event.held, { ...entry, failure: event.detail });
-            this.#touch(`held:${event.channel}`);
+            this.#touch(`held:${heldPlace(entry)}`);
           }
           break;
         }
@@ -3323,6 +3334,17 @@ export class RecordStore {
       this.#touch("unread");
     }
     this.#removeMute(id);
+    // A thread removed with the dropped first reply that made it leaves that reply waiting on the
+    // message it started from, to be sent again as a reply that makes the thread anew.
+    if (channel.ty === "thread" && channel.starterMessage != null) {
+      for (const [heldId, entry] of this.#heldMessages) {
+        if (entry.message.channelId === id && entry.startsThreadOf === null) {
+          this.#heldMessages.set(heldId, { ...entry, startsThreadOf: channel.starterMessage });
+          this.#touch(`held:${id}`);
+          this.#touch(`held:thread-of:${channel.starterMessage}`);
+        }
+      }
+    }
     this.#channels.delete(id);
     this.#removedChannels.add(id);
     this.#touch(`channel:${id}`);

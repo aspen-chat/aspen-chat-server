@@ -50,10 +50,13 @@
 - Messages held for their previews (`HeldMessages.tsx`): `AspenSync.sendMessage` sends with
   `mayHold`, so a message whose picture or video is still having its preview made is held by
   the server for up to twenty seconds from the upload and answered `202` with the held message,
-  which the store keeps (`heldMessages`, topic `held:<channelId>`) and the message box shows
+  which the store keeps (`heldMessages`, topic `held:<place>`, `heldPlace`: the channel, or
+  `thread-of:<message>` for a dropped first reply whose thread went with it, which
+  `RecordStore` moves there as the thread is removed) and the message box of that place shows
   above itself, waiting, until `heldMessagePosted` (the message itself arriving in the list by
   its own event) or `heldMessageFailed`, when it says why and offers to send it again
-  (`AspenSync.sendHeldAgain`) or let it go. The box clears as soon as the server has it, held or
+  (`AspenSync.sendHeldAgain`, which sends such a first reply with `replyInThread`, making the
+  thread anew) or let it go. The box clears as soon as the server has it, held or
   posted. Held messages are read at bootstrap (`GET /users/@me/held-messages`), and a dropped one
   stays, on this device, until it is sent again or let go.
 - Drafts (`src/features/messages/drafts.ts`): what is written in a message box and not sent

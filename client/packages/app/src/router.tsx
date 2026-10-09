@@ -190,6 +190,12 @@ const threadRoute = createRoute({
   component: ChannelScreen,
 });
 
+const newThreadRoute = createRoute({
+  getParentRoute: () => communityRoute,
+  path: "/channels/$channelId/messages/$starterId/thread",
+  component: ChannelScreen,
+});
+
 export const dmsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/dms",
@@ -217,6 +223,12 @@ const dmMessageRoute = createRoute({
 const dmThreadRoute = createRoute({
   getParentRoute: () => dmsRoute,
   path: "/$channelId/threads/$threadId",
+  component: ChannelScreen,
+});
+
+const dmNewThreadRoute = createRoute({
+  getParentRoute: () => dmsRoute,
+  path: "/$channelId/messages/$starterId/thread",
   component: ChannelScreen,
 });
 
@@ -276,6 +288,12 @@ const foreignThreadRoute = createRoute({
   component: ChannelScreen,
 });
 
+const foreignNewThreadRoute = createRoute({
+  getParentRoute: () => foreignCommunityRoute,
+  path: "/channels/$channelId/messages/$starterId/thread",
+  component: ChannelScreen,
+});
+
 const foreignDmsRoute = createRoute({
   getParentRoute: () => foreignRoute,
   path: "/dms",
@@ -306,6 +324,12 @@ const foreignDmThreadRoute = createRoute({
   component: ChannelScreen,
 });
 
+const foreignDmNewThreadRoute = createRoute({
+  getParentRoute: () => foreignDmsRoute,
+  path: "/$channelId/messages/$starterId/thread",
+  component: ChannelScreen,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   registerRoute,
@@ -317,8 +341,14 @@ const routeTree = rootRoute.addChildren([
   attributionsRoute,
   botAddRoute,
   inviteRoute,
-  communityRoute.addChildren([communityIndexRoute, channelRoute, messageRoute, threadRoute]),
-  dmsRoute.addChildren([dmsIndexRoute, dmRoute, dmMessageRoute, dmThreadRoute]),
+  communityRoute.addChildren([
+    communityIndexRoute,
+    channelRoute,
+    messageRoute,
+    threadRoute,
+    newThreadRoute,
+  ]),
+  dmsRoute.addChildren([dmsIndexRoute, dmRoute, dmMessageRoute, dmThreadRoute, dmNewThreadRoute]),
   foreignRoute.addChildren([
     foreignIndexRoute,
     foreignInviteRoute,
@@ -327,12 +357,14 @@ const routeTree = rootRoute.addChildren([
       foreignChannelRoute,
       foreignMessageRoute,
       foreignThreadRoute,
+      foreignNewThreadRoute,
     ]),
     foreignDmsRoute.addChildren([
       foreignDmsIndexRoute,
       foreignDmRoute,
       foreignDmMessageRoute,
       foreignDmThreadRoute,
+      foreignDmNewThreadRoute,
     ]),
   ]),
 ]);

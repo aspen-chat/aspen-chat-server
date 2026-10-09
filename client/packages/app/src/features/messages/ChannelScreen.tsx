@@ -11,7 +11,7 @@ import { PinsButton } from "@/features/messages/PinsButton";
 import { SearchButton } from "@/features/search/SearchDialog";
 import { MessageList } from "@/features/messages/MessageList";
 import { threadLink, type ChannelHome } from "@/features/messages/links";
-import { ThreadPanel } from "@/features/threads/ThreadPanel";
+import { NewThreadPanel, ThreadPanel } from "@/features/threads/ThreadPanel";
 import { VoiceScreen } from "@/features/voice/VoiceScreen";
 import { PluginChannelScreen } from "@/features/plugins/PluginChannel";
 import { useMessages } from "@/i18n/context";
@@ -24,11 +24,14 @@ import { Toasts } from "@/features/layout/Toasts";
  * A channel's screen, in a community or among the caller's DMs: a text channel's or DM's
  * history and composer, a voice channel's call, or a plugin's view of a channel of its kind. With a message id in the URL the history
  * opens around that message; otherwise it opens at the newest messages and follows new ones as
- * they arrive. With a thread id the thread opens beside it, in place of it on small screens.
+ * they arrive. With a thread id the thread opens beside it, in place of it on small screens, and
+ * with a starter's id, so does a thread of that message that its first reply will make.
  */
 export function ChannelScreen() {
   const m = useMessages();
-  const { domain, communityId, channelId, messageId, threadId } = useParams({ strict: false });
+  const { domain, communityId, channelId, messageId, threadId, starterId } = useParams({
+    strict: false,
+  });
   // One object for as long as the route's deployment and community hold, so the rows it is
   // handed to, which are memoized, are not rendered again for it.
   const home: ChannelHome = useMemo(
@@ -110,7 +113,7 @@ export function ChannelScreen() {
   return (
     <div className="flex min-h-0 flex-1">
       <main
-        className={`${threadId === undefined ? "flex" : "hidden md:flex"} min-h-0 min-w-0 flex-1 flex-col`}
+        className={`${threadId === undefined && starterId === undefined ? "flex" : "hidden md:flex"} min-h-0 min-w-0 flex-1 flex-col`}
       >
         {isDm(channel) ? (
           <DmHeader channel={channel} />
@@ -144,6 +147,9 @@ export function ChannelScreen() {
       </main>
       {threadId !== undefined && (
         <ThreadPanel home={home} parentId={channelId} threadId={threadId} />
+      )}
+      {starterId !== undefined && (
+        <NewThreadPanel home={home} parentId={channelId} starterId={starterId} />
       )}
     </div>
   );

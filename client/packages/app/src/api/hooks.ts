@@ -250,8 +250,8 @@ export function useIdWizard(): boolean {
 }
 
 /** The caller's messages in a channel held for their attachments' previews. */
-export function useHeldMessages(channelId: string): readonly HeldEntry[] {
-  return useTopic(`held:${channelId}`, (s) => s.heldMessages(channelId));
+export function useHeldMessages(place: string): readonly HeldEntry[] {
+  return useTopic(`held:${place}`, (s) => s.heldMessages(place));
 }
 
 /** An attachment record by id, fetched on demand when the cache lacks it. */
