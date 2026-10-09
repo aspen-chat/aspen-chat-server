@@ -24,7 +24,7 @@ base64 = "0.22.1"
 diesel-async = { version = "0.7.4", features = ["deadpool", "postgres", "r2d2"] }
 # The pool diesel-async builds on, for its Tokio timer: without one it cannot time out a wait.
 deadpool = { version = "0.12.2", default-features = false, features = ["managed", "rt_tokio_1"] }
-async-nats = { version = "0.46.0", features = ["aws-lc-rs", "jetstream", "kv", "server_2_10", "server_2_11"], default-features = false }
+async-nats = { version = "0.50.0", features = ["aws-lc-rs", "jetstream", "kv", "server_2_10", "server_2_11"], default-features = false }
 bytes = "1.10.1"
 config = { version = "0.15.14", features = ["toml"] }
 rust-i18n = "3.1.5"

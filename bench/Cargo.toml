@@ -14,7 +14,7 @@ anyhow = "1.0.102"
 aspen_bench_protocol = { path = "../bench_protocol" }
 aspen_limits = { path = "../limits" }
 aspen_metrics = { path = "../metrics" }
-async-nats = { version = "0.46.0", features = ["aws-lc-rs", "jetstream", "kv", "server_2_10", "server_2_11"], default-features = false }
+async-nats = { version = "0.50.0", features = ["aws-lc-rs", "jetstream", "kv", "server_2_10", "server_2_11"], default-features = false }
 axum = { version = "0.8.4", features = ["ws"] }
 base64 = "0.22.1"
 bytes = "1"
