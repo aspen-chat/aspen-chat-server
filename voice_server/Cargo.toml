@@ -13,7 +13,7 @@ aspen_metrics = { version = "0.1.0", path = "../metrics", features = ["jemalloc"
 # The global allocator, replacing malloc for the whole process (C and C++ libraries included),
 # so its statistics describe all of the process's memory.
 tikv-jemallocator = { version = "0.7", features = ["unprefixed_malloc_on_supported_platforms"] }
-async-nats = { version = "0.46.0", features = ["aws-lc-rs", "jetstream", "server_2_10", "server_2_11"], default-features = false }
+async-nats = { version = "0.50.0", features = ["aws-lc-rs", "jetstream", "server_2_10", "server_2_11"], default-features = false }
 axum = { version = "0.8.4", features = ["macros", "ws"] }
 clap = { version = "4.5.37", features = ["derive"] }
 config = { version = "0.15.14", features = ["toml"] }

@@ -9,10 +9,3 @@ allowBuilds:
   esbuild: true
   # Windows-only installer tooling pulled in by electron-builder; nothing to build elsewhere.
   electron-winstaller: false
-
-# pnpm's release-age policy would otherwise hold these back; they are deliberate choices.
-minimumReleaseAgeExclude:
-  - eslint@10.10.0
-  - electron@44.2.0
-  - react-aria-components@1.21.1
-  - react-aria@3.52.1

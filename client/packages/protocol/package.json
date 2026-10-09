@@ -17,16 +17,16 @@
   "dependencies": {
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
-    "mediasoup-client": "^3.24.1",
+    "mediasoup-client": "^3.24.5",
     "openapi-fetch": "^0.17.0"
   },
   "devDependencies": {
-    "@types/node": "^26.4.1",
+    "@types/node": "^26.6.4",
     "json-schema-to-typescript": "^16.0.0",
     "openapi-typescript": "^7.13.0",
-    "tsx": "^4.23.13",
+    "tsx": "^4.23.15",
     "typescript": "~5.9.3",
-    "vitest": "^5.0.0",
-    "yaml": "^2.9.0"
+    "vitest": "^5.0.3",
+    "yaml": "^2.9.1"
   }
 }
