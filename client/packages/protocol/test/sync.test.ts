@@ -9,6 +9,7 @@ import {
   MemorySessionStore,
   PRESENCE_POLL_MS,
   PRESENCE_READ_MS,
+  WATCH_TAKEN_UP_MS,
   TYPING_EXPIRY_MS,
   TYPING_NOTICES,
   TYPING_REFRESH_MS,
@@ -370,10 +371,14 @@ describe("AspenSync", () => {
   it("watches those shown on the stream, applies what it tells, and reads all only now and then", async () => {
     let now = 0;
     const presencePolls: (() => void)[] = [];
+    const takenUp: (() => void)[] = [];
     const { sync, calls } = makeSync(bootstrapResponses(), () => now, {
       setTimeout: ((handler: () => void, ms?: number) => {
         if (ms === PRESENCE_POLL_MS) {
           presencePolls.push(handler);
+        }
+        if (ms === WATCH_TAKEN_UP_MS) {
+          takenUp.push(handler);
         }
         return 0;
       }) as typeof setTimeout,
@@ -393,12 +398,19 @@ describe("AspenSync", () => {
     expect(sync.store.me()?.onlineStatus).toBe("doNotDisturb");
 
     const reads = () => calls.filter((u) => u.pathname === "/api/v1/users/statuses").length;
+    // Everyone shown is read whole only once the server has taken up whom it watches, so a
+    // change before then is in the read and one after it is told.
+    expect(reads()).toBe(0);
+    expect(takenUp).toHaveLength(1);
+    now = WATCH_TAKEN_UP_MS;
+    takenUp.shift()?.();
+    await settle();
     expect(reads()).toBe(1);
-    now = PRESENCE_POLL_MS;
+    now = WATCH_TAKEN_UP_MS + PRESENCE_POLL_MS;
     presencePolls.shift()?.();
     await settle();
     expect(reads()).toBe(1);
-    now = PRESENCE_READ_MS;
+    now = WATCH_TAKEN_UP_MS + PRESENCE_READ_MS;
     presencePolls.shift()?.();
     await settle();
     expect(reads()).toBe(2);
@@ -407,23 +419,30 @@ describe("AspenSync", () => {
 
   it("keeps a shown channel's online count current with the presence poll", async () => {
     let online = 3;
+    let now = 0;
     const presencePolls: (() => void)[] = [];
+    const takenUp: (() => void)[] = [];
     const { sync, calls } = makeSync(
       {
         ...bootstrapResponses(),
         [`/api/v1/channels/${general.id}/presence`]: () => json({ online }),
       },
-      () => 0,
+      () => now,
       {
         setTimeout: ((handler: () => void, ms?: number) => {
           if (ms === PRESENCE_POLL_MS) {
             presencePolls.push(handler);
+          }
+          if (ms === WATCH_TAKEN_UP_MS) {
+            takenUp.push(handler);
           }
           return 0;
         }) as typeof setTimeout,
       },
     );
     await goLive(sync);
+    now = WATCH_TAKEN_UP_MS;
+    takenUp.shift()?.();
     await settle();
     const reads = () =>
       calls.filter((u) => u.pathname === `/api/v1/channels/${general.id}/presence`).length;
@@ -500,7 +519,6 @@ describe("AspenSync", () => {
       "/api/v1/users/@me/thread-follows",
       "/api/v1/users/@me/presence-override",
       "/api/v1/users/%40me/preferences",
-      "/api/v1/users/statuses",
     ]);
     expect(sync.store.communities()).toEqual([aspen]);
     expect(sync.store.channels(aspen.id)).toEqual([general]);

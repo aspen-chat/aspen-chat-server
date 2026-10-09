@@ -28,7 +28,8 @@ pub enum EphemeralEvent {
         typing: bool,
     },
     /// The presence of users the connection watches (`watchPresence`), each as the reader may
-    /// learn it, for those whose presence changed or who were newly watched. Changes are
+    /// learn it, for those whose presence changed or whom a `watchPresence` after the
+    /// connection's first added. Changes are
     /// gathered for up to `PRESENCE_WINDOW_MILLIS` and told together, and only what differs
     /// from what the connection was last told of each.
     #[serde(rename_all = "camelCase")]

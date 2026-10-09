@@ -66,7 +66,7 @@ Connected or not:
 ## Reading presence
 
 - Clients ask `GET /users/statuses?ids=…` (at most 100 ids) for the users they show.
-- The reference client does so when it connects, and at most every two minutes after, since its event stream tells it of changes.
+- The reference client does so a second and a half after it connects, once the server has taken up whom its connection watches, and at most every two minutes after, since its event stream tells it of changes.
 - Every record that carries `onlineStatus` fills it the same way for the caller: `GET /users/{user}`, the `users` sideloaded with messages, reactors, DMs, blocks, and report cases, members, and bots.
 
 ## Telling of changes
@@ -103,7 +103,7 @@ A hint says only that someone's presence may have changed. It is made:
    1. reads the presence of every user to tell of in batched `MGET`s (`user_status::raw_statuses`);
    2. decides in one query per 5000 pairs which watchers may learn each (`user_status::presence_visible_pairs`, the same rule as below);
    3. sends each connection one frame holding only what differs from what it was last told of each.
-4. A user newly watched by a connection is told to it whatever they are.
+4. A user that a connection's watch list adds is told to it whatever they are, except the users of its first list, which its client reads whole over REST once the list is taken up (see [Design notes](design-notes.md#presence)). From the take-up on, every change is told.
 5. Someone a watcher may no longer learn the presence of is told to them as `offline`.
 
 A lost hint (a full queue, a server that stopped with timers pending, a core NATS message dropped) leaves a watcher behind until the next change or the client's next whole read.
@@ -112,7 +112,7 @@ A lost hint (a full queue, a server that stopped with timers pending, a core NAT
 
 - Nothing is done for a change no connection here watches but reading its hint.
 - A telling costs one batched read and one query per 5,000 pairs, per window per server.
-- One telling decides at most `MAX_PAIRS_PER_TELLING` (50,000) connection and user pairs, so at most ten queries, changes before newly watched users; the rest wait for the next window. After a crowd reconnects, their first tellings so take a while, which their clients' whole reads on connecting cover.
+- One telling decides at most `MAX_PAIRS_PER_TELLING` (50,000) connection and user pairs, so at most ten queries, changes first; the rest wait for the next window.
 - Memory is one entry per connection per user watched, at most 500 per connection, and one timer per user and kind marked on this server.
 
 ## Who may see it
@@ -169,7 +169,7 @@ The member sample (see [Roles and permissions](../roles-and-permissions/index.md
 1. **Who can observe it, and by which routes?** Those who may learn it (above), by REST (`GET /users/statuses`, and every record carrying `onlineStatus`) and by `presence` frames on an event stream that watches them. It is never pushed to a phone, searched, or carried by a stored event.
 2. **What decides it, and where is that checked?** `presence_visible`, for REST reads in `statuses_for`, and for frames by `presence_visible_pairs` at each telling, never when a connection names whom it watches.
 3. **When the deciding permission is lost, what happens to what is already open?** A block hints the blocker, so the blocked watcher is told `offline` within a window. Leaving a community, a removal, a ban, or a DM ending takes effect at the next change to that person, which the watcher is told as `offline`; meanwhile the watcher's client drops the member with the community's events, and so stops watching them. A sign-out, a password change, a ban from the deployment, or an account deleted closes the watcher's streams, which ends their watches.
-4. **When it is gained, how does a client already open find out without a reload?** It watches whom it now shows, and is told each of them at the next telling, as a newly watched user is.
+4. **When it is gained, how does a client already open find out without a reload?** It watches whom it now shows, and is told each of them at the next telling, as a user its watch list adds is; on a new connection, it reads them whole.
 5. **Does every path that changes it announce it?** Every change to a key or override hints, at once or by a timer at its expiry. A change to who may learn it hints only for a block; the rest are caught at the next change, or the client's next whole read.
 6. **Is it published inside the transaction that makes the change?** Hints from overrides and blocks are made once the transaction commits; the rest change Valkey, which has no transaction. A hint is published on core NATS and lost with no harm beyond lateness.
 

@@ -159,6 +159,14 @@ export const PRESENCE_READ_MS = 120_000;
 export const MAX_WATCHED_PRESENCE = 500;
 /** How long changes to whom to watch settle before the server is told. */
 const WATCH_SETTLE_MS = 250;
+/** How long a server gathers presence changes; mirrors the server's `PRESENCE_WINDOW_MILLIS`. */
+export const PRESENCE_WINDOW_MS = 1_000;
+/**
+ * How long after a connection's first `watchPresence` everyone shown is read whole: the server
+ * tells only of changes to that list's users, from when it takes the list up, at most a window
+ * after it is sent. Read later than that, every change is either in the read or told after it.
+ */
+export const WATCH_TAKEN_UP_MS = PRESENCE_WINDOW_MS + 500;
 
 /**
  * How long reading a channel is gathered before it is reported: one report per channel per
@@ -333,6 +341,8 @@ export class AspenSync {
   #reloadAttempt = 0;
   /** When everyone's presence was last read whole; `null` until it is, and on every connection. */
   #presenceReadAt: number | null = null;
+  /** When this connection's first watch list was sent, which the first whole read waits on. */
+  #firstWatchAt: number | null = null;
   /** The watch list the stream was last told of, joined; empty on a fresh connection. */
   #watchSent = "";
   #watchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3506,6 +3516,16 @@ export class AspenSync {
     const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
     const now = this.#now();
     const readDue = this.#presenceReadAt === null || now - this.#presenceReadAt >= PRESENCE_READ_MS;
+    const takenUpIn =
+      this.#firstWatchAt === null ? 0 : this.#firstWatchAt + WATCH_TAKEN_UP_MS - now;
+    if (readDue && takenUpIn > 0) {
+      // Too soon: a change before the server takes up the watch would be in neither.
+      this.#presenceTimer = this.#setTimeout(() => {
+        this.#presenceTimer = null;
+        void this.#pollPresence();
+      }, takenUpIn);
+      return;
+    }
     if (!hidden) {
       const ids = readDue ? this.store.presenceCandidates() : [];
       if (readDue) {
@@ -3661,9 +3681,11 @@ export class AspenSync {
   #onReady(resumed: boolean): void {
     this.#reportActivity();
     this.#tellViewing();
-    // A new connection watches nobody, and what it missed meanwhile is read whole.
+    // A new connection watches nobody, and what it missed meanwhile is read whole once the
+    // server has taken up whom it watches (`WATCH_TAKEN_UP_MS`).
     this.#watchSent = "";
     this.#tellWatching();
+    this.#firstWatchAt = this.#watchSent === "" ? null : this.#now();
     this.#presenceReadAt = null;
     if (this.#status === "resyncing" || this.#status === "failed") {
       return;

@@ -31,15 +31,21 @@ those it watches as they happen.
 - It sends it again, `WATCH_SETTLE_MS` after the members shown, the calls, the communities, or the
   user change (`RecordStore.onChange`, which hears every topic a change touched), when the list
   differs from the last sent.
-- The server answers with `presence` frames (`ephemeral`): each watched user as they are now, then
-  each change, gathered for up to a second. `applyStatuses` takes them.
+- The server answers with `presence` frames (`ephemeral`): each change to a watched user, gathered
+  for up to a second, and each user a later list adds as they are now. The users of a
+  connection's first list are not told as they are: the whole read below covers them, so a crowd
+  reconnecting at once puts that work on requests, which a busy server can refuse, rather than on
+  its presence router. `applyStatuses` takes them.
 
 ### Reading whole
 
 `AspenSync` also asks `GET /users/statuses` for `RecordStore.presenceCandidates()` (the user, the
 members shown for every community, and everyone in a call) in batches of `PRESENCE_BATCH`:
 
-1. when the sync goes live, on every connection;
+1. on every connection, `WATCH_TAKEN_UP_MS` (a second and a half) after its first
+   `watchPresence`, or when the sync goes live if later: the server takes up a list within
+   `PRESENCE_WINDOW_MS` and tells changes from then, so a change before it is in the read and one
+   after it is told;
 2. then at most every `PRESENCE_READ_MS` (two minutes), checked at each `PRESENCE_POLL_MS` while
    the page is visible, and when the page becomes visible again.
 
