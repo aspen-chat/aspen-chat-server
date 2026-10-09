@@ -5,7 +5,7 @@ import { Button } from "react-aria-components";
 import { useChannelCan, useChannelVoice, useMe, useSync, useVoiceCall } from "@/api/hooks";
 import { HomeSyncContext } from "@/api/syncContext";
 import { useNow } from "@/features/layout/useNow";
-import { startDialTone } from "@/features/notifications/ringtone";
+import { loopSound } from "@/features/notifications/sounds";
 import { voiceOutputDevice } from "@/features/settings/audioDevices";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { ShareControl } from "@/features/voice/ShareControl";
@@ -76,7 +76,7 @@ function useDialTone(connected: boolean, voice: ChannelVoice) {
     if (!ringing || home === null) {
       return;
     }
-    return startDialTone(voiceOutputDevice(home.preferences));
+    return loopSound("dialTone", voiceOutputDevice(home.preferences));
   }, [ringing, home]);
 }
 

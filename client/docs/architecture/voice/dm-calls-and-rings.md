@@ -24,7 +24,7 @@ A call that rings the user (`RecordStore.myRings`, on any deployment they use) s
 
 While it shows:
 
-- `startRingtone` (`src/features/notifications/ringtone.ts`, made like the chime by `tone.ts`) plays
+- The ringtone (`ringtone.wav`, looped by `loopSound`; see [sounds](../notifications.md#sounds)) plays
   through the notification sound's speaker.
 - When the app is not focused and the user turned system notifications on, the system notifies,
   once per ring (`ringNotifications.ts`). **Why:** a desktop may refuse a notification posted again
@@ -34,8 +34,9 @@ While it shows:
 
 ## Ringing out
 
-- While the user is in a DM's call that still rings someone, `startDialTone` plays a quiet ringback
-  (440 and 480 Hz, 1.2 seconds in every 4) through the voice chat's speaker.
+- While the user is in a DM's call that still rings someone, the dial tone (`dial-tone.wav`, looped
+  by `loopSound`) plays a quiet ringback (440 and 480 Hz, 1.2 seconds in every 4) through the voice
+  chat's speaker.
 - In the call, those being rung show as tiles darkened by `brightness-75`, at full opacity, with no
   visible label. A screen reader hears "Ringing".
 

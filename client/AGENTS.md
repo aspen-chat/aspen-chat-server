@@ -71,7 +71,7 @@ same commit, as with comments.
 - [`ios-app.md`](docs/architecture/ios-app.md): the iOS project and its UI tests.
 - [`message-list.md`](docs/architecture/message-list/index.md): how the message list scrolls itself on iOS, keeps what is in view still, renders pages, moves between messages by keyboard, reads out arrivals, and the tests that hold it to that.
 - [`message-rendering.md`](docs/architecture/message-rendering/index.md): Markdown, code highlighting, spoilers, linkifying, attachments, inline images, and video cards.
-- [`notifications.md`](docs/architecture/notifications.md): notification levels, the chime, and system notifications.
+- [`notifications.md`](docs/architecture/notifications.md): notification levels, the chime, system notifications, and every sound the app plays.
 - [`plugins.md`](docs/architecture/plugins/index.md): the plugin catalogue, annotations on messages and people, messages changed by plugins, plugins' accounts, the DM notice, the plugin settings in community settings and the dashboard, channels of a plugin's kind and their views' bridge, cards, and notices.
 - [`polls.md`](docs/architecture/polls.md): poll records, votes, closing, and write-ins.
 - [`preferences.md`](docs/architecture/preferences.md): `PreferenceStore`, device and account scope, audio devices, the desktop app's zoom and the phones' text sizes, the message text size and line spacing, contrast, and Settings.

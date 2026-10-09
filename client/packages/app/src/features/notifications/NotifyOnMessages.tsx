@@ -13,8 +13,8 @@ import { detectShell } from "@/config";
 import { channelLink, messageLink, threadLink } from "@/features/messages/links";
 import { notificationOutputDevice } from "@/features/settings/audioDevices";
 import { useMessages } from "@/i18n/context";
-import { playChime } from "./chime";
 import { describe } from "./describe";
+import { playSound } from "./sounds";
 
 /**
  * Tells the user of new messages their notification settings ask for (`AspenSync.onNotify`), and
@@ -59,7 +59,7 @@ export function NotifyOnMessages() {
         home.preferences.get(NOTIFICATION_SOUNDS) &&
         (!mobile || document.visibilityState === "visible")
       ) {
-        void playChime(notificationOutputDevice(home.preferences));
+        void playSound("chime", notificationOutputDevice(home.preferences));
       }
       if (
         mobile ||

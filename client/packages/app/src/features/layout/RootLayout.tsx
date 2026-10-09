@@ -8,6 +8,7 @@ import { useOneCallAtATime } from "@/api/calls";
 import { ShareBlocksAcrossDeployments } from "@/api/identity";
 import { WakeThisPhone } from "@/api/push";
 import { NotifyOnMessages } from "@/features/notifications/NotifyOnMessages";
+import { PlaySounds } from "@/features/notifications/PlaySounds";
 import { SyncProvider } from "@/api/sync";
 import { CommunityRail } from "@/features/communities/CommunityRail";
 import { AttributionsScreen } from "@/features/about/AttributionsScreen";
@@ -141,6 +142,7 @@ function SignedIn() {
       <ShareBlocksAcrossDeployments />
       <WakeThisPhone />
       <NotifyOnMessages />
+      <PlaySounds />
       <IncomingCalls />
       <FollowLanguagePreference />
       <FollowMotionSpeed />

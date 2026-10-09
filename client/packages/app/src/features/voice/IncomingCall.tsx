@@ -21,7 +21,7 @@ import {
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useNow } from "@/features/layout/useNow";
 import { channelLink } from "@/features/messages/links";
-import { startRingtone } from "@/features/notifications/ringtone";
+import { loopSound } from "@/features/notifications/sounds";
 import { notificationOutputDevice } from "@/features/settings/audioDevices";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
@@ -92,7 +92,7 @@ function IncomingCall({
     if (muted || answered || home === null) {
       return;
     }
-    return startRingtone(notificationOutputDevice(home.preferences));
+    return loopSound("ringtone", notificationOutputDevice(home.preferences));
   }, [muted, answered, home]);
 
   // Posted once the caller is known, so its title never changes, and once per ring whatever
