@@ -1,11 +1,48 @@
-//! The mediasoup settings every router and plain transport shares: the codecs a router
-//! offers, the H.264 parameters game capture sends, where a plain transport listens, and the
-//! conversion between mediasoup's media kinds and the signalling protocol's.
+//! The mediasoup settings every router and transport shares: the codecs a router offers, the
+//! H.264 parameters game capture sends, how a client's WebRTC transport listens, where a plain
+//! transport listens, and the conversion between mediasoup's media kinds and the signalling
+//! protocol's.
 
 use mediasoup::prelude::*;
 use mediasoup::types::data_structures::TransportTuple;
+use std::net::IpAddr;
 use std::num::{NonZeroU8, NonZeroU32};
 use voice_protocol::signal::MediaKind as WireKind;
+
+/// What a transport assumes a participant can receive before it has measured, in bits per
+/// second: enough for a screen share at full quality from its first seconds. The voice server
+/// assumes its network can carry the best picture and lets each receiver's own bandwidth
+/// estimate bring it down, rather than starting low (mediasoup's default is 600 kbps) and
+/// making every share blurry while the estimate climbs.
+const INITIAL_OUTGOING_BITRATE: u64 = 10_000_000;
+
+/// How a client's WebRTC transport listens: on `ip`, over UDP and TCP, UDP preferred, telling
+/// clients `announced_address` in its place when there is one.
+pub(crate) fn webrtc_transport_options(
+    ip: IpAddr,
+    announced_address: Option<String>,
+) -> WebRtcTransportOptions {
+    let mut listen = ListenInfo {
+        protocol: Protocol::Udp,
+        ip,
+        announced_address,
+        expose_internal_ip: false,
+        port: None,
+        port_range: None,
+        flags: None,
+        send_buffer_size: None,
+        recv_buffer_size: None,
+    };
+    let udp = listen.clone();
+    listen.protocol = Protocol::Tcp;
+    let mut options =
+        WebRtcTransportOptions::new(WebRtcTransportListenInfos::new(udp).insert(listen));
+    options.enable_udp = true;
+    options.enable_tcp = true;
+    options.prefer_udp = true;
+    options.initial_available_outgoing_bitrate = INITIAL_OUTGOING_BITRATE;
+    options
+}
 
 /// Where a plain transport listens.
 pub(crate) fn local_tuple(transport: &PlainTransport) -> (String, u16) {

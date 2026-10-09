@@ -12,6 +12,8 @@ mod rooms;
 mod signalling;
 mod token_keys;
 mod transfer;
+#[cfg(test)]
+mod webrtc_smoke;
 
 use anyhow::Context;
 use axum::Router;

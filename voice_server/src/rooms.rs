@@ -8,7 +8,7 @@
 mod plain_rtp;
 mod transfers;
 
-use crate::media::{media_codecs, media_kind, wire_kind};
+use crate::media::{media_codecs, media_kind, webrtc_transport_options, wire_kind};
 use crate::reporter::Reporter;
 use crate::transfer::Relay;
 use mediasoup::prelude::*;
@@ -28,13 +28,6 @@ use voice_protocol::signal::{
     TransportDirection,
 };
 use voice_protocol::token::Grants;
-
-/// What a transport assumes a participant can receive before it has measured, in bits per
-/// second: enough for a screen share at full quality from its first seconds. The voice server
-/// assumes its network can carry the best picture and lets each receiver's own bandwidth
-/// estimate bring it down, rather than starting low (mediasoup's default is 600 kbps) and
-/// making every share blurry while the estimate climbs.
-const INITIAL_OUTGOING_BITRATE: u64 = 10_000_000;
 
 /// Volumes above this, in dBvo, count as speaking.
 const SPEAKING_THRESHOLD_DBVO: i8 = -50;
@@ -822,25 +815,7 @@ impl Rooms {
             }
         }
         room.require(seat)?;
-        let mut listen = ListenInfo {
-            protocol: Protocol::Udp,
-            ip: self.rtc_ip,
-            announced_address: self.announced_address.clone(),
-            expose_internal_ip: false,
-            port: None,
-            port_range: None,
-            flags: None,
-            send_buffer_size: None,
-            recv_buffer_size: None,
-        };
-        let udp = listen.clone();
-        listen.protocol = Protocol::Tcp;
-        let mut options =
-            WebRtcTransportOptions::new(WebRtcTransportListenInfos::new(udp).insert(listen));
-        options.enable_udp = true;
-        options.enable_tcp = true;
-        options.prefer_udp = true;
-        options.initial_available_outgoing_bitrate = INITIAL_OUTGOING_BITRATE;
+        let options = webrtc_transport_options(self.rtc_ip, self.announced_address.clone());
         let transport = room.router.create_webrtc_transport(options).await?;
         self.expire_unconnected(&room, seat, Unconnected::WebRtc(transport.id()));
         let message = ServerMessage::TransportCreated {

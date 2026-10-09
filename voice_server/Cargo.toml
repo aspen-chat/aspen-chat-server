@@ -47,3 +47,10 @@ base64 = "0.22.1"
 hmac = "0.12.1"
 sha2 = "0.10.9"
 rand = "0.10.0"
+
+[dev-dependencies]
+dtls = "0.17.2"
+rtp = "0.17.2"
+rustls = { version = "0.23.26", default-features = false, features = ["ring"] }
+stun = "0.17.2"
+webrtc-srtp = "0.17.2"
