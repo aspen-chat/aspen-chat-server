@@ -11,7 +11,8 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Deserialize)]
 pub struct VoiceServerConfig {
     /// This server's row in the API server's `voice_server` table. Join tokens name the servers
-    /// they are good for by this id, and every report carries it.
+    /// they are good for by this id, and every report carries it. The server stops at startup
+    /// when the API servers say no registered server has it (`token_keys`).
     pub id: Uuid,
     /// Join tokens are signed by the API servers' key, whose public half this server asks them
     /// for (`signalling::TokenKeys`). Given this too, it also takes tokens of the shared-secret
@@ -54,7 +55,7 @@ pub struct VoiceServerConfig {
 
 /// A NATS user for this voice server alone. `docs/operators/installing.md` gives the
 /// permissions it needs: publishing this server's reports, reading its commands and the rate
-/// limit suspension, and replies to its own inbox (`Reporter::inbox_prefix`).
+/// limit suspension, and replies to its own inbox (`voice_protocol::control::inbox_prefix`).
 #[derive(Clone, Debug, Deserialize)]
 pub struct NatsUser {
     pub user: String,

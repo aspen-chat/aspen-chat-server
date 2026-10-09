@@ -11,7 +11,10 @@ voice server on ports of their own (so a development stack can keep running besi
   have registered and reported in over NATS;
 - reads both servers' metrics, including the allocator's figures;
 - runs the voice server's `estimate-capacity`, whose self-test forwards real media through
-  mediasoup, and checks the media arrived.
+  mediasoup, and checks the media arrived;
+- removes the voice server's registration while it runs, checks the dashboard's fleet lists it
+  as reporting under an id that is not registered, and checks that started again it stops,
+  saying its id is not registered.
 
 The deployment is `stack.Stack`'s: the database is dropped and the servers and NATS stopped
 however it ends, and their logs are printed if a check fails. Needs Python 3.10, and `docker compose` with
@@ -105,6 +108,32 @@ def smoke(stack: Stack) -> None:
     if estimate["capacity"] <= 0 or min(delivered.values()) < 0.9:
         raise Failed(f"estimate-capacity: capacity {estimate['capacity']}, delivered {delivered}")
     say(f"estimate-capacity: capacity {estimate['capacity']}, media delivered {delivered}")
+
+    unregistered(stack, name, token)
+
+
+def unregistered(stack: Stack, name: str, token: str) -> None:
+    """A voice server reporting under an id that is not registered is shown, and refuses to start."""
+    say("removing the voice server's registration while it runs")
+    stack.command("admin", "grant", name)
+    stack.command("voice-servers", "remove", stack.name)
+
+    def listed() -> bool:
+        fleet = stack.api("GET", "/admin/fleet", token=token)
+        return any(s.get("id") == stack.voice_id for s in fleet.get("unregisteredVoiceServers", []))
+
+    # Its next load report, within fifteen seconds, matches no registered server.
+    wait_for("the fleet to list the unregistered voice server", listed, 45)
+
+    say("starting the unregistered voice server again, which stops")
+    restarted = stack.restart_voice()
+    try:
+        code = restarted.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        raise Failed("the unregistered voice server kept running") from None
+    log = (stack.work / "voice-again.log").read_text()
+    if code == 0 or "is not registered" not in log or stack.voice_id not in log:
+        raise Failed(f"the unregistered voice server exited {code}, saying {log[-1500:]}")
 
 
 

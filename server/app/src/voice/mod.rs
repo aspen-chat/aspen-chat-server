@@ -37,15 +37,18 @@ use diesel::{
     AsChangeset, ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable, SelectableHelper,
 };
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use tracing::error;
+use tracing::{error, warn};
 
 /// Answers voice servers asking for the public half of the join token key
 /// (`voice_protocol::control::TOKEN_KEY_SUBJECT`), for as long as the server runs. Every API
 /// server answers, in one queue group, so any one of them up is enough. A voice server's NATS
 /// user may receive replies only on its own inbox, and nothing but the API servers may publish
-/// there, so the key it is given is the API servers'.
+/// there, so the key it is given is the API servers'. A request naming the voice server's id is
+/// also told whether that id is registered (`servers::is_registered`), so a voice server given
+/// the wrong id says so at startup instead of reporting to no one.
 pub async fn spawn_token_key_answerer(state: GlobalServerContext) -> crate::Result<()> {
     use futures_util::StreamExt;
+    use voice_protocol::control::TokenKeyRequest;
     let client = state.nats_context.client();
     let mut requests = client
         .queue_subscribe(
@@ -53,15 +56,42 @@ pub async fn spawn_token_key_answerer(state: GlobalServerContext) -> crate::Resu
             "aspen_api".to_string(),
         )
         .await?;
-    let answer = serde_json::to_vec(&state.join_token_key.public())?;
+    let key = state.join_token_key.public();
     tokio::spawn(async move {
         while let Some(request) = requests.next().await {
             let Some(reply) = request.reply else {
                 continue;
             };
-            if let Err(e) = client.publish(reply, answer.clone().into()).await {
-                error!(error = %e, "could not answer a voice server asking for the join token key");
-            }
+            let asking = serde_json::from_slice::<TokenKeyRequest>(&request.payload).ok();
+            let (state, client, mut answer) = (state.clone(), client.clone(), key.clone());
+            // Each answer is its own task, so one waiting for a database connection holds up
+            // no other voice server.
+            tokio::spawn(async move {
+                if let Some(asking) = asking {
+                    answer.registered = match servers::is_registered(
+                        &state,
+                        VoiceServerId::from(asking.server),
+                    )
+                    .await
+                    {
+                        Ok(registered) => Some(registered),
+                        Err(e) => {
+                            warn!(error = %e, "could not tell a voice server whether it is registered");
+                            None
+                        }
+                    };
+                }
+                let answer = match serde_json::to_vec(&answer) {
+                    Ok(answer) => answer,
+                    Err(e) => {
+                        error!(error = %e, "could not encode the join token key");
+                        return;
+                    }
+                };
+                if let Err(e) = client.publish(reply, answer.into()).await {
+                    error!(error = %e, "could not answer a voice server asking for the join token key");
+                }
+            });
         }
         error!("stopped answering voice servers asking for the join token key");
     });

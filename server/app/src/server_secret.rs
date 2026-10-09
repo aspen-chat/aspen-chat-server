@@ -87,6 +87,7 @@ impl JoinTokenKey {
         voice_protocol::control::TokenKey {
             key_id: voice_protocol::token::key_id(public),
             public_key: BASE64_URL_SAFE_NO_PAD.encode(public),
+            registered: None,
         }
     }
 }

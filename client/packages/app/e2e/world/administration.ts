@@ -245,6 +245,9 @@ export function administration() {
           reporting: false,
         },
       ],
+      unregisteredVoiceServers: [
+        { id: "0190f0a0-0000-7000-8000-000000000099", reportedAt: minutesAgo(0) },
+      ],
     }),
   };
 }

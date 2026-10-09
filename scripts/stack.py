@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import shutil
 import socket
 import struct
@@ -288,19 +289,32 @@ class Stack:
         )
         if migrated.returncode != 0:
             raise Failed(f"migrations failed: {migrated.stderr[-1000:]}")
-        self.command("voice-servers", "add", self.name, "--url", f"http://127.0.0.1:{self.ports.voice}",
-                     "--capacity", "50")
+        added = self.command("voice-servers", "add", self.name, "--url", f"http://127.0.0.1:{self.ports.voice}",
+                             "--capacity", "50")
+        # The id is taken from what `add` prints, as an operator takes it.
+        given = re.search(r'^\s*id = "([0-9a-f-]+)"$', added, re.MULTILINE)
+        if not given:
+            raise Failed(f"`voice-servers add` printed no id: {added}")
         self._spawn(
             [str(self.bins / "aspen-chat-server"), "--no-https", "--port", str(self.ports.api), "--listen-addr", "127.0.0.1"],
             "api.log",
         )
         wait_for("the chat server", lambda: http_status(f"{self.base}/api/v1/auth/methods") == 200, 60)
-        self.voice_id = psql(f"SELECT id FROM voice_server WHERE name = '{self.name}'", self.database)
-        if not self.voice_id:
-            raise Failed("the voice server was not registered")
+        self.voice_id = given.group(1)
+        if psql(f"SELECT id FROM voice_server WHERE name = '{self.name}'", self.database) != self.voice_id:
+            raise Failed(f"`voice-servers add` printed {self.voice_id}, not the id it registered")
         self._write_configs()
         self._spawn([str(self.bins / "voice_server")], "voice.log")
         wait_for("the voice server", lambda: http_status(f"http://127.0.0.1:{self.ports.voice}/health") == 204, 60)
+
+    def restart_voice(self) -> subprocess.Popen:
+        """Stops the voice server and starts it again as it was, logging to `voice-again.log`."""
+        for process, log in self.processes:
+            if log.name == "voice.log" and process.poll() is None:
+                process.terminate()
+                process.wait(timeout=30)
+        self._spawn([str(self.bins / "voice_server")], "voice-again.log")
+        return self.processes[-1][0]
 
     @property
     def base(self) -> str:

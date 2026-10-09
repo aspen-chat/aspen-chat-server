@@ -53,6 +53,11 @@ export const admin = {
   never: "Never",
   reporting: "Reporting",
   silent: "Silent",
+  unregisteredVoiceServers: "Voice servers that are not registered",
+  unregisteredVoiceServer:
+    "A voice server is reporting as {id}, which no registered server is, so its reports are ignored and nobody is sent to it. Last report {ago}.",
+  unregisteredVoiceServerFix:
+    "Set id in its voice_server.toml to the id of the registered server it should be, shown in the table above, and restart it. A new voice server is registered first, here or with aspen-chat-server voice-servers add, which prints its id.",
   disabled: "Disabled",
   invites: "Registration invites",
   invitesHint: "Anyone with a usable invite can create an account.",

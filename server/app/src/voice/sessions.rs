@@ -418,6 +418,36 @@ pub(super) async fn apply_report(
         )
         .await;
     }
+    // A load report writes one row, so it needs no transaction either.
+    if let VoiceReport::Load {
+        server,
+        participants,
+    } = report
+    {
+        // When the server sent it, not when it was applied: a report that waited in the
+        // stream says nothing about whether the server is up now.
+        let updated = diesel::update(voice_server::table)
+            .filter(voice_server::id.eq(VoiceServerId::from(server)))
+            .set((
+                voice_server::last_report_at.eq(published),
+                voice_server::reported_participants
+                    .eq(i32::try_from(participants).unwrap_or(i32::MAX)),
+            ))
+            .execute(conn.as_mut())
+            .await?;
+        if updated == 0 {
+            // No registered server has the id it reports as, which is a voice server
+            // configured with the wrong `id`: shown on the dashboard beside the server that
+            // is silent because of it.
+            drop(conn);
+            warn!(
+                server = %server,
+                "a voice server whose id is not registered is reporting; register it, or set its `id` to a registered server's"
+            );
+            crate::fleet::note_unregistered_voice_server(state, from, published).await;
+        }
+        return Ok(());
+    }
     // Someone who joined on a token issued before a change to what they may do, or before
     // the sign-in it was issued to ended, is brought in line with it once their joining is
     // recorded.
@@ -438,22 +468,8 @@ pub(super) async fn apply_report(
     conn.transaction(|conn| {
         async move {
             match report {
-                VoiceReport::Load {
-                    server,
-                    participants,
-                } => {
-                    // When the server sent it, not when it was applied: a report that waited in
-                    // the stream says nothing about whether the server is up now.
-                    diesel::update(voice_server::table)
-                        .filter(voice_server::id.eq(VoiceServerId::from(server)))
-                        .set((
-                            voice_server::last_report_at.eq(published),
-                            voice_server::reported_participants
-                                .eq(i32::try_from(participants).unwrap_or(i32::MAX)),
-                        ))
-                        .execute(conn.as_mut())
-                        .await?;
-                }
+                // Applied above, without a transaction.
+                VoiceReport::Load { .. } => {}
                 VoiceReport::SessionStarted {
                     server,
                     session,

@@ -7,7 +7,8 @@
 //! where the Prometheus metrics of the same names are recorded (`aspen_metrics::api`); the
 //! metrics endpoints stay on each server's loopback interface, and the heartbeat is how the
 //! dashboard sees every server without reaching them. Voice servers already report their load
-//! to the API servers (`app::voice`), and their health is read from those reports.
+//! to the API servers (`app::voice`), and their health is read from those reports; a load report
+//! from an id no registered server has is noted in the same bucket, under `voice.unregistered.`.
 
 use crate::VoiceServerId;
 use crate::context::GlobalServerContext;
@@ -78,7 +79,8 @@ async fn bucket(context: &async_nats::jetstream::Context) -> crate::Result<Store
     context
         .create_key_value(KvConfig {
             bucket: BUCKET.to_string(),
-            description: "API server heartbeats (crate::fleet)".to_string(),
+            description: "API server heartbeats and unregistered voice servers (crate::fleet)"
+                .to_string(),
             history: 1,
             max_age: BUCKET_MAX_AGE,
             ..Default::default()
@@ -157,22 +159,76 @@ pub fn spawn_heartbeat(state: GlobalServerContext) {
     });
 }
 
+/// Every entry of the bucket under `prefix` that reads as a `T`.
+async fn read_entries<T: serde::de::DeserializeOwned>(
+    state: &GlobalServerContext,
+    prefix: &str,
+) -> crate::Result<Vec<T>> {
+    let store = bucket(&state.nats_context).await?;
+    let mut keys = store.keys().await?;
+    let mut entries = Vec::new();
+    while let Some(key) = keys.next().await {
+        let Ok(key) = key else { continue };
+        if !key.starts_with(prefix) {
+            continue;
+        }
+        if let Ok(Some(bytes)) = store.get(&key).await
+            && let Ok(entry) = serde_json::from_slice::<T>(&bytes)
+        {
+            entries.push(entry);
+        }
+    }
+    Ok(entries)
+}
+
 /// Every API server that has written a heartbeat recently, by host.
 pub async fn read_api_servers(
     state: &GlobalServerContext,
 ) -> crate::Result<Vec<ApiServerHeartbeat>> {
-    let store = bucket(&state.nats_context).await?;
-    let mut keys = store.keys().await?;
-    let mut servers = Vec::new();
-    while let Some(key) = keys.next().await {
-        let Ok(key) = key else { continue };
-        if let Ok(Some(bytes)) = store.get(&key).await
-            && let Ok(heartbeat) = serde_json::from_slice::<ApiServerHeartbeat>(&bytes)
-        {
-            servers.push(heartbeat);
-        }
-    }
+    let mut servers = read_entries::<ApiServerHeartbeat>(state, "api.").await?;
     servers.sort_by(|a, b| a.host.cmp(&b.host).then(a.started_at.cmp(&b.started_at)));
+    Ok(servers)
+}
+
+/// A voice server reporting its load under an id no registered server has: one whose `id` in
+/// `voice_server.toml` is wrong, or that was removed while it ran. Its reports are dropped, so
+/// the registered server it was meant to be stays silent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnregisteredVoiceServer {
+    pub id: VoiceServerId,
+    pub reported_at: DateTime<Utc>,
+}
+
+const UNREGISTERED_PREFIX: &str = "voice.unregistered.";
+
+/// Notes that `id` reported its load at `reported_at` without being registered. The entry lasts
+/// `BUCKET_MAX_AGE`, longer than the time between two load reports, so it is shown for as long as
+/// the server keeps reporting. A failure is logged: the report is dropped either way.
+pub async fn note_unregistered_voice_server(
+    state: &GlobalServerContext,
+    id: VoiceServerId,
+    reported_at: DateTime<Utc>,
+) {
+    let entry = UnregisteredVoiceServer { id, reported_at };
+    let written = async {
+        let bytes = serde_json::to_vec(&entry)?;
+        bucket(&state.nats_context)
+            .await?
+            .put(format!("{UNREGISTERED_PREFIX}{}", id.0), bytes.into())
+            .await?;
+        Ok::<_, crate::Error>(())
+    };
+    if let Err(e) = written.await {
+        tracing::warn!("could not note an unregistered voice server: {e}");
+    }
+}
+
+/// Every unregistered voice server that has reported recently, by id.
+pub async fn read_unregistered_voice_servers(
+    state: &GlobalServerContext,
+) -> crate::Result<Vec<UnregisteredVoiceServer>> {
+    let mut servers = read_entries::<UnregisteredVoiceServer>(state, UNREGISTERED_PREFIX).await?;
+    servers.sort_by_key(|server| server.id);
     Ok(servers)
 }
 

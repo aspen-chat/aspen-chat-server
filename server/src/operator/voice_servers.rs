@@ -1,6 +1,8 @@
 //! `voice-servers list`, `add`, `set`, and `remove`: the registry of voice servers
 //! (`app::voice`), as Manage voice servers keeps it from the dashboard. `add` may be run again
-//! with the same arguments, so a deployment's scripts can declare their servers.
+//! with the same arguments, so a deployment's scripts can declare their servers, and prints what
+//! the voice server must be given: the id it reports as, in `voice_server.toml` and in its NATS
+//! user's permissions.
 
 use super::{database, operator, publisher};
 use anyhow::{Context, Result, anyhow};
@@ -13,7 +15,7 @@ pub enum VoiceServersCommand {
     /// List every registered voice server.
     List,
     /// Register a voice server, or give the one already registered by that name this address
-    /// and capacity.
+    /// and capacity, and print the id to give it.
     Add {
         /// What it is called, which the dashboard shows and the other commands name it by.
         name: String,
@@ -41,12 +43,28 @@ pub enum VoiceServersCommand {
 
 fn print(server: &VoiceServer) {
     println!(
-        "{}  {}  capacity {}{}",
+        "{}  {}  capacity {}  id {}{}",
         server.name,
         server.url,
         server.capacity,
+        server.id.0,
         if server.enabled { "" } else { "  disabled" }
     );
+}
+
+/// What the voice server `server` names must be given to report as it, after `add`.
+fn print_setup(server: &VoiceServer) {
+    let id = server.id.0;
+    let (publish, subscribe) = voice_protocol::control::own_subjects(id);
+    println!(
+        "\nGive the voice server this id in voice_server.toml (or ASPEN_VOICE_SERVER_ID):\n\n    id = \"{id}\"\n"
+    );
+    println!(
+        "If it signs in to NATS as a user of its own, that user's permissions name the same id \
+         (docs/operators/installing.md, section 6):\n"
+    );
+    println!("    publish:   {}", publish.join(", "));
+    println!("    subscribe: {}", subscribe.join(", "));
 }
 
 fn capacity(capacity: u32) -> Result<i32> {
@@ -95,6 +113,7 @@ pub async fn voice_servers(config: &AspenConfig, command: VoiceServersCommand) -
                 "registered a voice server"
             );
             print(&server);
+            print_setup(&server);
         }
         VoiceServersCommand::Set {
             name,

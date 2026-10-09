@@ -16,6 +16,7 @@ export type RegistrationInviteRequest = components["schemas"]["RegistrationInvit
 export type Fleet = components["schemas"]["Fleet"];
 export type ApiServerHealth = components["schemas"]["ApiServerHealth"];
 export type VoiceServerHealth = components["schemas"]["VoiceServerHealth"];
+export type UnregisteredVoiceServer = components["schemas"]["UnregisteredVoiceServer"];
 export type FederationOverview = components["schemas"]["FederationOverview"];
 export type FederatedDeployment = components["schemas"]["FederatedDeployment"];
 export type FederationList = components["schemas"]["FederationList"];

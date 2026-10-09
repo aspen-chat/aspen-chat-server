@@ -61,6 +61,17 @@ test("the fleet names each server's state in words", async ({ page }) => {
   await expect(voice.getByRole("row").filter({ hasText: "voice-spare" })).toContainText("Disabled");
 });
 
+test("the fleet names a voice server reporting under an unregistered id, and shows the ids to copy", async ({
+  page,
+}) => {
+  const fleet = await openSection(page, "Server fleet");
+  await expect(
+    fleet.getByText("A voice server is reporting as 0190f0a0-0000-7000-8000-000000000099"),
+  ).toBeVisible();
+  const voice = fleet.getByRole("table", { name: "Voice servers" });
+  await expect(voice.getByRole("columnheader", { name: "ID" })).toBeVisible();
+});
+
 test("an administrator makes an invite, sees its QR code, copies it, and revokes it", async ({
   page,
 }) => {

@@ -754,6 +754,29 @@ pub struct Fleet {
     pub api_servers: Vec<ApiServerHealth>,
     /// Every registered voice server.
     pub voice_servers: Vec<VoiceServerHealth>,
+    /// Every voice server reporting in the last half minute under an id no registered server
+    /// has, whose reports are therefore dropped.
+    pub unregistered_voice_servers: Vec<UnregisteredVoiceServer>,
+}
+
+/// A voice server reporting under an id that is not registered: its `id` in
+/// `voice_server.toml` names no server registered here.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UnregisteredVoiceServer {
+    /// The id it reports as.
+    pub id: VoiceServerId,
+    /// When its last load report was sent.
+    pub reported_at: DateTime<Utc>,
+}
+
+impl From<app::fleet::UnregisteredVoiceServer> for UnregisteredVoiceServer {
+    fn from(server: app::fleet::UnregisteredVoiceServer) -> Self {
+        Self {
+            id: server.id,
+            reported_at: server.reported_at,
+        }
+    }
 }
 
 #[utoipa::path(
@@ -773,9 +796,10 @@ pub async fn get_fleet(
     AdminUser(_session, access): AdminUser,
 ) -> ApiResult<Json<Fleet>> {
     access.require(DeploymentPermission::ViewDashboard)?;
-    let (api_servers, voice_servers) = tokio::try_join!(
+    let (api_servers, voice_servers, unregistered_voice_servers) = tokio::try_join!(
         app::fleet::read_api_servers(&state),
         app::fleet::read_voice_servers(&state),
+        app::fleet::read_unregistered_voice_servers(&state),
     )?;
     Ok(Json(Fleet {
         api_servers: api_servers
@@ -806,6 +830,10 @@ pub async fn get_fleet(
                 last_report_at: v.last_report_at,
                 reporting: v.reporting,
             })
+            .collect(),
+        unregistered_voice_servers: unregistered_voice_servers
+            .into_iter()
+            .map(UnregisteredVoiceServer::from)
             .collect(),
     }))
 }
