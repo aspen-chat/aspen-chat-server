@@ -59,8 +59,11 @@ export {
 } from "./session";
 export {
   EventStream,
+  RECONNECT_BASE_MS,
+  RECONNECT_CAP_MS,
   compileValidator,
   reconnectDelayMs,
+  serverDelayMs,
   type EventStreamHandlers,
   type EventStreamOptions,
   type EventStreamStatus,

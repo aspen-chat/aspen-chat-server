@@ -68,6 +68,14 @@ const DELIVERY_QUEUE: usize = 4;
 /// The most viewer and user pairs one visibility query decides.
 const PAIR_BATCH: usize = 5_000;
 
+/// The most connection and user pairs one telling decides, ten visibility queries' worth; the
+/// rest wait for the next window. After a crowd reconnects, each connection names up to
+/// [`MAX_WATCHED_PRESENCE`] users at once, and telling them all in one go would hold the router,
+/// and a database connection, for as long as that takes, while hints and watch lists queue
+/// behind it. Changes are told before newly watched users, whose clients read them whole when
+/// they connect.
+const MAX_PAIRS_PER_TELLING: usize = 10 * PAIR_BATCH;
+
 /// A little after a key's expiry, so the hint finds it gone.
 const EXPIRY_SLACK: Duration = Duration::from_secs(1);
 
@@ -416,15 +424,34 @@ impl Router {
         }
     }
 
-    /// The connection and user pairs to tell of now, and the watchers' viewers with them.
+    /// The connection and user pairs to tell of now, at most [`MAX_PAIRS_PER_TELLING`]; the
+    /// rest are kept for the next telling, as newly watched pairs, which are told whatever
+    /// differs from what their connections were last told just as changed ones are.
     fn gathered(&mut self) -> HashSet<(u64, UserId)> {
         self.tell_at = None;
         self.take_up_watches();
-        let mut pairs = std::mem::take(&mut self.fresh);
+        let mut pairs = HashSet::new();
+        let mut in_order = Vec::new();
         for user in std::mem::take(&mut self.changed) {
             if let Some(ids) = self.by_user.get(&user) {
-                pairs.extend(ids.iter().map(|id| (*id, user)));
+                for id in ids {
+                    if pairs.insert((*id, user)) {
+                        in_order.push((*id, user));
+                    }
+                }
             }
+        }
+        for pair in std::mem::take(&mut self.fresh) {
+            if pairs.insert(pair) {
+                in_order.push(pair);
+            }
+        }
+        if in_order.len() > MAX_PAIRS_PER_TELLING {
+            for pair in in_order.split_off(MAX_PAIRS_PER_TELLING) {
+                pairs.remove(&pair);
+                self.fresh.insert(pair);
+            }
+            self.due();
         }
         pairs
     }
@@ -690,6 +717,41 @@ mod tests {
             }]
         );
         assert!(received[1].try_recv().is_err());
+    }
+
+    #[test]
+    fn a_telling_decides_at_most_its_share_changes_first() {
+        let viewers: Vec<(u64, UserId)> = (0..MAX_PAIRS_PER_TELLING as u64 / 100 + 1)
+            .map(|id| (id, user(1_000_000 + u128::from(id))))
+            .collect();
+        let (mut router, _received) = router_with(&viewers);
+        let known = user(999);
+        router.named(0, vec![known]);
+        let _ = router.gathered();
+        // A crowd's watch lists, and a change to someone already watched, in one window.
+        for (id, _) in &viewers {
+            let mut watched: Vec<UserId> = (0..100).map(user).collect();
+            if *id == 0 {
+                watched.push(known);
+            }
+            router.named(*id, watched);
+        }
+        router.hinted(vec![known]);
+        let first = router.gathered();
+        assert_eq!(first.len(), MAX_PAIRS_PER_TELLING);
+        assert!(first.contains(&(0, known)));
+        assert_eq!(
+            router.fresh.len(),
+            viewers.len() * 100 + 1 - MAX_PAIRS_PER_TELLING
+        );
+        assert!(router.tell_at.is_some());
+        let second = router.gathered();
+        assert_eq!(
+            second.len(),
+            viewers.len() * 100 + 1 - MAX_PAIRS_PER_TELLING
+        );
+        assert!(first.is_disjoint(&second));
+        assert!(router.fresh.is_empty());
     }
 
     #[test]

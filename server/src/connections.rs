@@ -8,7 +8,16 @@
 //! `[rate_limits] trusted_proxies` carry many clients' connections, so they count only toward
 //! the total; an IPv6 address counts by its `[rate_limits] ipv6_prefix` network, as rate limits
 //! count it.
+//!
+//! Once someone signs in on a connection (a request presents a session, or its event stream
+//! identifies), it counts toward its user's share (`max_per_user`) instead of its address's and
+//! network's, while the user has room. The address limits then bound only connections nobody
+//! has signed in on, and the many people behind one carrier-grade NAT are each held to their own
+//! share rather than all to one address's. A connection whose user has no room left stays on
+//! its address's share, so signing in never closes one.
 
+use aspen_api::rate_limit::CountedConnection;
+use aspen_app::UserId;
 use aspen_app::aspen_config::ConnectionsConfig;
 use aspen_limits::ClientAddresses;
 use hyper::body::{Body, Frame, SizeHint};
@@ -32,16 +41,19 @@ pub struct Gate {
     open: Arc<Semaphore>,
     max_per_ip: usize,
     max_per_network: usize,
+    max_per_user: usize,
     addresses: ClientAddresses,
     held: Mutex<Held>,
     last_refusal_logged: AtomicU64,
 }
 
-/// What untrusted addresses hold open, by address and by network.
+/// What untrusted addresses hold open, by address and by network, and what users who signed in
+/// on their connections hold.
 #[derive(Default)]
 struct Held {
     per_ip: HashMap<String, usize>,
     per_network: HashMap<IpAddr, usize>,
+    per_user: HashMap<UserId, usize>,
 }
 
 /// Counts one more against `key`, or none when it already holds `max`.
@@ -74,11 +86,26 @@ fn network(ip: IpAddr) -> IpAddr {
     }
 }
 
+/// Whose share one connection counts toward, besides the total.
+enum Share {
+    /// A trusted proxy's, or one given back.
+    None,
+    /// Its address's and its network's.
+    Address(String, IpAddr),
+    /// The user who signed in on it.
+    User(UserId),
+}
+
 /// One admitted connection's place within the limits, given back when it is dropped.
 pub struct Admitted {
-    gate: Arc<Gate>,
-    key: Option<(String, IpAddr)>,
+    place: Arc<Place>,
     _open: OwnedSemaphorePermit,
+}
+
+/// Where an admitted connection counts, which moves to its user when someone signs in on it.
+pub struct Place {
+    gate: Arc<Gate>,
+    share: Mutex<Share>,
 }
 
 impl Gate {
@@ -87,6 +114,7 @@ impl Gate {
             open: Arc::new(Semaphore::new(config.max.min(Semaphore::MAX_PERMITS))),
             max_per_ip: config.max_per_ip,
             max_per_network: config.max_per_network,
+            max_per_user: config.max_per_user,
             addresses,
             held: Mutex::new(Held::default()),
             last_refusal_logged: AtomicU64::new(0),
@@ -99,8 +127,8 @@ impl Gate {
             self.log_refusal("the server holds [connections] max connections");
             return None;
         };
-        let key = if self.addresses.is_trusted(peer) {
-            None
+        let share = if self.addresses.is_trusted(peer) {
+            Share::None
         } else {
             let key = self.addresses.key(peer);
             let network = network(peer);
@@ -116,11 +144,13 @@ impl Gate {
                 self.log_refusal("one network holds [connections] max_per_network connections");
                 return None;
             }
-            Some((key, network))
+            Share::Address(key, network)
         };
         Some(Admitted {
-            gate: self.clone(),
-            key,
+            place: Arc::new(Place {
+                gate: self.clone(),
+                share: Mutex::new(share),
+            }),
             _open: open,
         })
     }
@@ -141,14 +171,48 @@ impl Gate {
     }
 }
 
+impl Admitted {
+    /// Where the connection counts, for its requests to say who signed in on it.
+    pub fn place(&self) -> Arc<Place> {
+        self.place.clone()
+    }
+}
+
 impl Drop for Admitted {
     fn drop(&mut self) {
-        let Some((key, network)) = self.key.take() else {
+        self.place.give_back();
+    }
+}
+
+impl Place {
+    fn give_back(&self) {
+        let mut share = self.share.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held = self.gate.held.lock().unwrap_or_else(|e| e.into_inner());
+        match std::mem::replace(&mut *share, Share::None) {
+            Share::None => {}
+            Share::Address(key, network) => {
+                give_back(&mut held.per_ip, &key);
+                give_back(&mut held.per_network, &network);
+            }
+            Share::User(user) => give_back(&mut held.per_user, &user),
+        }
+    }
+}
+
+impl CountedConnection for Place {
+    fn signed_in(&self, user: UserId) {
+        let mut share = self.share.lock().unwrap_or_else(|e| e.into_inner());
+        let Share::Address(key, network) = &*share else {
             return;
         };
         let mut held = self.gate.held.lock().unwrap_or_else(|e| e.into_inner());
-        give_back(&mut held.per_ip, &key);
-        give_back(&mut held.per_network, &network);
+        if !take(&mut held.per_user, user, self.gate.max_per_user) {
+            return;
+        }
+        give_back(&mut held.per_ip, key);
+        give_back(&mut held.per_network, network);
+        drop(held);
+        *share = Share::User(user);
     }
 }
 
@@ -376,6 +440,40 @@ mod tests {
         assert!(gate.admit("2001:db8:2::1".parse().unwrap()).is_some());
         drop(held);
         assert!(gate.admit("203.0.113.200".parse().unwrap()).is_some());
+    }
+
+    #[test]
+    fn signing_in_moves_a_connection_to_its_users_share() {
+        let config = ConnectionsConfig {
+            max: 100,
+            max_per_ip: 2,
+            max_per_network: usize::MAX,
+            max_per_user: 2,
+            ..ConnectionsConfig::default()
+        };
+        let gate = Gate::new(&config, ClientAddresses::new(&[], 64).unwrap());
+        let nat: IpAddr = "203.0.113.1".parse().unwrap();
+        let (alice, bob) = (UserId::new(), UserId::new());
+        let first = gate.admit(nat).unwrap();
+        let second = gate.admit(nat).unwrap();
+        assert!(gate.admit(nat).is_none());
+        // Signed in, they leave the address's share for their users'.
+        first.place().signed_in(alice);
+        second.place().signed_in(bob);
+        // Signing in again on the same connection changes nothing.
+        first.place().signed_in(bob);
+        let third = gate.admit(nat).unwrap();
+        let fourth = gate.admit(nat).unwrap();
+        assert!(gate.admit(nat).is_none());
+        // Alice has room for one more; past it, a connection stays on the address's share.
+        third.place().signed_in(alice);
+        fourth.place().signed_in(alice);
+        let fifth = gate.admit(nat).unwrap();
+        assert!(gate.admit(nat).is_none());
+        drop((first, second, third, fourth, fifth));
+        let held = gate.held.lock().unwrap();
+        assert!(held.per_user.is_empty());
+        assert!(held.per_ip.is_empty());
     }
 
     #[tokio::test(start_paused = true)]

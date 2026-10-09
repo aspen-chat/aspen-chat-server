@@ -33,16 +33,18 @@
 //! online; the channel counts (`app::channel_presence`) and the member sample
 //! (`connected_members`) confirm each one by their keys.
 
+use crate::aspen_config::PresenceConfig;
 use crate::context::GlobalServerContext;
 use crate::presence_feed::Expiry;
 use crate::presence_override::PresenceOverride;
+use crate::presence_upkeep::ListingTimes;
 use crate::user::UserPg;
 use crate::{CommunityId, UserId};
 use aspen_wire::user::UserOnlineStatus;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use fred::interfaces::{KeysInterface, SortedSetsInterface};
-use fred::types::{Expiration, SetOptions};
+use fred::types::Expiration;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,7 +67,7 @@ pub fn active_key(user_id: UserId) -> String {
 
 /// The Valkey key present while the user's community listings run far enough ahead of their
 /// `active` key that setting it again need not renew them: `user:{uuid}:listed`.
-fn listed_key(user_id: UserId) -> String {
+pub(crate) fn listed_key(user_id: UserId) -> String {
     format!("{KEY_PREFIX}{}{LISTED_KEY_SUFFIX}", user_id.0)
 }
 
@@ -82,16 +84,27 @@ fn listing_margin(ttl: i64) -> i64 {
 
 /// How long a listing covers before its margin: the longer of the two keys' lives, so a
 /// listing outlives either key set when it was made.
-fn listing_ttl(state: &GlobalServerContext) -> i64 {
-    let away = i64::try_from(state.config.presence.away_after_seconds).unwrap_or(i64::MAX / 2);
+fn listing_ttl(presence: &PresenceConfig) -> i64 {
+    let away = i64::try_from(presence.away_after_seconds).unwrap_or(i64::MAX / 2);
     away.max(ONLINE_TTL_SECONDS)
 }
 
 /// How long a community's set lives after its last listing: as long as a listing, so it lasts
 /// while any listing in it does and goes once nobody is listed.
 fn community_set_lifetime(state: &GlobalServerContext) -> i64 {
-    let ttl = listing_ttl(state);
-    ttl.saturating_add(listing_margin(ttl))
+    listing_times(&state.config.presence).set_lifetime
+}
+
+/// How long listings last under `presence`, for the upkeep that makes them
+/// (`app::presence_upkeep`).
+pub fn listing_times(presence: &PresenceConfig) -> ListingTimes {
+    let ttl = listing_ttl(presence);
+    let margin = listing_margin(ttl);
+    ListingTimes {
+        ttl,
+        margin,
+        set_lifetime: ttl.saturating_add(margin),
+    }
 }
 
 /// A user's status from the values of their three keys, as they themself are told it: an
@@ -145,67 +158,7 @@ pub fn mark_active(state: &GlobalServerContext, user: UserId) {
             Err(e) => tracing::warn!(error = %e, "failed to record the user as active"),
         }
     });
-    list_in_communities(state, user, listing_ttl(state));
-}
-
-/// Lists `user` in each of their communities' sets as someone who may be online for as long as
-/// a key just set to live `ttl` seconds can, unless a listing made within the margin
-/// already covers it. Fire and forget, like the keys.
-fn list_in_communities(state: &GlobalServerContext, user: UserId, ttl: i64) {
-    let state = state.clone();
-    tokio::spawn(async move {
-        let margin = listing_margin(ttl);
-        let fresh: Option<String> = match state
-            .valkey
-            .set(
-                listed_key(user),
-                1,
-                Some(Expiration::EX(margin.max(1))),
-                Some(SetOptions::NX),
-                false,
-            )
-            .await
-        {
-            Ok(fresh) => fresh,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to renew the user's community listings");
-                return;
-            }
-        };
-        if fresh.is_none() {
-            return;
-        }
-        if let Err(e) = renew_listings(&state, user, ttl.saturating_add(margin)).await {
-            tracing::warn!(error = %e, "failed to renew the user's community listings");
-            // The next time the key is set tries again rather than waiting out the margin.
-            let _ = state.valkey.del::<(), _>(listed_key(user)).await;
-        }
-    });
-}
-
-/// Lists `user` in every community they belong to for `seconds` from now, in one round trip.
-async fn renew_listings(
-    state: &GlobalServerContext,
-    user: UserId,
-    seconds: i64,
-) -> crate::Result<()> {
-    let communities =
-        crate::events::memberships(state.connection_pool.get().await?.as_mut(), user).await?;
-    if communities.is_empty() {
-        return Ok(());
-    }
-    let until = chrono::Utc::now().timestamp().saturating_add(seconds) as f64;
-    let lifetime = community_set_lifetime(state);
-    let pipeline = state.valkey.pipeline();
-    for community in communities {
-        let key = community_online_key(community);
-        let () = pipeline
-            .zadd(&key, None, None, false, false, (until, user.0.to_string()))
-            .await?;
-        let () = pipeline.expire(&key, lifetime, None).await?;
-    }
-    let _: Vec<fred::types::Value> = pipeline.all().await?;
-    Ok(())
+    state.presence_upkeep.list(user);
 }
 
 /// Lists `user`, who just joined `community`, in its set for as long as an `active` key of theirs
@@ -489,7 +442,8 @@ pub fn mark_user_online(state: &GlobalServerContext, user: &UserPg) {
 /// `last_seen_at` is written: it is when they last came online. Their presence override is
 /// copied to Valkey then too (`app::presence_override`), in case Valkey has lost it. Their coming
 /// online, and their going offline once the key runs out, are told to those watching them
-/// (`app::presence_feed`).
+/// (`app::presence_feed`). The writes, the copy, and their listings are batched with others'
+/// (`app::presence_upkeep`).
 ///
 /// Each server marks one user at most every [`MARK_EVERY`]: a client making many requests, or
 /// many of a user's devices on one server, cost a write each quarter of the key's life rather
@@ -530,39 +484,10 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
             tracing::warn!(error = %e, "failed to record the user as online");
         }
         if previous.is_none() {
-            if let Err(e) = record_seen(&state, user).await {
-                tracing::warn!(error = %e, "failed to record when the user came online");
-            }
-            // After the override is copied, so those told read what the user chose.
-            state.presence_feed.changed(user);
+            state.presence_upkeep.arrived(user);
         }
     });
-    list_in_communities(state, user, listing_ttl(state));
-}
-
-/// Writes `user`'s `last_seen_at` as now, on their account and on each of their memberships,
-/// which their communities' member samples are read by (`app::community::read_community_members`),
-/// and copies their presence override, read back by the same statement, to Valkey.
-async fn record_seen(state: &GlobalServerContext, user: UserId) -> crate::Result<()> {
-    use aspen_schema::{community_user, user};
-    let mut conn = state.connection_pool.get().await?;
-    let chosen: Option<(
-        Option<PresenceOverride>,
-        Option<chrono::DateTime<chrono::Utc>>,
-    )> = diesel::update(user::table.filter(user::id.eq(user)))
-        .set(user::last_seen_at.eq(diesel::dsl::now))
-        .returning((user::presence_override, user::presence_override_until))
-        .get_result(conn.as_mut())
-        .await
-        .optional()?;
-    if let Some((presence_override, until)) = chosen {
-        crate::presence_override::copy_row_to_valkey(state, user, presence_override, until).await?;
-    }
-    diesel::update(community_user::table.filter(community_user::user.eq(user)))
-        .set(community_user::last_seen_at.eq(diesel::dsl::now))
-        .execute(conn.as_mut())
-        .await?;
-    Ok(())
+    state.presence_upkeep.list(user);
 }
 
 /// How long a presence key lives; the event stream refreshes it while the user is connected.

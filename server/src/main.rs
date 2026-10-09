@@ -404,6 +404,7 @@ async fn run(options: Opt) -> Result<()> {
         if let Err(e) = socket.set_nodelay(true) {
             warn!("could not turn off Nagle's algorithm for {remote_addr}: {e}");
         }
+        let place = api::rate_limit::Connection(admitted.place());
         // The socket holds its place within the limits until it closes, through an upgrade to
         // a WebSocket too, which keeps it.
         let socket = connections::Counted::new(socket, admitted);
@@ -419,6 +420,7 @@ async fn run(options: Opt) -> Result<()> {
                     request
                         .extensions_mut()
                         .insert(api::rate_limit::PeerAddr(remote_addr));
+                    request.extensions_mut().insert(place.clone());
                     let busy = activity.begin();
                     let response = service.clone().call(request);
                     async move {

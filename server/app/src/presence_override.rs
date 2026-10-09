@@ -18,6 +18,7 @@
 //! (`app::push`) and no DM call rings them (`app::voice::ring`), both decided from the row.
 
 use crate::context::GlobalServerContext;
+use crate::presence_feed::PresenceFeed;
 use crate::t;
 use crate::{EventScope, UserId, publish_event};
 use aspen_schema::user;
@@ -198,13 +199,14 @@ async fn restore(state: &GlobalServerContext, user_id: UserId) -> crate::Result<
 /// Copies the override held by a `user` row's two columns, as they were read when the user came
 /// online, to Valkey.
 pub(crate) async fn copy_row_to_valkey(
-    state: &GlobalServerContext,
+    valkey: &fred::clients::Client,
+    feed: &PresenceFeed,
     user_id: UserId,
     presence_override: Option<PresenceOverride>,
     until: Option<DateTime<Utc>>,
 ) -> crate::Result<()> {
     let chosen = ChosenPresence::in_force(presence_override, until, Utc::now());
-    copy_to_valkey(state, user_id, chosen).await
+    copy_with(valkey, feed, user_id, chosen).await
 }
 
 /// Sets `user:{uuid}:override` to `chosen`, expiring when it does, or removes it for `None`. A
@@ -214,14 +216,22 @@ async fn copy_to_valkey(
     user_id: UserId,
     chosen: Option<ChosenPresence>,
 ) -> crate::Result<()> {
+    copy_with(&state.valkey, &state.presence_feed, user_id, chosen).await
+}
+
+async fn copy_with(
+    valkey: &fred::clients::Client,
+    feed: &PresenceFeed,
+    user_id: UserId,
+    chosen: Option<ChosenPresence>,
+) -> crate::Result<()> {
     let key = override_key(user_id);
     match chosen {
         Some(chosen) => {
             let expiry = chosen
                 .until
                 .map(|until| Expiration::PXAT(until.timestamp_millis()));
-            let () = state
-                .valkey
+            let () = valkey
                 .set(
                     key,
                     chosen.presence_override.to_string(),
@@ -231,7 +241,7 @@ async fn copy_to_valkey(
                 )
                 .await?;
             if let Some(until) = chosen.until {
-                state.presence_feed.expires(
+                feed.expires(
                     user_id,
                     crate::presence_feed::Expiry::Chosen,
                     (until - Utc::now()).to_std().unwrap_or_default(),
@@ -239,7 +249,7 @@ async fn copy_to_valkey(
             }
         }
         None => {
-            let () = state.valkey.del(key).await?;
+            let () = valkey.del(key).await?;
         }
     }
     Ok(())

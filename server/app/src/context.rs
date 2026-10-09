@@ -61,9 +61,13 @@ pub struct GlobalServerContext {
         Arc<crate::recent::Recent<crate::CommunityId, Arc<HashSet<crate::UserId>>>>,
     /// Telling event stream connections of presence as it changes (`app::presence_feed`).
     pub presence_feed: crate::presence_feed::PresenceFeed,
+    /// What follows from people coming online, done in batches (`app::presence_upkeep`).
+    pub presence_upkeep: crate::presence_upkeep::PresenceUpkeep,
     /// The server's one reading of the event stream, which every event stream connection
     /// registers with.
     pub event_feed: crate::event_feed::EventFeed,
+    /// Whether this server takes on another event stream now (`app::stream_admission`).
+    pub stream_admission: crate::stream_admission::StreamAdmission,
     /// What every call to another deployment is made with (`app::federation::fetch`).
     pub federation_client: reqwest::Client,
     /// What every push to a phone's push service is made with (`app::push::client`).
@@ -183,6 +187,12 @@ impl GlobalServerContext {
             )
         };
 
+        let presence_feed = crate::presence_feed::PresenceFeed::start(
+            context.client(),
+            valkey.clone(),
+            connection_pool.clone(),
+            role == Role::Public,
+        );
         Ok(Self {
             channel_homes: crate::events::channel_homes(),
             channel_presence: Arc::default(),
@@ -194,11 +204,16 @@ impl GlobalServerContext {
             voice_session_homes: Arc::default(),
             connected_members: Arc::default(),
             presence_marked: crate::user_status::presence_marked(),
-            presence_feed: crate::presence_feed::PresenceFeed::start(
-                context.client(),
-                valkey.clone(),
+            presence_upkeep: crate::presence_upkeep::PresenceUpkeep::start(
                 connection_pool.clone(),
-                role == Role::Public,
+                valkey.clone(),
+                presence_feed.clone(),
+                crate::user_status::listing_times(&config.presence),
+            ),
+            presence_feed,
+            stream_admission: crate::stream_admission::StreamAdmission::new(
+                config.limits.max_identifying_event_streams,
+                connection_pool.clone(),
             ),
             connection_pool,
             event_feed: match role {

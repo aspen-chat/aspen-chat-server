@@ -30,12 +30,14 @@
 
 use crate::extract::Query;
 use crate::message_enum::server_event::ServerEvent;
-use crate::rate_limit::ClientIp;
+use crate::rate_limit::{ClientIp, Connection};
 use crate::t;
 use aspen_app as app;
 use aspen_app::context::GlobalServerContext;
 use aspen_app::deployment_settings::DeploymentSettings;
-use aspen_app::event_feed::{Delivery, FeedEvent, Refused, StreamEnd, Subscription};
+use aspen_app::event_feed::{Delivery, FeedEvent, Refused, StreamEnd, StreamHold, Subscription};
+use aspen_app::rate_limit::Decision;
+use aspen_app::stream_admission::Identifying;
 use aspen_app::two_factor::Caller;
 use aspen_app::typing::{EphemeralEvent, Typist};
 use aspen_app::user::UserPg;
@@ -51,6 +53,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use std::borrow::Cow;
 use std::error::Error;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -152,8 +155,16 @@ pub enum EventStreamErrorCode {
     /// one of its others closes.
     TooManyStreams,
     /// The client's network address already holds as many event streams on this server as it
-    /// may (`[limits] max_event_streams_per_address`). Close code 4429.
+    /// may before they identify (`[limits] max_event_streams_per_address`). Close code 4429.
     TooManyStreamsFromAddress,
+    /// The server is taking on no more streams for now (`app::stream_admission`): so many
+    /// connect at once that it serves those already connected first. Close code 1013. The client
+    /// tries again no sooner than `retryAfterSeconds`, spreading its return over as long again.
+    ServerBusy,
+    /// The account opened streams faster than the event stream's limits per user allow
+    /// (`[rate_limits]`). Close code 4429. The client tries again no sooner than
+    /// `retryAfterSeconds`.
+    RateLimited,
     /// The server failed while setting up or serving the stream. Close code 1011.
     Internal,
 }
@@ -168,7 +179,9 @@ impl EventStreamErrorCode {
             EventStreamErrorCode::IdentifyTimeout => 4408,
             EventStreamErrorCode::Banned => 4410,
             EventStreamErrorCode::TooManyStreams
-            | EventStreamErrorCode::TooManyStreamsFromAddress => 4429,
+            | EventStreamErrorCode::TooManyStreamsFromAddress
+            | EventStreamErrorCode::RateLimited => 4429,
+            EventStreamErrorCode::ServerBusy => 1013,
             EventStreamErrorCode::Internal => 1011,
         }
     }
@@ -187,6 +200,8 @@ impl EventStreamErrorCode {
             EventStreamErrorCode::Banned => t!("eventStreamBanned"),
             EventStreamErrorCode::TooManyStreams => t!("eventStreamTooMany"),
             EventStreamErrorCode::TooManyStreamsFromAddress => t!("eventStreamTooManyFromAddress"),
+            EventStreamErrorCode::ServerBusy => t!("eventStreamBusy"),
+            EventStreamErrorCode::RateLimited => t!("eventStreamRateLimited"),
             EventStreamErrorCode::Internal => t!("eventStreamError"),
         }
     }
@@ -225,10 +240,15 @@ pub enum ServerMessage<'a> {
     },
     /// Sent immediately before the server closes the connection because of a protocol or
     /// authentication failure. Never sent for an orderly shutdown.
+    #[serde(rename_all = "camelCase")]
     Error {
         code: EventStreamErrorCode,
         /// Localized explanation suitable for display.
         detail: Cow<'a, str>,
+        /// For `serverBusy` and `rateLimited`, the least number of seconds to wait before
+        /// connecting again.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        retry_after_seconds: Option<u64>,
     },
 }
 
@@ -252,11 +272,14 @@ pub async fn event_stream(
     ws: WebSocketUpgrade,
     State(state): State<GlobalServerContext>,
     client: Option<Extension<ClientIp>>,
+    connection: Option<Extension<Connection>>,
     Query(query): Query<EventStreamQuery>,
 ) -> Response {
-    // Counted from the upgrade, so sockets that never identify are bounded too. A request with
-    // no address (none reaches here without one) is counted by user alone.
-    let address = client.and_then(|Extension(ClientIp(ip))| ip).map(|ip| {
+    let ip = client.and_then(|Extension(ClientIp(ip))| ip);
+    let connection = connection.map(|Extension(connection)| connection);
+    // Counted from the upgrade until the stream identifies, so sockets that never do are bounded
+    // too. A request with no address (none reaches here without one) is counted by user alone.
+    let address = ip.map(|ip| {
         let key = state.rate_limiter.addresses().key(ip);
         state.event_feed.caps.hold_address(key)
     });
@@ -275,8 +298,7 @@ pub async fn event_stream(
         .on_upgrade(move |socket| {
             app::locale::scope(locale, async move {
                 let mut socket = socket;
-                // Held until the socket ends.
-                let _address = match address {
+                let address = match address {
                     Some(None) => {
                         count_connect("rejected");
                         reject(&mut socket, EventStreamErrorCode::TooManyStreamsFromAddress).await;
@@ -284,17 +306,59 @@ pub async fn event_stream(
                     }
                     held => held.flatten(),
                 };
-                handle_socket_conn(socket, state).await;
+                let unidentified = Unidentified {
+                    ip,
+                    address,
+                    connection,
+                };
+                handle_socket_conn(socket, state, unidentified).await;
             })
         })
 }
 
-struct Rejection(EventStreamErrorCode);
+/// Where a stream comes from, and what it holds there until it identifies.
+struct Unidentified {
+    ip: Option<IpAddr>,
+    /// Its place under `[limits] max_event_streams_per_address`.
+    address: Option<StreamHold>,
+    /// The connection it was upgraded from, which counts toward its address's share until then.
+    connection: Option<Connection>,
+}
+
+impl Unidentified {
+    /// The stream identified as `user`, and holds a place under their cap: it no longer counts
+    /// toward its address's.
+    fn identified(self, user: UserId) {
+        let Unidentified {
+            address,
+            connection,
+            ..
+        } = self;
+        drop(address);
+        if let Some(connection) = connection {
+            connection.0.signed_in(user);
+        }
+    }
+}
+
+struct Rejection {
+    code: EventStreamErrorCode,
+    retry_after: Option<Duration>,
+}
+
+impl From<EventStreamErrorCode> for Rejection {
+    fn from(code: EventStreamErrorCode) -> Self {
+        Rejection {
+            code,
+            retry_after: None,
+        }
+    }
+}
 
 impl From<app::Error> for Rejection {
     fn from(e: app::Error) -> Self {
         error!("event stream setup failed: {e}");
-        Rejection(EventStreamErrorCode::Internal)
+        EventStreamErrorCode::Internal.into()
     }
 }
 
@@ -310,7 +374,7 @@ impl From<StreamEnd> for EventStreamErrorCode {
 impl From<Refused> for Rejection {
     fn from(refused: Refused) -> Self {
         match refused {
-            Refused::Ended(end) => Rejection(end.into()),
+            Refused::Ended(end) => EventStreamErrorCode::from(end).into(),
             Refused::Failed(e) => e.into(),
         }
     }
@@ -338,14 +402,22 @@ fn count_connect(outcome: &'static str) {
     metrics::counter!(aspen_metrics::api::EVENT_STREAM_CONNECTS, "outcome" => outcome).increment(1);
 }
 
-async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
+async fn handle_socket_conn(
+    mut socket: WebSocket,
+    state: GlobalServerContext,
+    unidentified: Unidentified,
+) {
     // Taken before `identify` checks the settings, so a change after that check is seen.
     let settings = state.settings.subscribe();
-    let session = match identify(&mut socket, &state).await {
-        Ok(session) => session,
-        Err(Rejection(code)) => {
-            count_connect("rejected");
-            reject(&mut socket, code).await;
+    let (session, identifying) = match identify(&mut socket, &state, unidentified.ip).await {
+        Ok(identified) => identified,
+        Err(rejection) => {
+            count_connect(if rejection.code == EventStreamErrorCode::ServerBusy {
+                "busy"
+            } else {
+                "rejected"
+            });
+            reject(&mut socket, rejection).await;
             return;
         }
     };
@@ -354,6 +426,7 @@ async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
         reject(&mut socket, EventStreamErrorCode::TooManyStreams).await;
         return;
     };
+    unidentified.identified(session.user.id);
     let subscription = match app::event_feed::subscribe(
         &state,
         session.user.id,
@@ -364,11 +437,11 @@ async fn handle_socket_conn(mut socket: WebSocket, state: GlobalServerContext) {
     {
         Ok(subscription) => subscription,
         Err(refused) => {
-            let Rejection(code) = refused.into();
-            reject(&mut socket, code).await;
+            reject(&mut socket, Rejection::from(refused)).await;
             return;
         }
     };
+    drop(identifying);
     count_connect(if subscription.resumed {
         "resumed"
     } else {
@@ -415,21 +488,26 @@ struct Identified {
 /// Waits for the `identify` frame and authenticates it. Control frames that arrive first are
 /// tolerated; any other data frame, a malformed body, or silence past the deadline rejects the
 /// connection.
+///
+/// Answers the stream's place among those identifying (`app::stream_admission`), which its
+/// caller holds until the stream is registered with the feed, the last of setting it up that
+/// reads the database.
 async fn identify(
     socket: &mut WebSocket,
     state: &GlobalServerContext,
-) -> Result<Identified, Rejection> {
+    ip: Option<IpAddr>,
+) -> Result<(Identified, Identifying), Rejection> {
     let deadline = tokio::time::Instant::now() + IDENTIFY_TIMEOUT;
     let text = loop {
         match tokio::time::timeout_at(deadline, socket.recv()).await {
-            Err(_) => return Err(Rejection(EventStreamErrorCode::IdentifyTimeout)),
+            Err(_) => return Err(EventStreamErrorCode::IdentifyTimeout.into()),
             // The peer went away before identifying; there is nobody to reject.
             Ok(None) | Ok(Some(Err(_))) | Ok(Some(Ok(Message::Close(_)))) => {
-                return Err(Rejection(EventStreamErrorCode::BadRequest));
+                return Err(EventStreamErrorCode::BadRequest.into());
             }
             Ok(Some(Ok(Message::Text(text)))) => break text,
             Ok(Some(Ok(Message::Binary(_)))) => {
-                return Err(Rejection(EventStreamErrorCode::BadRequest));
+                return Err(EventStreamErrorCode::BadRequest.into());
             }
             Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => continue,
         }
@@ -439,20 +517,40 @@ async fn identify(
         resume_after,
     } = serde_json::from_str(text.as_str()).map_err(|e| {
         debug!("malformed identify frame: {e}");
-        Rejection(EventStreamErrorCode::BadRequest)
+        Rejection::from(EventStreamErrorCode::BadRequest)
     })?
     else {
         debug!("the first frame was not identify");
-        return Err(Rejection(EventStreamErrorCode::BadRequest));
+        return Err(EventStreamErrorCode::BadRequest.into());
     };
+    let busy = Rejection {
+        code: EventStreamErrorCode::ServerBusy,
+        retry_after: Some(app::stream_admission::BUSY_RETRY_AFTER),
+    };
+    let identifying = state.stream_admission.admit().await.ok_or(busy)?;
     let (user, caller) = app::user::user_for_token(state, &session_token)
         .await?
-        .ok_or(Rejection(EventStreamErrorCode::Unauthorized))?;
+        .ok_or(Rejection::from(EventStreamErrorCode::Unauthorized))?;
     if caller.enrollment_required(&state.settings()) {
-        return Err(Rejection(EventStreamErrorCode::TwoFactorEnrollmentRequired));
+        return Err(EventStreamErrorCode::TwoFactorEnrollmentRequired.into());
     }
     if caller.verification_required(&state.settings()) {
-        return Err(Rejection(EventStreamErrorCode::EmailVerificationRequired));
+        return Err(EventStreamErrorCode::EmailVerificationRequired.into());
+    }
+    match crate::rate_limit::limit_event_stream(state, ip, user.id).await {
+        Decision::Allowed => {}
+        Decision::Limited { retry_after } => {
+            return Err(Rejection {
+                code: EventStreamErrorCode::RateLimited,
+                retry_after: Some(retry_after),
+            });
+        }
+        Decision::Unavailable => {
+            return Err(Rejection {
+                code: EventStreamErrorCode::ServerBusy,
+                retry_after: Some(app::stream_admission::BUSY_RETRY_AFTER),
+            });
+        }
     }
     let times = app::user::sign_in_times(state, &caller).await?;
     let expires = times.expires.map(|at| {
@@ -460,7 +558,7 @@ async fn identify(
         tokio::time::Instant::now() + left
     });
     app::user_status::mark_user_online(state, &user);
-    Ok(Identified {
+    let identified = Identified {
         user,
         sign_in: app::event_feed::SignIn {
             id: caller.sign_in(),
@@ -469,7 +567,8 @@ async fn identify(
         caller,
         expires,
         resume_after,
-    })
+    };
+    Ok((identified, identifying))
 }
 
 /// Most frames written to the socket before it is flushed, so a burst goes out in few writes
@@ -625,7 +724,7 @@ async fn pump_events(
                 }
                 metrics::counter!(aspen_metrics::api::EVENTS_DELIVERED).increment(written as u64);
                 if let Some(end) = ends {
-                    reject(&mut socket, end.into()).await;
+                    reject(&mut socket, EventStreamErrorCode::from(end)).await;
                     return;
                 }
                 let required = settings.borrow().email_verification_required;
@@ -748,12 +847,15 @@ async fn send_json(socket: &mut WebSocket, message: &ServerMessage<'_>) -> Resul
 
 /// Tells the peer why it is being dropped, then closes with the matching close code. Both
 /// sends are best-effort; the peer may already be gone.
-async fn reject(socket: &mut WebSocket, code: EventStreamErrorCode) {
+async fn reject(socket: &mut WebSocket, rejection: impl Into<Rejection>) {
+    let Rejection { code, retry_after } = rejection.into();
     let _ = send_json(
         socket,
         &ServerMessage::Error {
             code,
             detail: code.detail(),
+            // Rounded up, so a client waiting this long finds the limit allows it.
+            retry_after_seconds: retry_after.map(|wait| wait.as_millis().div_ceil(1000) as u64),
         },
     )
     .await;

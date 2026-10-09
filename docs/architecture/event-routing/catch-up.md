@@ -46,11 +46,26 @@ Each event's frame is serialized once, by the first connection to write it (`Fee
 | Limit | Default | Close code and problem |
 | --- | --- | --- |
 | `[limits] max_event_streams_per_user`: streams one user holds on one API server | 20 | 4429, `tooManyStreams` |
-| `[limits] max_event_streams_per_address`: streams one client address holds, counted from the upgrade, before `identify` | 200 | 4429, `tooManyStreamsFromAddress` |
+| `[limits] max_event_streams_per_address`: streams one client address holds that have not identified, counted from the upgrade | 200 | 4429, `tooManyStreamsFromAddress` |
 | `event_queue_size`: events one connection's queue holds | 512 | The connection is dropped and its client resumes. |
 
 - The stream counts are kept in the process (`app::event_feed::StreamCaps`), so a server that stops leaves no count behind.
 - One stream more than a cap allows is closed.
+- A stream that identifies takes a place under its user's cap and gives back its address's. Its connection moves from its address's share of `[connections]` to its user's the same way (`max_per_user`; see [Taking on streams](#taking-on-streams)).
+
+## Taking on streams
+
+`app::stream_admission` decides whether a server takes on another stream now.
+
+1. A stream's `identify` frame arrives.
+2. If as many requests wait for a database connection as the pool holds, it is turned away.
+3. Otherwise it waits for one of `[limits] max_identifying_event_streams` places (half the pool by default), for at most `ADMISSION_WAIT` (two seconds), and is turned away if none comes.
+4. It holds the place while it is authenticated, rate limited, and registered with the feed, the last step that reads the database.
+5. Its account's limits on `GET /events` (`user`, 30 a minute, 20 at once) are checked once the token says who it is: one more is closed with 4429, `rateLimited`, and `retryAfterSeconds`.
+
+A stream turned away is closed with 1013, `serverBusy`, and `retryAfterSeconds` (`BUSY_RETRY_AFTER`, ten). Its client waits that long and anywhere up to as long again, then connects as usual, and the metric `aspen_event_stream_connects_total` counts it with `outcome="busy"`.
+
+A stream is cheap to keep but dear to start: unless it resumes, its client reads its whole state again right after (see [Design notes](design-notes.md#reconnect-storms)).
 
 ## Sequence jumps
 

@@ -43,6 +43,17 @@ The reasons behind the [event routing](index.md) design.
 - **Events from before a role change are left out.** Which roles the user held before is not known. When that hides what the database's reading would have shown, `resumed: false` makes the client read its state again rather than miss it.
 - **Stream counts are kept in the process.** A server that stops leaves no count behind.
 
+## Reconnect storms
+
+A deployment's people can all lose their connections at once and come back at once: a server restarts, or an ISP's customers come back from an outage in the middle of the evening. Past a minute away, each of them reads its whole state again, ten reads at once. See [Catch-up](catch-up.md#taking-on-streams).
+
+- **New streams are taken on at the pace the server serves them.** A stream is cheap to keep and dear to start, since its client reloads right after. Taking every one as it comes would queue their reads for the database ahead of the requests of those already connected, until each waited out the pool and was refused, and tried again. So a server identifies a bounded number at once, and turns new ones away while requests already queue for the pool.
+- **A stream turned away is told when to come back, and its client spreads its return.** A fixed wait would bring everyone it turned away back together. Each client waits what the server said and anywhere up to as long again.
+- **Clients spread every retry over a window that grows.** A fixed interval, however long, keeps a crowd as synchronized as it arrived, and keeps offering the same load however overloaded the server is. A random wait in a doubling window ("full jitter") spreads a crowd out, and spreads it further the longer the server cannot take it.
+- **A failed reload is tried again by itself.** Left to the person, everyone who saw it fail presses Retry, or reloads the page, at about the same moment. Tried again by the client, it is spread out like a reconnect and follows `Retry-After`.
+- **Address limits count only those who have not signed in.** Many people may share one address, a carrier-grade NAT the most of all, and an outage at their ISP brings them all back together. Counted by address, they would be held to one share between them, and some locked out for as long as the rest stay. Once signed in on a connection or an event stream, it counts toward its user's share, which holds an account with many connections as the address did. The address limits then bound only what has not said who it is.
+- **A signed-in connection whose user has no room stays on its address's share.** Signing in never closes a connection, so a request that presents a session is never refused for it.
+
 ## Presence
 
 - **Presence is told only to those who watch it.** Every member being told of every member's changes costs as the square of a community; a connection names the few hundred users it shows, and only changes to those reach it. See [Presence](presence.md#telling-of-changes).
@@ -51,6 +62,8 @@ The reasons behind the [event routing](index.md) design.
 - **Who may learn it is decided when telling, not when watching.** A block or a community left takes effect at the next telling, which tells the watcher `offline`.
 - **Expiries are hinted by timers on the server that set the key.** Valkey's notices of expired keys are lazy and cost every server a subscription to every expiry; a timer costs nothing beyond the one entry, and a key renewed elsewhere only makes a hint that changes nothing.
 - **Clients still read presence whole now and then.** It catches what a lost hint or the 500-user cap left behind.
+- **A telling decides at most 50,000 pairs, changes first.** After a crowd reconnects, every connection names hundreds of users to watch at once; deciding all of them in one go would hold the router, and a database connection, for minutes, while hints and watch lists queued behind it. The rest wait for the next window. Changes go first, since newly watched users' clients read them whole when they connect.
+- **Coming online is written in batches, by one task per server.** Each arrival writes a row for every membership and copies the override to Valkey. A task of its own for each, in a crowd, would make as many tasks queueing for the pool ahead of everyone's requests. Batched, a hundred people share a statement, the task holds one connection, and a crowd makes the writes late rather than the requests. Rows are locked in key order, since another server may write some of the same people's at once.
 - **A bot is never away.** It uses Aspen through the API rather than as a person does.
 - **A chosen status is kept on the `user` row, with a copy in Valkey.** Statuses are read for whole member lists at once; a third key in the same `MGET` costs nothing more, where reading the row would add a query to every read. The row is what push and rings decide by, since do not disturb holds while the user is offline too, when nothing renews a Valkey key.
 - **Do not disturb hides unread marks and counts, not just alerts.** It is for not being drawn back in: a badge draws as a chime does. Read positions are untouched, so nothing is lost when it ends.

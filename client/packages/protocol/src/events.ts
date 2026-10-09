@@ -6,12 +6,29 @@ import { acceptLanguage } from "./languages";
 
 export type { ClientMessage, EphemeralEvent, ServerEvent, ServerMessage };
 
-/** Reconnect backoff: immediate, then 0.5s, 1s, 2s, 4s, then 5s forever. */
-export function reconnectDelayMs(attempt: number): number {
-  if (attempt <= 0) {
-    return 0;
-  }
-  return Math.min(500 * 2 ** (attempt - 1), 5_000);
+/** The first reconnect waits up to this long, and each after it up to twice as long as the last. */
+export const RECONNECT_BASE_MS = 1_000;
+/** The longest a reconnect waits, unless the server asks for longer. */
+export const RECONNECT_CAP_MS = 30_000;
+
+/**
+ * How long to wait before reconnecting after `attempt` failed attempts in a row: anywhere in a
+ * window of `RECONNECT_BASE_MS`, doubling with each attempt up to `RECONNECT_CAP_MS`. Each wait
+ * is spread over its whole window, so clients that lost their connections at one moment (a
+ * server restarting, a network coming back after an outage) do not all come back at one moment,
+ * and keep spreading out the longer the server cannot take them.
+ */
+export function reconnectDelayMs(attempt: number, random: () => number = Math.random): number {
+  const window = Math.min(RECONNECT_BASE_MS * 2 ** Math.max(attempt, 0), RECONNECT_CAP_MS);
+  return Math.floor(random() * window);
+}
+
+/**
+ * How long to wait when the server said to wait at least `retryAfterMs`: that, and anywhere up to
+ * as long again, so those it turned away together come back spread out.
+ */
+export function serverDelayMs(retryAfterMs: number, random: () => number = Math.random): number {
+  return Math.floor(retryAfterMs * (1 + random()));
 }
 
 /** WebSocket close code the server uses when the `identify` token is rejected. */
@@ -95,6 +112,8 @@ export interface EventStreamOptions extends EventStreamHandlers {
   /** Timer overrides for tests. */
   setTimeout?: typeof globalThis.setTimeout;
   clearTimeout?: typeof globalThis.clearTimeout;
+  /** Uniform in [0, 1); spreads reconnects (`reconnectDelayMs`). Tests replace it. */
+  random?: () => number;
 }
 
 /**
@@ -106,7 +125,9 @@ export interface EventStreamOptions extends EventStreamHandlers {
  * `ready`, and `onResyncRequired` fires so the caller can rebuild from REST.
  *
  * A dropped connection enters an outage: `onConnectionLost` fires once, reconnection follows
- * `reconnectDelayMs`, and `onReady` fires again when the handshake succeeds. A `4401` close,
+ * `reconnectDelayMs`, or the server's `retryAfterSeconds` when it turned the stream away as busy
+ * or too frequent (`serverDelayMs`), and `onReady` fires again when the handshake succeeds. A
+ * `4401` close,
  * or a `4410` for a ban from the deployment, makes the next `authenticate` call ask for a fresh
  * token; a `4403` fires `onEnrollmentRequired`, and a `4428` `onVerificationRequired`.
  */
@@ -116,6 +137,8 @@ export class EventStream {
   #attempt = 0;
   #inOutage = false;
   #tokenRejected = false;
+  /** How long the server said to wait before connecting again, from its last `error` frame. */
+  #retryAfterMs: number | null = null;
   /** Sequence of the last event handed to `onEvent`; `null` until the first one. */
   #lastSequence: number | null = null;
   /** Ids of recent events, so a copy already applied is dropped; see `SEEN_EVENT_IDS`. */
@@ -304,7 +327,12 @@ export class EventStream {
       this.#options.onConnectionLost?.(reason);
     }
     this.#status = "reconnecting";
-    const delay = reconnectDelayMs(this.#attempt);
+    const random = this.#options.random ?? Math.random;
+    const delay = Math.max(
+      reconnectDelayMs(this.#attempt, random),
+      this.#retryAfterMs === null ? 0 : serverDelayMs(this.#retryAfterMs, random),
+    );
+    this.#retryAfterMs = null;
     this.#attempt += 1;
     const generation = this.#generation;
     this.#timer = (this.#options.setTimeout ?? setTimeout)(() => {
@@ -373,10 +401,14 @@ export class EventStream {
         this.#options.onEphemeral?.(frame.event);
         break;
       case "error":
-        // The server closes right after this; the close handler drives reconnection and, for
-        // `unauthorized` and `banned`, the token refresh.
+        // The server closes right after this; the close handler drives reconnection, after as
+        // long as the frame says when it says, and, for `unauthorized` and `banned`, the token
+        // refresh.
         if (frame.code === "unauthorized" || frame.code === "banned") {
           this.#tokenRejected = true;
+        }
+        if (frame.retryAfterSeconds != null) {
+          this.#retryAfterMs = frame.retryAfterSeconds * 1000;
         }
         break;
     }

@@ -14,7 +14,7 @@
  */
 
 import { AdminApi, adminRead } from "./admin";
-import { EventStream, type EventStreamOptions } from "./events";
+import { EventStream, type EventStreamOptions, reconnectDelayMs, serverDelayMs } from "./events";
 import type {
   CommunityPlugin,
   CustomEmoji,
@@ -23,7 +23,7 @@ import type {
   ServerEvent,
 } from "./generated/events";
 import type { components } from "./generated/openapi";
-import { type AspenClient, problemOf } from "./http";
+import { type AspenClient, problemOf, retryAfterOf } from "./http";
 import { ApiProblemError, type Problem, transportProblem } from "./problem";
 import {
   AUDIO_INPUT,
@@ -254,7 +254,7 @@ export interface AspenSyncOptions {
    * `null` keeps them for the session only.
    */
   preferenceStorage?: PreferenceStorage | null;
-  /** Uniform in [0, 1); seeds the voice rejoin delay. */
+  /** Uniform in [0, 1); spreads the voice rejoin, reconnecting, and reloading after a failure. */
   random?: () => number;
   /**
    * The preferences to use instead of the server's own: the home deployment's, for a sync of
@@ -327,6 +327,10 @@ export class AspenSync {
   readonly #channelLoads = new Map<string, Promise<void>>();
   readonly #setTimeout: typeof globalThis.setTimeout;
   #presenceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Reads the cache again after a bootstrap failed for a reason that passes (`#retryLater`). */
+  #reloadTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Bootstraps that failed in a row, which spread the next one further out. */
+  #reloadAttempt = 0;
   /** When everyone's presence was last read whole; `null` until it is, and on every connection. */
   #presenceReadAt: number | null = null;
   /** The watch list the stream was last told of, joined; empty on a fresh connection. */
@@ -508,6 +512,9 @@ export class AspenSync {
     if (options.clearTimeout !== undefined) {
       streamOptions.clearTimeout = options.clearTimeout;
     }
+    if (options.random !== undefined) {
+      streamOptions.random = options.random;
+    }
     this.#stream = new EventStream(streamOptions);
   }
 
@@ -574,17 +581,26 @@ export class AspenSync {
     };
   };
 
-  /** Bootstraps the cache and then connects the event stream. Safe to call again after `failed`. */
+  /**
+   * Bootstraps the cache and then connects the event stream. Safe to call again after `failed`,
+   * which a failure that passes does by itself after a while (`#retryLater`); the stream may
+   * then be open already, and the cache is live once read.
+   */
   start(): void {
     if (this.#status !== "stopped" && this.#status !== "failed") {
       return;
     }
+    this.#cancelReload();
     this.#generation += 1;
     const generation = this.#generation;
     this.#lastError = null;
     this.#setStatus("bootstrapping");
     void this.#bootstrap(generation).then((ok) => {
       if (ok && generation === this.#generation) {
+        if (this.#stream.status === "open") {
+          this.#setStatus("live");
+          return;
+        }
         this.#setStatus("connecting");
         this.#stream.start();
       }
@@ -595,6 +611,8 @@ export class AspenSync {
   stop(): void {
     this.#generation += 1;
     this.#stream.stop();
+    this.#cancelReload();
+    this.#reloadAttempt = 0;
     if (this.#presenceTimer !== null) {
       clearTimeout(this.#presenceTimer);
       this.#presenceTimer = null;
@@ -3242,6 +3260,11 @@ export class AspenSync {
   async #bootstrap(generation: number): Promise<boolean> {
     this.#held = [];
     const startedAt = this.#now();
+    let retryAfterMs: number | null = null;
+    const failed = (result: { error?: unknown; response: Response }): ApiProblemError => {
+      retryAfterMs = retryAfterOf(result.response);
+      return new ApiProblemError(problemOf(result.error, result.response));
+    };
     try {
       const [
         me,
@@ -3297,16 +3320,16 @@ export class AspenSync {
         return false;
       }
       if (me.data === undefined) {
-        throw new ApiProblemError(problemOf(me.error, me.response));
+        throw failed(me);
       }
       if (communities.data === undefined) {
-        throw new ApiProblemError(problemOf(communities.error, communities.response));
+        throw failed(communities);
       }
       if (dms.data === undefined) {
-        throw new ApiProblemError(problemOf(dms.error, dms.response));
+        throw failed(dms);
       }
       if (blocks.data === undefined) {
-        throw new ApiProblemError(problemOf(blocks.error, blocks.response));
+        throw failed(blocks);
       }
       this.store.setBootstrap(me.data, communities.data.data, communities.data.included);
       this.store.ingest(dms.data.included);
@@ -3346,6 +3369,7 @@ export class AspenSync {
         await this.preferences.loadAccount();
       }
       this.#bootstrappedAt = startedAt;
+      this.#reloadAttempt = 0;
       const held = this.#held;
       this.#held = null;
       for (const event of held) {
@@ -3360,7 +3384,46 @@ export class AspenSync {
       this.#lastError =
         error instanceof ApiProblemError ? error.problem : problemOf(error, undefined);
       this.#setStatus("failed");
+      this.#retryLater(this.#lastError, retryAfterMs);
       return false;
+    }
+  }
+
+  /**
+   * Bootstraps again later when what failed passes: no answer, or the server busy, unavailable,
+   * or refusing for going too fast. The wait grows with each failure in a row and is spread like
+   * a reconnect's (`reconnectDelayMs`), and is at least what the server's `Retry-After` asked,
+   * so a crowd the server turned away comes back spread out rather than all at once. Anything
+   * else waits for the person to try again.
+   */
+  #retryLater(problem: Problem, retryAfterMs: number | null): void {
+    const passes =
+      problem.status === 0 ||
+      problem.status === 408 ||
+      problem.status === 429 ||
+      problem.status >= 500;
+    if (!passes) {
+      return;
+    }
+    const delay = Math.max(
+      reconnectDelayMs(this.#reloadAttempt, this.#random),
+      retryAfterMs === null ? 0 : serverDelayMs(retryAfterMs, this.#random),
+    );
+    this.#reloadAttempt += 1;
+    this.#cancelReload();
+    this.#reloadTimer = this.#setTimeout(
+      () => {
+        this.#reloadTimer = null;
+        this.start();
+      },
+      Math.min(delay, MAX_TIMER_MS),
+    );
+  }
+
+  #cancelReload(): void {
+    if (this.#reloadTimer !== null) {
+      clearTimeout(this.#reloadTimer);
+      this.#reloadTimer = null;
     }
   }
 
