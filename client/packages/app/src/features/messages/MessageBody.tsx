@@ -31,7 +31,10 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
  * `still` draws it for reference only, as another message shows it: no poll to vote in, no
  * card's buttons to press. The reader's mark on a message they saved, then `trailing`, follow
  * whatever the message ends with: its text, after its edited mark, or beside its last card or
- * its pictures where the line has room, and under them where it has not (`Trailed`). A message that fails to draw shows its text alone,
+ * its pictures where the line has room, and under them where it has not (`Trailed`). Beside
+ * the text, the marks sit level with its top: on its first line's baseline, or at the top edge
+ * of a code block or table it opens with (`.message-text-row` in `styles.css`), and under it
+ * where the line has no room. A message that fails to draw shows its text alone,
  * plainly, rather than taking the list it is in down with it.
  */
 export function MessageBody(props: MessageBodyProps) {
@@ -145,7 +148,7 @@ function MessageBodyContent({
   return (
     <>
       {!hideText && (
-        <div className="flex flex-wrap items-baseline gap-x-1">
+        <div className="message-text-row flex flex-wrap items-baseline gap-x-1">
           {!pictureOnly && (
             <Markdown
               content={message.content}
@@ -335,12 +338,20 @@ function CardPicture({
   );
 }
 
-/** A quiet mark on a message the reader saved, which their saved messages list. */
+/**
+ * A quiet mark on a message the reader saved, which their saved messages list. The icon sits
+ * in a line of text, so the mark has its line's baseline and lines up with the marks beside it.
+ */
 function SavedMark() {
   const m = useMessages();
   return (
-    <span className="inline-flex self-center text-ink-faint" title={m.saved.marker}>
-      <BookmarkSimpleIcon size="1em" weight="fill" aria-hidden="true" />
+    <span className="leading-none text-ink-faint" title={m.saved.marker}>
+      <BookmarkSimpleIcon
+        size="1em"
+        weight="fill"
+        aria-hidden="true"
+        className="inline-block align-[-0.125em]"
+      />
       <span className="sr-only">{m.saved.marker}</span>
     </span>
   );
