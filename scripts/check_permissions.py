@@ -1117,8 +1117,14 @@ def chosen_presence(world: World, check: Checks) -> None:
         return None
 
     world.stream.send({"type": "watchPresence", "userIds": [world.owner["id"]]})
+    check("a connection's first watch list is told only of changes, which its client reads whole",
+          told() is None)
+    world.stream.send({"type": "watchPresence", "userIds": []})
+    world.stream.gather(1.5)
+    world.stream.send({"type": "watchPresence", "userIds": [world.owner["id"]]})
     first = told()
-    check("a member watching the owner is told their presence at once", first not in (None, "offline"), first)
+    check("a member whose watch list adds the owner is told their presence at once",
+          first not in (None, "offline"), first)
     world.as_owner("PUT", "/users/@me/presence-override", {"presenceOverride": "doNotDisturb"})
     check("and of their choosing do not disturb within moments", told() == "doNotDisturb")
     world.as_owner("PUT", f"/users/@me/blocks/{world.member['id']}")

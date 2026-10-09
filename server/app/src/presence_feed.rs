@@ -13,7 +13,11 @@
 //!   ([`PresenceFeed::expires`]). A key renewed elsewhere meanwhile makes a hint that changes
 //!   nothing, which is then told to no one.
 //! - **Watching.** Each event stream connection says which users it shows (`watchPresence`, at
-//!   most [`MAX_WATCHED_PRESENCE`]), kept by one router task per server.
+//!   most [`MAX_WATCHED_PRESENCE`]), kept by one router task per server. The users of its first
+//!   list are told only of changes: its client reads them whole over REST once the list is taken
+//!   up, a read the request path can refuse when busy, where telling them would put every
+//!   reconnecting connection's whole list on the router at once. Users a later list adds are
+//!   told as they are.
 //! - **Telling.** The router gathers the hints for users watched here, and newly watched users,
 //!   for up to [`PRESENCE_WINDOW_MILLIS`] from the first, then reads all their presence in one
 //!   batched read, decides in one query which watchers may learn it (as
@@ -69,11 +73,10 @@ const DELIVERY_QUEUE: usize = 4;
 const PAIR_BATCH: usize = 5_000;
 
 /// The most connection and user pairs one telling decides, ten visibility queries' worth; the
-/// rest wait for the next window. After a crowd reconnects, each connection names up to
-/// [`MAX_WATCHED_PRESENCE`] users at once, and telling them all in one go would hold the router,
-/// and a database connection, for as long as that takes, while hints and watch lists queue
-/// behind it. Changes are told before newly watched users, whose clients read them whole when
-/// they connect.
+/// rest wait for the next window, so a burst (a popular user's change watched by thousands here,
+/// many connections changing their watch lists) never holds the router, and a database
+/// connection, for long while hints and watch lists queue behind it. Changes are told before
+/// pairs carried over or newly watched.
 const MAX_PAIRS_PER_TELLING: usize = 10 * PAIR_BATCH;
 
 /// A little after a key's expiry, so the hint finds it gone.
@@ -320,6 +323,10 @@ struct Watcher {
     told: HashMap<UserId, Option<UserOnlineStatus>>,
     /// The watch list it named last, taken up at the next telling.
     next: Option<Vec<UserId>>,
+    /// Whether a watch list of its has been taken up. The users of its first are told only of
+    /// changes, since its client reads them whole once the list is taken up; those added by later
+    /// lists are told as they are.
+    watching: bool,
 }
 
 /// Who watches whom on this server, and what is waiting to be told.
@@ -329,7 +336,8 @@ struct Router {
     by_user: HashMap<UserId, HashSet<u64>>,
     /// Users watched here whose presence may have changed.
     changed: HashSet<UserId>,
-    /// Users newly watched by a connection, which is told of them whatever they are.
+    /// Pairs to tell whatever they are: users a connection added to its watch after its first
+    /// list, and pairs left over from a telling cut short, failed, or not delivered.
     fresh: HashSet<(u64, UserId)>,
     /// When the gathered changes are told; `None` with none waiting.
     tell_at: Option<Instant>,
@@ -348,6 +356,7 @@ impl Router {
                 deliveries,
                 told: HashMap::new(),
                 next: None,
+                watching: false,
             },
         );
     }
@@ -386,7 +395,9 @@ impl Router {
         }
     }
 
-    /// Takes up each connection's latest watch list, one per telling however many it sent.
+    /// Takes up each connection's latest watch list, one per telling however many it sent. The
+    /// users a list adds are told as they are, except those of a connection's first, which its
+    /// client reads whole.
     fn take_up_watches(&mut self) {
         let named: Vec<(u64, Vec<UserId>)> = self
             .watchers
@@ -414,12 +425,15 @@ impl Router {
             for user in &added {
                 watcher.told.insert(*user, None);
             }
+            let tell_added = std::mem::replace(&mut watcher.watching, true);
             for user in dropped {
                 self.unwatch(id, user);
             }
             for user in added {
                 self.by_user.entry(user).or_default().insert(id);
-                self.fresh.insert((id, user));
+                if tell_added {
+                    self.fresh.insert((id, user));
+                }
             }
         }
     }
@@ -662,6 +676,10 @@ mod tests {
     async fn watchers_are_told_what_changed_as_they_may_learn_it() {
         let (alice, bob, carol) = (user(1), user(2), user(3));
         let (mut router, mut received) = router_with(&[(0, alice), (1, bob)]);
+        // Their first lists, whose users their clients read whole.
+        router.named(0, vec![]);
+        router.named(1, vec![]);
+        assert!(router.gathered().is_empty());
         router.named(0, vec![bob, carol, alice]);
         router.named(1, vec![alice]);
         let pairs = router.gathered();
@@ -726,7 +744,9 @@ mod tests {
             .collect();
         let (mut router, _received) = router_with(&viewers);
         let known = user(999);
-        router.named(0, vec![known]);
+        for (id, _) in &viewers {
+            router.named(*id, if *id == 0 { vec![known] } else { vec![] });
+        }
         let _ = router.gathered();
         // A crowd's watch lists, and a change to someone already watched, in one window.
         for (id, _) in &viewers {
@@ -752,6 +772,43 @@ mod tests {
         );
         assert!(first.is_disjoint(&second));
         assert!(router.fresh.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_connections_first_list_is_told_only_of_changes() {
+        let (alice, bob, carol) = (user(1), user(2), user(3));
+        let (mut router, mut received) = router_with(&[(0, alice)]);
+        router.named(0, vec![bob]);
+        assert!(router.gathered().is_empty());
+        let visible = HashSet::from([(alice, bob), (alice, carol)]);
+        let online = |users: &[UserId]| {
+            users
+                .iter()
+                .map(|user| (*user, UserOnlineStatus::Online))
+                .collect::<HashMap<_, _>>()
+        };
+        router.hinted(vec![bob]);
+        let pairs = router.gathered();
+        router.tell(pairs, &online(&[bob]), &visible);
+        assert_eq!(
+            received[0].try_recv().unwrap(),
+            vec![UserStatusRecord {
+                id: bob,
+                online_status: UserOnlineStatus::Online
+            }]
+        );
+        // A user a later list adds is told as they are.
+        router.named(0, vec![bob, carol]);
+        let pairs = router.gathered();
+        assert_eq!(pairs, HashSet::from([(0, carol)]));
+        router.tell(pairs, &online(&[bob, carol]), &visible);
+        assert_eq!(
+            received[0].try_recv().unwrap(),
+            vec![UserStatusRecord {
+                id: carol,
+                online_status: UserOnlineStatus::Online
+            }]
+        );
     }
 
     #[test]
