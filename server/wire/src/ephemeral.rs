@@ -29,11 +29,16 @@ pub enum EphemeralEvent {
     },
     /// The presence of users the connection watches (`watchPresence`), each as the reader may
     /// learn it, for those whose presence changed or whom a `watchPresence` after the
-    /// connection's first added. Changes are
-    /// gathered for up to `PRESENCE_WINDOW_MILLIS` and told together, and only what differs
-    /// from what the connection was last told of each.
+    /// connection's first added. Changes are gathered for up to `PRESENCE_WINDOW_MILLIS` and
+    /// told together, and only what differs from what the connection was last told of each.
     #[serde(rename_all = "camelCase")]
     Presence { statuses: Vec<UserStatusRecord> },
+    /// The server took up the connection's latest `watchPresence`: every change to its users
+    /// from now on is told. Sent for each list taken up, the latest sent, at most one per
+    /// `PRESENCE_WINDOW_MILLIS`. A client reads the users of its first list whole once this
+    /// arrives, so a change before it is in the read and one after it is told; a list the
+    /// server was too busy to hear is never answered, and the client sends it again.
+    PresenceWatching,
 }
 
 /// How long a server gathers changes to presence before telling its connections of them

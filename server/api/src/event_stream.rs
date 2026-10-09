@@ -115,11 +115,12 @@ pub enum ClientMessage {
     /// The users whose presence the client shows, at most `MAX_WATCHED_PRESENCE` (500), the
     /// most wanted first: it is told by `ephemeral` `presence` frames of each change to them,
     /// gathered for up to `PRESENCE_WINDOW_MILLIS`. Send it on every `ready` and whenever they
-    /// change. Each replaces the last, and the server takes up at most one per window. The users
-    /// of a connection's first are told only of changes: read them whole with
-    /// `GET /users/statuses` no sooner than `PRESENCE_WINDOW_MILLIS` after sending it, so that
-    /// whatever changes after the read is told. Users a later one adds are told as they are now,
-    /// then of each change. Nothing else answers it.
+    /// change. Each replaces the last, and the server takes up at most one per window, saying
+    /// so with an `ephemeral` `presenceWatching` frame. The users of a connection's first are
+    /// told only of changes: read them whole with `GET /users/statuses` once `presenceWatching`
+    /// answers it, so that whatever changes after the read is told. Users a later one adds are
+    /// told as they are now, then of each change. A list the server was too busy to hear is
+    /// never answered: send it again.
     #[serde(rename_all = "camelCase")]
     WatchPresence { user_ids: Vec<UserId> },
 }
@@ -736,8 +737,8 @@ async fn pump_events(
                     return;
                 }
             },
-            Some(statuses) = presence.next() => {
-                if let Err(e) = send_presence(&mut socket, statuses).await {
+            Some(told) = presence.next() => {
+                if let Err(e) = send_presence(&mut socket, &told).await {
                     log_send_error(&e);
                     return;
                 }
@@ -833,13 +834,9 @@ async fn pump_events(
     }
 }
 
-/// Writes a `presence` frame telling of `statuses`.
-async fn send_presence(
-    socket: &mut WebSocket,
-    statuses: Vec<crate::user::UserStatusRecord>,
-) -> Result<(), axum::Error> {
-    let event = serde_json::value::to_raw_value(&EphemeralEvent::Presence { statuses })
-        .map_err(axum::Error::new)?;
+/// Writes what the presence router told the connection of (`presence`, `presenceWatching`).
+async fn send_presence(socket: &mut WebSocket, told: &EphemeralEvent) -> Result<(), axum::Error> {
+    let event = serde_json::value::to_raw_value(told).map_err(axum::Error::new)?;
     send_json(socket, &ServerMessage::Ephemeral { event: &event }).await
 }
 

@@ -17,7 +17,8 @@
 //!   list are told only of changes: its client reads them whole over REST once the list is taken
 //!   up, a read the request path can refuse when busy, where telling them would put every
 //!   reconnecting connection's whole list on the router at once. Users a later list adds are
-//!   told as they are.
+//!   told as they are. Each list taken up is answered with `presenceWatching`, which the client
+//!   waits for before that read, so every change is in the read or told after it.
 //! - **Telling.** The router gathers the hints for users watched here, and newly watched users,
 //!   for up to [`PRESENCE_WINDOW_MILLIS`] from the first, then reads all their presence in one
 //!   batched read, decides in one query which watchers may learn it (as
@@ -31,6 +32,7 @@
 
 use crate::UserId;
 use crate::user_status::{presence_visible_pairs, raw_statuses, seen_by_others};
+use aspen_wire::ephemeral::EphemeralEvent;
 pub use aspen_wire::ephemeral::{MAX_WATCHED_PRESENCE, PRESENCE_WINDOW_MILLIS};
 use aspen_wire::user::{UserOnlineStatus, UserStatusRecord};
 use diesel_async::AsyncPgConnection;
@@ -113,7 +115,7 @@ enum Registration {
     Add {
         id: u64,
         viewer: UserId,
-        deliveries: mpsc::Sender<Vec<UserStatusRecord>>,
+        deliveries: mpsc::Sender<EphemeralEvent>,
     },
     Remove(u64),
 }
@@ -192,7 +194,7 @@ impl PresenceFeed {
 /// One event stream connection's watch on presence. Dropping it ends the watch.
 pub struct PresenceWatch {
     id: u64,
-    received: mpsc::Receiver<Vec<UserStatusRecord>>,
+    received: mpsc::Receiver<EphemeralEvent>,
     router: Option<RouterHandle>,
 }
 
@@ -207,8 +209,9 @@ impl PresenceWatch {
         }
     }
 
-    /// The next presence to tell the connection of; never on a server that routes nothing.
-    pub async fn next(&mut self) -> Option<Vec<UserStatusRecord>> {
+    /// The next `presence` or `presenceWatching` to tell the connection of; never on a server
+    /// that routes nothing.
+    pub async fn next(&mut self) -> Option<EphemeralEvent> {
         if self.router.is_none() {
             return std::future::pending().await;
         }
@@ -318,7 +321,7 @@ async fn keep_expiries(
 /// One watching connection.
 struct Watcher {
     viewer: UserId,
-    deliveries: mpsc::Sender<Vec<UserStatusRecord>>,
+    deliveries: mpsc::Sender<EphemeralEvent>,
     /// Each user watched, and what the connection was last told of them; `None` until told.
     told: HashMap<UserId, Option<UserOnlineStatus>>,
     /// The watch list it named last, taken up at the next telling.
@@ -339,6 +342,9 @@ struct Router {
     /// Pairs to tell whatever they are: users a connection added to its watch after its first
     /// list, and pairs left over from a telling cut short, failed, or not delivered.
     fresh: HashSet<(u64, UserId)>,
+    /// Connections whose latest watch list was taken up and who are yet to be told so
+    /// (`presenceWatching`).
+    unacknowledged: HashSet<u64>,
     /// When the gathered changes are told; `None` with none waiting.
     tell_at: Option<Instant>,
 }
@@ -348,7 +354,7 @@ impl Router {
         self.tell_at.get_or_insert_with(|| Instant::now() + WINDOW);
     }
 
-    fn add(&mut self, id: u64, viewer: UserId, deliveries: mpsc::Sender<Vec<UserStatusRecord>>) {
+    fn add(&mut self, id: u64, viewer: UserId, deliveries: mpsc::Sender<EphemeralEvent>) {
         self.watchers.insert(
             id,
             Watcher {
@@ -435,6 +441,29 @@ impl Router {
                     self.fresh.insert((id, user));
                 }
             }
+            self.unacknowledged.insert(id);
+        }
+        self.acknowledge();
+    }
+
+    /// Tells each connection whose watch list was taken up that it was. One whose queue is full
+    /// is told at the next telling.
+    fn acknowledge(&mut self) {
+        let mut left = HashSet::new();
+        for id in std::mem::take(&mut self.unacknowledged) {
+            let Some(watcher) = self.watchers.get(&id) else {
+                continue;
+            };
+            if let Err(mpsc::error::TrySendError::Full(_)) = watcher
+                .deliveries
+                .try_send(EphemeralEvent::PresenceWatching)
+            {
+                left.insert(id);
+            }
+        }
+        if !left.is_empty() {
+            self.unacknowledged = left;
+            self.due();
         }
     }
 
@@ -521,8 +550,10 @@ impl Router {
             let Some(watcher) = self.watchers.get_mut(&id) else {
                 continue;
             };
-            if let Err(mpsc::error::TrySendError::Full(statuses)) =
-                watcher.deliveries.try_send(statuses)
+            if let Err(mpsc::error::TrySendError::Full(EphemeralEvent::Presence { statuses })) =
+                watcher
+                    .deliveries
+                    .try_send(EphemeralEvent::Presence { statuses })
             {
                 // Told again at the next telling.
                 for status in statuses {
@@ -659,9 +690,47 @@ mod tests {
         assert_eq!(expiries.next(), None);
     }
 
-    fn router_with(
-        viewers: &[(u64, UserId)],
-    ) -> (Router, Vec<mpsc::Receiver<Vec<UserStatusRecord>>>) {
+    /// The next `presence` frame waiting for a connection, past any `presenceWatching`.
+    fn next_told(received: &mut mpsc::Receiver<EphemeralEvent>) -> Option<Vec<UserStatusRecord>> {
+        loop {
+            match received.try_recv().ok()? {
+                EphemeralEvent::Presence { statuses } => return Some(statuses),
+                EphemeralEvent::PresenceWatching => continue,
+                EphemeralEvent::Typing { .. } => panic!("typing from the presence router"),
+            }
+        }
+    }
+
+    #[test]
+    fn each_watch_list_taken_up_is_acknowledged_even_past_a_full_queue() {
+        let (mut router, mut received) = router_with(&[(0, user(1))]);
+        router.named(0, vec![user(2)]);
+        let _ = router.gathered();
+        assert_eq!(
+            received[0].try_recv().unwrap(),
+            EphemeralEvent::PresenceWatching
+        );
+        assert!(received[0].try_recv().is_err());
+        // A queue full of frames: the acknowledgement waits for the next telling.
+        for _ in 0..DELIVERY_QUEUE {
+            router.watchers[&0]
+                .deliveries
+                .try_send(EphemeralEvent::Presence { statuses: vec![] })
+                .unwrap();
+        }
+        router.named(0, vec![user(3)]);
+        let _ = router.gathered();
+        assert!(router.tell_at.is_some());
+        while received[0].try_recv().is_ok() {}
+        let _ = router.gathered();
+        assert_eq!(
+            received[0].try_recv().unwrap(),
+            EphemeralEvent::PresenceWatching
+        );
+        assert!(router.unacknowledged.is_empty());
+    }
+
+    fn router_with(viewers: &[(u64, UserId)]) -> (Router, Vec<mpsc::Receiver<EphemeralEvent>>) {
         let mut router = Router::default();
         let mut received = Vec::new();
         for (id, viewer) in viewers {
@@ -692,7 +761,7 @@ mod tests {
             (carol, UserOnlineStatus::Online),
         ]);
         router.tell(pairs, &statuses, &visible);
-        let mut told = received[0].try_recv().unwrap();
+        let mut told = next_told(&mut received[0]).unwrap();
         told.sort_by_key(|s| s.id);
         assert_eq!(
             told,
@@ -712,7 +781,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            received[1].try_recv().unwrap(),
+            next_told(&mut received[1]).unwrap(),
             vec![UserStatusRecord {
                 id: alice,
                 online_status: UserOnlineStatus::Offline
@@ -728,13 +797,13 @@ mod tests {
         ]);
         router.tell(pairs, &statuses, &visible);
         assert_eq!(
-            received[0].try_recv().unwrap(),
+            next_told(&mut received[0]).unwrap(),
             vec![UserStatusRecord {
                 id: bob,
                 online_status: UserOnlineStatus::Away
             }]
         );
-        assert!(received[1].try_recv().is_err());
+        assert!(next_told(&mut received[1]).is_none());
     }
 
     #[test]
@@ -791,7 +860,7 @@ mod tests {
         let pairs = router.gathered();
         router.tell(pairs, &online(&[bob]), &visible);
         assert_eq!(
-            received[0].try_recv().unwrap(),
+            next_told(&mut received[0]).unwrap(),
             vec![UserStatusRecord {
                 id: bob,
                 online_status: UserOnlineStatus::Online
@@ -803,7 +872,7 @@ mod tests {
         assert_eq!(pairs, HashSet::from([(0, carol)]));
         router.tell(pairs, &online(&[bob, carol]), &visible);
         assert_eq!(
-            received[0].try_recv().unwrap(),
+            next_told(&mut received[0]).unwrap(),
             vec![UserStatusRecord {
                 id: carol,
                 online_status: UserOnlineStatus::Online
