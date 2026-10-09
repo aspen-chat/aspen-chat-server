@@ -343,6 +343,38 @@ impl Plugins {
             .collect())
     }
 
+    /// Whether `plugin` runs in `community`, answered from what is cached of the community when
+    /// it can be, so a check made for every event takes a database connection only when the
+    /// community's plugins were not read lately.
+    pub async fn runs_in(
+        &self,
+        state: &GlobalServerContext,
+        plugin: &LoadedPlugin,
+        community: CommunityId,
+    ) -> crate::Result<bool> {
+        if plugin.mode == Mode::Everywhere {
+            return Ok(true);
+        }
+        let cached = self
+            .communities
+            .lock()
+            .expect("plugin communities")
+            .get(&community)
+            .filter(|(at, _)| at.elapsed() < COMMUNITY_TTL)
+            .map(|(_, found)| found.clone());
+        let used = match cached {
+            Some(used) => used,
+            None => {
+                let mut conn = state.connection_pool.get().await?;
+                self.community_use(conn.as_mut(), community).await?
+            }
+        };
+        Ok(used
+            .by_plugin
+            .get(&plugin.id)
+            .is_some_and(|(enabled, _)| *enabled))
+    }
+
     /// The plugins that run in DMs: those granted `dms`.
     pub fn running_in_dms(&self) -> Vec<Running> {
         self.loaded()
@@ -547,7 +579,6 @@ impl Plugins {
 pub async fn start(state: &GlobalServerContext) -> crate::Result<()> {
     host::start_ticker(state.plugins.engine.clone());
     state.plugins.reload(state).await?;
-    super::timer::spawn(state.clone());
     let client = state.nats_context.client();
     let state = state.clone();
     tokio::spawn(async move {

@@ -1,5 +1,5 @@
 //! Timed polls. A poll is opened with a message of kind `poll` in its channel and stays open
-//! until `closes_at`, when the closer task marks it closed and posts a message of kind
+//! until `closes_at`, when a job saved with it (`close_at_deadline`) marks it closed and posts a message of kind
 //! `poll_closed` announcing the outcome. Votes may be added and withdrawn while it is open, and
 //! every change publishes the poll's current results, so readers follow the tally live.
 //!
@@ -36,14 +36,12 @@ use aspen_wire::poll::{
 };
 use chrono::{DateTime, Utc};
 use diesel::{
-    BoolExpressionMethods, ExpressionMethods, Insertable, NullableExpressionMethods, QueryDsl,
-    Queryable, Selectable, SelectableHelper,
+    BoolExpressionMethods, ExpressionMethods, Insertable, NullableExpressionMethods,
+    OptionalExtension, QueryDsl, Queryable, Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use std::collections::HashMap;
-use std::time::Duration;
-use tracing::error;
 
 pub const MIN_OPTIONS: usize = 2;
 pub const MAX_OPTIONS: usize = 10;
@@ -55,8 +53,6 @@ pub const MAX_DURATION_SECONDS: u32 = 4 * 7 * 24 * 60 * 60;
 /// The most answers voters may add to one poll, removed ones included, since each keeps its
 /// index.
 pub const MAX_WRITE_INS: usize = 25;
-/// How often the closer looks for polls whose deadline has passed.
-const CLOSER_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
 #[diesel(table_name = poll)]
@@ -245,6 +241,19 @@ pub async fn create_poll(
             if crate::thread::record_if_reply(state, conn.as_mut(), channel, now).await? {
                 crate::thread_follow::took_part(state, conn.as_mut(), &[creator], channel).await?;
             }
+            // Closed at its deadline by a job saved with it, which an earlier close leaves
+            // nothing to do.
+            crate::jobs::enqueue(
+                conn.as_mut(),
+                crate::jobs::NewJob::new(
+                    crate::jobs::JobKind::ClosePoll,
+                    crate::jobs::JobClass::Interactive,
+                    &ToClose { poll: row.id },
+                )?
+                .keyed(row.id.0.to_string())
+                .not_before(row.closes_at),
+            )
+            .await?;
             Ok((poll_record, message_record))
         }
         .scope_boxed()
@@ -373,34 +382,69 @@ async fn load_options(
     Ok(choices)
 }
 
-/// The tally of every poll in `polls`: one entry per option, with the voters listed for polls
-/// that are not anonymous. Computed from the votes as they stand on `conn`.
+/// How many of an option's voters its tally names: the first to vote for it. The rest are
+/// read a page at a time ([`read_voters`]).
+pub const SHOWN_VOTERS: i64 = 5;
+
+#[derive(diesel::QueryableByName)]
+struct OptionTally {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    poll: PollId,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    option_index: i32,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    count: i64,
+    #[diesel(sql_type = diesel::sql_types::Array<diesel::sql_types::Uuid>)]
+    first: Vec<UserId>,
+}
+
+/// The tally of every poll in `polls`: one entry per option, with its first [`SHOWN_VOTERS`]
+/// voters named for polls that are not anonymous. Counted from the votes as they stand on
+/// `conn`, in SQL: the count over the votes' key, and the first voters through
+/// `poll_vote_by_option`, however many have voted.
 async fn load_results(
     conn: &mut AsyncPgConnection,
     polls: &[(&Poll, usize)],
 ) -> crate::Result<HashMap<PollId, Vec<PollOptionResult>>> {
-    let ids: Vec<PollId> = polls.iter().map(|(poll, _)| poll.id).collect();
-    let votes: Vec<PollVote> = poll_vote::table
-        .select(PollVote::as_select())
-        .filter(poll_vote::poll.eq_any(&ids))
-        .order(poll_vote::timestamp)
-        .load(conn)
-        .await?;
+    let ids: Vec<uuid::Uuid> = polls.iter().map(|(poll, _)| poll.id.0).collect();
+    let tallies: Vec<OptionTally> = diesel::sql_query(
+        r#"
+        SELECT o.poll, o.option_index, o.count, COALESCE(f.first, '{}') AS first
+        FROM (
+            SELECT poll, option_index, count(*) AS count FROM poll_vote
+            WHERE poll = ANY($1)
+            GROUP BY poll, option_index
+        ) o
+        CROSS JOIN LATERAL (
+            SELECT array_agg(v."user" ORDER BY v."timestamp", v."user") AS first
+            FROM (
+                SELECT "user", "timestamp" FROM poll_vote
+                WHERE poll = o.poll AND option_index = o.option_index
+                ORDER BY "timestamp", "user"
+                LIMIT $2
+            ) v
+        ) f
+        "#,
+    )
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(&ids)
+    .bind::<diesel::sql_types::BigInt, _>(SHOWN_VOTERS)
+    .load(conn)
+    .await?;
     let mut results: HashMap<PollId, Vec<PollOptionResult>> = polls
         .iter()
         .map(|(poll, option_count)| (poll.id, empty_results(poll, *option_count)))
         .collect();
-    for vote in votes {
-        let Some(tally) = results.get_mut(&vote.poll).and_then(|tally| {
-            usize::try_from(vote.option_index)
+    for tally in tallies {
+        let Some(result) = results.get_mut(&tally.poll).and_then(|results| {
+            usize::try_from(tally.option_index)
                 .ok()
-                .and_then(|i| tally.get_mut(i))
+                .and_then(|i| results.get_mut(i))
         }) else {
             continue;
         };
-        tally.count += 1;
-        if let Some(voters) = &mut tally.voters {
-            voters.push(vote.user);
+        result.count = u32::try_from(tally.count).unwrap_or(u32::MAX);
+        if let Some(voters) = &mut result.voters {
+            *voters = tally.first;
         }
     }
     Ok(results)
@@ -480,6 +524,67 @@ pub async fn read_poll(
         .into_iter()
         .next()
         .ok_or(crate::Error::Diesel(diesel::result::Error::NotFound))
+}
+
+/// The most voters one page of [`read_voters`] returns.
+pub const MAX_VOTERS_PAGE: u32 = 100;
+
+#[derive(diesel::QueryableByName)]
+struct VoterRow {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    user: UserId,
+}
+
+/// Who voted for `option` of poll `id`, earliest first: at most `limit` of them (up to
+/// [`MAX_VOTERS_PAGE`]), starting after `after` when given. Not found for a poll `caller` may
+/// not see; refused for an anonymous one, whose voters no one learns.
+pub async fn read_voters(
+    state: &GlobalServerContext,
+    caller: UserId,
+    id: PollId,
+    option: u32,
+    after: Option<UserId>,
+    limit: u32,
+) -> crate::Result<Vec<UserId>> {
+    let mut conn = state.connection_pool.get().await?;
+    let (channel, anonymous): (ChannelId, bool) = poll::table
+        .select((poll::channel, poll::anonymous))
+        .filter(poll::id.eq(id))
+        .first(conn.as_mut())
+        .await?;
+    channel_access_reading(
+        state,
+        conn.as_mut(),
+        caller,
+        channel,
+        Some(id.0.to_string()),
+    )
+    .await?;
+    if anonymous {
+        return Err(crate::Error::Validation(t!("pollVotersAnonymous")));
+    }
+    let option =
+        i32::try_from(option).map_err(|_| crate::Error::Validation(t!("pollOptionOutOfRange")))?;
+    // Keyset on (timestamp, user), the list's order, through `poll_vote_by_option`; the cursor
+    // is the last voter read.
+    let rows: Vec<VoterRow> = diesel::sql_query(
+        r#"
+        SELECT "user" FROM poll_vote
+        WHERE poll = $1 AND option_index = $2
+          AND ($3::uuid IS NULL OR ("timestamp", "user") > (
+              SELECT "timestamp", "user" FROM poll_vote
+              WHERE poll = $1 AND option_index = $2 AND "user" = $3))
+        ORDER BY "timestamp", "user"
+        LIMIT $4
+        "#,
+    )
+    .bind::<diesel::sql_types::Uuid, _>(id.0)
+    .bind::<diesel::sql_types::Integer, _>(option)
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(after.map(|a| a.0))
+    .bind::<diesel::sql_types::BigInt, _>(i64::from(limit.clamp(1, MAX_VOTERS_PAGE)))
+    .load(conn.as_mut())
+    .await?;
+    Ok(rows.into_iter().map(|row| row.user).collect())
 }
 
 /// Batched read for sideloading; see [`load_polls`].
@@ -969,38 +1074,45 @@ pub async fn delete_poll(
     Ok(())
 }
 
-/// Starts the task that closes polls once their deadline passes.
-pub fn spawn_closer(state: GlobalServerContext) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(CLOSER_INTERVAL);
-        loop {
-            interval.tick().await;
-            if let Err(e) = close_due_polls(&state).await {
-                error!(error = e.to_string(), "closing due polls failed");
-            }
-        }
-    });
+/// What closing one poll at its deadline is given (`jobs::JobKind::ClosePoll`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToClose {
+    pub poll: PollId,
 }
 
-/// Closes every open poll whose deadline has passed: marks it closed, publishes its final
-/// tally, and posts the `poll_closed` message. Polls another server instance is closing at
-/// the same moment are skipped and left to it.
-async fn close_due_polls(state: &GlobalServerContext) -> crate::Result<()> {
+/// Closes the poll a `ClosePoll` job names, at its deadline, under its row's lock: marks it
+/// closed, publishes its final tally, and posts the `poll_closed` message. A poll already
+/// closed, early by its creator or a moderator, or deleted, is left as it is.
+pub async fn close_at_deadline(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let ToClose { poll: id } = job.payload()?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let now = Utc::now();
-            let due: Vec<Poll> = poll::table
+            let Some(row) = poll::table
                 .select(Poll::as_select())
-                .filter(poll::closed_at.is_null().and(poll::closes_at.le(now)))
+                .filter(poll::id.eq(id))
                 .for_update()
-                .skip_locked()
-                .load(conn.as_mut())
-                .await?;
-            for row in due {
-                close_one(state, conn.as_mut(), row, now).await?;
+                .first::<Poll>(conn.as_mut())
+                .await
+                .optional()?
+            else {
+                return Ok(crate::jobs::Outcome::Done);
+            };
+            let now = Utc::now();
+            if row.closed_at.is_some() {
+                return Ok(crate::jobs::Outcome::Done);
             }
-            Ok(())
+            if row.closes_at > now {
+                return Ok(crate::jobs::Outcome::Later(
+                    (row.closes_at - now).to_std().unwrap_or_default(),
+                ));
+            }
+            close_one(state, conn.as_mut(), row, now).await?;
+            Ok(crate::jobs::Outcome::Done)
         }
         .scope_boxed()
     })

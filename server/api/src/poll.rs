@@ -2,18 +2,20 @@
 //! `poll` that shows them. Votes are a set keyed by (poll, option, user), so casting one is an
 //! idempotent `PUT` on `/polls/{poll}/votes/{option}/@me` and withdrawing one a `DELETE` on the
 //! same URL; only the calling user's own votes can be addressed. The poll's tally travels in
-//! its record and is republished with every change, so there is no endpoint for it.
+//! its record and is republished with every change, naming each answer's first few voters
+//! (`app::poll::SHOWN_VOTERS`); everyone who voted for an answer is
+//! `GET /polls/{poll}/votes/{option}`, earliest first, a page at a time.
 
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path, Query};
 use crate::include::{IncludeSet, Included, Sideloaded};
-use crate::message_enum::Poll;
 use crate::message_enum::request::PollCreateRequest;
+use crate::message_enum::{Poll, User};
 use crate::{API_PREFIX, TAG_POLLS};
 use aspen_app as app;
 use aspen_app::context::GlobalServerContext;
-use aspen_app::{ChannelId, PollId};
+use aspen_app::{ChannelId, PollId, UserId};
 pub use aspen_wire::poll::{OwnWriteIn, PollOption, PollVote};
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -151,6 +153,63 @@ pub async fn close_poll(
     Path(poll): Path<PollId>,
 ) -> ApiResult<Json<Poll>> {
     Ok(Json(app::poll::close_poll(&state, user.id, poll).await?))
+}
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct VotersQuery {
+    /// Continue after this person, the last of the previous page.
+    pub after: Option<UserId>,
+    /// How many to return, at most 100; 50 when absent.
+    pub limit: Option<u32>,
+}
+
+/// Everyone who voted for an answer, earliest first, a page at a time. A page shorter than
+/// `limit` is the last.
+#[utoipa::path(
+    get,
+    path = "/polls/{poll}/votes/{option}",
+    tag = TAG_POLLS,
+    params(
+        ("poll" = PollId, Path),
+        ("option" = u32, Path, description = "Index into the poll's answers"),
+        VotersQuery,
+    ),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = Vec<User>),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for an anonymous poll or no such answer", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn list_voters(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path((poll, option)): Path<(PollId, u32)>,
+    Query(query): Query<VotersQuery>,
+) -> ApiResult<Json<Vec<User>>> {
+    let ids = app::poll::read_voters(
+        &state,
+        user.id,
+        poll,
+        option,
+        query.after,
+        query.limit.unwrap_or(50),
+    )
+    .await?;
+    // Read in one batch, then put back in the list's order.
+    let mut users: std::collections::HashMap<UserId, User> =
+        app::user::read_users(&state, user.id, &ids)
+            .await?
+            .into_iter()
+            .map(|u| {
+                let record = User::from(u);
+                (record.id, record)
+            })
+            .collect();
+    Ok(Json(ids.iter().filter_map(|id| users.remove(id)).collect()))
 }
 
 /// Casts a vote. On a single-choice poll this replaces any earlier vote by the caller.

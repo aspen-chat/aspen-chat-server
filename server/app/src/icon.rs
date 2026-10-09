@@ -271,13 +271,18 @@ pub async fn require_own(
 }
 
 /// Whether anything uses the icon: a user's or community's picture, a custom emoji, the
-/// deployment's profile, or a profile a report or a warning keeps as it was.
+/// deployment's profile, or a profile a report or a warning keeps as it was. Each is looked up
+/// through an index on exactly the expression it compares (`user_icon`, `community_icon`,
+/// `custom_emoji_icon`, `report_profile_icon`, `message_warning_icon`), whose conditions the
+/// `IS NOT NULL`s repeat.
 const ICON_IN_USE_SQL: &str = "SELECT EXISTS (SELECT 1 FROM \"user\" WHERE icon = $1) \
      OR EXISTS (SELECT 1 FROM community WHERE icon = $1) \
      OR EXISTS (SELECT 1 FROM custom_emoji WHERE icon = $1) \
      OR EXISTS (SELECT 1 FROM deployment_settings WHERE icon = $1) \
-     OR EXISTS (SELECT 1 FROM report WHERE profile->>'icon' = $1::text) \
-     OR EXISTS (SELECT 1 FROM message WHERE warning->'profile'->>'icon' = $1::text) AS in_use";
+     OR EXISTS (SELECT 1 FROM report \
+                WHERE profile IS NOT NULL AND profile->>'icon' = $1::text) \
+     OR EXISTS (SELECT 1 FROM message \
+                WHERE warning IS NOT NULL AND warning->'profile'->>'icon' = $1::text) AS in_use";
 
 /// Whether anything uses the icon `id` ([`ICON_IN_USE_SQL`]).
 pub async fn in_use(conn: &mut AsyncPgConnection, id: IconId) -> crate::Result<bool> {

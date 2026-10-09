@@ -63,6 +63,9 @@ pub struct AspenConfig {
     pub web_client: WebClientConfig,
     #[serde(default)]
     pub plugins: PluginsConfig,
+    /// Running background jobs (`app::jobs`).
+    #[serde(default)]
+    pub jobs: JobsConfig,
     /// Sending mail (`app::email`); left out, the deployment sends none, and its administrators
     /// cannot require or offer what needs it.
     pub email: Option<EmailConfig>,
@@ -355,6 +358,20 @@ pub struct PushConfig {
     pub enabled: bool,
 }
 
+/// How this server runs background jobs (`app::jobs`). Which jobs there are is in the database;
+/// every server that runs jobs takes its share of them.
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
+pub struct JobsConfig {
+    /// Whether this server runs jobs at all. A deployment needs at least one server that does.
+    #[default = true]
+    pub run: bool,
+    /// The most jobs this server runs at once that any class may take, beside the one place
+    /// each class keeps for itself; two per logical CPU by default.
+    #[default(_code = "2 * default_event_feed_shards()")]
+    pub concurrency: usize,
+}
+
 /// How plugins run (`app::plugin`): how long each call may take and how much memory it may use.
 /// Which plugins are installed, and their settings, are in the database.
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
@@ -480,6 +497,7 @@ impl std::fmt::Debug for AspenConfig {
             push,
             web_client,
             plugins,
+            jobs,
             email,
             rate_limit_overrides,
             rate_limits,
@@ -509,6 +527,7 @@ impl std::fmt::Debug for AspenConfig {
             .field("push", push)
             .field("web_client", web_client)
             .field("plugins", plugins)
+            .field("jobs", jobs)
             .field("email", email)
             .field("rate_limit_overrides", rate_limit_overrides)
             .field("rate_limits", rate_limits)

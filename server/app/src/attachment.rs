@@ -453,6 +453,7 @@ pub async fn confirm_upload(
     }
     let confirmed = Utc::now();
     let wants_preview = preview::wanted(&row.mime_type);
+    let mime_type = &row.mime_type;
     let updated: usize = conn
         .transaction::<_, crate::Error, _>(|conn| {
             async move {
@@ -462,7 +463,7 @@ pub async fn confirm_upload(
                     .execute(conn)
                     .await?;
                 if updated > 0 && wants_preview {
-                    preview::queue(conn, id).await?;
+                    preview::queue(conn, id, mime_type).await?;
                 }
                 Ok(updated)
             }
@@ -475,7 +476,7 @@ pub async fn confirm_upload(
         return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
     }
     if wants_preview {
-        preview::wake(state).await;
+        crate::jobs::wake(state).await;
     }
     Ok(Attachment {
         ready_at: Some(confirmed),

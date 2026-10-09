@@ -49,6 +49,7 @@ pub mod file_transfer;
 pub mod fleet;
 pub mod icon;
 pub mod invite;
+pub mod jobs;
 pub mod link_preview;
 pub use aspen_locale as locale;
 pub mod login;

@@ -21,4 +21,6 @@ export const dms = {
   notFound: "This conversation could not be found.",
   back: "Back to direct messages",
   selected: "{count} selected",
+  older: "Show older conversations",
+  loadingOlder: "Loading older conversations…",
 } as const;

@@ -646,6 +646,17 @@ pub async fn report_failure(
                     .execute(conn.as_mut())
                     .await?;
             }
+            // Failures older than the window count for nothing any more, so they go, and what
+            // is left is counted through `voice_server_failure_recent`.
+            diesel::delete(
+                voice_server_failure::table.filter(
+                    voice_server_failure::voice_server
+                        .eq(server)
+                        .and(voice_server_failure::reported_at.le(window_start)),
+                ),
+            )
+            .execute(conn.as_mut())
+            .await?;
             let failures: i64 = voice_server_failure::table
                 .filter(
                     voice_server_failure::voice_server
@@ -694,45 +705,52 @@ pub async fn report_failure(
 
 /// Ends every session on a server whose last report is older than `session_silence_seconds`.
 /// A server that never reported is given that long from the session's start instead.
-pub(super) async fn reap_silent_servers(state: &GlobalServerContext) -> crate::Result<()> {
+pub(super) async fn reap_silent_servers(
+    state: &GlobalServerContext,
+    limit: i64,
+) -> crate::Result<usize> {
     let silence = Duration::seconds(
         i64::try_from(state.config.voice.session_silence_seconds).unwrap_or(24 * 60 * 60),
     );
     let cutoff = Utc::now() - silence;
     let mut conn = state.connection_pool.get().await?;
-    conn.transaction(|conn| {
-        async move {
-            let stale: Vec<VoiceSession> = voice_session::table
-                .inner_join(voice_server::table)
-                .select(VoiceSession::as_select())
-                .filter(
-                    voice_server::last_report_at
-                        .lt(cutoff)
-                        .or(voice_server::last_report_at
-                            .is_null()
-                            .and(voice_session::created_at.lt(cutoff))),
-                )
-                .load(conn.as_mut())
-                .await?;
-            for session in stale {
-                warn!(
-                    session = session.id.0.to_string(),
-                    server = session.voice_server.0.to_string(),
-                    "ending a call whose voice server stopped reporting"
-                );
+    let stale: Vec<VoiceSession> = voice_session::table
+        .inner_join(voice_server::table)
+        .select(VoiceSession::as_select())
+        .filter(
+            voice_server::last_report_at
+                .lt(cutoff)
+                .or(voice_server::last_report_at
+                    .is_null()
+                    .and(voice_session::created_at.lt(cutoff))),
+        )
+        .limit(limit)
+        .load(conn.as_mut())
+        .await?;
+    let found = stale.len();
+    // Each call ends in a transaction of its own, so one that fails leaves the others ended.
+    for session in stale {
+        warn!(
+            session = session.id.0.to_string(),
+            server = session.voice_server.0.to_string(),
+            "ending a call whose voice server stopped reporting"
+        );
+        conn.transaction(|conn| {
+            let session = &session;
+            async move {
                 end_session(
                     state,
                     conn.as_mut(),
-                    &session,
+                    session,
                     VoiceSessionEndReason::ServerLost,
                 )
-                .await?;
+                .await
             }
-            Ok(())
-        }
-        .scope_boxed()
-    })
-    .await
+            .scope_boxed()
+        })
+        .await?;
+    }
+    Ok(found)
 }
 
 #[cfg(test)]

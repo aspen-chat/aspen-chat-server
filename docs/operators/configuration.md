@@ -122,8 +122,8 @@ fitted within 1920 × 960 pixels as WebP, and a video's poster, one frame of it,
 itself played only when asked. The originals stay what the gallery shows and what is saved.
 A message sent with a picture or video whose preview is still being made may wait for it, up to
 twenty seconds from the upload, before it is posted. Every server queues previews; those with
-`make` on make them, from the database's queue, so a server that dies leaves its work to the
-others. Pictures are made in the server itself. Videos' posters are taken by running `ffmpeg`
+`make` on make them, as jobs (so `[jobs] run` must be on there too; see [`[jobs]`](#jobs)), so a
+server that dies leaves its work to the others. Pictures are made in the server itself. Videos' posters are taken by running `ffmpeg`
 and `ffprobe`, which need not be installed: a server without them makes previews of pictures
 only, and says so when it starts. Each video is copied whole to a scratch file under `TMPDIR`,
 so point that at a disk with room for `max_video_bytes` times `concurrency` (not a RAM-backed
@@ -131,7 +131,7 @@ so point that at a disk with room for `max_video_bytes` times `concurrency` (not
 
 | Setting | Default | |
 | --- | --- | --- |
-| `make` | `true` | Whether this server makes previews. Leave it on somewhere: with no server making them, messages sent with pictures wait their full twenty seconds. |
+| `make` | `true` | Whether this server makes previews; it needs `[jobs] run` on as well. Leave both on somewhere: with no server making them, messages sent with pictures wait their full twenty seconds. |
 | `concurrency` | `2` | How many previews this server makes at once. A large picture may take several hundred megabytes while it is made. |
 | `max_picture_bytes` | `67108864` (64 MiB) | The largest picture a preview is made of. |
 | `max_picture_pixels` | `100000000` | The most pixels a picture may have for a preview to be made of it. |
@@ -198,6 +198,19 @@ How plugins run; which are installed, and their settings, are in the database (s
 | `memory_mib` | `64` | The most memory one call of a plugin may use, all its memories together. |
 | `concurrency` | two per logical CPU | The most calls of plugins this server runs at once. A call waits for a place within its own time limit and counts as failed when none comes, so a refusing filter (`failure: closed`) refuses messages while the server is this busy. A quarter of the places (at least one, from two up) are kept for deciding messages, which routes and observers cannot take. With `memory_mib` it bounds what plugins can take of the server's memory. |
 | `concurrency_per_plugin` | one per logical CPU | The most calls of any one plugin this server runs at once, so one busy plugin leaves room for the rest. A quarter of them are likewise kept for deciding messages. |
+
+## `[jobs]`
+
+Background jobs: work a request decides but does not wait for, such as deleting a banned
+person's recent messages, and upkeep that runs on a schedule. Jobs wait in the database, so
+none is lost to a restart, and every server that runs jobs takes its share; one that stops part
+way through a job leaves it to another within a minute. The dashboard's Jobs tab, and
+`aspen-chat-server jobs list`, show what they are doing.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `run` | `true` | Whether this server runs jobs. At least one server of the deployment must. |
+| `concurrency` | two per logical CPU | The most jobs this server runs at once that any class of job may take; each class (urgent, interactive, normal, bulk, maintenance) also keeps one place of its own, so a busy class never holds up the others. |
 
 ## `[push]`
 

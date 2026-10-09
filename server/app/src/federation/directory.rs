@@ -2,11 +2,10 @@
 //! `federated_deployment`, and the lists each is on, as rows of `federation_list_entry`.
 
 use super::policy::ListKind;
+use super::standing;
 use super::{Domain, FederationList, MAX_NOTE_CHARS, own_domain, protocol};
-use super::{FederationPolicy, standing};
 use crate::UserId;
 use crate::aspen_config::FederationConfig;
-use crate::events::Publishing;
 use crate::t;
 use aspen_schema::{federated_deployment, federation_list_entry};
 use chrono::{DateTime, Utc};
@@ -143,8 +142,9 @@ fn clean_note(note: Option<String>) -> crate::Result<Option<String>> {
 }
 
 diesel::define_sql_function! {
-    /// PostgreSQL's `split_part`, which takes a domain's host from before its port.
-    fn split_part(text: diesel::sql_types::Text, delimiter: diesel::sql_types::Text, field: diesel::sql_types::Integer) -> diesel::sql_types::Text;
+    /// The host a domain names, without its port: the migrations' `aspen_domain_host`, which
+    /// `federation_list_entry_host` indexes.
+    fn aspen_domain_host(domain: diesel::sql_types::Text) -> diesel::sql_types::Text;
 }
 
 /// The lists each of `domains` is on itself, as the directory shows and edits them.
@@ -192,7 +192,7 @@ pub async fn lists_of(
     let covering: Vec<(Domain, FederationList)> = federation_list_entry::table
         .select((federation_list_entry::domain, federation_list_entry::list))
         .filter(federation_list_entry::list.eq_any(&blocks))
-        .filter(split_part(federation_list_entry::domain, ":", 1).eq_any(&hosts))
+        .filter(aspen_domain_host(federation_list_entry::domain).eq_any(&hosts))
         .load(conn)
         .await?;
     for domain in domains {
@@ -241,7 +241,7 @@ pub async fn list(
         .offset(offset.clamp(0, crate::admin::MAX_OFFSET))
         .limit(limit.clamp(1, crate::admin::MAX_PAGE))
         .into_boxed();
-    if let Some(pattern) = crate::admin::contains_pattern(search)? {
+    if let Some(pattern) = crate::admin::name_pattern(search)? {
         query = query.filter(federated_deployment::domain.like(pattern));
     }
     let deployments: Vec<FederatedDeployment> = query.load(conn).await?;
@@ -326,13 +326,9 @@ pub async fn set_note(
 /// stranger whose key is pinned afresh. One on a block list is not forgotten, since forgetting
 /// it would take it off the list and admit it wherever a gate blocks only those listed: it must
 /// be taken off its block lists first. Users of its own signed in here whom the gates no longer
-/// admit once it is forgotten, as when it was on an allow list, are signed out at once.
-pub async fn remove(
-    state: &impl Publishing,
-    conn: &mut AsyncPgConnection,
-    policy: &FederationPolicy,
-    domain: &Domain,
-) -> crate::Result<()> {
+/// admit once it is forgotten, as when it was on an allow list, are signed out by a job saved
+/// with the change (`standing::shut_out`).
+pub async fn remove(conn: &mut AsyncPgConnection, domain: &Domain) -> crate::Result<()> {
     let blocked = entries_of(conn, std::slice::from_ref(domain))
         .await?
         .remove(domain)
@@ -352,17 +348,16 @@ pub async fn remove(
     if removed == 0 {
         return Err(diesel::result::Error::NotFound.into());
     }
-    standing::shut_out(state, conn, policy).await
+    standing::shut_out(conn, None).await
 }
 
 /// Puts a known deployment on `list`, or takes it off. Returns whether anything changed. Users
 /// from elsewhere signed in here whom the gates no longer admit, as when a deployment is put on
-/// a block list or taken off an allow list, are signed out at once, whether or not this call
-/// changed anything, so trying again after a failure finishes the job.
+/// a block list or taken off an allow list, are signed out by a job saved with the change
+/// (`standing::shut_out`), whether or not this call changed anything, so trying again after a
+/// failure finishes the job.
 pub async fn set_listed(
-    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
-    policy: &FederationPolicy,
     domain: &Domain,
     list: FederationList,
     listed: bool,
@@ -397,7 +392,7 @@ pub async fn set_listed(
         .await?;
         removed > 0
     };
-    standing::shut_out(state, conn, policy).await?;
+    standing::shut_out(conn, None).await?;
     Ok(changed)
 }
 

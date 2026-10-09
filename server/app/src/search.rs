@@ -102,11 +102,9 @@ pub async fn search_messages(
         .select(Message::as_select())
         .filter(message::deleted_at.is_null())
         .filter(channel::deleted_at.is_null())
-        .filter(
-            message::channel
-                .eq_any(scope.clone())
-                .or(channel::parent_channel.eq_any(scope)),
-        )
+        // A thread reply's home is the thread's parent, so the places and their threads are
+        // one condition, which `message_search` and `message_by_home_channel` lead with.
+        .filter(message::home_channel.eq_any(scope))
         // Echoes and poll announcements say nothing of their own; the reply and the poll are
         // found where they were posted.
         .filter(message::kind.ne_all([

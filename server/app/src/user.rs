@@ -643,9 +643,7 @@ pub async fn retire(
     crate::two_factor::remove_all(conn, id).await?;
     crate::bot::orphan_bots_of(state, conn, id).await?;
     // Their address and the mail waiting for it go with them.
-    diesel::delete(schema::email_outbox::table.filter(schema::email_outbox::user.eq(id)))
-        .execute(conn)
-        .await?;
+    crate::email::outbox::forget_queued(conn, id, false).await?;
     diesel::delete(schema::user_email::table.filter(schema::user_email::user.eq(id)))
         .execute(conn)
         .await?;
@@ -691,7 +689,7 @@ async fn successor(
         JOIN "user" ON "user".id = cu."user"
         LEFT JOIN community_member_role cmr
             ON cmr.community = cu.community AND cmr."user" = cu."user"
-        LEFT JOIN community_role r ON r.id = cmr.role
+        LEFT JOIN community_role r ON r.id = cmr.role AND r.deleted_at IS NULL
         WHERE cu.community = $1
           AND cu."user" <> $2
           AND "user".deleted_at IS NULL

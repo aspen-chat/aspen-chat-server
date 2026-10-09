@@ -20,6 +20,7 @@ use aspen_schema::{community_user, dm_recipient, user_block};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// How many people are online in `channel`, for someone who may view it.
 pub async fn online_in_channel(
@@ -73,16 +74,29 @@ pub async fn online_in_channel(
     }
 }
 
-/// How many members of `community` are online and may view `channel`.
+/// How many members of `community` are online and may view `channel`: from who of it is online,
+/// by the roles they hold, worked out once per community for all its channels' counts
+/// (`community_online`, a `Recent`), so a community's channels cost one read of its members
+/// and roles between them rather than one each.
 async fn count_viewers(
     state: &GlobalServerContext,
     community: CommunityId,
     channel: ChannelId,
 ) -> crate::Result<u32> {
-    let candidates = crate::user_status::online_candidates(state, community).await?;
-    Ok(online_viewers(state, community, channel, candidates)
-        .await?
-        .len() as u32)
+    let groups = state
+        .community_online
+        .get_or_work(community, || async {
+            let candidates = crate::user_status::online_candidates(state, community).await?;
+            let online = crate::user_status::online_among(state, candidates).await?;
+            let mut conn = state.connection_pool.get().await?;
+            Ok(
+                crate::visibility::online_groups(conn.as_mut(), community, &online)
+                    .await?
+                    .map(Arc::new),
+            )
+        })
+        .await?;
+    Ok(groups.map_or(0, |groups| groups.viewers_of(channel)))
 }
 
 /// Those of `candidates`, members of `community`, who are online and may view `channel`.

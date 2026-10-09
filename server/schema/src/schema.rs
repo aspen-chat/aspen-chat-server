@@ -33,16 +33,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    attachment_preview_job (attachment_id) {
-        attachment_id -> Uuid,
-        priority -> Int2,
-        not_before -> Timestamptz,
-        attempts -> Int4,
-        hold_until -> Timestamptz,
-    }
-}
-
-diesel::table! {
     benchmark_community (run, community) {
         run -> Text,
         community -> Uuid,
@@ -206,6 +196,7 @@ diesel::table! {
         bot -> Nullable<Uuid>,
         hue -> Nullable<Int2>,
         hoist -> Bool,
+        deleted_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -216,6 +207,9 @@ diesel::table! {
         sort_index -> Int4,
         joined_at -> Timestamptz,
         nickname -> Nullable<Text>,
+        last_seen_at -> Timestamptz,
+        shown_name -> Text,
+        search_name -> Text,
     }
 }
 
@@ -227,6 +221,7 @@ diesel::table! {
         icon -> Uuid,
         created_by -> Nullable<Uuid>,
         created_at -> Timestamptz,
+        deleted_at -> Nullable<Timestamptz>,
     }
 }
 
@@ -274,19 +269,7 @@ diesel::table! {
         channel -> Uuid,
         user -> Uuid,
         joined_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    email_outbox (id) {
-        id -> Uuid,
-        priority -> Int2,
-        user -> Uuid,
-        address -> Nullable<Text>,
-        mail -> Jsonb,
-        attempts -> Int4,
-        not_before -> Timestamptz,
-        created_at -> Timestamptz,
+        active_at -> Timestamptz,
     }
 }
 
@@ -366,8 +349,6 @@ diesel::table! {
         echo_to_parent -> Bool,
         locale -> Text,
         held_at -> Timestamptz,
-        not_before -> Timestamptz,
-        attempts -> Int4,
     }
 }
 
@@ -390,6 +371,25 @@ diesel::table! {
         created_at -> Timestamptz,
         expires_at -> Nullable<Timestamptz>,
         deleted_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    job (id) {
+        id -> Uuid,
+        kind -> Text,
+        key -> Nullable<Text>,
+        class -> Int2,
+        due -> Timestamptz,
+        not_before -> Timestamptz,
+        every -> Nullable<Interval>,
+        payload -> Jsonb,
+        progress -> Nullable<Jsonb>,
+        attempts -> Int4,
+        running_since -> Nullable<Timestamptz>,
+        failed_at -> Nullable<Timestamptz>,
+        error -> Nullable<Text>,
+        created_at -> Timestamptz,
     }
 }
 
@@ -428,6 +428,7 @@ diesel::table! {
         altered_by -> Array<Nullable<Text>>,
         card -> Nullable<Jsonb>,
         echo -> Nullable<Uuid>,
+        home_channel -> Uuid,
     }
 }
 
@@ -541,7 +542,6 @@ diesel::table! {
         enabled -> Bool,
         position -> Int4,
         settings -> Jsonb,
-        storage_bytes -> Int8,
         installed_at -> Timestamptz,
         updated_at -> Timestamptz,
         removed_at -> Nullable<Timestamptz>,
@@ -595,21 +595,6 @@ diesel::table! {
         owner_kind -> Text,
         owner -> Uuid,
         bytes -> Int8,
-    }
-}
-
-diesel::table! {
-    plugin_timer (plugin, key) {
-        plugin -> Text,
-        key -> Text,
-        due -> Timestamptz,
-        payload -> Text,
-        attempts -> Int4,
-        claimed_until -> Nullable<Timestamptz>,
-        scope_kind -> Nullable<Text>,
-        scope -> Nullable<Uuid>,
-        owner_kind -> Text,
-        owner -> Uuid,
     }
 }
 
@@ -980,7 +965,6 @@ diesel::table! {
 
 diesel::joinable!(attachment -> message (removed_from));
 diesel::joinable!(attachment -> user (uploader));
-diesel::joinable!(attachment_preview_job -> attachment (attachment_id));
 diesel::joinable!(benchmark_community -> benchmark_run (run));
 diesel::joinable!(benchmark_community -> community (community));
 diesel::joinable!(benchmark_user -> benchmark_run (run));
@@ -1014,7 +998,6 @@ diesel::joinable!(custom_emoji -> user (created_by));
 diesel::joinable!(deployment_settings -> icon (icon));
 diesel::joinable!(dm_recipient -> channel (channel));
 diesel::joinable!(dm_recipient -> user (user));
-diesel::joinable!(email_outbox -> user (user));
 diesel::joinable!(federated_deployment -> user (added_by));
 diesel::joinable!(federation_list_entry -> federated_deployment (domain));
 diesel::joinable!(federation_list_entry -> user (added_by));
@@ -1054,7 +1037,6 @@ diesel::joinable!(plugin_notice -> plugin (plugin));
 diesel::joinable!(plugin_notice -> user (user));
 diesel::joinable!(plugin_storage -> plugin (plugin));
 diesel::joinable!(plugin_storage_usage -> plugin (plugin));
-diesel::joinable!(plugin_timer -> plugin (plugin));
 diesel::joinable!(poll -> channel (channel));
 diesel::joinable!(poll -> user (created_by));
 diesel::joinable!(poll_option -> poll (poll));
@@ -1103,7 +1085,6 @@ diesel::joinable!(voice_session -> voice_server (voice_server));
 
 diesel::allow_tables_to_appear_in_same_query!(
     attachment,
-    attachment_preview_job,
     benchmark_community,
     benchmark_run,
     benchmark_user,
@@ -1126,7 +1107,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     deployment_role,
     deployment_settings,
     dm_recipient,
-    email_outbox,
     federated_deployment,
     federation_key,
     federation_list_entry,
@@ -1135,6 +1115,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     held_message,
     icon,
     invite,
+    job,
     mention,
     message,
     message_annotation,
@@ -1151,7 +1132,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     plugin_notice,
     plugin_storage,
     plugin_storage_usage,
-    plugin_timer,
     poll,
     poll_option,
     poll_vote,

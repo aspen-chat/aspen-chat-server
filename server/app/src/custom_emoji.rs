@@ -18,7 +18,6 @@ use diesel::{
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use tracing::warn;
 
 /// How long a name may be, in characters.
 pub const NAME_MIN_CHARS: usize = 2;
@@ -99,6 +98,7 @@ pub async fn read_communities_emoji(
     let rows: Vec<CustomEmojiRow> = custom_emoji::table
         .select(CustomEmojiRow::as_select())
         .filter(custom_emoji::community.eq_any(communities.to_vec()))
+        .filter(custom_emoji::deleted_at.is_null())
         .order((
             custom_emoji::community,
             custom_emoji::name,
@@ -162,8 +162,11 @@ pub async fn create_emoji(
             if crate::icon::in_use(conn.as_mut(), icon_id).await? {
                 return Err(crate::Error::Validation(t!("customEmojiIconUsed")));
             }
+            // Additions at once take turns, so none passes the limit beside another.
+            crate::community::hold_for_count(conn.as_mut(), community_id).await?;
             let count: i64 = custom_emoji::table
                 .filter(custom_emoji::community.eq(community_id))
+                .filter(custom_emoji::deleted_at.is_null())
                 .count()
                 .get_result(conn.as_mut())
                 .await?;
@@ -248,48 +251,95 @@ pub async fn update_emoji(
     .await
 }
 
-/// Removes an emoji, and with it its reactions and its picture. Takes Manage custom emoji in
-/// its community.
+/// Deletes an emoji, which takes Manage custom emoji. At once it is marked deleted and
+/// announced, and is read nowhere after (not listed, not resolved, its reactions left out of
+/// every reading), its name free again; a job (`purgeCustomEmoji`, [`purge_step`]) takes its
+/// reactions off a batch at a time, then deletes it and its picture, unless something took the
+/// picture up since. A client drops its reactions on the deletion event.
 pub async fn delete_emoji(
     state: &GlobalServerContext,
     caller: UserId,
     id: CustomEmojiId,
 ) -> crate::Result<()> {
     let mut conn = state.connection_pool.get().await?;
-    let icon_id = conn
-        .transaction(|conn| {
-            async move {
-                let row = load_for_update(conn.as_mut(), id).await?;
-                let access = require_member(conn.as_mut(), caller, row.community).await?;
-                access.require(Permissions::MANAGE_CUSTOM_EMOJI)?;
-                // Its reactions go with it, by the table's cascade; a client drops them on
-                // the emoji's deletion event.
-                diesel::delete(custom_emoji::table.filter(custom_emoji::id.eq(id)))
-                    .execute(conn.as_mut())
-                    .await?;
-                publish_event(
-                    state,
-                    conn.as_mut(),
-                    EventScope::Community(row.community),
-                    &ServerEvent::CustomEmoji(CustomEmojiEvent::Delete { id }),
-                )
+    conn.transaction(|conn| {
+        async move {
+            let row = load_for_update(conn.as_mut(), id).await?;
+            let access = require_member(conn.as_mut(), caller, row.community).await?;
+            access.require(Permissions::MANAGE_CUSTOM_EMOJI)?;
+            diesel::update(custom_emoji::table.filter(custom_emoji::id.eq(id)))
+                .set(custom_emoji::deleted_at.eq(diesel::dsl::now))
+                .execute(conn.as_mut())
                 .await?;
-                Ok::<_, crate::Error>(row.icon)
-            }
-            .scope_boxed()
-        })
-        .await?;
-    // The picture goes too unless something has taken it up since the emoji was added (its
-    // uploader's profile, a report keeping that profile as it was); losing it to a storage
-    // failure costs an orphaned object, never the deletion.
-    if let Err(e) = crate::icon::delete_if_unused(state, icon_id).await {
-        warn!(
-            error = e.to_string(),
-            icon = icon_id.0.to_string(),
-            "failed to delete a custom emoji's picture"
-        );
+            crate::jobs::enqueue(
+                conn.as_mut(),
+                crate::jobs::NewJob::new(
+                    crate::jobs::JobKind::PurgeCustomEmoji,
+                    crate::jobs::JobClass::Normal,
+                    &ToPurge { emoji: id },
+                )?
+                .keyed(id.0.to_string()),
+            )
+            .await?;
+            publish_event(
+                state,
+                conn.as_mut(),
+                EventScope::Community(row.community),
+                &ServerEvent::CustomEmoji(CustomEmojiEvent::Delete { id }),
+            )
+            .await
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// What purging a deleted emoji is given (`jobs::JobKind::PurgeCustomEmoji`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToPurge {
+    pub emoji: CustomEmojiId,
+}
+
+/// How many of a deleted emoji's reactions one step takes off.
+const PURGE_BATCH: i64 = 1000;
+
+/// One step of purging a deleted emoji: a batch of its reactions, through
+/// `react_by_custom_emoji`; once none is left, the emoji, and its picture unless something has
+/// taken it up since the emoji was added (its uploader's profile, a report keeping that profile
+/// as it was). Nothing is announced: the emoji's deletion already told everyone it is gone.
+pub async fn purge_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let ToPurge { emoji } = job.payload()?;
+    let mut conn = state.connection_pool.get().await?;
+    let taken = diesel::sql_query(
+        "DELETE FROM react WHERE ctid IN \
+         (SELECT ctid FROM react WHERE custom_emoji = $1 LIMIT $2)",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(emoji.0)
+    .bind::<diesel::sql_types::BigInt, _>(PURGE_BATCH)
+    .execute(conn.as_mut())
+    .await?;
+    if taken as i64 >= PURGE_BATCH {
+        return Ok(crate::jobs::Outcome::Progress(serde_json::Value::Null));
     }
-    Ok(())
+    let icon: Option<IconId> = diesel::delete(custom_emoji::table.filter(
+        diesel::BoolExpressionMethods::and(
+            custom_emoji::id.eq(emoji),
+            custom_emoji::deleted_at.is_not_null(),
+        ),
+    ))
+    .returning(custom_emoji::icon)
+    .get_result(conn.as_mut())
+    .await
+    .optional()?;
+    drop(conn);
+    if let Some(icon) = icon {
+        crate::icon::delete_if_unused(state, icon).await?;
+    }
+    Ok(crate::jobs::Outcome::Done)
 }
 
 /// The emoji's row, locked for the rest of the transaction.
@@ -300,6 +350,7 @@ async fn load_for_update(
     custom_emoji::table
         .select(CustomEmojiRow::as_select())
         .filter(custom_emoji::id.eq(id))
+        .filter(custom_emoji::deleted_at.is_null())
         .for_update()
         .first(conn)
         .await
@@ -319,6 +370,7 @@ pub async fn resolve_in_community(
         .select(custom_emoji::id)
         .filter(custom_emoji::id.eq(id))
         .filter(custom_emoji::community.eq(community))
+        .filter(custom_emoji::deleted_at.is_null())
         .first(conn)
         .await
         .optional()?;

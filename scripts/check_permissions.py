@@ -37,9 +37,18 @@ PORTS = Ports(nats=14322, api=18100, voice=19101, api_metrics=19564, voice_metri
               transfer=13578, relay_min=46100, relay_max=46199)
 PASSWORD = "check-permissions-password"
 # Scenarios make several accounts and many changes in moments, as no person would. Mail goes to
-# an SMTP port nothing listens on, so what is queued stays in the outbox to be read.
+# an SMTP port nothing listens on, so what is queued stays among the jobs to be read.
 SETTINGS = ("[rate_limits]\nenabled = false\n"
             "[email]\nsmtp_url = \"smtp://127.0.0.1:9\"\nfrom = \"Aspen <noreply@localhost>\"\n")
+
+
+def eventually(probe, seconds: float = 15) -> bool:
+    """Whether `probe` comes true within `seconds`, as what a job does after a request does."""
+    try:
+        wait_for("it", probe, seconds)
+        return True
+    except Failed:
+        return False
 
 
 def say(message: str) -> None:
@@ -1560,12 +1569,30 @@ def ban_deletions(world: World, check: Checks) -> None:
                          {"content": "soon banned", "attachments": []}, target["token"])["id"]
 
     in_hidden, in_shown = said(hidden), said(shown)
-    stack.api("PUT", f"/communities/{world.community}/bans/{target['id']}",
-              {"deleteMessagesSeconds": 3600}, member["token"])
-    check("the message where the banner may view is deleted",
-          stack.status("GET", f"/messages/{in_shown}", token=world.owner["token"]) == 404)
+    banned = stack.api("PUT", f"/communities/{world.community}/bans/{target['id']}",
+                       {"deleteMessagesSeconds": 3600}, member["token"])
+    check("the ban says how many of their messages go", banned.get("deletedMessages") == 1, banned)
+    # The deletion is a job (`app::jobs`), done once the ban commits.
+    check("the message where the banner may view is deleted, shortly after", eventually(
+        lambda: stack.status("GET", f"/messages/{in_shown}", token=world.owner["token"]) == 404))
     check("the one in a channel hidden from the banner stays",
           stack.status("GET", f"/messages/{in_hidden}", token=world.owner["token"]) == 200)
+
+
+def job_preview(world: World, check: Checks) -> None:
+    say("the jobs preview takes View jobs")
+    stack, member = world.stack, world.member
+    check("a member without it is refused",
+          stack.status("GET", "/admin/jobs", token=member["token"]) == 403)
+    viewers = world.account("job-viewer")
+    stack.command("admin", "grant", viewers["name"])
+    shown = stack.api("GET", "/admin/jobs", token=viewers["token"])
+    check("an administrator, who holds it, reads it", isinstance(shown.get("waitingCounts"), list), shown)
+    check("and it names no job's payload",
+          all("payload" not in job for job in shown.get("waiting", []) + shown.get("running", [])))
+    stack.command("admin", "revoke", viewers["name"])
+    check("once their role goes, they are refused again",
+          stack.status("GET", "/admin/jobs", token=viewers["token"]) == 403)
 
 
 def dm_reads(world: World, check: Checks) -> None:
@@ -1851,13 +1878,14 @@ def calendar_channels(world: World, check: Checks) -> None:
     check("but may delete their own",
           stack.status("DELETE", f"{events}/{mine}", token=member) == 204)
     check("and its reminder goes with it",
-          psql(f"SELECT count(*) FROM plugin_timer WHERE key = 'remind:{mine}'", stack.database) == "0")
+          psql(f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND key = '{CALENDAR_ID}/remind:{mine}'", stack.database) == "0")
     # Deleting the calendar deletes the reminders set in it, with its events.
     check("an event's reminder is kept in the calendar's scope",
-          psql(f"SELECT count(*) FROM plugin_timer WHERE scope = '{calendar}'", stack.database) != "0")
+          psql(f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND payload->>'scope' = '{calendar}'", stack.database) != "0")
     world.as_owner("DELETE", f"/channels/{calendar}")
-    check("deleting the calendar deletes its reminders",
-          psql(f"SELECT count(*) FROM plugin_timer WHERE scope = '{calendar}'", stack.database) == "0")
+    # What a plugin kept in a deleted channel is forgotten by a job (`forgetPluginScope`).
+    check("deleting the calendar deletes its reminders, shortly after", eventually(
+        lambda: psql(f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND payload->>'scope' = '{calendar}'", stack.database) == "0"))
     stack.command("plugins", "disable", CALENDAR_ID)
 
 
@@ -1925,8 +1953,9 @@ def email(world: World, check: Checks) -> None:
          f"WHERE \"user\" = '{member['id']}'", stack.database)
 
     def digest() -> str:
-        return psql(f"SELECT mail FROM email_outbox WHERE \"user\" = '{member['id']}' "
-                    f"AND mail->>'kind' = 'digest'", stack.database)
+        return psql(f"SELECT payload->'mail' FROM job WHERE kind = 'sendEmail' "
+                    f"AND payload->>'user' = '{member['id']}' "
+                    f"AND payload->'mail'->>'kind' = 'digest'", stack.database)
 
     check("a digest is made when it is due", soon(lambda: digest() != "", 75))
     made = digest()
@@ -2243,7 +2272,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, thread_echoes, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, typing, name_colours, dual_invites, device_links,
-             nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, dm_reads, frequent_emoji,
+             nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed]
 

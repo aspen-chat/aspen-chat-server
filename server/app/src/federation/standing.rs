@@ -63,8 +63,6 @@ const LIFETIME: Duration = Duration::minutes(2);
 pub const MAX_USERS: usize = 128;
 /// The largest answer read: its statement, and the JSON around it.
 const MAX_ANSWER_BYTES: usize = jws::MAX_LENGTH + 1024;
-/// Which advisory lock a pass holds, so one server does it at a time.
-const PASS_LOCK: i64 = 0x6173_7065_6e5f_7374;
 
 /// A deployment asks one home about the home's users signed in there.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -226,38 +224,52 @@ pub async fn answer(state: &GlobalServerContext, token: &str) -> crate::Result<S
 /// How many homes a pass asks at once, and how many deployments it reads the documents of at
 /// once, so a few slow ones hold up no one else.
 const CONCURRENCY: usize = 16;
+/// The most foreign users one pass asks about; the rest are due at the next.
+const MAX_DUE_PER_PASS: i64 = 5000;
+/// The longest a pass spends asking homes about their users: chunks not asked by then are left
+/// due for the next pass, and count against no home.
+const CONFIRM_BUDGET: std::time::Duration = std::time::Duration::from_secs(240);
 /// The longest a pass waits on one deployment: for all of a home's answers, or for its
 /// document. A home that takes longer is taken as unreached.
 const BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 /// The longest a pass spends reading documents again, however many are due.
 const REFRESH_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// Runs a pass whenever one may be due, for as long as the server runs, while any gate is open:
-/// the documents of the deployments a gate admits are read again, so a key they replaced stops
-/// verifying, and, while an immigration gate admits anyone, the homes of the users from
-/// elsewhere are asked about them.
-pub fn spawn_confirmer(state: GlobalServerContext) {
-    tokio::spawn(async move {
-        let interval = state.config.federation.standing_interval_seconds.max(1);
-        let every = std::time::Duration::from_secs(interval.min(300));
-        let mut tick = tokio::time::interval(every);
-        let longest = std::time::Duration::from_secs(interval);
-        let mut backoff = Backoffs {
+/// How often a pass runs: every `standing_interval_seconds`, and at least every five minutes,
+/// so a home failing is tried again within its backoff.
+pub fn pass_every(config: &crate::aspen_config::FederationConfig) -> std::time::Duration {
+    std::time::Duration::from_secs(config.standing_interval_seconds.clamp(1, 300))
+}
+
+/// One pass (`jobs::JobKind::ConfirmStanding`, recurring every [`pass_every`]), while any gate is
+/// open: the documents of the deployments a gate admits are read again, so a key they replaced
+/// stops verifying here, and each foreign user's home is asked whether they may still be here,
+/// those due the longest first. One server runs a pass at a time, as every job runs; which homes
+/// and documents are failing is remembered by each server (`StandingBackoff`), so one taking
+/// over starts afresh.
+pub async fn pass_step(
+    state: &GlobalServerContext,
+    _job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    if state.settings().federation.enabled() {
+        let mut backoff = state.standing_backoff.lock().await;
+        pass(state, &mut backoff).await?;
+    }
+    Ok(crate::jobs::Outcome::Done)
+}
+
+/// What one server remembers between passes of which deployments are failing.
+pub struct StandingBackoff(Backoffs);
+
+impl StandingBackoff {
+    pub fn new(config: &crate::aspen_config::FederationConfig) -> Self {
+        let every = pass_every(config);
+        let longest = std::time::Duration::from_secs(config.standing_interval_seconds.max(1));
+        StandingBackoff(Backoffs {
             documents: Backoff::new(every, longest),
             homes: Backoff::new(every, longest),
-        };
-        loop {
-            tick.tick().await;
-            if !state.settings().federation.enabled() {
-                continue;
-            }
-            let (passed, noted) = crate::events::noting(pass(&state, &mut backoff)).await;
-            crate::events::settle(&state, noted, passed.is_err()).await;
-            if let Err(error) = passed {
-                tracing::warn!(%error, "checking foreign users' standing failed");
-            }
-        }
-    });
+        })
+    }
 }
 
 /// Who a pass leaves alone for now: deployments whose documents could not be read, and homes
@@ -320,44 +332,26 @@ impl Backoff {
 /// deployments in use that a gate admits while it asks every home about its users here who are
 /// due, then forgets the deployments recorded on first contact that went unused
 /// (`directory::prune_unused`).
-async fn pass(state: &GlobalServerContext, backoff: &mut Backoffs) -> crate::Result<()> {
-    // The lock belongs to a transaction, so it is let go however the pass ends: done, failed,
-    // or dropped part way, when the pool discards the connection rather than recycling it
-    // still in the transaction.
-    let mut lock = state.connection_pool.get().await?;
-    lock.transaction(|lock| {
-        async move {
-            let locked: bool = diesel::select(diesel::dsl::sql::<diesel::sql_types::Bool>(
-                &format!("pg_try_advisory_xact_lock({PASS_LOCK})"),
-            ))
-            .get_result(lock.as_mut())
-            .await?;
-            if !locked {
-                return Ok(());
-            }
-            // The two run side by side, so however many documents are due, homes are asked
-            // about their users within the pass.
-            let Backoffs { documents, homes } = backoff;
-            let confirming = async {
-                if state.settings().federation.admits_anyone() {
-                    confirm_users(state, homes).await
-                } else {
-                    Ok(())
-                }
-            };
-            let (refreshed, confirmed) =
-                tokio::join!(refresh_documents(state, documents), confirming);
-            refreshed?;
-            confirmed?;
-            let pruned = super::directory::prune_unused(lock.as_mut()).await?;
-            if pruned > 0 {
-                tracing::info!(pruned, "forgot deployments contacted once and never used");
-            }
+async fn pass(state: &GlobalServerContext, backoff: &mut StandingBackoff) -> crate::Result<()> {
+    // The two run side by side, so however many documents are due, homes are asked about their
+    // users within the pass.
+    let Backoffs { documents, homes } = &mut backoff.0;
+    let confirming = async {
+        if state.settings().federation.admits_anyone() {
+            confirm_users(state, homes).await
+        } else {
             Ok(())
         }
-        .scope_boxed()
-    })
-    .await
+    };
+    let (refreshed, confirmed) = tokio::join!(refresh_documents(state, documents), confirming);
+    refreshed?;
+    confirmed?;
+    let mut conn = state.connection_pool.get().await?;
+    let pruned = super::directory::prune_unused(conn.as_mut()).await?;
+    if pruned > 0 {
+        tracing::info!(pruned, "forgot deployments contacted once and never used");
+    }
+    Ok(())
 }
 
 /// Reads again the document of every deployment in use (`directory::IN_USE_SQL`) that a gate
@@ -456,6 +450,8 @@ struct PassContext<'a> {
     lists: HashMap<Domain, Vec<FederationList>>,
     /// Homes that presented a key nothing vouches for, refused until it is accepted.
     suspended: Vec<Domain>,
+    /// When the pass stops asking (`CONFIRM_BUDGET` after it began).
+    until: tokio::time::Instant,
 }
 
 /// Asks every home about its users here who are due, [`CONCURRENCY`] homes at a time, the homes
@@ -468,28 +464,39 @@ async fn confirm_users(state: &GlobalServerContext, backoff: &mut Backoff) -> cr
     let due_before = Utc::now()
         - Duration::seconds(i64::try_from(config.standing_interval_seconds).unwrap_or(i64::MAX));
     let mut conn = state.connection_pool.get().await?;
-    let rows: Vec<DueRow> = user::table
-        .select((
-            user::id,
-            user::home_domain,
-            user::home_id,
-            user::bot,
-            user::home_confirmed_at,
-        ))
-        .filter(user::home_domain.is_not_null())
-        .filter(user::deleted_at.is_null())
-        .filter(
-            user::home_confirmed_at
-                .is_null()
-                .or(user::home_confirmed_at.lt(due_before)),
-        )
-        .filter(diesel::dsl::exists(
-            refresh_token::table
-                .filter(refresh_token::user.eq(user::id))
-                .filter(refresh_token::expires.gt(diesel::dsl::now)),
-        ))
-        .load(&mut conn)
-        .await?;
+    // Those never confirmed, then those confirmed longest ago, through `user_standing_due`, at
+    // most `MAX_DUE_PER_PASS`: the rest wait for the next pass, oldest first.
+    let due = |never: bool, limit: i64| {
+        let query = user::table
+            .select((
+                user::id,
+                user::home_domain,
+                user::home_id,
+                user::bot,
+                user::home_confirmed_at,
+            ))
+            .filter(user::home_domain.is_not_null())
+            .filter(user::deleted_at.is_null())
+            .filter(diesel::dsl::exists(
+                refresh_token::table
+                    .filter(refresh_token::user.eq(user::id))
+                    .filter(refresh_token::expires.gt(diesel::dsl::now)),
+            ))
+            .limit(limit)
+            .into_boxed();
+        if never {
+            query.filter(user::home_confirmed_at.is_null())
+        } else {
+            query
+                .filter(user::home_confirmed_at.lt(due_before))
+                .order(user::home_confirmed_at.asc())
+        }
+    };
+    let mut rows: Vec<DueRow> = due(true, MAX_DUE_PER_PASS).load(&mut conn).await?;
+    let room = MAX_DUE_PER_PASS - rows.len() as i64;
+    if room > 0 {
+        rows.extend(due(false, room).load::<DueRow>(&mut conn).await?);
+    }
     let mut by_home: HashMap<Domain, Vec<Due>> = HashMap::new();
     for (id, home, home_id, bot, confirmed_at) in rows {
         if let (Some(home), Some(home_id)) = (home, home_id) {
@@ -523,6 +530,7 @@ async fn confirm_users(state: &GlobalServerContext, backoff: &mut Backoff) -> cr
         policy: state.settings().federation,
         lists,
         suspended,
+        until: tokio::time::Instant::now() + CONFIRM_BUDGET,
     };
     let mut homes: Vec<(Domain, Vec<Due>, bool)> = by_home
         .into_iter()
@@ -567,7 +575,6 @@ async fn confirm_home(
     ask_now: bool,
 ) -> crate::Result<Option<bool>> {
     let state = context.state;
-    let deadline = tokio::time::Instant::now() + BUDGET;
     let on = context
         .lists
         .get(home)
@@ -595,6 +602,11 @@ async fn confirm_home(
     }
     let mut reached = ask_now;
     for chunk in admitted.chunks(MAX_USERS) {
+        // A pass that has run long leaves the rest of the chunks due for the next, rather than
+        // holding them against a home that was never asked.
+        if tokio::time::Instant::now() >= context.until {
+            break;
+        }
         let answer = if reached {
             let now = Utc::now();
             let request = jws::sign(
@@ -610,7 +622,9 @@ async fn confirm_home(
                     users: chunk.iter().map(|due| due.home_id).collect(),
                 },
             );
-            match tokio::time::timeout_at(deadline, ask(state, home, request)).await {
+            // Each chunk has its own time to be answered in, so a home with many users here is
+            // not taken as unreached for the time its earlier chunks took.
+            match tokio::time::timeout(BUDGET, ask(state, home, request)).await {
                 Ok(Ok(answer)) => Some(answer),
                 Ok(Err(error)) => {
                     tracing::info!(%home, %error, "could not ask a home about its users");
@@ -706,17 +720,25 @@ async fn apply(
     asked: &[Due],
     answer: StandingAnswer,
 ) -> crate::Result<()> {
+    let said: HashMap<Uuid, Standing> = answer.users.iter().map(|u| (u.sub, u.standing)).collect();
+    // Those in good standing are confirmed together, in one statement.
+    let good: Vec<UserId> = asked
+        .iter()
+        .filter(|due| said.get(&due.home_id) == Some(&Standing::Good))
+        .map(|due| due.id)
+        .collect();
+    if !good.is_empty() {
+        diesel::update(user::table.filter(user::id.eq_any(&good)))
+            .set(user::home_confirmed_at.eq(diesel::dsl::now))
+            .execute(conn)
+            .await?;
+    }
     for due in asked {
-        let Some(said) = answer.users.iter().find(|u| u.sub == due.home_id) else {
+        let Some(standing) = said.get(&due.home_id).copied() else {
             continue;
         };
-        match said.standing {
-            Standing::Good => {
-                diesel::update(user::table.find(due.id))
-                    .set(user::home_confirmed_at.eq(diesel::dsl::now))
-                    .execute(conn)
-                    .await?;
-            }
+        match standing {
+            Standing::Good => {}
             Standing::Gone => {
                 let retired = conn
                     .transaction(|conn| crate::user::retire(state, conn, due.id).scope_boxed())
@@ -733,68 +755,109 @@ async fn apply(
     Ok(())
 }
 
-/// Ends the sessions of the users from elsewhere whose homes `policy` no longer admits, for a
-/// change to the immigration gates that has committed. It reads only users with a session, so a
-/// second run finds nothing left to do.
-pub async fn shut_out(
-    state: &impl Publishing,
-    conn: &mut AsyncPgConnection,
-    policy: &FederationPolicy,
-) -> crate::Result<()> {
-    let staying: Vec<(UserId, Option<Domain>, bool)> = user::table
-        .select((user::id, user::home_domain, user::bot))
-        .filter(user::home_domain.is_not_null())
-        .filter(user::deleted_at.is_null())
-        .filter(diesel::dsl::exists(
-            refresh_token::table
-                .filter(refresh_token::user.eq(user::id))
-                .filter(refresh_token::expires.gt(diesel::dsl::now)),
-        ))
-        .load(conn)
-        .await?;
-    let homes: Vec<Domain> = staying
-        .iter()
-        .filter_map(|(_, home, _)| home.clone())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-    let lists = lists_of(conn, &homes).await?;
-    for (id, home, bot) in staying {
-        let Some(home) = home else { continue };
-        let subject = if bot { Subject::Bots } else { Subject::Users };
-        let on = lists.get(&home).map(Vec::as_slice).unwrap_or_default();
-        if !admits(policy, subject, Direction::Immigration, on) {
-            end_stay(state, conn, id).await?;
-            tracing::info!(%home, user = %id.0, "ended the sessions of a user whose home this deployment no longer admits");
-        }
-    }
+/// Whom a sign-out of users from elsewhere covers (`jobs::JobKind::ShutOut`): those whose homes
+/// the gates no longer admit, decided as each step runs, or everyone of one home.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShutOut {
+    /// One home, suspended because it presented a key nothing vouches for; `None` for every
+    /// home the gates no longer admit.
+    pub home: Option<Domain>,
+}
+
+/// Starts ending the sessions of the users from elsewhere whose homes the gates no longer admit,
+/// for a change to the gates or the lists they read, or, given `home`, of everyone of that home:
+/// a job saved in the caller's transaction (`shutOut`, urgent, [`shut_out_step`]), so the change
+/// commits at once and the sign-outs follow within seconds, a batch at a time.
+pub async fn shut_out(conn: &mut AsyncPgConnection, home: Option<Domain>) -> crate::Result<()> {
+    crate::jobs::enqueue(
+        conn,
+        crate::jobs::NewJob::new(
+            crate::jobs::JobKind::ShutOut,
+            crate::jobs::JobClass::Urgent,
+            &ShutOut { home },
+        )?,
+    )
+    .await?;
     Ok(())
 }
 
-/// Ends the sessions of every user of `home` signed in here, for a home that is suspended
-/// because it presented a key nothing vouches for (`contact::record_contact`). It reads only
-/// users with a session, so a second run finds nothing left to do.
-pub async fn shut_out_home(
-    state: &impl Publishing,
-    conn: &mut AsyncPgConnection,
-    home: &Domain,
-) -> crate::Result<()> {
-    let staying: Vec<UserId> = user::table
-        .select(user::id)
-        .filter(user::home_domain.eq(home))
-        .filter(user::deleted_at.is_null())
-        .filter(diesel::dsl::exists(
-            refresh_token::table
-                .filter(refresh_token::user.eq(user::id))
-                .filter(refresh_token::expires.gt(diesel::dsl::now)),
-        ))
-        .load(conn)
-        .await?;
-    for id in staying {
-        end_stay(state, conn, id).await?;
-        tracing::info!(%home, user = %id.0, "ended the sessions of a user whose home presented a key nothing vouches for");
+/// How many users one step of a sign-out ends the sessions of.
+const SHUT_OUT_BATCH: i64 = 100;
+
+/// One step of signing out users from elsewhere: the homes not admitted are decided afresh, per
+/// home rather than per user, from the gates as they stand (`settings().federation`) and the
+/// lists, and a batch of those homes' users who still have a session here are signed out, each in
+/// a transaction of its own. Those signed out have no session left, so each step reads only who
+/// remains, and a second run finds nothing to do.
+pub async fn shut_out_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    use crate::jobs::Outcome;
+    let ShutOut { home } = job.payload()?;
+    let mut conn = state.connection_pool.get().await?;
+    // Which homes, and for which of people and bots, are shut out.
+    let shut: Vec<(Domain, Option<bool>)> = match home {
+        Some(home) => vec![(home, None)],
+        None => {
+            let homes: Vec<Domain> = user::table
+                .select(user::home_domain.assume_not_null())
+                .filter(user::home_domain.is_not_null())
+                .filter(user::deleted_at.is_null())
+                .distinct()
+                .load(conn.as_mut())
+                .await?;
+            let lists = lists_of(conn.as_mut(), &homes).await?;
+            let policy = state.settings().federation;
+            homes
+                .into_iter()
+                .flat_map(|home| {
+                    let on = lists.get(&home).cloned().unwrap_or_default();
+                    [(Subject::Users, false), (Subject::Bots, true)]
+                        .into_iter()
+                        .filter(move |(subject, _)| {
+                            !admits(&policy, *subject, Direction::Immigration, &on)
+                        })
+                        .map(move |(_, bot)| (home.clone(), Some(bot)))
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        }
+    };
+    let mut batch: Vec<UserId> = Vec::new();
+    for (home, bot) in shut {
+        let room = SHUT_OUT_BATCH - batch.len() as i64;
+        if room <= 0 {
+            break;
+        }
+        let mut found = user::table
+            .select(user::id)
+            .filter(user::home_domain.eq(home))
+            .filter(user::deleted_at.is_null())
+            .filter(diesel::dsl::exists(
+                refresh_token::table
+                    .filter(refresh_token::user.eq(user::id))
+                    .filter(refresh_token::expires.gt(diesel::dsl::now)),
+            ))
+            .limit(room)
+            .into_boxed();
+        if let Some(bot) = bot {
+            found = found.filter(user::bot.eq(bot));
+        }
+        batch.extend(found.load::<UserId>(conn.as_mut()).await?);
     }
-    Ok(())
+    let more = batch.len() as i64 >= SHUT_OUT_BATCH;
+    for id in batch {
+        conn.transaction(|conn| async move { end_stay(state, conn, id).await }.scope_boxed())
+            .await?;
+        tracing::info!(user = %id.0, "ended the sessions of a user whose home this deployment no longer admits");
+    }
+    Ok(if more {
+        Outcome::Progress(serde_json::Value::Null)
+    } else {
+        Outcome::Done
+    })
 }
 
 /// Ends a foreign user's sessions here, closing their event streams, and takes them out of

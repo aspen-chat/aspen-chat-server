@@ -14,7 +14,7 @@ use crate::context::GlobalServerContext;
 use crate::events::dm_recipients;
 use crate::t;
 use crate::{ChannelId, EventScope, UserId, publish_event};
-use aspen_schema::{channel, community_user, dm_recipient, message, user};
+use aspen_schema::{channel, community_user, dm_recipient, user};
 use aspen_wire::message_enum::server_event::{ChannelEvent, ServerEvent};
 use chrono::Utc;
 use diesel::prelude::*;
@@ -248,6 +248,8 @@ pub async fn list_dms_moderating(
     state: &GlobalServerContext,
     access: &crate::deployment::DeploymentAccess,
     user: UserId,
+    before: Option<ChannelId>,
+    limit: i64,
 ) -> crate::Result<Vec<(Channel, Vec<UserId>)>> {
     access.require(crate::deployment::DeploymentPermission::ModerateCommunities)?;
     crate::moderation_log::log_moderation(
@@ -259,58 +261,75 @@ pub async fn list_dms_moderating(
         Some(user.0.to_string()),
     )
     .await?;
-    list_dms(state, user).await
+    list_dms(state, user, before, limit).await
 }
 
+/// The most DMs one page of [`list_dms`] lists.
+pub const MAX_DM_PAGE: i64 = 100;
+
+/// A page of `caller`'s DMs and group DMs, most recently active first (`dm_recipient.active_at`:
+/// when they joined, or its latest message since), after the DM `before` when given, each with
+/// its people. Read through `dm_recipient_by_activity`, so a page costs the same however many
+/// DMs the caller has; a DM that became active since the page before moves up, and is listed
+/// again rather than missed.
 pub async fn list_dms(
     state: &GlobalServerContext,
     caller: UserId,
+    before: Option<ChannelId>,
+    limit: i64,
 ) -> crate::Result<Vec<(Channel, Vec<UserId>)>> {
+    #[derive(diesel::QueryableByName)]
+    struct Listed {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        channel: ChannelId,
+    }
     let mut conn = state.connection_pool.get().await?;
-    let channels: Vec<Channel> = channel::table
-        .inner_join(dm_recipient::table.on(dm_recipient::channel.eq(channel::id)))
+    let order: Vec<ChannelId> = diesel::sql_query(
+        r#"
+        SELECT dr.channel FROM dm_recipient dr
+        JOIN channel c ON c.id = dr.channel
+        WHERE dr."user" = $1 AND c.deleted_at IS NULL
+          AND ($2::uuid IS NULL OR (dr.active_at, dr.channel) < (
+              SELECT p.active_at, p.channel FROM dm_recipient p
+              WHERE p."user" = $1 AND p.channel = $2))
+        ORDER BY dr.active_at DESC, dr.channel DESC
+        LIMIT $3
+        "#,
+    )
+    .bind::<diesel::sql_types::Uuid, _>(caller.0)
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(before.map(|b| b.0))
+    .bind::<diesel::sql_types::BigInt, _>(limit.clamp(1, MAX_DM_PAGE))
+    .load::<Listed>(conn.as_mut())
+    .await?
+    .into_iter()
+    .map(|l| l.channel)
+    .collect();
+    let mut channels: HashMap<ChannelId, Channel> = channel::table
         .select(Channel::as_select())
-        .filter(
-            dm_recipient::user
-                .eq(caller)
-                .and(channel::deleted_at.is_null()),
-        )
-        .load(conn.as_mut())
-        .await?;
-    let ids: Vec<ChannelId> = channels.iter().map(|c| c.id).collect();
+        .filter(channel::id.eq_any(&order))
+        .load::<Channel>(conn.as_mut())
+        .await?
+        .into_iter()
+        .map(|c| (c.id, c))
+        .collect();
     let mut recipients: HashMap<ChannelId, Vec<UserId>> = HashMap::new();
     for (dm, user) in dm_recipient::table
         .select((dm_recipient::channel, dm_recipient::user))
-        .filter(dm_recipient::channel.eq_any(&ids))
+        .filter(dm_recipient::channel.eq_any(&order))
         .order_by(dm_recipient::joined_at.asc())
         .load::<(ChannelId, UserId)>(conn.as_mut())
         .await?
     {
         recipients.entry(dm).or_default().push(user);
     }
-    let latest: HashMap<ChannelId, chrono::DateTime<Utc>> = message::table
-        .filter(
-            message::channel
-                .eq_any(&ids)
-                .and(message::deleted_at.is_null()),
-        )
-        .group_by(message::channel)
-        .select((message::channel, diesel::dsl::max(message::timestamp)))
-        .load::<(ChannelId, Option<chrono::DateTime<Utc>>)>(conn.as_mut())
-        .await?
+    Ok(order
         .into_iter()
-        .filter_map(|(dm, last)| last.map(|last| (dm, last)))
-        .collect();
-    let mut listed: Vec<(Channel, Vec<UserId>)> = channels
-        .into_iter()
-        .map(|c| {
-            let people = recipients.remove(&c.id).unwrap_or_default();
-            (c, people)
+        .filter_map(|id| {
+            let c = channels.remove(&id)?;
+            let people = recipients.remove(&id).unwrap_or_default();
+            Some((c, people))
         })
-        .collect();
-    // Latest message first; DMs with none after them, newest first (channel ids are UUIDv7).
-    listed.sort_by_key(|(c, _)| std::cmp::Reverse((latest.get(&c.id).copied(), c.id.0)));
-    Ok(listed)
+        .collect())
 }
 
 /// Adds someone to a group DM the caller is in; whether they were added, rather than already

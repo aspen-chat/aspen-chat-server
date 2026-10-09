@@ -36,8 +36,26 @@ pub struct GlobalServerContext {
     /// Where each channel belongs (`app::events::channel_home`), filled as it is asked; a
     /// channel never moves.
     pub channel_homes: Arc<Mutex<HashMap<crate::ChannelId, crate::events::ChannelHome>>>,
+    /// Which deployments this server found failing in its standing passes
+    /// (`app::federation::standing`).
+    pub standing_backoff: Arc<tokio::sync::Mutex<crate::federation::standing::StandingBackoff>>,
+    /// The places for rechecks of calls this server runs at once (`app::voice::recheck`).
+    pub rechecks: Arc<tokio::sync::Semaphore>,
     /// Each channel's recent count of who is online in it (`app::channel_presence`).
     pub channel_presence: Arc<crate::recent::Recent<crate::ChannelId, u32>>,
+    /// Who of each community is online, by the roles they hold, for its channels' counts
+    /// (`app::channel_presence`).
+    pub community_online: Arc<
+        crate::recent::Recent<crate::CommunityId, Option<Arc<crate::visibility::OnlineGroups>>>,
+    >,
+    /// Where each call recently reported speaking in is, its voice server and channel, which
+    /// never change (`app::voice::sessions`), so speaking changes are checked without a read.
+    pub voice_session_homes: Arc<
+        crate::recent::Recent<
+            crate::VoiceSessionId,
+            Option<(crate::VoiceServerId, crate::ChannelId)>,
+        >,
+    >,
     /// Each community's recent set of members with a connection (`app::user_status`).
     pub connected_members:
         Arc<crate::recent::Recent<crate::CommunityId, Arc<HashSet<crate::UserId>>>>,
@@ -156,6 +174,12 @@ impl GlobalServerContext {
         Ok(Self {
             channel_homes: Arc::new(Mutex::new(HashMap::new())),
             channel_presence: Arc::default(),
+            standing_backoff: Arc::new(tokio::sync::Mutex::new(
+                crate::federation::standing::StandingBackoff::new(&config.federation),
+            )),
+            rechecks: Arc::new(tokio::sync::Semaphore::new(crate::voice::RECHECKS_AT_ONCE)),
+            community_online: Arc::default(),
+            voice_session_homes: Arc::default(),
             connected_members: Arc::default(),
             connection_pool,
             event_feed: match role {
@@ -183,31 +207,22 @@ impl GlobalServerContext {
     }
 }
 
-/// Starts the app's background tasks: the settings watcher, the poll closer, the voice report
-/// listener and reaper, the fleet heartbeat, the federation standing confirmer, the push
-/// dispatcher, the mail sender and digest scheduler, the attachment preview maker and held
-/// message releaser, the sweeper of staging uploads, the mover of evidence off the public read
-/// path, and the plugins with their observers,
-/// making the federation and push keys where they are missing.
+/// Starts the app's background tasks: the settings watcher, the voice report listener, the fleet
+/// heartbeat, the push dispatcher, the mail sender and digest scheduler, the attachment preview
+/// maker and held message releaser, the sweeper of staging uploads, the mover of evidence off
+/// the public read path, the plugins with their observers, and the job runner (`app::jobs`),
+/// which does the rest, making the federation and push keys where they are missing.
 pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(), crate::Error> {
     crate::deployment_settings::spawn_watcher(context.clone());
-    crate::poll::spawn_closer(context.clone());
     crate::voice::spawn_report_listener(context.clone()).await?;
     crate::voice::spawn_token_key_answerer(context.clone()).await?;
-    crate::voice::spawn_reaper(context.clone());
     crate::fleet::spawn_heartbeat(context.clone());
     if context.config.federation.domain.is_some() {
         crate::federation::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
     }
-    crate::federation::standing::spawn_confirmer(context.clone());
     crate::push::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
     crate::push::spawn_dispatcher(context.clone());
-    crate::email::outbox::spawn_sender(context.clone());
-    crate::email::digest::spawn_scheduler(context.clone());
-    crate::attachment::preview::spawn_maker(context.clone());
-    crate::message::held::spawn_releaser(context.clone());
-    crate::media_store::spawn_upload_sweeper(context.clone());
-    crate::attachment::evidence::spawn_mover(context.clone());
     crate::plugin::registry::start(context).await?;
+    crate::jobs::spawn_runner(context.clone());
     Ok(())
 }

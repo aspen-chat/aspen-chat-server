@@ -6,49 +6,45 @@
 //! is checked as any message is, kept in `held_message`, and answered `202 Accepted`, and the
 //! author's apps show it waiting. Nobody else learns of it until it is posted.
 //!
-//! A held message is posted ([`spawn_releaser`], on every server) once none of its attachments
-//! holds it: each attachment holds the messages it is in until its preview is made, or found
-//! not worth making, or fails, or until its preview job's `hold_until` passes, twenty seconds
-//! after the upload (`app::attachment::preview::HOLD`). A preview made after the message is
-//! posted still reaches its readers, by `attachmentPreviewed`.
+//! A held message is posted by a job of its own (`releaseHeldMessage`, keyed by it; `app::jobs`)
+//! once none of its attachments holds it and no message its author sent before it is still
+//! held, so an author's held messages are posted in the order they were sent. Each attachment
+//! holds the messages it is in until its preview is made, or found not worth making, or fails,
+//! or until its preview job's `holdUntil` passes, twenty seconds after the upload
+//! (`app::attachment::preview::HOLD`). A preview job that settles sets the jobs of the messages
+//! it held going at once ([`wake_holding`]); a job still held looks again when the hold runs
+//! out, and at least every [`LOOK_EVERY`]. A preview made after the message is posted still
+//! reaches its readers, by `attachmentPreviewed`.
 //!
 //! Posting it is posting the message as it was sent (`super::post`), with the author's
 //! permissions as they are then, its plugins deciding it then, in the language it was sent in;
-//! the held row goes in the same transaction, so it is posted once however many servers try,
-//! and `heldMessagePosted` tells the author's apps which message it became. One that can no
-//! longer be posted (the author lost the right to post there, the channel went) is dropped,
-//! and `heldMessageFailed` tells them why. A releaser claims a held message by pushing its
-//! `not_before` on, so one that dies leaves it to another.
-//!
-//! Releasers look when a preview maker finishes or a message is held ([`wake`]), and otherwise
-//! when the next hold runs out.
+//! the held row goes in the same transaction, so it is posted once however its job is run, and
+//! `heldMessagePosted` tells the author's apps which message it became. One that can no longer
+//! be posted (the author lost the right to post there, the channel went), or whose posting has
+//! failed [`MAX_ATTEMPTS`] times, is dropped, and `heldMessageFailed` tells them why.
 
 use super::Message;
+use crate::attachment::preview;
 use crate::context::GlobalServerContext;
+use crate::jobs::{self, Claimed, JobClass, JobKind, NewJob, Outcome};
 use crate::t;
 use crate::{AttachmentId, ChannelId, EventScope, HeldMessageId, UserId};
-use aspen_schema::{attachment_preview_job, held_message};
+use aspen_schema::held_message;
 use aspen_wire::message_enum::server_event::ServerEvent;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
-use diesel::sql_types::{Array, BigInt, Bool, Integer, Text, Timestamptz, Uuid as PgUuid};
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use futures_util::StreamExt;
+use diesel::sql_types::{Array, Bool, Nullable, Text, Timestamptz, Uuid as PgUuid};
+use diesel_async::scoped_futures::ScopedFutureExt;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use std::borrow::Cow;
-use std::sync::Arc;
 use std::time::Duration;
 
-/// The subject a server publishes on when held messages may be ready to go.
-pub const WAKE_SUBJECT: &str = "aspen.messages.held.wake";
-
-/// The longest a releaser waits between looks.
-const POLL: Duration = Duration::from_secs(5);
-/// How long a claimed held message is the claimant's to post.
-const CLAIM_SECONDS: i32 = 60;
-/// How many held messages one look claims.
-const BATCH: i64 = 32;
+/// The longest a held message's job waits between looks while something holds it.
+pub const LOOK_EVERY: Duration = Duration::from_secs(5);
+/// How long a held message's job waits while a message its author sent before it is held.
+const BEHIND_WAIT: Duration = Duration::from_secs(1);
 /// How many times posting one is tried before it is dropped.
-const MAX_ATTEMPTS: i32 = 10;
+pub const MAX_ATTEMPTS: i32 = 10;
 
 /// A message waiting for its attachments' previews.
 #[derive(Debug, Clone, QueryableByName)]
@@ -80,7 +76,7 @@ pub enum Posted {
 
 /// Posts a message, or holds it while one of its attachments' previews is being made when
 /// `may_hold`, as its client said it may. A message held has been checked as it would have been
-/// posted; [`spawn_releaser`] posts it.
+/// posted; its job posts it.
 pub async fn post(
     state: &GlobalServerContext,
     author: UserId,
@@ -113,26 +109,37 @@ pub async fn post(
                 locale: crate::locale::current().to_string(),
                 held_at: Utc::now(),
             };
-            diesel::insert_into(held_message::table)
-                .values((
-                    held_message::id.eq(held.id),
-                    held_message::author.eq(held.author),
-                    held_message::channel.eq(held.channel),
-                    held_message::content.eq(&held.content),
-                    held_message::attachments.eq(held
-                        .attachments
-                        .iter()
-                        .copied()
-                        .map(Some)
-                        .collect::<Vec<_>>()),
-                    held_message::echo_to_parent.eq(held.echo_to_parent),
-                    held_message::locale.eq(&held.locale),
-                    held_message::held_at.eq(held.held_at),
-                ))
-                .execute(conn.as_mut())
-                .await?;
+            let values = (
+                held_message::id.eq(held.id),
+                held_message::author.eq(held.author),
+                held_message::channel.eq(held.channel),
+                held_message::content.eq(&held.content),
+                held_message::attachments.eq(held
+                    .attachments
+                    .iter()
+                    .copied()
+                    .map(Some)
+                    .collect::<Vec<_>>()),
+                held_message::echo_to_parent.eq(held.echo_to_parent),
+                held_message::locale.eq(&held.locale),
+                held_message::held_at.eq(held.held_at),
+            );
+            let job = NewJob::new(JobKind::ReleaseHeldMessage, JobClass::Interactive, &())?
+                .keyed(held.id.0.to_string());
+            conn.transaction::<_, crate::Error, _>(|conn| {
+                async move {
+                    diesel::insert_into(held_message::table)
+                        .values(values)
+                        .execute(conn)
+                        .await?;
+                    jobs::enqueue(conn, job).await?;
+                    Ok(())
+                }
+                .scope_boxed()
+            })
+            .await?;
             drop(conn);
-            wake(state).await;
+            jobs::wake(state).await;
             return Ok(Posted::Held(held));
         }
     }
@@ -149,18 +156,40 @@ pub async fn post(
     .map(|message| Posted::Sent(Box::new(message)))
 }
 
+#[derive(QueryableByName)]
+struct HeldUntil {
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    at: Option<DateTime<Utc>>,
+}
+
+/// Until when the attachments most holding the messages they are in hold them, if any does now:
+/// their preview jobs' `holdUntil`.
+async fn held_until(
+    conn: &mut AsyncPgConnection,
+    attachments: &[AttachmentId],
+) -> crate::Result<Option<DateTime<Utc>>> {
+    let held: HeldUntil = diesel::sql_query(
+        r#"
+        SELECT max(until) AS at FROM (
+            SELECT (payload->>'holdUntil')::timestamptz AS until FROM job
+            WHERE kind = ANY($1) AND key = ANY($2::uuid[]::text[]) AND failed_at IS NULL
+        ) holds
+        WHERE until > now()
+        "#,
+    )
+    .bind::<Array<Text>, _>(preview::KINDS.to_vec())
+    .bind::<Array<PgUuid>, _>(attachments)
+    .get_result(conn)
+    .await?;
+    Ok(held.at)
+}
+
 /// Whether any of `attachments` holds the messages it is in now.
 async fn held_back(
     conn: &mut AsyncPgConnection,
     attachments: &[AttachmentId],
 ) -> crate::Result<bool> {
-    Ok(diesel::select(diesel::dsl::exists(
-        attachment_preview_job::table
-            .filter(attachment_preview_job::attachment_id.eq_any(attachments))
-            .filter(attachment_preview_job::hold_until.gt(diesel::dsl::now)),
-    ))
-    .get_result(conn)
-    .await?)
+    Ok(held_until(conn, attachments).await?.is_some())
 }
 
 /// The held messages of `author`, oldest first, for their apps to show waiting.
@@ -213,144 +242,112 @@ pub(super) async fn announce_released(
     .await
 }
 
-/// Wakes every releaser.
-pub async fn wake(state: &GlobalServerContext) {
-    if let Err(e) = state
-        .nats_context
-        .client()
-        .publish(WAKE_SUBJECT, bytes::Bytes::new())
-        .await
-    {
-        tracing::warn!(error = %e, "could not wake the held message releasers");
-    }
+/// Sets the jobs of the messages `attachment` holds going at once, inside the transaction that
+/// ends its hold. Call [`jobs::wake`] once it commits.
+pub async fn wake_holding(
+    conn: &mut AsyncPgConnection,
+    attachment: AttachmentId,
+) -> crate::Result<()> {
+    wake_holding_any(conn, &[attachment]).await
 }
 
-/// Starts posting held messages as they become ready, for as long as the server runs.
-pub fn spawn_releaser(state: GlobalServerContext) {
-    let woken = Arc::new(tokio::sync::Notify::new());
-    spawn_wake_listener(state.clone(), woken.clone());
-    tokio::spawn(async move {
-        loop {
-            match release_batch(&state).await {
-                Ok(claimed) if claimed as i64 == BATCH => continue,
-                Ok(_) => {}
-                Err(e) => tracing::error!(error = %e, "could not post held messages"),
-            }
-            let wait = next_release(&state).await.unwrap_or(POLL).min(POLL);
-            tokio::select! {
-                () = woken.notified() => {}
-                () = tokio::time::sleep(wait) => {}
-            }
-        }
-    });
-}
-
-fn spawn_wake_listener(state: GlobalServerContext, woken: Arc<tokio::sync::Notify>) {
-    tokio::spawn(async move {
-        loop {
-            match state.nats_context.client().subscribe(WAKE_SUBJECT).await {
-                Ok(mut wakes) => {
-                    while wakes.next().await.is_some() {
-                        woken.notify_one();
-                    }
-                }
-                Err(e) => tracing::warn!(error = %e, "could not listen for held messages"),
-            }
-            tokio::time::sleep(POLL).await;
-        }
-    });
-}
-
-#[derive(QueryableByName)]
-struct NextRelease {
-    #[diesel(sql_type = diesel::sql_types::Nullable<Timestamptz>)]
-    at: Option<DateTime<Utc>>,
-}
-
-/// How long until the next hold on a held message runs out, if any does.
-async fn next_release(state: &GlobalServerContext) -> Option<Duration> {
-    let mut conn = state.connection_pool.get().await.ok()?;
-    let next: NextRelease = diesel::sql_query(
+/// [`wake_holding`] for each of `attachments`, in one statement, through
+/// `held_message_attachments_idx`.
+pub async fn wake_holding_any(
+    conn: &mut AsyncPgConnection,
+    attachments: &[AttachmentId],
+) -> crate::Result<()> {
+    diesel::sql_query(
         r#"
-        SELECT min(job.hold_until) AS at
-        FROM held_message held
-        JOIN attachment_preview_job job ON job.attachment_id = ANY (held.attachments)
-        WHERE job.hold_until > now()
+        UPDATE job SET not_before = now()
+        WHERE kind = $1 AND running_since IS NULL AND failed_at IS NULL
+          AND key IN (SELECT id::text FROM held_message WHERE attachments && $2::uuid[])
         "#,
     )
-    .get_result(conn.as_mut())
-    .await
-    .ok()?;
-    // A moment past it, so the look that follows finds it out.
-    (next.at? - Utc::now() + chrono::Duration::milliseconds(20))
-        .to_std()
-        .ok()
+    .bind::<Text, _>(JobKind::ReleaseHeldMessage)
+    .bind::<Array<PgUuid>, _>(attachments)
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 #[derive(QueryableByName)]
-struct Claimed {
-    #[diesel(sql_type = PgUuid)]
-    id: HeldMessageId,
-    #[diesel(sql_type = PgUuid)]
-    author: UserId,
-    #[diesel(sql_type = PgUuid)]
-    channel: ChannelId,
-    #[diesel(sql_type = Text)]
-    content: String,
-    #[diesel(sql_type = Array<PgUuid>)]
-    attachments: Vec<AttachmentId>,
+struct Behind {
     #[diesel(sql_type = Bool)]
-    echo_to_parent: bool,
-    #[diesel(sql_type = Text)]
-    locale: String,
-    #[diesel(sql_type = Integer)]
-    attempts: i32,
+    behind: bool,
 }
 
-/// Claims the held messages nothing holds any longer and posts them, oldest first, answering
-/// how many it claimed.
-async fn release_batch(state: &GlobalServerContext) -> crate::Result<usize> {
-    let claimed: Vec<Claimed> = {
+/// Whether a message `held`'s author sent before it is still held, its own job not given up:
+/// through `held_message_by_author`.
+async fn behind_another(conn: &mut AsyncPgConnection, held: &HeldMessage) -> crate::Result<bool> {
+    let found: Behind = diesel::sql_query(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM held_message earlier
+            JOIN job ON job.kind = $4 AND job.key = earlier.id::text AND job.failed_at IS NULL
+            WHERE earlier.author = $1 AND (earlier.held_at, earlier.id) < ($2, $3)
+        ) AS behind
+        "#,
+    )
+    .bind::<PgUuid, _>(held.author)
+    .bind::<Timestamptz, _>(held.held_at)
+    .bind::<PgUuid, _>(held.id)
+    .bind::<Text, _>(JobKind::ReleaseHeldMessage)
+    .get_result(conn)
+    .await?;
+    Ok(found.behind)
+}
+
+/// One held message's job: posts it once nothing holds it, or waits.
+pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outcome> {
+    let Some(id) = job
+        .key
+        .as_deref()
+        .and_then(|key| key.parse().ok())
+        .map(HeldMessageId)
+    else {
+        return Ok(Outcome::Done);
+    };
+    let held = {
         let mut conn = state.connection_pool.get().await?;
-        diesel::sql_query(
+        let held: Option<HeldMessage> = diesel::sql_query(
             r#"
-            UPDATE held_message
-            SET not_before = now() + make_interval(secs => $1), attempts = attempts + 1
-            WHERE id IN (
-                SELECT held.id FROM held_message held
-                WHERE held.not_before <= now()
-                  AND NOT EXISTS (
-                      SELECT 1 FROM attachment_preview_job job
-                      WHERE job.attachment_id = ANY (held.attachments)
-                        AND job.hold_until > now()
-                  )
-                ORDER BY held.held_at
-                LIMIT $2
-                FOR UPDATE SKIP LOCKED
-            )
-            RETURNING id, author, channel, content, attachments, echo_to_parent, locale, attempts,
-                      held_at
+            SELECT id, author, channel, content, attachments, echo_to_parent, locale, held_at
+            FROM held_message WHERE id = $1
             "#,
         )
-        .bind::<Integer, _>(CLAIM_SECONDS)
-        .bind::<BigInt, _>(BATCH)
-        .load(conn.as_mut())
-        .await?
+        .bind::<PgUuid, _>(id)
+        .get_result(conn.as_mut())
+        .await
+        .optional()?;
+        // Posted, or gone with its author or channel.
+        let Some(held) = held else {
+            return Ok(Outcome::Done);
+        };
+        if behind_another(conn.as_mut(), &held).await? {
+            return Ok(Outcome::Later(BEHIND_WAIT));
+        }
+        if let Some(until) = held_until(conn.as_mut(), &held.attachments).await? {
+            // A moment past it, so the look that follows finds it out.
+            let left = (until - Utc::now() + chrono::Duration::milliseconds(20))
+                .to_std()
+                .unwrap_or_default();
+            return Ok(Outcome::Later(left.min(LOOK_EVERY)));
+        }
+        held
     };
-    let count = claimed.len();
-    let mut claimed = claimed;
-    claimed.sort_by_key(|row| row.id);
-    // One at a time, so that one author's messages go in the order they were sent.
-    for row in claimed {
-        release(state, row).await;
-    }
-    Ok(count)
+    release(state, held, jobs::last_attempt(job)).await
 }
 
-/// Posts one held message, or drops it with the reason when it can no longer be posted.
-async fn release(state: &GlobalServerContext, row: Claimed) {
+/// Posts one held message, or drops it with the reason when it can no longer be posted, or this
+/// is its `last` attempt.
+async fn release(
+    state: &GlobalServerContext,
+    row: HeldMessage,
+    last: bool,
+) -> crate::Result<Outcome> {
     let locale = crate::locale::negotiate(&row.locale);
-    let (id, author, channel, attempts) = (row.id, row.author, row.channel, row.attempts);
+    let (id, author, channel) = (row.id, row.author, row.channel);
     let (posted, noted) = crate::locale::scope(
         locale,
         crate::events::noting(super::post(
@@ -367,29 +364,25 @@ async fn release(state: &GlobalServerContext, row: Claimed) {
     .await;
     crate::events::settle(state, noted, posted.is_err()).await;
     let error = match posted {
-        Ok(_) => return,
+        Ok(_) => return Ok(Outcome::Done),
         Err(error) => error,
     };
-    // Not found may be another server's having posted it already.
+    // Not found may be its having been posted already, by a run of its job whose lease ran out.
     if matches!(error, crate::Error::Diesel(diesel::result::Error::NotFound))
         && !still_held(state, id).await
     {
-        return;
+        return Ok(Outcome::Done);
     }
     let reason = match refusal(&error) {
         Some(reason) => reason,
-        None if attempts >= MAX_ATTEMPTS => {
+        None if last => {
             tracing::error!(held = %id.0, error = %error, "gave up posting a held message");
             crate::locale::scope(locale, async { t!("heldMessageNotPosted") }).await
         }
-        None => {
-            tracing::warn!(held = %id.0, error = %error, "could not post a held message; trying later");
-            return;
-        }
+        None => return Err(error),
     };
-    if let Err(e) = drop_held(state, id, author, channel, reason).await {
-        tracing::error!(held = %id.0, error = %e, "could not drop a held message");
-    }
+    drop_held(state, id, author, channel, reason).await?;
+    Ok(Outcome::Done)
 }
 
 /// Why a message cannot be posted, for its author, when it never will be; `None` for a failure
@@ -426,8 +419,6 @@ async fn drop_held(
     channel: ChannelId,
     detail: Cow<'static, str>,
 ) -> crate::Result<()> {
-    use diesel_async::AsyncConnection;
-    use diesel_async::scoped_futures::ScopedFutureExt;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction::<_, crate::Error, _>(|conn| {
         async move {

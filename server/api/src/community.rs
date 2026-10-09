@@ -96,6 +96,9 @@ pub async fn sideload_communities(
         None
     };
     let visible = visible.as_ref();
+    // Read one after another, each taking a connection only while it reads, so one read of a
+    // community list never holds more than one of the pool's connections however much it
+    // sideloads; every reader is bounded, so the reads are quick in turn.
     let (
         channels,
         categories,
@@ -107,7 +110,7 @@ pub async fn sideload_communities(
         collapses,
         roles,
         emoji,
-    ) = tokio::try_join!(
+    ) = (
         async {
             match visible {
                 Some(visible) if include.contains(CommunityInclude::Channels) => {
@@ -117,7 +120,8 @@ pub async fn sideload_communities(
                 }
                 _ => Ok(None),
             }
-        },
+        }
+        .await?,
         async {
             match visible {
                 Some(visible) if include.contains(CommunityInclude::Categories) => {
@@ -127,7 +131,8 @@ pub async fn sideload_communities(
                 }
                 _ => Ok(None),
             }
-        },
+        }
+        .await?,
         async {
             if include.contains(CommunityInclude::Members) {
                 app::community::read_community_members(state, caller, communities)
@@ -136,7 +141,8 @@ pub async fn sideload_communities(
             } else {
                 Ok(None)
             }
-        },
+        }
+        .await?,
         async {
             match visible {
                 Some(visible) if include.contains(CommunityInclude::Voice) => {
@@ -146,7 +152,8 @@ pub async fn sideload_communities(
                 }
                 _ => Ok(None),
             }
-        },
+        }
+        .await?,
         async {
             match visible {
                 Some(visible) if include.contains(CommunityInclude::ReadStates) => {
@@ -156,7 +163,8 @@ pub async fn sideload_communities(
                 }
                 _ => Ok(None),
             }
-        },
+        }
+        .await?,
         async {
             match visible {
                 Some(visible) if include.contains(CommunityInclude::Mutes) => {
@@ -166,7 +174,8 @@ pub async fn sideload_communities(
                 }
                 _ => Ok(None),
             }
-        },
+        }
+        .await?,
         async {
             match visible {
                 Some(visible) if include.contains(CommunityInclude::Notifications) => {
@@ -176,7 +185,8 @@ pub async fn sideload_communities(
                 }
                 _ => Ok(None),
             }
-        },
+        }
+        .await?,
         async {
             match visible {
                 Some(visible) if include.contains(CommunityInclude::Collapses) => {
@@ -186,19 +196,19 @@ pub async fn sideload_communities(
                 }
                 _ => Ok(None),
             }
-        },
+        }
+        .await?,
         async {
             match visible {
                 Some(visible) if include.contains(CommunityInclude::Roles) => {
-                    let (roles, overrides) = tokio::try_join!(
-                        app::role::read_communities_roles(state, communities),
-                        app::role::read_communities_overrides(state, visible),
-                    )?;
-                    Ok(Some((roles, overrides)))
+                    let roles = app::role::read_communities_roles(state, communities).await?;
+                    let overrides = app::role::read_communities_overrides(state, visible).await?;
+                    Ok::<_, app::Error>(Some((roles, overrides)))
                 }
                 _ => Ok(None),
             }
-        },
+        }
+        .await?,
         async {
             if include.contains(CommunityInclude::Emoji) {
                 app::custom_emoji::read_communities_emoji(state, communities)
@@ -207,8 +217,9 @@ pub async fn sideload_communities(
             } else {
                 Ok(None)
             }
-        },
-    )?;
+        }
+        .await?,
+    );
     let mut included = Included {
         channels: channels.map(|channels| {
             channels
@@ -391,13 +402,13 @@ pub type MemberList = SideloadedList<User>;
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct MemberListQuery {
-    /// Search: members whose username or display name contains this, ignoring case; at most
-    /// 100 characters.
+    /// Search: members whose username, display name, or nickname contains this, ignoring case,
+    /// or for one or two characters starts with it; at most 100 characters.
     #[serde(rename = "filter[name]")]
     #[param(rename = "filter[name]")]
     pub name: Option<String>,
-    /// Where a search's page starts, at most 10000.
-    pub offset: Option<i64>,
+    /// Continue a search after this member, the last of the previous page.
+    pub after: Option<UserId>,
     /// How many a search returns, at most 50; 20 when absent.
     pub limit: Option<i64>,
 }
@@ -432,14 +443,14 @@ pub async fn list_community_members(
     Path(community): Path<CommunityId>,
     Query(query): Query<MemberListQuery>,
 ) -> ApiResult<Json<MemberList>> {
-    let searching = query.name.is_some() || query.offset.is_some() || query.limit.is_some();
+    let searching = query.name.is_some() || query.after.is_some() || query.limit.is_some();
     let members = if searching {
         app::community::search_community_members(
             &state,
             user.id,
             community,
             query.name.as_deref(),
-            query.offset.unwrap_or(0),
+            query.after,
             query.limit.unwrap_or(DEFAULT_MEMBER_PAGE),
         )
         .await?

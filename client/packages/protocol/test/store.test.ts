@@ -1094,7 +1094,7 @@ describe("RecordStore threads and DMs", () => {
     const store = bootstrapped();
     const older = dm(50, [me.id, bob.id]);
     const newer = dm(51, [me.id, bob.id, id(3)], "groupDm");
-    store.setDms([newer, older]);
+    store.setDms([newer, older], true);
     expect(store.dms().map((c) => c.id)).toEqual([newer.id, older.id]);
     expect(store.channels(aspen.id).some((c) => c.id === older.id)).toBe(false);
     store.applyEvent({ serverEvent: "message", type: "create", ...message(9, older.id, bob.id) });
@@ -1108,7 +1108,7 @@ describe("RecordStore threads and DMs", () => {
   it("drops a DM the caller left, with its history", () => {
     const store = bootstrapped();
     const group = dm(52, [me.id, bob.id, id(3)], "groupDm");
-    store.setDms([group]);
+    store.setDms([group], true);
     store.replaceWindow(group.id, [message(3, group.id)], { hasOlder: false, atLatest: true });
     store.applyEvent({
       serverEvent: "channel",
@@ -1136,10 +1136,24 @@ describe("RecordStore threads and DMs", () => {
     const store = bootstrapped();
     const kept = dm(53, [me.id, bob.id]);
     const gone = dm(54, [me.id, id(3)]);
-    store.setDms([kept, gone]);
-    store.setDms([kept]);
+    store.setDms([kept, gone], true);
+    store.setDms([kept], true);
     expect(store.dms().map((c) => c.id)).toEqual([kept.id]);
     expect(store.channel(gone.id)).toBeUndefined();
+  });
+
+  it("adds later pages of DMs after those listed, in the server's order", () => {
+    const store = bootstrapped();
+    const newest = dm(55, [me.id, bob.id]);
+    const older = dm(56, [me.id, id(3)]);
+    const oldest = dm(57, [me.id, id(4)]);
+    store.setDms([newest], false);
+    expect(store.dmsComplete()).toBe(false);
+    expect(store.lastListedDm()).toBe(newest.id);
+    store.appendDms([older, newest, oldest], true);
+    expect(store.dms().map((c) => c.id)).toEqual([newest.id, older.id, oldest.id]);
+    expect(store.dmsComplete()).toBe(true);
+    expect(store.lastListedDm()).toBe(oldest.id);
   });
 });
 

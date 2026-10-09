@@ -29,7 +29,7 @@ pub const URL_LIFETIME: Duration = Duration::from_secs(10 * 60);
 
 /// How often each server looks for evidence still on the anonymous read path. A deleted
 /// message's files stay readable there, by whoever already holds their URLs, until then.
-const MOVE_EVERY: Duration = Duration::from_secs(5);
+pub const MOVE_EVERY: Duration = Duration::from_secs(5);
 
 /// How many attachments one look moves at most before looking again.
 const MOVE_BATCH: i64 = 50;
@@ -82,8 +82,11 @@ async fn mark(
     .await?;
     let marked: Vec<AttachmentId> = marked.into_iter().map(|m| AttachmentId(m.id)).collect();
     if !marked.is_empty() {
-        diesel::delete(aspen_schema::attachment_preview_job::table)
-            .filter(aspen_schema::attachment_preview_job::attachment_id.eq_any(&marked))
+        // Evidence gets no preview; what its previews held goes without one.
+        crate::message::held::wake_holding_any(conn, &marked).await?;
+        diesel::sql_query("DELETE FROM job WHERE kind = ANY($1) AND key = ANY($2::uuid[]::text[])")
+            .bind::<Array<diesel::sql_types::Text>, _>(super::preview::KINDS.to_vec())
+            .bind::<Array<PgUuid>, _>(&marked)
             .execute(conn)
             .await?;
     }
@@ -99,6 +102,20 @@ pub async fn keep_deleted(
     let ids: Vec<AttachmentId> = message_attachment::table
         .select(message_attachment::attachment_id)
         .filter(message_attachment::message_id.eq(message))
+        .load(conn)
+        .await?;
+    let ids: Vec<uuid::Uuid> = ids.into_iter().map(|id| id.0).collect();
+    mark(conn, &ids, None).await
+}
+
+/// As [`keep_deleted`], for every one of `messages` at once.
+pub async fn keep_deleted_many(
+    conn: &mut AsyncPgConnection,
+    messages: &[MessageId],
+) -> crate::Result<Vec<AttachmentId>> {
+    let ids: Vec<AttachmentId> = message_attachment::table
+        .select(message_attachment::attachment_id)
+        .filter(message_attachment::message_id.eq_any(messages))
         .load(conn)
         .await?;
     let ids: Vec<uuid::Uuid> = ids.into_iter().map(|id| id.0).collect();
@@ -188,18 +205,17 @@ async fn move_one(state: &GlobalServerContext, row: &Unmoved) -> crate::Result<b
     Ok(updated == 1)
 }
 
-/// Looks for evidence to move every [`MOVE_EVERY`], on every server, for as long as it runs.
-pub fn spawn_mover(state: GlobalServerContext) {
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(MOVE_EVERY).await;
-            match move_unmoved(&state).await {
-                Ok(0) => {}
-                Ok(moved) => tracing::info!(moved, "moved evidence off the public read path"),
-                Err(e) => tracing::warn!(error = %e, "could not look for evidence to move"),
-            }
-        }
-    });
+/// One move of evidence off the public read path (`jobs::JobKind::MoveEvidence`, every
+/// [`MOVE_EVERY`]).
+pub async fn move_step(
+    state: &GlobalServerContext,
+    _job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let moved = move_unmoved(state).await?;
+    if moved > 0 {
+        tracing::info!(moved, "moved evidence off the public read path");
+    }
+    Ok(crate::jobs::Outcome::Done)
 }
 
 /// URLs reading an attachment kept as evidence and its preview, signed for [`URL_LIFETIME`],
@@ -334,17 +350,24 @@ pub async fn purge(
                         if exists.is_none() {
                             return Err(PurgeError::NotFound);
                         }
-                        let held = message_attachment::table
+                        // What it holds and what was taken off it, each found through its
+                        // own index, then those of them kept as evidence.
+                        let mut named: Vec<AttachmentId> = message_attachment::table
                             .select(message_attachment::attachment_id)
-                            .filter(message_attachment::message_id.eq(message_id));
+                            .filter(message_attachment::message_id.eq(message_id))
+                            .load(conn)
+                            .await?;
+                        named.extend(
+                            attachment::table
+                                .select(attachment::id)
+                                .filter(attachment::removed_from.eq(message_id))
+                                .load::<AttachmentId>(conn)
+                                .await?,
+                        );
                         attachment::table
                             .select(attachment::id)
                             .filter(attachment::evidence_at.is_not_null())
-                            .filter(
-                                attachment::removed_from
-                                    .eq(message_id)
-                                    .or(attachment::id.eq_any(held)),
-                            )
+                            .filter(attachment::id.eq_any(&named))
                             .load(conn)
                             .await?
                     }

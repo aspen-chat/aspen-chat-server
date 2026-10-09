@@ -8,13 +8,13 @@
 //! scope, and the deployment's for the plugin's own. A plugin keeps at most its manifest's
 //! `storageQuota` of keys and values together in each owner's share, counted in
 //! `plugin_storage_usage` as values are written and deleted, so no one community can use up what
-//! the plugin may keep for the rest. `plugin.storage_bytes` counts every share together, for the
-//! operator.
+//! the plugin may keep for the rest. A plugin's total is its shares' sum (`totals`), read for the
+//! operator and the dashboard.
 
 use super::host::wit;
 use crate::context::GlobalServerContext;
 use crate::{ChannelId, CommunityId, UserId};
-use aspen_schema::{plugin, plugin_storage, plugin_storage_usage, plugin_timer};
+use aspen_schema::{plugin_storage, plugin_storage_usage};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -29,7 +29,8 @@ pub const MAX_VALUE: usize = 64 << 10;
 pub const MAX_LIST: u32 = 100;
 
 /// Where a value lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "camelCase")]
 pub enum Scope {
     Deployment,
     Community(CommunityId),
@@ -115,8 +116,9 @@ impl Owner {
     }
 }
 
-/// Adds `delta` bytes to `owner`'s share of `plugin_id`'s storage, and to the plugin's count of
-/// every share, refusing growth past `quota`; answers whether it fit.
+/// Adds `delta` bytes to `owner`'s share of `plugin_id`'s storage, refusing growth past `quota`;
+/// answers whether it fit. Only the owner's row is written, so writes for different owners
+/// never wait on each other; the plugin's total is the shares' sum, read when it is shown.
 async fn count_usage(
     conn: &mut AsyncPgConnection,
     plugin_id: &str,
@@ -145,14 +147,22 @@ async fn count_usage(
     .bind::<diesel::sql_types::BigInt, _>(quota)
     .execute(conn)
     .await?;
-    if counted == 0 {
-        return Ok(false);
-    }
-    diesel::update(plugin::table.filter(plugin::id.eq(plugin_id)))
-        .set(plugin::storage_bytes.eq(plugin::storage_bytes + delta))
-        .execute(conn)
-        .await?;
-    Ok(true)
+    Ok(counted > 0)
+}
+
+/// How much each plugin keeps, every owner's share together, summed through
+/// `plugin_storage_usage`'s key; a plugin keeping nothing is absent.
+pub async fn totals(conn: &mut AsyncPgConnection) -> crate::Result<HashMap<String, i64>> {
+    Ok(plugin_storage_usage::table
+        .group_by(plugin_storage_usage::plugin)
+        .select((
+            plugin_storage_usage::plugin,
+            diesel::dsl::sql::<diesel::sql_types::BigInt>("COALESCE(sum(bytes), 0)::bigint"),
+        ))
+        .load::<(String, i64)>(conn)
+        .await?
+        .into_iter()
+        .collect())
 }
 
 fn check_key(key: &str) -> Result<(), wit::Error> {
@@ -426,7 +436,24 @@ pub async fn delete(
     .await
 }
 
-/// The keys after `after` that begin with `prefix`, in order, with their values.
+/// The least string greater than every string that begins with `prefix`, in byte order (which
+/// is code point order in UTF-8), or `None` when there is none: `prefix` with its last
+/// character moved one on, dropping characters that cannot move.
+fn past_prefix(prefix: &str) -> Option<String> {
+    let mut chars: Vec<char> = prefix.chars().collect();
+    while let Some(last) = chars.pop() {
+        let next = (u32::from(last) + 1..=u32::from(char::MAX)).find_map(char::from_u32);
+        if let Some(next) = next {
+            chars.push(next);
+            return Some(chars.into_iter().collect());
+        }
+    }
+    None
+}
+
+/// The keys after `after` that begin with `prefix`, in order of their bytes, with their values:
+/// a range of the key's index (`key` compares in the `C` collation), so a page reads what it
+/// returns and no more.
 pub async fn list(
     conn: &mut AsyncPgConnection,
     plugin_id: &str,
@@ -451,72 +478,161 @@ pub async fn list(
         .order(plugin_storage::key.asc())
         .limit(i64::from(limit))
         .into_boxed();
+    if !prefix.is_empty() {
+        query = query.filter(plugin_storage::key.ge(prefix.to_string()));
+    }
+    if let Some(past) = past_prefix(prefix) {
+        query = query.filter(plugin_storage::key.lt(past));
+    }
     if let Some(after) = after {
         query = query.filter(plugin_storage::key.gt(after.to_string()));
     }
     Ok(query.load(conn).await?)
 }
 
-/// Deletes what every plugin kept in `scope`, and the timers it set there, as what it names goes,
-/// inside the caller's transaction: for a channel, in its threads too; for a community, in its
-/// channels and their threads too.
+/// Starts deleting what every plugin kept in `scope`, and the timers it set there, as what it
+/// names goes: for a channel, in its threads too; for a community, in its channels and their
+/// threads too. A job saved in the caller's transaction (`forgetPluginScope`, [`forget_step`])
+/// does it a batch at a time, however much there is.
 pub async fn forget(conn: &mut AsyncPgConnection, scope: Scope) -> crate::Result<()> {
-    use aspen_schema::channel;
-    let channels: Vec<Uuid> = match scope {
-        Scope::Channel(id) => channel::table
-            .select(channel::id)
-            .filter(channel::parent_channel.eq(id))
-            .load::<ChannelId>(conn)
-            .await?
-            .into_iter()
-            .map(|c| c.0)
-            .collect(),
-        Scope::Community(id) => channel::table
-            .select(channel::id)
-            .filter(channel::community.eq(id))
-            .load::<ChannelId>(conn)
-            .await?
-            .into_iter()
-            .map(|c| c.0)
-            .collect(),
-        Scope::Deployment | Scope::User(_) => Vec::new(),
-    };
-    diesel::delete(
-        plugin_timer::table.filter(
-            plugin_timer::scope_kind
-                .eq(scope.kind())
-                .and(plugin_timer::scope.eq(scope.id()))
-                .or(plugin_timer::scope_kind
-                    .eq("channel")
-                    .and(plugin_timer::scope.eq_any(&channels))),
-        ),
+    crate::jobs::enqueue(
+        conn,
+        crate::jobs::NewJob::new(
+            crate::jobs::JobKind::ForgetPluginScope,
+            crate::jobs::JobClass::Normal,
+            &scope,
+        )?
+        .keyed(format!("{}:{}", scope.kind(), scope.id())),
     )
+    .await?;
+    Ok(())
+}
+
+/// How far forgetting a scope has come: whether the scope's own values are gone, and the last
+/// of its channels (or threads) whose values are.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Forgotten {
+    own: bool,
+    after: Option<ChannelId>,
+}
+
+/// How many values, or channels, one step of forgetting takes.
+const FORGET_BATCH: i64 = 500;
+
+/// Deletes up to [`FORGET_BATCH`] of the values in the scopes `kind` and `ids` name, and the
+/// timers there, taking what they held off `owner`'s shares; answers how many values went.
+async fn forget_in(
+    conn: &mut AsyncPgConnection,
+    owner: Owner,
+    kind: &str,
+    ids: &[Uuid],
+) -> crate::Result<usize> {
+    #[derive(diesel::QueryableByName)]
+    struct Freed {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        plugin: String,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        bytes: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        values: i64,
+    }
+    diesel::sql_query(
+        "DELETE FROM job WHERE kind = $1 AND payload ? 'scope' \
+         AND payload->>'scopeKind' = $2 AND payload->>'scope' = ANY($3::uuid[]::text[])",
+    )
+    .bind::<diesel::sql_types::Text, _>(crate::jobs::JobKind::FirePluginTimer)
+    .bind::<diesel::sql_types::Text, _>(kind)
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(ids)
     .execute(conn)
     .await?;
-    let freed: Vec<(String, i32)> = diesel::delete(
-        plugin_storage::table.filter(
-            plugin_storage::scope_kind
-                .eq(scope.kind())
-                .and(plugin_storage::scope.eq(scope.id()))
-                .or(plugin_storage::scope_kind
-                    .eq("channel")
-                    .and(plugin_storage::scope.eq_any(&channels))),
-        ),
+    // What went is summed per plugin in the statement that deletes it.
+    let freed: Vec<Freed> = diesel::sql_query(
+        r#"
+        WITH gone AS (
+            DELETE FROM plugin_storage WHERE ctid IN (
+                SELECT ctid FROM plugin_storage
+                WHERE scope_kind = $1 AND scope = ANY($2)
+                LIMIT $3
+            )
+            RETURNING plugin, octet_length(key) + octet_length(value) AS bytes
+        )
+        SELECT plugin, sum(bytes)::bigint AS bytes, count(*) AS values
+        FROM gone GROUP BY plugin
+        "#,
     )
-    .returning((
-        plugin_storage::plugin,
-        diesel::dsl::sql::<diesel::sql_types::Integer>("octet_length(key) + octet_length(value)"),
-    ))
-    .get_results(conn)
+    .bind::<diesel::sql_types::Text, _>(kind)
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(ids)
+    .bind::<diesel::sql_types::BigInt, _>(FORGET_BATCH)
+    .load(conn)
     .await?;
-    let mut by_plugin: HashMap<String, i64> = HashMap::new();
-    for (plugin_id, bytes) in freed {
-        *by_plugin.entry(plugin_id).or_default() += i64::from(bytes);
+    let mut values = 0;
+    for gone in freed {
+        count_usage(conn, &gone.plugin, owner, -gone.bytes, i64::MAX).await?;
+        values += usize::try_from(gone.values).unwrap_or(0);
     }
+    Ok(values)
+}
+
+/// One step of forgetting a scope: its own values a batch at a time, then its channels' (or a
+/// channel's threads') a batch of channels at a time, in order of id; once all are gone, a
+/// community's or a user's share of every plugin's storage.
+pub async fn forget_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let scope: Scope = job.payload()?;
+    let done: Forgotten = job.progress()?.unwrap_or_default();
+    let mut conn = state.connection_pool.get().await?;
+    Ok(match forget_some(conn.as_mut(), scope, done).await? {
+        Some(done) => crate::jobs::Outcome::Progress(serde_json::to_value(&done)?),
+        None => crate::jobs::Outcome::Done,
+    })
+}
+
+/// A step of forgetting `scope` from `done` on: how far it came, or `None` once it is all gone.
+async fn forget_some(
+    conn: &mut AsyncPgConnection,
+    scope: Scope,
+    mut done: Forgotten,
+) -> crate::Result<Option<Forgotten>> {
+    use aspen_schema::channel;
     // A channel and its threads draw on one owner's share; a community or a user is an owner.
     let owner = Owner::of(conn, &scope).await?;
-    for (plugin_id, bytes) in by_plugin {
-        count_usage(conn, &plugin_id, owner, -bytes, i64::MAX).await?;
+    if !done.own {
+        let gone = forget_in(conn, owner, scope.kind(), &[scope.id()]).await?;
+        if gone as i64 >= FORGET_BATCH {
+            return Ok(Some(done));
+        }
+        done.own = true;
+    }
+    let mut channels = channel::table.select(channel::id).into_boxed();
+    channels = match scope {
+        Scope::Channel(id) => channels.filter(channel::parent_channel.eq(id)),
+        Scope::Community(id) => channels.filter(channel::community.eq(id)),
+        Scope::Deployment | Scope::User(_) => {
+            channels.filter(diesel::dsl::sql::<diesel::sql_types::Bool>("false"))
+        }
+    };
+    if let Some(after) = done.after {
+        channels = channels.filter(channel::id.gt(after));
+    }
+    let batch: Vec<ChannelId> = channels
+        .order(channel::id)
+        .limit(FORGET_BATCH)
+        .load(conn)
+        .await?;
+    if let Some(last) = batch.last().copied() {
+        let ids: Vec<Uuid> = batch.iter().map(|c| c.0).collect();
+        // A batch of channels may hold more than one step's values: the same channels are
+        // taken again until they hold none.
+        if forget_in(conn, owner, "channel", &ids).await? as i64 >= FORGET_BATCH {
+            return Ok(Some(done));
+        }
+        done.after = Some(last);
+        if batch.len() as i64 >= FORGET_BATCH {
+            return Ok(Some(done));
+        }
     }
     if matches!(scope, Scope::Community(_) | Scope::User(_)) {
         diesel::delete(
@@ -528,6 +644,16 @@ pub async fn forget(conn: &mut AsyncPgConnection, scope: Scope) -> crate::Result
         )
         .execute(conn)
         .await?;
+    }
+    Ok(None)
+}
+
+/// Forgets all of `scope` at once, step after step on one connection, as the tests do.
+#[cfg(test)]
+async fn forget_all(conn: &mut AsyncPgConnection, scope: Scope) -> crate::Result<()> {
+    let mut done = Forgotten::default();
+    while let Some(further) = forget_some(conn, scope, done).await? {
+        done = further;
     }
     Ok(())
 }
@@ -558,6 +684,15 @@ pub async fn count(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_end_of_a_prefix_range_is_past_every_key_with_it() {
+        assert_eq!(past_prefix("ab").as_deref(), Some("ac"));
+        assert_eq!(past_prefix(""), None);
+        assert_eq!(past_prefix("a\u{10FFFF}").as_deref(), Some("b"));
+        assert_eq!(past_prefix("\u{D7FF}").as_deref(), Some("\u{E000}"));
+        assert!("ab\u{10FFFF}zz" < "ac");
+    }
     use diesel_async::SimpleAsyncConnection;
 
     const COMMUNITY: &str = "5e1f0000-0000-4000-8000-000000000001";
@@ -631,15 +766,10 @@ mod tests {
         set(&mut conn, plugin, quota, &thread, "k", &[0; 40])
             .await
             .unwrap();
-        let total: i64 = plugin::table
-            .select(plugin::storage_bytes)
-            .filter(plugin::id.eq(plugin))
-            .first(&mut conn)
-            .await
-            .unwrap();
+        let total = totals(&mut conn).await.unwrap()[plugin];
         assert_eq!(total, (1 + 40) + (1 + 30) + (1 + 90) + (1 + 90));
 
-        forget(&mut conn, Scope::Community(CommunityId(id(COMMUNITY))))
+        forget_all(&mut conn, Scope::Community(CommunityId(id(COMMUNITY))))
             .await
             .unwrap();
         let shares: Vec<(String, i64)> = plugin_storage_usage::table

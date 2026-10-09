@@ -1,51 +1,37 @@
-//! Mail waiting to be sent. Whatever causes mail writes it to `email_outbox` in its own
-//! transaction ([`queue`]), so mail is sent exactly when what caused it commits and survives a
-//! restart, and every API server sends from the table ([`spawn_sender`]).
+//! Mail waiting to be sent. Whatever causes mail queues it ([`queue`]) as a job of its own
+//! (`jobs::JobKind::SendEmail`) in its own transaction, so mail is sent exactly when what caused
+//! it commits and survives a restart, and any server that sends mail sends it ([`send_step`]).
 //!
-//! A sender claims a batch of rows by pushing their `not_before` past the time it needs to send
-//! them, under `FOR UPDATE SKIP LOCKED`, so servers sending at once never claim one row twice,
-//! and a server that dies mid-batch leaves its rows to be claimed again once that time passes.
-//! It takes the highest `priority` first: a password reset, which someone is waiting for at the
-//! sign-in screen, before a verification code, before notices, before digests and newsletters,
-//! however many of those are waiting. A row sent is deleted. A row the SMTP server refuses for
-//! good (a mailbox that does not exist) is deleted and logged; one it refuses for now is tried
-//! again later, waiting twice as long each time, up to [`MAX_ATTEMPTS`].
+//! Each piece's class orders it among the deployment's jobs (`Mail::class`): a password reset
+//! or a verification code, which someone waits for at a screen, before notices, before digests
+//! and newsletters, however many of those are waiting. A piece sent is done. One the SMTP server
+//! refuses for good (a mailbox that does not exist) is given up and logged; one it refuses for
+//! now is tried again later, waiting twice as long each time, up to [`MAX_ATTEMPTS`], then given
+//! up too, so a piece's content is never kept once it will not be sent.
 //!
-//! Only servers whose `[email]` has `send` on send (`Mailer::sends`); the others queue. Each
-//! sender looks for mail every few seconds, and at once when any server publishes on
-//! [`super::WAKE_SUBJECT`], which it does after queueing mail someone waits for. Where
-//! `max_per_second` is set, every sender takes each piece from one GCRA bucket in Valkey
-//! ([`SEND_RATE_KEY`]) before handing it over, so the deployment as a whole keeps to the
-//! provider's quota, and claims no more than a second's worth at a time, so a reset queued
-//! meanwhile waits at most about a second per sending server; a Valkey failure lets mail through
-//! unthrottled, as the API's own limits do, and is logged.
+//! Only servers whose `[email]` has `send` on send (`Mailer::sends`); the others queue. Mail
+//! someone waits for wakes every runner once queued (`super::wake`). Where `max_per_second` is
+//! set, every sender takes each piece from one GCRA bucket in Valkey ([`SEND_RATE_KEY`]) before
+//! handing it over, so the deployment as a whole keeps to the provider's quota; a Valkey failure
+//! lets mail through unthrottled, as the API's own limits do, and is logged.
 
 use super::{EmailAccount, Mailer, render};
 use crate::UserId;
 use crate::context::GlobalServerContext;
-use aspen_schema::{email_outbox, user, user_email};
-use chrono::{DateTime, Utc};
+use crate::jobs::{JobClass, JobKind};
+use aspen_schema::{user, user_email};
 use diesel::prelude::*;
-use diesel::sql_types::{Integer, Jsonb, Nullable, SmallInt, Text, Uuid as PgUuid};
+use diesel::sql_types::Text;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use futures_util::StreamExt;
 use lettre::AsyncTransport;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
-/// How often a server looks for mail when nothing wakes it.
-const POLL: Duration = Duration::from_secs(5);
-/// How long a claimed row is held for its sender.
-const CLAIM_SECONDS: i32 = 300;
-/// How many rows one look claims, and how many of them are sent at once.
-const BATCH: i64 = 64;
-const CONCURRENCY: usize = 8;
 /// The Valkey bucket of the deployment-wide sending rate.
 const SEND_RATE_KEY: &str = "email:send-rate";
 
-/// How many times a row is tried before it is given up: the waits between them, starting at a
-/// minute and doubling, add up to about a day.
-const MAX_ATTEMPTS: i32 = 11;
+/// How many times a piece is tried before it is given up: the waits between them, starting at
+/// a minute and doubling, add up to about a day.
+pub const MAX_ATTEMPTS: i32 = 11;
 
 /// A mailing list an address can leave by the links its mail carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::EnumString)]
@@ -114,20 +100,19 @@ pub enum Factor {
 }
 
 impl Mail {
-    /// Higher is sent first.
-    fn priority(&self) -> i16 {
+    /// How soon it must be sent, among every job of the deployment: a code someone waits for at
+    /// a screen first, notices and tests next, and what goes to many last.
+    pub(super) fn class(&self) -> JobClass {
         match self {
-            Mail::PasswordReset { .. } => 40,
-            Mail::Verification { .. } => 30,
+            Mail::PasswordReset { .. } | Mail::Verification { .. } => JobClass::Interactive,
             Mail::AddressChanged { .. }
             | Mail::PasswordWasReset { .. }
             | Mail::PasswordChanged
             | Mail::SecondFactorAdded { .. }
             | Mail::SecondFactorRemoved { .. }
-            | Mail::SignInLocked => 20,
-            Mail::Newsletter { test: true, .. } => 15,
-            Mail::Digest { .. } => 10,
-            Mail::Newsletter { test: false, .. } => 0,
+            | Mail::SignInLocked
+            | Mail::Newsletter { test: true, .. } => JobClass::Normal,
+            Mail::Digest { .. } | Mail::Newsletter { test: false, .. } => JobClass::Bulk,
         }
     }
 
@@ -172,6 +157,34 @@ pub async fn notify(
     Ok(())
 }
 
+/// One piece waiting to be sent, as its job holds it: whose it is, where to (an address of its
+/// own, or the account's verified address as it is when sent), and what.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Queued {
+    pub user: UserId,
+    #[serde(default)]
+    pub address: Option<String>,
+    pub mail: Mail,
+}
+
+/// The piece `mail` for `user_id` as a job to save.
+pub(super) fn job_of(
+    user_id: UserId,
+    address: Option<&str>,
+    mail: &Mail,
+) -> crate::Result<crate::jobs::NewJob> {
+    crate::jobs::NewJob::new(
+        JobKind::SendEmail,
+        mail.class(),
+        &Queued {
+            user: user_id,
+            address: address.map(str::to_string),
+            mail: mail.clone(),
+        },
+    )
+}
+
 /// Queues `mail` for `user_id`, to `address`, or to their verified address as it is when the
 /// mail is sent. Call [`super::wake`] once the transaction commits for mail someone waits on.
 pub async fn queue(
@@ -180,88 +193,26 @@ pub async fn queue(
     address: Option<&str>,
     mail: &Mail,
 ) -> crate::Result<()> {
-    diesel::insert_into(email_outbox::table)
-        .values((
-            email_outbox::id.eq(uuid::Uuid::now_v7()),
-            email_outbox::priority.eq(mail.priority()),
-            email_outbox::user.eq(user_id),
-            email_outbox::address.eq(address),
-            email_outbox::mail.eq(serde_json::to_value(mail)?),
-        ))
-        .execute(conn)
-        .await?;
+    crate::jobs::enqueue(conn, job_of(user_id, address, mail)?).await?;
     Ok(())
 }
 
-#[derive(QueryableByName)]
-struct Claimed {
-    #[diesel(sql_type = PgUuid)]
-    id: uuid::Uuid,
-    #[diesel(sql_type = PgUuid)]
-    user: UserId,
-    #[diesel(sql_type = Nullable<Text>)]
-    address: Option<String>,
-    #[diesel(sql_type = Jsonb)]
-    mail: serde_json::Value,
-    #[diesel(sql_type = Integer)]
-    attempts: i32,
-    #[diesel(sql_type = SmallInt)]
-    priority: i16,
-}
-
-/// Starts sending mail from the outbox, for as long as the server runs, where it sends.
-pub fn spawn_sender(state: GlobalServerContext) {
-    let Some(mailer) = state.mailer.clone().filter(|mailer| mailer.sends()) else {
-        return;
-    };
-    spawn_wake_listener(state.clone(), mailer.clone());
-    tokio::spawn(async move {
-        loop {
-            match send_batch(&state, &mailer).await {
-                // A full batch suggests more is waiting.
-                Ok(sent) if sent as i64 == claim_size(&mailer) => continue,
-                Ok(_) => {}
-                Err(e) => tracing::error!(error = %e, "could not send mail from the outbox"),
-            }
-            if let Err(e) = super::newsletter::queue_some(&state).await {
-                tracing::error!(error = %e, "could not queue a newsletter");
-            }
-            tokio::select! {
-                () = mailer.wake.notified() => {}
-                () = tokio::time::sleep(POLL) => {}
-            }
-        }
-    });
-}
-
-/// Wakes this server's sender whenever a server says mail someone waits for was queued.
-fn spawn_wake_listener(state: GlobalServerContext, mailer: std::sync::Arc<Mailer>) {
-    tokio::spawn(async move {
-        loop {
-            match state
-                .nats_context
-                .client()
-                .subscribe(super::WAKE_SUBJECT)
-                .await
-            {
-                Ok(mut wakes) => {
-                    while wakes.next().await.is_some() {
-                        mailer.wake.notify_one();
-                    }
-                }
-                Err(e) => tracing::warn!(error = %e, "could not listen for mail to send"),
-            }
-            tokio::time::sleep(POLL).await;
-        }
-    });
-}
-
-/// How many rows one look claims: [`BATCH`], or a second's worth under a sending rate.
-fn claim_size(mailer: &Mailer) -> i64 {
-    match mailer.rate {
-        Some(rate) => (1000 / rate.emission_ms.max(1)).clamp(1, BATCH as u64) as i64,
-        None => BATCH,
-    }
+/// Deletes the mail waiting for `user_id`, to their account's address alone when
+/// `account_address_only`, as the account or its address goes (`job_send_email_user`).
+pub async fn forget_queued(
+    conn: &mut AsyncPgConnection,
+    user_id: UserId,
+    account_address_only: bool,
+) -> crate::Result<()> {
+    diesel::sql_query(
+        "DELETE FROM job WHERE kind = 'sendEmail' AND payload->>'user' = $1 \
+         AND (NOT $2 OR payload->>'address' IS NULL)",
+    )
+    .bind::<Text, _>(user_id.0.to_string())
+    .bind::<diesel::sql_types::Bool, _>(account_address_only)
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 /// Waits until the deployment's sending rate allows one more piece.
@@ -281,47 +232,35 @@ async fn throttle(state: &GlobalServerContext, mailer: &Mailer) {
     }
 }
 
-/// Claims and sends one batch, answering how many rows it claimed.
-async fn send_batch(state: &GlobalServerContext, mailer: &Mailer) -> crate::Result<usize> {
-    let claimed: Vec<Claimed> = {
-        let mut conn = state.connection_pool.get().await?;
-        diesel::sql_query(
-            r#"
-            UPDATE email_outbox
-            SET not_before = now() + make_interval(secs => $1), attempts = attempts + 1
-            WHERE id IN (
-                SELECT id FROM email_outbox
-                WHERE not_before <= now()
-                ORDER BY priority DESC, not_before, id
-                LIMIT $2
-                FOR UPDATE SKIP LOCKED
-            )
-            RETURNING id, "user", address, mail, attempts, priority
-            "#,
-        )
-        .bind::<Integer, _>(CLAIM_SECONDS)
-        .bind::<diesel::sql_types::BigInt, _>(claim_size(mailer))
-        .load(conn.as_mut())
-        .await?
+/// Sends one piece (`jobs::JobKind::SendEmail`): done once sent, or once it will never be
+/// (refused for good, nowhere to send it, or tried [`MAX_ATTEMPTS`] times); a failure for now
+/// is tried again after [`retry_wait`].
+pub async fn send_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let Some(mailer) = state.mailer.clone().filter(|mailer| mailer.sends()) else {
+        return Ok(crate::jobs::Outcome::Later(std::time::Duration::from_secs(
+            60,
+        )));
     };
-    let count = claimed.len();
-    // The most urgent first, however the update returned them.
-    let mut claimed = claimed;
-    claimed.sort_by_key(|row| std::cmp::Reverse(row.priority));
-    futures_util::stream::iter(claimed)
-        .for_each_concurrent(CONCURRENCY, |row| async move {
-            let id = row.id;
-            let attempts = row.attempts;
-            let outcome = send_one(state, mailer, row).await;
-            if let Err(e) = settle(state, id, attempts, outcome).await {
-                tracing::error!(error = %e, "could not record a mail's outcome");
-            }
-        })
-        .await;
-    Ok(count)
+    let queued: Queued = job.payload()?;
+    match send_one(state, &mailer, queued).await {
+        Outcome::Done => {}
+        Outcome::Refused(reason) => {
+            metrics::counter!(aspen_metrics::api::EMAILS_FAILED).increment(1);
+            tracing::warn!(%reason, "mail was refused; giving it up");
+        }
+        Outcome::Later(reason) if job.attempts >= MAX_ATTEMPTS => {
+            metrics::counter!(aspen_metrics::api::EMAILS_FAILED).increment(1);
+            tracing::error!(%reason, attempts = job.attempts, "mail could not be sent; giving it up");
+        }
+        Outcome::Later(reason) => return Err(crate::Error::MailUnsent(reason)),
+    }
+    Ok(crate::jobs::Outcome::Done)
 }
 
-/// What became of one row.
+/// What became of one piece.
 enum Outcome {
     /// Sent, or nothing left to send (the address gone or no longer verified).
     Done,
@@ -331,12 +270,13 @@ enum Outcome {
     Later(String),
 }
 
-async fn send_one(state: &GlobalServerContext, mailer: &Mailer, row: Claimed) -> Outcome {
-    let mail: Mail = match serde_json::from_value(row.mail) {
-        Ok(mail) => mail,
-        Err(e) => return Outcome::Refused(format!("unreadable mail: {e}")),
-    };
-    let recipient = match recipient(state, row.user, row.address.as_deref(), &mail).await {
+async fn send_one(state: &GlobalServerContext, mailer: &Mailer, queued: Queued) -> Outcome {
+    let Queued {
+        user,
+        address,
+        mail,
+    } = queued;
+    let recipient = match recipient(state, user, address.as_deref(), &mail).await {
         Ok(Some(recipient)) => recipient,
         Ok(None) => return Outcome::Done,
         Err(e) => return Outcome::Later(e.to_string()),
@@ -430,42 +370,8 @@ async fn recipient(
     }))
 }
 
-/// Deletes a row that is done with, or puts it off until its next attempt.
-async fn settle(
-    state: &GlobalServerContext,
-    id: uuid::Uuid,
-    attempts: i32,
-    outcome: Outcome,
-) -> crate::Result<()> {
-    let mut conn = state.connection_pool.get().await?;
-    let row = email_outbox::table.filter(email_outbox::id.eq(id));
-    match outcome {
-        Outcome::Done => {}
-        Outcome::Refused(reason) => {
-            metrics::counter!(aspen_metrics::api::EMAILS_FAILED).increment(1);
-            tracing::warn!(%reason, "mail was refused; giving it up");
-        }
-        Outcome::Later(reason) if attempts >= MAX_ATTEMPTS => {
-            metrics::counter!(aspen_metrics::api::EMAILS_FAILED).increment(1);
-            tracing::error!(%reason, attempts, "mail could not be sent; giving it up");
-        }
-        Outcome::Later(reason) => {
-            let wait = retry_wait(attempts);
-            tracing::warn!(%reason, attempts, ?wait, "mail could not be sent; trying again later");
-            let at: DateTime<Utc> = Utc::now() + wait;
-            diesel::update(row)
-                .set(email_outbox::not_before.eq(at))
-                .execute(conn.as_mut())
-                .await?;
-            return Ok(());
-        }
-    }
-    diesel::delete(row).execute(conn.as_mut()).await?;
-    Ok(())
-}
-
 /// How long to wait after the `attempts`th failure: a minute, doubling each time.
-fn retry_wait(attempts: i32) -> chrono::Duration {
+pub fn retry_wait(attempts: i32) -> chrono::Duration {
     let doublings = u32::try_from(attempts.saturating_sub(1))
         .unwrap_or(0)
         .min(16);
@@ -477,14 +383,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resets_are_sent_before_everything_else() {
+    fn codes_someone_waits_for_are_sent_before_everything_else() {
         let reset = Mail::PasswordReset {
             code: "12345678".to_string(),
         };
+        let code = Mail::Verification {
+            code: "123456".to_string(),
+        };
+        assert_eq!(reset.class(), code.class());
         for other in [
-            Mail::Verification {
-                code: "123456".to_string(),
-            },
             Mail::PasswordWasReset {
                 removed_factors: 0,
                 recovery_codes_gone: false,
@@ -495,7 +402,7 @@ mod tests {
                 test: false,
             },
         ] {
-            assert!(reset.priority() > other.priority());
+            assert!(reset.class() < other.class());
         }
     }
 
@@ -517,14 +424,6 @@ mod tests {
     async fn only_a_server_that_sends_has_a_transport() {
         assert!(mailer(true, None).sends());
         assert!(!mailer(false, None).sends());
-    }
-
-    #[tokio::test]
-    async fn a_sending_rate_claims_a_second_s_worth() {
-        assert_eq!(claim_size(&mailer(true, None)), BATCH);
-        assert_eq!(claim_size(&mailer(true, Some(10))), 10);
-        assert_eq!(claim_size(&mailer(true, Some(1))), 1);
-        assert_eq!(claim_size(&mailer(true, Some(10_000))), BATCH);
     }
 
     #[test]

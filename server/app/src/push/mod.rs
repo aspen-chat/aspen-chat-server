@@ -20,7 +20,7 @@ use crate::context::GlobalServerContext;
 use crate::events::{SubjectOwner, subject_owner};
 use crate::message::Message;
 use crate::message::MessageKind;
-use crate::notification_setting::{NotificationLevel, default_level};
+use crate::notification_setting::default_level;
 use crate::t;
 use crate::two_factor::Caller;
 use crate::visibility::viewers;
@@ -29,14 +29,14 @@ use crate::{
     PushSubscriptionId, UserId,
 };
 use aspen_schema::{
-    self as schema, channel, channel_mute, community_member_role, community_user, dm_recipient,
-    message, notification_setting, push_key, push_subscription, read_state, refresh_token,
-    thread_follow, user_block,
+    self as schema, channel, community_user, dm_recipient, message, push_key, push_subscription,
+    read_state, refresh_token,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
+use diesel::sql_types::{Array, Bool, Nullable, Text, Uuid as PgUuid};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use fred::prelude::{KeysInterface as _, SetsInterface as _};
@@ -884,188 +884,125 @@ async fn recipients(
         None => posted_in,
     };
     let community = place.community.as_ref().map(|c| *c.id());
-    let subscribed = push_subscription::table.select(push_subscription::user);
-    // Everyone who might be told: a DM's people, or a community's members who are tagged or
-    // want every message.
-    let (candidates, tagged_users): (HashSet<UserId>, HashSet<UserId>) = match community {
-        None => {
-            let people: HashSet<UserId> = dm_recipient::table
-                .select(dm_recipient::user)
-                .filter(dm_recipient::channel.eq(place.id))
-                .filter(dm_recipient::user.eq_any(subscribed))
-                .load::<UserId>(conn.as_mut())
-                .await?
-                .into_iter()
-                .collect();
-            let tagged_users = people
-                .iter()
-                .filter(|u| found.mentions.everyone || found.mentions.users.contains(u))
-                .copied()
-                .collect();
-            (people, tagged_users)
-        }
-        Some(community) => {
-            let tagged_users = tagged(conn.as_mut(), community, &found.mentions).await?;
-            let everything: HashSet<UserId> = notification_setting::table
-                .select(notification_setting::user)
-                .filter(notification_setting::level.eq(NotificationLevel::All))
-                .filter(
-                    notification_setting::channel
-                        .eq(place.id)
-                        .or(notification_setting::community.eq(community)),
-                )
-                .filter(notification_setting::user.eq_any(subscribed))
-                .load::<UserId>(conn.as_mut())
-                .await?
-                .into_iter()
-                .collect();
-            (&tagged_users | &everything, tagged_users)
-        }
-    };
-    // Those following a thread are told of every reply in it, whatever their level.
-    let followers: HashSet<UserId> = if posted_in_thread {
-        thread_follow::table
-            .select(thread_follow::user)
-            .filter(thread_follow::thread.eq(channel_id))
-            .filter(
-                thread_follow::user
-                    .eq_any(push_subscription::table.select(push_subscription::user)),
-            )
-            .load::<UserId>(conn.as_mut())
-            .await?
-            .into_iter()
-            .collect()
-    } else {
-        HashSet::new()
-    };
-    // A DM's thread is for the DM's people alone, whoever followed it before they left.
-    let followers: HashSet<UserId> = if community.is_none() {
-        &followers & &candidates
-    } else {
-        followers
-    };
-    let mut candidates = &candidates | &followers;
-    candidates.remove(&author);
-    if candidates.is_empty() {
-        return Ok(Vec::new());
-    }
-    let listed: Vec<UserId> = candidates.iter().copied().collect();
-    // Each one's level here: the channel's own setting, else the community's, else the default.
-    let settings: Vec<(UserId, Option<CommunityId>, NotificationLevel)> =
-        notification_setting::table
-            .select((
-                notification_setting::user,
-                notification_setting::community,
-                notification_setting::level,
-            ))
-            .filter(notification_setting::user.eq_any(&listed))
-            .filter(
-                notification_setting::channel
-                    .eq(place.id)
-                    .or(notification_setting::community.nullable().eq(community)),
-            )
-            .load(conn.as_mut())
-            .await?;
-    let mut for_channel = HashMap::new();
-    let mut for_community = HashMap::new();
-    for (user, community, level) in settings {
-        match community {
-            Some(_) => for_community.insert(user, level),
-            None => for_channel.insert(user, level),
-        };
-    }
-    let level_of = |user: UserId| {
-        for_channel
-            .get(&user)
-            .or_else(|| for_community.get(&user))
-            .copied()
-            .unwrap_or_else(|| default_level(place.ty))
-    };
-    candidates.retain(|user| {
-        followers.contains(user)
-            || match level_of(*user) {
-                NotificationLevel::All => true,
-                NotificationLevel::Tags => tagged_users.contains(user),
-                NotificationLevel::Nothing => false,
-            }
-    });
-    if let Some(community) = community {
+    let mentions = &found.mentions;
+    let mut candidates: HashSet<UserId> = diesel::sql_query(RECIPIENTS_SQL)
+        .bind::<Nullable<PgUuid>, _>(community.map(|c| c.0))
+        .bind::<PgUuid, _>(place.id.0)
+        .bind::<PgUuid, _>(author.0)
+        .bind::<Array<PgUuid>, _>(mentions.users.iter().map(|u| u.0).collect::<Vec<_>>())
+        .bind::<Array<PgUuid>, _>(mentions.roles.iter().map(|r| r.0).collect::<Vec<_>>())
+        .bind::<Bool, _>(mentions.everyone)
+        .bind::<Text, _>(default_level(place.ty))
+        .bind::<Nullable<PgUuid>, _>(posted_in_thread.then_some(channel_id.0))
+        .load::<Recipient>(conn.as_mut())
+        .await?
+        .into_iter()
+        .map(|r| r.user)
+        .collect();
+    if let Some(community) = community
+        && !candidates.is_empty()
+    {
         let viewers = viewers(conn.as_mut(), community, &candidates, place.id).await?;
         candidates.retain(|user| viewers.contains(user));
     }
-    if candidates.is_empty() {
-        return Ok(Vec::new());
-    }
-    let listed: Vec<UserId> = candidates.iter().copied().collect();
-    let blocking: Vec<UserId> = user_block::table
-        .select(user_block::blocker)
-        .filter(user_block::blocked.eq(author))
-        .filter(user_block::blocker.eq_any(&listed))
-        .load(conn.as_mut())
-        .await?;
-    let muting: Vec<UserId> = channel_mute::table
-        .select(channel_mute::user)
-        .filter(channel_mute::channel.eq(place.id))
-        .filter(channel_mute::user.eq_any(&listed))
-        .filter(
-            channel_mute::until
-                .is_null()
-                .or(channel_mute::until.gt(diesel::dsl::now)),
-        )
-        .load(conn.as_mut())
-        .await?;
     drop(conn);
-    for user in blocking.into_iter().chain(muting) {
-        candidates.remove(&user);
-    }
     let listed: Vec<UserId> = candidates.into_iter().collect();
-    if listed.is_empty() {
-        return Ok(listed);
+    // Those using Aspen right now are not woken; asked in batches, so a message to a whole
+    // community never sends Valkey one command naming every member.
+    let mut asleep = Vec::with_capacity(listed.len());
+    for batch in listed.chunks(ACTIVE_BATCH) {
+        let keys: Vec<String> = batch
+            .iter()
+            .map(|user| crate::user_status::active_key(*user))
+            .collect();
+        let active: Vec<Option<i64>> = state.valkey.mget(keys).await?;
+        asleep.extend(
+            batch
+                .iter()
+                .zip(active)
+                .filter_map(|(user, active)| active.is_none().then_some(*user)),
+        );
     }
-    let keys: Vec<String> = listed
-        .iter()
-        .map(|user| crate::user_status::active_key(*user))
-        .collect();
-    let active: Vec<Option<i64>> = state.valkey.mget(keys).await?;
-    Ok(listed
-        .into_iter()
-        .zip(active)
-        .filter_map(|(user, active)| active.is_none().then_some(user))
-        .collect())
+    Ok(asleep)
 }
 
-/// The members of `community` with a phone to wake whom `mentions` tags.
-async fn tagged(
-    conn: &mut AsyncPgConnection,
-    community: CommunityId,
-    mentions: &crate::mention::Mentions,
-) -> crate::Result<HashSet<UserId>> {
-    if mentions.users.is_empty() && mentions.roles.is_empty() && !mentions.everyone {
-        return Ok(HashSet::new());
-    }
-    let subscribed = push_subscription::table.select(push_subscription::user);
-    let members = community_user::table
-        .select(community_user::user)
-        .filter(community_user::community.eq(community))
-        .filter(community_user::user.eq_any(subscribed))
-        .into_boxed();
-    let members: Vec<UserId> = if mentions.everyone {
-        members.load(conn).await?
-    } else {
-        let holders = community_member_role::table
-            .select(community_member_role::user)
-            .filter(community_member_role::role.eq_any(mentions.roles.clone()));
-        members
-            .filter(
-                community_user::user
-                    .eq_any(mentions.users.clone())
-                    .or(community_user::user.eq_any(holders)),
-            )
-            .load(conn)
-            .await?
-    };
-    Ok(members.into_iter().collect())
+/// How many people's activity one Valkey command asks about.
+const ACTIVE_BATCH: usize = 1000;
+
+#[derive(diesel::QueryableByName)]
+struct Recipient {
+    #[diesel(sql_type = PgUuid)]
+    user: UserId,
 }
+
+/// Who a message wakes, before who may view it and who is using Aspen are decided: `$1` the
+/// community (`NULL` in a DM), `$2` the channel whose settings and mutes count (a thread's
+/// parent), `$3` the author, `$4`/`$5`/`$6` whom it tags (users, roles, everyone), `$7` the level
+/// with no setting, `$8` the thread it is a reply in (`NULL` when it is in none). Candidates come
+/// from indexed branches: the members tagged by name (`community_user`'s key), holders of tagged
+/// roles (`community_member_role_by_role`), every member when everyone is, those whose setting
+/// asks for every message (`notification_setting_all_*`), a DM's people, and the thread's
+/// followers (`thread_follow_by_thread`), a DM's thread's only while they are still its people.
+/// Each one's level is the channel's setting, else the community's, else `$7`, and a follower is
+/// told whatever theirs; those with a phone who neither blocked the author nor muted the channel
+/// remain.
+const RECIPIENTS_SQL: &str = r#"
+    WITH candidate AS (
+        SELECT cu."user", true AS tagged, false AS following FROM community_user cu
+        WHERE cu.community = $1 AND cu."user" = ANY($4)
+        UNION ALL
+        SELECT r."user", true, false FROM community_member_role r
+        WHERE r.community = $1 AND r.role = ANY($5)
+        UNION ALL
+        SELECT cu."user", true, false FROM community_user cu
+        WHERE $6 AND cu.community = $1
+        UNION ALL
+        SELECT ns."user", false, false FROM notification_setting ns
+        WHERE $1 IS NOT NULL AND ns.level = 'all' AND ns.channel = $2
+        UNION ALL
+        SELECT ns."user", false, false FROM notification_setting ns
+        WHERE ns.level = 'all' AND ns.community = $1
+        UNION ALL
+        SELECT dr."user", $6 OR dr."user" = ANY($4), false FROM dm_recipient dr
+        WHERE $1 IS NULL AND dr.channel = $2
+        UNION ALL
+        SELECT tf."user", false, true FROM thread_follow tf
+        WHERE tf.thread = $8
+          AND (
+              $1 IS NOT NULL
+              OR EXISTS (
+                  SELECT 1 FROM dm_recipient dr
+                  WHERE dr.channel = $2 AND dr."user" = tf."user"
+              )
+          )
+    ),
+    person AS (
+        SELECT "user", bool_or(tagged) AS tagged, bool_or(following) AS following
+        FROM candidate
+        WHERE "user" <> $3
+        GROUP BY "user"
+    )
+    SELECT p."user" FROM person p
+    CROSS JOIN LATERAL (
+        SELECT COALESCE(
+            (SELECT level FROM notification_setting
+             WHERE "user" = p."user" AND channel = $2),
+            (SELECT level FROM notification_setting
+             WHERE "user" = p."user" AND community = $1),
+            $7
+        ) AS level
+    ) l
+    WHERE (p.following OR l.level = 'all' OR (l.level = 'tags' AND p.tagged))
+      AND EXISTS (SELECT 1 FROM push_subscription s WHERE s."user" = p."user")
+      AND NOT EXISTS (
+          SELECT 1 FROM user_block b WHERE b.blocker = p."user" AND b.blocked = $3
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM channel_mute m
+          WHERE m."user" = p."user" AND m.channel = $2
+            AND (m.until IS NULL OR m.until > now())
+      )
+"#;
 
 /// What the phone's badge shows for this deployment: the unread messages tagging the person,
 /// and their unread DMs.

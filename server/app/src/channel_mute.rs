@@ -46,16 +46,9 @@ pub async fn mute(
         )));
     }
     let mut conn = state.connection_pool.get().await?;
-    crate::permissions::channel_access(state, conn.as_mut(), user, channel_id).await?;
-    let ty: ChannelType = channel::table
-        .select(channel::ty)
-        .filter(
-            channel::id
-                .eq(channel_id)
-                .and(channel::deleted_at.is_null()),
-        )
-        .first(conn.as_mut())
-        .await?;
+    let ty = crate::permissions::channel_access(state, conn.as_mut(), user, channel_id)
+        .await?
+        .ty;
     if !matches!(
         ty,
         ChannelType::Text | ChannelType::Dm | ChannelType::GroupDm | ChannelType::Plugin
@@ -158,6 +151,35 @@ pub async fn read_channel_mutes(
     channels: &[ChannelId],
 ) -> crate::Result<Vec<ChannelMute>> {
     read_mutes(state, user, channels, &[]).await
+}
+
+/// The user's mutes in force of every DM and group DM they are in, however many there are:
+/// rows they made themselves, few, found from their own key, which the DM list sends whole
+/// beside its pages so a DM not listed yet is known muted when it is heard from.
+pub async fn read_dm_mutes(
+    state: &GlobalServerContext,
+    user: UserId,
+) -> crate::Result<Vec<ChannelMute>> {
+    use aspen_schema::dm_recipient;
+    let mut conn = state.connection_pool.get().await?;
+    let now = Utc::now();
+    Ok(channel_mute::table
+        .select(ChannelMute::as_select())
+        .filter(channel_mute::user.eq(user))
+        .filter(
+            channel_mute::until
+                .is_null()
+                .or(channel_mute::until.gt(now)),
+        )
+        .filter(diesel::dsl::exists(
+            dm_recipient::table.filter(
+                dm_recipient::channel
+                    .eq(channel_mute::channel)
+                    .and(dm_recipient::user.eq(user)),
+            ),
+        ))
+        .load(conn.as_mut())
+        .await?)
 }
 
 /// The mutes in force of `visible`'s user of the channels they may view in its communities.

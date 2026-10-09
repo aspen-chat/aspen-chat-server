@@ -45,6 +45,9 @@ export type ModerationEntry = components["schemas"]["ModerationEntry"];
 export type LoggedChannel = components["schemas"]["LoggedChannel"];
 export type LoggedMessage = components["schemas"]["LoggedMessage"];
 export type FileOfferEntry = components["schemas"]["FileOfferEntry"];
+export type JobsOverview = components["schemas"]["JobsOverview"];
+export type JobEntry = components["schemas"]["JobEntry"];
+export type JobClass = components["schemas"]["JobClass"];
 export type GrowthRange = paths["/api/v1/admin/growth"]["get"]["parameters"]["query"]["range"];
 export type UserBanRequest = components["schemas"]["UserBanRequest"];
 export type UserBanOutcome = components["schemas"]["UserBanOutcome"];
@@ -562,6 +565,11 @@ export class AdminApi {
         },
       }),
     );
+  }
+
+  /** What the deployment's background jobs are doing now: a preview of at most 100. */
+  async jobs(): Promise<JobsOverview> {
+    return adminRead(await this.#client.api.GET("/api/v1/admin/jobs"));
   }
 
   /** Every installed plugin, on or off, in the order they decide messages in. */

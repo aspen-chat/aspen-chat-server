@@ -65,7 +65,8 @@ pub struct BanRequest {
     pub delete_messages_seconds: Option<u32>,
 }
 
-/// What banning did: the ban, whether one stood already, and the messages deleted.
+/// What banning did: the ban, whether one stood already, and how many messages are being
+/// deleted, a batch at a time once the ban commits (`message::queue_deletion_of_recent`).
 pub struct Banned {
     pub ban: message_enum::CommunityBan,
     pub replaced: bool,
@@ -199,7 +200,7 @@ pub async fn ban_member(
                 .await?;
             }
             let deleted = match request.delete_messages_seconds {
-                None => Vec::new(),
+                None => 0,
                 Some(window) => {
                     if !access.has(Permissions::MANAGE_MESSAGES) {
                         return Err(crate::permissions::missing(Permissions::MANAGE_MESSAGES));
@@ -219,8 +220,7 @@ pub async fn ban_member(
                     let since = Utc::now() - Duration::seconds(i64::from(window));
                     // Only where the banner may view, as deleting one by one would allow.
                     let visible = Visibility::load_on(conn.as_mut(), caller, &[community]).await?;
-                    crate::message::delete_recent_by(
-                        state,
+                    crate::message::queue_deletion_of_recent(
                         conn.as_mut(),
                         Some(&visible),
                         member,
@@ -237,25 +237,23 @@ pub async fn ban_member(
                 banned_at: Utc::now(),
                 until,
             };
-            let replaced: Option<CommunityBanRow> = community_ban::table
-                .select(CommunityBanRow::as_select())
-                .filter(community_ban::community.eq(community))
-                .filter(community_ban::user.eq(member))
-                .first(conn.as_mut())
-                .await
-                .optional()?;
-            if replaced.is_some() {
-                diesel::update(community_ban::table)
-                    .filter(community_ban::community.eq(community))
-                    .filter(community_ban::user.eq(member))
-                    .set((
-                        community_ban::banned_by.eq(row.banned_by),
-                        community_ban::reason.eq(&row.reason),
-                        community_ban::banned_at.eq(row.banned_at),
-                        community_ban::until.eq(row.until),
-                    ))
-                    .execute(conn.as_mut())
-                    .await?;
+            // One statement makes the ban or replaces the one standing, and says which, so
+            // two bans of one member at once both succeed, the later one standing.
+            let made: bool = diesel::insert_into(community_ban::table)
+                .values(&row)
+                .on_conflict((community_ban::community, community_ban::user))
+                .do_update()
+                .set((
+                    community_ban::banned_by.eq(row.banned_by),
+                    community_ban::reason.eq(&row.reason),
+                    community_ban::banned_at.eq(row.banned_at),
+                    community_ban::until.eq(row.until),
+                ))
+                .returning(diesel::dsl::sql::<diesel::sql_types::Bool>("xmax = 0"))
+                .get_result(conn.as_mut())
+                .await?;
+            let replaced = !made;
+            if replaced {
                 // A ban's record does not change in place: the one that stood goes, and
                 // the new one is announced whole.
                 publish_event(
@@ -268,11 +266,6 @@ pub async fn ban_member(
                     }),
                 )
                 .await?;
-            } else {
-                diesel::insert_into(community_ban::table)
-                    .values(&row)
-                    .execute(conn.as_mut())
-                    .await?;
             }
             let record = message_enum::CommunityBan::from(&row);
             publish_event(
@@ -285,8 +278,8 @@ pub async fn ban_member(
             crate::community::end_membership(state, conn.as_mut(), member, community).await?;
             Ok::<_, crate::Error>(Banned {
                 ban: record,
-                replaced: replaced.is_some(),
-                deleted_messages: deleted.len(),
+                replaced,
+                deleted_messages: deleted,
             })
         }
         .scope_boxed()

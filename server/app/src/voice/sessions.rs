@@ -204,15 +204,22 @@ pub enum Recheck {
     Everyone,
 }
 
+/// How many rechecks one server runs at once; the rest wait their turn.
+pub const RECHECKS_AT_ONCE: usize = 16;
+
 /// Brings the calls `which` names in line with what their participants may now do, after a
 /// change to it has committed: whoever may no longer view the channel or join voice there (or
 /// is banned from the deployment, or gone) is removed, and everyone else's grants are sent to
 /// their voice server, which stops whatever they may no longer send. Runs on its own task, so
-/// the change that called for it does not wait; a failure is logged, and the next change or
-/// join brings the call in line.
+/// the change that called for it does not wait, at most [`RECHECKS_AT_ONCE`] at a time on each
+/// server; a failure is logged, and the next change or join brings the call in line. Every
+/// call on the deployment is rechecked by a job instead ([`recheck_all_step`]).
 pub fn recheck(state: &GlobalServerContext, which: Recheck) {
     let state = state.clone();
     tokio::spawn(async move {
+        let Ok(_turn) = state.rechecks.clone().acquire_owned().await else {
+            return;
+        };
         let rechecked = async {
             let mut conn = state.connection_pool.get().await?;
             recheck_in(&state, conn.as_mut(), which.clone()).await
@@ -262,6 +269,79 @@ pub async fn recheck_in(
         Recheck::Everyone => seats,
     };
     let seats: Vec<(VoiceSessionId, VoiceServerId, ChannelId, UserId)> = seats.load(conn).await?;
+    recheck_seats(state, conn, file_transfers, &which, seats).await
+}
+
+/// How many seats one step of rechecking every call takes.
+const RECHECK_BATCH: i64 = 200;
+
+/// How far rechecking every call has come: the last seat rechecked, by session and user.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Rechecked {
+    after: Option<(VoiceSessionId, UserId)>,
+}
+
+/// One step of rechecking every call on the deployment (`jobs::JobKind::RecheckAllCalls`), for a
+/// change that touches them all, as turning file transfers on or off does: the next
+/// [`RECHECK_BATCH`] seats in order of session and user.
+pub async fn recheck_all_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let done: Rechecked = job.progress()?.unwrap_or_default();
+    let mut conn = state.connection_pool.get().await?;
+    let file_transfers = crate::deployment_settings::load(conn.as_mut())
+        .await?
+        .file_transfers;
+    let mut seats = voice_participant::table
+        .inner_join(voice_session::table)
+        .select((
+            voice_session::id,
+            voice_session::voice_server,
+            voice_session::channel,
+            voice_participant::user,
+        ))
+        .order((voice_participant::session, voice_participant::user))
+        .limit(RECHECK_BATCH)
+        .into_boxed();
+    if let Some((session, user)) = done.after {
+        seats = seats.filter(
+            voice_participant::session
+                .gt(session)
+                .or(voice_participant::session
+                    .eq(session)
+                    .and(voice_participant::user.gt(user))),
+        );
+    }
+    let seats: Vec<(VoiceSessionId, VoiceServerId, ChannelId, UserId)> =
+        seats.load(conn.as_mut()).await?;
+    let last = seats.last().map(|(session, _, _, user)| (*session, *user));
+    let full = seats.len() as i64 >= RECHECK_BATCH;
+    recheck_seats(
+        state,
+        conn.as_mut(),
+        file_transfers,
+        &Recheck::Everyone,
+        seats,
+    )
+    .await?;
+    Ok(match last {
+        Some(after) if full => {
+            crate::jobs::Outcome::Progress(serde_json::to_value(Rechecked { after: Some(after) })?)
+        }
+        _ => crate::jobs::Outcome::Done,
+    })
+}
+
+/// Rechecks each of `seats`, as `which` asks.
+async fn recheck_seats(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    file_transfers: bool,
+    which: &Recheck,
+    seats: Vec<(VoiceSessionId, VoiceServerId, ChannelId, UserId)>,
+) -> crate::Result<()> {
     if let Recheck::SignIns { ended, kept, .. } = which {
         // The voice server knows which sign-in each participant joined on; it decides.
         for (session, server, _, user) in seats {
@@ -388,7 +468,7 @@ pub(super) async fn apply_report(
     published: DateTime<Utc>,
 ) -> crate::Result<()> {
     let mut conn = state.connection_pool.get().await?;
-    if !reported_by(conn.as_mut(), &report, from).await? {
+    if !reported_by(state, conn.as_mut(), &report, from).await? {
         warn!(
             server = %from.0,
             report = <&'static str>::from(&report),
@@ -397,7 +477,8 @@ pub(super) async fn apply_report(
         return Ok(());
     }
     // A speaking change is only passed on: it writes nothing, so it needs no transaction, and
-    // the lookup of its session (`reported_by`) is all it reads.
+    // the lookup of its session (`reported_by`, from `voice_session_homes` when it was asked
+    // of lately) is all it reads.
     if let VoiceReport::Speaking {
         channel,
         user,
@@ -682,6 +763,7 @@ async fn end_if_signed_out(
 /// needing one there. So a voice server, limited by its NATS user to its own subjects, cannot
 /// report on another's calls or channels.
 async fn reported_by(
+    state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     report: &VoiceReport,
     from: VoiceServerId,
@@ -712,12 +794,26 @@ async fn reported_by(
     };
     let channel = ChannelId::from(channel);
     match session {
+        // Speaking changes come many times a second in a lively call; where a session is never
+        // changes, so its home is remembered a few seconds rather than read for each.
+        Some(session) if matches!(report, VoiceReport::Speaking { .. }) => {
+            let session = VoiceSessionId::from(session);
+            let home = state
+                .voice_session_homes
+                .get_or_work(session, || async {
+                    Ok(find_session(conn, session)
+                        .await?
+                        .map(|recorded| (recorded.voice_server, recorded.channel)))
+                })
+                .await?;
+            Ok(home == Some((from, channel)))
+        }
         // A session not recorded (ended, or never recorded) is ignored by the report's own
-        // handling, except a speaking change, which is passed on without a lookup of its own.
+        // handling.
         Some(session) => Ok(
             match find_session(conn, VoiceSessionId::from(session)).await? {
                 Some(recorded) => recorded.voice_server == from && recorded.channel == channel,
-                None => !matches!(report, VoiceReport::Speaking { .. }),
+                None => true,
             },
         ),
         None => Ok(match session_on_channel(conn, channel).await? {
@@ -985,8 +1081,13 @@ async fn apply_snapshot(
         .load(conn)
         .await?;
     let mut repairs = usize::from(!known);
+    // Matched by user both ways in maps, so a large call costs its size, not its square.
+    let recorded_by_user: std::collections::HashMap<uuid::Uuid, &VoiceParticipant> =
+        recorded.iter().map(|row| (row.user.0, row)).collect();
+    let reported: std::collections::HashSet<uuid::Uuid> =
+        participants.iter().map(|p| p.user).collect();
     for participant in participants {
-        match recorded.iter().find(|row| row.user.0 == participant.user) {
+        match recorded_by_user.get(&participant.user) {
             None => {
                 record_participant(state, conn, &mut existing, participant).await?;
                 repairs += 1;
@@ -1008,7 +1109,7 @@ async fn apply_snapshot(
     let departed: Vec<UserId> = recorded
         .iter()
         .map(|row| row.user)
-        .filter(|user| !participants.iter().any(|p| p.user == user.0))
+        .filter(|user| !reported.contains(&user.0))
         .collect();
     for user in &departed {
         remove_participant(state, conn, &existing, *user).await?;
@@ -1116,49 +1217,31 @@ async fn remove_participant(
     Ok(())
 }
 
-/// The value `alone_since` takes after the participant count settles at `count`: cleared
-/// while the call has company, the earlier of now and the standing value while it does not.
-fn alone_after(
-    count: i64,
-    current: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> Option<DateTime<Utc>> {
-    if count >= 2 {
-        None
-    } else {
-        current.or(Some(now))
-    }
+#[derive(diesel::QueryableByName)]
+struct Company {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    present: i64,
 }
 
 /// Re-evaluates whether the call has company after a join or leave and returns how many are
-/// in it.
+/// in it, in one statement: a call with two or more has had company and is not alone; one with
+/// fewer is alone from its first lonely moment until someone else arrives.
 async fn note_company(conn: &mut AsyncPgConnection, session: &VoiceSession) -> crate::Result<i64> {
-    let count: i64 = voice_participant::table
-        .filter(voice_participant::session.eq(session.id))
-        .count()
-        .get_result(conn)
-        .await?;
-    let current: Option<DateTime<Utc>> = voice_session::table
-        .select(voice_session::alone_since)
-        .filter(voice_session::id.eq(session.id))
-        .first(conn)
-        .await?;
-    if count >= 2 && !session.had_company {
-        diesel::update(voice_session::table)
-            .filter(voice_session::id.eq(session.id))
-            .set(voice_session::had_company.eq(true))
-            .execute(conn)
-            .await?;
-    }
-    let next = alone_after(count, current, Utc::now());
-    if next != current {
-        diesel::update(voice_session::table)
-            .filter(voice_session::id.eq(session.id))
-            .set(voice_session::alone_since.eq(next))
-            .execute(conn)
-            .await?;
-    }
-    Ok(count)
+    let Company { present } = diesel::sql_query(
+        r#"
+        UPDATE voice_session s
+        SET had_company = s.had_company OR c.present >= 2,
+            alone_since = CASE WHEN c.present >= 2 THEN NULL
+                               ELSE COALESCE(s.alone_since, now()) END
+        FROM (SELECT count(*) AS present FROM voice_participant WHERE session = $1) c
+        WHERE s.id = $1
+        RETURNING c.present
+        "#,
+    )
+    .bind::<diesel::sql_types::Uuid, _>(session.id.0)
+    .get_result(conn)
+    .await?;
+    Ok(present)
 }
 
 /// Ends a call: every participant is told to leave, the reason is announced, then the
@@ -1223,31 +1306,38 @@ pub(super) async fn end_session(
 }
 
 /// Ends every call that has gone `idle_session_seconds` without holding two people at once.
-pub(super) async fn reap_idle_sessions(state: &GlobalServerContext) -> crate::Result<()> {
+pub(super) async fn reap_idle_sessions(
+    state: &GlobalServerContext,
+    limit: i64,
+) -> crate::Result<usize> {
     let idle = Duration::seconds(
         i64::try_from(state.config.voice.idle_session_seconds).unwrap_or(24 * 60 * 60),
     );
     let cutoff = Utc::now() - idle;
     let mut conn = state.connection_pool.get().await?;
-    conn.transaction(|conn| {
-        async move {
-            let idle: Vec<VoiceSession> = voice_session::table
-                .select(VoiceSession::as_select())
-                .filter(voice_session::alone_since.lt(cutoff))
-                .load(conn.as_mut())
-                .await?;
-            for session in idle {
-                info!(
-                    session = session.id.0.to_string(),
-                    "ending a call that has been alone for the idle limit"
-                );
-                end_session(state, conn.as_mut(), &session, VoiceSessionEndReason::Idle).await?;
+    let idle: Vec<VoiceSession> = voice_session::table
+        .select(VoiceSession::as_select())
+        .filter(voice_session::alone_since.lt(cutoff))
+        .limit(limit)
+        .load(conn.as_mut())
+        .await?;
+    let found = idle.len();
+    // Each call ends in a transaction of its own, so one that fails leaves the others ended.
+    for session in idle {
+        info!(
+            session = session.id.0.to_string(),
+            "ending a call that has been alone for the idle limit"
+        );
+        conn.transaction(|conn| {
+            let session = &session;
+            async move {
+                end_session(state, conn.as_mut(), session, VoiceSessionEndReason::Idle).await
             }
-            Ok(())
-        }
-        .scope_boxed()
-    })
-    .await
+            .scope_boxed()
+        })
+        .await?;
+    }
+    Ok(found)
 }
 
 #[cfg(test)]
@@ -1264,16 +1354,5 @@ mod tests {
         assert!(replaces(a, b, false));
         // Another server that still reports: the reported room is the second call.
         assert!(!replaces(a, b, true));
-    }
-
-    #[test]
-    fn a_call_is_alone_from_its_first_lonely_moment_until_someone_else_arrives() {
-        let now = Utc::now();
-        let earlier = now - Duration::hours(3);
-        assert_eq!(alone_after(0, None, now), Some(now));
-        assert_eq!(alone_after(1, None, now), Some(now));
-        assert_eq!(alone_after(1, Some(earlier), now), Some(earlier));
-        assert_eq!(alone_after(2, Some(earlier), now), None);
-        assert_eq!(alone_after(3, None, now), None);
     }
 }

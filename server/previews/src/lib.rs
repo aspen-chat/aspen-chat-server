@@ -59,9 +59,10 @@ pub enum Outcome {
 /// Making what readers' apps show inline in place of pictures and videos
 /// (`app::attachment::preview`): smaller copies of pictures, and videos' posters.
 ///
-/// Every server queues the work; those with `make` on do it, `concurrency` at a time. Pictures
-/// are made in the server's own process; videos' posters by running `ffmpeg` and `ffprobe`, so a
-/// server without them (or with `ffmpeg` naming nothing) makes previews of pictures only.
+/// Every server queues the work as jobs; those with `make` and `[jobs] run` on do it,
+/// `concurrency` at a time. Pictures are made in the server's own process; videos' posters by
+/// running `ffmpeg` and `ffprobe`, so a server without them (or with `ffmpeg` naming nothing)
+/// makes previews of pictures only.
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct PreviewConfig {

@@ -129,6 +129,11 @@ enum Command {
         #[clap(subcommand)]
         action: operator::CommunitiesCommand,
     },
+    /// Operator commands for background jobs.
+    Jobs {
+        #[clap(subcommand)]
+        action: operator::JobsCommand,
+    },
     /// Operator commands for registration invites.
     Invites {
         #[clap(subcommand)]
@@ -225,6 +230,7 @@ async fn run(options: Opt) -> Result<()> {
             Command::Attachments { action } => operator::attachments(&config, action).await,
             Command::Invites { action } => operator::invites(&config, action).await,
             Command::Communities { action } => operator::communities(&config, action).await,
+            Command::Jobs { action } => operator::jobs(&config, action).await,
             Command::Federation { action } => operator::federation(&config, action).await,
             Command::Settings { action } => operator::settings(&config, action).await,
             Command::VoiceServers { action } => operator::voice_servers(&config, action).await,

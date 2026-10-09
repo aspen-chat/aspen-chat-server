@@ -108,3 +108,5 @@ pub mod m20261007_183427_upload_quota;
 pub mod m20261007_192833_bot_transfer;
 pub mod m20261008_013730_react_by_author;
 pub mod m20261008_120000_saved_messages_thread_follows;
+pub mod m20261008_153045_query_growth;
+pub mod m20261008_170000_jobs;

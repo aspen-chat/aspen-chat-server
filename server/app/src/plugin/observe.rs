@@ -232,6 +232,20 @@ async fn handle(
         let Some(id) = seen.id else {
             return Ok(());
         };
+        // Every observer reads every event, so where the event was published decides first,
+        // before anything is read: a community the plugin does not run in, or a DM to a plugin
+        // not granted them, is passed over at the cost of the subject alone.
+        match crate::events::subject_owner(subject) {
+            Some(crate::events::SubjectOwner::Community(community)) => {
+                if !state.plugins.runs_in(state, plugin, community).await? {
+                    return Ok(());
+                }
+            }
+            Some(crate::events::SubjectOwner::User(_)) if !plugin.holds(PluginPermission::Dms) => {
+                return Ok(());
+            }
+            Some(crate::events::SubjectOwner::User(_)) | None => {}
+        }
         if !first_copy(state, &plugin.id, event_id, subject).await? {
             return Ok(());
         }

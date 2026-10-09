@@ -194,11 +194,11 @@ mod tests {
         );
         // What `admin grant` gives: View dashboard, Manage registration invites, voice servers,
         // deployment roles, and federation, Manage report categories, Manage deployment
-        // settings, Manage plugins, and Send newsletters, as the migrations give existing
-        // administrators.
+        // settings, Manage plugins, Send newsletters, and View jobs, as the migrations give
+        // existing administrators.
         assert_eq!(
             DeploymentPermissions::ADMINISTRATOR.bits(),
-            1 | 2 | 4 | 8 | 64 | 256 | 2048 | 4096 | 16384
+            1 | 2 | 4 | 8 | 64 | 256 | 2048 | 4096 | 16384 | 32768
         );
     }
 

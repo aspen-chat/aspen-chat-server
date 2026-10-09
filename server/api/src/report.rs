@@ -362,8 +362,8 @@ pub struct ReportCaseQuery {
     #[serde(rename = "filter[status]")]
     #[param(rename = "filter[status]", value_type = Option<ReportStatus>)]
     pub status: Option<ReportStatus>,
-    /// How many to skip, at most 100,000.
-    pub offset: Option<i64>,
+    /// Continue after this case, the last of the previous page.
+    pub before: Option<ReportCaseId>,
     /// How many to return, at most 100; 15 when absent.
     pub limit: Option<i64>,
 }
@@ -393,7 +393,7 @@ pub async fn list_report_cases(
         &state,
         &access,
         query.status.unwrap_or(ReportStatus::Open),
-        query.offset.unwrap_or(0),
+        query.before,
         query.limit.unwrap_or(15),
     )
     .await?;

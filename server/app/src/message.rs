@@ -513,12 +513,16 @@ async fn post(
                     .execute(conn.as_mut())
                     .await?;
                 mention::record(conn.as_mut(), message.id, channel_id, &message.mentions).await?;
-                for attachment in &attachments {
+                let held: Vec<MessageAttachment> = attachments
+                    .iter()
+                    .map(|attachment| MessageAttachment {
+                        message_id: message.id,
+                        attachment_id: *attachment,
+                    })
+                    .collect();
+                if !held.is_empty() {
                     diesel::insert_into(message_attachment::table)
-                        .values(&MessageAttachment {
-                            message_id: message.id,
-                            attachment_id: *attachment,
-                        })
+                        .values(&held)
                         .execute(conn.as_mut())
                         .await?;
                 }
@@ -902,12 +906,16 @@ pub async fn update_message(
                         .returning(message_attachment::attachment_id)
                         .load(conn.as_mut())
                         .await?;
-                    for attachment_id in new_attachments {
+                    let held: Vec<MessageAttachment> = new_attachments
+                        .iter()
+                        .map(|attachment_id| MessageAttachment {
+                            message_id: id,
+                            attachment_id: *attachment_id,
+                        })
+                        .collect();
+                    if !held.is_empty() {
                         diesel::insert_into(message_attachment::table)
-                            .values(&MessageAttachment {
-                                message_id: id,
-                                attachment_id: *attachment_id,
-                            })
+                            .values(&held)
                             .execute(conn.as_mut())
                             .await?;
                     }
@@ -1081,42 +1089,130 @@ pub async fn soft_delete(
     Ok(())
 }
 
-/// Deletes every message `author` posted since `since` in the channels `visible` covers that its
-/// user may view, and their threads, as deleting each one by one would let them, or with no
-/// `visible` anywhere on the deployment, DMs included, inside the caller's transaction, which
-/// has checked who may (a ban with a deletion window, `app::ban` and `app::user_ban`). Echoes go
-/// with their replies. Returns the ids.
-pub async fn delete_recent_by(
+/// Deletes `ids` as [`soft_delete`] deletes each, as one set: one statement marks them deleted,
+/// one their echoes, one keeps their files as evidence, their threads' summaries are taken down
+/// once per thread, and every deletion is announced together. Messages already deleted are
+/// passed over. Answers how many it deleted.
+pub async fn soft_delete_many(
     state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    ids: &[MessageId],
+) -> Result<usize, crate::Error> {
+    let deleted: Vec<Message> = diesel::update(message::table)
+        .set(message::deleted_at.eq(diesel::dsl::now))
+        .filter(message::id.eq_any(ids).and(message::deleted_at.is_null()))
+        .returning(Message::as_select())
+        .load(conn)
+        .await?;
+    if deleted.is_empty() {
+        return Ok(0);
+    }
+    let gone: Vec<MessageId> = deleted.iter().map(|m| m.id).collect();
+    let replies: Vec<MessageId> = deleted
+        .iter()
+        .filter(|m| m.kind != MessageKind::ThreadEcho)
+        .map(|m| m.id)
+        .collect();
+    // Echoes go with their replies.
+    let echoes: Vec<(MessageId, ChannelId)> = diesel::update(message::table)
+        .set(message::deleted_at.eq(diesel::dsl::now))
+        .filter(
+            message::echo_of
+                .eq_any(&replies)
+                .and(message::deleted_at.is_null()),
+        )
+        .returning((message::id, message::channel))
+        .load(conn)
+        .await?;
+    // Their files leave the public read path, kept for reviewing reports.
+    crate::attachment::evidence::keep_deleted_many(conn, &gone).await?;
+    let mut events: Vec<(EventScope, ServerEvent)> = deleted
+        .iter()
+        .map(|m| (*m.channel.id(), m.id))
+        .chain(echoes.iter().map(|(id, channel)| (*channel, *id)))
+        .map(|(channel, id)| {
+            (
+                EventScope::Channel(channel),
+                ServerEvent::Message(MessageEvent::Delete { id }),
+            )
+        })
+        .collect();
+    crate::events::publish_events(state, conn, std::mem::take(&mut events)).await?;
+    for message in &deleted {
+        // An echo deleted alone leaves its reply free to be echoed again.
+        if message.kind == MessageKind::ThreadEcho
+            && let Some(reply) = message.echo_of
+        {
+            thread::forget_echo(state, conn, reply, message.id).await?;
+        }
+        // Deleting the message a poll is shown in ends the poll.
+        if message.kind == MessageKind::Poll
+            && let Some(poll) = message.poll
+        {
+            crate::poll::delete_poll(state, conn, poll, *message.channel.id()).await?;
+        }
+    }
+    // Each thread's summary comes down once, by however many of its replies went.
+    let channels: Vec<ChannelId> = deleted
+        .iter()
+        .map(|m| *m.channel.id())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let threads: std::collections::HashSet<ChannelId> = channel::table
+        .select(channel::id)
+        .filter(channel::id.eq_any(&channels))
+        .filter(channel::ty.eq(ChannelType::Thread))
+        .load::<ChannelId>(conn)
+        .await?
+        .into_iter()
+        .collect();
+    let mut removed: std::collections::BTreeMap<ChannelId, i32> = std::collections::BTreeMap::new();
+    for message in &deleted {
+        if threads.contains(message.channel.id()) {
+            *removed.entry(*message.channel.id()).or_default() += 1;
+        }
+    }
+    for (thread, count) in removed {
+        thread::record_removals(state, conn, thread, count).await?;
+    }
+    Ok(deleted.len())
+}
+
+/// Starts deleting every message `author` posted since `since` in the channels `visible` covers
+/// that its user may view, and their threads, as deleting each one by one would let them, or
+/// with no `visible` anywhere on the deployment, DMs included: a ban with a deletion window
+/// (`app::ban` and `app::user_ban`), which has checked who may. The deletion is a job
+/// (`jobs::delete_messages`) saved in the caller's transaction, so it starts once the ban
+/// commits and goes on a batch at a time, however many there are; where it may delete is fixed
+/// now, as the banner may view now. Echoes go with their replies. Answers how many it will
+/// delete, as they stand now.
+pub async fn queue_deletion_of_recent(
     conn: &mut AsyncPgConnection,
     visible: Option<&Visibility>,
     author: UserId,
     since: DateTime<Utc>,
-) -> Result<Vec<MessageId>, crate::Error> {
-    let mut query = message::table
-        .inner_join(channel::table.on(channel::id.eq(message::channel)))
-        .select(message::id)
-        .filter(message::author.eq(author))
-        .filter(message::deleted_at.is_null())
-        .filter(message::timestamp.ge(since))
-        .filter(message::kind.ne(MessageKind::ThreadEcho))
-        .order(message::id.desc())
-        .into_boxed();
-    if let Some(visible) = visible {
-        let channels = visible.visible_channels();
-        query = query
-            .filter(channel::community.eq_any(visible.communities().to_vec()))
-            .filter(
-                channel::id
-                    .eq_any(channels.clone())
-                    .or(channel::parent_channel.eq_any(channels)),
-            );
+) -> Result<usize, crate::Error> {
+    let places = visible.map(Visibility::visible_channels);
+    let deletion = crate::jobs::delete_messages::Deletion {
+        author,
+        after: crate::read_state::position_at(since),
+        before: MessageId::new(),
+        places,
+    };
+    let count = crate::jobs::delete_messages::count(conn, &deletion).await?;
+    if count > 0 {
+        crate::jobs::enqueue(
+            conn,
+            crate::jobs::NewJob::new(
+                crate::jobs::JobKind::DeleteMessagesBy,
+                crate::jobs::JobClass::Normal,
+                &deletion,
+            )?,
+        )
+        .await?;
     }
-    let ids: Vec<MessageId> = query.load(conn).await?;
-    for id in &ids {
-        soft_delete(state, conn, *id).await?;
-    }
-    Ok(ids)
+    Ok(count)
 }
 
 /// Pins a message in its channel, after every pin already there, or unpins it. In a community

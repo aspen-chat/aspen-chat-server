@@ -489,7 +489,7 @@ pub async fn update(
             .scope_boxed()
         })
         .await?;
-    after_change(state, conn, &before, &after).await;
+    after_change(conn, &before, &after).await;
     Ok(after)
 }
 
@@ -527,18 +527,28 @@ fn validate(settings: &DeploymentSettings) -> crate::Result<()> {
     Ok(())
 }
 
-/// Brings what is already open in line with a change that has committed: the calls, when file
-/// transfers were turned on or off, and the sessions of users from elsewhere, when an
-/// immigration gate or the list it reads changed. A failure is logged; the next change, join,
-/// or standing check brings them in line.
+/// Brings what is already open in line with a change that has committed, by saving the jobs that
+/// do it (see `app::jobs`): every call rechecked, when file transfers were turned on or off,
+/// and the sessions of users from elsewhere ended, when an immigration gate or the list it reads
+/// changed. A failure to save one is logged; the next change, join, or standing check brings
+/// them in line.
 async fn after_change(
-    state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     before: &DeploymentSettings,
     after: &DeploymentSettings,
 ) {
+    // Every call, a batch of seats at a time, by an urgent job.
     if before.file_transfers != after.file_transfers
-        && let Err(e) = crate::voice::recheck_in(state, conn, crate::voice::Recheck::Everyone).await
+        && let Err(e) = crate::jobs::enqueue(
+            conn,
+            crate::jobs::NewJob::new(
+                crate::jobs::JobKind::RecheckAllCalls,
+                crate::jobs::JobClass::Urgent,
+                &serde_json::Value::Null,
+            )
+            .expect("an empty payload"),
+        )
+        .await
     {
         tracing::error!("could not recheck calls after file transfers changed: {e}");
     }
@@ -546,7 +556,7 @@ async fn after_change(
         [&policy.users, &policy.bots].map(|rules| (rules.immigration, rules.shared_list))
     };
     if immigration(&before.federation) != immigration(&after.federation)
-        && let Err(e) = crate::federation::standing::shut_out(state, conn, &after.federation).await
+        && let Err(e) = crate::federation::standing::shut_out(conn, None).await
     {
         tracing::error!("could not sign out the users a closed gate no longer admits: {e}");
     }

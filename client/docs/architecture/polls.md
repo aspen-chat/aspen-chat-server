@@ -5,7 +5,9 @@
   no text, and a message of kind `pollClosed` is the announcement the server posts when the
   deadline passes. The tally lives in the poll record's `results` and is republished as an
   update event on every vote, so a vote only records the caller's own choice locally
-  (`store.setMyVote`) and leaves the numbers to the stream. Message reads sideload `polls` with
+  (`store.setMyVote`) and leaves the numbers to the stream. Each answer's result names only its
+  first five voters, so `ChoiceRow` says how many more there are, and `VotersDialog` lists
+  everyone who voted for it a page at a time (`AspenSync.loadVoters`). Message reads sideload `polls` with
   the caller's `pollVotes`, which is the only way to learn one's own vote on an anonymous poll;
   `usePoll` fetches a poll the window did not bring. Each option is `{ label, emoji? }`; the
   emoji is chosen in the dialog from the same lazily loaded picker reactions use, and the server

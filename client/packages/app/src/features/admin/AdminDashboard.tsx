@@ -9,6 +9,7 @@ import {
   HardDrivesIcon,
   IdentificationBadgeIcon,
   PlugIcon,
+  QueueIcon,
   ScrollIcon,
   TicketIcon,
   UsersIcon,
@@ -32,6 +33,7 @@ import { PluginsSection } from "@/features/admin/Plugins";
 import { NewsletterSection } from "@/features/admin/Newsletter";
 import { useDeploymentRoles } from "@/features/admin/deploymentRoleRecords";
 import { FileTransferLog } from "@/features/admin/FileTransferLog";
+import { Jobs } from "@/features/admin/Jobs";
 import { ModerationLog } from "@/features/admin/ModerationLog";
 import { useAdminRead } from "@/features/admin/useAdminRead";
 import { RailPage } from "@/features/layout/RailPage";
@@ -71,6 +73,7 @@ function useAllowedTabs(): AdminTab[] {
     plugins: view || permissions.has("managePlugins"),
     moderation: view,
     transfers: permissions.has("moderateCommunities"),
+    jobs: permissions.has("viewJobs"),
   };
   return ADMIN_TABS.filter((tab) => allowed[tab]);
 }
@@ -90,6 +93,7 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
   plugins: PlugIcon,
   moderation: ScrollIcon,
   transfers: FileArrowUpIcon,
+  jobs: QueueIcon,
 };
 
 /**
@@ -98,7 +102,7 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
  * registration invites, its roles, the reports people made and the categories they make them
  * in, searchable lists of its users and communities, the name and icon it welcomes people with
  * and its policies, its email newsletter, federation with other deployments, its plugins, the
- * moderation log, and the record of file transfers. Each shows only to those with the
+ * moderation log, the record of file transfers, and a preview of the background jobs. Each shows only to those with the
  * deployment permission it needs; the server refuses everyone else whatever this page shows.
  * `/admin`, or a tab the caller may not
  * open, goes to the first they may.
@@ -212,6 +216,8 @@ function TabContent({ tab }: { tab: AdminTab }) {
       return <ModerationLog />;
     case "transfers":
       return <FileTransferLog />;
+    case "jobs":
+      return <Jobs />;
   }
 }
 

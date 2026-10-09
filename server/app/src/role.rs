@@ -111,6 +111,8 @@ pub async fn create_default_roles(
     Ok(rows[2].id)
 }
 
+/// A community's roles, lowest first; deleted roles, whose holders a job is still taking off
+/// (`retire_role`), are no longer any of them, here or anywhere roles are read.
 async fn load_roles(
     conn: &mut AsyncPgConnection,
     community_id: CommunityId,
@@ -118,6 +120,7 @@ async fn load_roles(
     Ok(community_role::table
         .select(RoleRow::as_select())
         .filter(community_role::community.eq(community_id))
+        .filter(community_role::deleted_at.is_null())
         .order((community_role::position, community_role::id))
         .load(conn)
         .await?)
@@ -127,6 +130,19 @@ async fn load_role(conn: &mut AsyncPgConnection, id: RoleId) -> crate::Result<Ro
     Ok(community_role::table
         .select(RoleRow::as_select())
         .filter(community_role::id.eq(id))
+        .filter(community_role::deleted_at.is_null())
+        .first(conn)
+        .await?)
+}
+
+/// The role `id`, locked for the rest of the caller's transaction, so a change made from what
+/// it reads is never made over another change that committed meanwhile.
+async fn lock_role(conn: &mut AsyncPgConnection, id: RoleId) -> crate::Result<RoleRow> {
+    Ok(community_role::table
+        .select(RoleRow::as_select())
+        .filter(community_role::id.eq(id))
+        .filter(community_role::deleted_at.is_null())
+        .for_update()
         .first(conn)
         .await?)
 }
@@ -140,6 +156,7 @@ pub async fn read_communities_roles(
     let rows: Vec<RoleRow> = community_role::table
         .select(RoleRow::as_select())
         .filter(community_role::community.eq_any(communities.to_vec()))
+        .filter(community_role::deleted_at.is_null())
         .order((
             community_role::community,
             community_role::position,
@@ -185,6 +202,7 @@ pub async fn read_communities_overrides(
             channel_override::deny,
         ))
         .filter(channel::community.eq_any(communities.to_vec()))
+        .filter(channel::parent_channel.is_null())
         .filter(channel::deleted_at.is_null())
         .load(conn.as_mut())
         .await?;
@@ -231,7 +249,19 @@ pub async fn read_communities_overrides(
     ))
 }
 
-/// The roles each of `members` holds besides everyone's, keyed by community and user.
+#[derive(diesel::QueryableByName)]
+struct HeldRole {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    community: CommunityId,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    user: UserId,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    role: RoleId,
+}
+
+/// The roles each of `members` holds besides everyone's, keyed by community and user: the pairs
+/// themselves are matched, through `community_member_role_by_member`, so the rows read are
+/// those pairs' roles and no one else's.
 pub async fn roles_of_members(
     conn: &mut AsyncPgConnection,
     members: &[(CommunityId, UserId)],
@@ -239,23 +269,28 @@ pub async fn roles_of_members(
     if members.is_empty() {
         return Ok(HashMap::new());
     }
-    let communities: Vec<CommunityId> = members.iter().map(|(c, _)| *c).collect();
-    let users: Vec<UserId> = members.iter().map(|(_, u)| *u).collect();
-    let rows: Vec<(CommunityId, UserId, RoleId)> = community_member_role::table
-        .inner_join(community_role::table)
-        .select((
-            community_member_role::community,
-            community_member_role::user,
-            community_member_role::role,
-        ))
-        .filter(community_member_role::community.eq_any(communities))
-        .filter(community_member_role::user.eq_any(users))
-        .order((community_role::position, community_role::id))
-        .load(conn)
-        .await?;
+    let pairs: std::collections::BTreeSet<(CommunityId, UserId)> =
+        members.iter().copied().collect();
+    let (communities, users): (Vec<uuid::Uuid>, Vec<uuid::Uuid>) =
+        pairs.iter().map(|(c, u)| (c.0, u.0)).unzip();
+    let rows: Vec<HeldRole> = diesel::sql_query(
+        r#"
+        SELECT mr.community, mr."user", mr.role
+        FROM unnest($1::uuid[], $2::uuid[]) AS m(community, "user")
+        JOIN community_member_role mr ON mr.community = m.community AND mr."user" = m."user"
+        JOIN community_role r ON r.id = mr.role AND r.deleted_at IS NULL
+        ORDER BY r.position, r.id
+        "#,
+    )
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(&communities)
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(&users)
+    .load(conn)
+    .await?;
     let mut held: HashMap<(CommunityId, UserId), Vec<RoleId>> = HashMap::new();
-    for (community, user, role) in rows {
-        held.entry((community, user)).or_default().push(role);
+    for row in rows {
+        held.entry((row.community, row.user))
+            .or_default()
+            .push(row.role);
     }
     Ok(held)
 }
@@ -439,24 +474,27 @@ pub async fn delete_bot_role(
     community_id: CommunityId,
     bot: UserId,
 ) -> crate::Result<()> {
-    let deleted: Vec<RoleId> = diesel::delete(
-        community_role::table.filter(
+    // Taking turns with every other change to the community's roles, as `hold_for_count` has
+    // them do, whether or not the community is still there.
+    aspen_schema::community::table
+        .select(aspen_schema::community::id)
+        .filter(aspen_schema::community::id.eq(community_id))
+        .for_no_key_update()
+        .first::<CommunityId>(conn)
+        .await
+        .optional()?;
+    let deleted: Vec<RoleId> = community_role::table
+        .select(community_role::id)
+        .filter(
             community_role::community
                 .eq(community_id)
-                .and(community_role::bot.eq(bot)),
-        ),
-    )
-    .returning(community_role::id)
-    .get_results(conn)
-    .await?;
-    for id in &deleted {
-        publish_event(
-            state,
-            conn,
-            EventScope::Community(community_id),
-            &ServerEvent::Role(RoleEvent::Delete { id: *id }),
+                .and(community_role::bot.eq(bot))
+                .and(community_role::deleted_at.is_null()),
         )
+        .load(conn)
         .await?;
+    for id in &deleted {
+        retire_role(state, conn, community_id, *id).await?;
     }
     if !deleted.is_empty() {
         let order = load_roles(conn, community_id).await?;
@@ -480,7 +518,7 @@ pub async fn update_role(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let mut role = load_role(conn.as_mut(), role_id).await?;
+            let mut role = lock_role(conn.as_mut(), role_id).await?;
             if role.everyone && name.is_some() {
                 return Err(crate::Error::Validation(t!("everyoneRoleFixed")));
             }
@@ -548,6 +586,8 @@ pub async fn take_from_everyone(
     community_id: CommunityId,
     permission: Permissions,
 ) -> crate::Result<bool> {
+    // Locked, so a role edit at the same moment neither gives the permission back nor loses its
+    // own change.
     let role: RoleRow = community_role::table
         .select(RoleRow::as_select())
         .filter(
@@ -555,6 +595,7 @@ pub async fn take_from_everyone(
                 .eq(community_id)
                 .and(community_role::everyone),
         )
+        .for_update()
         .first(conn)
         .await?;
     if !role.permissions.contains(permission) {
@@ -592,6 +633,9 @@ pub async fn delete_role(
     conn.transaction(|conn| {
         async move {
             let role = load_role(conn.as_mut(), role_id).await?;
+            // Changes to a community's roles take turns, as making one does, so two that
+            // renumber at once cannot leave two roles at one position.
+            crate::community::hold_for_count(conn.as_mut(), role.community).await?;
             if role.everyone {
                 return Err(crate::Error::Validation(t!("everyoneRoleFixed")));
             }
@@ -601,19 +645,7 @@ pub async fn delete_role(
             let access = require_member(conn.as_mut(), caller, role.community).await?;
             access.require(Permissions::MANAGE_ROLES)?;
             access.require_role_above(role.position)?;
-            // Its holders lose it and its overrides go with it, by the foreign keys. The one
-            // event says so: readers of it (the event feed, clients) take the role from its
-            // holders and its overrides away themselves, however many there are.
-            diesel::delete(community_role::table.filter(community_role::id.eq(role_id)))
-                .execute(conn.as_mut())
-                .await?;
-            publish_event(
-                state,
-                conn.as_mut(),
-                EventScope::Community(role.community),
-                &ServerEvent::Role(RoleEvent::Delete { id: role_id }),
-            )
-            .await?;
+            retire_role(state, conn.as_mut(), role.community, role_id).await?;
             let order = load_roles(conn.as_mut(), role.community).await?;
             renumber(state, conn.as_mut(), role.community, &order).await?;
             Ok(())
@@ -621,6 +653,107 @@ pub async fn delete_role(
         .scope_boxed()
     })
     .await
+}
+
+/// Deletes role `id` of `community`, inside the caller's transaction, which holds the
+/// community's row (`hold_for_count`): at once it grants nothing and ranks nobody (its
+/// permissions, hue, and showing apart are taken away, and its position put below every role),
+/// its overrides go, and it is no longer read as a role anywhere; its holders and the tags of it
+/// are taken off by a job a batch at a time (`purgeRole`, `purge_step`), which then deletes it.
+/// The one event says so: readers of it (the event feed, clients) take the role from its holders
+/// and its overrides away themselves, however many there are.
+async fn retire_role(
+    state: &impl crate::events::Publishing,
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+    id: RoleId,
+) -> crate::Result<()> {
+    diesel::delete(channel_override::table.filter(channel_override::role.eq(id)))
+        .execute(conn)
+        .await?;
+    diesel::delete(category_override::table.filter(category_override::role.eq(id)))
+        .execute(conn)
+        .await?;
+    diesel::update(community_role::table.filter(community_role::id.eq(id)))
+        .set((
+            community_role::deleted_at.eq(diesel::dsl::now),
+            community_role::permissions.eq(Permissions::empty()),
+            community_role::hoist.eq(false),
+            community_role::hue.eq(None::<i16>),
+            community_role::position.eq(-1),
+        ))
+        .execute(conn)
+        .await?;
+    crate::jobs::enqueue(
+        conn,
+        crate::jobs::NewJob::new(
+            crate::jobs::JobKind::PurgeRole,
+            crate::jobs::JobClass::Normal,
+            &ToPurge { role: id },
+        )?
+        .keyed(id.0.to_string()),
+    )
+    .await?;
+    publish_event(
+        state,
+        conn,
+        EventScope::Community(community),
+        &ServerEvent::Role(RoleEvent::Delete { id }),
+    )
+    .await
+}
+
+/// What purging a deleted role is given (`jobs::JobKind::PurgeRole`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToPurge {
+    pub role: RoleId,
+}
+
+/// How many of a deleted role's holdings or tags one step takes off.
+const PURGE_BATCH: i64 = 1000;
+
+/// One step of purging a deleted role: a batch of its holdings, then of the tags of it, through
+/// `community_member_role_by_role` and `mention_by_role`; once neither is left, the role itself.
+/// Nothing is announced: the role's deletion already told everyone it is gone.
+pub async fn purge_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let ToPurge { role } = job.payload()?;
+    let mut conn = state.connection_pool.get().await?;
+    let holdings = diesel::sql_query(
+        "DELETE FROM community_member_role WHERE (\"user\", role) IN \
+         (SELECT \"user\", role FROM community_member_role WHERE role = $1 LIMIT $2)",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(role.0)
+    .bind::<diesel::sql_types::BigInt, _>(PURGE_BATCH)
+    .execute(conn.as_mut())
+    .await?;
+    if holdings as i64 >= PURGE_BATCH {
+        return Ok(crate::jobs::Outcome::Progress(serde_json::Value::Null));
+    }
+    let tags = diesel::sql_query(
+        "DELETE FROM mention WHERE ctid IN \
+         (SELECT ctid FROM mention WHERE target_role = $1 LIMIT $2)",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(role.0)
+    .bind::<diesel::sql_types::BigInt, _>(PURGE_BATCH)
+    .execute(conn.as_mut())
+    .await?;
+    if tags as i64 >= PURGE_BATCH {
+        return Ok(crate::jobs::Outcome::Progress(serde_json::Value::Null));
+    }
+    diesel::delete(
+        community_role::table.filter(
+            community_role::id
+                .eq(role)
+                .and(community_role::deleted_at.is_not_null()),
+        ),
+    )
+    .execute(conn.as_mut())
+    .await?;
+    Ok(crate::jobs::Outcome::Done)
 }
 
 /// Reorders the roles ranked below the caller: `order` lists exactly those, lowest first,
@@ -634,6 +767,8 @@ pub async fn reorder_roles(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
+            // Taking turns with every other change to the community's roles (`hold_for_count`).
+            crate::community::hold_for_count(conn.as_mut(), community_id).await?;
             let access = require_member(conn.as_mut(), caller, community_id).await?;
             access.require(Permissions::MANAGE_ROLES)?;
             let roles = load_roles(conn.as_mut(), community_id).await?;
@@ -1120,17 +1255,8 @@ pub async fn set_override(
                         channel: channel_id,
                         departed: None,
                     };
-                    let existed: bool = diesel::select(diesel::dsl::exists(
-                        channel_override::table.filter(
-                            channel_override::channel
-                                .eq(channel_id)
-                                .and(channel_override::role.eq(role_id)),
-                        ),
-                    ))
-                    .get_result(conn.as_mut())
-                    .await?;
                     if permissions.is_none() {
-                        diesel::delete(
+                        let existed = 0 < diesel::delete(
                             channel_override::table.filter(
                                 channel_override::channel
                                     .eq(channel_id)
@@ -1156,7 +1282,7 @@ pub async fn set_override(
                             ..cleared
                         });
                     }
-                    diesel::insert_into(channel_override::table)
+                    let existed: bool = diesel::insert_into(channel_override::table)
                         .values((
                             channel_override::channel.eq(channel_id),
                             channel_override::role.eq(role_id),
@@ -1169,7 +1295,9 @@ pub async fn set_override(
                             channel_override::allow.eq(allow),
                             channel_override::deny.eq(deny),
                         ))
-                        .execute(conn.as_mut())
+                        // Whether it replaced one, said by the statement that wrote it.
+                        .returning(diesel::dsl::sql::<diesel::sql_types::Bool>("xmax <> 0"))
+                        .get_result::<bool>(conn.as_mut())
                         .await?;
                     let record = message_enum::ChannelOverride {
                         channel: channel_id,
@@ -1200,17 +1328,8 @@ pub async fn set_override(
                     })
                 }
                 OverrideTarget::Category(category_id) => {
-                    let existed: bool = diesel::select(diesel::dsl::exists(
-                        category_override::table.filter(
-                            category_override::category
-                                .eq(category_id)
-                                .and(category_override::role.eq(role_id)),
-                        ),
-                    ))
-                    .get_result(conn.as_mut())
-                    .await?;
                     if permissions.is_none() {
-                        diesel::delete(
+                        let existed = 0 < diesel::delete(
                             category_override::table.filter(
                                 category_override::category
                                     .eq(category_id)
@@ -1236,7 +1355,7 @@ pub async fn set_override(
                             ..cleared
                         });
                     }
-                    diesel::insert_into(category_override::table)
+                    let existed: bool = diesel::insert_into(category_override::table)
                         .values((
                             category_override::category.eq(category_id),
                             category_override::role.eq(role_id),
@@ -1249,7 +1368,9 @@ pub async fn set_override(
                             category_override::allow.eq(allow),
                             category_override::deny.eq(deny),
                         ))
-                        .execute(conn.as_mut())
+                        // Whether it replaced one, said by the statement that wrote it.
+                        .returning(diesel::dsl::sql::<diesel::sql_types::Bool>("xmax <> 0"))
+                        .get_result::<bool>(conn.as_mut())
                         .await?;
                     let record = message_enum::CategoryOverride {
                         category: category_id,

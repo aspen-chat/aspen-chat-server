@@ -4,7 +4,7 @@ import { headerIconButtonClass } from "@/features/layout/headerButton";
 import { PaneEdge, ResizablePane } from "@/features/layout/ResizablePane";
 import { CHANNEL_LIST } from "@/features/layout/paneSizes";
 import { NotePencilIcon, PhoneIcon, UsersThreeIcon } from "@phosphor-icons/react";
-import { useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { Button, Label, RadioButton, RadioField, RadioGroup } from "react-aria-components";
 import { SourceScope } from "@/api/deployments";
@@ -145,10 +145,62 @@ function DmSidebar({ current }: { current: string | undefined }) {
             />
           </SourceScope>
         ))}
+        <OlderDms />
       </nav>
       <SidebarFooter />
       <PaneEdge />
     </section>
+  );
+}
+
+/**
+ * The end of the DM list while any deployment has older DMs than it has listed: the next page
+ * of each is read as this comes into view, or when it is pressed.
+ */
+function OlderDms() {
+  const m = useMessages();
+  const sources = useEverywhere(["dms"], (all) => all.filter((s) => !s.sync.store.dmsComplete()));
+  const [loading, setLoading] = useState(false);
+  const end = useRef<HTMLButtonElement>(null);
+  const load = useCallback(() => {
+    if (loading || sources.length === 0) {
+      return;
+    }
+    setLoading(true);
+    void Promise.all(
+      sources.map((source) => source.sync.loadMoreDms().catch(() => undefined)),
+    ).finally(() => {
+      setLoading(false);
+    });
+  }, [loading, sources]);
+  // Watched afresh after each page, so the next is read while the end stays in view.
+  useEffect(() => {
+    const element = end.current;
+    if (element === null) {
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        load();
+      }
+    });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [load]);
+  if (sources.length === 0) {
+    return null;
+  }
+  return (
+    <Button
+      ref={end}
+      onPress={load}
+      isDisabled={loading}
+      className="rounded-md px-2 py-1.5 text-start text-sm text-ink-muted outline-none hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
+    >
+      {loading ? m.dms.loadingOlder : m.dms.older}
+    </Button>
   );
 }
 

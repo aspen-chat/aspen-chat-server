@@ -85,6 +85,13 @@ If they never open, check that the proxy passes `Upgrade` and `Connection` throu
 
 ## Symptoms
 
+**Something that should follow a decision does not happen** (a banned person's messages stay,
+mail is not sent). It is a job that has not run. `aspen-chat-server jobs list` (or the
+dashboard's Jobs tab) shows what is running, what waits, and what was given up, with its error.
+Jobs wait when no server runs them (`[jobs] run` off everywhere) or every place is taken; a job
+given up after its attempts is kept, and `jobs retry <id>` runs it again once its cause is fixed.
+The log has a line for each failed attempt, naming the job and its kind.
+
 **The web client says it cannot reach the server.** Open `https://<your domain>/api/v1/auth/methods`
 in a browser: it should answer JSON. If it answers a page instead, your proxy sends `/api/` to
 something other than the API servers.
@@ -103,8 +110,9 @@ them, or name them in [`[media.previews]`](configuration.md#mediapreviews). An H
 larger than `max_video_bytes`, has no poster by design.
 
 **Messages with a picture take twenty seconds to appear.** No server makes previews (`[media.previews]
-make` is off everywhere, or every maker is stuck), so each message waits out its hold. The
-`attachment_preview_job` table shows what is waiting.
+make` or `[jobs] run` is off everywhere, or every server making them is stuck), so each message
+waits out its hold. The dashboard's Jobs tab, or `aspen-chat-server jobs list`, shows
+`makePicturePreview` and `makeVideoPoster` jobs waiting.
 
 **Nobody can join a call** ("No voice server can take a call right now"). No voice server is
 enabled, has room, and reported within `[voice] offer_silence_seconds`. The dashboard's Server fleet

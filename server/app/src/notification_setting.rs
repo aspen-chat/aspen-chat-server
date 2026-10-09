@@ -10,7 +10,7 @@ use crate::channel::ChannelType;
 use crate::context::GlobalServerContext;
 use crate::t;
 use crate::{ChannelId, CommunityId, EventScope, UserId, publish_event};
-use aspen_schema::{channel, community_user, notification_setting};
+use aspen_schema::{community_user, notification_setting};
 use aspen_wire::message_enum::server_event::ServerEvent;
 pub use aspen_wire::notification_setting::NotificationLevel;
 use diesel::prelude::*;
@@ -166,16 +166,9 @@ async fn check_target(
             }
         }
         NotificationTarget::Channel(channel_id) => {
-            crate::permissions::channel_access(state, conn, user, channel_id).await?;
-            let ty: ChannelType = channel::table
-                .select(channel::ty)
-                .filter(
-                    channel::id
-                        .eq(channel_id)
-                        .and(channel::deleted_at.is_null()),
-                )
-                .first(conn)
-                .await?;
+            let ty = crate::permissions::channel_access(state, conn, user, channel_id)
+                .await?
+                .ty;
             if !matches!(
                 ty,
                 ChannelType::Text | ChannelType::Dm | ChannelType::GroupDm | ChannelType::Plugin
@@ -196,19 +189,46 @@ pub async fn read_channel_settings(
     read_settings(state, user, channels, &[]).await
 }
 
+/// The user's settings for every DM and group DM they are in, however many there are: rows they
+/// made themselves, found from their own key, which the DM list sends whole beside its pages.
+pub async fn read_dm_settings(
+    state: &GlobalServerContext,
+    user: UserId,
+) -> crate::Result<Vec<NotificationSetting>> {
+    use aspen_schema::dm_recipient;
+    let mut conn = state.connection_pool.get().await?;
+    Ok(notification_setting::table
+        .select(NotificationSetting::as_select())
+        .filter(notification_setting::user.eq(user))
+        .filter(diesel::dsl::exists(
+            dm_recipient::table.filter(
+                dm_recipient::channel
+                    .nullable()
+                    .eq(notification_setting::channel)
+                    .and(dm_recipient::user.eq(user)),
+            ),
+        ))
+        .load(conn.as_mut())
+        .await?)
+}
+
 /// The settings of `visible`'s user for its communities and for the channels they may view in
 /// them.
 pub async fn read_community_settings(
     state: &GlobalServerContext,
     visible: &crate::visibility::Visibility,
 ) -> crate::Result<Vec<NotificationSetting>> {
-    let mut settings = read_settings(state, visible.user(), &[], visible.communities()).await?;
-    settings.retain(|s| s.channel.is_none_or(|channel| visible.can_view(channel)));
-    Ok(settings)
+    read_settings(
+        state,
+        visible.user(),
+        &visible.visible_channels(),
+        visible.communities(),
+    )
+    .await
 }
 
-/// The user's settings for the listed communities and every channel in them, and for the listed
-/// channels, in one query.
+/// The user's settings for the listed communities and the listed channels, in one query, each
+/// arm found through the user's own `(user, community)` or `(user, channel)` index.
 async fn read_settings(
     state: &GlobalServerContext,
     user: UserId,
@@ -216,17 +236,13 @@ async fn read_settings(
     communities: &[CommunityId],
 ) -> crate::Result<Vec<NotificationSetting>> {
     let mut conn = state.connection_pool.get().await?;
-    let in_communities = channel::table
-        .select(channel::id.nullable())
-        .filter(channel::community.eq_any(communities.to_vec()));
     Ok(notification_setting::table
         .select(NotificationSetting::as_select())
         .filter(notification_setting::user.eq(user))
         .filter(
             notification_setting::community
                 .eq_any(communities.to_vec())
-                .or(notification_setting::channel.eq_any(channels.to_vec()))
-                .or(notification_setting::channel.eq_any(in_communities)),
+                .or(notification_setting::channel.eq_any(channels.to_vec())),
         )
         .load(conn.as_mut())
         .await?)

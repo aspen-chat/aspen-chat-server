@@ -164,6 +164,12 @@ const NOTIFY_CLOCK_SLACK_MS = 5_000;
 
 export const REACTORS_PAGE = 50;
 
+/** How many voters one read of an answer's voters asks for. */
+export const VOTERS_PAGE = 50;
+
+/** How many DMs one read of the DM list asks for, the most the server lists at once. */
+export const DM_PAGE = 100;
+
 /** The longest delay `setTimeout` keeps; a longer one fires at once. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 /**
@@ -290,6 +296,8 @@ export class AspenSync {
   #bootstrappedAt = 0;
   /** Increments on every start/stop so a stale async step can notice and bail. */
   #generation = 0;
+  /** Whether a further page of the DM list is being read. */
+  #loadingDms = false;
   readonly #windowLoads = new Map<string, Promise<void>>();
   /** Reads of what a message links to, under way, by the message linking. */
   readonly #linkLoads = new Map<string, Promise<void>>();
@@ -1380,6 +1388,25 @@ export class AspenSync {
     return result.data;
   }
 
+  /**
+   * Everyone who voted for one answer of a poll, earliest first, a page at a time: the page
+   * after `after`, or the first. A page shorter than `VOTERS_PAGE` is the last. The users are
+   * stored as they come.
+   */
+  async loadVoters(pollId: string, option: number, after?: string): Promise<User[]> {
+    const result = await this.#client.api.GET("/api/v1/polls/{poll}/votes/{option}", {
+      params: {
+        path: { poll: pollId, option },
+        query: after === undefined ? { limit: VOTERS_PAGE } : { after, limit: VOTERS_PAGE },
+      },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ users: result.data });
+    return result.data;
+  }
+
   /** Removes the caller's reaction, dropping it from the cache at once. */
   async removeReaction(messageId: string, emoji: string): Promise<void> {
     const me = this.store.myUserId;
@@ -2073,6 +2100,34 @@ export class AspenSync {
   }
 
   /**
+   * Reads the next page of the caller's DMs, after the last listed, when the server has more;
+   * its mutes and notification settings already came whole with the first.
+   */
+  async loadMoreDms(): Promise<void> {
+    if (this.store.dmsComplete() || this.#loadingDms) {
+      return;
+    }
+    const before = this.store.lastListedDm();
+    if (before === undefined) {
+      return;
+    }
+    const generation = this.#generation;
+    this.#loadingDms = true;
+    try {
+      const page = await this.#client.api.GET("/api/v1/users/@me/dms", {
+        params: { query: { include: ["users", "readStates", "voice"], before, limit: DM_PAGE } },
+      });
+      if (generation !== this.#generation || page.data === undefined) {
+        return;
+      }
+      this.store.ingest(page.data.included);
+      this.store.appendDms(page.data.data, page.data.data.length < DM_PAGE);
+    } finally {
+      this.#loadingDms = false;
+    }
+  }
+
+  /**
    * Reads again what the server leaves blocked users out of: every read state, and the
    * reactions of each held message window, one read per window (a window never holds more than
    * a read returns on each side of its middle).
@@ -2386,15 +2441,19 @@ export class AspenSync {
   }
 
   /**
-   * A page of a community's members whose name contains `name`, sorted by name. Only those who
-   * act on members may search a community larger than its member sample; the server refuses
-   * anyone else. The members are cached, their roles too, but not added to the sample.
+   * A page of a community's members whose name contains `name`, sorted by name, after the
+   * member `after` when given. Only those who act on members may search a community larger
+   * than its member sample; the server refuses anyone else. The members are cached, their roles
+   * too, but not added to the sample.
    */
-  async searchMembers(communityId: string, name: string, offset = 0): Promise<User[]> {
+  async searchMembers(communityId: string, name: string, after?: string): Promise<User[]> {
     const result = await this.#client.api.GET("/api/v1/communities/{community}/members", {
       params: {
         path: { community: communityId },
-        query: { "filter[name]": name, offset, limit: MEMBER_SEARCH_PAGE },
+        query:
+          after === undefined
+            ? { "filter[name]": name, limit: MEMBER_SEARCH_PAGE }
+            : { "filter[name]": name, after, limit: MEMBER_SEARCH_PAGE },
       },
     });
     if (result.data === undefined) {
@@ -3011,7 +3070,10 @@ export class AspenSync {
           }),
           this.#client.api.GET("/api/v1/users/@me/dms", {
             params: {
-              query: { include: ["users", "readStates", "mutes", "notifications", "voice"] },
+              query: {
+                include: ["users", "readStates", "mutes", "notifications", "voice"],
+                limit: DM_PAGE,
+              },
             },
           }),
           this.#client.api.GET("/api/v1/users/@me/admin"),
@@ -3040,7 +3102,7 @@ export class AspenSync {
       }
       this.store.setBootstrap(me.data, communities.data.data, communities.data.included);
       this.store.ingest(dms.data.included);
-      this.store.setDms(dms.data.data);
+      this.store.setDms(dms.data.data, dms.data.data.length < DM_PAGE);
       this.store.replaceMutes([
         ...(communities.data.included.channelMutes ?? []),
         ...(dms.data.included.channelMutes ?? []),

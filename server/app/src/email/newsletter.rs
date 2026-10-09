@@ -3,10 +3,10 @@
 //! account that subscribed at a verified address.
 //!
 //! A post is a draft until it is sent: it may be edited, deleted, and sent as a test to its
-//! sender's own verified address. Sending fixes it and marks it sent; the outbox's senders then
-//! queue its mail a batch of subscribers at a time ([`queue_some`]), in order of their ids, so
-//! a newsletter to a million subscribers is never one transaction, and a server stopping midway
-//! leaves the rest to the next. Each piece is checked again as it is sent: an account that
+//! sender's own verified address. Sending fixes it and marks it sent, with a job saved beside it
+//! (`jobs::JobKind::QueueNewsletter`, [`queue_step`]) that queues its mail a batch of
+//! subscribers at a time, in order of their ids, so a newsletter to a million subscribers is
+//! never one transaction, and a server stopping midway leaves the rest to the next. Each piece is checked again as it is sent: an account that
 //! unsubscribed or lost its verified address meanwhile receives nothing. Sent posts are kept,
 //! as the newsletter's archive.
 
@@ -16,7 +16,7 @@ use crate::UserId;
 use crate::context::GlobalServerContext;
 use crate::deployment::{DeploymentAccess, DeploymentPermission};
 use crate::t;
-use aspen_schema::{email_outbox, newsletter_post, user, user_email};
+use aspen_schema::{newsletter_post, user, user_email};
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
@@ -308,29 +308,49 @@ pub async fn send(
             .await?;
         return Err(crate::Error::Conflict(t!("newsletterAlreadySent")));
     };
-    super::wake(state).await;
+    crate::jobs::enqueue(
+        conn.as_mut(),
+        crate::jobs::NewJob::new(
+            crate::jobs::JobKind::QueueNewsletter,
+            crate::jobs::JobClass::Bulk,
+            &ToQueue { post: id },
+        )?
+        .keyed(id.0.to_string()),
+    )
+    .await?;
     tracing::info!(post = %id.0, sender = %access.user.0, "a newsletter post is being sent");
     Ok(sent)
 }
 
-/// Queues the next batch of subscribers' mail for one post being sent, if any is. Several
-/// servers may run it at once: each takes a different post, or waits its turn for the same.
-pub(super) async fn queue_some(state: &GlobalServerContext) -> crate::Result<()> {
+/// What queueing a post's mail is given (`jobs::JobKind::QueueNewsletter`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToQueue {
+    pub post: NewsletterPostId,
+}
+
+/// One step of queueing a sent post's mail: the next [`QUEUE_BATCH`] subscribers after those
+/// queued already (`queued_through`), in order of id, through `user_email_newsletter`, their mail
+/// saved in one statement and the post's place moved past them in the same transaction.
+pub async fn queue_step(
+    state: &GlobalServerContext,
+    job: &crate::jobs::Claimed,
+) -> crate::Result<crate::jobs::Outcome> {
+    let ToQueue { post } = job.payload()?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let post: Option<(NewsletterPostId, Option<uuid::Uuid>)> = newsletter_post::table
-                .select((newsletter_post::id, newsletter_post::queued_through))
+            let found: Option<Option<uuid::Uuid>> = newsletter_post::table
+                .select(newsletter_post::queued_through)
+                .filter(newsletter_post::id.eq(post))
                 .filter(newsletter_post::sent_at.is_not_null())
                 .filter(newsletter_post::queued_at.is_null())
-                .order_by(newsletter_post::sent_at)
                 .for_update()
-                .skip_locked()
                 .first(conn)
                 .await
                 .optional()?;
-            let Some((post, through)) = post else {
-                return Ok(());
+            let Some(through) = found else {
+                return Ok(crate::jobs::Outcome::Done);
             };
             let mut subscribers = user_email::table
                 .inner_join(user::table)
@@ -346,24 +366,12 @@ pub(super) async fn queue_some(state: &GlobalServerContext) -> crate::Result<()>
                 subscribers = subscribers.filter(user_email::user.gt(UserId(through)));
             }
             let batch: Vec<UserId> = subscribers.load(conn).await?;
-            let mail = serde_json::to_value(Mail::Newsletter { post, test: false })?;
-            let rows: Vec<_> = batch
+            let mail = Mail::Newsletter { post, test: false };
+            let jobs = batch
                 .iter()
-                .map(|subscriber| {
-                    (
-                        email_outbox::id.eq(uuid::Uuid::now_v7()),
-                        email_outbox::priority.eq(0i16),
-                        email_outbox::user.eq(*subscriber),
-                        email_outbox::mail.eq(mail.clone()),
-                    )
-                })
-                .collect();
-            if !rows.is_empty() {
-                diesel::insert_into(email_outbox::table)
-                    .values(rows)
-                    .execute(conn)
-                    .await?;
-            }
+                .map(|subscriber| outbox::job_of(*subscriber, None, &mail))
+                .collect::<crate::Result<Vec<_>>>()?;
+            crate::jobs::enqueue_many(conn, jobs).await?;
             let done = (batch.len() as i64) < QUEUE_BATCH;
             diesel::update(newsletter_post::table.filter(newsletter_post::id.eq(post)))
                 .set((
@@ -374,7 +382,11 @@ pub(super) async fn queue_some(state: &GlobalServerContext) -> crate::Result<()>
                 ))
                 .execute(conn)
                 .await?;
-            Ok::<_, crate::Error>(())
+            Ok(if done {
+                crate::jobs::Outcome::Done
+            } else {
+                crate::jobs::Outcome::Progress(serde_json::Value::Null)
+            })
         }
         .scope_boxed()
     })

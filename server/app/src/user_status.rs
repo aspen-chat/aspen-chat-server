@@ -433,12 +433,18 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
     list_in_communities(state, user, listing_ttl(state));
 }
 
-/// Writes `user`'s `last_seen_at` as now.
+/// Writes `user`'s `last_seen_at` as now, on their account and on each of their memberships,
+/// which their communities' member samples are read by (`app::community::read_community_members`).
 async fn record_seen(state: &GlobalServerContext, user: UserId) -> crate::Result<()> {
-    use aspen_schema::user;
+    use aspen_schema::{community_user, user};
+    let mut conn = state.connection_pool.get().await?;
     diesel::update(user::table.filter(user::id.eq(user)))
         .set(user::last_seen_at.eq(diesel::dsl::now))
-        .execute(state.connection_pool.get().await?.as_mut())
+        .execute(conn.as_mut())
+        .await?;
+    diesel::update(community_user::table.filter(community_user::user.eq(user)))
+        .set(community_user::last_seen_at.eq(diesel::dsl::now))
+        .execute(conn.as_mut())
         .await?;
     Ok(())
 }

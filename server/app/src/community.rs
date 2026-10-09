@@ -746,11 +746,12 @@ pub struct Membership {
 /// grouped by community and in order of priority within each group. Those with a connection
 /// (online or away, `app::user_status::connected_members`) come first, and among them those
 /// holding a role shown apart, by the rank of their highest such role, even when they fill the
-/// whole sample; then the rest, connected before not, each by when they last came online. The
-/// caller's own membership of each community is always among them, wherever they rank, because
-/// their memberships carry the order of their own community list. One query serves any number of
-/// communities: the per-community cap is a window function rather than a `LIMIT`, so sideloading
-/// members for a user's whole community list costs one round trip.
+/// whole sample; then the rest, each by when they last came online. The caller's own membership
+/// of each community is always among them, wherever they rank, because their memberships carry
+/// the order of their own community list. One query serves any number of communities, and its
+/// work grows with who is connected and the sample's size, never with how many members there
+/// are: the connected are ranked from the pairs Valkey named, and the rest are the first few
+/// through `community_user_recent`, each community's most recently seen.
 pub async fn read_community_members(
     state: &GlobalServerContext,
     caller: UserId,
@@ -761,65 +762,100 @@ pub async fn read_community_members(
     if communities.is_empty() {
         return Ok(Vec::new());
     }
-    // Presence is anyone's, whichever community they were found connected through, except
-    // that of those who blocked the caller (`app::user_status::presence_visible`), who are
-    // ordered as if not connected.
-    let mut connected: HashSet<UserId> = try_join_all(
+    // Each community's connected members, as (community, user) pairs; those who blocked the
+    // caller (`app::user_status::presence_visible`) are ordered as if not connected.
+    let connected = try_join_all(
         communities
             .iter()
             .map(|community| crate::user_status::connected_members(state, *community)),
     )
-    .await?
-    .iter()
-    .flat_map(|members| members.iter().copied())
-    .collect();
+    .await?;
     let mut conn = state.connection_pool.get().await?;
-    if !connected.is_empty() {
-        let blockers: Vec<UserId> = aspen_schema::user_block::table
+    let blockers: HashSet<UserId> = if connected.iter().any(|members| !members.is_empty()) {
+        aspen_schema::user_block::table
             .select(aspen_schema::user_block::blocker)
             .filter(aspen_schema::user_block::blocked.eq(caller))
-            .load(conn.as_mut())
-            .await?;
-        for blocker in blockers {
-            connected.remove(&blocker);
-        }
-    }
-    // The rank of a member's highest role shown apart is looked up only for those connected,
-    // since it orders no one else.
+            .load::<UserId>(conn.as_mut())
+            .await?
+            .into_iter()
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    let (pair_communities, pair_users): (Vec<uuid::Uuid>, Vec<uuid::Uuid>) = communities
+        .iter()
+        .zip(&connected)
+        .flat_map(|(community, members)| {
+            members
+                .iter()
+                .filter(|user| !blockers.contains(user))
+                .map(move |user| (community.0, user.0))
+        })
+        .unzip();
     let rows: Vec<CommunityMember> = diesel::sql_query(
         r#"
-        SELECT community, sort_index, nickname, id, name, password_hash, icon, created_at, last_seen_at,
-               deleted_at, display_name, pronouns, bio, status_text, status_emoji, bot, system,
-               bot_owner, bot_public, home_domain, home_id, home_icon, name_hue, plugin,
-               public_email
-        FROM (
-            SELECT cu.community, cu.sort_index, cu.nickname, u.*,
+        WITH connected AS MATERIALIZED (
+            SELECT * FROM unnest($4::uuid[], $5::uuid[]) AS k(community, "user")
+        ),
+        candidate AS (
+            SELECT cu.community, cu."user", 0 AS tier,
+                   (SELECT max(r.position)
+                    FROM community_member_role mr
+                    JOIN community_role r ON r.id = mr.role
+                    WHERE mr.community = cu.community AND mr."user" = cu."user" AND r.hoist
+                   ) AS rank,
+                   cu.last_seen_at
+            FROM connected k
+            JOIN community_user cu ON cu.community = k.community AND cu."user" = k."user"
+            UNION ALL
+            SELECT recent.community, recent."user", 1, NULL, recent.last_seen_at
+            FROM unnest($1::uuid[]) AS c(id)
+            CROSS JOIN LATERAL (
+                SELECT cu.community, cu."user", cu.last_seen_at
+                FROM community_user cu
+                WHERE cu.community = c.id
+                ORDER BY cu.last_seen_at DESC, cu."user"
+                LIMIT $2 * 2
+            ) recent
+            WHERE NOT EXISTS (
+                SELECT 1 FROM connected k
+                WHERE k.community = recent.community AND k."user" = recent."user"
+            )
+        ),
+        ranked AS (
+            SELECT community, "user",
                    ROW_NUMBER() OVER (
-                       PARTITION BY cu.community
-                       ORDER BY connected.id IS NOT NULL DESC,
-                                CASE WHEN connected.id IS NOT NULL THEN (
-                                    SELECT max(r.position)
-                                    FROM community_member_role mr
-                                    JOIN community_role r ON r.id = mr.role
-                                    WHERE mr.community = cu.community AND mr."user" = cu."user"
-                                      AND r.hoist
-                                ) END DESC NULLS LAST,
-                                u.last_seen_at DESC,
-                                u.id
+                       PARTITION BY community
+                       ORDER BY tier, rank DESC NULLS LAST, last_seen_at DESC, "user"
                    ) AS priority
-            FROM community_user cu
-            JOIN "user" u ON u.id = cu."user"
-            LEFT JOIN unnest($4::uuid[]) AS connected(id) ON connected.id = u.id
-            WHERE cu.community = ANY($1) AND u.deleted_at IS NULL
-        ) ranked
-        WHERE priority <= $2 OR id = $3
-        ORDER BY community, priority
+            FROM candidate
+        ),
+        picked AS (
+            SELECT DISTINCT ON (community, "user") community, "user", priority
+            FROM (
+                SELECT community, "user", priority FROM ranked WHERE priority <= $2
+                UNION ALL
+                SELECT community, "user", 2147483647 FROM community_user
+                WHERE "user" = $3 AND community = ANY($1)
+            ) both_ways
+            ORDER BY community, "user", priority
+        )
+        SELECT cu.community, cu.sort_index, cu.nickname, u.id, u.name, u.password_hash, u.icon,
+               u.created_at, u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio,
+               u.status_text, u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public,
+               u.home_domain, u.home_id, u.home_icon, u.name_hue, u.plugin, u.public_email
+        FROM picked p
+        JOIN community_user cu ON cu.community = p.community AND cu."user" = p."user"
+        JOIN "user" u ON u.id = p."user"
+        WHERE u.deleted_at IS NULL
+        ORDER BY p.community, p.priority
         "#,
     )
     .bind::<Array<Uuid>, _>(communities.iter().map(|c| c.0).collect::<Vec<_>>())
     .bind::<BigInt, _>(MEMBERS_PER_COMMUNITY)
     .bind::<Uuid, _>(caller.0)
-    .bind::<Array<Uuid>, _>(connected.iter().map(|u| u.0).collect::<Vec<_>>())
+    .bind::<Array<Uuid>, _>(pair_communities)
+    .bind::<Array<Uuid>, _>(pair_users)
     .load(conn.as_mut())
     .await?;
     memberships_of(state, conn.as_mut(), caller, rows).await
@@ -869,11 +905,25 @@ async fn memberships_of(
 
 /// The most results one page of a member search holds.
 pub const MAX_MEMBER_PAGE: i64 = 50;
-/// The furthest into a member search a page may start.
-pub const MAX_MEMBER_OFFSET: i64 = 10_000;
+
+/// `text` as a pattern over a membership's `search_name`: any part of any of the member's names,
+/// or for fewer than `admin::MIN_CONTAINS_CHARS` characters the start of one, each of which
+/// follows a space there. The trigram index `community_user_search` serves both.
+fn member_pattern(text: Option<&str>) -> crate::Result<Option<String>> {
+    let Some(pattern) = crate::admin::name_pattern(text)? else {
+        return Ok(None);
+    };
+    Ok(Some(match pattern.strip_prefix('%') {
+        Some(_) => pattern,
+        None => format!("% {pattern}"),
+    }))
+}
 
 /// One page of `community`'s members whose username, display name, or nickname there contains
-/// `search`, by the name the community shows: `limit` of them from `offset`.
+/// `search` (or, for one or two characters, starts with it), by the name the community shows,
+/// after the member `after` when given: `limit` of them. Read through
+/// `community_user_by_shown_name` and `community_user_search`, so a page costs the same however
+/// large the community.
 ///
 /// In a community no bigger than the member sample (`MEMBERS_PER_COMMUNITY`), which every
 /// member already reads whole, anyone in it may search. In a larger one only those who act on
@@ -886,7 +936,7 @@ pub async fn search_community_members(
     caller: UserId,
     community: CommunityId,
     search: Option<&str>,
-    offset: i64,
+    after: Option<UserId>,
     limit: i64,
 ) -> crate::Result<Vec<Membership>> {
     use diesel::sql_types::{BigInt, Nullable, Text, Uuid};
@@ -903,12 +953,14 @@ pub async fn search_community_members(
         .into_iter()
         .any(|p| access.has(p));
     if !privileged {
-        let members: i64 = community_user::table
+        // Counted only as far as the answer needs: whether there are more than the sample.
+        let members: Vec<UserId> = community_user::table
+            .select(community_user::user)
             .filter(community_user::community.eq(community))
-            .count()
-            .get_result(conn.as_mut())
+            .limit(MEMBERS_PER_COMMUNITY + 1)
+            .load(conn.as_mut())
             .await?;
-        if members > MEMBERS_PER_COMMUNITY {
+        if members.len() as i64 > MEMBERS_PER_COMMUNITY {
             return Err(crate::Error::Forbidden(t!("memberSearchRefused")));
         }
     }
@@ -922,15 +974,17 @@ pub async fn search_community_members(
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND u.deleted_at IS NULL
-          AND ($2::text IS NULL OR lower(u.name) LIKE $2 OR lower(u.display_name) LIKE $2
-               OR lower(cu.nickname) LIKE $2)
-        ORDER BY lower(COALESCE(cu.nickname, u.display_name, u.name)), u.id
-        OFFSET $3 LIMIT $4
+          AND ($2::text IS NULL OR cu.search_name LIKE $2)
+          AND ($3::uuid IS NULL OR (cu.shown_name, cu."user") > (
+              SELECT p.shown_name, p."user" FROM community_user p
+              WHERE p.community = $1 AND p."user" = $3))
+        ORDER BY cu.shown_name, cu."user"
+        LIMIT $4
         "#,
     )
     .bind::<Uuid, _>(community.0)
-    .bind::<Nullable<Text>, _>(crate::admin::contains_pattern(search)?)
-    .bind::<BigInt, _>(offset.clamp(0, MAX_MEMBER_OFFSET))
+    .bind::<Nullable<Text>, _>(member_pattern(search)?)
+    .bind::<Nullable<Uuid>, _>(after.map(|a| a.0))
     .bind::<BigInt, _>(limit.clamp(1, MAX_MEMBER_PAGE))
     .load(conn.as_mut())
     .await?;

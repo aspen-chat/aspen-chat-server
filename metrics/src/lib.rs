@@ -71,6 +71,15 @@ pub mod api {
     pub const VOICE_REPORT_WAIT_DURATION: &str = "aspen_voice_report_wait_duration_seconds";
     /// Mail handed to the SMTP server.
     pub const EMAILS_SENT: &str = "aspen_emails_sent_total";
+    /// Background jobs running on this server, by `kind`.
+    pub const JOBS_RUNNING: &str = "aspen_jobs_running";
+    /// Background jobs ended on this server, by `kind` and `outcome` (`done`, `later`,
+    /// `retried`, `failed`).
+    pub const JOBS_FINISHED: &str = "aspen_jobs_finished_total";
+    /// How long a job waited from when it was due until a server started it, by `class`.
+    pub const JOB_WAIT_DURATION: &str = "aspen_job_wait_duration_seconds";
+    /// How long a job ran once started, by `kind`.
+    pub const JOB_DURATION: &str = "aspen_job_duration_seconds";
     /// Mail given up: refused for good, or failing for about a day.
     pub const EMAILS_FAILED: &str = "aspen_emails_failed_total";
     /// Attachment previews made and kept, by `kind` (`picture`, `video`).

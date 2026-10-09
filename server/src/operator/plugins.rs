@@ -387,7 +387,7 @@ async fn run(
             {
                 bail!("not removed");
             }
-            install::remove(publisher, conn, &id)
+            install::remove(conn, &id)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             announce(publisher).await?;

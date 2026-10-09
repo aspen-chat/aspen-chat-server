@@ -363,8 +363,10 @@ pub struct ReportCase {
     pub message: Option<MessageId>,
     /// For a nickname case, the community the nickname was chosen in.
     pub community: Option<CommunityId>,
-    /// Its reports, oldest first.
+    /// Its latest reports, at most [`SHOWN_REPORTS`], oldest first.
     pub reports: Vec<Report>,
+    /// How many reports it has in all.
+    pub report_count: u32,
     pub opened_at: DateTime<Utc>,
     pub last_reported_at: DateTime<Utc>,
     /// When it was resolved or dismissed, and by whom.
@@ -395,7 +397,7 @@ struct CaseRow {
     resolution: Option<Resolution>,
 }
 
-#[derive(Debug, Clone, Queryable, Selectable, Insertable)]
+#[derive(Debug, Clone, Queryable, QueryableByName, Selectable, Insertable)]
 #[diesel(table_name = report)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 struct ReportRow {
@@ -1012,12 +1014,7 @@ async fn announce(
         if !reviewable(reviewer, rank, subject, standing) {
             continue;
         }
-        let open: i64 = report_case::table
-            .filter(report_case::status.eq(ReportStatus::Open))
-            .filter(reviewable_cases(reviewer, rank))
-            .count()
-            .get_result(conn)
-            .await?;
+        let open = count_cases(conn, reviewer, rank, ReportStatus::Open).await?;
         publish_event(
             state,
             conn,
@@ -1036,22 +1033,44 @@ pub async fn counts(
 ) -> crate::Result<ReportCounts> {
     access.require(DeploymentPermission::ReviewReports)?;
     let mut conn = state.connection_pool.get().await?;
-    let rows: Vec<(ReportStatus, i64)> = report_case::table
-        .group_by(report_case::status)
-        .select((report_case::status, diesel::dsl::count_star()))
-        .filter(report_case::status.ne(ReportStatus::Resolved))
-        .filter(reviewable_cases(access.user, access.rank()))
-        .load(conn.as_mut())
-        .await?;
-    let count = |status| {
-        rows.iter()
-            .find(|(s, _)| *s == status)
-            .map_or(0, |(_, n)| *n)
-    };
     Ok(ReportCounts {
-        open: count(ReportStatus::Open),
-        dismissed: count(ReportStatus::Dismissed),
+        open: count_cases(
+            conn.as_mut(),
+            access.user,
+            access.rank(),
+            ReportStatus::Open,
+        )
+        .await?,
+        dismissed: count_cases(
+            conn.as_mut(),
+            access.user,
+            access.rank(),
+            ReportStatus::Dismissed,
+        )
+        .await?,
     })
+}
+
+/// The most cases one count goes up to: a count this high reads as "this many or more", so
+/// counting costs the same however many cases have piled up.
+pub const MAX_COUNTED_CASES: i64 = 1000;
+
+/// How many of the cases in `status` the reviewer may see, up to [`MAX_COUNTED_CASES`], read
+/// through `report_case_by_status`.
+async fn count_cases(
+    conn: &mut AsyncPgConnection,
+    reviewer: UserId,
+    rank: i32,
+    status: ReportStatus,
+) -> crate::Result<i64> {
+    let seen = report_case::table
+        .select(report_case::id)
+        .filter(report_case::status.eq(status))
+        .filter(reviewable_cases(reviewer, rank))
+        .limit(MAX_COUNTED_CASES)
+        .load::<ReportCaseId>(conn)
+        .await?;
+    Ok(seen.len() as i64)
 }
 
 /// The highest deployment role position each of `users` holds, 0 with none.
@@ -1161,6 +1180,9 @@ fn reviewable_cases(
     )
 }
 
+/// How many of a case's reports a read of it carries: its latest.
+pub const SHOWN_REPORTS: i64 = 50;
+
 /// The cases among `rows` with their reports, messages, and categories.
 async fn page_of(
     state: &GlobalServerContext,
@@ -1170,16 +1192,36 @@ async fn page_of(
 ) -> crate::Result<CasePage> {
     let ids: Vec<ReportCaseId> = rows.iter().map(|c| c.id).collect();
     let subjects: Vec<UserId> = rows.iter().map(|c| c.subject).collect();
+    let case_ids: Vec<uuid::Uuid> = ids.iter().map(|c| c.0).collect();
+    // Each case's latest reports, through `report_by_case`, however many it has, and how many
+    // that is.
     let mut reports: HashMap<ReportCaseId, Vec<Report>> = HashMap::new();
-    for row in report::table
-        .select(ReportRow::as_select())
-        .filter(report::case.eq_any(&ids))
-        .order(report::created_at.asc())
-        .load::<ReportRow>(conn)
-        .await?
+    for row in diesel::sql_query(
+        r#"
+        SELECT r.* FROM unnest($1::uuid[]) AS c(id)
+        CROSS JOIN LATERAL (
+            SELECT * FROM report WHERE report."case" = c.id
+            ORDER BY created_at DESC, id DESC
+            LIMIT $2
+        ) r
+        ORDER BY r.created_at, r.id
+        "#,
+    )
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(&case_ids)
+    .bind::<diesel::sql_types::BigInt, _>(SHOWN_REPORTS)
+    .load::<ReportRow>(conn)
+    .await?
     {
         reports.entry(row.case).or_default().push(Report::from(row));
     }
+    let report_counts: HashMap<ReportCaseId, i64> = report::table
+        .group_by(report::case)
+        .select((report::case, diesel::dsl::count_star()))
+        .filter(report::case.eq_any(&ids))
+        .load::<(ReportCaseId, i64)>(conn)
+        .await?
+        .into_iter()
+        .collect();
     let standings = standings(conn, &subjects).await?;
     let banned_now: HashSet<UserId> = user::table
         .select(user::id)
@@ -1211,6 +1253,8 @@ async fn page_of(
             ),
             subject_banned: banned_now.contains(&row.subject),
             reports: reports.remove(&row.id).unwrap_or_default(),
+            report_count: u32::try_from(report_counts.get(&row.id).copied().unwrap_or(0))
+                .unwrap_or(u32::MAX),
             id: row.id,
             kind: row.kind,
             status: row.status,
@@ -1263,29 +1307,49 @@ async fn reviewed(
         .collect())
 }
 
-/// A page of the cases in `status`, most recently reported first. Takes Review reports.
+/// A page of the cases in `status`, most recently reported first, after the case `before` when
+/// given. Takes Review reports.
 pub async fn list_cases(
     state: &GlobalServerContext,
     access: &DeploymentAccess,
     status: ReportStatus,
-    offset: i64,
+    before: Option<ReportCaseId>,
     limit: i64,
 ) -> crate::Result<CasePage> {
+    use diesel::sql_types::{Nullable, Uuid as SqlUuid};
     access.require(DeploymentPermission::ReviewReports)?;
     let mut conn = state.connection_pool.get().await?;
-    // Resolved cases read in the order they were closed; the others in the order reports came.
+    // Resolved cases read in the order they were closed (`report_case_resolved`); the others in
+    // the order reports came (`report_case_by_status`). Pages follow on from the last case of
+    // the one before, by the same order, so a page costs the same however deep it is.
     let mut query = report_case::table
         .select(CaseRow::as_select())
         .filter(report_case::status.eq(status))
         .filter(reviewable_cases(access.user, access.rank()))
         .into_boxed();
+    let before = before.map(|case| case.0);
     query = if status == ReportStatus::Resolved {
-        query.order((report_case::closed_at.desc(), report_case::id.desc()))
+        query
+            .filter(
+                diesel::dsl::sql::<diesel::sql_types::Bool>("(")
+                    .bind::<Nullable<SqlUuid>, _>(before)
+                    .sql("::uuid IS NULL OR (report_case.closed_at, report_case.id) < (SELECT c.closed_at, c.id FROM report_case c WHERE c.id = ")
+                    .bind::<Nullable<SqlUuid>, _>(before)
+                    .sql("))"),
+            )
+            .order((report_case::closed_at.desc(), report_case::id.desc()))
     } else {
-        query.order((report_case::last_reported_at.desc(), report_case::id.desc()))
+        query
+            .filter(
+                diesel::dsl::sql::<diesel::sql_types::Bool>("(")
+                    .bind::<Nullable<SqlUuid>, _>(before)
+                    .sql("::uuid IS NULL OR (report_case.last_reported_at, report_case.id) < (SELECT c.last_reported_at, c.id FROM report_case c WHERE c.id = ")
+                    .bind::<Nullable<SqlUuid>, _>(before)
+                    .sql("))"),
+            )
+            .order((report_case::last_reported_at.desc(), report_case::id.desc()))
     };
     let rows: Vec<CaseRow> = query
-        .offset(offset.clamp(0, crate::admin::MAX_OFFSET))
         .limit(limit.clamp(1, MAX_PAGE))
         .load(conn.as_mut())
         .await?;
@@ -1648,22 +1712,35 @@ async fn act(
 /// with every aspect the reports named, or the nickname as the latest report found it.
 async fn warning_of(state: &GlobalServerContext, case: &CaseRow) -> crate::Result<Warning> {
     let mut conn = state.connection_pool.get().await?;
-    let reports: Vec<ReportRow> = report::table
-        .select(ReportRow::as_select())
+    // What every report named, and the latest profile and nickname they found, each read in
+    // SQL rather than by loading every report.
+    let named: Vec<Option<String>> = report::table
+        .select(diesel::dsl::sql::<Nullable<Text>>(
+            "DISTINCT unnest(aspects)",
+        ))
         .filter(report::case.eq(case.id))
-        .order(report::created_at.asc())
         .load(conn.as_mut())
         .await?;
-    let mut aspects: Vec<ProfileAspect> = Vec::new();
-    for aspect in reports.iter().flat_map(|r| r.aspects.0.iter()) {
-        if !aspects.contains(aspect) {
-            aspects.push(*aspect);
-        }
-    }
-    let nickname = match (
-        case.community,
-        reports.iter().rev().find_map(|r| r.nickname.clone()),
-    ) {
+    let aspects: Vec<ProfileAspect> = <ProfileAspect as strum::VariantArray>::VARIANTS
+        .iter()
+        .copied()
+        .filter(|aspect| named.iter().flatten().any(|n| *n == aspect.to_string()))
+        .collect();
+    let latest_profile: Option<ProfileSnapshot> = report::table
+        .select(report::profile.assume_not_null())
+        .filter(report::case.eq(case.id).and(report::profile.is_not_null()))
+        .order((report::created_at.desc(), report::id.desc()))
+        .first(conn.as_mut())
+        .await
+        .optional()?;
+    let latest_nickname: Option<String> = report::table
+        .select(report::nickname.assume_not_null())
+        .filter(report::case.eq(case.id).and(report::nickname.is_not_null()))
+        .order((report::created_at.desc(), report::id.desc()))
+        .first(conn.as_mut())
+        .await
+        .optional()?;
+    let nickname = match (case.community, latest_nickname) {
         (Some(community_id), Some(nickname)) => {
             let community_name: String = community::table
                 .select(community::name)
@@ -1681,7 +1758,7 @@ async fn warning_of(state: &GlobalServerContext, case: &CaseRow) -> crate::Resul
     Ok(Warning {
         subject: case.subject,
         message: case.message,
-        profile: reports.iter().rev().find_map(|r| r.profile.clone()),
+        profile: latest_profile,
         aspects,
         nickname,
     })
