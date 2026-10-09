@@ -8,6 +8,7 @@ import {
   MESSAGE_PAGE_SIZE,
   MemorySessionStore,
   PRESENCE_POLL_MS,
+  PRESENCE_READ_MS,
   TYPING_EXPIRY_MS,
   TYPING_NOTICES,
   TYPING_REFRESH_MS,
@@ -197,9 +198,31 @@ function makeSync(
     client,
     WebSocket: FakeSocket as unknown as typeof WebSocket,
     now,
+    // Reconnects and reloads after a failure then wait out no spread.
+    random: () => 0,
     ...extra,
   });
   return { sync, calls };
+}
+
+/** A `setTimeout` that runs nothing, keeping each handler and its delay for the test to run. */
+function heldTimers() {
+  const held: { handler: () => void; ms: number }[] = [];
+  const setTimeout = ((handler: () => void, ms?: number) => {
+    held.push({ handler, ms: ms ?? 0 });
+    return 0;
+  }) as typeof globalThis.setTimeout;
+  return { held, setTimeout };
+}
+
+function busy(retryAfterSeconds: number): Response {
+  return new Response(JSON.stringify({ code: "serverBusy", title: "Busy", status: 503 }), {
+    status: 503,
+    headers: {
+      "content-type": "application/problem+json",
+      "retry-after": String(retryAfterSeconds),
+    },
+  });
 }
 
 /** Runs `start()` through the bootstrap and the stream's `ready`. */
@@ -344,6 +367,44 @@ describe("AspenSync", () => {
     sync.stop();
   });
 
+  it("watches those shown on the stream, applies what it tells, and reads all only now and then", async () => {
+    let now = 0;
+    const presencePolls: (() => void)[] = [];
+    const { sync, calls } = makeSync(bootstrapResponses(), () => now, {
+      setTimeout: ((handler: () => void, ms?: number) => {
+        if (ms === PRESENCE_POLL_MS) {
+          presencePolls.push(handler);
+        }
+        return 0;
+      }) as typeof setTimeout,
+    });
+    const socket = await goLive(sync);
+    await settle();
+    const watches = () =>
+      socket.sent.filter((f) => (f as { type: string }).type === "watchPresence") as {
+        userIds: string[];
+      }[];
+    // The caller first, whose own status the user bar shows.
+    expect(watches()).toEqual([{ type: "watchPresence", userIds: [me.id] }]);
+    socket.frame({
+      type: "ephemeral",
+      event: { type: "presence", statuses: [{ id: me.id, onlineStatus: "doNotDisturb" }] },
+    });
+    expect(sync.store.me()?.onlineStatus).toBe("doNotDisturb");
+
+    const reads = () => calls.filter((u) => u.pathname === "/api/v1/users/statuses").length;
+    expect(reads()).toBe(1);
+    now = PRESENCE_POLL_MS;
+    presencePolls.shift()?.();
+    await settle();
+    expect(reads()).toBe(1);
+    now = PRESENCE_READ_MS;
+    presencePolls.shift()?.();
+    await settle();
+    expect(reads()).toBe(2);
+    sync.stop();
+  });
+
   it("keeps a shown channel's online count current with the presence poll", async () => {
     let online = 3;
     const presencePolls: (() => void)[] = [];
@@ -454,21 +515,112 @@ describe("AspenSync", () => {
 
   it("reports a failed bootstrap and can be started again", async () => {
     let attempts = 0;
-    const { sync } = makeSync({
-      ...bootstrapResponses(),
-      "/api/v1/users/@me": () => {
-        attempts += 1;
-        return attempts === 1
-          ? json({ code: "internal", title: "boom", status: 500 }, 500)
-          : json(me);
+    const timers = heldTimers();
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        "/api/v1/users/@me": () => {
+          attempts += 1;
+          return attempts === 1
+            ? json({ code: "internal", title: "boom", status: 500 }, 500)
+            : json(me);
+        },
       },
-    });
+      undefined,
+      { setTimeout: timers.setTimeout },
+    );
     sync.start();
     await settle();
     expect(sync.status).toBe("failed");
     expect(sync.lastError?.code).toBe("internal");
     expect(FakeSocket.instances).toHaveLength(0);
+    // Tried again by itself in a while; the person need not wait for it.
+    expect(timers.held).toHaveLength(1);
     await goLive(sync);
+  });
+
+  it("bootstraps again by itself after a failure that passes, no sooner than asked", async () => {
+    let attempts = 0;
+    const timers = heldTimers();
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        "/api/v1/users/@me": () => {
+          attempts += 1;
+          return attempts === 1 ? busy(5) : json(me);
+        },
+      },
+      undefined,
+      { setTimeout: timers.setTimeout, random: () => 0.5 },
+    );
+    sync.start();
+    await settle();
+    expect(sync.status).toBe("failed");
+    expect(sync.lastError?.code).toBe("serverBusy");
+    // Five seconds, and as long again spread: here half of it.
+    expect(timers.held.map((t) => t.ms)).toEqual([7500]);
+    timers.held.shift()?.handler();
+    await settle();
+    expect(sync.status).toBe("connecting");
+    expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it("leaves a failure that does not pass to the person", async () => {
+    const timers = heldTimers();
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        "/api/v1/users/@me": () => json({ code: "unauthorized", title: "No", status: 403 }, 403),
+      },
+      undefined,
+      { setTimeout: timers.setTimeout },
+    );
+    sync.start();
+    await settle();
+    expect(sync.status).toBe("failed");
+    expect(timers.held).toHaveLength(0);
+  });
+
+  it("goes live on the open stream when a failed resync is tried again", async () => {
+    let failing = false;
+    const timers = heldTimers();
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        "/api/v1/users/@me": () => (failing ? busy(5) : json(me)),
+      },
+      undefined,
+      { setTimeout: timers.setTimeout },
+    );
+    const socket = await goLive(sync);
+    socket.frame({
+      type: "event",
+      sequence: 1,
+      event: { serverEvent: "message", type: "delete", id: id(5) },
+    });
+    failing = true;
+    timers.held.length = 0;
+    socket.close();
+    // The reconnect, at once here.
+    expect(timers.held.map((t) => t.ms)).toEqual([0]);
+    timers.held.shift()?.handler();
+    await settle();
+    const again = FakeSocket.instances[1];
+    if (again === undefined) {
+      throw new Error("no reconnect attempt");
+    }
+    again.onopen?.();
+    again.frame({ type: "ready", userId: me.id, resumed: false });
+    expect(sync.status).toBe("resyncing");
+    await settle();
+    expect(sync.status).toBe("failed");
+    failing = false;
+    const reload = timers.held.find((t) => t.ms === 5000);
+    expect(reload).toBeDefined();
+    reload?.handler();
+    await settle();
+    expect(sync.status).toBe("live");
+    expect(FakeSocket.instances).toHaveLength(2);
   });
 
   it("holds events during a resync and applies them after the re-read", async () => {

@@ -392,7 +392,9 @@ banSystemAccount: "The server's own account cannot be banned."
 banOwnerNoBot: "Only a bot has an owner to ban with it. Ban this account by itself."
 eventStreamBanned: "This account was banned from this server, so the live connection has closed."
 eventStreamTooMany: "This account already has as many live connections open to this server as it may. Close the app in a window or on a device you are not using, and this one connects by itself."
-eventStreamTooManyFromAddress: "Your network already has as many live connections open to this server as it may. Close the app where it is not in use, and this one connects by itself; if many people share your network, its administrators can ask this server's to raise the limit."
+eventStreamTooManyFromAddress: "Your network already has as many connections waiting to sign in to this server as it may. The app connects by itself once some of them have; if many people share your network, its administrators can ask this server's to raise the limit."
+eventStreamBusy: "This server is busy connecting many people at once, and serves those already connected first. The app connects by itself in a few moments."
+eventStreamRateLimited: "This account reconnected too many times in a short while. The app connects by itself in a few moments."
 
 # Reports
 reportOwn: "You can't report your own messages, profile, or nickname."

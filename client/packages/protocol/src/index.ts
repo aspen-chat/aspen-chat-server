@@ -59,8 +59,11 @@ export {
 } from "./session";
 export {
   EventStream,
+  RECONNECT_BASE_MS,
+  RECONNECT_CAP_MS,
   compileValidator,
   reconnectDelayMs,
+  serverDelayMs,
   type EventStreamHandlers,
   type EventStreamOptions,
   type EventStreamStatus,
@@ -240,6 +243,8 @@ export {
   MEMBER_SEARCH_PAGE,
   PRESENCE_BATCH,
   PRESENCE_POLL_MS,
+  PRESENCE_READ_MS,
+  MAX_WATCHED_PRESENCE,
   READ_REPORT_MS,
   REACTORS_PAGE,
   VOTERS_PAGE,
