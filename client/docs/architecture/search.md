@@ -1,9 +1,27 @@
 # Message search
 
-- Message search (`src/features/search/SearchDialog.tsx`) opens from the channel and DM headers
-  and searches the channel, its community, its server, or every deployment the user uses
-  (`useSources`), each through its own `AspenSync.searchMessages`. Several deployments' pages
-  merge newest first with `mergeResults`, which shows nothing older than the oldest result of
-  a deployment that has more to give, so a later page never lands above what is shown. Each
-  result renders in its deployment's `SourceScope`, as a plain-text preview with tags as names
-  (`decodeTags`), since a result is a link and a message's Markdown may hold links of its own.
+Code: `src/features/search/SearchDialog.tsx`.
+
+## Opening and scope
+
+Search opens from the channel and DM headers. It searches one of:
+
+- the channel;
+- its community;
+- its server;
+- every deployment the user uses (`useSources`).
+
+Each deployment is searched through its own `AspenSync.searchMessages`.
+
+## Merging deployments
+
+`mergeResults` merges several deployments' pages newest first.
+
+- It shows nothing older than the oldest result of a deployment that has more to give.
+- So a later page never lands above what is already shown.
+
+## Results
+
+- Each result renders in its deployment's `SourceScope`.
+- A result is a plain-text preview with tags as names (`decodeTags`).
+- **Why:** a result is a link, and a message's Markdown may hold links of its own.

@@ -113,7 +113,7 @@ pub fn is_voice_inbox(subject: &str, server: Option<Uuid>) -> bool {
 
 /// The subjects naming `server` that its NATS user must be allowed: those it publishes on, and
 /// those it subscribes to. The rest of its permissions name no server
-/// (`docs/operators/installing.md`).
+/// (`docs/operators/installing/6-voice-servers.md`).
 pub fn own_subjects(server: Uuid) -> ([String; 2], [String; 2]) {
     (
         [

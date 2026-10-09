@@ -219,11 +219,10 @@ impl GlobalServerContext {
     }
 }
 
-/// Starts the app's background tasks: the settings watcher, the voice report listener, the fleet
-/// heartbeat, the push dispatcher, the mail sender and digest scheduler, the attachment preview
-/// maker and held message releaser, the sweeper of staging uploads, the mover of evidence off
-/// the public read path, the plugins with their observers, and the job runner (`app::jobs`),
-/// which does the rest, making the federation and push keys where they are missing.
+/// Starts the app's background tasks: the settings watcher, the voice report listener and the
+/// answerer of voice servers' token key requests, the fleet heartbeat, the push dispatcher, the
+/// plugins with their observers, and the job runner (`app::jobs`), which does the rest, making
+/// the federation and push keys where they are missing.
 pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(), crate::Error> {
     crate::deployment_settings::spawn_watcher(context.clone());
     crate::voice::spawn_report_listener(context.clone()).await?;

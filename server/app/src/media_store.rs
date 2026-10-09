@@ -57,8 +57,8 @@ pub const UPLOAD_PREFIX: &str = "uploads/";
 
 /// Where the objects kept as evidence for reviewing reports are (`app::attachment::evidence`):
 /// the files of deleted messages and attachments taken off their messages. The anonymous read
-/// path must never serve it (`docs/operators/installing.md`); reviewers read what is there
-/// through short-lived signed URLs ([`MediaStore::presign_get`]).
+/// path must never serve it (`docs/operators/installing/storage-read-path.md`); reviewers read
+/// what is there through short-lived signed URLs ([`MediaStore::presign_get`]).
 pub const EVIDENCE_PREFIX: &str = "evidence/";
 
 /// Where the object at `key` is kept as evidence.

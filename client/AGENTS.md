@@ -54,9 +54,11 @@ When the server API changes, run `pnpm codegen:regen` and fix whatever stops com
 
 ## Architecture reference
 
-How each client feature works is written up in `docs/architecture/`, one file per feature. Read the
-file for a feature before working on it, and keep it describing the code as it stands in the same
-commit, as with comments.
+How each client feature works is written up in `docs/architecture/`: one file per feature, or a
+folder (`index.md` and a page per subtopic) for the larger ones. The reasons behind a design are kept
+apart, in `design-notes.md` in the folder or `<feature>-design-notes.md` beside the file. Read a
+feature's file or folder before working on it, and keep it describing the code as it stands in the
+same commit, as with comments.
 
 - [`about.md`](docs/architecture/about.md): About Aspen, opened from Settings (the deployment, every version, and the license), and the Open Source Attributions page and the build-time list of every package each part ships.
 - [`administration.md`](docs/architecture/administration.md): the dashboard's tabs, the permissions each needs, directories, moderation log, growth charts, registration invites, and foreign users' bans.
@@ -67,10 +69,10 @@ commit, as with comments.
 - [`deployments.md`](docs/architecture/deployments.md): the home and other deployments, `Deployments`, scopes, invites across deployments, protocol versions, blocks across deployments, and file transfers in calls.
 - [`fonts.md`](docs/architecture/fonts.md): Inclusive Sans and Intel One Mono, the bundled Noto fallbacks and their regional Han order, emoji, and the user's own fonts.
 - [`ios-app.md`](docs/architecture/ios-app.md): the iOS project and its UI tests.
-- [`message-list.md`](docs/architecture/message-list.md): how the message list scrolls itself on iOS, keeps what is in view still, renders pages, moves between messages by keyboard, reads out arrivals, and the tests that hold it to that.
-- [`message-rendering.md`](docs/architecture/message-rendering.md): Markdown, code highlighting, spoilers, linkifying, attachments, inline images, and video cards.
+- [`message-list.md`](docs/architecture/message-list/index.md): how the message list scrolls itself on iOS, keeps what is in view still, renders pages, moves between messages by keyboard, reads out arrivals, and the tests that hold it to that.
+- [`message-rendering.md`](docs/architecture/message-rendering/index.md): Markdown, code highlighting, spoilers, linkifying, attachments, inline images, and video cards.
 - [`notifications.md`](docs/architecture/notifications.md): notification levels, the chime, and system notifications.
-- [`plugins.md`](docs/architecture/plugins.md): the plugin catalogue, annotations on messages and people, messages changed by plugins, plugins' accounts, the DM notice, the plugin settings in community settings and the dashboard, channels of a plugin's kind and their views' bridge, cards, and notices.
+- [`plugins.md`](docs/architecture/plugins/index.md): the plugin catalogue, annotations on messages and people, messages changed by plugins, plugins' accounts, the DM notice, the plugin settings in community settings and the dashboard, channels of a plugin's kind and their views' bridge, cards, and notices.
 - [`polls.md`](docs/architecture/polls.md): poll records, votes, closing, and write-ins.
 - [`preferences.md`](docs/architecture/preferences.md): `PreferenceStore`, device and account scope, audio devices, the desktop app's zoom and the phones' text sizes, the message text size and line spacing, contrast, and Settings.
 - [`presence.md`](docs/architecture/presence.md): polling statuses and reporting activity.
@@ -81,14 +83,14 @@ commit, as with comments.
 - [`reactions.md`](docs/architecture/reactions.md): reaction summaries, chips, and the reactions dialog.
 - [`reports.md`](docs/architecture/reports.md): reporting messages, profiles, and nicknames, message links and their embeds, warnings, reviewing reports and their categories, and bans from the deployment.
 - [`roles-and-permissions.md`](docs/architecture/roles-and-permissions.md): the client's permission resolver (kept in step with the server's through `spec/permission_vectors.json`), hidden controls, community settings, bans, access presets, member search, and pins.
-- [`screen-sharing-and-game-capture.md`](docs/architecture/screen-sharing-and-game-capture.md): the desktop shell's libobs helper, Linux's application audio, the game capture dialog, and the screen picker.
+- [`screen-sharing-and-game-capture.md`](docs/architecture/screen-sharing-and-game-capture/index.md): the desktop shell's libobs helper, Linux's application audio, the game capture dialog, and the screen picker.
 - [`saved-and-activity.md`](docs/architecture/saved-and-activity.md): saved messages, the activity feed and its filters, and the rows and pages they share.
 - [`search.md`](docs/architecture/search.md): message search across channels, communities, and deployments.
 - [`sign-in.md`](docs/architecture/sign-in.md): the signed-out screens, the server each shell signs in to, passkey ceremonies and their hand-off to the system browser, and signing in from another device by a QR code.
 - [`tagging.md`](docs/architecture/tagging.md): rendering tags, completing them in the message box, and mention counts.
 - [`threads-and-dms.md`](docs/architecture/threads-and-dms.md): threads, following them, echoes, DMs and group DMs, the DM list, and the system account's DM.
 - [`unread-and-muting.md`](docs/architecture/unread-and-muting.md): read states, unread marks, marking read, the New Messages line, and muting.
-- [`voice.md`](docs/architecture/voice.md): `VoiceCall`: joining, media, screens and cameras, call state, per-person volume, the call screen, DM calls and rings, and moderation.
+- [`voice.md`](docs/architecture/voice/index.md): `VoiceCall`: joining, media, screens and cameras, call state, per-person volume, the call screen, DM calls and rings, and moderation.
 
 ## Talking to the server
 
