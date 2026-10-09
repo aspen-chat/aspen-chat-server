@@ -35,7 +35,9 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
  * the text, the marks sit level with its top: on its first line's baseline, or at the top edge
  * of a code block or table it opens with (`.message-text-row` in `styles.css`), and under it
  * where the line has no room. A message that fails to draw shows its text alone,
- * plainly, rather than taking the list it is in down with it.
+ * plainly, rather than taking the list it is in down with it. Without `savedMark` the saved
+ * mark is left to whoever draws the message, as `MessageItem` gives it to its header on a touch
+ * screen.
  */
 export function MessageBody(props: MessageBodyProps) {
   const { message, hideText = false } = props;
@@ -58,6 +60,8 @@ interface MessageBodyProps {
   still?: boolean;
   onRemoveAttachment?: (attachmentId: string) => void;
   trailing?: ReactNode;
+  /** Whether the reader's mark on a message they saved trails it; it does by default. */
+  savedMark?: boolean;
   /**
    * How far below the top of the block it trails the saved mark and `trailing` start, in
    * pixels, while they sit beside it, to clear what covers that corner (`MessageItem`'s
@@ -73,6 +77,7 @@ function MessageBodyContent({
   still = false,
   onRemoveAttachment,
   trailing,
+  savedMark = true,
   trailingDrop,
 }: MessageBodyProps) {
   const m = useMessages();
@@ -131,7 +136,7 @@ function MessageBodyContent({
           : pollId !== null
             ? "poll"
             : "text";
-  const saved = useIsSaved(message.id);
+  const saved = useIsSaved(message.id) && savedMark;
   const tail =
     saved || trailing !== undefined ? (
       <>
@@ -341,11 +346,12 @@ function CardPicture({
 /**
  * A quiet mark on a message the reader saved, which their saved messages list. The icon sits
  * in a line of text, so the mark has its line's baseline and lines up with the marks beside it.
+ * `className` sets its size where it follows smaller text than the message's.
  */
-function SavedMark() {
+export function SavedMark({ className = "" }: { className?: string }) {
   const m = useMessages();
   return (
-    <span className="leading-none text-ink-faint" title={m.saved.marker}>
+    <span className={`leading-none text-ink-faint ${className}`} title={m.saved.marker}>
       <BookmarkSimpleIcon
         size="1em"
         weight="fill"
