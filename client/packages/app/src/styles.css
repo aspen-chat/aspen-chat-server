@@ -538,6 +538,21 @@ body {
   font-size: max(1rem, var(--text-base));
 }
 
+/* The height of a channel's foot at rest, the typing line (`TypingIndicator`, one line of message
+   text) over an empty one-line message box (`Composer`: its rule and padding around the taller of
+   the box and its 42px buttons), at the message text size and spacing. The user bar
+   (`SidebarFooter`) sits beside it at the foot of the sidebar and takes it as its least height, so
+   their top rules meet in one line. Each term is the one those components draw; change them
+   together. */
+@utility composer-foot-height {
+  --foot-text: calc(1rem * var(--system-text-scale, 1) * var(--message-text-scale, 1));
+  --foot-line: calc(1.5 * var(--message-line-scale, 1));
+  min-height: calc(
+    var(--foot-text) * var(--foot-line) + 1px + 1.5rem +
+      max(1.25rem + 22px, max(1rem, var(--foot-text)) * var(--foot-line) + 1rem + 2px)
+  );
+}
+
 /* Message bodies are GitHub-flavoured Markdown rendered by `features/messages/Markdown.tsx`. */
 .message-body {
   min-width: 0;

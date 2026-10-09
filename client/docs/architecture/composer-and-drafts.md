@@ -17,6 +17,7 @@ The message box (`Composer`) is where a user writes and sends messages. This pag
 - The box sits level with its buttons, all 42px tall.
 - Send is an icon (a paper plane), so the box keeps the room.
 - On a narrow screen, the other controls share one + button. Its menu offers attaching a file and making a poll (`CreatePollModal`, which the wide screen's own poll button opens too).
+- The user bar (`SidebarFooter`) at the sidebar's foot is at least as tall as the typing line and an empty box together (`composer-foot-height` in `styles.css`), at every message text size and spacing, so its top rule meets the typing line's in one line.
 
 ### Enter
 

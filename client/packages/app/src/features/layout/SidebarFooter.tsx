@@ -44,7 +44,8 @@ export function SidebarFooter({
 function UserFooter({ groundClassName }: { groundClassName: string }) {
   const me = useMe();
   return (
-    <div className="flex items-center gap-2 border-t border-line py-4 ps-2 pe-5">
+    // As tall as the typing line and message box beside it, so their top rules line up.
+    <div className="composer-foot-height flex items-center gap-2 border-t border-line py-3 ps-2 pe-5">
       {me === null ? (
         <span className="flex-1 p-1 text-base font-medium">…</span>
       ) : (
