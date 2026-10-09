@@ -103,6 +103,11 @@ pub enum ClientMessage {
     /// it. A connection that closes says so on its own for every channel it was typing in.
     #[serde(rename_all = "camelCase")]
     StoppedTyping { channel_id: ChannelId },
+    /// The channels the client has open where it shows who is typing, at most eight: it hears
+    /// typing in these alone, so send it on every `ready` and whenever they change, an empty
+    /// list when none is open. Each replaces the last. Nothing answers it.
+    #[serde(rename_all = "camelCase")]
+    Viewing { channel_ids: Vec<ChannelId> },
 }
 
 /// The least time between two `activity` frames that count; clients send them at most this
@@ -687,6 +692,9 @@ async fn pump_events(
                         Ok(ClientMessage::Typing { channel_id }) => typist.typing(channel_id),
                         Ok(ClientMessage::StoppedTyping { channel_id }) => {
                             typist.stopped(channel_id);
+                        }
+                        Ok(ClientMessage::Viewing { channel_ids }) => {
+                            subscription.viewing(channel_ids);
                         }
                         // Anything else (a second `identify`, an unknown frame) is dropped
                         // rather than tearing the connection down.

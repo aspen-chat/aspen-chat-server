@@ -176,6 +176,9 @@ export const DM_PAGE = 100;
  */
 export const LIST_PAGE = 100;
 
+/** The most channels the server sends typing for on one connection (`viewing`). */
+const MAX_VIEWING = 8;
+
 /** The longest delay `setTimeout` keeps; a longer one fires at once. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 /**
@@ -318,6 +321,11 @@ export class AspenSync {
   #activityReportedAt = Number.NEGATIVE_INFINITY;
   /** The channels the server was told the user is typing in, and when it was last told. */
   readonly #typingSent = new Map<string, number>();
+  /**
+   * The channels open where someone typing is shown, each with how many places show it; the
+   * server is told of them (`#tellViewing`), since it sends typing only where it is shown.
+   */
+  readonly #viewing = new Map<string, number>();
   /** When the next of those shown typing runs out. */
   #typingTimer: ReturnType<typeof setTimeout> | null = null;
   /** Users the server said do not exist; asked once, not again. */
@@ -3378,6 +3386,29 @@ export class AspenSync {
   }
 
   /**
+   * Shows who is typing in a channel while the returned function is not yet called: the server
+   * sends typing only for channels the app says it shows (`viewing`), at most `MAX_VIEWING`.
+   */
+  watchTyping(channelId: string): () => void {
+    this.#viewing.set(channelId, (this.#viewing.get(channelId) ?? 0) + 1);
+    this.#tellViewing();
+    return () => {
+      const held = (this.#viewing.get(channelId) ?? 1) - 1;
+      if (held > 0) {
+        this.#viewing.set(channelId, held);
+      } else {
+        this.#viewing.delete(channelId);
+      }
+      this.#tellViewing();
+    };
+  }
+
+  /** Tells the server which channels are shown, the latest first when there are too many. */
+  #tellViewing(): void {
+    this.#stream.sendViewing(Array.from(this.#viewing.keys()).reverse().slice(0, MAX_VIEWING));
+  }
+
+  /**
    * The user wrote in a channel's message box. The server hears that they are typing there at
    * most every `TYPING_REFRESH_MS`, and not at all while the user has turned typing notices off
    * (`TYPING_NOTICES`).
@@ -3449,6 +3480,7 @@ export class AspenSync {
 
   #onReady(resumed: boolean): void {
     this.#reportActivity();
+    this.#tellViewing();
     if (this.#status === "resyncing" || this.#status === "failed") {
       return;
     }

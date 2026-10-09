@@ -452,9 +452,11 @@ export function useBlocked(userId: string | undefined): boolean {
 
 /**
  * Who else is typing in a channel, in the order they began, leaving out the caller and anyone
- * they block.
+ * they block. While it is used the server sends typing for the channel (`AspenSync.watchTyping`).
  */
 export function useTypers(channelId: string): readonly string[] {
+  const sync = useSync();
+  useEffect(() => sync.watchTyping(channelId), [sync, channelId]);
   return useTopic(`typing:${channelId}`, (s) => s.typers(channelId));
 }
 

@@ -1070,11 +1070,24 @@ def typing(world: World, check: Checks) -> None:
     def type_in(stream, channel: str, typing: bool = True) -> None:
         stream.send({"type": "typing" if typing else "stoppedTyping", "channelId": channel})
 
+    def view(stream, *channels: str) -> None:
+        # A client hears typing only in the channels it says it has open.
+        stream.send({"type": "viewing", "channelIds": list(channels)})
+        stream.gather(0.2)
+
+    view(world.stream, general, hidden, quiet)
+    view(owner, general, hidden, quiet)
     type_in(owner, general)
     check("a member hears the owner typing", heard(world.stream, general, world.owner["id"]) == [True])
     check("the owner is not told of their own typing", heard(owner, general, world.owner["id"], 0.3) == [])
     type_in(owner, general, False)
     check("and hears them stop", heard(world.stream, general, world.owner["id"]) == [False])
+    view(world.stream, hidden, quiet)
+    type_in(owner, general)
+    check("a member without the channel open hears nobody typing there",
+          heard(world.stream, general, world.owner["id"]) == [])
+    type_in(owner, general, False)
+    view(world.stream, general, hidden, quiet)
     type_in(owner, hidden)
     check("typing in a channel the member may not view does not reach them",
           heard(world.stream, hidden, world.owner["id"]) == [])
@@ -1089,6 +1102,7 @@ def typing(world: World, check: Checks) -> None:
     dm = world.as_owner("POST", "/users/@me/dms", {"recipients": [world.member["id"]]})
     dm = dm.get("id") or dm["data"]["id"]
     world.stream.gather(0.5)
+    view(world.stream, general, dm)
     type_in(owner, dm)
     check("the other person of a DM hears the owner typing there", heard(world.stream, dm, world.owner["id"]) == [True])
     type_in(owner, dm, False)

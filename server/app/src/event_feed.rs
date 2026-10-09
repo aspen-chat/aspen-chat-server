@@ -147,6 +147,9 @@ pub struct FeedEvent {
     ephemeral: bool,
     /// Readers it never reaches, although its subject's owner is theirs.
     unseen_by: Option<Arc<HashSet<UserId>>>,
+    /// For one from outside the stream about a channel (someone typing there), the channel: it
+    /// reaches only connections that said they have it open ([`Subscription::viewing`]).
+    place: Option<ChannelId>,
     /// The frame the event is written to sockets as, made by the first connection that writes
     /// it and shared by every other ([`FeedEvent::frame`]).
     frame: OnceLock<bytes::Bytes>,
@@ -198,12 +201,13 @@ impl FeedEvent {
                 .is_none_or(|ended| ended.covers(&sign_in.id))
     }
 
-    /// An event from outside the stream, for `owner`'s readers who may view `channel` (when it
-    /// names one) and are not among `unseen_by`.
+    /// An event from outside the stream about `place`, for `owner`'s readers who may view
+    /// `channel` (when it names one), have `place` open, and are not among `unseen_by`.
     fn ephemeral(
         payload: Box<RawValue>,
         owner: SubjectOwner,
         channel: Option<ChannelId>,
+        place: ChannelId,
         unseen_by: Arc<HashSet<UserId>>,
     ) -> Self {
         FeedEvent {
@@ -229,6 +233,7 @@ impl FeedEvent {
             email_unverified: None,
             ephemeral: true,
             unseen_by: Some(unseen_by),
+            place: Some(place),
             frame: OnceLock::new(),
         }
     }
@@ -286,7 +291,25 @@ pub struct Subscription {
     /// Whether `resume_after` was honoured; when not, the catch-up is the whole retained window.
     pub resumed: bool,
     pub deliveries: mpsc::Receiver<Delivery>,
+    /// The shard the connection belongs to, told what its client has open.
+    shard: mpsc::Sender<ShardCommand>,
     _registration: Registration,
+}
+
+/// The most channels one connection may say it has open.
+pub const MAX_VIEWING: usize = 8;
+
+impl Subscription {
+    /// The channels the connection's client has open (at most [`MAX_VIEWING`]), which alone it
+    /// hears typing in: a client shows typing only where someone could answer. Each call
+    /// replaces the last. Best-effort: when the shard is too busy to hear it, the client's next
+    /// change says it again.
+    pub fn viewing(&self, channels: impl IntoIterator<Item = ChannelId>) {
+        let channels = channels.into_iter().take(MAX_VIEWING).collect();
+        let _ = self
+            .shard
+            .try_send(ShardCommand::Viewing(self._registration.id, channels));
+    }
 }
 
 struct Registration {
@@ -305,6 +328,8 @@ impl Drop for Registration {
 #[derive(Clone)]
 pub struct EventFeed {
     registrations: mpsc::Sender<Register>,
+    /// The routing shards, by index, which a connection's id picks.
+    shards: Arc<[mpsc::Sender<ShardCommand>]>,
     unregister: mpsc::UnboundedSender<u64>,
     next_id: Arc<AtomicU64>,
     queue_size: usize,
@@ -449,6 +474,7 @@ impl EventFeed {
         let (unregister, _) = mpsc::unbounded_channel();
         Self {
             registrations,
+            shards: Arc::new([]),
             unregister,
             next_id: Arc::new(AtomicU64::new(0)),
             queue_size: 1,
@@ -468,13 +494,14 @@ impl EventFeed {
     ) -> Self {
         let (registrations, registrations_rx) = mpsc::channel(REGISTRATION_QUEUE);
         let (unregister, unregister_rx) = mpsc::unbounded_channel();
-        let shards = (0..shards.max(1))
+        let shards: Vec<mpsc::Sender<ShardCommand>> = (0..shards.max(1))
             .map(|_| {
                 let (commands, commands_rx) = mpsc::channel(SHARD_QUEUE);
                 tokio::spawn(route_shard(commands_rx, unregister.clone()));
                 commands
             })
             .collect();
+        let held: Arc<[mpsc::Sender<ShardCommand>]> = shards.clone().into();
         tokio::spawn(dispatch(
             context,
             shards,
@@ -484,6 +511,7 @@ impl EventFeed {
         ));
         Self {
             registrations,
+            shards: held,
             unregister,
             next_id: Arc::new(AtomicU64::new(0)),
             queue_size: queue_size.max(1),
@@ -541,9 +569,16 @@ pub async fn subscribe(
         };
         match outcome {
             Outcome::Registered(resumed) => {
+                let Some(shard) = feed
+                    .shards
+                    .get((id % feed.shards.len().max(1) as u64) as usize)
+                else {
+                    return Err(crate::Error::EventFeedStopped.into());
+                };
                 return Ok(Subscription {
                     resumed,
                     deliveries,
+                    shard: shard.clone(),
                     _registration: Registration {
                         id,
                         unregister: feed.unregister.clone(),
@@ -1003,6 +1038,8 @@ struct Connection {
     /// Whether the user moderates the deployment.
     moderator: bool,
     deliveries: mpsc::Sender<Delivery>,
+    /// The channels its client has open, which it hears typing in ([`Subscription::viewing`]).
+    viewing: HashSet<ChannelId>,
 }
 
 /// Who reads what, on this server.
@@ -1073,6 +1110,9 @@ impl Routes {
                     .unseen_by
                     .as_ref()
                     .is_some_and(|unseen| unseen.contains(&connection.user))
+                || event
+                    .place
+                    .is_some_and(|place| !connection.viewing.contains(&place))
             {
                 continue;
             }
@@ -1179,6 +1219,8 @@ enum ShardCommand {
     Route(Arc<FeedEvent>),
     /// Catches a connection up, then adds it.
     Add(u64, Connection, Box<CatchingUp>),
+    /// The channels a connection's client has open.
+    Viewing(u64, HashSet<ChannelId>),
     Remove(u64),
     /// Drops one connection, which then resumes: it joined a community whose model this
     /// server does not hold.
@@ -1217,6 +1259,11 @@ async fn route_shard(
                 }
             }
             ShardCommand::Remove(id) => routes.remove(id),
+            ShardCommand::Viewing(id, channels) => {
+                if let Some(connection) = routes.connections.get_mut(&id) {
+                    connection.viewing = channels;
+                }
+            }
             ShardCommand::Resync(id) => {
                 routes.remove(id);
                 metrics::counter!(aspen_metrics::api::EVENT_STREAMS_DROPPED, "reason" => "resync")
@@ -1470,6 +1517,7 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             email_unverified,
             ephemeral: false,
             unseen_by: None,
+            place: None,
             frame: OnceLock::new(),
         },
         info.pending,
@@ -1635,6 +1683,9 @@ fn typing_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
         return Vec::new();
     };
     let unseen_by = Arc::new(relay.unseen_by.into_iter().collect::<HashSet<_>>());
+    let place = match relay.event {
+        crate::typing::EphemeralEvent::Typing { channel_id, .. } => channel_id,
+    };
     match relay.audience {
         Audience::Community {
             community,
@@ -1647,6 +1698,7 @@ fn typing_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
                 payload,
                 SubjectOwner::Community(community),
                 Some(governing),
+                place,
                 unseen_by,
             );
             let _ = event.access.set(model.clone());
@@ -1660,6 +1712,7 @@ fn typing_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
                     payload.clone(),
                     SubjectOwner::User(user),
                     None,
+                    place,
                     unseen_by.clone(),
                 )
             })
@@ -1836,6 +1889,7 @@ async fn dispatch(
                     roles: reads.roles,
                     moderator: reads.moderator,
                     deliveries: registration.deliveries,
+                    viewing: HashSet::new(),
                 };
                 let catching_up = CatchingUp {
                     snapshot,
@@ -1907,6 +1961,7 @@ mod tests {
             email_unverified: None,
             ephemeral: false,
             unseen_by: None,
+            place: None,
             frame: OnceLock::new(),
         }
     }
@@ -2266,6 +2321,7 @@ mod tests {
                 roles: HashMap::new(),
                 moderator: false,
                 deliveries: tx,
+                viewing: HashSet::new(),
             },
         );
         let in_community = event(2, SubjectOwner::Community(community), None);
@@ -2354,6 +2410,7 @@ mod tests {
                     roles: HashMap::new(),
                     moderator: false,
                     deliveries: tx,
+                    viewing: HashSet::new(),
                 },
             );
             receivers.push(rx);
@@ -2544,6 +2601,7 @@ mod tests {
                 roles: HashMap::new(),
                 moderator: false,
                 deliveries: tx,
+                viewing: HashSet::new(),
             },
         );
         let mut followed = |sequence: u64, channel: ChannelId, change: Option<ModelChange>| {
@@ -2638,6 +2696,7 @@ mod tests {
                 roles: HashMap::new(),
                 moderator: false,
                 deliveries: tx,
+                viewing: HashSet::new(),
             },
         );
         let mut followed = |sequence: u64, category: CategoryId, change: Option<ModelChange>| {
@@ -2696,6 +2755,7 @@ mod tests {
                 roles: HashMap::new(),
                 moderator: false,
                 deliveries: member_tx,
+                viewing: HashSet::new(),
             },
         );
         routes.add(
@@ -2707,6 +2767,7 @@ mod tests {
                 roles: HashMap::from([(community, vec![moderator])]),
                 moderator: false,
                 deliveries: moderator_tx,
+                viewing: HashSet::new(),
             },
         );
         routes.route(&in_channel(1, community, open, &model));
@@ -2737,23 +2798,32 @@ mod tests {
 
     #[test]
     fn typing_reaches_who_may_view_but_the_typist_and_whom_they_block() {
-        let (typist, member, blocked, moderator_user) =
-            (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let (typist, member, blocked, moderator_user, elsewhere) = (
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+        );
         let community = CommunityId::new();
         let (open, hidden, moderator) = (ChannelId::new(), ChannelId::new(), RoleId::new());
         let model = Arc::new(two_channels(community, open, hidden, moderator));
         let mut routes = Routes::default();
         let mut receivers = Vec::new();
-        for (id, user, roles, queue) in [
-            (1, typist, HashMap::new(), 8),
-            (2, member, HashMap::new(), 8),
-            (3, blocked, HashMap::new(), 8),
+        let both = HashSet::from([open, hidden]);
+        for (id, user, roles, queue, viewing) in [
+            (1, typist, HashMap::new(), 8, both.clone()),
+            (2, member, HashMap::new(), 8, both.clone()),
+            (3, blocked, HashMap::new(), 8, both.clone()),
             (
                 4,
                 moderator_user,
                 HashMap::from([(community, vec![moderator])]),
                 1,
+                both.clone(),
             ),
+            // A member with neither channel open hears nobody typing in them.
+            (5, elsewhere, HashMap::new(), 8, HashSet::new()),
         ] {
             let (tx, rx) = mpsc::channel(queue);
             routes.add(
@@ -2765,6 +2835,7 @@ mod tests {
                     roles,
                     moderator: false,
                     deliveries: tx,
+                    viewing,
                 },
             );
             receivers.push(rx);
@@ -2804,7 +2875,7 @@ mod tests {
                 n
             })
             .collect();
-        assert_eq!(received, vec![0, 1, 0, 1]);
+        assert_eq!(received, vec![0, 1, 0, 1, 0]);
         // Nobody here reads a DM whose people read elsewhere.
         let direct = Relay {
             audience: Audience::Direct {
@@ -2889,6 +2960,7 @@ mod tests {
                     roles: HashMap::from([(community, roles)]),
                     moderator: false,
                     deliveries: tx,
+                    viewing: HashSet::new(),
                 },
             );
             receivers.push(rx);
