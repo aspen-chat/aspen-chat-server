@@ -38,15 +38,27 @@ use diesel::{
     AsChangeset, ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable, SelectableHelper,
 };
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use tracing::error;
+use tracing::{error, warn};
 
 /// Answers voice servers asking for the public half of the join token key
 /// (`voice_protocol::control::TOKEN_KEY_SUBJECT`), for as long as the server runs. Every API
 /// server answers, in one queue group, so any one of them up is enough. A voice server's NATS
 /// user may receive replies only on its own inbox, and nothing but the API servers may publish
-/// there, so the key it is given is the API servers'.
+/// there, so the key it is given is the API servers'. NATS does not check the reply subject a
+/// requester names against its permissions, so an answer goes only to a voice server's inbox
+/// (`is_voice_inbox`), the asking server's when the request names it: anywhere else this
+/// server, with its wider permissions, would be publishing where a voice server chose.
+///
+/// A request naming the voice server's id is also told whether that id is registered
+/// (`servers::is_registered`), so a voice server given the wrong id says so at startup instead
+/// of reporting to no one. At most `REGISTRATION_LOOKUPS` of those look-ups run at once, so a
+/// voice server asking over and over holds that many database connections at most; a request
+/// arriving while they are all running is answered with the key alone, which the voice server
+/// takes as no answer to the question (the dashboard still lists an id it reports under that no
+/// server has; see Administration).
 pub async fn spawn_token_key_answerer(state: GlobalServerContext) -> crate::Result<()> {
     use futures_util::StreamExt;
+    use voice_protocol::control::{TokenKeyRequest, is_voice_inbox};
     let client = state.nats_context.client();
     let mut requests = client
         .queue_subscribe(
@@ -54,20 +66,63 @@ pub async fn spawn_token_key_answerer(state: GlobalServerContext) -> crate::Resu
             "aspen_api".to_string(),
         )
         .await?;
-    let answer = serde_json::to_vec(&state.join_token_key.public())?;
+    let key = state.join_token_key.public();
+    let lookups = std::sync::Arc::new(tokio::sync::Semaphore::new(REGISTRATION_LOOKUPS));
     tokio::spawn(async move {
         while let Some(request) = requests.next().await {
             let Some(reply) = request.reply else {
                 continue;
             };
-            if let Err(e) = client.publish(reply, answer.clone().into()).await {
-                error!(error = %e, "could not answer a voice server asking for the join token key");
+            let asking = serde_json::from_slice::<TokenKeyRequest>(&request.payload).ok();
+            let asking_server = asking.as_ref().map(|asking| asking.server);
+            if !is_voice_inbox(&reply, asking_server) {
+                warn!(
+                    reply = %reply,
+                    server = ?asking_server,
+                    "refused to answer a request for the join token key whose reply subject is not the voice server's inbox; a voice server may be compromised"
+                );
+                continue;
             }
+            let (state, client, mut answer) = (state.clone(), client.clone(), key.clone());
+            let lookup = asking_server.zip(lookups.clone().try_acquire_owned().ok());
+            // Each answer is its own task, so one waiting for a database connection holds up
+            // no other voice server.
+            tokio::spawn(async move {
+                if let Some((server, _lookup)) = lookup {
+                    answer.registered = match servers::is_registered(
+                        &state,
+                        VoiceServerId::from(server),
+                    )
+                    .await
+                    {
+                        Ok(registered) => Some(registered),
+                        Err(e) => {
+                            warn!(error = %e, "could not tell a voice server whether it is registered");
+                            None
+                        }
+                    };
+                }
+                let answer = match serde_json::to_vec(&answer) {
+                    Ok(answer) => answer,
+                    Err(e) => {
+                        error!(error = %e, "could not encode the join token key");
+                        return;
+                    }
+                };
+                if let Err(e) = client.publish(reply, answer.into()).await {
+                    error!(error = %e, "could not answer a voice server asking for the join token key");
+                }
+            });
         }
         error!("stopped answering voice servers asking for the join token key");
     });
     Ok(())
 }
+
+/// The most look-ups of whether a voice server is registered that one API server runs at once
+/// (`spawn_token_key_answerer`). Each voice server asks once at startup, so a few cover a whole
+/// fleet starting together.
+const REGISTRATION_LOOKUPS: usize = 2;
 
 /// How often the reaper runs (`reap`).
 pub const REAPER_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);

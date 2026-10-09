@@ -32,6 +32,7 @@ anyhow = "1.0.102"
 log = "0.4.27"
 time = "0.3.47"
 aspen_limits = { version = "0.1.0", path = "../limits" }
+voice_protocol = { path = "../voice_protocol" }
 aspen_metrics = { version = "0.1.0", path = "../metrics", features = ["jemalloc"] }
 # The global allocator, replacing malloc for the whole process (C and C++ libraries included),
 # so its statistics describe all of the process's memory.

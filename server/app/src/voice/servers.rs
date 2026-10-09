@@ -43,6 +43,19 @@ pub async fn list_servers(state: &GlobalServerContext) -> crate::Result<Vec<Voic
     list_servers_in(state.connection_pool.get().await?.as_mut()).await
 }
 
+/// Whether `server` is a registered voice server's id.
+pub(super) async fn is_registered(
+    state: &GlobalServerContext,
+    server: VoiceServerId,
+) -> crate::Result<bool> {
+    let mut conn = state.connection_pool.get().await?;
+    Ok(diesel::select(diesel::dsl::exists(
+        voice_server::table.filter(voice_server::id.eq(server)),
+    ))
+    .get_result(conn.as_mut())
+    .await?)
+}
+
 /// Every registered server, by name.
 pub async fn list_servers_in(conn: &mut AsyncPgConnection) -> crate::Result<Vec<VoiceServer>> {
     Ok(voice_server::table

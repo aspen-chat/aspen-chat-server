@@ -143,7 +143,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("failed to connect to NATS")?;
     aspen_limits::suspension::watch(reporter.client(), limits.suspension().clone(), "voice");
-    let token_keys = token_keys::TokenKeys::start(reporter.client());
+    let token_keys = token_keys::TokenKeys::start(reporter.client(), config.id);
     let announced_address = config.rtc.resolved_announced_address()?;
     if let Some(address) = &announced_address {
         if address
@@ -213,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
     let state = signalling::AppState {
         server: config.id,
         token_secret: config.token_secret.as_deref().map(Arc::from),
-        token_keys,
+        token_keys: Arc::clone(&token_keys),
         rooms: Arc::clone(&rooms),
         limits,
         used_tokens: Arc::default(),
@@ -240,18 +240,23 @@ async fn main() -> anyhow::Result<()> {
         server = config.id.to_string(),
         "voice server listening"
     );
-    let stopped = serve(
-        listener,
-        app,
-        config.rate_limits.max_connections,
-        worker_died.notified(),
-    )
+    let stopped = serve(listener, app, config.rate_limits.max_connections, async {
+        tokio::select! {
+            () = worker_died.notified() => Stopped::WorkerDied,
+            () = token_keys.unregistered() => Stopped::Unregistered,
+        }
+    })
     .await;
     rooms.shutdown().await;
     relay.shutdown().await;
     match stopped {
         Stopped::Asked => Ok(()),
         Stopped::WorkerDied => anyhow::bail!("a mediasoup worker died"),
+        Stopped::Unregistered => anyhow::bail!(
+            "this voice server's id ({}) is not registered with the deployment; set `id` in \
+             voice_server.toml to the id `aspen-chat-server voice-servers list` shows for it",
+            config.id
+        ),
     }
 }
 
@@ -261,6 +266,8 @@ enum Stopped {
     Asked,
     /// A mediasoup worker died.
     WorkerDied,
+    /// The API servers said this server's id is not registered.
+    Unregistered,
 }
 
 /// How long a connection has to send a request's headers, from when it opens or its last
@@ -268,7 +275,7 @@ enum Stopped {
 /// and sends nothing, cannot hold them.
 const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Serves `app` on `listener` until the process is told to stop or `worker_died` completes:
+/// Serves `app` on `listener` until the process is told to stop or `failed` completes:
 /// at most `max_connections` at once (past that, new ones wait in the listen backlog), each
 /// given `HEADER_READ_TIMEOUT` for every request's headers, with WebSocket upgrades. Each
 /// request carries its peer's address as axum's `ConnectInfo`.
@@ -276,7 +283,7 @@ async fn serve(
     listener: tokio::net::TcpListener,
     app: Router,
     max_connections: usize,
-    worker_died: impl std::future::Future<Output = ()>,
+    failed: impl std::future::Future<Output = Stopped>,
 ) -> Stopped {
     use hyper_util::rt::{TokioIo, TokioTimer};
     use tower::ServiceExt as _;
@@ -284,7 +291,7 @@ async fn serve(
     let mut stopping = std::pin::pin!(async {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => Stopped::Asked,
-            () = worker_died => Stopped::WorkerDied,
+            stopped = failed => stopped,
         }
     });
     let stopped = loop {

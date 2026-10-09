@@ -1,4 +1,4 @@
-import type { ApiServerHealth, VoiceServerHealth } from "@aspen/protocol";
+import type { ApiServerHealth, UnregisteredVoiceServer, VoiceServerHealth } from "@aspen/protocol";
 import { CheckCircleIcon, ProhibitIcon, WarningIcon, XCircleIcon } from "@phosphor-icons/react";
 import type { ComponentType, ReactNode } from "react";
 import { useCallback } from "react";
@@ -16,14 +16,18 @@ const FLEET_REFRESH_MS = 10_000;
 
 /**
  * The deployment's servers: every API server that has sent a heartbeat in the last half
- * minute, and every registered voice server with its last report.
+ * minute, every registered voice server with its last report, and every voice server reporting
+ * under an id that is not registered, whose reports are ignored.
  */
 export function FleetHealth() {
   const m = useMessages();
   const sync = useSync();
   const load = useCallback(() => sync.admin.fleet(), [sync]);
   const { data, at: now, error, reload } = useAdminRead(load, FLEET_REFRESH_MS);
-  const wizard = useIdWizard();
+  const unregistered = data?.unregisteredVoiceServers ?? [];
+  // Ids are shown to everyone while a voice server reports under the wrong one, since fixing it
+  // means copying the right one.
+  const showIds = useIdWizard() || unregistered.length > 0;
   return (
     <Section id="admin-fleet" title={m.admin.fleet} hint={m.admin.fleetUpdated}>
       {error !== null && <ReadFailed error={error} onRetry={reload} />}
@@ -62,15 +66,27 @@ export function FleetHealth() {
             m.admin.status,
             m.admin.load,
             m.admin.lastReport,
-            ...(wizard ? [m.bots.idColumn] : []),
+            ...(showIds ? [m.bots.idColumn] : []),
           ]}
           numeric={[2]}
           skeletonRows={data === undefined && error === null ? 2 : 0}
         >
           {(data?.voiceServers ?? []).map((server) => (
-            <VoiceServerRow key={server.id} server={server} now={now} />
+            <VoiceServerRow key={server.id} server={server} now={now} showId={showIds} />
           ))}
         </Table>
+      )}
+      {unregistered.length > 0 && (
+        <>
+          <h3 className="text-sm font-semibold text-ink-muted">
+            {m.admin.unregisteredVoiceServers}
+          </h3>
+          <ul className="flex flex-col gap-2">
+            {unregistered.map((server) => (
+              <UnregisteredVoiceServerItem key={server.id} server={server} now={now} />
+            ))}
+          </ul>
+        </>
       )}
     </Section>
   );
@@ -108,9 +124,16 @@ function ApiServerRow({ server, now }: { server: ApiServerHealth; now: number })
   );
 }
 
-function VoiceServerRow({ server, now }: { server: VoiceServerHealth; now: number }) {
+function VoiceServerRow({
+  server,
+  now,
+  showId,
+}: {
+  server: VoiceServerHealth;
+  now: number;
+  showId: boolean;
+}) {
   const m = useMessages();
-  const wizard = useIdWizard();
   const { count, ago } = useFigures();
   return (
     <tr>
@@ -134,12 +157,37 @@ function VoiceServerRow({ server, now }: { server: VoiceServerHealth; now: numbe
         })}
       </Cell>
       <Cell>{server.lastReportAt == null ? m.admin.never : ago(server.lastReportAt, now)}</Cell>
-      {wizard && (
+      {showId && (
         <Cell>
           <CopyIdButton id={server.id} thing="voiceServer" />
         </Cell>
       )}
     </tr>
+  );
+}
+
+function UnregisteredVoiceServerItem({
+  server,
+  now,
+}: {
+  server: UnregisteredVoiceServer;
+  now: number;
+}) {
+  const m = useMessages();
+  const { ago } = useFigures();
+  return (
+    <li className="flex gap-2 rounded-lg border border-line bg-surface-raised px-3 py-2 text-sm">
+      <WarningIcon size={16} weight="fill" aria-hidden className="mt-0.5 shrink-0 text-away" />
+      <div className="flex min-w-0 flex-col gap-1">
+        <p className="break-all">
+          {format(m.admin.unregisteredVoiceServer, {
+            id: server.id,
+            ago: ago(server.reportedAt, now),
+          })}
+        </p>
+        <p className="text-ink-muted">{m.admin.unregisteredVoiceServerFix}</p>
+      </div>
+    </li>
   );
 }
 

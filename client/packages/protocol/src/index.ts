@@ -129,6 +129,7 @@ export {
   type UserSort,
   type RegistrationInvite,
   type RegistrationInviteRequest,
+  type UnregisteredVoiceServer,
   type VoiceServerHealth,
   type ContactResult,
   type FederatedDeployment,

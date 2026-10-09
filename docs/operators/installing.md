@@ -229,8 +229,31 @@ aspen-chat-server voice-servers add voice-1 --url https://voice-1.chat.example.o
 ```
 
 It may be run again with the same arguments, so a deployment script can run it every time; the
-dashboard registers servers too. Its id is then in the database
-(`SELECT id FROM voice_server WHERE name = 'voice-1'`). Give the voice server that id and NATS:
+dashboard registers servers too. Registering gives the server its id, which is how the deployment
+tells its voice servers apart: the voice server reports as that id, join tokens name it, and its
+NATS user (below) may publish only on subjects naming it. `voice-servers add` prints the id, the
+line to put in `voice_server.toml`, and the subjects its NATS user's permissions must name, like
+this:
+
+```
+voice-1  https://voice-1.chat.example.org  capacity 120  id 01a11de4-6cd9-7023-a882-a62812d5d6b9
+
+Give the voice server this id in voice_server.toml (or ASPEN_VOICE_SERVER_ID):
+
+    id = "01a11de4-6cd9-7023-a882-a62812d5d6b9"
+
+If it signs in to NATS as a user of its own, that user's permissions name the same id (docs/operators/installing.md, section 6):
+
+    publish:   aspen.voice.report.*.01a11de4-…, aspen.voice.speaking.*.01a11de4-…
+    subscribe: aspen.voice.command.01a11de4-…, _INBOX_voice.01a11de4-….>
+```
+
+`voice-servers list` shows every server's id again, as does the dashboard's Server fleet tab
+(with the **ID wizard** on in the app's settings, or whenever a voice server reports under an id that
+is not registered).
+The id never changes for as long as the server stays registered, so it is written once; a
+server removed and registered again gets a new one, and its `voice_server.toml` and NATS user
+must be given it. Give the voice server its id and NATS:
 
 ```toml
 id = "…"
@@ -305,7 +328,14 @@ it. A voice server that cannot reach an API server at startup keeps asking every
 turns joins away until one answers. The API servers apply a
 report only when it came on a subject naming the server it is about, and only when the call or
 channel it is about is that server's, so a voice server taken over can misreport its own calls and
-no one else's. A voice server still given `nats_auth_token` works, and warns at startup.
+no one else's. It can still cause some trouble beyond its own calls, because NATS lets a request
+name any subject for its reply: it can have NATS publish its own answers on the API servers'
+subjects, making every API server reload its plugins or redo background passes, and replacing a
+suspension of rate limits with a value that is not read. It cannot make anything it says believed
+that way. The API servers refuse to answer anywhere but the asking server's own inbox, and log
+`refused to answer a request for the join token key` when one tries, which means that voice
+server is compromised. Firewalling NATS from everything but the deployment's own machines remains
+the main defence (below). A voice server still given `nats_auth_token` works, and warns at startup.
 
 Clients reach a voice server in two ways, and both must be open to them:
 
@@ -322,6 +352,21 @@ Clients reach a voice server in two ways, and both must be open to them:
   devices can connect directly, and the TURN relay for transfers that go through the server,
   at no more than `[transfer] relay_mbps` (50) in all. Set `relay_mbps = 0` not to relay
   transfers at all.
+
+### Checking that it is registered
+
+When a voice server starts, it asks the API servers for the key join tokens are signed with,
+naming its id, and they answer whether that id is registered. If it is not, the voice server
+logs `this voice server's id is not registered with the deployment` with the id, and stops with
+an error; fix its `id` and start it again. When no API server is up yet it keeps asking, and the
+check happens once one answers.
+
+The API servers watch for the same mistake from their side: a voice server whose id is not
+registered sends load reports that match no server, so they are dropped, and the server it was
+meant to be shows as **Silent** in the dashboard. While such reports keep arriving (from a voice
+server already running when it was removed, say), each API server logs `a voice server whose id
+is not registered is reporting` with the id, and the Server fleet tab lists it under **Voice
+servers that are not registered**, beside every registered server's id to copy.
 
 A voice server that stops reporting for a minute is no longer offered to people joining calls;
 one that people fail to reach is suspended for `failure_window_seconds` after `failure_threshold`

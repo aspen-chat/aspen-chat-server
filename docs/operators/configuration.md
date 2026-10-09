@@ -352,18 +352,20 @@ add, change, disable, and remove them in the dashboard. From the terminal:
   `https://voice-1.chat.example.org`, an `http` or `https` address, and `https` wherever
   `public_url` is (here and in the dashboard; browsers on an `https` page refuse unencrypted
   WebSockets); `capacity` is the most people it carries at once, which
-  `voice_server estimate-capacity` suggests.
+  `voice_server estimate-capacity` suggests. It prints the server's id, which the voice server's
+  `id` must be, and the subjects its NATS user's permissions name
+  ([Installing](installing.md#6-voice-servers)).
 - `voice-servers set NAME [--url URL] [--capacity N] [--enabled true|false]` changes one. A
   disabled server is offered to no one joining a call; calls already on it go on.
 - `voice-servers remove NAME` removes one that holds no calls. Disable it first and let its calls
   end, or remove it from the dashboard, which ends them.
-- `voice-servers list` lists them.
+- `voice-servers list` lists them, with their ids.
 
 ## `voice_server.toml`
 
 | Setting | Default | |
 | --- | --- | --- |
-| `id` | required | The server's id in the registry (`SELECT id FROM voice_server WHERE name = '…'` once the API server has registered it). |
+| `id` | required | The server's id in the registry, which `voice-servers add` prints and `voice-servers list` and the dashboard's Server fleet tab show. The server stops at startup when the API servers say no registered server has it. |
 | `token_secret` | | Only while upgrading from API servers that signed join tokens with a shared secret ([Upgrading](installing.md#from-shared-secret-join-tokens)): the server then also takes tokens signed with it, and warns at startup. Leave it out otherwise: join tokens are signed with the API servers' key, which the server asks them for over NATS. It refuses to start with the old development value or one shorter than 32 bytes, unless `development` is set. |
 | `development` | `false` | Lets the server start with a development or short `token_secret`. Never on a deployment people use: whoever knows the secret can join any call. |
 | `nats_url` | required | The same NATS as the API servers. |

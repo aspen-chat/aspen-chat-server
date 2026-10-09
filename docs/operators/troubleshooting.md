@@ -119,9 +119,21 @@ enabled, has room, and reported within `[voice] offer_silence_seconds`. The dash
 tab shows each voice server's last report. Check that the voice server is running, reaches
 NATS (with the token, or as its own user with the permissions [Installing](installing.md#6-voice-servers)
 lists; NATS logs a `Permissions Violation` for anything else), and has the `id` the registry gave
-it. An API server logs `a voice report on a subject it does not belong on was dropped`, or `a
-voice report about what is not that server's was dropped`, for a report from a voice server
-configured with another's `id`.
+it (below). An API server logs `a voice report on a subject it does not belong on was dropped`, or
+`a voice report about what is not that server's was dropped`, for a report about another voice
+server's calls.
+
+**A voice server shows as Silent though it is running**, or **it stops at startup saying `this
+voice server's id is not registered`**. Its `id` in `voice_server.toml` (or
+`ASPEN_VOICE_SERVER_ID`) is not the id the deployment registered it under: it was copied from
+another deployment, kept from before the database was recreated, or the server was removed and
+registered again, which gives it a new id. Its reports name an id no registered server has, so
+they are dropped. The Server fleet tab lists the id it reports as under **Voice servers that are
+not registered**, and the API servers log `a voice server whose id is not registered is
+reporting`. Set `id` to the registered server's id (`voice-servers list`, or the ID column of the
+Server fleet tab), change the id in its NATS user's permissions to match if it has one, and
+restart it. A voice server checks its id each time it starts and stops when it is wrong, so one
+that keeps running unregistered was removed while it ran, or its API servers are older than it.
 
 **The log warns that a voice server's snapshot repaired the record of a call**, or that a voice
 server no longer holds a call recorded on it. Some of that voice server's reports never reached

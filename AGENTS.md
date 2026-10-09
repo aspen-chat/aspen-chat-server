@@ -115,7 +115,7 @@ Federation, letting a user of one deployment use others, is built in five phases
    ```
    scripts/smoke_servers.py --bin target/release
    ```
-   It migrates a database of its own, runs a NATS of its own, starts both servers on ports of their own (a development stack keeps running beside it), registers and signs in a user, joins a call through the voice server, reads both metrics endpoints, and runs `estimate-capacity`, then drops the database. `scripts/stack.py` is the deployment both this and the next check run against, serving a stand-in web client (`scripts/web_client.py`), with a WebSocket client of the standard library. In a worktree, set `COMPOSE_PROJECT_NAME` to the main checkout's directory name so they find its running services.
+   It migrates a database of its own, runs a NATS of its own, starts both servers on ports of their own (a development stack keeps running beside it), registers and signs in a user, joins a call through the voice server, reads both metrics endpoints, runs `estimate-capacity`, and checks that a voice server whose id is not registered is listed in the fleet and stops when started, then drops the database. `scripts/stack.py` is the deployment both this and the next check run against, serving a stand-in web client (`scripts/web_client.py`), with a WebSocket client of the standard library. In a worktree, set `COMPOSE_PROJECT_NAME` to the main checkout's directory name so they find its running services.
 
    Check that changes to access reach everything already open:
    ```
