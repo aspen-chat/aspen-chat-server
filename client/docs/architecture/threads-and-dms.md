@@ -21,7 +21,9 @@
   and drafts). `ThreadPanel` shows the starter, heading the replies in one `MessageList` (its `start`, shown
   once the window reaches the thread's beginning) so the two scroll together however long the
   starter is, a thread shorter than the panel standing at its top (`fromTop`, its skeleton
-  too) rather than at its bottom by the composer as a channel's history does, and a `Composer` whose `echoTarget` offers to
+  too) rather than at its bottom by the composer as a channel's history does, "No replies in
+  this thread." under the starter while the thread holds none, as when every reply is deleted
+  (the list's `empty`), and a `Composer` whose `echoTarget` offers to
   also show the reply in the parent channel (`echoToParent`). Its header's bell (`FollowButton`,
   a toggle) follows the thread or stops following it (`AspenSync.setFollowing`, which the store
   follows at once), so every reply tells the reader; taking part follows it too, as the server

@@ -95,6 +95,7 @@ export function MessageList({
   home,
   highlightId,
   start,
+  empty,
   fromTop = false,
 }: {
   channelId: string;
@@ -105,6 +106,11 @@ export function MessageList({
    * beginning, once the window reaches it: a thread's starter, which scrolls with its replies.
    */
   start?: ReactNode;
+  /**
+   * What stands under `start` while the whole history is in the window and holds no message, as
+   * a thread's does once all its replies are deleted.
+   */
+  empty?: ReactNode;
   /**
    * Whether a window shorter than the view stands at its top, as a thread's replies under their
    * starter do, rather than at its bottom by the composer, as a channel's history does.
@@ -286,6 +292,12 @@ export function MessageList({
             ) : (
               <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
             )}
+            {empty !== undefined &&
+              !window.hasOlder &&
+              window.atLatest &&
+              window.ids.length === 0 &&
+              departing.length === 0 &&
+              empty}
             <div ref={rows} className="flex flex-col gap-1">
               {lineIndex === -1 && <NewMessagesLine />}
               {leaving(null)}

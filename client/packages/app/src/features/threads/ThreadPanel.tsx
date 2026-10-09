@@ -138,6 +138,7 @@ export function ThreadPanel({
                   )}
                 </div>
               }
+              empty={<p className="py-2 text-sm text-ink-faint">{m.threads.noReplies}</p>}
             />
             {/* Toasts show over the channel's messages beside the panel; on a one-pane
                   screen the panel is the whole screen and shows its own. */}

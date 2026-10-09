@@ -17,6 +17,7 @@ export const threads = {
   starterNotFound:
     "This message could not be found. It may have been deleted, so no thread can start from it.",
   firstReply: "No replies yet.",
+  noReplies: "No replies in this thread.",
   thisConversation: "this conversation",
   follow: "Follow thread",
   unfollow: "Unfollow thread",
