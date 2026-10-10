@@ -1915,9 +1915,9 @@ def stop_reviewing(world: World) -> None:
     world.stack.command("admin", "revoke", world.owner["name"])
 
 
-WORD_FILTER_ID = "org.aspenchat.wordfilter"
-CALENDAR_ID = "org.aspenchat.calendar"
-BLACKJACK_ID = "org.aspenchat.blackjack"
+WORD_FILTER_ID = "com.aspen-chat.wordfilter"
+CALENDAR_ID = "com.aspen-chat.calendar"
+BLACKJACK_ID = "com.aspen-chat.blackjack"
 
 
 def example(name: str) -> Path:

@@ -1,4 +1,4 @@
-package org.aspenchat.client.push;
+package com.aspen_chat.client.push;
 
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -19,7 +19,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import org.aspenchat.client.R;
+import com.aspen_chat.client.R;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;

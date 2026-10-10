@@ -1,10 +1,10 @@
-package org.aspenchat.client;
+package com.aspen_chat.client;
 
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
-import org.aspenchat.client.files.AspenFilesPlugin;
-import org.aspenchat.client.navigation.AspenNavigationPlugin;
-import org.aspenchat.client.push.AspenPushPlugin;
+import com.aspen_chat.client.files.AspenFilesPlugin;
+import com.aspen_chat.client.navigation.AspenNavigationPlugin;
+import com.aspen_chat.client.push.AspenPushPlugin;
 
 public class MainActivity extends BridgeActivity {
 

@@ -1,4 +1,4 @@
-package org.aspenchat.client.files;
+package com.aspen_chat.client.files;
 
 import android.app.Activity;
 import android.content.Intent;

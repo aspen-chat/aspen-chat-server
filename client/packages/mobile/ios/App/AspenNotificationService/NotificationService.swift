@@ -1,8 +1,8 @@
 import UserNotifications
 import os
 
-/// The extension's log, read with `log stream --predicate 'subsystem == "org.aspenchat.client"'`.
-private let log = Logger(subsystem: "org.aspenchat.client", category: "push")
+/// The extension's log, read with `log stream --predicate 'subsystem == "com.aspen-chat.client"'`.
+private let log = Logger(subsystem: "com.aspen-chat.client", category: "push")
 
 /// Turns a push into the notification it stands for, within the thirty seconds iOS gives an
 /// extension (`spec/push.md`, What reaches the phone): the push carries only a subscription id

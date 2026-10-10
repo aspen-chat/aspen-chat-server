@@ -1,6 +1,8 @@
 # Packaging for the desktop shell. Run `pnpm package` (all platforms the host can build) or
 # `pnpm package:dir` for an unpacked directory to inspect.
-appId: org.aspenchat.client
+# The domain reversed, `aspen-chat.com`'s hyphen written as an underscore, which every platform
+# but Apple's takes in an identifier (`mac.appId`).
+appId: com.aspen_chat.client
 productName: Aspen
 copyright: "MPL-2.0"
 directories:
@@ -44,6 +46,8 @@ linux:
     - deb
   category: Network
 mac:
+  # A bundle identifier may hold a hyphen and no underscore; the iOS app's is the same.
+  appId: com.aspen-chat.client
   icon: build/icon-mac.png
   target:
     - dmg

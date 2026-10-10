@@ -28,7 +28,7 @@
 		<true/>
 	</dict>
 	<key>AspenKeychainAccessGroup</key>
-	<string>$(AppIdentifierPrefix)org.aspenchat.client.push</string>
+	<string>$(AppIdentifierPrefix)com.aspen-chat.client.push</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>

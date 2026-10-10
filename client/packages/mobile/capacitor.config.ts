@@ -1,7 +1,9 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
-  appId: "org.aspenchat.client",
+  // The Android application's id. The Xcode project names the iOS bundle itself
+  // (`com.aspen-chat.client`): Android takes no hyphen in an id, and Apple no underscore.
+  appId: "com.aspen_chat.client",
   appName: "Aspen",
   // The renderer is the @aspen/app production build; `pnpm sync` builds it and copies it in.
   webDir: "../app/dist",

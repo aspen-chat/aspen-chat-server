@@ -1,4 +1,4 @@
-package org.aspenchat.client.push;
+package com.aspen_chat.client.push;
 
 import androidx.annotation.NonNull;
 import com.capacitorjs.plugins.pushnotifications.MessagingService;

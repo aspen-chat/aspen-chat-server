@@ -1,4 +1,4 @@
-package org.aspenchat.client.push;
+package com.aspen_chat.client.push;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -6,7 +6,7 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.google.firebase.FirebaseApp;
-import org.aspenchat.client.R;
+import com.aspen_chat.client.R;
 
 /**
  * The app's native side of push (`AspenPush` in the app's `src/api/pushBridge.ts`): which

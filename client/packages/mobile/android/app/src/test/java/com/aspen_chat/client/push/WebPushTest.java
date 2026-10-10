@@ -1,4 +1,4 @@
-package org.aspenchat.client.push;
+package com.aspen_chat.client.push;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;

@@ -1,4 +1,4 @@
-package org.aspenchat.client.navigation;
+package com.aspen_chat.client.navigation;
 
 import android.net.Uri;
 import com.getcapacitor.Plugin;

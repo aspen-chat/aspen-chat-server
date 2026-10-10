@@ -38,7 +38,7 @@ struct PushState: Codable {
 /// (a push reaches the extension only then), and on this device only: the item holds sessions
 /// and the subscriptions' private keys, so it goes into no backup and moves to no new phone.
 enum PushStateStore {
-    private static let service = "org.aspenchat.client.push"
+    private static let service = "com.aspen-chat.client.push"
     private static let account = "state"
     private static let accessible = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
 

@@ -1,4 +1,4 @@
-package org.aspenchat.client.push;
+package com.aspen_chat.client.push;
 
 import java.math.BigInteger;
 import java.security.AlgorithmParameters;

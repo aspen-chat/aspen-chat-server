@@ -117,7 +117,7 @@ function account(origin: string, userId: string, key: string | null, refreshToke
 
 const phone: PushDevice = {
   platform: "apns",
-  app: "org.aspen.chat",
+  app: "com.aspen-chat.client",
   environment: "production",
   token: "t1",
 };

@@ -86,7 +86,7 @@ interface types {
         /// a newer server adds.
         ty: string,
         /// For a channel of a plugin's kind, the kind: the plugin's id, a colon, and the name
-        /// its manifest gives the kind (`org.aspenchat.forum:board`).
+        /// its manifest gives the kind (`com.aspen-chat.forum:board`).
         plugin-type: option<string>,
     }
 

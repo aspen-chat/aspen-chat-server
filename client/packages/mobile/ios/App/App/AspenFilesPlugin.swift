@@ -28,7 +28,7 @@ public class AspenFilesPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerDele
     }
 
     /// Every file open, and the choice under way; touched only on `queue`.
-    private let queue = DispatchQueue(label: "org.aspenchat.client.files")
+    private let queue = DispatchQueue(label: "com.aspen-chat.client.files")
     private var open: [String: Sink] = [:]
     private var choosing: (call: CAPPluginCall, name: String)?
 

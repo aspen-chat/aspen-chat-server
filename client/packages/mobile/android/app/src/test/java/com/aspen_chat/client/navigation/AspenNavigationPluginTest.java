@@ -1,4 +1,4 @@
-package org.aspenchat.client.navigation;
+package com.aspen_chat.client.navigation;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
