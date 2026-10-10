@@ -1,7 +1,20 @@
-import { ArrowBendDownRightIcon, ChatsCircleIcon, RobotIcon } from "@phosphor-icons/react";
+import {
+  ArrowBendDownRightIcon,
+  ChatsCircleIcon,
+  DotsThreeIcon,
+  RobotIcon,
+} from "@phosphor-icons/react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { Message, User } from "@aspen/protocol";
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 // React Aria Components has no long press; the hook it is built on does.
 import { useLongPress } from "react-aria";
 import { Button } from "react-aria-components";
@@ -48,14 +61,15 @@ import { useAspenClient } from "@/api/context";
 import { useMessages } from "@/i18n/context";
 import { feelPress } from "@/features/messages/haptics";
 import { MessageActionSheet } from "@/features/messages/MessageActionSheet";
-import { MessageActions, type MessageSheet } from "@/features/messages/MessageActions";
+import { MessageActions, actionClass, type MessageSheet } from "@/features/messages/MessageActions";
+import { ACTION_ICON } from "@/features/messages/actionIcon";
 import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 import { UserMention } from "@/features/messages/Mention";
 import { formatNodes } from "@/i18n/formatNodes";
 import { useNameIn } from "@/features/users/nameIn";
-import { useRowProps } from "@/features/messages/messageRows";
+import { useRowEngagement, useRowProps } from "@/features/messages/messageRows";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 /** The time a grouped message shows after what it ends with, its day being its group's. */
@@ -76,6 +90,51 @@ const TRAILING_CLEARANCE_PX = 2;
 /** How soon after a message arrives that it is drawn arriving. */
 const ARRIVING_MS = 1000;
 
+/** An end of the pointer's actions, as the tab order meets them. */
+type ActionsEnd = "first" | "last";
+
+/**
+ * Where the pointer's actions stand for the row `row`: how far they rise over the message
+ * before, which is no further than the top of the list, or of whatever holds the row, where
+ * they would be cut off or cover what is above; and how far under the top of what the body
+ * ends with its time and saved mark must start (`MessageBody`'s `trailingDrop`) to clear them,
+ * which is only where those sit beside that block and reach across under the actions.
+ * Elsewhere, and under the block where the line has no room beside it, they are clear already.
+ */
+function actionsPlace(
+  row: HTMLElement,
+  toolbar: HTMLElement | null,
+  id: string,
+): { rise: number; trailingDrop: number | undefined } {
+  const room = row.closest<HTMLElement>("[data-message-list]") ?? row.parentElement;
+  const top = row.getBoundingClientRect().top;
+  const rise = Math.min(
+    TOOLBAR_RISE_PX,
+    Math.max(0, Math.floor(top - (room?.getBoundingClientRect().top ?? 0))),
+  );
+  const trailing = row.querySelector<HTMLElement>(`[data-trailing="${CSS.escape(id)}"]`);
+  const block = trailing?.previousElementSibling;
+  if (trailing == null || block == null || toolbar === null) {
+    return { rise, trailingDrop: undefined };
+  }
+  const blockBox = block.getBoundingClientRect();
+  const trailingBox = trailing.getBoundingClientRect();
+  const toolbarBox = toolbar.getBoundingClientRect();
+  // Where its line starts, whatever drop it has now: the block's top beside it, its bottom
+  // under it.
+  const lineTop = trailingBox.top - parseFloat(getComputedStyle(trailing).marginTop);
+  const beside = lineTop < blockBox.bottom;
+  const underToolbar = trailingBox.right > toolbarBox.left && trailingBox.left < toolbarBox.right;
+  const toolbarBottom = top - rise + toolbarBox.height;
+  return {
+    rise,
+    trailingDrop:
+      beside && underToolbar
+        ? Math.max(0, toolbarBottom + TRAILING_CLEARANCE_PX - blockBox.top)
+        : undefined,
+  };
+}
+
 /**
  * One message. `parentId` is the parent channel when `channelId` is a thread: its messages
  * link to the thread and cannot start threads of their own. Elsewhere a message offers to
@@ -92,7 +151,11 @@ const ARRIVING_MS = 1000;
  *
  * Its actions (`MessageActions`) show in a bar rising over its top corner while the pointer is
  * over it or focus is in it, kept out of the layout so the header and body sit where they
- * would without it; near the top of its list, the bar rises only as far as there is room. A
+ * would without it; near the top of its list, the bar rises only as far as there is room. They
+ * are built only while the row is engaged (`useRowEngagement`): each button of theirs holds
+ * state of its own, and a window of messages holds thousands of them, nearly all unseen. A row
+ * not engaged keeps one button in their place (`ActionsStandIn`), so the tab order and
+ * assistive technology still find the actions where they are. A
  * touch screen has no hover, and a row of buttons over every message would cost the
  * screen's room, so there a long press on the message opens them in a sheet sliding up from
  * the bottom (`MessageActionSheet`), with quick reactions above them and a tap felt in the
@@ -135,6 +198,9 @@ export const MessageItem = memo(function MessageItem({
   const timeOfDay = useDateFormat(TIME_OF_DAY);
   const [editing, setEditing] = useState(false);
   const rowProps = useRowProps(id);
+  const { engaged, pointed } = useRowEngagement(id);
+  // The end of the actions focus goes on to once they are built, having reached their stand-in.
+  const focusActions = useRef<ActionsEnd | null>(null);
   // How far the pointer's actions rise above the row: all the way, or as far as there is room.
   const [toolbarRise, setToolbarRise] = useState(TOOLBAR_RISE_PX);
   // How far under the top of what the body ends with its time and saved mark start, when they
@@ -174,6 +240,27 @@ export const MessageItem = memo(function MessageItem({
       setSheet(open ? which : null);
     },
   });
+  const placeToolbar = useCallback(() => {
+    if (row.current !== null) {
+      const place = actionsPlace(row.current, toolbar.current, id);
+      setToolbarRise(place.rise);
+      setTrailingDrop(place.trailingDrop);
+    }
+  }, [id]);
+  // The actions are built as the row is engaged, after the event that placed them without
+  // their size to go by.
+  useLayoutEffect(() => {
+    if (!engaged) {
+      return;
+    }
+    placeToolbar();
+    const end = focusActions.current;
+    focusActions.current = null;
+    if (end !== null) {
+      const buttons = toolbar.current?.querySelectorAll<HTMLElement>("button:not(:disabled)");
+      buttons?.[end === "first" ? 0 : buttons.length - 1]?.focus();
+    }
+  }, [engaged, placeToolbar]);
   // A message that came while the reader was here rises into place; history arrives still.
   const [arriving] = useState(() => {
     const at = sync.store.arrivedAt(id);
@@ -263,45 +350,6 @@ export const MessageItem = memo(function MessageItem({
       setEditing(true);
     },
   };
-  // The pointer's actions rise over the message before, but no further than the top of the
-  // list, or of whatever holds the row, where they would be cut off or cover what is above.
-  // Its time and saved mark, beside the top of a picture or card, start under them where they
-  // would reach across under them; elsewhere, and under the block where the line has no room
-  // beside it, they are clear of the actions already.
-  const placeToolbar = () => {
-    const el = row.current;
-    if (el === null) {
-      return;
-    }
-    const room = el.closest<HTMLElement>("[data-message-list]") ?? el.parentElement;
-    const top = el.getBoundingClientRect().top;
-    const rise = Math.min(
-      TOOLBAR_RISE_PX,
-      Math.max(0, Math.floor(top - (room?.getBoundingClientRect().top ?? 0))),
-    );
-    setToolbarRise(rise);
-    const trailing = el.querySelector<HTMLElement>(`[data-trailing="${CSS.escape(id)}"]`);
-    const block = trailing?.previousElementSibling;
-    if (trailing == null || block == null || toolbar.current === null) {
-      setTrailingDrop(undefined);
-      return;
-    }
-    const blockBox = block.getBoundingClientRect();
-    const trailingBox = trailing.getBoundingClientRect();
-    const toolbarBox = toolbar.current.getBoundingClientRect();
-    // Where its line starts, whatever drop it has now: the block's top beside it, its bottom
-    // under it.
-    const lineTop = trailingBox.top - parseFloat(getComputedStyle(trailing).marginTop);
-    const beside = lineTop < blockBox.bottom;
-    // Only what reaches across under the actions needs to dodge them.
-    const underToolbar = trailingBox.right > toolbarBox.left && trailingBox.left < toolbarBox.right;
-    const toolbarBottom = top - rise + toolbarBox.height;
-    setTrailingDrop(
-      beside && underToolbar
-        ? Math.max(0, toolbarBottom + TRAILING_CLEARANCE_PX - blockBox.top)
-        : undefined,
-    );
-  };
   // A message that tags the reader stands out, with a bar at its edge in place of padding.
   const tagsMe = sync.store.mentionsMe(message);
   return (
@@ -313,7 +361,13 @@ export const MessageItem = memo(function MessageItem({
       {...(touchOnly
         ? longPressProps
         : {
-            onPointerEnter: placeToolbar,
+            onPointerEnter: () => {
+              pointed();
+              placeToolbar();
+            },
+            // A pointer the row came to under (a scroll, a row drawn where it rests) enters
+            // nothing; its next move engages the row.
+            ...(engaged ? {} : { onPointerMove: pointed }),
             onFocus: () => {
               rowProps.onFocus();
               placeToolbar();
@@ -415,7 +469,19 @@ export const MessageItem = memo(function MessageItem({
             className="pointer-events-none absolute end-2 z-10 flex gap-0.5 rounded-lg border border-line bg-surface-raised p-0.5 opacity-0 shadow-sm group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
             style={{ top: -toolbarRise }}
           >
-            <MessageActions {...actions} />
+            {engaged ? (
+              <MessageActions {...actions} />
+            ) : (
+              <ActionsStandIn
+                onReach={(end) => {
+                  focusActions.current = end;
+                }}
+                onActivate={() => {
+                  focusActions.current = "first";
+                  pointed();
+                }}
+              />
+            )}
           </div>
         )}
         {editing ? (
@@ -477,6 +543,46 @@ export const MessageItem = memo(function MessageItem({
     </article>
   );
 });
+
+/**
+ * Stands where a row's actions go while the row is not engaged, so they are still found there.
+ * Focus reaching it, by Tab from either side or as assistive technology moves to it, engages
+ * the row, as focus anywhere in a row does, and `onReach` says which end of the actions the
+ * tab order would have met, for focus to go on to. Activated without being focused, as some
+ * assistive technology does, it asks for the row to be engaged (`onActivate`). It is never
+ * seen: the actions show only while the row is engaged.
+ *
+ * It is a plain `button`, not React Aria's: every row holds one, a pointer never presses it,
+ * and it is gone the moment it has focus, so it has no use for the press, hover, and focus
+ * state that one keeps, close to a hundred hooks a button.
+ */
+function ActionsStandIn({
+  onReach,
+  onActivate,
+}: {
+  onReach: (end: ActionsEnd) => void;
+  onActivate: () => void;
+}) {
+  const m = useMessages();
+  return (
+    <button
+      type="button"
+      aria-label={m.showMessageActions}
+      onFocus={(event) => {
+        const from = event.relatedTarget;
+        const fromAfter =
+          from instanceof Node &&
+          (event.currentTarget.compareDocumentPosition(from) & Node.DOCUMENT_POSITION_FOLLOWING) !==
+            0;
+        onReach(fromAfter ? "last" : "first");
+      }}
+      onClick={onActivate}
+      className={actionClass}
+    >
+      <DotsThreeIcon size={ACTION_ICON} aria-hidden="true" />
+    </button>
+  );
+}
 
 /** A notice the server writes into the conversation, under no author, set in line with text. */
 function NoticeRow({

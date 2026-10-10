@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { bob, general, signInToWorld } from "./world";
+import { bob, general, ownText, signInToWorld } from "./world";
 
 /**
  * Appearance and accessibility, against the stubbed world: the message text size and line
@@ -183,6 +183,60 @@ test("the keyboard moves between messages, the list one stop in the tab order", 
   await page.keyboard.press("End");
   await expect(rows.nth(count - 1)).toBeFocused();
   await expect(stops).toHaveCount(1);
+});
+
+test("a message's actions are built for the rows in use, and are met in the same order", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(isMobile, "a phone offers the actions under a long press");
+  await signInToWorld(page);
+  await openGeneral(page);
+  const row = page.locator("article").filter({ hasText: "Sounds good. See everyone at ten" });
+  // A row beside it, so going from one to the other scrolls nothing under the pointer.
+  const other = page.locator("article").filter({ hasText: ownText });
+  // The oldest row, where focus goes to leave the row under test to itself.
+  const first = page.locator("[data-message-row]").first();
+  const actionsOf = (article: typeof row) =>
+    article.getByRole("group", { name: "Message actions" }).getByRole("button");
+  // A row not in use holds one button where its actions go, for whoever looks for them there.
+  await expect(actionsOf(row)).toHaveCount(1);
+  await expect(actionsOf(row)).toHaveAccessibleName("Show message actions");
+  // The pointer builds them, and they stay built while focus is in another row.
+  await row.hover();
+  await expect(actionsOf(row).first()).toHaveAccessibleName("Add a reaction");
+  await other.focus();
+  await expect(actionsOf(other).first()).toHaveAccessibleName("Add a reaction");
+  await expect(actionsOf(row).first()).toHaveAccessibleName("Add a reaction");
+  await expect(actionsOf(row).first()).toBeVisible();
+
+  // Focus reaching the button from before it goes on to the first action. The pointer rests
+  // off the list from here on, so nothing the list scrolls passes under it.
+  await other.hover();
+  await page.mouse.move(2, 2);
+  await first.focus();
+  await expect(actionsOf(row)).toHaveCount(1);
+  await actionsOf(row).focus();
+  await expect(actionsOf(row).first()).toHaveAccessibleName("Add a reaction");
+  await expect(actionsOf(row).first()).toBeFocused();
+
+  // Shift+Tab from the row after one whose actions are the last of its controls meets the last
+  // of them.
+  const plain = page.locator("article").filter({ hasText: "Morning all!" });
+  const plainId = (await plain.getAttribute("data-message-row")) ?? "";
+  await expect(actionsOf(plain)).toHaveCount(1);
+  await page.locator(`[data-message-row="${plainId}"] ~ [data-message-row]`).first().focus();
+  await expect(actionsOf(plain)).toHaveCount(1);
+  await page.keyboard.press("Shift+Tab");
+  await expect(actionsOf(plain).last()).not.toHaveAccessibleName("Show message actions");
+  await expect(actionsOf(plain).last()).toBeFocused();
+
+  // Assistive technology that activates the button without focusing it gets the actions too.
+  await first.focus();
+  await expect(actionsOf(row)).toHaveCount(1);
+  await actionsOf(row).dispatchEvent("click");
+  await expect(actionsOf(row).first()).toHaveAccessibleName("Add a reaction");
+  await expect(actionsOf(row).first()).toBeFocused();
 });
 
 test("arriving messages are read out where the reader asks", async ({ page }) => {

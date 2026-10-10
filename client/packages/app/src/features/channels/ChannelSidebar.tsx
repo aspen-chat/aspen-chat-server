@@ -56,6 +56,7 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useDomain, channelLink } from "@/features/messages/links";
 import { CopyIdButton } from "@/features/layout/CopyId";
+import { OnceOpen } from "@/features/layout/OnceOpen";
 
 /**
  * The drag type channel rows carry, so a channel can be dropped into any channel group but
@@ -455,31 +456,33 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
             }}
             className={muted || tags > 0 ? "" : "ms-auto"}
           />
-          <ChannelMenu
-            channelId={channel.id}
-            name={channel.name}
-            anchorRef={label}
-            isOpen={menuOpen}
-            onOpenChange={setMenuOpen}
-            mutable={channel.ty === "text" || channel.ty === "plugin"}
-            {...(manage
-              ? {
-                  onAccess: () => {
-                    setDialog("access");
-                  },
-                }
-              : {})}
-            {...(manage || moderator
-              ? {
-                  onRename: () => {
-                    setDialog("rename");
-                  },
-                  onDelete: () => {
-                    setDialog("delete");
-                  },
-                }
-              : {})}
-          />
+          <OnceOpen isOpen={menuOpen}>
+            <ChannelMenu
+              channelId={channel.id}
+              name={channel.name}
+              anchorRef={label}
+              isOpen={menuOpen}
+              onOpenChange={setMenuOpen}
+              mutable={channel.ty === "text" || channel.ty === "plugin"}
+              {...(manage
+                ? {
+                    onAccess: () => {
+                      setDialog("access");
+                    },
+                  }
+                : {})}
+              {...(manage || moderator
+                ? {
+                    onRename: () => {
+                      setDialog("rename");
+                    },
+                    onDelete: () => {
+                      setDialog("delete");
+                    },
+                  }
+                : {})}
+            />
+          </OnceOpen>
         </>
       )}
       {manage && channel.community != null && (

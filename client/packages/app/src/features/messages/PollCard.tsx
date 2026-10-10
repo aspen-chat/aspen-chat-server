@@ -52,6 +52,7 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { CopyIdButton } from "@/features/layout/CopyId";
+import { OnceOpen } from "@/features/layout/OnceOpen";
 
 /**
  * A poll in its message: the question, one bar per answer showing its share of the votes, the
@@ -342,19 +343,21 @@ function VotersDialog({
           <UsersIcon size={16} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ModalOverlay className={overlayClass} isDismissable>
-        <Modal className={modalClass}>
-          <Dialog className={dialogClass}>
-            <DialogHeading>{format(m.poll.votersHeading, { option: label })}</DialogHeading>
-            {/* The list is read once the answer has a vote, so one that has none asks nothing. */}
-            {count === 0 ? (
-              <NoVoters label={label} />
-            ) : (
-              <VoterList pollId={pollId} index={index} label={label} />
-            )}
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
+      <OnceOpen>
+        <ModalOverlay className={overlayClass} isDismissable>
+          <Modal className={modalClass}>
+            <Dialog className={dialogClass}>
+              <DialogHeading>{format(m.poll.votersHeading, { option: label })}</DialogHeading>
+              {/* The list is read once the answer has a vote, so one that has none asks nothing. */}
+              {count === 0 ? (
+                <NoVoters label={label} />
+              ) : (
+                <VoterList pollId={pollId} index={index} label={label} />
+              )}
+            </Dialog>
+          </Modal>
+        </ModalOverlay>
+      </OnceOpen>
     </DialogTrigger>
   );
 }
@@ -472,15 +475,17 @@ function RemoveWriteInDialog({
           <XIcon size={16} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ModalOverlay className={overlayClass} isDismissable>
-        <Modal className={modalClass}>
-          <Dialog role="alertdialog" className={dialogClass}>
-            {({ close }) => (
-              <ConfirmRemove pollId={pollId} index={index} label={label} close={close} />
-            )}
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
+      <OnceOpen>
+        <ModalOverlay className={overlayClass} isDismissable>
+          <Modal className={modalClass}>
+            <Dialog role="alertdialog" className={dialogClass}>
+              {({ close }) => (
+                <ConfirmRemove pollId={pollId} index={index} label={label} close={close} />
+              )}
+            </Dialog>
+          </Modal>
+        </ModalOverlay>
+      </OnceOpen>
     </DialogTrigger>
   );
 }

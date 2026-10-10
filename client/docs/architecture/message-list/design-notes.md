@@ -64,3 +64,21 @@ See [moving between messages by keyboard](keyboard.md).
 
 - **A row asks for the stop with `useRowStop`.** Moving re-renders only the rows the stop leaves and
   reaches.
+
+## What a row holds
+
+See [what a row holds](memory.md).
+
+- **Rows are all drawn, not virtualized.** Rows far from the view could stand as placeholders of
+  their measured height, which would hold the least of all, but text that is not drawn is not found
+  by the browser's find-in-page nor read by a screen reader moving through the conversation, and the
+  list's stillness rests on real rows' real heights. So a row is made light instead.
+- **Actions are built for the rows in use, not for the row alone that is hovered.** Building them
+  as the pointer enters and dropping them as it leaves would close whatever they had opened, and
+  leave a dialog that closes with no button to give focus back to. A row keeps them until another
+  takes its place, which nothing can while what they opened is open.
+- **A stand-in button rather than nothing.** With nothing where the actions go, Shift+Tab into a
+  row from the row after would skip them, and a screen reader moving through the messages without
+  moving focus would never come upon them.
+- **Overlays wait for their first opening, not for every opening.** One built and dropped each time
+  would be gone before it could move as it closes.

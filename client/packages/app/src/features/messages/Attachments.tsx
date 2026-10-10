@@ -22,6 +22,7 @@ import { format } from "@/i18n/messages";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { CopyIdButton } from "@/features/layout/CopyId";
 import { mediaUrl, webPageUrl } from "@/features/layout/safeUrl";
+import { OnceOpen } from "@/features/layout/OnceOpen";
 
 const imageClass = "block max-h-80 max-w-full rounded-md border border-line object-contain";
 
@@ -188,14 +189,16 @@ export function MessageMedia({
           </Button>
         </li>
       )}
-      <ImageGallery
-        pictures={pictures}
-        initial={gallery ?? 0}
-        isOpen={gallery !== null}
-        onClose={() => {
-          setGallery(null);
-        }}
-      />
+      <OnceOpen isOpen={gallery !== null}>
+        <ImageGallery
+          pictures={pictures}
+          initial={gallery ?? 0}
+          isOpen={gallery !== null}
+          onClose={() => {
+            setGallery(null);
+          }}
+        />
+      </OnceOpen>
     </ul>
   );
 }
