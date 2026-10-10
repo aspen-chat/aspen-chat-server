@@ -10,10 +10,10 @@ about. It has three parties besides Apple and Google:
 - **The deployment**: an Aspen API server. It decides who should be notified of what.
 - **The relay**: a service holding the credentials of one published build of the Aspen app,
   through which alone that build's phones can be reached: Apple's push service (APNs) for iOS,
-  Google's (FCM) for Android builds from the Play Store. The Aspen Foundation runs the relay for
-  the app it publishes; anyone who publishes their own build runs their own. A relay is the only
-  holder of those credentials because they cannot be shared: an APNs key sends to every user of
-  every app of its team, and an FCM service account to every user of its project.
+  Google's (FCM) for Android builds from the Play Store. The Aspen Chat Foundation runs the relay
+  for the app it publishes; anyone who publishes their own build runs their own. A relay is the
+  only holder of those credentials because they cannot be shared: an APNs key sends to every user
+  of every app of its team, and an FCM service account to every user of its project.
 - **The app**: the Aspen app on one phone, signed in to one or more deployments.
 
 A phone on Android without Google's services receives push through **UnifiedPush** instead: a

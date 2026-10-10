@@ -8,7 +8,7 @@
 
 How phones are woken:
 
-- Through the relay of whoever published their app (the Aspen Foundation's, for the published
-  apps), or through a UnifiedPush distributor.
+- Through the relay of whoever published their app (the Aspen Chat Foundation's, for the
+  published apps), or through a UnifiedPush distributor.
 - This server calls them over HTTPS, as it calls other deployments.
 - What it sends is encrypted to the phone, and says only which channel and message to fetch.
