@@ -3,8 +3,6 @@ packages:
 
 # pnpm runs no dependency install scripts unless listed here.
 allowBuilds:
-  # Downloads the Electron binary for this platform.
-  electron: true
   # Downloads the esbuild binary Vite relies on.
   esbuild: true
   # Windows-only installer tooling pulled in by electron-builder; nothing to build elsewhere.

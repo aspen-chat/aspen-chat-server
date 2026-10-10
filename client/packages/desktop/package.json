@@ -7,7 +7,7 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "install-electron && electron-vite dev",
     "build": "electron-vite build",
     "fetch:libobs": "node scripts/fetch-libobs.mjs",
     "build:native": "cargo build --release --manifest-path native/obs-capture/Cargo.toml && node scripts/copy-native.mjs",
