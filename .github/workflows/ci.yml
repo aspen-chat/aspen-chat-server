@@ -200,7 +200,7 @@ jobs:
       # AppArmor keeps from programs it has no profile for.
       - name: Allow user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      # What `packages/desktop/flatpak/org.aspenchat.client.yml` builds on and runs in.
+      # What `packages/desktop/flatpak/com.aspen_chat.client.yml` builds on and runs in.
       - name: Flatpak runtime, SDK, and base app
         run: |
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -221,7 +221,7 @@ jobs:
         run: |
           flatpak install --user --noninteractive ./Aspen-*.flatpak
           echo '{"type":"kinds","id":1}' \
-            | flatpak run --command=/app/aspen/resources/aspen-obs-capture org.aspenchat.client \
+            | flatpak run --command=/app/aspen/resources/aspen-obs-capture com.aspen_chat.client \
             | grep '"type":"kinds"'
       - uses: actions/upload-artifact@v4
         with:

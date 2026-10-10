@@ -4,14 +4,14 @@ The desktop app is packaged as a Flatpak for Linux, alongside the other Linux pa
 
 ## Where it lives
 
-| Part                                                        | Code                                                |
-| ----------------------------------------------------------- | --------------------------------------------------- |
-| Manifest: runtime, permissions, and what is installed where | `packages/desktop/flatpak/org.aspenchat.client.yml` |
-| Launcher                                                    | `flatpak/aspen.sh`                                  |
-| Desktop entry                                               | `flatpak/org.aspenchat.client.desktop`              |
-| What software centres show                                  | `flatpak/org.aspenchat.client.metainfo.xml.in`      |
-| Build script                                                | `packages/desktop/scripts/flatpak.mjs`              |
-| The window naming its desktop entry                         | `src/main/index.ts`                                 |
+| Part                                                        | Code                                                 |
+| ----------------------------------------------------------- | ---------------------------------------------------- |
+| Manifest: runtime, permissions, and what is installed where | `packages/desktop/flatpak/com.aspen_chat.client.yml` |
+| Launcher                                                    | `flatpak/aspen.sh`                                   |
+| Desktop entry                                               | `flatpak/com.aspen_chat.client.desktop`              |
+| What software centres show                                  | `flatpak/com.aspen_chat.client.metainfo.xml.in`      |
+| Build script                                                | `packages/desktop/scripts/flatpak.mjs`               |
+| The window naming its desktop entry                         | `src/main/index.ts`                                  |
 
 ## Building it
 

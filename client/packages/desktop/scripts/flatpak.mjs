@@ -5,7 +5,7 @@
 //   node scripts/flatpak.mjs [--branch stable|beta]
 //
 // It needs flatpak-builder (on the `PATH`, or the `org.flatpak.Builder` Flatpak) and, installed
-// from Flathub, the runtime, SDK, and base app `flatpak/org.aspenchat.client.yml` names.
+// from Flathub, the runtime, SDK, and base app `flatpak/com.aspen_chat.client.yml` names.
 //
 // `ASPEN_FLATPAK_GPG_KEY` names the GnuPG key the repository's commits and summary are signed
 // with (`ASPEN_FLATPAK_GPG_HOMEDIR` its keyring, when not the default). A repository people add
@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 
-const APP_ID = "org.aspenchat.client";
+const APP_ID = "com.aspen_chat.client";
 // Where the bundle tells Flatpak to find the runtime when the machine lacks it.
 const RUNTIME_REPO = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 const BRANCHES = ["stable", "beta"];

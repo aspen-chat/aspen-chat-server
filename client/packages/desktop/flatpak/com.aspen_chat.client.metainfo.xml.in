@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- What software centres show of the app. `scripts/flatpak.mjs` fills in the release. -->
 <component type="desktop-application">
-  <id>org.aspenchat.client</id>
+  <id>com.aspen_chat.client</id>
   <name>Aspen</name>
   <summary>Text, voice, and video chat for communities</summary>
-  <developer id="org.aspenchat">
+  <developer id="com.aspen_chat">
     <name>The Aspen contributors</name>
   </developer>
   <metadata_license>CC0-1.0</metadata_license>
@@ -19,7 +19,7 @@
       Deployments federate: an account on one can join communities on others.
     </p>
   </description>
-  <launchable type="desktop-id">org.aspenchat.client.desktop</launchable>
+  <launchable type="desktop-id">com.aspen_chat.client.desktop</launchable>
   <url type="homepage">https://github.com/aspen-chat/aspen-chat-server</url>
   <url type="bugtracker">https://github.com/aspen-chat/aspen-chat-server/issues</url>
   <url type="vcs-browser">https://github.com/aspen-chat/aspen-chat-server</url>
