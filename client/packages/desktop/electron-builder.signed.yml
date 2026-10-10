@@ -1,0 +1,17 @@
+# Packaging with our signature on it: `pnpm package:signed`, which CI runs for builds of `main`
+# and no pull request's, since whatever it builds carries the publisher's name. Everything else
+# is `electron-builder.yml`.
+extends: ./electron-builder.yml
+win:
+  # Without this a build whose signing failed would still produce an installer.
+  forceCodeSigning: true
+  # Azure Trusted Signing, which keeps the key and signs what the service principal in
+  # `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET` sends it. Its certificates
+  # last days, not years, so a signature holds only by its timestamp, which electron-builder
+  # asks Microsoft's timestamp service for unless told otherwise.
+  azureSignOptions:
+    # The certificate's common name, which Windows shows as the publisher.
+    publisherName: Jacob Kiesel
+    endpoint: https://eus.codesigning.azure.net/
+    codeSigningAccountName: AspenChat
+    certificateProfileName: AspenChat

@@ -55,6 +55,7 @@ pnpm e2e              # Playwright against Chromium, Firefox, and WebKit (run `p
 pnpm build            # production build of every package
 pnpm dev:desktop      # Electron pointed at the running Vite dev server
 pnpm --filter @aspen/desktop package   # installers under packages/desktop/release
+pnpm --filter @aspen/desktop package:signed   # the same, signed (Windows; needs the AZURE_* credentials, as CI has)
 pnpm --filter @aspen/mobile run:android   # build, sync, and install on a phone (see below)
 ```
 

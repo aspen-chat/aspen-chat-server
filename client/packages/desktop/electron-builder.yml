@@ -35,6 +35,7 @@ protocols:
     schemes:
       - aspen
 npmRebuild: false
+afterPack: ./scripts/check-libobs.mjs
 linux:
   # The package's own name, `@aspen/desktop`, is no file name.
   executableName: aspen
@@ -72,3 +73,12 @@ win:
         - obs-plugins/**
         - data/**
         - VERSION
+  # electron-builder signs every `.exe` it packages, which would put our signature over the OBS
+  # Project's on the game hook's helpers; anti-cheat systems and antivirus software know them by
+  # the OBS Project's. `scripts/check-libobs.mjs` fails the build when a file under `libobs/`
+  # differs from the one fetched, which is how an OBS release with a new executable shows up here.
+  signExts:
+    - "!inject-helper32.exe"
+    - "!inject-helper64.exe"
+    - "!get-graphics-offsets32.exe"
+    - "!get-graphics-offsets64.exe"

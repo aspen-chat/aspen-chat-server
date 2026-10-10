@@ -163,7 +163,39 @@ jobs:
       - run: pnpm codegen
       # The OBS Project's own signed release files, pinned by checksum (`scripts/fetch-libobs.mjs`).
       - run: pnpm --filter @aspen/desktop fetch:libobs
-      - run: pnpm --filter @aspen/desktop package
+      # A pull request's installer is unsigned: it is built from code no one has reviewed, and
+      # whatever is signed carries the publisher's name.
+      - if: github.event_name == 'pull_request'
+        run: pnpm --filter @aspen/desktop package
+      - if: github.event_name != 'pull_request'
+        run: pnpm --filter @aspen/desktop package:signed
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      - name: Check that our files carry our signature, and the OBS Project's theirs
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        working-directory: client/packages/desktop/release
+        run: |
+          # The start of the certificate's subject (`publisherName` in electron-builder.signed.yml).
+          $publisher = 'CN=Jacob Kiesel,'
+          $ours = @(Get-ChildItem *.exe) + @(Get-Item win-unpacked/Aspen.exe, win-unpacked/resources/aspen-obs-capture.exe)
+          foreach ($file in $ours) {
+            $signature = Get-AuthenticodeSignature $file
+            "$($file.Name): $($signature.Status), $($signature.SignerCertificate.Subject)"
+            if ($signature.Status -ne 'Valid') { throw "$($file.Name) has no valid signature: $($signature.StatusMessage)" }
+            if (-not $signature.SignerCertificate.Subject.StartsWith($publisher)) { throw "$($file.Name) is not signed by $publisher" }
+            # The certificate lasts days; past them the signature holds only by its timestamp.
+            if (-not $signature.TimeStamperCertificate) { throw "$($file.Name)'s signature has no timestamp" }
+          }
+          $hook = 'win-unpacked/resources/libobs/data/obs-plugins/win-capture'
+          foreach ($file in Get-Item $hook/graphics-hook64.dll, $hook/inject-helper64.exe, $hook/get-graphics-offsets64.exe) {
+            $signature = Get-AuthenticodeSignature $file
+            "$($file.Name): $($signature.Status), $($signature.SignerCertificate.Subject)"
+            if ($signature.Status -ne 'Valid') { throw "$($file.Name) has no valid signature: $($signature.StatusMessage)" }
+            if ($signature.SignerCertificate.Subject.StartsWith($publisher)) { throw "$($file.Name) carries our signature in place of the OBS Project's" }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-windows
