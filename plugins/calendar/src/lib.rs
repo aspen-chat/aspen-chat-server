@@ -323,7 +323,7 @@ fn delete(channel: &str, event: &Event) -> Response {
 }
 
 /// The kind of channel a calendar is, as the manifest names it beneath the plugin's id.
-const CALENDAR: &str = "org.aspenchat.calendar:calendar";
+const CALENDAR: &str = "com.aspen-chat.calendar:calendar";
 
 /// Whether `channel` is a calendar. Read as the caller, a channel they may not view is none.
 fn is_calendar(channel: &str) -> bool {

@@ -28,7 +28,7 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>org.aspenchat.client</string>
+			<string>com.aspen-chat.client</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>aspen</string>
@@ -98,6 +98,6 @@
 	<key>AspenPushRelay</key>
 	<string>$(ASPEN_PUSH_RELAY)</string>
 	<key>AspenKeychainAccessGroup</key>
-	<string>$(AppIdentifierPrefix)org.aspenchat.client.push</string>
+	<string>$(AppIdentifierPrefix)com.aspen-chat.client.push</string>
 </dict>
 </plist>

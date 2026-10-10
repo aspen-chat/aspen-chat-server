@@ -1,5 +1,5 @@
 {
-  "id": "org.aspenchat.forum",
+  "id": "com.aspen-chat.forum",
   "version": "1.2.0",
   "api": 1,
   "component": "target/wasm32-wasip2/release/aspen_forum.wasm",

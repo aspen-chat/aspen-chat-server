@@ -311,7 +311,7 @@ fn publish(channel: &str, table: &Table) {
 }
 
 /// The kind of channel a table is, as the manifest names it beneath the plugin's id.
-const TABLE_KIND: &str = "org.aspenchat.blackjack:table";
+const TABLE_KIND: &str = "com.aspen-chat.blackjack:table";
 
 /// The community of the table in `channel`, which the caller may view, and, when they are to
 /// play, may send messages in. A channel of any other kind has no table.

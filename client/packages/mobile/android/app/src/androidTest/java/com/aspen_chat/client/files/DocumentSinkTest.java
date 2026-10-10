@@ -1,4 +1,4 @@
-package org.aspenchat.client.files;
+package com.aspen_chat.client.files;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;

@@ -290,7 +290,7 @@ fn changed(channel: &str) {
 }
 
 /// The kind of channel a board is, as the manifest names it beneath the plugin's id.
-const BOARD: &str = "org.aspenchat.forum:board";
+const BOARD: &str = "com.aspen-chat.forum:board";
 
 /// Whether `channel` is a board. Read as the caller, a channel they may not view is none.
 fn is_board(channel: &str) -> bool {

@@ -41,7 +41,7 @@ A plugin is a WebAssembly component (the component model, built against `spec/pl
 together with a manifest, a JSON file beside it:
 
 - `id`: a domain its author controls, reversed (`org.example.nocursing`), as a fork names its
-  capabilities (`spec/federation.md`). Aspen's own plugins use `org.aspenchat.*`.
+  capabilities (`spec/federation.md`). Aspen's own plugins use `com.aspen-chat.*`.
 - `version`: semver, for people and for the host's upgrades.
 - `api`: the version of the plugin interface it was built against (`1`). The host supports every
   version of the last thirty-six months; within a version the interface changes only by

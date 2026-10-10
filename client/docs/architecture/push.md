@@ -105,7 +105,7 @@ The `AppDelegate` posts APNs registration to the Capacitor push plugin.
 | Check | What it does |
 | --- | --- |
 | `ios/scripts/check_webpush.sh` | Runs `WebPush.swift` against RFC 8291's example with `swiftc`; no target needed |
-| `xcrun simctl push <device> org.aspenchat.client payload.json` | Delivers a push to the simulator without APNs or the relay, with `aspen.s` and `aspen.c` as the relay would send them. Shows only the placeholder |
+| `xcrun simctl push <device> com.aspen-chat.client payload.json` | Delivers a push to the simulator without APNs or the relay, with `aspen.s` and `aspen.c` as the relay would send them. Shows only the placeholder |
 | `ios/scripts/check_notification.sh state.json payload.json` | Runs the extension's work on a Mac with its own sources, on a kept state and such a payload. Reaches the deployment the state names and prints what the notification would show |
 | `pnpm --filter @aspen/mobile test:android` | Runs the JVM tests and, on a connected device or emulator, the handler end to end against a stand-in deployment |
 

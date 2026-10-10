@@ -81,7 +81,7 @@ Aspen API's are, and each `detail` says what to do.
 `POST /v1/devices` registers one install of the app:
 
 ```json
-{ "platform": "apns", "app": "org.aspen.chat", "environment": "production", "token": "…" }
+{ "platform": "apns", "app": "com.aspen-chat.client", "environment": "production", "token": "…" }
 ```
 
 `platform` is `apns` or `fcm`; `app` is the bundle id (APNs topic) or FCM project, which must be

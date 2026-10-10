@@ -1,4 +1,4 @@
-package org.aspenchat.client.files;
+package com.aspen_chat.client.files;
 
 import android.content.ContentResolver;
 import android.net.Uri;
