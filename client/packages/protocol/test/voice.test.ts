@@ -565,7 +565,7 @@ describe("VoiceCall", () => {
     FakeSocket.behaviour = new Map([["near", "throttled"]]);
     const { call, calls } = makeCall({
       candidates: ["near", "far"],
-      latency: { near: 1, far: 2 },
+      latency: { near: 1, far: 30 },
     });
     await expect(call.join(channel)).rejects.toThrow("too many createTransport frames");
     expect(call.state).toMatchObject({
@@ -581,7 +581,10 @@ describe("VoiceCall", () => {
 
   it("treats being turned away at identify for coming too fast as a refusal too", async () => {
     FakeSocket.behaviour = new Map([["near", "throttledIdentify"]]);
-    const { call, calls } = makeCall({ candidates: ["near", "far"], latency: { near: 1, far: 2 } });
+    const { call, calls } = makeCall({
+      candidates: ["near", "far"],
+      latency: { near: 1, far: 30 },
+    });
     await expect(call.join(channel)).rejects.toThrow("too many identify frames");
     expect(call.state).toMatchObject({ errorKind: "refused", retryAfterSeconds: 7 });
     expect(FakeSocket.instances).toHaveLength(1);

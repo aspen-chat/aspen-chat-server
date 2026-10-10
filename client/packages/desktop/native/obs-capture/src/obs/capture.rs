@@ -473,6 +473,7 @@ pub fn start_audio_capture(options: AudioStart) -> Result<()> {
             }
         };
         let sound_only = |output| Session {
+            serial,
             source: ptr::null_mut(),
             scene: ptr::null_mut(),
             item: ptr::null_mut(),
