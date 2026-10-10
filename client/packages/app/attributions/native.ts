@@ -80,7 +80,7 @@ const MEDIASOUP: readonly NativeLibrary[] = [
     license: "MIT",
     url: "https://github.com/martinus/unordered_dense",
     texts: ["unordered_dense-LICENSE"],
-    version: { wrap: "unordered-dense", directory: "unordered_dense-4.8.1", version: "4.8.1" },
+    version: { wrap: "unordered-dense", directory: "unordered_dense-5.3.1", version: "5.3.1" },
   },
 ];
 
