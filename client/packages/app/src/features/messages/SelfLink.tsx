@@ -1,4 +1,5 @@
 import type { Channel } from "@aspen/protocol";
+import { OnceOpen } from "@/features/layout/OnceOpen";
 import { ArrowSquareOutIcon, CaretRightIcon, CopyIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { Fragment, useContext, useRef, useState, type ReactNode } from "react";
@@ -113,46 +114,48 @@ export function SelfLink({ target, href }: { target: SelfLinkTarget; href: strin
           </SourceScope>
         )}
       </Link>
-      <Popover
-        triggerRef={anchor}
-        isOpen={menuOpen}
-        onOpenChange={setMenuOpen}
-        placement="bottom start"
-        className={popoverClass}
-      >
-        <Dialog aria-label={m.selfLinks.options} className="outline-none">
-          <Menu aria-label={m.selfLinks.options} className="outline-none">
-            <MenuItem
-              id="copy"
-              className={itemClass}
-              onAction={() => {
-                void copyText(href, anchor.current ?? document.body).then((copied) => {
-                  if (copied) {
-                    toast(m.selfLinks.copiedLink);
-                  }
-                });
-              }}
-            >
-              <CopyIcon size={14} aria-hidden="true" className="shrink-0 text-ink-muted" />
-              {m.selfLinks.copyLink}
-            </MenuItem>
-            <MenuItem
-              id="open"
-              href={href}
-              target="_blank"
-              rel="noreferrer noopener"
-              className={itemClass}
-            >
-              <ArrowSquareOutIcon
-                size={14}
-                aria-hidden="true"
-                className="shrink-0 text-ink-muted"
-              />
-              {m.selfLinks.openOriginal}
-            </MenuItem>
-          </Menu>
-        </Dialog>
-      </Popover>
+      <OnceOpen isOpen={menuOpen}>
+        <Popover
+          triggerRef={anchor}
+          isOpen={menuOpen}
+          onOpenChange={setMenuOpen}
+          placement="bottom start"
+          className={popoverClass}
+        >
+          <Dialog aria-label={m.selfLinks.options} className="outline-none">
+            <Menu aria-label={m.selfLinks.options} className="outline-none">
+              <MenuItem
+                id="copy"
+                className={itemClass}
+                onAction={() => {
+                  void copyText(href, anchor.current ?? document.body).then((copied) => {
+                    if (copied) {
+                      toast(m.selfLinks.copiedLink);
+                    }
+                  });
+                }}
+              >
+                <CopyIcon size={14} aria-hidden="true" className="shrink-0 text-ink-muted" />
+                {m.selfLinks.copyLink}
+              </MenuItem>
+              <MenuItem
+                id="open"
+                href={href}
+                target="_blank"
+                rel="noreferrer noopener"
+                className={itemClass}
+              >
+                <ArrowSquareOutIcon
+                  size={14}
+                  aria-hidden="true"
+                  className="shrink-0 text-ink-muted"
+                />
+                {m.selfLinks.openOriginal}
+              </MenuItem>
+            </Menu>
+          </Dialog>
+        </Popover>
+      </OnceOpen>
     </>
   );
 }

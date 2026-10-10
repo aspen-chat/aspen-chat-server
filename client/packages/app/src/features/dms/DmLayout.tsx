@@ -40,6 +40,7 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
+import { OnceOpen } from "@/features/layout/OnceOpen";
 
 /**
  * `/dms`: the caller's DMs and group DMs beside the route's content, on their home and every
@@ -328,13 +329,15 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
           }}
         />
       </span>
-      <ChannelMenu
-        channelId={dm.id}
-        name={title}
-        anchorRef={row}
-        isOpen={menuOpen}
-        onOpenChange={setMenuOpen}
-      />
+      <OnceOpen isOpen={menuOpen}>
+        <ChannelMenu
+          channelId={dm.id}
+          name={title}
+          anchorRef={row}
+          isOpen={menuOpen}
+          onOpenChange={setMenuOpen}
+        />
+      </OnceOpen>
     </div>
   );
 }

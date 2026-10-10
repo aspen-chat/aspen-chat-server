@@ -54,6 +54,7 @@ import { PluginAccount, UserAnnotations } from "@/features/plugins/Annotations";
 import { ClearNicknameButton, NicknameForm, ReportNicknameButton } from "@/features/users/Nickname";
 import { useNameIn } from "@/features/users/nameIn";
 import { mailtoUrl } from "@/features/layout/safeUrl";
+import { OnceOpen } from "@/features/layout/OnceOpen";
 
 /**
  * A user's profile as a card, its parts on planes: who they are, their pronouns, what they are up to, the
@@ -556,15 +557,17 @@ export function ProfilePopover({
   return (
     <DialogTrigger>
       {children}
-      <Popover
-        placement={placement}
-        {...(anchorRef === undefined ? {} : { triggerRef: anchorRef })}
-        className="rounded-lg border border-line bg-surface shadow-lg"
-      >
-        <Dialog aria-label={format(m.profile.cardLabel, { name })} className="outline-none">
-          <ProfileCard user={user} />
-        </Dialog>
-      </Popover>
+      <OnceOpen>
+        <Popover
+          placement={placement}
+          {...(anchorRef === undefined ? {} : { triggerRef: anchorRef })}
+          className="rounded-lg border border-line bg-surface shadow-lg"
+        >
+          <Dialog aria-label={format(m.profile.cardLabel, { name })} className="outline-none">
+            <ProfileCard user={user} />
+          </Dialog>
+        </Popover>
+      </OnceOpen>
     </DialogTrigger>
   );
 }

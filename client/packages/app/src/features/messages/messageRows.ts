@@ -13,10 +13,18 @@ import {
  * Tab goes on into the row's own controls, which focus shows. Each list keeps its own
  * `MessageRows`, and a row asks whether it is the stop with `useRowStop`, so moving re-renders
  * only the two rows the stop leaves and reaches.
+ *
+ * It also holds which rows are engaged, the only ones whose actions are built
+ * (`useRowEngagement`): the row the pointer last entered and the row focus last went into. Each
+ * stays engaged until another row takes its place, so whatever its actions opened (a dialog,
+ * the emoji picker) outlives the pointer leaving it, and has its button to give focus back to
+ * when it closes; those are modal, so neither place can be taken while one is open.
  */
 export class MessageRows {
   #chosen: string | null = null;
   #stop: string | null = null;
+  #pointed: string | null = null;
+  #focused: string | null = null;
   readonly #listeners = new Set<() => void>();
 
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -30,19 +38,40 @@ export class MessageRows {
     return this.#stop;
   }
 
-  #setStop(id: string | null): void {
-    if (id === this.#stop) {
-      return;
-    }
-    this.#stop = id;
+  engaged(id: string): boolean {
+    return id === this.#pointed || id === this.#focused;
+  }
+
+  #changed(): void {
     for (const listener of this.#listeners) {
       listener();
     }
   }
 
-  /** A row took focus: it is the stop from now on. */
+  #setStop(id: string | null): void {
+    if (id === this.#stop) {
+      return;
+    }
+    this.#stop = id;
+    this.#changed();
+  }
+
+  /** The pointer entered a row. */
+  readonly pointed = (id: string): void => {
+    if (id === this.#pointed) {
+      return;
+    }
+    this.#pointed = id;
+    this.#changed();
+  };
+
+  /** A row took focus, or something in it did: it is the stop from now on. */
   readonly focused = (id: string): void => {
     this.#chosen = id;
+    if (id !== this.#focused) {
+      this.#focused = id;
+      this.#changed();
+    }
     this.#setStop(id);
   };
 
@@ -115,6 +144,30 @@ const noRows = () => () => undefined;
 export function useRowStop(id: string): boolean {
   const rows = useContext(MessageRowsContext);
   return useSyncExternalStore(rows?.subscribe ?? noRows, () => rows?.stop === id);
+}
+
+const noPointing = () => undefined;
+
+/**
+ * Whether the row `id` is engaged, and what to call as the pointer enters it (focus is noted
+ * through `useRowProps`). A row outside any list is always engaged, having no other rows to
+ * save for.
+ */
+export function useRowEngagement(id: string): { engaged: boolean; pointed: () => void } {
+  const rows = useContext(MessageRowsContext);
+  const engaged = useSyncExternalStore(
+    rows?.subscribe ?? noRows,
+    () => rows === null || rows.engaged(id),
+  );
+  return {
+    engaged,
+    pointed:
+      rows === null
+        ? noPointing
+        : () => {
+            rows.pointed(id);
+          },
+  };
 }
 
 /** What a row needs to take part: its attribute, its place in the tab order, and noting focus. */

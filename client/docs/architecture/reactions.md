@@ -18,7 +18,8 @@ Reactions are store state per message. Per emoji the store holds:
 - the first few to react.
 
 They are installed from the `reactions` sideload of every message read (`setReactions`) and kept
-current by `react` events.
+current by `react` events, for messages the store holds: a reaction to a message it does not hold
+is counted nowhere, since the read that brings the message brings its reactions whole.
 
 - The caller's own reaction is applied from the request's answer and again from its event. The
   second time changes nothing.

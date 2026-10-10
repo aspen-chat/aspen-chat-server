@@ -9,8 +9,11 @@ a page at a time, moves between messages by keyboard, and reads out arrivals.
   scrolls it everywhere else.
 - [Keeping the view still](keeping-still.md): the still row, catching up, linked messages, pictures'
   room, and pinning to the bottom.
-- [History pages](history-pages.md): page size, rendering pages as transitions, and memoized rows.
+- [History pages](history-pages.md): page size, rendering pages as transitions, memoized rows, and
+  what the store keeps of windows and of messages outside them.
 - [Moving between messages by keyboard](keyboard.md): the list's one tab stop and row keys.
+- [What a row holds](memory.md): actions built only for the rows in use, overlays built once
+  opened, and what a row costs.
 - [Reading out arrivals](announcing-arrivals.md): announcing new messages to screen readers.
 - [Tests](tests.md): the Playwright history tests and the iOS simulator test.
 - [Design notes](design-notes.md): why the list works this way.
@@ -30,6 +33,6 @@ The code is in parts, each with one concern. Files are in `src/features/messages
 | `useNewMessagesLine` | `newMessagesLine.ts` | Places the "New Messages" line. |
 | `useReadMarking` | `useReadMarking.ts` | Marks what is seen as read. |
 | `useKeepStill` | `keepStill.ts` | Lets a picture tell the list it arrived. |
-| `MessageRows` | `messageRows.ts` | Keyboard focus between rows. |
+| `MessageRows` | `messageRows.ts` | Keyboard focus between rows, and which rows are engaged. |
 | `useAnnounceArrivals` | `announceArrivals.ts` | Reads out arriving messages. |
 | Diagnostics | `scrollDiagnostics.ts`, `ScrollDiagnosticsPanel` | Records what the list does with its position, in a `VITE_SCROLL_DEBUG=1` build. |

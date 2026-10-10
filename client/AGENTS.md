@@ -69,7 +69,7 @@ same commit, as with comments.
 - [`deployments.md`](docs/architecture/deployments.md): the home and other deployments, `Deployments`, scopes, invites across deployments, protocol versions, blocks across deployments, and file transfers in calls.
 - [`fonts.md`](docs/architecture/fonts.md): Inclusive Sans and Intel One Mono, the bundled Noto fallbacks and their regional Han order, emoji, and the user's own fonts.
 - [`ios-app.md`](docs/architecture/ios-app.md): the iOS project and its UI tests.
-- [`message-list.md`](docs/architecture/message-list/index.md): how the message list scrolls itself on iOS, keeps what is in view still, renders pages, moves between messages by keyboard, reads out arrivals, and the tests that hold it to that.
+- [`message-list.md`](docs/architecture/message-list/index.md): how the message list scrolls itself on iOS, keeps what is in view still, renders pages, moves between messages by keyboard, reads out arrivals, what a row and the store hold in memory, and the tests that hold it to that.
 - [`message-rendering.md`](docs/architecture/message-rendering/index.md): Markdown, code highlighting, spoilers, linkifying, attachments, inline images, and video cards.
 - [`notifications.md`](docs/architecture/notifications.md): notification levels, the chime, system notifications, and every sound the app plays.
 - [`plugins.md`](docs/architecture/plugins/index.md): the plugin catalogue, annotations on messages and people, messages changed by plugins, plugins' accounts, the DM notice, the plugin settings in community settings and the dashboard, channels of a plugin's kind and their views' bridge, cards, and notices.
@@ -145,6 +145,13 @@ same commit, as with comments.
   the hooks in `src/api/hooks.ts`, each subscribed to one store topic; never copy server records
   into component state or fetch them with `client.api` directly from a component. New reads and
   writes go in `AspenSync`, and new record types go in the store with their event handling.
+  The store is bounded, as a client left running for weeks must be: it keeps the windows of the
+  `KEPT_WINDOWS_MAX` channels shown most recently, never dropping one something shows, and of
+  the messages no window holds (those arriving in channels not open, a dropped window's, those
+  read one at a time) the `LOOSE_MESSAGES_MAX` newest, besides any something shows or that is
+  unread and tags the caller. So a message's record may be gone whenever nothing subscribes to
+  it: whatever shows a message by id reads it on demand (`useMessageOnDemand`), and a new map
+  keyed by message, channel, or user says what removes its entries.
 - A write's REST response never overwrites a record the stream already holds. The server
   publishes events before it answers, so an event that arrives while the request is in flight
   is newer than the response; the response only fills in a record the stream has not delivered
@@ -281,6 +288,14 @@ same commit, as with comments.
   place. A finger moving mostly up or down, or across something that scrolls sideways, is left
   to scroll, and a swipe's moves stop at the swipe, so the message list, which follows a
   finger itself on iOS, does not move with one. The Android back button puts the drawer away.
+- A row of a list holds as little as it can, since a list draws hundreds: every React Aria
+  control holds its own state (a `Button` close to a hundred hooks, a closed `Popover` or
+  `ModalOverlay` more), drawn or not. A popover, modal, or menu that each row of a list has is
+  wrapped in `OnceOpen` (`src/features/layout/OnceOpen.tsx`), which builds it from when it first
+  opens; `Tooltip` does the same for every tooltip. Controls a row shows only while it is in use
+  are built only then, with a way kept for the keyboard and assistive technology to reach them,
+  as a message's actions are. `docs/architecture/message-list/memory.md` has the figures and how
+  to measure a row.
 - Copy to the clipboard with `copyText` (`src/features/layout/clipboard.ts`), never
   `navigator.clipboard` directly: the Clipboard API is missing on a page served over plain HTTP,
   such as a dev server a phone reaches by address, and `copyText` falls back to a copy that
@@ -293,7 +308,10 @@ same commit, as with comments.
   (`MessageActions`, icons at `ACTION_ICON`) show on hover or focus where there is a pointer, in
   a bar positioned out of the layout and rising over the message before (as far as the top of
   the list or the row's container leaves room), so the header stays one line of text tall and
-  the body sits right under it, and on a touch-only device (`TOUCH_ONLY`) a long press on the
+  the body sits right under it; the bar is built only for the rows in use, the one under the
+  pointer and the one holding focus (`useRowEngagement`), and every other row keeps one unseen
+  button in its place that hands focus on to the actions (`ActionsStandIn`); and on a
+  touch-only device (`TOUCH_ONLY`) a long press on the
   message (`useLongPress` from `react-aria`, the one hook taken from it, since the components
   package has no long press) opens them in a sheet sliding up from the bottom over a darkened
   screen (`MessageActionSheet`, a `Drawer` at the `bottom` edge, which a finger pulls down to

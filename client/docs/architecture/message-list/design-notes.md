@@ -64,3 +64,37 @@ See [moving between messages by keyboard](keyboard.md).
 
 - **A row asks for the stop with `useRowStop`.** Moving re-renders only the rows the stop leaves and
   reaches.
+
+## What a row holds
+
+See [what a row holds](memory.md).
+
+- **Rows are all drawn, not virtualized.** Rows far from the view could stand as placeholders of
+  their measured height, which would hold the least of all, but text that is not drawn is not found
+  by the browser's find-in-page nor read by a screen reader moving through the conversation, and the
+  list's stillness rests on real rows' real heights. So a row is made light instead.
+- **Actions are built for the rows in use, not for the row alone that is hovered.** Building them
+  as the pointer enters and dropping them as it leaves would close whatever they had opened, and
+  leave a dialog that closes with no button to give focus back to. A row keeps them until another
+  takes its place, which nothing can while what they opened is open.
+- **A stand-in button rather than nothing.** With nothing where the actions go, Shift+Tab into a
+  row from the row after would skip them, and a screen reader moving through the messages without
+  moving focus would never come upon them.
+- **Overlays wait for their first opening, not for every opening.** One built and dropped each time
+  would be gone before it could move as it closes.
+
+## What the store keeps
+
+See [history pages](history-pages.md).
+
+- **Without a bound on windows, a session holds every channel it ever opened**, each growing to
+  `LIVE_WINDOW_MAX_MESSAGES` as its messages arrive, and reads each again whenever a block changes
+  what they hold.
+- **Without a bound on loose messages, a client left running holds every message its communities
+  post**, about 2 KB each: the event stream brings all of them, open channel or not.
+- **Loose messages are bounded rather than refused.** A message that just arrived is wanted for a
+  while by what follows it: the notification it raises, the echo that shows it, the edit or
+  deletion that changes whether the reader is tagged.
+- **What is shown is told by subscription, not by a list of its own.** Every component that draws
+  a record subscribes to its topic, so the store knows what is in use with nothing more to keep in
+  step.

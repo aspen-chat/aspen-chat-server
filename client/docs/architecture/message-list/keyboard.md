@@ -20,6 +20,10 @@ On a row itself (not a control inside it):
 | Home, End | The first, the last row the list holds. |
 | Tab | On into the row's controls, which focus reveals as hover does. |
 
+Focus anywhere in a row engages it, which builds its actions (see [what a row holds](memory.md)).
+A row reached from after it by Shift+Tab meets the button standing in for its actions, which
+passes focus to the last of them, so the order is the same whether they were built or not.
+
 ## Paging and the scroller
 
 - A move tells `ListScroller.focusMoved` which way it went, so history pages ahead of it as for a

@@ -50,6 +50,7 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { PersonAvatar, PersonName } from "@/features/users/PersonName";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
+import { OnceOpen } from "@/features/layout/OnceOpen";
 
 const chipClass =
   "flex items-center gap-1 rounded-full border px-2 py-0.5 text-sm outline-none " +
@@ -146,13 +147,15 @@ export function ReactionChips({
           />
         </li>
       )}
-      <ReactionsDialog
-        messageId={messageId}
-        communityId={communityId}
-        isOpen={listOpen}
-        onOpenChange={setListOpen}
-        {...(listEmoji === null ? {} : { initialEmoji: listEmoji })}
-      />
+      <OnceOpen isOpen={listOpen}>
+        <ReactionsDialog
+          messageId={messageId}
+          communityId={communityId}
+          isOpen={listOpen}
+          onOpenChange={setListOpen}
+          {...(listEmoji === null ? {} : { initialEmoji: listEmoji })}
+        />
+      </OnceOpen>
     </ul>
   );
 }
@@ -285,12 +288,14 @@ export function ViewReactionsButton({
           <UsersIcon size={ACTION_ICON} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ReactionsDialog
-        messageId={messageId}
-        communityId={communityId}
-        isOpen={open}
-        onOpenChange={setOpen}
-      />
+      <OnceOpen isOpen={open}>
+        <ReactionsDialog
+          messageId={messageId}
+          communityId={communityId}
+          isOpen={open}
+          onOpenChange={setOpen}
+        />
+      </OnceOpen>
     </>
   );
 }
@@ -553,14 +558,16 @@ export function ReactionPicker({
           <SmileyIcon size={iconSize} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ReactionPickerOverlay
-        messageId={messageId}
-        communityId={communityId}
-        triggerRef={trigger}
-        placement="bottom end"
-        isOpen={open}
-        onOpenChange={setOpen}
-      />
+      <OnceOpen isOpen={open}>
+        <ReactionPickerOverlay
+          messageId={messageId}
+          communityId={communityId}
+          triggerRef={trigger}
+          placement="bottom end"
+          isOpen={open}
+          onOpenChange={setOpen}
+        />
+      </OnceOpen>
     </>
   );
 }

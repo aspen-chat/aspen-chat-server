@@ -6,6 +6,7 @@ import { useAnnotations, usePlugin, usePlugins, useUserAnnotations } from "@/api
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { webPageUrl } from "@/features/layout/safeUrl";
+import { OnceOpen } from "@/features/layout/OnceOpen";
 
 /** How each severity is drawn: its colours and its icon. */
 const SEVERITY: Record<Severity, { className: string; Icon: typeof InfoIcon }> = {
@@ -50,28 +51,32 @@ function AnnotationChip({
           <Icon size={12} aria-hidden="true" className="shrink-0" />
           <span className="truncate">{label}</span>
         </Button>
-        <Popover className="max-w-xs rounded-md border border-line bg-surface-raised p-3 text-sm shadow-lg">
-          <Dialog className="flex flex-col gap-1 outline-none" aria-label={label}>
-            <p className="font-medium break-words">{label}</p>
-            {annotation.detail != null && (
-              <p className="break-words text-ink-muted">{pluginText(plugin, annotation.detail)}</p>
-            )}
-            <p className="text-xs text-ink-faint">
-              {format(m.plugins.noteFrom, { plugin: plugin.name })}
-            </p>
-            {link !== undefined && (
-              <a
-                href={link}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-1 text-xs text-accent hover:underline"
-              >
-                {m.plugins.noteLink}
-                <ArrowSquareOutIcon size={12} aria-hidden="true" />
-              </a>
-            )}
-          </Dialog>
-        </Popover>
+        <OnceOpen>
+          <Popover className="max-w-xs rounded-md border border-line bg-surface-raised p-3 text-sm shadow-lg">
+            <Dialog className="flex flex-col gap-1 outline-none" aria-label={label}>
+              <p className="font-medium break-words">{label}</p>
+              {annotation.detail != null && (
+                <p className="break-words text-ink-muted">
+                  {pluginText(plugin, annotation.detail)}
+                </p>
+              )}
+              <p className="text-xs text-ink-faint">
+                {format(m.plugins.noteFrom, { plugin: plugin.name })}
+              </p>
+              {link !== undefined && (
+                <a
+                  href={link}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1 text-xs text-accent hover:underline"
+                >
+                  {m.plugins.noteLink}
+                  <ArrowSquareOutIcon size={12} aria-hidden="true" />
+                </a>
+              )}
+            </Dialog>
+          </Popover>
+        </OnceOpen>
       </DialogTrigger>
     </li>
   );
