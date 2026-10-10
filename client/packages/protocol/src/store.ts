@@ -108,11 +108,27 @@ export const WINDOW_MAX_MESSAGES = 300;
  * time this many have arrived, they have long since left.
  */
 export const LIVE_WINDOW_MAX_MESSAGES = WINDOW_MAX_MESSAGES * 2;
+/**
+ * The most channels whose windows are kept. Past it, the windows longest unshown are dropped,
+ * never one something shows, and a channel opened again reads its latest page afresh. Without
+ * it a long session holds a window for every channel it ever opened, each followed live.
+ */
+export const KEPT_WINDOWS_MAX = 30;
+/**
+ * The most messages kept that no window holds: those that arrived in channels not followed
+ * live, a dropped or replaced window's, and those read one at a time (a link's, a pin's, a
+ * saved one). Past it the oldest go, but none that is still needed (`#needed`). Without it a
+ * client left running holds every message its communities post.
+ */
+export const LOOSE_MESSAGES_MAX = 1000;
 
 const NO_VOICE: ChannelVoice = { session: null, participants: [], rings: [] };
 
 /** How many of an emoji's reactors a summary names, as the server's `SUMMARY_USERS`. */
 export const REACTION_SUMMARY_USERS = 4;
+
+/** What the topic of a channel's window starts with, before the channel's id. */
+const WINDOW_TOPIC = "messages:";
 
 const EMPTY_IDS: readonly string[] = [];
 const NO_PERMISSIONS: PermissionSet = new Set();
@@ -295,7 +311,13 @@ export class RecordStore {
   #openReports: number | undefined = undefined;
   #reportsChanges = 0;
   #emailChanges = 0;
+  /** Each channel's window, the one shown longest ago first (`#trimWindows`). */
   readonly #windows = new Map<string, MessageWindow>();
+  /**
+   * The messages that may be in no window, the one that came to be so longest ago first; one a
+   * window has since taken in is found out when its turn to go comes (`#trimLoose`).
+   */
+  readonly #loose = new Set<string>();
   /** Invites by code, for the communities whose invite lists have been loaded. */
   readonly #invites = new Map<string, Invite>();
   #myUserId: string | null = null;
@@ -344,6 +366,9 @@ export class RecordStore {
       this.#listeners.set(topic, set);
     }
     set.add(listener);
+    if (topic.startsWith(WINDOW_TOPIC)) {
+      this.#noteWindowShown(topic.slice(WINDOW_TOPIC.length));
+    }
     return () => {
       set.delete(listener);
       if (set.size === 0) {
@@ -1703,6 +1728,7 @@ export class RecordStore {
         this.#touch(`message:${messageId}`);
       }
       this.#messages.clear();
+      this.#loose.clear();
       for (const id of this.#links.keys()) {
         this.#touch(`link:${id}`);
       }
@@ -1762,6 +1788,7 @@ export class RecordStore {
       // Messages outside any loaded window, such as the thread replies echoes show.
       for (const message of included.messages ?? []) {
         this.#putMessage(message);
+        this.#noteLoose(message.id);
       }
       for (const link of included.linkedMessages ?? []) {
         this.#links.set(link.id, link);
@@ -1908,9 +1935,19 @@ export class RecordStore {
       const ids = messages.map((m) => m.id).sort();
       for (const message of messages) {
         this.#putMessage(message);
+        this.#loose.delete(message.id);
       }
+      const replaced = this.#windows.get(channelId);
+      // Last, as the window shown most recently.
+      this.#windows.delete(channelId);
       this.#windows.set(channelId, { ids, ...flags });
+      for (const id of replaced?.ids ?? []) {
+        if (ids[lowerBound(ids, id)] !== id) {
+          this.#noteLoose(id);
+        }
+      }
       this.#touch(`messages:${channelId}`);
+      this.#trimWindows();
     });
   }
 
@@ -1928,6 +1965,7 @@ export class RecordStore {
       const older = messages.map((m) => m.id).sort();
       for (const message of messages) {
         this.#putMessage(message);
+        this.#loose.delete(message.id);
       }
       let ids = older.concat(window.ids.filter((id) => !older.includes(id)));
       let atLatest = window.atLatest;
@@ -1956,6 +1994,7 @@ export class RecordStore {
       const newer = messages.map((m) => m.id).sort();
       for (const message of messages) {
         this.#putMessage(message);
+        this.#loose.delete(message.id);
       }
       let ids = window.ids.filter((id) => !newer.includes(id)).concat(newer);
       let hasOlder = window.hasOlder;
@@ -1984,7 +2023,9 @@ export class RecordStore {
         this.#noteArrival(message.id);
         this.#putMessage(message);
       }
-      this.#appendToWindow(message);
+      if (!this.#appendToWindow(message)) {
+        this.#noteLoose(message.id);
+      }
       this.#noteDmActivity(message.channelId, message.id);
     });
   }
@@ -2304,6 +2345,7 @@ export class RecordStore {
       this.#channels.clear();
       this.#categories.clear();
       this.#messages.clear();
+      this.#loose.clear();
       this.#attachments.clear();
       this.#heldMessages.clear();
       this.#settledHeld.clear();
@@ -2562,7 +2604,9 @@ export class RecordStore {
               this.#noteArrival(message.id);
             }
             this.#putMessage(message);
-            this.#appendToWindow(message);
+            if (!this.#appendToWindow(message)) {
+              this.#noteLoose(message.id);
+            }
             this.#noteDmActivity(message.channelId, message.id);
             this.#noteNewMessage(message);
             // Whoever posted has stopped typing it, whether or not they said so first.
@@ -3594,6 +3638,12 @@ export class RecordStore {
     if (this.#pins.delete(id)) {
       this.#touch(`pins:${id}`);
     }
+    // Nor are its messages that no window holds, which the window's going below does not reach.
+    for (const messageId of Array.from(this.#loose)) {
+      if (this.#messages.get(messageId)?.channelId === id) {
+        this.#removeMessage(messageId);
+      }
+    }
     // What links into it showed is no longer the caller's to see.
     for (const link of Array.from(this.#links.values())) {
       if (link.state === "available" && this.#messages.get(link.id)?.channelId === id) {
@@ -3905,6 +3955,12 @@ export class RecordStore {
     if (this.#blocked.has(userId)) {
       return;
     }
+    // A message not held has no summary to count in or out of: the read that brings the
+    // message brings its reactions whole (`setReactions`), and nothing drops a summary kept
+    // for a message that never comes.
+    if (!this.#messages.has(messageId)) {
+      return;
+    }
     const current = this.#reactions.get(messageId) ?? EMPTY_REACTIONS;
     const summary = current.get(emoji);
     const mine = userId === this.#myUserId;
@@ -3960,6 +4016,7 @@ export class RecordStore {
       return;
     }
     this.#messages.delete(id);
+    this.#loose.delete(id);
     this.#touch(`message:${id}`);
     if (this.#reactions.delete(id)) {
       this.#touch(`reactions:${id}`);
@@ -3979,14 +4036,21 @@ export class RecordStore {
     }
   }
 
-  #appendToWindow(message: Message): void {
+  /**
+   * Adds a message that just came to its channel's window, when that window is at the latest,
+   * and answers whether the window holds it.
+   */
+  #appendToWindow(message: Message): boolean {
     const window = this.#windows.get(message.channelId);
-    if (!window?.atLatest) {
-      return;
+    if (window === undefined) {
+      return false;
     }
     const at = lowerBound(window.ids, message.id);
     if (window.ids[at] === message.id) {
-      return;
+      return true;
+    }
+    if (!window.atLatest) {
+      return false;
     }
     let ids = window.ids.slice();
     ids.splice(at, 0, message.id);
@@ -4002,13 +4066,18 @@ export class RecordStore {
     }
     this.#windows.set(message.channelId, { ...window, ids, hasOlder });
     this.#touch(`messages:${message.channelId}`);
+    return true;
   }
 
   /**
-   * Forgets a message that fell out of its window, with its reactions. Unlike a delete this
-   * says nothing about the server; the message is read again when the window returns to it.
+   * Forgets a message that fell out of its window, or that no window held, with its reactions.
+   * Unlike a delete this says nothing about the server; the message is read again when the
+   * window returns to it, or by whoever shows it next. A link that found it readable is
+   * forgotten with it, to be read again too, since without the message it would read as one
+   * to a message deleted.
    */
   #evictMessage(id: string): void {
+    this.#loose.delete(id);
     if (this.#messages.delete(id)) {
       this.#touch(`message:${id}`);
     }
@@ -4016,6 +4085,89 @@ export class RecordStore {
       this.#touch(`reactions:${id}`);
     }
     this.#clearAnnotations(id);
+    if (this.#links.get(id)?.state === "available") {
+      this.#links.delete(id);
+      this.#touch(`link:${id}`);
+    }
+  }
+
+  /** A window's subscriber came: the channel is shown, most recently of all. */
+  #noteWindowShown(channelId: string): void {
+    const window = this.#windows.get(channelId);
+    if (window !== undefined) {
+      this.#windows.delete(channelId);
+      this.#windows.set(channelId, window);
+    }
+  }
+
+  /**
+   * Drops the windows shown longest ago past `KEPT_WINDOWS_MAX`, leaving any that something
+   * shows (a subscriber to its topic). Their messages are loose from then on.
+   */
+  #trimWindows(): void {
+    let over = this.#windows.size - KEPT_WINDOWS_MAX;
+    for (const [channelId, window] of this.#windows) {
+      if (over <= 0) {
+        break;
+      }
+      if (this.#listeners.has(`${WINDOW_TOPIC}${channelId}`)) {
+        continue;
+      }
+      over -= 1;
+      this.#windows.delete(channelId);
+      this.#touch(`${WINDOW_TOPIC}${channelId}`);
+      for (const id of window.ids) {
+        this.#noteLoose(id);
+      }
+    }
+  }
+
+  /** Notes that a held message may be in no window, as the newest such. */
+  #noteLoose(id: string): void {
+    this.#loose.delete(id);
+    this.#loose.add(id);
+    this.#trimLoose();
+  }
+
+  /**
+   * Whether a message no window holds is still needed: something shows it (a subscriber to its
+   * topic), or it is unread and tags the caller, when its edit or deletion must be known for
+   * what it is to put the channel's count of unread tags right (`AspenSync`).
+   */
+  #needed(message: Message): boolean {
+    return (
+      this.#listeners.has(`message:${message.id}`) ||
+      (message.id > (this.#readStates.get(message.channelId)?.lastRead ?? "") &&
+        this.mentionsMe(message))
+    );
+  }
+
+  /**
+   * Forgets the loose messages longest so past `LOOSE_MESSAGES_MAX`. One a window holds after
+   * all is loose no longer; one still needed takes its turn again as the newest.
+   */
+  #trimLoose(): void {
+    let over = this.#loose.size - LOOSE_MESSAGES_MAX;
+    for (const id of this.#loose) {
+      if (over <= 0) {
+        break;
+      }
+      over -= 1;
+      this.#loose.delete(id);
+      const message = this.#messages.get(id);
+      if (message === undefined) {
+        continue;
+      }
+      const window = this.#windows.get(message.channelId);
+      if (window?.ids[lowerBound(window.ids, id)] === id) {
+        continue;
+      }
+      if (this.#needed(message)) {
+        this.#loose.add(id);
+      } else {
+        this.#evictMessage(id);
+      }
+    }
   }
 
   #putInvite(invite: Invite): void {

@@ -9,7 +9,8 @@ a page at a time, moves between messages by keyboard, and reads out arrivals.
   scrolls it everywhere else.
 - [Keeping the view still](keeping-still.md): the still row, catching up, linked messages, pictures'
   room, and pinning to the bottom.
-- [History pages](history-pages.md): page size, rendering pages as transitions, and memoized rows.
+- [History pages](history-pages.md): page size, rendering pages as transitions, memoized rows, and
+  what the store keeps of windows and of messages outside them.
 - [Moving between messages by keyboard](keyboard.md): the list's one tab stop and row keys.
 - [What a row holds](memory.md): actions built only for the rows in use, overlays built once
   opened, and what a row costs.

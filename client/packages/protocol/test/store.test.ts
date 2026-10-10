@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  KEPT_WINDOWS_MAX,
+  LOOSE_MESSAGES_MAX,
   RecordStore,
   TEMPLATES,
   WINDOW_MAX_MESSAGES,
@@ -273,6 +275,7 @@ describe("RecordStore events", () => {
   it("collects reactions per message and emoji", () => {
     const store = bootstrapped();
     const target = message(1).id;
+    store.replaceWindow(general.id, [message(1)], { hasOlder: false, atLatest: true });
     store.applyEvent({
       serverEvent: "react",
       type: "create",
@@ -327,8 +330,9 @@ describe("RecordStore reaction summaries", () => {
 
   it("counts someone beyond the named few, and the caller's own reaction once", () => {
     const store = bootstrapped();
-    const target = id(1503);
+    const target = message(503).id;
     const others = [id(91), id(92), id(93), id(94)];
+    store.replaceWindow(general.id, [message(503)], { hasOlder: false, atLatest: true });
     store.setReactions(
       [target],
       [{ messageId: target, emoji: "👍", count: 4, me: false, users: others }],
@@ -612,6 +616,139 @@ describe("RecordStore window bounds", () => {
     expect(window?.ids[0]).toBe(message(901).id);
     expect(window?.hasOlder).toBe(true);
     expect(store.message(message(100).id)).toBeUndefined();
+  });
+});
+
+describe("RecordStore bounds on what nothing shows", () => {
+  const arrive = (store: RecordStore, arrived: Message) => {
+    store.applyEvent({ serverEvent: "message", type: "create", ...arrived });
+  };
+  /** Messages `from` up to `to` arriving in a channel that has no window. */
+  const arriveInDev = (store: RecordStore, from: number, to: number) => {
+    for (let n = from; n < to; n++) {
+      arrive(store, message(n, dev.id, bob.id));
+    }
+  };
+  const held = (store: RecordStore, n: number) => store.message(message(n).id) !== undefined;
+  const react = (store: RecordStore, messageId: string) => {
+    store.applyEvent({
+      serverEvent: "react",
+      type: "create",
+      messageId,
+      emoji: "👍",
+      userId: bob.id,
+    });
+  };
+
+  it("keeps the newest messages of channels with no window, and forgets the rest with their reactions", () => {
+    const store = bootstrapped();
+    arriveInDev(store, 0, 1);
+    react(store, message(0).id);
+    expect(store.reactions(message(0).id).size).toBe(1);
+    arriveInDev(store, 1, LOOSE_MESSAGES_MAX + 10);
+    expect(held(store, 9)).toBe(false);
+    expect(held(store, 10)).toBe(true);
+    expect(held(store, LOOSE_MESSAGES_MAX + 9)).toBe(true);
+    expect(store.reactions(message(0).id).size).toBe(0);
+    // A reaction to a message not held is counted nowhere.
+    react(store, message(0).id);
+    expect(store.reactions(message(0).id).size).toBe(0);
+  });
+
+  it("keeps a message something shows, and one unread that tags the caller", () => {
+    const store = bootstrapped();
+    arrive(store, message(0, dev.id, bob.id));
+    arrive(store, {
+      ...message(1, dev.id, bob.id),
+      mentions: { users: [me.id], roles: [], everyone: false },
+    });
+    const unsubscribe = store.subscribe(`message:${message(0).id}`, () => undefined);
+    arriveInDev(store, 2, LOOSE_MESSAGES_MAX + 10);
+    expect(held(store, 0)).toBe(true);
+    expect(held(store, 1)).toBe(true);
+    expect(held(store, 2)).toBe(false);
+    // Shown no longer, and read: both go when their turn comes again.
+    unsubscribe();
+    store.setLastRead(dev.id, message(LOOSE_MESSAGES_MAX + 9).id);
+    arriveInDev(store, LOOSE_MESSAGES_MAX + 10, 2 * LOOSE_MESSAGES_MAX + 20);
+    expect(held(store, 0)).toBe(false);
+    expect(held(store, 1)).toBe(false);
+  });
+
+  it("never forgets a message a window holds", () => {
+    const store = bootstrapped();
+    store.replaceWindow(general.id, [message(5000)], { hasOlder: false, atLatest: true });
+    // It arrives again as a sideloaded record, as a link to it would bring it.
+    store.ingest({ messages: [{ ...message(5000), card: null }] });
+    arriveInDev(store, 0, LOOSE_MESSAGES_MAX + 10);
+    expect(held(store, 5000)).toBe(true);
+  });
+
+  it("leaves a replaced window's messages to the same bound", () => {
+    const store = bootstrapped();
+    store.replaceWindow(general.id, [message(5000), message(5001)], {
+      hasOlder: true,
+      atLatest: false,
+    });
+    store.replaceWindow(general.id, [message(5001), message(6000)], {
+      hasOlder: true,
+      atLatest: true,
+    });
+    expect(held(store, 5000)).toBe(true);
+    arriveInDev(store, 0, LOOSE_MESSAGES_MAX);
+    expect(held(store, 5000)).toBe(false);
+    expect(held(store, 5001)).toBe(true);
+  });
+
+  it("forgets a link with the message it found, so it is read again", () => {
+    const store = bootstrapped();
+    const linked = { ...message(0, dev.id, bob.id), card: null };
+    store.ingest({
+      messages: [linked],
+      linkedMessages: [{ id: linked.id, state: "available", community: aspen.id }],
+    });
+    expect(store.linkedMessage(linked.id)?.state).toBe("available");
+    arriveInDev(store, 1, LOOSE_MESSAGES_MAX + 1);
+    expect(held(store, 0)).toBe(false);
+    expect(store.linkedMessage(linked.id)).toBeUndefined();
+  });
+
+  it("removes a removed channel's messages that no window holds", () => {
+    const store = bootstrapped();
+    arriveInDev(store, 0, 3);
+    store.applyEvent({ serverEvent: "channel", type: "delete", id: dev.id });
+    expect(held(store, 0)).toBe(false);
+    expect(held(store, 2)).toBe(false);
+  });
+
+  it("keeps the windows shown most recently, and any that is being shown", () => {
+    const store = bootstrapped();
+    const channel = (n: number) => id(7000 + n);
+    const open = (n: number) => {
+      store.replaceWindow(channel(n), [message(8000 + n, channel(n))], {
+        hasOlder: false,
+        atLatest: true,
+      });
+    };
+    open(0);
+    open(1);
+    // The first is on screen throughout; the second is looked at again later.
+    store.subscribe(`messages:${channel(0)}`, () => undefined);
+    for (let n = 2; n < KEPT_WINDOWS_MAX; n++) {
+      open(n);
+    }
+    store.subscribe(`messages:${channel(1)}`, () => undefined)();
+    open(KEPT_WINDOWS_MAX);
+    // One too many: the one shown longest ago goes, which is neither of those.
+    expect(store.messages(channel(0))).toBeDefined();
+    expect(store.messages(channel(1))).toBeDefined();
+    expect(store.messages(channel(2))).toBeUndefined();
+    expect(store.messages(channel(3))).toBeDefined();
+    expect(store.heldWindows()).toHaveLength(KEPT_WINDOWS_MAX);
+    // What it held is kept as any message outside a window is, and it no longer follows.
+    expect(held(store, 8002)).toBe(true);
+    arrive(store, message(9000, channel(2), bob.id));
+    expect(store.messages(channel(2))).toBeUndefined();
   });
 });
 

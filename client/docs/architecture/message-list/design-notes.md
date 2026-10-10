@@ -82,3 +82,19 @@ See [what a row holds](memory.md).
   moving focus would never come upon them.
 - **Overlays wait for their first opening, not for every opening.** One built and dropped each time
   would be gone before it could move as it closes.
+
+## What the store keeps
+
+See [history pages](history-pages.md).
+
+- **Without a bound on windows, a session holds every channel it ever opened**, each growing to
+  `LIVE_WINDOW_MAX_MESSAGES` as its messages arrive, and reads each again whenever a block changes
+  what they hold.
+- **Without a bound on loose messages, a client left running holds every message its communities
+  post**, about 2 KB each: the event stream brings all of them, open channel or not.
+- **Loose messages are bounded rather than refused.** A message that just arrived is wanted for a
+  while by what follows it: the notification it raises, the echo that shows it, the edit or
+  deletion that changes whether the reader is tagged.
+- **What is shown is told by subscription, not by a list of its own.** Every component that draws
+  a record subscribes to its topic, so the store knows what is in use with nothing more to keep in
+  step.

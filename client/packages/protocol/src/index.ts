@@ -69,7 +69,14 @@ export {
   type EventStreamStatus,
   type ReadyInfo,
 } from "./events";
-export { REACTION_SUMMARY_USERS, RecordStore, WINDOW_MAX_MESSAGES, heldPlace } from "./store";
+export {
+  KEPT_WINDOWS_MAX,
+  LOOSE_MESSAGES_MAX,
+  REACTION_SUMMARY_USERS,
+  RecordStore,
+  WINDOW_MAX_MESSAGES,
+  heldPlace,
+} from "./store";
 export { UNREAD_DMS } from "./notifyRules";
 export { groupChannels, isDm } from "./channels";
 export type {
