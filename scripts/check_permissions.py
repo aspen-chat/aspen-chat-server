@@ -2338,7 +2338,10 @@ def blackjack_tables(world: World, check: Checks) -> None:
         time.sleep(0.2)
     check("the timer deals, and the round is played to its end", phase["name"] == "settled", phase)
     if decided_twice is not None:
-        check("a decision sent twice counts once", decided_twice[0] == 409 and "stale" in decided_twice[1],
+        # The second is refused as made at a version the table has left, or, when the first ended
+        # the players' turns, as coming when no one is to decide: the phase is looked at first.
+        check("a decision sent twice counts once",
+              decided_twice[0] == 409 and any(why in decided_twice[1] for why in ("stale", "notNow")),
               decided_twice)
     hand = next(s for s in now["seats"] if s["user"] == member["id"])["hands"][0]
     won = {"blackjack": 250, "win": 200, "push": 100}.get(hand.get("outcome"), 0)
