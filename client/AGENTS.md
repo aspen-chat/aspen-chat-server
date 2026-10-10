@@ -67,6 +67,7 @@ same commit, as with comments.
 - [`composer-and-drafts.md`](docs/architecture/composer-and-drafts.md): the message box's layout and keys, keeping the bottom edge, Jump to latest, drafts, and who is typing.
 - [`custom-emoji.md`](docs/architecture/custom-emoji.md): a community's emoji in messages, completion, reactions, and the Emoji tab.
 - [`deployments.md`](docs/architecture/deployments.md): the home and other deployments, `Deployments`, scopes, invites across deployments, protocol versions, blocks across deployments, and file transfers in calls.
+- [`flatpak.md`](docs/architecture/flatpak.md): the desktop app's Flatpak: its manifest and permissions, building and signing it, the base app, and the desktop entry.
 - [`fonts.md`](docs/architecture/fonts.md): Inclusive Sans and Intel One Mono, the bundled Noto fallbacks and their regional Han order, emoji, and the user's own fonts.
 - [`ios-app.md`](docs/architecture/ios-app.md): the iOS project and its UI tests.
 - [`message-list.md`](docs/architecture/message-list/index.md): how the message list scrolls itself on iOS, keeps what is in view still, renders pages, moves between messages by keyboard, reads out arrivals, what a row and the store hold in memory, and the tests that hold it to that.

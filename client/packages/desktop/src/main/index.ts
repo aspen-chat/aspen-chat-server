@@ -27,6 +27,12 @@ if (process.env.ASPEN_DESKTOP_FAKE_MEDIA === "1") {
   app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 }
 
+// A Flatpak's desktop entry is named for the app's id, and a window is given its entry's icon
+// and grouped with its other windows only when it names that entry.
+if (process.env.FLATPAK_ID !== undefined) {
+  app.setDesktopName(`${process.env.FLATPAK_ID}.desktop`);
+}
+
 // A second launch that only carried a link has handed it to the running app.
 const firstInstance = claimAppLinks();
 if (!firstInstance) {

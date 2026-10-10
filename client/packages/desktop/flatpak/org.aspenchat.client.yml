@@ -1,0 +1,64 @@
+# The desktop app as a Flatpak, made by `pnpm package:flatpak` (`scripts/flatpak.mjs`) from the
+# unpacked app electron-builder leaves in `release/linux-unpacked`. It is the same build the
+# other Linux packages carry; nothing is compiled here.
+app-id: org.aspenchat.client
+runtime: org.freedesktop.Platform
+runtime-version: "25.08"
+sdk: org.freedesktop.Sdk
+# Chromium's sandbox needs a setuid helper or user namespaces, and a Flatpak has neither. The
+# base app brings zypak, which gives Chromium's processes Flatpak's own sandboxes instead.
+base: org.electronjs.Electron2.BaseApp
+base-version: "25.08"
+command: aspen
+# The app's translations are in its own bundle; there are no locale files to split out.
+separate-locales: false
+finish-args:
+  - --share=network
+  # Shared memory with the X server, where there is one.
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # Calls: the microphone and the speakers.
+  - --socket=pulseaudio
+  # Calls: the camera, for which Flatpak has no narrower grant, and the GPU.
+  - --device=all
+  # The capture helper finds the applications playing sound, and takes one's, through PipeWire.
+  - --filesystem=xdg-run/pipewire-0
+  - --talk-name=org.freedesktop.Notifications
+modules:
+  - name: aspen
+    buildsystem: simple
+    # The binaries ship as electron-builder left them, as in every other package.
+    build-options:
+      strip: false
+      no-debuginfo: true
+    build-commands:
+      - cp -a linux-unpacked /app/aspen
+      # zypak stands in for it, and a setuid file is not allowed in a Flatpak.
+      - rm /app/aspen/chrome-sandbox
+      - install -Dm755 aspen.sh /app/bin/aspen
+      - install -Dm644 org.aspenchat.client.desktop -t /app/share/applications
+      - install -Dm644 org.aspenchat.client.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 aspen-icon.svg /app/share/icons/hicolor/scalable/apps/org.aspenchat.client.svg
+      - |
+        for size in 64 128 256 512; do
+          install -Dm644 icons/${size}x${size}.png \
+            /app/share/icons/hicolor/${size}x${size}/apps/org.aspenchat.client.png
+        done
+    sources:
+      - type: dir
+        path: ../release/linux-unpacked
+        dest: linux-unpacked
+      - type: dir
+        path: ../build/icons
+        dest: icons
+      - type: file
+        path: ../../../brand/aspen-icon.svg
+      - type: file
+        path: aspen.sh
+      - type: file
+        path: org.aspenchat.client.desktop
+      # Written by `scripts/flatpak.mjs` from `org.aspenchat.client.metainfo.xml.in`, with the
+      # release being built.
+      - type: file
+        path: ../release/flatpak/org.aspenchat.client.metainfo.xml
