@@ -65,6 +65,12 @@ pub mod api {
     pub const RATE_LIMIT_CHECK_DURATION: &str = "aspen_rate_limit_check_duration_seconds";
     /// Requests refused for going too fast, by `route`.
     pub const RATE_LIMIT_REFUSALS: &str = "aspen_rate_limit_refusals_total";
+    /// Rounds of searches that read on after finding nothing near the present, by `outcome`:
+    /// `found`, `exhausted` (read to the beginning), `unfinished` (the round's time ran out), or
+    /// `abandoned` (its client went away).
+    pub const DEEP_SEARCH_ROUNDS: &str = "aspen_deep_search_rounds_total";
+    /// Time for one step of such a search, its wait for a place to run in included.
+    pub const DEEP_SEARCH_STEP_DURATION: &str = "aspen_deep_search_step_duration_seconds";
     /// 1 while a suspension of the rate limits is in force.
     pub const RATE_LIMITS_SUSPENDED: &str = "aspen_rate_limits_suspended";
     /// Voice server reports applied, by `report` (its type).

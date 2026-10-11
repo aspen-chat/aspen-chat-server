@@ -568,13 +568,20 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// away part way (closing the connection, or resetting its stream): a request dropped between
 /// publishing and committing would otherwise roll back what it announced, and anyone could make
 /// every member of a community reload by abandoning their requests at the right moment.
+///
+/// A handler that only reads, and reads for long, may stop early instead: it takes the
+/// request's [`app::search::Abandoned`], which turns true when the client goes away.
 async fn settle_after_request(
     axum::extract::State(state): axum::extract::State<GlobalServerContext>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     use tracing::Instrument as _;
     let locale = app::locale::current();
+    let abandoned = app::search::Abandoned::default();
+    request.extensions_mut().insert(abandoned.clone());
+    // Dropped with this future, which is when the client has gone, or been answered.
+    let _leaving = abandoned.when_dropped();
     let work = app::locale::scope(locale, async move {
         app::events::settle_after(&state, next.run(request), |response| {
             let status = response.status();

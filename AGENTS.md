@@ -75,6 +75,7 @@ Federation, letting a user of one deployment use others, is built in five phases
    - `[limits] max_communities_per_user` — the most communities one user may belong to (500 by default); it bounds what an event stream connection reads and how far a profile change fans out. `max_event_streams_per_user` (20) and `max_event_streams_per_address` (200) cap the event streams one user, and one client address before they identify, hold open on each API server, and `max_identifying_event_streams` (half the pool) how many each API server identifies at once (`app::stream_admission`), turning the rest away with 1013 `serverBusy` and a `retryAfterSeconds`
    - `[auth]` — `reverify_seconds` (how recent a verification security changes need, ten minutes by default), `password_hashing_threads` (one per logical CPU by default) and `password_hashing_wait_seconds` (ten) bound password work; see Sign-in and security.
    - `[presence] away_after_seconds` — how long a connected user may go without using Aspen before showing as away (600 by default)
+   - `[search]` — `deep_concurrency` (2), how many searches that found nothing near the present read on through history at once on the whole deployment, each a core of the database's, and `round_seconds` (20), how long one request reads on before answering with how far it got (`app::deep_search`; see Search)
    - `[rate_limits]` — per-endpoint rate limits laid over the built-in ones in `server/app/src/rate_limits.toml`, which documents the format; see Rate limits below. `max_suspension_seconds` (a day) caps how long an operator's suspension of them lasts on this server (see Benchmarking)
    - `[metrics]` — `enabled` and `listen_addr` (`127.0.0.1:9464`) for the Prometheus endpoint, a listener of its own; keep it off public interfaces
    - `[connections]` — `max`, `max_per_ip`, and `max_per_network` (100000, 512, and 4096), the connections the listener holds open at once, of everyone, of one address, and of one IPv4 /24 or IPv6 /48 (trusted proxies count only toward `max`), `max_per_user` (64), what a connection counts toward instead once someone signs in on it, `handshake_seconds` and `header_read_seconds` (10 and 30), how long a client has for its TLS handshake and an HTTP/1.1 request's headers, and `idle_seconds` (120), how long a connection stays open with no request in it (`connections`)
@@ -227,7 +228,7 @@ How each feature works is written up in `docs/architecture/`: one file per featu
 - `docs/architecture/activity-feed.md` — the activity feed: every message that tells its reader, by the notification rule, and its filters
 - `docs/architecture/muting.md` — muting channels and DMs
 - `docs/architecture/collapsed-categories.md` — folded categories that follow a user between devices
-- `docs/architecture/search.md` — message search and its indexes
+- `docs/architecture/search.md` — message search: the probe, the walk through history, deep rounds and their places, and its indexes
 - `docs/architecture/notifications.md` — notification levels and what the apps tell of
 - `docs/architecture/tagging.md` — tagging members, roles, and everyone, and what counts
 - `docs/architecture/bots/index.md` — bots, their tokens, links, roles, and commands

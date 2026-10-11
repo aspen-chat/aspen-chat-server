@@ -82,6 +82,16 @@ For engineers changing `server/app/src/aspen_config.rs` or `voice_server/src/con
 - **Each class of job keeps one place of its own within `concurrency`.** A busy class never holds
   up the others.
 
+## Search
+
+- **`deep_concurrency` is one number for the deployment, not per server.** What a long search
+  uses is the database, which the servers share.
+  ([Search](../../operators/configuration/search.md), [how search reads](../search.md))
+- **It defaults to two.** No API server can see how many cores the database server has, and two
+  is safe on the smallest machine a deployment runs on.
+- **`round_seconds` is a setting.** The right value depends on the timeouts of whatever stands
+  between the apps and the server, which only the operator knows.
+
 ## Email
 
 - **An `smtp://` URL with credentials needs `?tls=required` unless the host is local.**

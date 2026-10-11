@@ -50,6 +50,7 @@ A voice server reads `voice_server.toml` the same way, with the prefix `ASPEN_VO
 | `[voice]` | [Voice](voice.md#voice) | Voice server failures, join tokens, and idle calls. |
 | `[plugins]` | [Plugins](plugins.md#plugins) | Plugin time, memory, concurrency, notice, and storage limits. |
 | `[jobs]` | [Jobs](jobs.md#jobs) | Whether this server runs background jobs, and how many at once. |
+| `[search]` | [Search](search.md#search) | How many long searches read at once, and for how long per request. |
 | `[push]` | [Push](push.md#push) | Waking phones. |
 | `[email]` | [Email](email.md#email) | Sending mail. |
 | `[email.tls]` | [Email](email.md#emailtls) | Authorities and a client certificate for the SMTP server. |

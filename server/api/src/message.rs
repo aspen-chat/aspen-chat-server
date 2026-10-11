@@ -425,12 +425,33 @@ pub struct MessageSearchQuery {
 /// How many messages a search returns when it does not say.
 const DEFAULT_SEARCH_RESULTS: u32 = 25;
 
+/// One page of a search, and how far back it read.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageSearchPage {
+    pub data: Vec<Message>,
+    pub included: Included,
+    /// How far back the search read: every match newer than this, and older than `before`, is
+    /// in `data`. Ask for the next page with `before` set to it. Null when nothing is left to
+    /// read. It names a position in history, not always a message.
+    pub searched_to: Option<MessageId>,
+    /// Whether anything older than `searchedTo` is left to read. A page may hold fewer messages
+    /// than `limit`, or none, and still have more.
+    pub more: bool,
+}
+
 /// Searches the messages the caller may read, newest first: the channels they may view in the
 /// communities they belong to, the DMs they are in, and the threads of both, leaving out
 /// messages by anyone they blocked. `filter[community]` or `filter[channel]` narrows where;
 /// `filter[text]`, `filter[author]`, `filter[mentions]`, and `filter[has]` narrow what, and at
 /// least one of them must be given. A community the caller does not belong to, or a channel they
 /// may not read, is answered `404`.
+///
+/// A search reads back through history only so far in one request. When it has found nothing
+/// it reads on for a while (twenty seconds unless the server is set otherwise), sharing the
+/// server's capacity for that with everyone else's searches, and then answers with an empty
+/// page whose `more` is true. Whenever `more` is true, the search goes on from `searchedTo`:
+/// ask again with `before` set to it. Only a page whose `more` is false is the last.
 #[utoipa::path(
     get,
     path = "/messages",
@@ -438,7 +459,7 @@ const DEFAULT_SEARCH_RESULTS: u32 = 25;
     params(MessageSearchQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = MessageList),
+        (status = OK, body = MessageSearchPage),
         (status = BAD_REQUEST, description = "`validation`: nothing to search for, text too long, or both a community and a channel", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -448,8 +469,9 @@ const DEFAULT_SEARCH_RESULTS: u32 = 25;
 pub async fn search_messages(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
+    axum::Extension(abandoned): axum::Extension<app::search::Abandoned>,
     Query(query): Query<MessageSearchQuery>,
-) -> ApiResult<Json<MessageList>> {
+) -> ApiResult<Json<MessageSearchPage>> {
     let scope = match (query.community, query.channel) {
         (None, None) => app::search::SearchScope::Everywhere,
         (Some(community), None) => app::search::SearchScope::Community(community),
@@ -469,7 +491,7 @@ pub async fn search_messages(
     .filter(|h| query.has.contains(*h))
     .map(app::search::Holding::from)
     .collect();
-    let messages: Vec<Message> = app::search::search_messages(
+    let page = app::search::search_messages(
         &state,
         user.id,
         app::search::MessageSearch {
@@ -481,13 +503,17 @@ pub async fn search_messages(
             before: query.before,
             limit: query.limit.unwrap_or(DEFAULT_SEARCH_RESULTS),
         },
+        &abandoned,
     )
-    .await?
-    .into_iter()
-    .map(Message::from)
-    .collect();
+    .await?;
+    let messages: Vec<Message> = page.messages.into_iter().map(Message::from).collect();
     let included = sideload_messages(&state, user.id, &messages, &query.include).await?;
-    Ok(Json(MessageList::new(messages, included)))
+    Ok(Json(MessageSearchPage {
+        data: messages,
+        included,
+        searched_to: page.searched_to,
+        more: page.more,
+    }))
 }
 
 /// A message held while a preview of one of its attachments is being made, as its author's

@@ -34,6 +34,7 @@ pub mod channel_presence;
 pub mod community;
 pub mod context;
 pub mod custom_emoji;
+pub mod deep_search;
 pub mod deployment;
 pub mod deployment_role;
 pub mod deployment_settings;

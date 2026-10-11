@@ -68,6 +68,8 @@ pub struct AspenConfig {
     #[serde(default)]
     pub presence: PresenceConfig,
     #[serde(default)]
+    pub search: SearchConfig,
+    #[serde(default)]
     pub metrics: MetricsConfig,
     #[serde(default)]
     pub connections: ConnectionsConfig,
@@ -279,6 +281,24 @@ pub struct PresenceConfig {
     /// minutes make people flicker between away and online.
     #[default = 600]
     pub away_after_seconds: u64,
+}
+
+/// Searches that read on through history after finding nothing near the present
+/// (`app::search`, `app::deep_search`).
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
+pub struct SearchConfig {
+    /// How many such searches' steps run at once on the whole deployment, each a core of the
+    /// database's for as long as it runs; two by default, which suits a small machine. About a
+    /// quarter of the database server's cores leaves the rest for everyone else. Every server
+    /// should be given the same number.
+    #[default = 2]
+    pub deep_concurrency: u32,
+    /// How long one request reads on for before it answers with how far it got, and its client
+    /// asks again from there; twenty seconds by default. Keep it under the shortest timeout of
+    /// anything between clients and this server (a reverse proxy's is commonly sixty seconds).
+    #[default = 20]
+    pub round_seconds: u64,
 }
 
 /// Sign-in: second factors, passkeys, and how recent a verification must be.
@@ -549,6 +569,7 @@ impl std::fmt::Debug for AspenConfig {
             limits,
             auth,
             presence,
+            search,
             metrics,
             connections,
             federation,
@@ -582,6 +603,7 @@ impl std::fmt::Debug for AspenConfig {
             .field("limits", limits)
             .field("auth", auth)
             .field("presence", presence)
+            .field("search", search)
             .field("metrics", metrics)
             .field("connections", connections)
             .field("federation", federation)

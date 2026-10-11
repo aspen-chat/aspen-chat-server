@@ -540,7 +540,9 @@ user_per_community = { requests = 30, per_seconds = 600, burst = 10 }
 user = { requests = 60, per_seconds = 60, burst = 20 }
 
 # Searching messages reads an index across everything the user may read: enough for someone
-# searching and paging through results by hand.
+# searching and paging through results by hand. A search that reads on through history is held
+# for up to `[search] round_seconds` a request, and shares `deep_concurrency` places with every
+# other (`app::deep_search`), so these count requests, not that reading.
 [rate_limits.endpoints."GET /messages"]
 user = { requests = 30, per_seconds = 60, burst = 10 }
 
