@@ -222,28 +222,33 @@ final class AppUITests: XCTestCase {
     }
 
     /// Text follows the system's Larger Text (`theme/systemTextSize.ts`): the app launched at
-    /// Accessibility Extra Large, whose body text is 40 points to the default's 17, draws the
-    /// user's name at the foot of the channel list over twice as tall, and Settings beside it
-    /// stays on the screen. The size is given at launch, for this app alone, as the system's
-    /// own setting would give it.
+    /// Accessibility Extra Large, whose body text is 40 points to the default's 17, draws a
+    /// channel's name (`ASPEN_TEST_CHANNEL`, "general") in the channel list over twice as tall,
+    /// and Settings at the foot of the list stays on the screen. The size is given at launch,
+    /// for this app alone, as the system's own setting would give it.
     func testTextFollowsLargerText() throws {
-        let user = try environment("ASPEN_TEST_USER")
+        let channel = ProcessInfo.processInfo.environment["ASPEN_TEST_CHANNEL"] ?? "general"
         try signIn()
-        let normal = try nameHeight(user, at: "UICTContentSizeCategoryL")
-        let larger = try nameHeight(user, at: "UICTContentSizeCategoryAccessibilityXL")
+        let normal = try nameHeight(channel, at: "UICTContentSizeCategoryL")
+        let larger = try nameHeight(channel, at: "UICTContentSizeCategoryAccessibilityXL")
         XCTAssertGreaterThan(larger / normal, 1.8, "drawn \(normal) then \(larger) tall")
         let settings = web.buttons["Settings"].firstMatch
         XCTAssertTrue(settings.isHittable, "Settings is off the screen: \(settings.frame)")
         XCTAssertLessThanOrEqual(settings.frame.maxX, app.windows.firstMatch.frame.maxX)
     }
 
-    /// Launches the app at the text size `category` and reads how tall the name `user` is drawn.
-    private func nameHeight(_ user: String, at category: String) throws -> CGFloat {
+    /// Launches the app at the text size `category` and reads how tall the channel list draws
+    /// the name of `channel`. A channel's name is text of its own to WebKit, where the user's
+    /// name at the foot of the list is inside a button that answers only by its own label.
+    private func nameHeight(_ channel: String, at category: String) throws -> CGFloat {
         app.terminate()
         app.launchArguments = ["-UIPreferredContentSizeCategoryName", category]
         app.launch()
-        let name = web.staticTexts[user].firstMatch
-        XCTAssertTrue(name.waitForExistence(timeout: 30), "no \(user): \(app.debugDescription)")
+        // The row's label says when the channel is unread ("general, unread").
+        let name = web.staticTexts.matching(
+            NSPredicate(format: "label == %@ OR label BEGINSWITH %@", channel, channel + ",")
+        ).firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 30), "no \(channel): \(app.debugDescription)")
         // The page measures the system's text size a moment after it starts.
         Thread.sleep(forTimeInterval: 2)
         return name.frame.height

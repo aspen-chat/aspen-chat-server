@@ -77,7 +77,7 @@ The page imports it dynamically, as a chunk of its own: about 2 MB, 160 kB compr
 | The phone apps | The npm packages `@aspen/mobile` depends on: Capacitor and its plugins, which carry the native Android and iOS code. |
 | The servers | The crates the API server, the voice server, and `aspen-migrate` are built from, on the platforms they are built for. The C and C++ libraries mediasoup's worker builds from its Meson wraps. |
 
-Chromium's notices are too many to carry in the list. They ship as `LICENSES.chromium.html` among the app's resources (`electron-builder.yml`). They open in the system's browser through `window.aspenDesktop.chromiumNotices` (`packages/desktop/src/main/chromiumNotices.ts`).
+Chromium's notices are too many to carry in the list. They ship as `LICENSES.chromium.html` among the app's resources (`electron-builder.yml`). The file comes with Electron's own files, which a fresh install does not hold until `install-electron` fetches them, so `package:build` runs that first. They open in the system's browser through `window.aspenDesktop.chromiumNotices` (`packages/desktop/src/main/chromiumNotices.ts`).
 
 ### Crates
 
