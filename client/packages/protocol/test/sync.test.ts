@@ -924,6 +924,40 @@ describe("AspenSync", () => {
     expect(sync.store.messages(general.id)).toMatchObject({ hasOlder: true, atLatest: false });
   });
 
+  it("loads around a message asked for while a page of history is on its way", async () => {
+    const page = Array.from({ length: MESSAGE_PAGE_SIZE }, (_, i) => message(600 + i));
+    const anchor = message(100);
+    let giveOlder: (response: Response) => void = () => undefined;
+    const { sync, calls } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/channels/${general.id}/messages`]: (url) => {
+        if (url.searchParams.has("before")) {
+          return new Promise<Response>((resolve) => {
+            giveOlder = resolve;
+          });
+        }
+        return json({
+          data: url.searchParams.has("around") ? [anchor] : page,
+          included: { users: [], attachments: [] },
+        });
+      },
+    });
+    await goLive(sync);
+    await sync.loadLatest(general.id);
+    const older = sync.loadOlder(general.id);
+    await settle();
+    const around = sync.loadAround(general.id, anchor.id);
+    await settle();
+    expect(calls.some((u) => u.searchParams.has("around"))).toBe(false);
+    giveOlder(json({ data: [message(599)], included: { users: [], attachments: [] } }));
+    await older;
+    await around;
+    expect(calls.find((u) => u.searchParams.has("around"))?.searchParams.get("around")).toBe(
+      anchor.id,
+    );
+    expect(sync.store.messages(general.id)?.ids).toEqual([anchor.id]);
+  });
+
   it("fetches an unknown author once when a message event names one", async () => {
     let userReads = 0;
     const { sync } = makeSync({

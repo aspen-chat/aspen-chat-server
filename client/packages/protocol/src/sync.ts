@@ -749,8 +749,18 @@ export class AspenSync {
    * Loads the window around one message, for a link to it. The window is not at the latest
    * unless the read shows nothing newer, so new messages are not appended to it; `loadLatest`
    * brings the channel back to the present.
+   *
+   * A page already on its way is waited for first: `#loadWindow` would hand that page back in
+   * place of this read, and a link opened while history was loading would go nowhere.
    */
-  loadAround(channelId: string, messageId: string): Promise<void> {
+  async loadAround(channelId: string, messageId: string): Promise<void> {
+    for (
+      let pending = this.#windowLoads.get(channelId);
+      pending !== undefined;
+      pending = this.#windowLoads.get(channelId)
+    ) {
+      await pending.catch(() => undefined);
+    }
     return this.#loadWindow(channelId, async () => {
       const messages = await this.#readMessages(channelId, {
         around: messageId,
