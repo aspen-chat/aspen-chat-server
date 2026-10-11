@@ -50,7 +50,28 @@ The apps' Unread tab is not a view. It lists the channels and DMs whose read sta
 ## How a page is read
 
 1. The places are worked out in Rust from the user's memberships, `Visibility`, settings, mutes, and follows.
-2. One query reads the page by message id, as search does (see [Search](search.md)). `all`, `mentions`, and `dms` name their places by `message.home_channel`, which is a thread reply's parent, so a place and its threads are one condition.
+2. One statement finds the page's message ids (`app::activity::page_sql`), and a second reads those messages.
+
+Each view is some of three reads:
+
+| Read | Of | Views |
+| --- | --- | --- |
+| A place whole, with its threads | `message.home_channel`, which is a thread reply's parent | What tells the reader (places at `all`), `all`, `dms` |
+| A thread alone | `message.channel` | What tells the reader (followed threads), `threads` |
+| What tags the reader in a place | `mention` | What tells the reader (places at `tags`), `mentions` |
+
+PostgreSQL cannot read "the newest across these channels" in order from an index that leads with the channel. So no read asks it to. Each walks one index backwards from the newest, for one place, thread, or tagged target at a time, and stops at the page's length.
+
+- **Places and threads.** The newest message of each is read first, one index row apiece. Only the places holding the newest of those, as many as the page is long, are then walked for a page each. A message among the newest 25 of all has fewer than 25 newer than it, so no other place can hold one.
+- **Tags by name** are walked through `mention (target_user, message)`, and **tags of a role** through `mention (target_role, message)`, one walk for each role the reader holds. Both pass over tags in places not asked for.
+- **Tags of everyone** are walked a place at a time through `mention (home_channel, message)`, as places are.
+- A walk ends at the moment the reader joined (`aspen_uuid_floor`). A thread read for what is unread ends at their position in it.
+
+So a page costs one index row for each place, then at most the page's length squared, however much the places hold.
+
+`filter[unread]` over a place read whole is a filter, not a bound: a thread's position is its own, so what is read of a place is walked past until the page fills. The apps read what is unread only of threads.
+
+The statement must be planned for the values it runs with, which Diesel's `sql_query` is. See the note on `page_sql` before changing how it is prepared.
 
 ## Parameters
 

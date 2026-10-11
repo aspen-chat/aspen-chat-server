@@ -412,6 +412,7 @@ diesel::table! {
         target_user -> Nullable<Uuid>,
         target_role -> Nullable<Uuid>,
         everyone -> Bool,
+        home_channel -> Uuid,
     }
 }
 

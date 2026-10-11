@@ -2555,11 +2555,23 @@ def activity_views(world: World, check: Checks) -> None:
           feed("all", f"&filter[community]={world.everyone}") == [whisper])
     check("a view this server does not have is refused",
           stack.status("GET", "/users/@me/activity?filter[view]=nonsense", token=member) == 400)
+    held = world.role("views-held", [])
+    world.give(held)
+    by_role = world.post(room, f"<@&{held}> to the role")
+    by_everyone = world.post(thread, "@everyone in the thread")
+    twice = world.post(room, f"<@{world.member['id']}> <@&{held}> @everyone all three")
+    check("mentions holds tags by name, by a role held, and of everyone, a thread's among them, each once",
+          feed("mentions") == [twice, by_everyone, by_role, tagged], feed("mentions"))
+    check("a page is as long as asked, and the next begins where it ended",
+          feed("mentions", "&limit=2") == [twice, by_everyone]
+          and feed("mentions", f"&limit=2&before={by_everyone}") == [by_role, tagged]
+          and feed("all", f"&limit=3&before={by_role}") == [reply, unfollowed, starter],
+          feed("all", f"&limit=3&before={by_role}"))
     stack.api("PUT", f"/communities/{world.community}/notification-settings/@me", {"level": "nothing"}, member)
     check("a level of nothing takes nothing out of a view", plain in feed("all") and tagged in feed("mentions"))
     stack.api("PUT", f"/channels/{room}/mutes/@me", {}, member)
     check("a mute takes the channel and its threads out of every view",
-          not ({plain, tagged, reply} & set(feed("all"))) and feed("mentions") == [] and feed("threads") == []
+          not ({plain, tagged, reply, by_everyone} & set(feed("all"))) and feed("mentions") == [] and feed("threads") == []
           and elsewhere in feed("all"), feed("all"))
     stack.api("DELETE", f"/channels/{room}/mutes/@me", token=member)
 
@@ -2567,9 +2579,9 @@ def activity_views(world: World, check: Checks) -> None:
     hidden = world.channel("views-hidden", overrides=[{"role": world.everyone, "allow": [], "deny": ["viewChannel"]}])
     secret = world.post(hidden, "not for members")
     status = stack.status("PUT", "/users/@me/read-states", {"positions": [
-        {"channel": room, "lastRead": starter},
+        {"channel": room, "lastRead": twice},
         {"channel": other, "lastRead": elsewhere},
-        {"channel": thread, "lastRead": reply},
+        {"channel": thread, "lastRead": by_everyone},
         {"channel": dm_id, "lastRead": whisper},
         # Passed over: a channel they may not view, and a message of another channel.
         {"channel": hidden, "lastRead": secret},
@@ -2577,8 +2589,8 @@ def activity_views(world: World, check: Checks) -> None:
     ]}, member)
     got = world.stream.gather(1.0)
     check("many positions move in one request", status == 204
-          and read_state(room)["lastRead"] == starter and read_state(other)["lastRead"] == elsewhere
-          and read_state(thread)["lastRead"] == reply and read_state(dm_id)["lastRead"] == whisper)
+          and read_state(room)["lastRead"] == twice and read_state(other)["lastRead"] == elsewhere
+          and read_state(thread)["lastRead"] == by_everyone and read_state(dm_id)["lastRead"] == whisper)
     check("each move is heard by the reader's devices, and nothing of the channel they may not view",
           {e["channel"] for e in of(got, "channelRead")} == {room, other, thread, dm_id}, got)
     check("and what is read leaves each view's unread",
@@ -2591,13 +2603,14 @@ def activity_views(world: World, check: Checks) -> None:
     world.as_owner("PUT", f"/channels/{room}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
     world.stream.gather(0.8)
     check("once the channel is lost, nothing of it or its thread is in any view",
-          not ({plain, tagged, reply, unfollowed} & set(feed("all"))) and feed("mentions") == [] and feed("threads") == [],
+          not ({plain, tagged, reply, unfollowed, twice, by_everyone} & set(feed("all"))) and feed("mentions") == []
+          and feed("threads") == [],
           feed("all"))
     later = world.post(room, "said while it was hidden")
     stack.api("PUT", "/users/@me/read-states", {"positions": [{"channel": room, "lastRead": later}]}, member)
     world.as_owner("DELETE", f"/channels/{room}/overrides/{world.everyone}")
     world.stream.gather(0.8)
-    check("and its position cannot be moved meanwhile", read_state(room)["lastRead"] == starter, read_state(room))
+    check("and its position cannot be moved meanwhile", read_state(room)["lastRead"] == twice, read_state(room))
 
 
 def emoji_deletions(world: World, check: Checks) -> None:

@@ -8,7 +8,8 @@
 //! they follow (`app::thread_follow`), whatever their level. Never in a channel they muted (a
 //! thread's parent included), never by them or anyone they blocked, never from before they
 //! joined, and never a message that only records something (an echo, a poll's result, a call, a
-//! command). What is read is decided as they may read it now, as search decides it.
+//! command). What is read is decided as they may read it now, as search decides it, and a page
+//! is read a place at a time ([`page_sql`]).
 //!
 //! That rule is the feed's own view ([`ActivityView::Notifying`]). The other views read wider or
 //! narrower than it, whatever the user's levels: everything said where they read, what tags
@@ -21,12 +22,9 @@ use crate::message::{Message, MessageKind, MessageWithRelations};
 use crate::notification_setting::{NotificationLevel, default_level};
 use crate::visibility::Visibility;
 use crate::{ChannelId, CommunityId, MessageId, RoleId, UserId};
-use aspen_schema::{
-    channel, community_member_role, community_user, dm_recipient, mention, message, read_state,
-    thread_follow, user_block,
-};
-use diesel::dsl::{exists, not};
+use aspen_schema::{channel, community_member_role, dm_recipient, message, thread_follow};
 use diesel::prelude::*;
+use diesel::sql_types::{Array, Bool, Uuid as PgUuid};
 use diesel_async::RunQueryDsl;
 use std::collections::{HashMap, HashSet};
 
@@ -111,6 +109,211 @@ fn sort_places(places: &[Place], followed: &[(ChannelId, ChannelId)]) -> Places 
         .map(|(thread, _)| *thread)
         .collect();
     sorted
+}
+
+#[derive(QueryableByName)]
+struct Found {
+    #[diesel(sql_type = PgUuid)]
+    id: MessageId,
+}
+
+/// What every message of the feed passes, written of `m`: not deleted, nor its thread; by
+/// someone else the user (`$1`) has not blocked; of no kind in `$8`; and, when `$3`, after the
+/// user's position where it was said.
+const PASSES: &str = r#"
+    m.deleted_at IS NULL
+    AND m.author <> $1
+    AND m.kind <> ALL($8)
+    AND NOT EXISTS (
+        SELECT 1 FROM user_block b WHERE b.blocker = $1 AND b.blocked = m.author
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM channel gone WHERE gone.id = m.channel AND gone.deleted_at IS NOT NULL
+    )
+    AND (NOT $3 OR NOT EXISTS (
+        SELECT 1 FROM read_state rs
+        WHERE rs."user" = $1 AND rs.channel = m.channel AND rs.message >= m.id
+    ))
+"#;
+
+/// Each place `p.channel` with `j.floor`, the position of the moment the user joined where it
+/// belongs (`aspen_uuid_floor`): nothing at or before it is theirs to read, and a place they
+/// belong to nowhere has none, so nothing of it is read.
+const JOINED_PLACE: &str = r#"
+    JOIN channel pc ON pc.id = p.channel
+    LEFT JOIN community_user cu ON cu.community = pc.community AND cu."user" = $1
+    LEFT JOIN dm_recipient dr ON dr.channel = pc.id AND dr."user" = $1
+    CROSS JOIN LATERAL (
+        SELECT aspen_uuid_floor(COALESCE(cu.joined_at, dr.joined_at)) AS floor
+    ) j
+"#;
+
+/// The newest `limit` ids (`key`, of `from`) older than `$2` that pass `passing`, across every
+/// row `x` of `source`, each row's walked on its own: those whose `place` is `x.channel` and
+/// whose id is after `x.after`. A row whose `after` is null has nothing read.
+///
+/// The newest of each `x` is read first, one row apiece, and only the `limit` rows of `source`
+/// with the newest of those are walked for a page: a message among the newest `limit` of all
+/// has fewer than `limit` messages newer than it, so fewer than `limit` other rows of `source`
+/// can begin with a newer one. That is one index row for each `x` and at most `limit` squared
+/// after, where walking every `x` for a page would be `limit` for each.
+///
+/// The range is written as two row comparisons, `(place, key)` between `(x.channel, x.after)`
+/// and `(x.channel, $2)`, which only rows of `x.channel` satisfy, rather than as `place =
+/// x.channel` with a range of `key`. Both bound the same stretch of an index on `(place, key)`,
+/// but the planner may take a two-sided range of one column, one end of which it cannot see,
+/// for a sliver, and then collect and sort everything the place holds rather than walk back
+/// from its newest (it does when `$3` is set). It measures a row comparison by its first column,
+/// and walks.
+fn walk(source: &str, from: &str, place: &str, key: &str, passing: &str, limit: u32) -> String {
+    let newest = |rows: u32| {
+        format!(
+            r#"
+            SELECT {key} AS id FROM {from}
+            WHERE ({place}, {key}) > (x.channel, x.after) AND ({place}, {key}) < (x.channel, $2)
+              AND {passing}
+            ORDER BY {place} DESC, {key} DESC
+            LIMIT {rows}
+            "#
+        )
+    };
+    format!(
+        r#"
+        (SELECT found.id
+         FROM (
+             SELECT x.*
+             FROM {source}
+             CROSS JOIN LATERAL ({head}) head
+             ORDER BY head.id DESC
+             LIMIT {limit}
+         ) x
+         CROSS JOIN LATERAL ({page}) found)
+        "#,
+        head = newest(1),
+        page = newest(limit),
+    )
+}
+
+/// The ids of one page of the feed of `limit` messages, newest first. `$1` is the user, `$2`
+/// the id the page is older than, `$3` whether only what is unread is read, `$4` the roles the
+/// user holds, `$5` the places read whole with their threads, `$6` the threads read alone, `$7`
+/// the places read for what tags the user, and `$8` the kinds of message left out.
+///
+/// The planner chooses a walk over collecting and sorting everything a place holds only when it
+/// can see how few rows are wanted and how wide the range is. So `limit` is written into the
+/// statement rather than bound, and the statement must be planned for the values it is run
+/// with, as `sql_query` is, which Diesel prepares afresh each time; a plan made once for every
+/// value (a cached prepared statement) sorts.
+///
+/// PostgreSQL cannot read "the newest across these channels" in order from an index that
+/// leads with the channel, so no branch asks it to: each walks one index backwards from the
+/// newest for one place, thread, or tagged target at a time ([`walk`]), and stops at the page's
+/// length. The page is then the newest of what the branches found, so its cost grows with the
+/// places and the page, not with what the places hold.
+///
+/// - A place is walked through `message_by_home_channel`, a thread through `message (channel,
+///   id)`, each back to the moment the user joined, and a thread read for what is unread back
+///   to their position in it.
+/// - Tags are walked through `mention`: the user's own through `mention_user_recent`, each
+///   role's through `mention_role_recent`, and each place's tags of everyone through
+///   `mention_everyone_recent`. The first two pass over tags in places not asked for.
+///
+/// The unread filter over a place read whole is a filter, not a bound: a thread's position is
+/// its own, so what is read of a place and its threads is walked past until the page fills.
+fn page_sql(limit: u32) -> String {
+    let places = |listed: &str| {
+        format!(
+            "unnest({listed}::uuid[]) AS p(channel) {JOINED_PLACE} \
+             CROSS JOIN LATERAL (SELECT p.channel, j.floor AS after) x"
+        )
+    };
+    let whole = walk(
+        &places("$5"),
+        "message m",
+        "m.home_channel",
+        "m.id",
+        PASSES,
+        limit,
+    );
+    let threads = walk(
+        // A thread read for what is unread is walked back to the user's position in it.
+        &format!(
+            r#"unnest($6::uuid[]) AS t(thread)
+            JOIN channel tc ON tc.id = t.thread
+            CROSS JOIN LATERAL (SELECT tc.parent_channel AS channel) p
+            {JOINED_PLACE}
+            LEFT JOIN read_state pos ON pos.channel = t.thread AND pos."user" = $1
+            CROSS JOIN LATERAL (
+                SELECT t.thread AS channel,
+                       CASE WHEN j.floor IS NOT NULL
+                            THEN GREATEST(j.floor, CASE WHEN $3 THEN pos.message END)
+                       END AS after
+            ) x"#
+        ),
+        "message m",
+        "m.channel",
+        "m.id",
+        PASSES,
+        limit,
+    );
+    let everyone = walk(
+        &places("$7"),
+        "mention mn JOIN message m ON m.id = mn.message",
+        "mn.home_channel",
+        "mn.message",
+        &format!("mn.everyone AND {PASSES}"),
+        limit,
+    );
+    // A tag by name or by role is found before its place is known, so joining is checked
+    // against the message's time there rather than bounding the walk.
+    let tagged = format!(
+        r#"
+            cardinality($7::uuid[]) > 0
+            AND mn.message < $2
+            AND m.home_channel = ANY($7)
+            AND (EXISTS (
+                SELECT 1 FROM channel hc
+                JOIN community_user cu ON cu.community = hc.community AND cu."user" = $1
+                WHERE hc.id = m.home_channel AND cu.joined_at < m."timestamp"
+            ) OR EXISTS (
+                SELECT 1 FROM dm_recipient dr
+                WHERE dr."user" = $1 AND dr.channel = m.home_channel
+                  AND dr.joined_at < m."timestamp"
+            ))
+            AND {PASSES}
+            "#
+    );
+    format!(
+        r#"
+            SELECT id FROM (
+                {whole}
+                UNION
+                {threads}
+                UNION
+                (SELECT m.id
+                 FROM mention mn
+                 JOIN message m ON m.id = mn.message
+                 WHERE mn.target_user = $1 AND {tagged}
+                 ORDER BY mn.message DESC
+                 LIMIT {limit})
+                UNION
+                (SELECT found.id
+                 FROM unnest($4::uuid[]) AS r(role)
+                 CROSS JOIN LATERAL (
+                     SELECT m.id
+                     FROM mention mn
+                     JOIN message m ON m.id = mn.message
+                     WHERE mn.target_role = r.role AND {tagged}
+                     ORDER BY mn.message DESC
+                     LIMIT {limit}
+                 ) found)
+                UNION
+                {everyone}
+            ) page
+            ORDER BY id DESC
+            LIMIT {limit}
+            "#
+    )
 }
 
 /// The messages of the user's feed that `query` asks for, newest first.
@@ -207,99 +410,39 @@ pub async fn read_activity(
     if places.unmuted.is_empty() {
         return Ok(Vec::new());
     }
-    let tagged = exists(
-        mention::table.filter(
-            mention::message.eq(message::id).and(
-                mention::target_user
-                    .eq(user)
-                    .or(mention::everyone)
-                    .or(mention::target_role.assume_not_null().eq_any(roles)),
-            ),
-        ),
-    );
-    let mut messages = message::table
-        .inner_join(channel::table.on(channel::id.eq(message::channel)))
-        .select(Message::as_select())
-        .filter(message::deleted_at.is_null())
-        .filter(channel::deleted_at.is_null())
-        .filter(message::author.ne(user))
-        .into_boxed();
-    messages = match query.view {
-        ActivityView::Notifying => messages.filter(
-            message::channel
-                .eq_any(places.all.clone())
-                .or(channel::parent_channel.eq_any(places.all))
-                .or(message::channel.eq_any(places.followed))
-                .or(message::channel
-                    .eq_any(places.tags.clone())
-                    .or(channel::parent_channel.eq_any(places.tags))
-                    .and(tagged)),
-        ),
-        // A thread reply's home is the thread's parent, so a place and its threads are one
-        // condition, which `message_by_home_channel` leads with.
-        ActivityView::All => messages.filter(message::home_channel.eq_any(places.unmuted)),
-        ActivityView::Mentions => messages
-            .filter(message::home_channel.eq_any(places.unmuted))
-            .filter(tagged),
-        ActivityView::Dms => messages.filter(message::home_channel.eq_any(places.dms)),
-        ActivityView::Threads => messages.filter(message::channel.eq_any(places.followed)),
+    // Each view is some of three reads: places read whole with their threads, threads read
+    // alone, and places read for what tags the user.
+    let none = Vec::new;
+    let (whole, threads, tagging) = match query.view {
+        ActivityView::Notifying => (places.all, places.followed, places.tags),
+        ActivityView::All => (places.unmuted, none(), none()),
+        ActivityView::Mentions => (none(), none(), places.unmuted),
+        ActivityView::Dms => (places.dms, none(), none()),
+        ActivityView::Threads => (none(), places.followed, none()),
     };
-    messages = messages
+    let uuids = |ids: Vec<ChannelId>| ids.into_iter().map(|id| id.0).collect::<Vec<_>>();
+    let page: Vec<Found> = diesel::sql_query(page_sql(query.limit.clamp(1, MAX_PAGE)))
+        .bind::<PgUuid, _>(user.0)
+        .bind::<PgUuid, _>(query.before.map_or(uuid::Uuid::max(), |before| before.0))
+        .bind::<Bool, _>(query.unread)
+        .bind::<Array<PgUuid>, _>(roles.into_iter().map(|role| role.0).collect::<Vec<_>>())
+        .bind::<Array<PgUuid>, _>(uuids(whole))
+        .bind::<Array<PgUuid>, _>(uuids(threads))
+        .bind::<Array<PgUuid>, _>(uuids(tagging))
         // What only records something says nothing of its own, as it wakes no phone.
-        .filter(message::kind.ne_all([
+        .bind::<Array<aspen_schema::sql_types::MessageKind>, _>(vec![
             MessageKind::ThreadEcho,
             MessageKind::PollClosed,
             MessageKind::Call,
             MessageKind::MissedCall,
             MessageKind::Command,
-        ]))
-        .filter(not(exists(
-            user_block::table.filter(
-                user_block::blocker
-                    .eq(user)
-                    .and(user_block::blocked.eq(message::author)),
-            ),
-        )))
-        // Nothing from before they joined the community, or the DM a thread's parent is.
-        .filter(
-            exists(
-                community_user::table.filter(
-                    community_user::community
-                        .nullable()
-                        .eq(channel::community)
-                        .and(community_user::user.eq(user))
-                        .and(community_user::joined_at.lt(message::timestamp)),
-                ),
-            )
-            .or(exists(
-                dm_recipient::table.filter(
-                    dm_recipient::user
-                        .eq(user)
-                        .and(dm_recipient::joined_at.lt(message::timestamp))
-                        .and(
-                            dm_recipient::channel
-                                .eq(message::channel)
-                                .or(dm_recipient::channel.nullable().eq(channel::parent_channel)),
-                        ),
-                ),
-            )),
-        );
-    if query.unread {
-        messages = messages.filter(not(exists(
-            read_state::table.filter(
-                read_state::user
-                    .eq(user)
-                    .and(read_state::channel.eq(message::channel))
-                    .and(read_state::message.ge(message::id)),
-            ),
-        )));
-    }
-    if let Some(before) = query.before {
-        messages = messages.filter(message::id.lt(before));
-    }
-    let messages: Vec<Message> = messages
+        ])
+        .load(conn.as_mut())
+        .await?;
+    let messages: Vec<Message> = message::table
+        .select(Message::as_select())
+        .filter(message::id.eq_any(page.into_iter().map(|found| found.id)))
         .order_by(message::id.desc())
-        .limit(i64::from(query.limit.clamp(1, MAX_PAGE)))
         .load(conn.as_mut())
         .await?;
     crate::message::with_relations(state, conn.as_mut(), messages).await
