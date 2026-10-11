@@ -1,10 +1,17 @@
 import { ACTIVITY_PAGE, ApiProblemError, type Message } from "@aspen/protocol";
-import { ChatCircleIcon } from "@phosphor-icons/react";
+import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, ToggleButton } from "react-aria-components";
+import { Button } from "react-aria-components";
 import { SourceScope } from "@/api/deployments";
 import { useEverywhere, useSources, type Source } from "@/api/everywhere";
-import { useLastRead, useMessageOnDemand, usePreference, useSync } from "@/api/hooks";
+import {
+  useChannelRemoved,
+  useLastRead,
+  useMessageOnDemand,
+  useMessageWindow,
+  usePreference,
+  useSync,
+} from "@/api/hooks";
 import { ActivityFilters } from "@/features/activity/ActivityFilters";
 import {
   ACTIVITY_HIDDEN,
@@ -13,19 +20,19 @@ import {
   shows,
 } from "@/features/activity/filter";
 import { PersonalPage } from "@/features/activity/PersonalPage";
+import { foldThreads } from "@/features/activity/threads";
 import { CompactCheckbox } from "@/features/layout/choices";
 import { LoadingLabel } from "@/features/layout/Skeleton";
-import { Tooltip } from "@/features/layout/Tooltip";
 import { Composer } from "@/features/messages/Composer";
-import {
-  ListedMessage,
-  ListedMessageSkeleton,
-  listedActionClass,
-} from "@/features/messages/ListedMessage";
+import type { ChannelHome } from "@/features/messages/links";
+import { ListedMessage, ListedMessageSkeleton } from "@/features/messages/ListedMessage";
 import { useMessagePlace } from "@/features/messages/place";
 import { mergeResults, type SourceResults } from "@/features/search/merge";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+
+/** How many of a thread's latest replies its entry in the feed shows. */
+const THREAD_REPLIES_SHOWN = 5;
 
 /** One deployment's part of the feed so far, newest first. */
 interface Feed extends SourceResults<Message> {
@@ -36,9 +43,10 @@ interface Feed extends SourceResults<Message> {
 /**
  * The activity feed, `/activity`: every message that tells the reader of itself (by the rule
  * their notifications follow, and every reply in a thread they follow), from every deployment
- * they use, newest first, merged as search merges, with older pages on request. What arrives
- * while it is open joins the top. What it shows is chosen in its rail (`ActivityFilters`), and
- * it can show only what is unread; opening it marks nothing read.
+ * they use, newest first, merged as search merges, with older pages on request. A thread's
+ * replies stand as one entry (`foldThreads`, `ThreadItem`). What arrives while it is open joins
+ * the top. What it shows is chosen in its rail (`ActivityFilters`), and it can show only what is
+ * unread; opening it marks nothing read.
  */
 export function ActivityScreen() {
   const m = useMessages();
@@ -175,8 +183,15 @@ export function ActivityScreen() {
     }
   };
 
-  const merged = feeds === null ? [] : mergeResults(feeds);
   const bySource = new Map(feeds?.map((feed) => [feed.key, feed.source]));
+  const entries =
+    feeds === null
+      ? []
+      : foldThreads(
+          mergeResults(feeds),
+          (key, channelId) =>
+            bySource.get(key)?.sync.store.channel(channelId)?.parentChannel != null,
+        );
   const everythingHidden =
     sources.length > 0 &&
     sources.every(
@@ -217,7 +232,7 @@ export function ActivityScreen() {
             <ListedMessageSkeleton key={index} index={index} />
           ))}
         </div>
-      ) : merged.length === 0 ? (
+      ) : entries.length === 0 ? (
         <p className="px-2 text-sm text-ink-muted">
           {everythingHidden
             ? m.activity.noneShown
@@ -227,14 +242,21 @@ export function ActivityScreen() {
         </p>
       ) : (
         <ul aria-label={m.activity.heading} className="message-text flex flex-col gap-1">
-          {merged.map(({ key, message }) => {
+          {entries.map(({ key, message, thread }) => {
             const source = bySource.get(key);
-            return (
-              source !== undefined && (
-                <SourceScope key={`${key}/${message.id}`} source={source}>
-                  <FeedItem message={message} domain={source.domain} />
-                </SourceScope>
-              )
+            if (source === undefined) {
+              return null;
+            }
+            // A thread's entry is keyed by the thread, so what is being written in it stays
+            // when a newer reply takes the entry's place in the feed.
+            return thread ? (
+              <SourceScope key={`${key}/thread/${message.channelId}`} source={source}>
+                <ThreadItem newest={message} domain={source.domain} />
+              </SourceScope>
+            ) : (
+              <SourceScope key={`${key}/${message.id}`} source={source}>
+                <FeedItem message={message} domain={source.domain} />
+              </SourceScope>
             );
           })}
         </ul>
@@ -254,59 +276,110 @@ export function ActivityScreen() {
   );
 }
 
+function UnreadMark() {
+  const m = useMessages();
+  return (
+    <span className="flex items-center self-center" title={m.activity.unread}>
+      <span className="forced-fill h-2 w-2 rounded-full bg-accent" aria-hidden="true" />
+      <span className="sr-only">{m.activity.unread}</span>
+    </span>
+  );
+}
+
 /**
- * One message of the feed, in its deployment's scope: where it was said, whether it is unread,
- * a way to go to it, and, for a reply in a thread, a way to reply there without leaving. A
- * message deleted since, or that the reader may no longer read, leaves the feed.
+ * One message of the feed said outside any thread, in its deployment's scope: where it was said,
+ * whether it is unread, and a way to go to it. A message deleted since, or that the reader may
+ * no longer read, leaves the feed.
  */
 function FeedItem({ message: read, domain }: { message: Message; domain: string | null }) {
   const m = useMessages();
   const { message, missing } = useMessageOnDemand(read.id, true);
-  const { home, link, where, thread } = useMessagePlace(message ?? read, domain);
+  const { home, link, where } = useMessagePlace(message ?? read, domain);
   const lastRead = useLastRead(read.channelId);
-  const [replying, setReplying] = useState(false);
   if (missing) {
     return null;
   }
-  const unread = lastRead === undefined || read.id > lastRead;
   return (
     <ListedMessage
       message={message}
       home={home}
       link={link}
       where={domain === null ? where : `${where} · ${format(m.search.onDomain, { domain })}`}
-      mark={
-        unread && (
-          <span className="flex items-center self-center" title={m.activity.unread}>
-            <span className="forced-fill h-2 w-2 rounded-full bg-accent" aria-hidden="true" />
-            <span className="sr-only">{m.activity.unread}</span>
-          </span>
-        )
-      }
-      actions={
-        thread !== undefined && (
-          <Tooltip text={replying ? m.activity.hideReply : m.activity.reply}>
-            <ToggleButton
-              aria-label={replying ? m.activity.hideReply : m.activity.reply}
-              isSelected={replying}
-              onChange={setReplying}
-              className={listedActionClass + " selected:text-accent"}
-            >
-              <ChatCircleIcon size={16} aria-hidden="true" />
-            </ToggleButton>
-          </Tooltip>
-        )
-      }
-    >
-      {replying && thread !== undefined && (
-        <div className="mt-1 flex flex-col">
-          <Composer
-            key={thread.id}
-            channelId={thread.id}
-            placeholder={m.activity.replyPlaceholder}
-          />
-        </div>
-      )}
-    </ListedMessage>
+      mark={(lastRead === undefined || read.id > lastRead) && <UnreadMark />}
+    />
   );
+}
+
+/**
+ * A thread with replies in the feed, in its deployment's scope, standing where the newest of
+ * them (`newest`) does: where the thread is, whether that reply is unread, a way to the thread,
+ * its `THREAD_REPLIES_SHOWN` latest replies whoever wrote them, oldest first and followed live,
+ * and its message box, so the reader answers without leaving. The replies are the thread's
+ * window (`AspenSync.loadLatest`), read here when the store's does not reach the latest; if that
+ * read fails, `newest` alone is shown. A thread deleted since, or left with no replies, leaves
+ * the feed.
+ */
+function ThreadItem({ newest, domain }: { newest: Message; domain: string | null }) {
+  const m = useMessages();
+  const sync = useSync();
+  const threadId = newest.channelId;
+  const { home, link, where } = useMessagePlace(newest, domain);
+  const lastRead = useLastRead(threadId);
+  const removed = useChannelRemoved(threadId);
+  const window = useMessageWindow(threadId);
+  const current = window?.atLatest === true;
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!current) {
+      sync.loadLatest(threadId).catch(() => {
+        setFailed(true);
+      });
+    }
+  }, [sync, threadId, current]);
+  const replies = current ? window.ids.slice(-THREAD_REPLIES_SHOWN) : failed ? [newest.id] : null;
+  if (removed || replies?.length === 0) {
+    return null;
+  }
+  const place = domain === null ? where : `${where} · ${format(m.search.onDomain, { domain })}`;
+  return (
+    <li className="flex flex-col gap-1 py-1.5">
+      <div className="flex items-baseline gap-2 px-2">
+        {(lastRead === undefined || newest.id > lastRead) && <UnreadMark />}
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-muted">{place}</span>
+        {link !== undefined && (
+          <Link
+            {...link}
+            className="shrink-0 rounded px-1 text-xs text-accent outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
+          >
+            {m.pins.jump}
+          </Link>
+        )}
+      </div>
+      {replies === null ? (
+        <div aria-busy="true" className="ms-2 flex flex-col gap-1 border-s-2 border-line">
+          <LoadingLabel text={m.activity.loadingReplies} />
+          <ListedMessageSkeleton index={0} />
+          <ListedMessageSkeleton index={1} />
+        </div>
+      ) : (
+        <ul
+          aria-label={m.activity.latestReplies}
+          className="ms-2 flex flex-col gap-1 border-s-2 border-line"
+        >
+          {replies.map((id) => (
+            <ThreadReply key={id} id={id} home={home} />
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-col px-2">
+        <Composer key={threadId} channelId={threadId} placeholder={m.activity.replyPlaceholder} />
+      </div>
+    </li>
+  );
+}
+
+/** One of a thread's latest replies in its entry; one deleted since leaves it. */
+function ThreadReply({ id, home }: { id: string; home: ChannelHome }) {
+  const { message, missing } = useMessageOnDemand(id, true);
+  return missing ? null : <ListedMessage message={message} home={home} link={undefined} />;
 }

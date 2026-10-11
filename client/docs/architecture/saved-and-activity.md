@@ -11,6 +11,7 @@ Two pages of the reader's own, across every deployment they use (`useSources`).
 | A listed message | `ListedMessage` (`src/features/messages`), `useMessagePlace`, `useMessageOnDemand` |
 | Saved messages | `SavedScreen`, `SaveButton`, `SavedMark`, `RecordStore.saves` |
 | The activity feed | `ActivityScreen`, `ActivityFilters`, `readFilter` |
+| A thread in the feed | `foldThreads` (`threads.ts`), `ThreadItem` in `ActivityScreen` |
 
 ## Opening the pages
 
@@ -118,13 +119,37 @@ Each row removes its save.
 What `AspenSync.onNotify` announces while the feed is open, by the same rule, joins the top of
 its deployment's feed if the filter shows it.
 
-### Unread and replying
+### Unread
 
 - A message after the reader's position where it was said carries an unread dot. The position is
   a channel's, or a thread's own (`useLastRead`).
 - Opening the feed marks nothing read.
-- A reply in a thread has a Reply button. It opens the thread's `Composer` in the row, so the
-  reader replies without leaving.
+
+### Threads
+
+A thread's replies in the feed stand as one entry (`foldThreads`), where the newest of them
+stands. Its older replies there are left out. The entry (`ThreadItem`) shows:
+
+1. where the thread is, an unread dot when its newest reply in the feed is unread, and a way to
+   the thread;
+2. the thread's `THREAD_REPLIES_SHOWN` (five) latest replies, oldest first, whoever wrote them,
+   the reader's own among them;
+3. the thread's `Composer`, always, so the reader replies without leaving.
+
+The replies are the thread's window in the store (`useMessageWindow`), so they follow the thread
+live.
+
+| The store's window | What the entry does |
+| --- | --- |
+| Reaches the latest | Shows its last five |
+| Missing, or not at the latest | Reads the latest page (`AspenSync.loadLatest`), in skeleton meanwhile |
+| The read failed | Shows the feed's newest reply alone |
+
+An entry subscribes to its thread's window, so the store keeps one window for each thread the
+feed shows, however many (`KEPT_WINDOWS_MAX` drops only windows nothing shows).
+
+The entry is keyed by its thread, so what is being written in it stays when a newer reply moves
+it up the feed. A thread deleted since, or left with no replies, leaves the feed.
 
 ### Filters
 

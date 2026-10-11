@@ -13,7 +13,7 @@ export const activity = {
   show: "Show",
   thisServer: "This server",
   dms: "Direct messages",
-  reply: "Reply",
-  hideReply: "Close reply",
+  latestReplies: "Latest replies",
+  loadingReplies: "Loading replies…",
   replyPlaceholder: "Reply in thread…",
 } as const;

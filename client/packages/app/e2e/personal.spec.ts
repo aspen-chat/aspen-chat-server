@@ -4,8 +4,8 @@ import { longPress, reactedText, signInToWorld } from "./world";
 /**
  * Saved messages and the activity feed, against the stubbed world in `world.ts`: saving Bob's
  * "Sounds good" from its actions marks it and lists it under Saved messages, where it can be
- * removed; the feed holds Bob's DM, and his replies in the thread once the caller follows it,
- * each a way to go to it, and a reply in a thread a way to reply there.
+ * removed; the feed holds Bob's DM, each message a way to go to it, and, once the caller follows
+ * the thread, one entry for it: its latest replies at the message text size, and its message box.
  */
 
 const channels = (page: Page) => page.getByRole("grid", { name: "Channels" }).first();
@@ -63,7 +63,8 @@ test("the feed holds what notifies, follows threads, and leaves out what is filt
   await expect(feed.getByText("Did you get the photos?")).toBeVisible();
   await expect(feed.getByText("Crisps and a fruit platter from me.")).toHaveCount(0);
 
-  // Following the thread brings its replies, with a way to reply in place.
+  // Following the thread brings it as one entry: its latest replies, the caller's own among
+  // them, over a message box to reply in place.
   await page.goto("/");
   await channels(page).getByText("general", { exact: true }).click();
   await page
@@ -74,8 +75,12 @@ test("the feed holds what notifies, follows threads, and leaves out what is filt
   await expect(page.getByRole("button", { name: "Unfollow thread" })).toBeVisible();
   await page.goto("/activity");
   await expect(feed.getByText("Crisps and a fruit platter from me.")).toBeVisible();
-  await feed.getByRole("button", { name: "Reply" }).first().click();
+  const replies = feed.getByRole("list", { name: "Latest replies" });
+  await expect(replies).toHaveCount(1);
+  await expect(replies.getByRole("listitem")).toHaveCount(2);
+  await expect(replies.getByText("Perfect, thank you!")).toBeVisible();
   await expect(feed.getByRole("textbox")).toBeVisible();
+  await expect(replies.locator(".message-body").first()).toHaveCSS("font-size", "16px");
 
   // Leaving DMs out asks for none, and is remembered.
   const show = page.getByRole("button", { name: "Show", exact: true });
