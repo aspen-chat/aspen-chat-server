@@ -1,16 +1,19 @@
 import { expect, test, type Page } from "@playwright/test";
-import { signInToWorld } from "./world";
+import { general, lounge, signInToWorld, type Publish } from "./world";
 
 /**
  * Folding a category, against the stubbed world in `world.ts`, where Planning holds #roadmap,
- * unread, and #ideas, read, and Archive holds nothing.
+ * unread, and #ideas, read, and Archive holds nothing; and the top level, which beside
+ * categories never says it is empty.
  */
 
 const planning = (page: Page) => page.getByRole("button", { name: "Planning", exact: true });
 const planningList = (page: Page) => page.getByRole("grid", { name: "Planning channels" });
 
+let publish: Publish;
+
 test.beforeEach(async ({ page }) => {
-  await signInToWorld(page);
+  publish = await signInToWorld(page);
 });
 
 test("a folded category keeps only what needs attention in view", async ({ page }) => {
@@ -66,4 +69,34 @@ test("a folded category with no channels at all does not say it is empty", async
       .getByRole("grid", { name: "Archive channels" })
       .getByText("No channels yet; drop one here"),
   ).toHaveCount(0);
+});
+
+test("the top level beside categories does not say it is empty, and keeps a place to drop on", async ({
+  page,
+}) => {
+  const topLevel = page.getByRole("grid", { name: "Channels", exact: true }).first();
+  await expect(topLevel.getByText("general", { exact: true })).toBeVisible();
+  const strip = topLevel.locator("div.rounded-full");
+  const background = () => strip.evaluate((e) => getComputedStyle(e).backgroundColor);
+  // The world still lists both channels, so a bootstrap that ends after the deletions brings
+  // them back; a deletion told twice is told once, so everything is tried again from them.
+  await expect(async () => {
+    publish({ serverEvent: "channel", type: "delete", id: general });
+    publish({ serverEvent: "channel", type: "delete", id: lounge });
+    await expect(topLevel.getByText(/general|Lounge/)).toHaveCount(0, { timeout: 1000 });
+    await expect(topLevel.getByText("No channels yet; drop one here")).toHaveCount(0);
+    // The caller may arrange channels, so a strip stays for dropping one on the top level,
+    // lit while a channel is held over the list.
+    await expect(strip).toHaveCSS("height", "6px", { timeout: 1000 });
+    const unlit = await background();
+    await topLevel.evaluate((list) => {
+      list.setAttribute("data-drop-target", "true");
+    });
+    expect(await background()).not.toBe(unlit);
+  }).toPass();
+  await expect(
+    page
+      .getByRole("grid", { name: "Archive channels" })
+      .getByText("No channels yet; drop one here"),
+  ).toBeVisible();
 });

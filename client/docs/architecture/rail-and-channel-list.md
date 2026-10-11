@@ -34,6 +34,9 @@ Reordering is drag and drop from React Aria: `useDragAndDrop` on a `GridList`.
 | Categories | Their own order, for now |
 
 A channel dragged into another group, or onto an empty category's drop zone, moves there.
+An empty group says so ("No channels yet; drop one here"), but for the top level beside at least
+one category, which says nothing: there it keeps only a thin strip, for those who may arrange
+channels, that lights while a channel is held over it.
 `arrangeChannels` sets its `parentCategory` along with its position.
 
 ## Folders on the rail

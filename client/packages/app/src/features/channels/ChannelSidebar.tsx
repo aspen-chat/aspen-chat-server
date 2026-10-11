@@ -100,6 +100,7 @@ export function ChannelSidebar({ community }: { community: Community }) {
           label={m.channelsLabel}
           parentCategory={null}
           channels={topLevel}
+          quietWhenEmpty={categories.length > 0}
         />
         {categories.map((category) => (
           <CategorySection
@@ -230,6 +231,7 @@ function ChannelGroup({
   allIds,
   collapsed = false,
   unfolded = false,
+  quietWhenEmpty = false,
 }: {
   communityId: string;
   label: string;
@@ -243,6 +245,12 @@ function ChannelGroup({
   collapsed?: boolean;
   /** Whether it is a category unfolded since it was drawn, whose channels drop into place. */
   unfolded?: boolean;
+  /**
+   * Whether the group says nothing when it holds no channels, as the top level does beside
+   * categories, which show the community is not empty. Someone who may arrange channels still
+   * gets a strip to drop one on.
+   */
+  quietWhenEmpty?: boolean;
 }) {
   const m = useMessages();
   const sync = useSync();
@@ -308,7 +316,11 @@ function ChannelGroup({
       dependencies={[current, unfolded]}
       selectionMode="none"
       renderEmptyState={() =>
-        collapsed ? null : (
+        collapsed ? null : quietWhenEmpty ? (
+          arrange && (
+            <div className="mx-2 h-1.5 rounded-full group-drop-target/channels:bg-accent group-drop-target/channels:forced-fill" />
+          )
+        ) : (
           <p className="rounded-md border border-dashed border-line px-2 py-1 text-xs text-ink-faint">
             {m.emptyChannelGroup}
           </p>
@@ -327,7 +339,7 @@ function ChannelGroup({
       }}
       // Only someone who may manage channels can move them.
       {...(arrange ? { dragAndDropHooks } : {})}
-      className="flex flex-col gap-0.5 outline-none"
+      className="group/channels flex flex-col gap-0.5 outline-none"
     >
       {(channel) => (
         <GridListItem
