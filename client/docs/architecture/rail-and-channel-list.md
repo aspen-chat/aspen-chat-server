@@ -5,7 +5,8 @@
 | Part | Where |
 | --- | --- |
 | Drop to new order | `src/features/layout/reorder.ts` |
-| Reordering requests | `AspenSync.reorderCommunities`, `AspenSync.reorderChannels`, `arrangeChannels` |
+| Reordering requests | `AspenSync.reorderCommunities`, `arrangeChannels`, `arrangeCategories` |
+| The Layout tab | `LayoutPanel`, `planMove` (`src/features/community-settings/layoutOrder.ts`) |
 | The rail and folders | `CommunityRail`, `RailFolder.tsx` |
 | What a rail drop means | `moveInRail` (`railOrder.ts`) |
 | Folded categories | `ChannelSidebar`, `useCollapsed`, `AspenSync.setCategoryCollapsed` |
@@ -14,14 +15,15 @@
 
 Reordering is drag and drop from React Aria: `useDragAndDrop` on a `GridList`.
 
-- There is one `GridList` for the community rail and one per channel group.
+- There is one `GridList` for the community rail, one per channel group in the sidebar, and
+  one for the Layout tab of community settings.
 - Each row carries a `Button slot="drag"` handle, which keyboard and screen reader users drag
   with.
 - `src/features/layout/reorder.ts` turns a drop into the new id order.
 - Rows carry a private drag type, so channel groups accept only channels and the rail accepts
   only communities.
 
-`AspenSync.reorderCommunities` and `reorderChannels`:
+`AspenSync.reorderCommunities`, `arrangeChannels`, and `arrangeCategories`:
 
 1. renumber positions;
 2. patch only the records whose index changed;
@@ -31,13 +33,37 @@ Reordering is drag and drop from React Aria: `useDragAndDrop` on a `GridList`.
 | --- | --- |
 | Communities | Per user, on the caller's membership (`UserCommunity.sortIndex`), which every community read sideloads |
 | Channels | Position, and `parentCategory` when moved |
-| Categories | Their own order, for now |
+| Categories | Position |
 
 A channel dragged into another group, or onto an empty category's drop zone, moves there.
 An empty group says so ("No channels yet; drop one here"), but for the top level beside at least
 one category, which says nothing: there it keeps only a thin strip, for those who may arrange
 channels, that lights while a channel is held over it.
 `arrangeChannels` sets its `parentCategory` along with its position.
+
+## The Layout tab
+
+Categories are arranged only here; the sidebar arranges channels alone. `LayoutPanel` shows a
+community's channels and categories as one `GridList`, as the rail is one: a "No category"
+heading and the top-level channels, then each category's heading followed by its channels.
+Every drop is saved at once, by the same requests as the sidebar's.
+
+`planMove` decides what a drop means; its tests list every case.
+
+| Dragged | Dropped | Result |
+| --- | --- | --- |
+| A channel | Between two rows | Joins the group of the row above, right after it: first under a heading, last in the group above when just over a category's heading |
+| A channel | On a heading | Goes to the end of that group |
+| A category | Just over another category's heading, or at the end | Moves there with its channels |
+| A category | Anywhere else | Nothing; it is not offered as a place |
+
+- Holders of Manage channels move, rename, and delete channels; holders of Manage categories
+  do the same to categories and make new ones (`RenameCategoryDialog`, `DeleteCategoryDialog`,
+  `CreateCategoryForm`).
+- React Aria makes every row of such a list draggable. A row the caller may not move, the "No
+  category" heading among them, is refused everywhere by `getDropOperation`, and carries a
+  hidden, disabled handle in place of a real one.
+- Positions are numbered among the channels and categories the caller can see.
 
 ## Folders on the rail
 

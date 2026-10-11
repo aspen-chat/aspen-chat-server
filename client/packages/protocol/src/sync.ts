@@ -890,6 +890,56 @@ export class AspenSync {
   }
 
   /**
+   * Arranges a community's categories in the given order, as `reorderCommunities` does the
+   * caller's communities: each whose position changed is renumbered to it and patched, and the
+   * cache is arranged at once.
+   */
+  async arrangeCategories(orderedIds: readonly string[]): Promise<void> {
+    const changed = orderedIds.flatMap((id, index) => {
+      const category = this.store.category(id);
+      return category === undefined || category.sortIndex === index ? [] : [{ id, index }];
+    });
+    for (const { id, index } of changed) {
+      this.store.applyEvent({ serverEvent: "category", type: "update", id, sortIndex: index });
+    }
+    await Promise.all(
+      changed.map(async ({ id, index }) => {
+        const result = await this.#client.api.PATCH("/api/v1/categories/{category}", {
+          params: { path: { category: id } },
+          body: { sortIndex: index },
+        });
+        if (result.error !== undefined) {
+          throw new ApiProblemError(problemOf(result.error, result.response));
+        }
+      }),
+    );
+  }
+
+  /** Renames a category. The cache is left to the update event. */
+  async renameCategory(categoryId: string, name: string): Promise<void> {
+    const result = await this.#client.api.PATCH("/api/v1/categories/{category}", {
+      params: { path: { category: categoryId } },
+      body: { name },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Deletes a category, whose channels the server leaves in no category. The cache is left to
+   * the events: the category's deletion and each channel's move.
+   */
+  async deleteCategory(categoryId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/categories/{category}", {
+      params: { path: { category: categoryId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
    * Changes a community's name or icon as a merge patch. The cache is left to the update
    * event, which the server publishes before it answers.
    */

@@ -76,11 +76,12 @@ Without Speak the call joins to listen, opening no microphone.
 
 ### `CommunitySettingsDialog`
 
-Opened from the sidebar gear.
+Opened from the wrench in the sidebar's header.
 
 | Section | Holds |
 | --- | --- |
 | Overview | Name and icon, the caller's own nickname, ownership, delete or leave |
+| Layout | For holders of Manage channels or Manage categories: `LayoutPanel`, the channels and categories as one list to arrange, rename, and delete, and New category (see [rail-and-channel-list.md](rail-and-channel-list.md)) |
 | Roles | Templates, and a grouped `PermissionChecklist` whose unheld permissions are disabled |
 | Members | Each member by their nickname, with their roles, Remove, Clear nickname (Manage nicknames; see [profiles-and-icons.md](profiles-and-icons.md)), and Ban for holders of Ban members |
 
