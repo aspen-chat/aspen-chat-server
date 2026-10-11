@@ -11,17 +11,15 @@ Two pages of the reader's own, across every deployment they use (`useSources`).
 | A listed message | `ListedMessage` (`src/features/messages`), `useMessagePlace`, `useMessageOnDemand` |
 | Saved messages | `SavedScreen`, `SaveButton`, `SavedMark`, `RecordStore.saves` |
 | The activity feed | `ActivityScreen`, `ActivityFilters`, `readFilter` |
+| Its tabs | `ACTIVITY_TAB`, `FeedTab`, `UnreadTab`, `useFeeds` in `ActivityScreen` |
+| What is unread | `unreadEntries` (`unread.ts`), `RecordStore.unreadChannels`, `ChannelItem` |
 | A thread in the feed | `foldThreads` (`threads.ts`), `ThreadItem` in `ActivityScreen` |
 
 ## Opening the pages
 
-They open from the top of the community rail (`CommunityRail`), in this order:
-
-1. Activity;
-2. Saved messages;
-3. the DMs.
-
-Each is a round link drawn alike (`railLinkClass`), ringed while its page is open.
+One round link at the top of the community rail (`CommunityRail`), above the DMs', opens Activity.
+It is drawn as the DMs' is (`railLinkClass`) and ringed while either page is open. Saved messages
+open from the page's own rail (`PersonalPage`), which goes between the two.
 
 | Page | Route |
 | --- | --- |
@@ -107,23 +105,60 @@ Each row removes its save.
 
 ## The activity feed
 
-`ActivityScreen` shows what tells the reader.
+`ActivityScreen` shows what is said where the reader reads, under one of five tabs. The tab is a
+device preference (`ACTIVITY_TAB`), Unread until one is chosen.
 
-### Reading
+| Tab | Shows | Read with |
+| --- | --- | --- |
+| Unread | Every unread channel, DM, and followed thread, each one entry | The store's read states, and the `threads` view with `filter[unread]` |
+| Mentions | Messages that tag the reader | The `mentions` view |
+| DMs | The reader's DMs' messages | The `dms` view |
+| Threads | Replies in the threads they follow | The `threads` view |
+| All | Everything said where they read | The `all` view |
+
+Muted channels are in none of them.
+
+### Reading a view
+
+`FeedTab` lists one view's messages, read or not (`useFeeds`):
 
 1. It reads each deployment's page (`AspenSync.readActivity`, `ACTIVITY_PAGE` at a time), with
    read positions sideloaded.
 2. It merges them as search does (`mergeResults`).
 3. It reads older pages on request.
 
-What `AspenSync.onNotify` announces while the feed is open, by the same rule, joins the top of
-its deployment's feed if the filter shows it.
+What arrives while a view is open (`AspenSync.onArrival`) joins the top of its deployment's feed
+if the view holds it (`RecordStore.inActivity`, the server's rule for each view) and the filter
+shows it.
 
 ### Unread
 
-- A message after the reader's position where it was said carries an unread dot. The position is
-  a channel's, or a thread's own (`useLastRead`).
-- Opening the feed marks nothing read.
+`UnreadTab` lists places, not messages, so a busy channel is one entry:
+
+- Channels and DMs come from each deployment's store (`RecordStore.unreadChannels`, topic
+  `unread`), which holds every one whole and follows them live.
+- Threads come from each deployment's `threads` view with `filter[unread]`, since no list carries
+  threads' positions. A thread read since leaves the list (`threadRead`).
+- `unreadEntries` orders both by their newest unread message, and holds back what is older than
+  the oldest reply of a deployment with more replies to give.
+- `UNREAD_PAGE` entries show at a time, since each reads its channel's latest page.
+
+A channel's entry (`ChannelItem`) shows where it is, its `ENTRY_MESSAGES_SHOWN` (five) latest
+unread messages, and how many are unread as far as its window reaches (that many "or more" when
+the whole window is unread and older messages remain).
+
+### Marking read
+
+Showing the feed marks nothing read.
+
+- Every unread entry and unread message has a Mark read button (`AspenSync.markRead`). On a
+  message it moves the channel's position up to that message.
+- Mark all read, on the Unread tab, marks every channel the filter shows and every thread read so
+  far (`AspenSync.markManyRead`, `READ_REPORTS_MAX` positions to a request), then reads the
+  threads again, since more may wait behind those read.
+
+In the other tabs a message after the reader's position where it was said carries an unread dot.
+The position is a channel's, or a thread's own (`useLastRead`).
 
 ### Threads
 
@@ -132,7 +167,7 @@ stands. Its older replies there are left out. The entry (`ThreadItem`) shows:
 
 1. where the thread is, an unread dot when its newest reply in the feed is unread, and a way to
    the thread;
-2. the thread's `THREAD_REPLIES_SHOWN` (five) latest replies, oldest first, whoever wrote them,
+2. the thread's `ENTRY_MESSAGES_SHOWN` (five) latest replies, oldest first, whoever wrote them,
    the reader's own among them;
 3. the thread's `Composer`, always, so the reader replies without leaving.
 
@@ -153,15 +188,16 @@ it up the feed. A thread deleted since, or left with no replies, leaves the feed
 
 ### Filters
 
-What the feed shows is chosen in its rail (`ActivityFilters`), folded away on a one-pane screen.
+What every tab shows is narrowed in the page's rail (`ActivityFilters`), folded away on a one-pane
+screen.
 
 | Filter | Preference | How it is read |
 | --- | --- | --- |
 | Each deployment, and within it the reader's DMs and each community | `ACTIVITY_HIDDEN`, a device preference of what is hidden, so a community joined later shows | `readFilter` turns it into each read's filter |
-| Unread only | `ACTIVITY_UNREAD_ONLY`, a device preference | Reads again with `filter[unread]` |
 
 `readFilter`:
 
 - does not ask a deployment wholly hidden;
 - asks a deployment whose communities are all hidden but whose DMs show for `NO_COMMUNITY`, a
-  community no one belongs to.
+  community no one belongs to;
+- for the `dms` view names no community, and does not ask a deployment whose DMs are hidden.

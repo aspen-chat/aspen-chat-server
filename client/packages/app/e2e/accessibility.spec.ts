@@ -191,7 +191,9 @@ for (const { palette, scheme, contrast } of combinations) {
       await openChannel(page, "general");
       await page.goto("/activity");
       await expect(
-        page.getByRole("list", { name: "Activity" }).getByText("Did you get the photos?"),
+        page
+          .getByRole("list", { name: "Unread", exact: true })
+          .getByText("Did you get the photos?"),
       ).toBeVisible();
       await settleAnimations(page);
       await expectAccessible(page, "activity");

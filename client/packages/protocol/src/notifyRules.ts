@@ -79,6 +79,48 @@ export function tagsMe(tags: Mentions, me: string, held: readonly string[] | und
 }
 
 /**
+ * Which messages a read of the activity feed is of. `notifying` is what tells the caller of
+ * itself, by their notification levels and the threads they follow; the others read whatever
+ * their levels: everything said where they read, what tags them, their DMs, and replies in the
+ * threads they follow.
+ */
+export type ActivityView = "notifying" | "all" | "mentions" | "dms" | "threads";
+
+/** An unread channel or DM: where it is, and its newest message by someone else. */
+export interface UnreadChannel {
+  readonly channel: string;
+  /** Its community; `null` for a DM. */
+  readonly community: string | null;
+  readonly lastMessage: string;
+}
+
+/** The tracked channels and DMs with something unread, never muted ones, newest message first. */
+export function unreadChannels(
+  readStates: ReadonlyMap<string, ReadState>,
+  channels: ReadonlyMap<string, Channel>,
+  mutes: ReadonlyMap<string, ChannelMute>,
+): UnreadChannel[] {
+  const unread: UnreadChannel[] = [];
+  for (const state of readStates.values()) {
+    const channel = channels.get(state.channel);
+    if (
+      channel !== undefined &&
+      !mutes.has(state.channel) &&
+      state.lastMessage != null &&
+      state.lastMessage > state.lastRead
+    ) {
+      unread.push({
+        channel: state.channel,
+        community: channel.community ?? null,
+        lastMessage: state.lastMessage,
+      });
+    }
+  }
+  // Message ids are UUIDv7s, which sort by time as text.
+  return unread.sort((a, b) => (a.lastMessage < b.lastMessage ? 1 : -1));
+}
+
+/**
  * The communities with an unread channel, and `UNREAD_DMS` when a DM is unread. A muted
  * channel counts for neither.
  */

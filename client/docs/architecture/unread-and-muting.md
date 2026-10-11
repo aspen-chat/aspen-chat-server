@@ -6,6 +6,7 @@
 | --- | --- |
 | Read states | `RecordStore` (topic `read:<channelId>`), `useReadState`, `useUnread` |
 | Unread places | `unreadPlaces()` (topic `unread`), `useUnreadPlaces`, `UNREAD_DMS` |
+| Unread channels | `unreadChannels()` (topic `unread`), which the activity feed's Unread tab lists |
 | Marking read | `MessageList`, `AspenSync.markRead` |
 | Thread positions | `threadRead` (topic `read:<threadId>`) |
 | Mutes | `replaceMutes`, `useMute`, `MuteBell`, `useMuteEnd`, `nextMuteEnd`, `expireMutes` |
@@ -51,6 +52,10 @@ for the DMs. They drive the rail's dots, which sit half under the entry's icon.
 - It reports to the server at most every `READ_REPORT_MS` per channel.
 - It reports only while the page is visible and focused.
 - Leaving the channel or hiding the page flushes the report.
+
+The activity feed marks places read without opening them, one at a time through `markRead` and
+all at once through `AspenSync.markManyRead`, which reports many positions in one request (see
+[Saved messages and activity](saved-and-activity.md)).
 
 ### Threads
 

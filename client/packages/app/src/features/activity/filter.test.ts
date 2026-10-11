@@ -22,6 +22,14 @@ describe("the activity feed's filter", () => {
     expect(shows(hidden, null, "b")).toBe(true);
   });
 
+  it("names no community for the DMs' view, and asks nothing where DMs are hidden", () => {
+    const hidden = hide(hiddenKey({ kind: "community", domain: null, community: "a" }));
+    expect(readFilter(hidden, null, ["a", "b"], "dms")).toEqual({ dms: true });
+    const none = hide(hiddenKey({ kind: "dms", domain: null }));
+    expect(readFilter(none, null, ["a"], "dms")).toBeNull();
+    expect(readFilter(none, null, ["a"], "all")).toEqual({ dms: false });
+  });
+
   it("asks for DMs alone with a community no one belongs to", () => {
     const hidden = hide(hiddenKey({ kind: "community", domain: null, community: "a" }));
     expect(readFilter(hidden, null, ["a"])).toEqual({ dms: true, communities: [NO_COMMUNITY] });

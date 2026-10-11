@@ -111,6 +111,7 @@ pub const TAG_PLUGINS: &str = "plugins";
     // body types are, so they are registered here to keep them named components.
     components(schemas(
         community::CommunityInclude,
+        activity::ActivityView,
         message::MessageInclude,
         message::MessageHolding,
         dm::DmInclude,
@@ -439,6 +440,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             read_state::get_read_state,
             read_state::put_read_state
         ))
+        .routes(routes!(read_state::put_read_states))
         .routes(routes!(
             channel_mute::mute_channel,
             channel_mute::unmute_channel

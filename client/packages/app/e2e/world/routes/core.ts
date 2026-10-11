@@ -173,6 +173,7 @@ export function coreRoutes({
       }),
     ],
     ["PUT", /^\/channels\/[^/]+\/read-states\/@me$/, () => reply(null, 204)],
+    ["PUT", /^\/users\/@me\/read-states$/, () => reply(null, 204)],
     ["GET", /^\/channels\/[^/]+\/pins$/, () => []],
     // A member search: everyone in the world whose name holds what was typed, Dana included,
     // though she is not in the member sample.

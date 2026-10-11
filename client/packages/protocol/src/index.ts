@@ -77,7 +77,7 @@ export {
   WINDOW_MAX_MESSAGES,
   heldPlace,
 } from "./store";
-export { UNREAD_DMS } from "./notifyRules";
+export { UNREAD_DMS, type ActivityView, type UnreadChannel } from "./notifyRules";
 export { groupChannels, isDm } from "./channels";
 export type {
   Attachment,

@@ -100,3 +100,54 @@ pub async fn put_read_state(
     app::read_state::mark_read(&state, user.id, channel, update.last_read).await?;
     Ok(NoContent)
 }
+
+/// A channel, DM, or thread, and where the caller has read it up to.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadPosition {
+    pub channel: ChannelId,
+    /// A message of the channel, deleted or not, that the caller has now seen.
+    pub last_read: MessageId,
+}
+
+/// Where the caller has read several channels up to.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadStatesUpdate {
+    /// At most `app::read_state::MAX_MARKED` (100) positions.
+    pub positions: Vec<ReadPosition>,
+}
+
+/// Moves the caller's read positions in several channels, DMs, and threads forward at once, each
+/// as `PUT /channels/{channel}/read-states/@me` moves one, and each move announced to the
+/// caller's devices as `channelRead`. A position is passed over, not refused, when its channel
+/// is not one the caller may read or its message is not of that channel.
+#[utoipa::path(
+    put,
+    path = "/users/@me/read-states",
+    tag = TAG_CHANNELS,
+    request_body = ReadStatesUpdate,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT, description = "Recorded"),
+        (status = BAD_REQUEST, description = "`validation`: more positions than one request may move", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn put_read_states(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Json(update): Json<ReadStatesUpdate>,
+) -> ApiResult<NoContent> {
+    let positions: Vec<app::read_state::Position> = update
+        .positions
+        .into_iter()
+        .map(|p| app::read_state::Position {
+            channel: p.channel,
+            message: p.last_read,
+        })
+        .collect();
+    app::read_state::mark_many_read(&state, user.id, &positions).await?;
+    Ok(NoContent)
+}

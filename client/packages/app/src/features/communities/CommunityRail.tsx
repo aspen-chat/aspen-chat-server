@@ -39,7 +39,6 @@ import { MentionBadge } from "@/features/mentions/MentionBadge";
 import { mentionsText } from "@/features/mentions/mentions";
 import { useMessages } from "@/i18n/context";
 import {
-  BookmarksSimpleIcon,
   ChatsTeardropIcon,
   DotsSixVerticalIcon,
   DotsThreeIcon,
@@ -120,7 +119,7 @@ function railRows(units: readonly RailUnit<RailEntry>[]): RailRow[] {
 }
 
 const currentRing = "ring-2 ring-accent ring-offset-2 ring-offset-surface-rail";
-/** A round way to a page of the rail's own (activity, saved messages, DMs, the dashboard), ringed while it is open. */
+/** A round way to a page of the rail's own (activity and saved messages, DMs, the dashboard), ringed while it is open. */
 function railLinkClass(current: boolean): string {
   return (
     "flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-surface-raised text-ink-muted outline-none hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/60" +
@@ -288,24 +287,15 @@ export function CommunityRail() {
       aria-label={m.communitiesLabel}
       className="flex w-16 shrink-0 flex-col items-center gap-2 overflow-y-auto border-e border-line bg-surface-rail py-3"
     >
+      {/* Saved messages are a tab of the page this opens (`PersonalPage`), so it stands for both. */}
       <Tooltip text={m.activity.open}>
         <Link
           to="/activity"
           aria-label={m.activity.open}
           aria-current={inActivity ? "page" : undefined}
-          className={railLinkClass(inActivity)}
+          className={railLinkClass(inActivity || inSaved)}
         >
           <TrayIcon size={22} aria-hidden="true" />
-        </Link>
-      </Tooltip>
-      <Tooltip text={m.saved.open}>
-        <Link
-          to="/saved"
-          aria-label={m.saved.open}
-          aria-current={inSaved ? "page" : undefined}
-          className={railLinkClass(inSaved)}
-        >
-          <BookmarksSimpleIcon size={22} aria-hidden="true" />
         </Link>
       </Tooltip>
       {/* The dot sits beside the link rather than in it, so the link's own round background

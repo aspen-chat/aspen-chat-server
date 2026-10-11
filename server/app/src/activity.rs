@@ -9,6 +9,11 @@
 //! thread's parent included), never by them or anyone they blocked, never from before they
 //! joined, and never a message that only records something (an echo, a poll's result, a call, a
 //! command). What is read is decided as they may read it now, as search decides it.
+//!
+//! That rule is the feed's own view ([`ActivityView::Notifying`]). The other views read wider or
+//! narrower than it, whatever the user's levels: everything said where they read, what tags
+//! them, their DMs, or the threads they follow. Mutes, blocks, joining, and the kinds left out
+//! hold in every view.
 
 use crate::channel::ChannelType;
 use crate::context::GlobalServerContext;
@@ -28,9 +33,28 @@ use std::collections::{HashMap, HashSet};
 /// The most messages one page of the feed holds.
 pub const MAX_PAGE: u32 = 50;
 
+/// Which messages a read of the feed is of. Each leaves out what every view does: muted
+/// channels, the user's own messages and those of anyone they blocked, what was said before
+/// they joined, and messages that only record something.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ActivityView {
+    /// What tells the user of itself, by their notification levels and the threads they follow.
+    #[default]
+    Notifying,
+    /// Everything said where they read, threads included.
+    All,
+    /// What tags them: by name, a role they hold, or everyone.
+    Mentions,
+    /// Their DMs and group DMs, and those DMs' threads.
+    Dms,
+    /// Replies in the threads they follow.
+    Threads,
+}
+
 /// Which part of the feed to read.
 #[derive(Debug, Clone, Default)]
 pub struct ActivityQuery {
+    pub view: ActivityView,
     /// Only these communities' messages, or every community's when `None`.
     pub communities: Option<Vec<CommunityId>>,
     /// Whether DMs' messages are read.
@@ -52,11 +76,16 @@ struct Places {
     tags: Vec<ChannelId>,
     /// Threads every reply in which tells them.
     followed: Vec<ChannelId>,
+    /// Every channel and DM they read and have not muted, whatever their level there.
+    unmuted: Vec<ChannelId>,
+    /// The DMs among `unmuted`.
+    dms: Vec<ChannelId>,
 }
 
 /// One channel or DM the user may read, and their level and mute there.
 struct Place {
     channel: ChannelId,
+    dm: bool,
     level: NotificationLevel,
     muted: bool,
 }
@@ -66,6 +95,10 @@ fn sort_places(places: &[Place], followed: &[(ChannelId, ChannelId)]) -> Places 
     let mut unmuted = HashSet::new();
     for place in places.iter().filter(|p| !p.muted) {
         unmuted.insert(place.channel);
+        sorted.unmuted.push(place.channel);
+        if place.dm {
+            sorted.dms.push(place.channel);
+        }
         match place.level {
             NotificationLevel::All => sorted.all.push(place.channel),
             NotificationLevel::Tags => sorted.tags.push(place.channel),
@@ -143,6 +176,7 @@ pub async fn read_activity(
         .chain(dms.iter().map(|dm| (*dm, ChannelType::Dm)))
         .map(|(channel, ty)| Place {
             channel,
+            dm: ty == ChannelType::Dm,
             level: for_channel
                 .get(&channel)
                 .or_else(|| {
@@ -170,7 +204,7 @@ pub async fn read_activity(
         .load(conn.as_mut())
         .await?;
     let places = sort_places(&places, &followed);
-    if places == Places::default() {
+    if places.unmuted.is_empty() {
         return Ok(Vec::new());
     }
     let tagged = exists(
@@ -189,7 +223,9 @@ pub async fn read_activity(
         .filter(message::deleted_at.is_null())
         .filter(channel::deleted_at.is_null())
         .filter(message::author.ne(user))
-        .filter(
+        .into_boxed();
+    messages = match query.view {
+        ActivityView::Notifying => messages.filter(
             message::channel
                 .eq_any(places.all.clone())
                 .or(channel::parent_channel.eq_any(places.all))
@@ -198,7 +234,17 @@ pub async fn read_activity(
                     .eq_any(places.tags.clone())
                     .or(channel::parent_channel.eq_any(places.tags))
                     .and(tagged)),
-        )
+        ),
+        // A thread reply's home is the thread's parent, so a place and its threads are one
+        // condition, which `message_by_home_channel` leads with.
+        ActivityView::All => messages.filter(message::home_channel.eq_any(places.unmuted)),
+        ActivityView::Mentions => messages
+            .filter(message::home_channel.eq_any(places.unmuted))
+            .filter(tagged),
+        ActivityView::Dms => messages.filter(message::home_channel.eq_any(places.dms)),
+        ActivityView::Threads => messages.filter(message::channel.eq_any(places.followed)),
+    };
+    messages = messages
         // What only records something says nothing of its own, as it wakes no phone.
         .filter(message::kind.ne_all([
             MessageKind::ThreadEcho,
@@ -237,8 +283,7 @@ pub async fn read_activity(
                         ),
                 ),
             )),
-        )
-        .into_boxed();
+        );
     if query.unread {
         messages = messages.filter(not(exists(
             read_state::table.filter(
@@ -267,6 +312,7 @@ mod tests {
     fn place(level: NotificationLevel, muted: bool) -> Place {
         Place {
             channel: ChannelId::new(),
+            dm: false,
             level,
             muted,
         }
@@ -278,6 +324,14 @@ mod tests {
         let tags = place(NotificationLevel::Tags, false);
         let nothing = place(NotificationLevel::Nothing, false);
         let muted = place(NotificationLevel::All, true);
+        let dm = Place {
+            dm: true,
+            ..place(NotificationLevel::All, false)
+        };
+        let muted_dm = Place {
+            dm: true,
+            ..place(NotificationLevel::All, true)
+        };
         let (in_all, in_nothing, in_muted) = (ChannelId::new(), ChannelId::new(), ChannelId::new());
         let followed = [
             (in_all, all.channel),
@@ -285,13 +339,16 @@ mod tests {
             (in_muted, muted.channel),
         ];
         let expected = Places {
-            all: vec![all.channel],
+            all: vec![all.channel, dm.channel],
             tags: vec![tags.channel],
             // Following outranks a level of nothing; a mute outranks following.
             followed: vec![in_all, in_nothing],
+            // A level of nothing still leaves a place read; only a mute takes it out.
+            unmuted: vec![all.channel, tags.channel, nothing.channel, dm.channel],
+            dms: vec![dm.channel],
         };
         assert_eq!(
-            sort_places(&[all, tags, nothing, muted], &followed),
+            sort_places(&[all, tags, nothing, muted, dm, muted_dm], &followed),
             expected
         );
     }

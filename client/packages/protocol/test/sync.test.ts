@@ -1464,6 +1464,28 @@ describe("AspenSync", () => {
     expect(reports).toHaveLength(1);
   });
 
+  it("marks many channels read in one request, leaving out what was read already", async () => {
+    const reports: unknown[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/read-states": async (_url, request) => {
+        reports.push(await request.json());
+        return new Response(null, { status: 204 });
+      },
+    });
+    await goLive(sync);
+    expect(sync.store.unread(general.id)).toBe(true);
+    await sync.markManyRead([
+      { channelId: general.id, messageId: id(1002) },
+      // Behind the position already recorded: nothing to report.
+      { channelId: general.id, messageId: id(1000) },
+    ]);
+    expect(sync.store.unread(general.id)).toBe(false);
+    expect(reports).toEqual([{ positions: [{ channel: general.id, lastRead: id(1002) }] }]);
+    await sync.markManyRead([{ channelId: general.id, messageId: id(1002) }]);
+    expect(reports).toHaveLength(1);
+  });
+
   it("reads a channel's read state again when its newest message is deleted", async () => {
     let reads = 0;
     const { sync } = makeSync({

@@ -84,7 +84,7 @@ same commit, as with comments.
 - [`reports.md`](docs/architecture/reports.md): reporting messages, profiles, and nicknames, message links and their embeds, warnings, reviewing reports and their categories, and bans from the deployment.
 - [`roles-and-permissions.md`](docs/architecture/roles-and-permissions.md): the client's permission resolver (kept in step with the server's through `spec/permission_vectors.json`), hidden controls, community settings, bans, access presets, member search, and pins.
 - [`screen-sharing-and-game-capture.md`](docs/architecture/screen-sharing-and-game-capture/index.md): the desktop shell's libobs helper, Linux's application audio, the game capture dialog, and the screen picker.
-- [`saved-and-activity.md`](docs/architecture/saved-and-activity.md): saved messages, the activity feed and its filters, and the rows and pages they share.
+- [`saved-and-activity.md`](docs/architecture/saved-and-activity.md): saved messages, the activity feed, its tabs and filters, marking read from it, and the rows and pages they share.
 - [`search.md`](docs/architecture/search.md): message search across channels, communities, and deployments.
 - [`sign-in.md`](docs/architecture/sign-in.md): the signed-out screens, the server each shell signs in to, passkey ceremonies and their hand-off to the system browser, and signing in from another device by a QR code.
 - [`tagging.md`](docs/architecture/tagging.md): rendering tags, completing them in the message box, and mention counts.

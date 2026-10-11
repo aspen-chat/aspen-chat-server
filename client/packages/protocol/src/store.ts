@@ -19,7 +19,10 @@ import {
   levelOf,
   placeMentions,
   tagsMe,
+  unreadChannels,
   unreadPlaces,
+  type ActivityView,
+  type UnreadChannel,
 } from "./notifyRules";
 import {
   dmAccess,
@@ -1084,6 +1087,41 @@ export class RecordStore {
   }
 
   /**
+   * Whether a message belongs to `view` of the caller's activity feed, as the server reads that
+   * view (`ActivityView`): someone else's, not someone they blocked, saying something of its
+   * own, in a channel not muted, and then by the view. `notifying` is `notifies`.
+   */
+  inActivity(message: Message, view: ActivityView): boolean {
+    if (view === "notifying") {
+      return this.notifies(message);
+    }
+    if (
+      message.author === this.#myUserId ||
+      this.silenced(message.author) ||
+      !kindNotifies(message)
+    ) {
+      return false;
+    }
+    const channel = this.#channels.get(message.channelId);
+    const place = channel?.parentChannel ?? message.channelId;
+    if (this.#mutes.has(place)) {
+      return false;
+    }
+    switch (view) {
+      case "all":
+        return true;
+      case "mentions":
+        return this.mentionsMe(message);
+      case "dms": {
+        const home = this.#channels.get(place);
+        return home !== undefined && home.community == null;
+      }
+      case "threads":
+        return this.#follows.has(message.channelId);
+    }
+  }
+
+  /**
    * Topic `presence`: what the caller chose to show of their presence in place of what their
    * connections say, while it lasts, if anything.
    */
@@ -1443,6 +1481,14 @@ export class RecordStore {
     return this.#memoized("unread", () =>
       unreadPlaces(this.#readStates, this.#channels, this.#mutes),
     );
+  }
+
+  /**
+   * Topic `unread`: the channels and DMs with something unread, never muted ones, newest
+   * message first. Threads are not among them: their positions are kept apart.
+   */
+  unreadChannels(): readonly UnreadChannel[] {
+    return unreadChannels(this.#readStates, this.#channels, this.#mutes);
   }
 
   /** The tracked channels whose newest message by someone else is `messageId`. */

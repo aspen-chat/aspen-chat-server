@@ -198,6 +198,7 @@ test.describe("on a phone", () => {
       await page.goto(path);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
       if (path === "/activity") {
+        await page.getByRole("tab", { name: "All", exact: true }).click();
         await expect(page.getByText(/^A long word/)).toBeVisible();
         await page.getByRole("button", { name: "Show", exact: true }).click();
       }
