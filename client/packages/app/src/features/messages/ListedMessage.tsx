@@ -23,6 +23,8 @@ export const listedActionClass =
  * (`MessageBody`: its text, tags, pictures, files, poll, and link cards). `actions` stand beside
  * the way to it, `mark` before the name, and `children` below the message. A message by someone
  * the reader blocked is not quoted; going to it opens it. `undefined` while it is on its way.
+ * Its text is the size of the list it stands in, which sets one: `text-sm`, or `message-text`
+ * to follow the reader's message text size.
  */
 export function ListedMessage({
   message,
@@ -49,7 +51,7 @@ export function ListedMessage({
   return (
     <li className="flex gap-2 rounded-md px-2 py-1.5 hover:bg-surface-hover">
       <PersonAvatar id={message?.author} size="sm" />
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-sm">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex items-baseline gap-2">
           {mark}
           <span className="truncate font-medium">

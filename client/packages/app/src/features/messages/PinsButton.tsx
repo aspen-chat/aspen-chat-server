@@ -80,7 +80,7 @@ function PinList({
     return <p className="px-1 text-sm text-ink-muted">{m.pins.none}</p>;
   }
   return (
-    <ul className="flex flex-col gap-1">
+    <ul className="flex flex-col gap-1 text-sm">
       {[...pins].reverse().map((pin) => (
         <PinnedMessage
           key={pin.messageId}

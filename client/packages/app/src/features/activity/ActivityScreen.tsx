@@ -226,7 +226,7 @@ export function ActivityScreen() {
               : m.activity.none}
         </p>
       ) : (
-        <ul aria-label={m.activity.heading} className="flex flex-col gap-1">
+        <ul aria-label={m.activity.heading} className="message-text flex flex-col gap-1">
           {merged.map(({ key, message }) => {
             const source = bySource.get(key);
             return (

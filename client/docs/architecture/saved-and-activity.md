@@ -58,6 +58,10 @@ Each row:
 - runs in its deployment's `SourceScope`;
 - reads its message on demand (`useMessageOnDemand`).
 
+A row's text is the size of the list it stands in. Both pages' lists are `message-text`, so their
+rows are drawn at the reader's message text size and line spacing (`preferences.md`), 16 pixels
+at the normal, as a channel draws them. A channel's pins keep `text-sm`.
+
 A message the server refuses or no longer has is marked missing in the store (`MissingKind`
 `message`), and its row leaves the list. So a message deleted, or a channel lost, takes its rows
 with it.

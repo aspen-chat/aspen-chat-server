@@ -95,7 +95,7 @@ export function SavedScreen() {
       {saves.length === 0 ? (
         <p className="px-2 text-sm text-ink-muted">{m.saved.none}</p>
       ) : (
-        <ul aria-label={m.saved.heading} className="flex flex-col gap-1">
+        <ul aria-label={m.saved.heading} className="message-text flex flex-col gap-1">
           {listed.map(({ source, save }) => {
             const index = placeIn.get(source) ?? 0;
             placeIn.set(source, index + 1);
