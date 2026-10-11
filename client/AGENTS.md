@@ -192,7 +192,11 @@ same commit, as with comments.
   pane fills the screen and has no edge.
 - Every list sidebar, the channel list's and the DM list's, is drawn by the same two pieces:
   `SidebarHeader` (its title and plain icon buttons, `headerIconButtonClass`, spaced so their
-  touch areas never overlap) and `SidebarFooter` (the call bar and the user bar). A page of its
+  touch areas never overlap) and `SidebarFooter` (the call bar and the user bar). The bar at the
+  head of every pane (`SidebarHeader`, `ChannelHeader`, `DmHeader`, the thread panel's) takes
+  `pane-head-height` (`styles.css`) and centres what it holds, so the rules under bars side by
+  side meet in one line, as the user bar's and the composer's do at the foot
+  (`composer-foot-height`); a new pane's bar takes it too. A page of its
   own beside the community rail (the Administration Dashboard, activity, saved messages) is a
   `RailPage`, whose rail has the user bar at its foot and whose content scrolls only up and
   down.

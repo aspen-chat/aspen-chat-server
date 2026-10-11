@@ -257,7 +257,7 @@ function ThreadShell({
         aria-label={m.threads.heading}
         className="motion-from-end relative flex min-h-0 w-full flex-col border-s border-line bg-surface"
       >
-        <header className="flex items-center gap-2 border-b border-line px-4 py-3">
+        <header className="pane-head-height flex items-center gap-2 border-b border-line px-4 py-3">
           <ChatsCircleIcon size={18} aria-hidden="true" className="text-ink-faint" />
           {onePane ? (
             <h1 className="flex-1 font-semibold">{m.threads.heading}</h1>

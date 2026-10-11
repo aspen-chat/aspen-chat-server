@@ -553,6 +553,14 @@ body {
   );
 }
 
+/* The least height of the bar at the head of a pane (`SidebarHeader`, `ChannelHeader`, `DmHeader`,
+   the thread panel's): the taller of its title's line, at the system's text size, and its 28px
+   icon buttons, in 12px of padding over its rule. Each bar centres what it holds within it, so
+   the rules under bars side by side meet in one line whatever each holds. */
+@utility pane-head-height {
+  min-height: calc(max(1.5rem * var(--system-text-scale, 1), 1.75rem) + 1.5rem + 1px);
+}
+
 /* Message bodies are GitHub-flavoured Markdown rendered by `features/messages/Markdown.tsx`. */
 .message-body {
   min-width: 0;

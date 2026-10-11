@@ -4,7 +4,7 @@ import { signInToWorld } from "./world";
 /**
  * Resizable panes, against the stubbed world: the channel list, member list, and thread panel
  * each have an edge the reader drags or moves from the keyboard, and this device keeps the
- * width.
+ * width; the bars at their heads are one height, so the rules under them meet.
  */
 
 test.beforeEach(async ({ page }, testInfo) => {
@@ -56,4 +56,30 @@ test("the member list's edge moves from the keyboard, within its bounds", async 
   );
   await page.keyboard.press("Enter");
   await expect(separator).toHaveAttribute("aria-valuenow", String(before));
+});
+
+test("the bars at the head of the channel list, the channel, and a thread are one height", async ({
+  page,
+}) => {
+  await page
+    .getByRole("link", { name: /^View thread/ })
+    .first()
+    .click();
+  const heights = () =>
+    Promise.all(
+      [
+        page.getByRole("heading", { level: 1, name: "Family" }).locator(".."),
+        page.locator("main > header"),
+        page.getByRole("complementary", { name: "Thread" }).locator("header"),
+      ].map(async (bar) => (await bar.boundingBox())?.height),
+    );
+  await expect.poll(heights).toEqual([53, 53, 53]);
+  await page.goto("/dms");
+  await page.getByRole("navigation", { name: "Direct messages" }).getByRole("link").first().click();
+  await expect
+    .poll(async () => [
+      (await page.getByRole("heading", { level: 1 }).locator("..").boundingBox())?.height,
+      (await page.locator("main > header").boundingBox())?.height,
+    ])
+    .toEqual([53, 53]);
 });

@@ -16,7 +16,7 @@ export function ChannelListSkeleton() {
       className="relative flex h-full flex-col border-e border-line bg-surface-raised"
     >
       <LoadingLabel />
-      <div className="flex h-11 items-center border-b border-line px-4 py-2">
+      <div className="pane-head-height flex items-center border-b border-line px-4 py-2">
         <Skeleton className="h-4 w-32" />
       </div>
       <div className="flex flex-1 flex-col gap-2.5 overflow-hidden px-4 py-3">
@@ -42,7 +42,7 @@ export function ChannelListSkeleton() {
 export function ChannelSkeleton() {
   return (
     <main aria-busy="true" className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex h-[3.25rem] items-center gap-2 border-b border-line px-4 py-3">
+      <div className="pane-head-height flex items-center gap-2 border-b border-line px-4 py-3">
         <Skeleton className="h-4 w-4 rounded" />
         <Skeleton className="h-4 w-36" />
       </div>

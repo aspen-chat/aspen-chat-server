@@ -48,7 +48,7 @@ export function DmHeader({ channel }: { channel: Channel }) {
   const title = useDmTitle(channel);
   const group = channel.ty === "groupDm";
   return (
-    <header className="flex items-center gap-2 border-b border-line px-4 py-3">
+    <header className="pane-head-height flex items-center gap-2 border-b border-line px-4 py-3">
       <Link
         {...dmsLink(domain)}
         aria-label={m.dms.back}
