@@ -1,6 +1,5 @@
 import {
   ApiProblemError,
-  SEARCH_PAGE,
   type Message,
   type MessageHolding,
   type MessageSearch,
@@ -8,7 +7,7 @@ import {
 } from "@aspen/protocol";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
-import { useContext, useMemo, useState, type SyntheticEvent } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import {
   Button,
   Dialog,
@@ -44,6 +43,7 @@ import { decodeTags } from "@/features/mentions/tags";
 import { messageLink } from "@/features/messages/links";
 import { useMessagePlace } from "@/features/messages/place";
 import { mergeResults, type SourceResults } from "@/features/search/merge";
+import { positionTime, searchUntilFound } from "@/features/search/rounds";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
@@ -107,7 +107,21 @@ export function SearchButton({
 /** One deployment's results so far, and what searching it said when it failed. */
 interface Searched extends SourceResults<Message> {
   readonly source: Source;
+  /** Where its next page is asked for from; `null` before it has read anything. */
+  readonly searchedTo: string | null;
   readonly problem: string | null;
+}
+
+const DAY: Intl.DateTimeFormatOptions = { dateStyle: "medium" };
+
+/**
+ * The moment a deployment has read back to when that is past its oldest message. A full page
+ * ends at its last message, which the merge reads from the message itself.
+ */
+function readTo(messages: readonly Message[], searchedTo: string | null): number | null {
+  return searchedTo === null || messages.some((message) => message.id === searchedTo)
+    ? null
+    : positionTime(searchedTo);
 }
 
 function SearchPanel({
@@ -135,6 +149,17 @@ function SearchPanel({
   const [taggingMe, setTaggingMe] = useState(false);
   const [searched, setSearched] = useState<readonly Searched[] | null>(null);
   const [pending, setPending] = useState(false);
+  // How far back each deployment still being read has got, once its first request found nothing.
+  const [reading, setReading] = useState<ReadonlyMap<string, string>>(new Map());
+  const day = useDateFormat(DAY);
+  /** Gives up the search under way: a new one replaces it, as does stopping or closing. */
+  const underWay = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      underWay.current?.abort();
+    },
+    [],
+  );
   // Who wrote a message is asked only within a community, where there are members to pick.
   const byAuthor = communityId !== null && (scope === "channel" || scope === "community");
   const ready = text.trim() !== "" || has.size > 0 || taggingMe || (byAuthor && author !== null);
@@ -174,26 +199,68 @@ function SearchPanel({
     };
   }
 
-  async function page(source: Source, before: string | undefined, earlier: readonly Message[]) {
+  /**
+   * `source`'s next page after `earlier`, asked for until it holds something or nothing is left
+   * (`searchUntilFound`). A search given up or failed part way keeps where it had read to, so
+   * it goes on from there when asked for more.
+   */
+  async function page(
+    source: Source,
+    before: string | undefined,
+    earlier: readonly Message[],
+    signal: AbortSignal,
+  ): Promise<Searched> {
     const key = source.domain ?? "";
+    let reached = before;
     try {
-      const found = await source.sync.searchMessages(queryFor(source, before));
+      const found = await searchUntilFound(
+        (from) => source.sync.searchMessages(queryFor(source, from), signal),
+        before,
+        (searchedTo) => {
+          reached = searchedTo;
+          setReading((now) => new Map(now).set(key, searchedTo));
+        },
+        signal,
+      );
+      const messages = [...earlier, ...found.messages];
       return {
         key,
         source,
-        messages: [...earlier, ...found],
-        exhausted: found.length < SEARCH_PAGE,
+        messages,
+        exhausted: !found.more,
+        searchedTo: found.searchedTo,
+        readTo: readTo(messages, found.searchedTo),
         problem: null,
       };
     } catch (e) {
+      const searchedTo = reached ?? null;
       return {
         key,
         source,
         messages: earlier,
-        exhausted: true,
-        problem: e instanceof ApiProblemError ? e.message : String(e),
+        exhausted: !signal.aborted && searchedTo === null,
+        searchedTo,
+        readTo: readTo(earlier, searchedTo),
+        problem: signal.aborted ? null : e instanceof ApiProblemError ? e.message : String(e),
       };
     }
+  }
+
+  /** Runs `pages` as the search under way, in place of any other. */
+  async function run(pages: (signal: AbortSignal) => Promise<readonly Searched[]>) {
+    underWay.current?.abort();
+    const mine = new AbortController();
+    underWay.current = mine;
+    setPending(true);
+    setReading(new Map());
+    const found = await pages(mine.signal);
+    if (underWay.current !== mine) {
+      return;
+    }
+    underWay.current = null;
+    setSearched(found);
+    setReading(new Map());
+    setPending(false);
   }
 
   async function search(event: SyntheticEvent<HTMLFormElement>) {
@@ -201,30 +268,36 @@ function SearchPanel({
     if (!ready) {
       return;
     }
-    setPending(true);
     const asked = scope === "everywhere" ? sources : [here];
-    setSearched(await Promise.all(asked.map((source) => page(source, undefined, []))));
-    setPending(false);
+    await run((signal) => Promise.all(asked.map((source) => page(source, undefined, [], signal))));
   }
 
   async function more() {
     if (searched === null) {
       return;
     }
-    setPending(true);
-    setSearched(
-      await Promise.all(
+    await run((signal) =>
+      Promise.all(
         searched.map((s) =>
-          s.exhausted ? Promise.resolve(s) : page(s.source, s.messages.at(-1)?.id, s.messages),
+          s.exhausted
+            ? Promise.resolve(s)
+            : page(s.source, s.searchedTo ?? undefined, s.messages, signal),
         ),
       ),
     );
-    setPending(false);
   }
 
   const results = searched === null ? [] : mergeResults(searched);
   const bySource = new Map((searched ?? []).map((s) => [s.key, s.source]));
   const failures = (searched ?? []).filter((s) => s.problem !== null);
+  // Every deployment still being read has read back at least this far.
+  const readingBackTo =
+    reading.size === 0 ? null : Math.max(...[...reading.values()].map(positionTime));
+  const unfinished = (searched ?? []).filter((s) => !s.exhausted && s.searchedTo !== null);
+  const nothingBackTo =
+    results.length === 0 && unfinished.length > 0
+      ? Math.max(...unfinished.map((s) => positionTime(s.searchedTo ?? "")))
+      : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -317,11 +390,30 @@ function SearchPanel({
           })}
         </p>
       ))}
+      {pending && readingBackTo !== null && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p role="status" className={hintClass}>
+            {format(m.search.deeper, { date: day.format(readingBackTo) })}
+          </p>
+          <Button
+            onPress={() => {
+              underWay.current?.abort();
+            }}
+            className="rounded-md px-2 py-1 text-sm text-accent outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
+          >
+            {m.search.stop}
+          </Button>
+        </div>
+      )}
       {pending && searched === null && <ResultsSkeleton count={4} />}
       {searched !== null && (
         <section aria-label={m.search.results} className="flex flex-col gap-2">
           {results.length === 0 && failures.length === 0 ? (
-            <p className={hintClass}>{m.search.none}</p>
+            <p className={hintClass}>
+              {nothingBackTo === null
+                ? m.search.none
+                : format(m.search.noneBackTo, { date: day.format(nothingBackTo) })}
+            </p>
           ) : (
             <ul className="flex flex-col gap-1">
               {results.map(({ key, message }) => {

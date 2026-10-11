@@ -1,6 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 import { foreignDomain, foreignSearchText, stubForeignDeployment } from "./foreignWorld";
-import { community, general, ownText, signInToWorld, thread } from "./world";
+import {
+  community,
+  deepSearchPosition,
+  deepSearchText,
+  general,
+  ownText,
+  signInToWorld,
+  thread,
+} from "./world";
 
 /**
  * Message search against the stubbed world: it finds messages by their words, says where each
@@ -35,6 +43,25 @@ test("a search finds messages by their words and opens one in place", async ({ p
   await found.click();
   await expect(dialog).toBeHidden();
   await expect(page).toHaveURL(new RegExp(`/channels/${general}/messages/`));
+});
+
+test("a search that finds nothing near the present is asked again from where it read to", async ({
+  page,
+}) => {
+  await signInToWorld(page);
+  const dialog = await openSearch(page);
+  const befores: (string | null)[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/messages") && url.searchParams.has("filter[text]")) {
+      befores.push(url.searchParams.get("before"));
+    }
+  });
+  await dialog.getByRole("searchbox", { name: "Words" }).fill(deepSearchText);
+  await dialog.getByRole("button", { name: "Search", exact: true }).click();
+  const results = dialog.getByRole("region", { name: "Results" });
+  await expect(results.getByRole("link", { name: /Go to message: Kate/ })).toContainText(ownText);
+  expect(befores).toEqual([null, deepSearchPosition]);
 });
 
 test("a reply found in a thread opens its thread", async ({ page }) => {

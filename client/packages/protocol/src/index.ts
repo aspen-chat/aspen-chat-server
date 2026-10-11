@@ -188,6 +188,7 @@ export {
   type MessageHolding,
   type Sent,
   type MessageSearch,
+  type SearchPage,
   type ActivityFilter,
   type ForeignDmNotice,
   type PluginEvent,

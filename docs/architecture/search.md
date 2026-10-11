@@ -113,3 +113,8 @@ Each statement is planned for the values it runs with, with settings of its own 
 ## Client
 
 The client searches the channel or DM it is in, its community, its server, or every server the user uses, merging the last page by page.
+
+- A page that comes back empty with `more` is asked for again from its `searchedTo`, until one holds a message or nothing is left (`searchUntilFound`).
+- While it waits, the dialog says how far back the search has read, and offers to stop.
+- A search stopped, or failed part way, keeps where it had read to. "Show older" goes on from there.
+- Across several servers, results are shown as far back as every server with more to give has read (`mergeResults`).

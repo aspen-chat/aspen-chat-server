@@ -84,6 +84,21 @@ export interface MessageSearch {
 /** How many messages one page of search results holds. */
 export const SEARCH_PAGE = 25;
 
+/** One page of a search (`AspenSync.searchMessages`), newest first. */
+export interface SearchPage {
+  readonly messages: Message[];
+  /**
+   * How far back the server read: every match newer than this position is in a page already
+   * given. The next page is asked for as `before` it. `null` when nothing is left to read.
+   */
+  readonly searchedTo: string | null;
+  /**
+   * Whether anything older is left to read. A page may be short, or empty, and still have
+   * more: a server reads only so far in one request.
+   */
+  readonly more: boolean;
+}
+
 /** Which part of the activity feed to read (`AspenSync.readActivity`). */
 export interface ActivityFilter {
   view: ActivityView;
@@ -3150,11 +3165,14 @@ export class AspenSync {
 
   /**
    * The messages matching `search` that the user may read on this deployment, newest first, a
-   * page of `SEARCH_PAGE`. Their authors, channels (threads among them), attachments, polls,
-   * and reactions are cached, so they render as they do in a channel.
+   * page of at most `SEARCH_PAGE`, and how far back the server read for it. Their authors,
+   * channels (threads among them), attachments, polls, and reactions are cached, so they render
+   * as they do in a channel. A search that finds nothing near the present is held by the server
+   * while it reads further back, for many seconds; `signal` gives it up.
    */
-  async searchMessages(search: MessageSearch): Promise<Message[]> {
+  async searchMessages(search: MessageSearch, signal?: AbortSignal): Promise<SearchPage> {
     const result = await this.#client.api.GET("/api/v1/messages", {
+      ...(signal === undefined ? {} : { signal }),
       params: {
         query: {
           ...(search.text === undefined ? {} : { "filter[text]": search.text }),
@@ -3177,7 +3195,11 @@ export class AspenSync {
       result.data.data.map((m) => m.id),
       result.data.included.reactions ?? [],
     );
-    return result.data.data;
+    return {
+      messages: result.data.data,
+      searchedTo: result.data.searchedTo ?? null,
+      more: result.data.more,
+    };
   }
 
   /**

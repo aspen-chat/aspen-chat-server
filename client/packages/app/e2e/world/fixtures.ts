@@ -347,16 +347,27 @@ export const dmMessages = [
 /** The one message in the DM, which the caller has not read. */
 export const dmMessageId = messageId(220);
 
+/** A word nothing near the present holds: a search for it finds its messages a round later. */
+export const deepSearchText = "longago";
+/** Where a search for `deepSearchText` says it read back to in its first round. */
+export const deepSearchPosition = "0190e000-0000-7000-8000-000000000000";
+
 /**
  * A message search as the server answers it: messages holding every word of `filter[text]`,
  * ignoring case, in `filter[channel]` and its thread when given, newest first, with their
- * authors and channels.
+ * authors and channels. A search for `deepSearchText` answers first with an empty page that
+ * has more, and from `deepSearchPosition` with the messages holding "lemonade".
  */
 export function searchMessages(url: URL) {
-  const words = (url.searchParams.get("filter[text]") ?? "")
+  const asked = (url.searchParams.get("filter[text]") ?? "")
     .toLowerCase()
     .split(/\s+/)
     .filter((word) => word !== "");
+  const deep = asked.includes(deepSearchText);
+  if (deep && url.searchParams.get("before") !== deepSearchPosition) {
+    return { data: [], included: {}, searchedTo: deepSearchPosition, more: true };
+  }
+  const words = deep ? ["lemonade"] : asked;
   const within = url.searchParams.get("filter[channel]");
   const found = [...generalMessages, ...threadReplies, ...dmMessages]
     .filter((m) => m.kind !== "threadEcho" && m.kind !== "poll")
@@ -369,6 +380,8 @@ export function searchMessages(url: URL) {
     .slice(0, 25);
   const posted = new Set(found.map((m) => m.channelId));
   return {
+    searchedTo: null,
+    more: false,
     data: found,
     included: {
       users,

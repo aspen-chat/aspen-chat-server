@@ -38,6 +38,8 @@ export {
   missingPictureMessageId,
   organiserRole,
   organiserRoleWith,
+  deepSearchPosition,
+  deepSearchText,
   ownText,
   planning,
   pollQuestion,

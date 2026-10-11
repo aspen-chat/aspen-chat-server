@@ -2,14 +2,20 @@
 export interface SourceResults<T extends { id: string; timestamp: string }> {
   readonly key: string;
   readonly messages: readonly T[];
-  /** Whether its last page was short, so it has nothing older. */
+  /** Whether it has nothing older to give. */
   readonly exhausted: boolean;
+  /**
+   * The moment it has read back to, in milliseconds, when that is further than its oldest
+   * message (a page may end past the last message it holds); absent or `null` when it is that
+   * message.
+   */
+  readonly readTo?: number | null;
 }
 
 /**
  * The results of searching several deployments at once, newest first, as far as they can be
  * shown in order: a deployment with more to give may still have messages newer than another's
- * oldest, so nothing older than the oldest message of any such deployment is shown until it has
+ * oldest, so nothing older than where any such deployment has read to is shown until it has
  * given its next page.
  */
 export function mergeResults<T extends { id: string; timestamp: string }>(
@@ -19,7 +25,7 @@ export function mergeResults<T extends { id: string; timestamp: string }>(
     Number.NEGATIVE_INFINITY,
     ...sources
       .filter((source) => !source.exhausted)
-      .map((source) => Date.parse(source.messages.at(-1)?.timestamp ?? "")),
+      .map((source) => source.readTo ?? Date.parse(source.messages.at(-1)?.timestamp ?? "")),
   );
   return sources
     .flatMap((source) => source.messages.map((message) => ({ key: source.key, message })))

@@ -23,4 +23,17 @@ describe("mergeResults", () => {
     ]);
     expect(merged.map((r) => r.message.id)).toEqual(["h2", "b2", "b1"]);
   });
+
+  it("shows as far back as a deployment has read, past its oldest message", () => {
+    const merged = mergeResults([
+      { key: "home", messages: [at("h2", 50), at("h1", 10)], exhausted: true },
+      {
+        key: "b",
+        messages: [at("b2", 40), at("b1", 30)],
+        exhausted: false,
+        readTo: Date.UTC(2026, 8, 1, 12, 5),
+      },
+    ]);
+    expect(merged.map((r) => r.message.id)).toEqual(["h2", "b2", "b1", "h1"]);
+  });
 });
