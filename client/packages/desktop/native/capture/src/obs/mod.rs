@@ -57,7 +57,7 @@ const OUTPUT_AV_ID: &CStr = c"aspen_packet_output_av";
 const OUTPUT_AUDIO_ID: &CStr = c"aspen_packet_output_audio";
 
 /// libobs logs everything to stderr by default. Only its warnings and errors are worth the
-/// terminal, prefixed so they can be told from the shell's own, unless `ASPEN_OBS_CAPTURE_VERBOSE`
+/// terminal, prefixed so they can be told from the shell's own, unless `ASPEN_CAPTURE_VERBOSE`
 /// is set, which lets its information through too (how much audio buffering it added, which
 /// encoder settings it took). Formatting a C `va_list` is platform-specific; where it is not
 /// done here, libobs's own logging stands.
@@ -69,7 +69,7 @@ mod logging {
 
     fn verbose() -> bool {
         static VERBOSE: OnceLock<bool> = OnceLock::new();
-        *VERBOSE.get_or_init(|| std::env::var_os("ASPEN_OBS_CAPTURE_VERBOSE").is_some())
+        *VERBOSE.get_or_init(|| std::env::var_os("ASPEN_CAPTURE_VERBOSE").is_some())
     }
 
     unsafe extern "C" {

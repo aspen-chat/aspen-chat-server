@@ -374,7 +374,7 @@ impl Graph {
                 Ok(link) => {
                     self.links.insert((output, input), link);
                 }
-                Err(error) => eprintln!("aspen-obs-capture: PipeWire link refused: {error}"),
+                Err(error) => eprintln!("aspen-capture: PipeWire link refused: {error}"),
             }
         }
     }
@@ -548,7 +548,7 @@ fn run(
         let _core_listener = core
             .add_listener_local()
             .error(|id, _seq, res, message| {
-                eprintln!("aspen-obs-capture: PipeWire error on {id} ({res}): {message}");
+                eprintln!("aspen-capture: PipeWire error on {id} ({res}): {message}");
             })
             .register();
 
@@ -581,7 +581,7 @@ fn run(
                         }
                     }
                     StreamState::Error(error) => {
-                        eprintln!("aspen-obs-capture: PipeWire stream failed: {error}");
+                        eprintln!("aspen-capture: PipeWire stream failed: {error}");
                     }
                     _ => {}
                 }
@@ -630,7 +630,7 @@ fn run(
     })();
     if let Err(error) = outcome {
         // Unheard when the loop already ran and `start` returned; the log then stands.
-        eprintln!("aspen-obs-capture: PipeWire capture ended: {error}");
+        eprintln!("aspen-capture: PipeWire capture ended: {error}");
         let _ = ready.send(Err(error));
     }
 }

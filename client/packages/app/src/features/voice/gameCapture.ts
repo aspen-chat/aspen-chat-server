@@ -2,7 +2,7 @@ import type { ExternalAudio, ExternalShare, ExternalTargets, RtpTarget } from "@
 
 /**
  * Game capture on the desktop shell. The Electron main process runs the libobs helper (see
- * `packages/desktop/native/obs-capture`), which captures a game or window, encodes it to
+ * `packages/desktop/native/capture`), which captures a game or window, encodes it to
  * H.264, and sends it as SRTP straight to the voice server; the renderer only asks for the
  * producer and tells the helper where to send. On Linux the helper captures one application's
  * sound only, and the picture is the browser's own screen share. Nothing here exists in a
