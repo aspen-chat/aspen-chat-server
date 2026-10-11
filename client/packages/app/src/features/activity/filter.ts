@@ -1,4 +1,4 @@
-import type { ActivityFilter, PreferenceDefinition } from "@aspen/protocol";
+import type { ActivityFilter, ActivityView, PreferenceDefinition } from "@aspen/protocol";
 
 /**
  * What the activity feed leaves out, as this device remembers it: whole deployments, single
@@ -13,12 +13,27 @@ export const ACTIVITY_HIDDEN: PreferenceDefinition<readonly string[]> = {
     Array.isArray(raw) && raw.every((key) => typeof key === "string") ? raw : undefined,
 };
 
-/** Whether the activity feed shows only what the reader has not read, as this device remembers. */
-export const ACTIVITY_UNREAD_ONLY: PreferenceDefinition<boolean> = {
-  key: "activity.unreadOnly",
+/**
+ * A tab of the activity feed: what is unread everywhere, a channel or thread to an entry, or
+ * the feed's messages by one of the server's views.
+ */
+export type ActivityTab = "unread" | "mentions" | "dms" | "threads" | "all";
+
+/** The feed's tabs in the order they stand. */
+export const ACTIVITY_TABS: readonly ActivityTab[] = [
+  "unread",
+  "mentions",
+  "dms",
+  "threads",
+  "all",
+];
+
+/** The tab the activity feed opens on, as this device remembers. */
+export const ACTIVITY_TAB: PreferenceDefinition<ActivityTab> = {
+  key: "activity.tab",
   scope: "device",
-  fallback: false,
-  parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
+  fallback: "unread",
+  parse: (raw) => ACTIVITY_TABS.find((tab) => tab === raw),
 };
 
 /** What may be left out of the feed: a deployment (`null` the home), or one of its communities or its DMs. */
@@ -48,17 +63,22 @@ export const NO_COMMUNITY = "00000000-0000-0000-0000-000000000000";
 
 /**
  * What to ask a deployment for, given what is hidden and the communities the reader belongs to
- * there; `null` when nothing of it shows.
+ * there; `null` when nothing of it shows. The `dms` view holds no community's messages, so it
+ * names none and shows nothing where the DMs are hidden.
  */
 export function readFilter(
   hidden: ReadonlySet<string>,
   domain: string | null,
   communities: readonly string[],
+  view?: ActivityView,
 ): Pick<ActivityFilter, "communities" | "dms"> | null {
   if (hidden.has(hiddenKey({ kind: "deployment", domain }))) {
     return null;
   }
   const dms = !hidden.has(hiddenKey({ kind: "dms", domain }));
+  if (view === "dms") {
+    return dms ? { dms } : null;
+  }
   const shown = communities.filter(
     (community) => !hidden.has(hiddenKey({ kind: "community", domain, community })),
   );

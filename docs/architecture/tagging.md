@@ -25,6 +25,7 @@ A tag counts wherever the message renders as text, never in code of any kind.
 - So is a tag naming someone outside the community (or DM), or a role not of it.
 - At most `MAX_TAGS` (50) people and roles count per message.
 - What counts is `Message.mentions` (`{users, roles, everyone}`) and a row per tag in `mention`.
+- Each row carries `home_channel`, its message's (a thread reply's is the thread's parent), set by a trigger. The activity feed reads a place's tags of everyone, its threads' among them, through it (see [Activity feed](activity-feed.md)).
 - Both are written in the transaction that posts or edits the message.
 - An edit of the text tags afresh, with its author's permissions of the moment, and announces the new set in the message's `update`.
 

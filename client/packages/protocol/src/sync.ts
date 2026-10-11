@@ -39,6 +39,7 @@ import {
   userVolume,
   type PreferenceStorage,
 } from "./preferences";
+import type { ActivityView } from "./notifyRules";
 import type { OverrideGrant } from "./permissions";
 import { REACTION_SUMMARY_USERS, RecordStore } from "./store";
 import type { HeldMessage, Included, Invocation, NotificationLevel } from "./storeTypes";
@@ -85,6 +86,7 @@ export const SEARCH_PAGE = 25;
 
 /** Which part of the activity feed to read (`AspenSync.readActivity`). */
 export interface ActivityFilter {
+  view: ActivityView;
   /** Only these communities' messages; every community's when absent. */
   communities?: readonly string[];
   /** Whether DMs' messages are read. */
@@ -171,6 +173,9 @@ export const WATCH_ACK_TIMEOUT_MS = 10_000;
  * this long however fast messages scroll past, well inside the server's limit on reports.
  */
 export const READ_REPORT_MS = 1_000;
+
+/** The most read positions one request reports; mirrors the server's `MAX_MARKED`. */
+export const READ_REPORTS_MAX = 100;
 
 /**
  * How far before this sync began a message may say it was posted and still notify, allowing for
@@ -382,6 +387,7 @@ export class AspenSync {
   readonly #latestLoads = new Map<string, Promise<void>>();
   readonly #foreignDmListeners = new Set<(notice: ForeignDmNotice) => void>();
   readonly #notifyListeners = new Set<(message: Message) => void>();
+  readonly #arrivalListeners = new Set<(message: Message) => void>();
   readonly #pluginEventListeners = new Set<(event: PluginEvent) => void>();
   readonly #pluginNoticeListeners = new Set<(notice: PluginNotice) => void>();
   /** Whether `preferences` is this sync's own, loaded from and cleared with its server. */
@@ -562,6 +568,18 @@ export class AspenSync {
     this.#notifyListeners.add(listener);
     return () => {
       this.#notifyListeners.delete(listener);
+    };
+  };
+
+  /**
+   * Registers for every new message as it arrives, whether or not it would notify, and returns
+   * the unsubscribe function. What the replay a connection starts with carries is not news and
+   * is left out, as for `onNotify`.
+   */
+  readonly onArrival = (listener: (message: Message) => void): (() => void) => {
+    this.#arrivalListeners.add(listener);
+    return () => {
+      this.#arrivalListeners.delete(listener);
     };
   };
 
@@ -1625,23 +1643,57 @@ export class AspenSync {
    * was read meanwhile. Reading behind the current position changes nothing.
    */
   markRead(channelId: string, messageId: string): void {
-    if (this.store.channel(channelId)?.ty === "thread") {
-      const read = this.store.threadRead(channelId);
-      if (read !== undefined && messageId <= read) {
-        return;
-      }
-      this.store.setThreadRead(channelId, messageId);
-    } else {
-      const state = this.store.readState(channelId);
-      if (state === undefined || messageId <= state.lastRead) {
-        return;
-      }
-      this.store.setLastRead(channelId, messageId);
+    if (!this.#readInStore(channelId, messageId)) {
+      return;
     }
     this.#unreported.set(channelId, messageId);
     this.#readTimer ??= setTimeout(() => {
       this.flushReads();
     }, READ_REPORT_MS);
+  }
+
+  /**
+   * Records that the caller has seen each of `positions` (a channel, DM, or thread, and a
+   * message of it), as marking everything read at once does: at once in the store, and to the
+   * server `READ_REPORTS_MAX` to a request, since one request each would run into the rate
+   * limit. Resolves once the server has them all; rejects with the first refusal.
+   */
+  async markManyRead(
+    positions: readonly { channelId: string; messageId: string }[],
+  ): Promise<void> {
+    const moved = positions.filter((p) => this.#readInStore(p.channelId, p.messageId));
+    for (let start = 0; start < moved.length; start += READ_REPORTS_MAX) {
+      const group = moved.slice(start, start + READ_REPORTS_MAX);
+      const result = await this.#client.api.PUT("/api/v1/users/@me/read-states", {
+        body: {
+          positions: group.map((p) => ({ channel: p.channelId, lastRead: p.messageId })),
+        },
+      });
+      if (result.error !== undefined) {
+        throw new ApiProblemError(problemOf(result.error, result.response));
+      }
+      for (const { channelId } of group) {
+        this.#recountTags(channelId);
+      }
+    }
+  }
+
+  /** Moves the store's position in a channel, DM, or thread forward; whether it moved. */
+  #readInStore(channelId: string, messageId: string): boolean {
+    if (this.store.channel(channelId)?.ty === "thread") {
+      const read = this.store.threadRead(channelId);
+      if (read !== undefined && messageId <= read) {
+        return false;
+      }
+      this.store.setThreadRead(channelId, messageId);
+      return true;
+    }
+    const state = this.store.readState(channelId);
+    if (state === undefined || messageId <= state.lastRead) {
+      return false;
+    }
+    this.store.setLastRead(channelId, messageId);
+    return true;
   }
 
   /**
@@ -2914,7 +2966,7 @@ export class AspenSync {
 
   /**
    * A page of `ACTIVITY_PAGE` of the caller's activity feed on this deployment, newest first:
-   * the messages that tell them of themselves. Their authors, channels (threads among them),
+   * the messages of `filter.view`. Their authors, channels (threads among them),
    * read positions, attachments, polls, and reactions are cached.
    */
   async readActivity(filter: ActivityFilter): Promise<Message[]> {
@@ -2924,6 +2976,7 @@ export class AspenSync {
           ...(filter.communities === undefined
             ? {}
             : { "filter[community]": [...filter.communities] }),
+          ...(filter.view === "notifying" ? {} : { "filter[view]": filter.view }),
           "filter[dms]": filter.dms,
           "filter[unread]": filter.unread,
           ...(filter.before === undefined ? {} : { before: filter.before }),
@@ -3736,11 +3789,15 @@ export class AspenSync {
       if (
         message !== undefined &&
         // Some seconds' allowance for the server's clock and this device's disagreeing.
-        Date.parse(message.timestamp) >= this.#bootstrappedAt - NOTIFY_CLOCK_SLACK_MS &&
-        this.store.notifies(message)
+        Date.parse(message.timestamp) >= this.#bootstrappedAt - NOTIFY_CLOCK_SLACK_MS
       ) {
-        for (const listener of this.#notifyListeners) {
+        for (const listener of this.#arrivalListeners) {
           listener(message);
+        }
+        if (this.store.notifies(message)) {
+          for (const listener of this.#notifyListeners) {
+            listener(message);
+          }
         }
       }
     }

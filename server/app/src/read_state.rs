@@ -5,6 +5,8 @@
 //! and deleting a message never writes here. A position only moves forward, whichever device
 //! reports it, and each move is published to the user's own subject as `channelRead` so their
 //! other devices follow. Posting in a channel moves the poster's position to their message.
+//! Several positions move in one request ([`mark_many_read`]), as when a user marks everything
+//! read at once.
 //!
 //! Nothing a member's channels held before they joined (the community, or the DM) is unread to
 //! them: until they have read past it, their position is that moment. A channel is unread while
@@ -18,8 +20,10 @@
 //! same messages are left out as for being unread.
 
 use crate::context::GlobalServerContext;
-use crate::{ChannelId, EventScope, MessageId, UserId, publish_event};
-use aspen_schema::message;
+use crate::t;
+use crate::visibility::Visibility;
+use crate::{ChannelId, CommunityId, EventScope, MessageId, UserId, publish_event};
+use aspen_schema::{dm_recipient, message};
 use aspen_wire::message_enum::server_event::ServerEvent;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
@@ -270,6 +274,167 @@ pub async fn mark_read(
     .await
 }
 
+/// The most positions one request may move ([`mark_many_read`]), and so the most `channelRead`
+/// events one publishes.
+pub const MAX_MARKED: usize = 100;
+
+/// A channel, DM, or thread, and a message of it its reader has seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    pub channel: ChannelId,
+    pub message: MessageId,
+}
+
+#[derive(QueryableByName)]
+struct Listed {
+    #[diesel(sql_type = PgUuid)]
+    id: ChannelId,
+    #[diesel(sql_type = PgUuid)]
+    home: ChannelId,
+    #[diesel(sql_type = Nullable<PgUuid>)]
+    community: Option<CommunityId>,
+}
+
+#[derive(QueryableByName)]
+struct Moved {
+    #[diesel(sql_type = PgUuid)]
+    channel: ChannelId,
+    #[diesel(sql_type = PgUuid)]
+    message: MessageId,
+}
+
+/// One position for each channel of `positions`, the furthest named for it.
+fn furthest(positions: &[Position]) -> Vec<Position> {
+    let mut by_channel: std::collections::HashMap<ChannelId, MessageId> =
+        std::collections::HashMap::new();
+    for position in positions {
+        by_channel
+            .entry(position.channel)
+            .and_modify(|held| *held = (*held).max(position.message))
+            .or_insert(position.message);
+    }
+    by_channel
+        .into_iter()
+        .map(|(channel, message)| Position { channel, message })
+        .collect()
+}
+
+/// Records that the user has read each of `positions`, at most [`MAX_MARKED`] of them, as
+/// [`mark_read`] records one, publishing `channelRead` for each that moved. A position is
+/// passed over, not refused, when its channel is not one the user may read or its message is
+/// not of that channel: what a client marks read together may have lost a channel since it was
+/// listed.
+pub async fn mark_many_read(
+    state: &GlobalServerContext,
+    user: UserId,
+    positions: &[Position],
+) -> crate::Result<()> {
+    if positions.len() > MAX_MARKED {
+        return Err(crate::Error::Validation(t!(
+            "tooManyReadPositions",
+            max = MAX_MARKED
+        )));
+    }
+    let positions = furthest(positions);
+    if positions.is_empty() {
+        return Ok(());
+    }
+    let channels: Vec<uuid::Uuid> = positions.iter().map(|p| p.channel.0).collect();
+    let mut conn = state.connection_pool.get().await?;
+    // Each listed channel with where it is read: a thread in its parent, and the community
+    // that parent is in.
+    let listed: Vec<Listed> = diesel::sql_query(
+        r#"
+        SELECT c.id,
+               COALESCE(c.parent_channel, c.id) AS home,
+               COALESCE(p.community, c.community) AS community
+        FROM channel c
+        LEFT JOIN channel p ON p.id = c.parent_channel
+        WHERE c.id = ANY($1) AND c.deleted_at IS NULL AND p.deleted_at IS NULL
+        "#,
+    )
+    .bind::<Array<PgUuid>, _>(&channels)
+    .load(conn.as_mut())
+    .await?;
+    let memberships = crate::events::memberships(conn.as_mut(), user).await?;
+    let mut communities: Vec<CommunityId> = listed
+        .iter()
+        .filter_map(|c| c.community)
+        .filter(|community| memberships.contains(community))
+        .collect();
+    communities.sort_unstable();
+    communities.dedup();
+    let dms: Vec<ChannelId> = dm_recipient::table
+        .select(dm_recipient::channel)
+        .filter(dm_recipient::user.eq(user))
+        .filter(
+            dm_recipient::channel.eq_any(
+                listed
+                    .iter()
+                    .filter(|c| c.community.is_none())
+                    .map(|c| c.home),
+            ),
+        )
+        .load(conn.as_mut())
+        .await?;
+    drop(conn);
+    let visible = Visibility::load(state, user, &communities).await?;
+    let readable: std::collections::HashSet<ChannelId> = listed
+        .iter()
+        .filter(|c| match c.community {
+            Some(community) => communities.contains(&community) && visible.can_view(c.home),
+            None => dms.contains(&c.home),
+        })
+        .map(|c| c.id)
+        .collect();
+    let (channels, messages): (Vec<uuid::Uuid>, Vec<uuid::Uuid>) = positions
+        .iter()
+        .filter(|p| readable.contains(&p.channel))
+        .map(|p| (p.channel.0, p.message.0))
+        .unzip();
+    if channels.is_empty() {
+        return Ok(());
+    }
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            // Only positions whose message is of their channel are written, and each only
+            // forward, as `advance` writes one.
+            let moved: Vec<Moved> = diesel::sql_query(
+                r#"
+                INSERT INTO read_state ("user", channel, message)
+                SELECT $1, p.channel, p.message
+                FROM unnest($2::uuid[], $3::uuid[]) AS p(channel, message)
+                JOIN message m ON m.id = p.message AND m.channel = p.channel
+                ON CONFLICT ("user", channel) DO UPDATE SET message = excluded.message
+                WHERE read_state.message < excluded.message
+                RETURNING channel, message
+                "#,
+            )
+            .bind::<PgUuid, _>(user.0)
+            .bind::<Array<PgUuid>, _>(&channels)
+            .bind::<Array<PgUuid>, _>(&messages)
+            .load(conn.as_mut())
+            .await?;
+            for Moved { channel, message } in moved {
+                publish_event(
+                    state,
+                    conn,
+                    EventScope::User(user),
+                    &ServerEvent::ChannelRead {
+                        channel,
+                        last_read: message,
+                    },
+                )
+                .await?;
+            }
+            Ok::<_, crate::Error>(())
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +456,29 @@ mod tests {
         ));
         assert!(later > position.0);
         assert!(earlier < position.0);
+    }
+
+    #[test]
+    fn a_channel_named_twice_keeps_its_furthest_position() {
+        let channel = ChannelId::new();
+        let (older, newer) = (MessageId::new(), MessageId::new());
+        let positions = [
+            Position {
+                channel,
+                message: newer.max(older),
+            },
+            Position {
+                channel,
+                message: newer.min(older),
+            },
+        ];
+        assert_eq!(
+            furthest(&positions),
+            vec![Position {
+                channel,
+                message: newer.max(older),
+            }]
+        );
     }
 
     #[test]

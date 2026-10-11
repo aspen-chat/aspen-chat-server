@@ -24,6 +24,16 @@ The id is a position, not a reference.
 - Each move is published to the user's own subject as `channelRead`, so their other devices follow.
 - Posting a message or a poll moves the poster's position to it, in the same transaction.
 
+### Many at once
+
+`PUT /users/@me/read-states` moves several positions in one request (`app::read_state::mark_many_read`), as an app does when its user marks everything read.
+
+- Its body lists `positions`, each a `channel` and a `lastRead`, at most `MAX_MARKED` (100). More are refused with `validation`.
+- Each moves as one does alone, and each move is published as `channelRead`.
+- A position is passed over, not refused, when its channel is not one the caller may read or its message is not of that channel. What is marked read together may have lost a channel since it was listed.
+- Access is decided for all of them together: the channels' communities through `Visibility`, and the DMs through `dm_recipient`, a thread through its parent.
+- It has a rate limit of its own.
+
 ## Unread
 
 - Nothing from before a member joined is unread to them. `community_user.joined_at` (and `dm_recipient.joined_at` for DMs) stands in for the position until they have read past it.

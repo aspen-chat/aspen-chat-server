@@ -115,3 +115,4 @@ pub mod m20261009_080000_upkeep;
 pub mod m20261009_080100_evidence_retention;
 pub mod m20261009_080200_paging;
 pub mod m20261009_094225_presence_override;
+pub mod m20261011_053939_mention_recent;

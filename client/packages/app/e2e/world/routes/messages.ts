@@ -99,19 +99,31 @@ export function messageRoutes({
         return reply(null, 204);
       },
     ],
-    // The feed holds Bob's DMs, and his replies in the thread once the caller follows it.
+    // The feed holds Bob's DMs, and his replies in the thread once the caller follows it; its
+    // views hold the DMs (whose one message tags the caller), those replies, or both with the
+    // general channel's messages.
     [
       "GET",
       /^\/users\/@me\/activity$/,
-      () => ({
-        data: [
-          ...(url.searchParams.get("filter[dms]") === "false" ? [] : dmMessages),
-          ...(follows.has(thread) ? threadReplies : []),
-        ]
-          .filter((m) => m.author !== me)
-          .sort((a, b) => String(b.id).localeCompare(String(a.id))),
-        included: { users, channels: [threadRecord, dmRecord] },
-      }),
+      () => {
+        const view = url.searchParams.get("filter[view]");
+        const dms = url.searchParams.get("filter[dms]") === "false" ? [] : dmMessages;
+        const replies = follows.has(thread) ? threadReplies : [];
+        const held =
+          view === "mentions" || view === "dms"
+            ? dms
+            : view === "threads"
+              ? replies
+              : view === "all"
+                ? [...dms, ...generalMessages, ...threadReplies]
+                : [...dms, ...replies];
+        return {
+          data: held
+            .filter((m) => m.author !== me)
+            .sort((a, b) => String(b.id).localeCompare(String(a.id))),
+          included: { users, channels: [threadRecord, dmRecord] },
+        };
+      },
     ],
     ["GET", /^\/messages$/, () => searchMessages(url)],
     ["GET", /^\/users\/@me\/preferences$/, () => ({ values: {}, updatedAt: minutesAgo(600) })],

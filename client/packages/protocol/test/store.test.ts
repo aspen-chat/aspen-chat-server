@@ -1898,6 +1898,58 @@ describe("RecordStore notifications", () => {
     expect(store.notifies(plain)).toBe(false);
   });
 
+  it("places a message in the feed's views whatever the level, never muted, blocked, or own", () => {
+    const store = bootstrapped();
+    const thread: Channel = { ...general, id: id(30), ty: "thread", parentChannel: general.id };
+    const dm: Channel = { ...general, id: id(31), ty: "dm", community: null };
+    store.ingest({ channels: [thread, dm] });
+    const plain = message(2, general.id, bob.id);
+    const tagging = {
+      ...message(3, general.id, bob.id),
+      mentions: { users: [me.id], roles: [], everyone: false },
+    };
+    const reply = message(4, thread.id, bob.id);
+    const direct = message(5, dm.id, bob.id);
+    const views = (m: typeof plain) =>
+      (["all", "mentions", "dms", "threads"] as const).filter((view) => store.inActivity(m, view));
+    expect(views(plain)).toEqual(["all"]);
+    expect(views(tagging)).toEqual(["all", "mentions"]);
+    expect(views(direct)).toEqual(["all", "dms"]);
+    expect(views(reply)).toEqual(["all"]);
+    store.applyEvent({ serverEvent: "threadFollowChanged", thread: thread.id, following: true });
+    expect(views(reply)).toEqual(["all", "threads"]);
+    expect(views({ ...tagging, author: me.id })).toEqual([]);
+    store.replaceMutes([{ channel: general.id, until: null }]);
+    expect(views(tagging)).toEqual([]);
+    expect(views(reply)).toEqual([]);
+    expect(views(direct)).toEqual(["all", "dms"]);
+    store.replaceMutes([]);
+    store.setBlocked(bob.id, true);
+    expect(views(direct)).toEqual([]);
+  });
+
+  it("lists unread channels newest first, leaving out read and muted ones", () => {
+    const store = bootstrapped();
+    const other: Channel = { ...general, id: id(32), name: "other" };
+    const quiet: Channel = { ...general, id: id(33), name: "quiet" };
+    store.ingest({
+      channels: [other, quiet],
+      readStates: [
+        { channel: general.id, lastRead: id(1000), lastMessage: id(1001), mentions: 0 },
+        { channel: other.id, lastRead: id(1000), lastMessage: id(1005), mentions: 0 },
+        { channel: quiet.id, lastRead: id(1000), lastMessage: null, mentions: 0 },
+      ],
+    });
+    expect(store.unreadChannels()).toEqual([
+      { channel: other.id, community: general.community, lastMessage: id(1005) },
+      { channel: general.id, community: general.community, lastMessage: id(1001) },
+    ]);
+    store.replaceMutes([{ channel: other.id, until: null }]);
+    expect(store.unreadChannels().map((unread) => unread.channel)).toEqual([general.id]);
+    store.setLastRead(general.id, id(1001));
+    expect(store.unreadChannels()).toEqual([]);
+  });
+
   it("notifies of every reply in a followed thread, past its parent's level but not its mute", () => {
     const store = bootstrapped();
     const thread: Channel = {

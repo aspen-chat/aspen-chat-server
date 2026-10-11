@@ -1,5 +1,6 @@
 //! The caller's activity feed (`app::activity`): every message that tells them of itself, by
-//! the rule their notifications follow, newest first.
+//! the rule their notifications follow, or another view of what is said where they read, newest
+//! first.
 
 use crate::TAG_MESSAGES;
 use crate::auth::SessionUser;
@@ -13,11 +14,43 @@ use aspen_app::context::GlobalServerContext;
 use aspen_app::{self as app, CommunityId, MessageId};
 use axum::extract::State;
 use serde::Deserialize;
-use utoipa::IntoParams;
+use utoipa::{IntoParams, ToSchema};
+
+/// Which messages the feed is read for, in place of those that tell the caller of themselves.
+/// Every view leaves out muted channels, the caller's own messages and those of anyone they
+/// blocked, what was said before they joined, and messages that only record something.
+#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ActivityView {
+    /// Everything said where the caller reads, threads included, whatever their notification
+    /// levels.
+    All,
+    /// What tags the caller: by name, a role they hold, or everyone.
+    Mentions,
+    /// The caller's DMs and group DMs, and those DMs' threads.
+    Dms,
+    /// Replies in the threads the caller follows.
+    Threads,
+}
+
+impl From<ActivityView> for app::activity::ActivityView {
+    fn from(view: ActivityView) -> Self {
+        match view {
+            ActivityView::All => Self::All,
+            ActivityView::Mentions => Self::Mentions,
+            ActivityView::Dms => Self::Dms,
+            ActivityView::Threads => Self::Threads,
+        }
+    }
+}
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ActivityQuery {
+    /// Which messages to read; those that tell the caller of themselves when absent.
+    #[serde(rename = "filter[view]")]
+    #[param(rename = "filter[view]", value_type = Option<ActivityView>)]
+    pub view: Option<ActivityView>,
     /// Only messages of these communities, comma separated; every community's when absent.
     #[serde(rename = "filter[community]")]
     #[param(rename = "filter[community]", value_type = Option<Vec<CommunityId>>, style = Form, explode = false)]
@@ -46,8 +79,8 @@ const DEFAULT_ACTIVITY_PAGE: u32 = 25;
 /// The messages that tell the caller of themselves, newest first: in a DM, community, or
 /// channel, every message or only those tagging them as their notification level there says,
 /// and every reply in a thread they follow; never in a channel they muted, by them or anyone
-/// they blocked, or from before they joined. A community the caller does not belong to is
-/// passed over.
+/// they blocked, or from before they joined. `filter[view]` reads another view in their place.
+/// A community the caller does not belong to is passed over.
 #[utoipa::path(
     get,
     path = "/users/@me/activity",
@@ -56,7 +89,7 @@ const DEFAULT_ACTIVITY_PAGE: u32 = 25;
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = MessageList),
-        (status = BAD_REQUEST, description = "`validation`: a malformed community id", body = Problem),
+        (status = BAD_REQUEST, description = "`validation`: a malformed community id, or a view this server does not have", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -85,6 +118,7 @@ pub async fn read_activity(
         &state,
         user.id,
         app::activity::ActivityQuery {
+            view: query.view.map(Into::into).unwrap_or_default(),
             communities,
             dms: query.dms.unwrap_or(true),
             unread: query.unread.unwrap_or(false),
