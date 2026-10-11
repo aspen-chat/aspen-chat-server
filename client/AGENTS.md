@@ -243,6 +243,10 @@ same commit, as with comments.
   each pair shows is the root's `color-scheme`: `light dark`, following the system, unless the
   user chose Light or Dark under Appearance (`applyThemeMode`, kept per install like the
   palette). Nothing may read `prefers-color-scheme` itself, since that ignores the user's choice.
+  Scroll bars take the palette too: `scrollbar-color` on the root, the faint ink over the pane's
+  own ground, inherited by every scroller and given back to the system under forced colours.
+  Nothing sets `scrollbar-width` or draws a bar with `::-webkit-scrollbar`, which would replace
+  the platform's bar, its overlay behaviour included.
   More contrast (`applyContrastMode`, kept per install, following the system's
   `prefers-contrast` unless the user chose Standard or More) is `data-contrast="more"` on the
   root, which draws every palette's muted and faint inks and lines nearer its ink; a token

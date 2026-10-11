@@ -405,6 +405,11 @@
 
 :root {
   color-scheme: light dark;
+  /* Scroll bars take the palette: a thumb in the faint ink, which reaches 4.5:1 on every surface
+     (and more at more contrast), over the pane's own ground. It is inherited, so every scroller
+     has it. Only the colours are set: the width, the shape, and whether the bars overlay stay
+     the platform's, as a scroll bar drawn by hand (`::-webkit-scrollbar`) would not leave them. */
+  scrollbar-color: var(--color-ink-faint) transparent;
 }
 
 html,
@@ -449,8 +454,12 @@ body,
 /* Forced colours (Windows' contrast themes) draw every background in the theme's one ground and
    drop box shadows, which take Tailwind's rings with them. What those alone show is given
    another way here: focus and the choice made by an outline in the theme's highlight, and
-   marks drawn as a fill, or as a ring, by the utilities below. */
+   marks drawn as a fill, or as a ring, by the utilities below. Scroll bars go back to the
+   system's colours. */
 @media (forced-colors: active) {
+  :root {
+    scrollbar-color: auto;
+  }
   :focus-visible {
     outline: 2px solid Highlight;
     outline-offset: 2px;

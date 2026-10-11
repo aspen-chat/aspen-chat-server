@@ -38,3 +38,24 @@ test("the theme overrides the system's preference until set back to follow it", 
   await again.getByText("System", { exact: true }).click();
   await expect.poll(() => isDark(page)).toBe(false);
 });
+
+test("scroll bars take the palette's faint ink, and the system's colours when it forces them", async ({
+  page,
+}) => {
+  await signInToWorld(page);
+  await page.getByText("general", { exact: true }).click();
+  const scrollbar = () =>
+    page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.className = "text-ink-faint";
+      document.querySelector("main")?.append(probe);
+      const faint = getComputedStyle(probe).color;
+      probe.remove();
+      const drawn = getComputedStyle(document.querySelector("main article") ?? document.body);
+      return { faint, color: drawn.scrollbarColor };
+    });
+  const themed = await scrollbar();
+  expect(themed.color).toContain(themed.faint);
+  await page.emulateMedia({ forcedColors: "active" });
+  expect((await scrollbar()).color).toBe("auto");
+});
