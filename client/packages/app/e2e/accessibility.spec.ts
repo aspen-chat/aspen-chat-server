@@ -206,6 +206,8 @@ for (const { palette, scheme, contrast } of combinations) {
       await page.getByRole("button", { name: "Community settings" }).click();
       const dialog = page.getByRole("dialog");
       await expectAccessible(page, "community settings");
+      await dialog.getByRole("tab", { name: "Layout" }).click();
+      await expectAccessible(page, "layout");
       await dialog.getByRole("tab", { name: "Roles" }).click();
       await expectAccessible(page, "roles");
       await dialog.getByRole("tab", { name: "Members" }).click();

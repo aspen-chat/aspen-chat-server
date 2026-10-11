@@ -1,5 +1,5 @@
 import type { Community, User } from "@aspen/protocol";
-import { GearSixIcon } from "@phosphor-icons/react";
+import { WrenchIcon } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import {
@@ -30,6 +30,7 @@ import { Avatar } from "@/features/communities/Avatar";
 import { IconPicker } from "@/features/media/IconPicker";
 import { MemberPicker } from "@/features/community-settings/MemberPicker";
 import { EmojiPanel } from "@/features/community-settings/EmojiPanel";
+import { LayoutPanel } from "@/features/community-settings/LayoutPanel";
 import { MembersPanel } from "@/features/community-settings/MembersPanel";
 import { RolesPanel } from "@/features/community-settings/RolesPanel";
 import { PluginsPanel } from "@/features/plugins/PluginsPanel";
@@ -57,10 +58,11 @@ const tabClass =
   "selected:bg-accent-soft selected:text-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50";
 
 /**
- * The community's settings, from the gear in its sidebar: its name, its owner (who alone may
- * hand it on or delete it) and the way out of it, its roles, its members, its emoji, and, for
- * holders of Manage plugins, the deployment's plugins. Every member can open it; each part
- * offers only what they may do.
+ * The community's settings, from the wrench in its sidebar: its name, its owner (who alone may
+ * hand it on or delete it) and the way out of it, for holders of Manage channels or Manage
+ * categories the arrangement of its channels and categories, its roles, its members, its
+ * emoji, and, for holders of Manage plugins, the deployment's plugins. Every member can open
+ * it; each part offers only what they may do.
  */
 export function CommunitySettingsDialog({
   community,
@@ -73,12 +75,14 @@ export function CommunitySettingsDialog({
   const access = useAccess(community.id);
   const manageRoles = access?.has("manageRoles") ?? false;
   const roleTab = manageRoles || (access?.has("assignRoles") ?? false);
+  const layoutTab =
+    (access?.has("manageChannels") ?? false) || (access?.has("manageCategories") ?? false);
   const pluginTab = access?.has("managePlugins") === true;
   return (
     <DialogTrigger>
       <Tooltip text={m.communitySettings.open}>
         <Button aria-label={m.communitySettings.open} className={triggerClassName}>
-          <GearSixIcon size={18} aria-hidden="true" />
+          <WrenchIcon size={18} aria-hidden="true" />
         </Button>
       </Tooltip>
       <ModalOverlay className={overlayClass} isDismissable>
@@ -88,10 +92,15 @@ export function CommunitySettingsDialog({
               {format(m.communitySettings.heading, { community: community.name })}
             </DialogHeading>
             <Tabs className="flex flex-col gap-4">
-              <TabList aria-label={m.communitySettings.open} className="flex gap-1">
+              <TabList aria-label={m.communitySettings.open} className="flex flex-wrap gap-1">
                 <Tab id="overview" className={tabClass}>
                   {m.communitySettings.overviewTab}
                 </Tab>
+                {layoutTab && (
+                  <Tab id="layout" className={tabClass}>
+                    {m.channelLayout.tab}
+                  </Tab>
+                )}
                 {roleTab && (
                   <Tab id="roles" className={tabClass}>
                     {m.communitySettings.rolesTab}
@@ -112,6 +121,11 @@ export function CommunitySettingsDialog({
               <TabPanel id="overview" className="outline-none">
                 <Overview community={community} />
               </TabPanel>
+              {layoutTab && (
+                <TabPanel id="layout" className="outline-none">
+                  <LayoutPanel communityId={community.id} />
+                </TabPanel>
+              )}
               {roleTab && (
                 <TabPanel id="roles" className="outline-none">
                   <RolesPanel communityId={community.id} />

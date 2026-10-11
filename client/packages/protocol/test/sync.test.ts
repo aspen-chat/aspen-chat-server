@@ -1674,6 +1674,37 @@ describe("AspenSync", () => {
     expect(sync.store.channels(aspen.id).filter((c) => c.parentCategory == null)).toHaveLength(1);
   });
 
+  it("arranges categories, patching only those whose position changed", async () => {
+    const work = { id: id(30), community: aspen.id, name: "Work", sortIndex: 0 };
+    const play = { id: id(31), community: aspen.id, name: "Play", sortIndex: 1 };
+    const rest = { id: id(32), community: aspen.id, name: "Rest", sortIndex: 2 };
+    const patched: string[] = [];
+    const patch = (category: typeof work) => () => {
+      patched.push(category.name);
+      return json(category);
+    };
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/communities": () =>
+        json({
+          data: [aspen],
+          included: {
+            channels: [general],
+            categories: [work, play, rest],
+            users: [me],
+            userCommunities: [{ community: aspen.id, user: me.id, sortIndex: 0 }],
+          },
+        }),
+      [`/api/v1/categories/${work.id}`]: patch(work),
+      [`/api/v1/categories/${play.id}`]: patch(play),
+      [`/api/v1/categories/${rest.id}`]: patch(rest),
+    });
+    await goLive(sync);
+    await sync.arrangeCategories([play.id, work.id, rest.id]);
+    expect(sync.store.categories(aspen.id).map((c) => c.name)).toEqual(["Play", "Work", "Rest"]);
+    expect(patched.sort()).toEqual(["Play", "Work"]);
+  });
+
   it("uploads an icon in two phases and patches a community with it", async () => {
     const icon = { id: id(7000), mimeType: "image/png", downloadUrl: "http://store/icons/x" };
     let putBody: Blob | null = null;

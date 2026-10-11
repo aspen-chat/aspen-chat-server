@@ -1,5 +1,5 @@
 import type { Channel } from "@aspen/protocol";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 import {
   Button,
@@ -100,7 +100,10 @@ export function RenameChannelDialog({
   );
 }
 
-/** Deletes a channel after saying what goes with it. */
+/**
+ * Deletes a channel after saying what goes with it. Someone viewing the channel is taken to
+ * its community.
+ */
 export function DeleteChannelDialog({
   channel,
   isOpen,
@@ -114,6 +117,7 @@ export function DeleteChannelDialog({
   const sync = useSync();
   const navigate = useNavigate();
   const domain = useDomain();
+  const { channelId: current } = useParams({ strict: false });
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -142,7 +146,7 @@ export function DeleteChannelDialog({
               sync.deleteChannel(channel.id).then(
                 () => {
                   onOpenChange(false);
-                  if (channel.community != null) {
+                  if (channel.community != null && current === channel.id) {
                     void navigate(communityLink(domain, channel.community));
                   }
                 },

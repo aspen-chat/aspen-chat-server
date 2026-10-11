@@ -5,6 +5,7 @@ import { admin } from "./en/admin";
 import { blocking } from "./en/blocking";
 import { bots } from "./en/bots";
 import { channelActions } from "./en/channelActions";
+import { channelLayout } from "./en/channelLayout";
 import { commands } from "./en/commands";
 import { communitySettings } from "./en/communitySettings";
 import { crop } from "./en/crop";
@@ -291,6 +292,7 @@ export const en = {
     "More draws quiet text and lines stronger, in any palette. Only this device follows this setting.",
   cannotSendHere: "You can't send messages here.",
   channelActions,
+  channelLayout,
   removeReactor: "Remove {name}'s reaction",
   removeSentAttachment: "Remove attachment {name}",
   notifications,

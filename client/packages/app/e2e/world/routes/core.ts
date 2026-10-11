@@ -244,6 +244,46 @@ export function coreRoutes({
         return reply(null, 204);
       },
     ],
+    // Arranging and renaming: a patch answers with the record changed and tells of it by
+    // event, as does making a category or deleting one.
+    [
+      "PATCH",
+      /^\/categories\/[^/]+$/,
+      () => {
+        const id = path.split("/")[2] ?? "";
+        const patch = route.request().postDataJSON() as { name?: string; sortIndex?: number };
+        publish({ serverEvent: "category", type: "update", id, ...patch });
+        return { id, community, name: "Planning", sortIndex: 0, ...patch };
+      },
+    ],
+    [
+      "DELETE",
+      /^\/categories\/[^/]+$/,
+      () => {
+        publish({ serverEvent: "category", type: "delete", id: path.split("/")[2] ?? "" });
+        return reply(null, 204);
+      },
+    ],
+    [
+      "POST",
+      new RegExp(`^/communities/${community}/categories$`),
+      () => {
+        const request = route.request().postDataJSON() as { name: string; sortIndex: number };
+        const record = { id: freshId(), community, ...request };
+        publish({ serverEvent: "category", type: "create", ...record });
+        return reply(record, 201);
+      },
+    ],
+    [
+      "PATCH",
+      /^\/channels\/[^/]+$/,
+      () => {
+        const channel = channels.find((c) => c.id === path.split("/")[2]);
+        const patch = route.request().postDataJSON() as Record<string, unknown>;
+        publish({ serverEvent: "channel", type: "update", id: channel?.id, ...patch });
+        return channel === undefined ? undefined : { ...channel, ...patch };
+      },
+    ],
     // Posting answers with the message as the server would record it, tagging the people of
     // the world it names.
     [
