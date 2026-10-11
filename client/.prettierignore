@@ -5,7 +5,7 @@ out
 release
 pnpm-lock.yaml
 packages/protocol/src/generated
-packages/desktop/native/obs-capture/target
+packages/desktop/native/capture/target
 # The Android project is Gradle's and Android Studio's to format, and holds their build output.
 packages/mobile/android/
 # License texts are kept exactly as their projects publish them.

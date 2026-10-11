@@ -5,7 +5,7 @@ members = ["server", "server/app", "server/api", "server/previews", "server/sche
 # workspace and built by `pnpm build:native` in client/packages/desktop. The example plugins are
 # built for `wasm32-wasip2`, each its own workspace too.
 exclude = [
-  "client/packages/desktop/native/obs-capture",
+  "client/packages/desktop/native/capture",
   "plugins/word_filter",
   "plugins/forum",
   "plugins/calendar",

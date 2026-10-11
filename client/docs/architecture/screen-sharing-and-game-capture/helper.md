@@ -1,6 +1,6 @@
 # The capture helper
 
-The helper `packages/desktop/native/obs-capture` is a Rust crate with its own Cargo workspace.
+The helper `packages/desktop/native/capture` is a Rust crate with its own Cargo workspace.
 It is a separate executable, not a Node addon (see [design notes](design-notes.md#the-helper)). Its
 request protocol is documented at the top of its `main.rs`.
 

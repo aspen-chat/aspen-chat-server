@@ -15,12 +15,12 @@ extraResources:
   # The renderer: the @aspen/app production build, loaded from `resources/app/index.html`.
   - from: ../app/dist
     to: app
-  # The libobs capture helper, built by `pnpm build:native` (`aspen-obs-capture.exe` on Windows).
+  # The capture helper, built by `pnpm build:native` (`aspen-capture.exe` on Windows).
   - from: native
     to: .
     filter:
-      - aspen-obs-capture
-      - aspen-obs-capture.exe
+      - aspen-capture
+      - aspen-capture.exe
   # Chromium's notices, which the Open Source Attributions page opens (`chromiumNotices.ts`).
   - from: node_modules/electron/dist/LICENSES.chromium.html
     to: LICENSES.chromium.html

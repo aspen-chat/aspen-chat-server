@@ -57,9 +57,9 @@ jobs:
       # and libopus and no libobs.
       - name: Capture helper (Linux)
         run: |
-          cargo fmt --manifest-path client/packages/desktop/native/obs-capture/Cargo.toml --check
-          cargo clippy --locked --manifest-path client/packages/desktop/native/obs-capture/Cargo.toml --all-targets -- -D warnings
-          cargo test --locked --manifest-path client/packages/desktop/native/obs-capture/Cargo.toml
+          cargo fmt --manifest-path client/packages/desktop/native/capture/Cargo.toml --check
+          cargo clippy --locked --manifest-path client/packages/desktop/native/capture/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path client/packages/desktop/native/capture/Cargo.toml
       # The example plugins are workspaces of their own, built for WebAssembly components.
       - name: Example plugins
         run: |
@@ -156,7 +156,7 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: client/packages/desktop/native/obs-capture
+          workspaces: client/packages/desktop/native/capture
       # MSVC's `lib` writes the import library the helper links obs.dll through.
       - uses: ilammy/msvc-dev-cmd@v1
       - run: pnpm install --frozen-lockfile
@@ -180,7 +180,7 @@ jobs:
         run: |
           # The start of the certificate's subject (`publisherName` in electron-builder.signed.yml).
           $publisher = 'CN=Jacob Kiesel,'
-          $ours = @(Get-ChildItem *.exe) + @(Get-Item win-unpacked/Aspen.exe, win-unpacked/resources/aspen-obs-capture.exe)
+          $ours = @(Get-ChildItem *.exe) + @(Get-Item win-unpacked/Aspen.exe, win-unpacked/resources/aspen-capture.exe)
           foreach ($file in $ours) {
             $signature = Get-AuthenticodeSignature $file
             "$($file.Name): $($signature.Status), $($signature.SignerCertificate.Subject)"

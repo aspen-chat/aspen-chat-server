@@ -7,7 +7,7 @@ application's sound.
 
 - The picture is the browser's own screen share: the system picker on macOS 15 and later. That is the
   same framework libobs's window capture uses, with nothing there a hook could add.
-- The helper captures the sound through ScreenCaptureKit (`native/obs-capture/src/sck_audio.rs`,
+- The helper captures the sound through ScreenCaptureKit (`native/capture/src/sck_audio.rs`,
   which the catalogue names `aspen_sck_app_audio`).
 - The stream's content filter includes the one application. The stream then carries only its audio,
   besides the smallest, slowest picture the framework allows.
@@ -34,7 +34,7 @@ the helper instead of the browser:
 
 ### The PipeWire capture
 
-`native/obs-capture/src/pipewire_audio.rs`, which the catalogue names `aspen_pipewire_app_audio`:
+`native/capture/src/pipewire_audio.rs`, which the catalogue names `aspen_pipewire_app_audio`:
 
 - opens a capture stream and links one application's output ports to it;
 - follows that application by process id while it runs, and by name across a restart.

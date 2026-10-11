@@ -42,11 +42,11 @@ pub(super) fn watch_hook(serial: u64, settings: Option<String>) {
                 }
                 match unsafe { capture_window_instead(current, settings.as_deref()) } {
                     Ok(()) => eprintln!(
-                        "aspen-obs-capture: the game capture hook delivered no frame in {} s; capturing the window through Windows.Graphics.Capture instead",
+                        "aspen-capture: the game capture hook delivered no frame in {} s; capturing the window through Windows.Graphics.Capture instead",
                         HOOK_TIMEOUT.as_secs()
                     ),
                     Err(reason) => eprintln!(
-                        "aspen-obs-capture: the game capture hook delivered no frame, and the window could not be captured instead: {reason}"
+                        "aspen-capture: the game capture hook delivered no frame, and the window could not be captured instead: {reason}"
                     ),
                 }
                 return;

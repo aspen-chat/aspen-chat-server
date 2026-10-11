@@ -12,8 +12,8 @@ import {
 } from "./captureKinds";
 
 /**
- * Game capture through libobs, for the renderer. The helper `aspen-obs-capture` (the Rust
- * crate in `native/obs-capture`) captures a game or window, encodes it to H.264, and sends it
+ * Game capture through libobs, for the renderer. The helper `aspen-capture` (the Rust
+ * crate in `native/capture`) captures a game or window, encodes it to H.264, and sends it
  * as SRTP straight to the voice server; the shell never touches the video. On Linux it captures
  * only one application's sound (`startAudio`), since there the picture comes from the
  * browser's own screen share. The helper is a
@@ -111,7 +111,7 @@ export const CAPTURE_STOP_CHANNEL = "voice:capture-stop";
 export const CAPTURE_ENDED_CHANNEL = "voice:capture-ended";
 
 function helperPath(): string | null {
-  const name = process.platform === "win32" ? "aspen-obs-capture.exe" : "aspen-obs-capture";
+  const name = process.platform === "win32" ? "aspen-capture.exe" : "aspen-capture";
   // Built by `pnpm build:native` next to the crate; packaged builds carry it as a resource.
   const candidates = [join(process.resourcesPath, name), join(app.getAppPath(), "native", name)];
   return candidates.find((candidate) => existsSync(candidate)) ?? null;

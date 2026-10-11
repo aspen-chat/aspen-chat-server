@@ -158,7 +158,7 @@ fn playing_applications() -> Option<Vec<AudioTarget>> {
     match listed {
         Ok(targets) => Some(targets),
         Err(error) => {
-            eprintln!("aspen-obs-capture: application audio unavailable: {error}");
+            eprintln!("aspen-capture: application audio unavailable: {error}");
             None
         }
     }
@@ -303,7 +303,7 @@ fn main() {
         let request: Request = match serde_json::from_str(&line) {
             Ok(request) => request,
             Err(error) => {
-                eprintln!("aspen-obs-capture: unreadable request: {error}");
+                eprintln!("aspen-capture: unreadable request: {error}");
                 continue;
             }
         };

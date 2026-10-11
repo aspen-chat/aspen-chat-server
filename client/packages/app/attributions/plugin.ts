@@ -138,8 +138,8 @@ function collect(strict: boolean): Attributions {
       ...attempt("Electron", () => electron()),
       ...attempt("crates of the capture helper", () =>
         cargoPackages(
-          join(client, "packages", "desktop", "native", "obs-capture", "Cargo.toml"),
-          ["aspen_obs_capture"],
+          join(client, "packages", "desktop", "native", "capture", "Cargo.toml"),
+          ["aspen_capture"],
           DESKTOP_PLATFORMS,
         ),
       ),

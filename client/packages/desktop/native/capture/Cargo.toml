@@ -1,5 +1,5 @@
 [package]
-name = "aspen_obs_capture"
+name = "aspen_capture"
 version = "0.1.0"
 edition = "2024"
 license = "MPL-2.0"
@@ -12,7 +12,7 @@ publish = false
 [workspace]
 
 [[bin]]
-name = "aspen-obs-capture"
+name = "aspen-capture"
 path = "src/main.rs"
 
 [dependencies]
