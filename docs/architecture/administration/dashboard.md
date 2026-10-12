@@ -13,6 +13,7 @@ The Administration Dashboard is the deployment's console. This page covers what 
 | `/admin/file-transfers` | The record of files offered in calls ([File transfers](../file-transfers.md)) | Moderate any community |
 | `/admin/registration-invites` | [Registration invites](registration-invites.md) | Manage registration invites |
 | The fleet | [Fleet health](#fleet-health), with [NATS memory](#nats-memory) | View dashboard |
+| `/admin/database-latency?range=…` | [Database latency](#database-latency) | View dashboard |
 | `/admin/jobs` | A preview of background jobs ([Jobs](../jobs/index.md)) | View jobs |
 
 Powers too strong for even a privileged web API, such as suspending rate limits, stay terminal commands.
@@ -72,6 +73,39 @@ A load report from an id no registered server has (a voice server given the wron
 2. The note lasts as long as a heartbeat does, so it stays while the voice server keeps reporting every fifteen seconds.
 3. The fleet lists these as `unregisteredVoiceServers`.
 4. The dashboard shows each with what to do, and shows every registered server's id beside them, to copy.
+
+### Database latency
+
+`GET /admin/database-latency` gives how long the database took over a range, as the servers saw it: the median and the 95th and 99th percentiles of two things, on every server together.
+
+- **Statements**: each statement's round trip on a pooled connection, from when it is handed to the connection until its answer has arrived. `BEGIN` and `COMMIT` are statements; the wait for NATS between them is not.
+- **Waits for a connection**: each `Pool::get`, refused ones included: waiting for a connection to be free, opening one, and the pool's check that an idle one still answers. That check is one round trip, so a wait is never shorter than one.
+
+**Why:** see [design notes](design-notes.md#database-latency).
+
+How it is counted (`aspen_database::latency`):
+
+1. `aspen_database::Pool` wraps the pool. `get` times the wait, and gives the connection a timer (Diesel's instrumentation) for as long as its caller holds it.
+2. Statements sent together on one connection are answered in the order sent, so each answer ends the oldest statement under way. A statement whose future is dropped never ends; a new timer for each holder keeps the error to that holder.
+3. Each duration is counted in a histogram of 104 fixed buckets, four to each doubling from a microsecond to about two minutes, so a percentile read from them is within an eighth of the truth.
+4. The same durations are the Prometheus histograms `aspen_db_query_duration_seconds` and `aspen_db_pool_wait_duration_seconds`.
+
+How it is kept (`app::database_latency`):
+
+1. At the end of each minute by the clock, each server, private workers too, takes what it counted and adds it, bucket by bucket (`aspen_add_counts`), to rows of `database_latency`: one for the step that minute falls in, of each step length.
+2. A row is one step, so it holds what every server counted in it, and its percentiles are the deployment's.
+3. A minute that cannot be written, as while the database is away, is kept in memory and written when it can be, in its own place. A server keeps at most sixty.
+4. The recurring job [`sweepExpired`](../jobs/kinds.md#sweepexpired) deletes steps older than their range reaches, so the table stays a few hundred rows.
+
+| `range` | Step | Steps |
+| --- | --- | --- |
+| `oneHour` | a minute | 60 |
+| `oneDay` | a quarter of an hour | 96 |
+| `sevenDays` | an hour | 168 |
+
+A read is its range's rows, through the table's key. It gives every step of the range, oldest first, ending with the step the last whole minute fell in; a step no server wrote has `null` figures, which the chart draws as a gap.
+
+Who sees it: holders of View dashboard, by this read alone. Nothing of it is in the event stream, push, or a cache, so a holder who loses the permission is refused at their next read, and nothing already open keeps showing more than they had read.
 
 ### NATS memory
 

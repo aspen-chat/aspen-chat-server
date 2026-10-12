@@ -28,14 +28,21 @@
 //! host name, or OpenSSL's full verification. What is this crate's own is reading the TLS
 //! parameters out of `database_url`, which its tests hold to tokio-postgres's reading of the rest.
 
-use diesel_async::AsyncPgConnection;
-use diesel_async::pooled_connection::{AsyncDieselConnectionManager, ManagerConfig};
+pub mod latency;
+
+use diesel::IntoSql;
+use diesel_async::pooled_connection::deadpool::{BuildError, Object, PoolError};
+use diesel_async::pooled_connection::{
+    AsyncDieselConnectionManager, ManagerConfig, RecyclingMethod,
+};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use futures_util::FutureExt;
 use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
 use openssl::x509::store::X509StoreBuilder;
 use postgres_openssl::MakeTlsConnector;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio_postgres::config::SslMode;
 
 /// Why `database_url` cannot be connected with.
@@ -172,16 +179,65 @@ impl Database {
         AsyncPgConnection::try_from_client_and_connection(client, connection).await
     }
 
-    /// What a pool opens its connections with.
-    pub fn manager(self) -> AsyncDieselConnectionManager<AsyncPgConnection> {
+    /// A pool of at most `max_size` connections (deadpool's default when `None`), each wait for
+    /// one refused after `wait_timeout`. Connections are opened as they are first needed.
+    pub fn pool(
+        self,
+        max_size: Option<usize>,
+        wait_timeout: Option<Duration>,
+    ) -> Result<Pool, BuildError> {
         let database = Arc::new(self);
         let mut config = ManagerConfig::default();
         config.custom_setup = Box::new(move |_| {
             let database = database.clone();
             async move { database.connect().await }.boxed()
         });
+        // The check `RecyclingMethod::Verified` makes, with the last holder's timer taken off
+        // first, so the check is counted in the wait for the connection and not as a statement.
+        config.recycling_method = RecyclingMethod::CustomFunction(Box::new(|conn| {
+            async move {
+                conn.set_instrumentation(None::<latency::QueryTimer>);
+                diesel::select(1_i32.into_sql::<diesel::sql_types::Integer>())
+                    .execute(conn)
+                    .await
+                    .map(|_| ())
+            }
+            .boxed()
+        }));
         // The manager hands its URL only to `custom_setup`, which ignores it.
-        AsyncDieselConnectionManager::new_with_config("", config)
+        let manager = AsyncDieselConnectionManager::new_with_config("", config);
+        let builder = deadpool::managed::Pool::builder(manager)
+            .runtime(deadpool::Runtime::Tokio1)
+            .wait_timeout(wait_timeout);
+        let inner = match max_size {
+            Some(size) => builder.max_size(size),
+            None => builder,
+        }
+        .build()?;
+        Ok(Pool { inner })
+    }
+}
+
+/// A pool of connections that times what is done with them (`latency`): each wait for a
+/// connection, and every statement run on one while a caller holds it. Cheap to clone.
+#[derive(Clone)]
+pub struct Pool {
+    inner: diesel_async::pooled_connection::deadpool::Pool<AsyncPgConnection>,
+}
+
+impl Pool {
+    /// A connection, waited for until one is free or the pool's wait timeout passes.
+    pub async fn get(&self) -> Result<Object<AsyncPgConnection>, PoolError> {
+        let asked = Instant::now();
+        let got = self.inner.get().await;
+        latency::POOL_WAITS.record(asked.elapsed());
+        let mut conn = got?;
+        conn.set_instrumentation(latency::QueryTimer::new(&latency::QUERIES));
+        Ok(conn)
+    }
+
+    pub fn status(&self) -> deadpool::Status {
+        self.inner.status()
     }
 }
 
@@ -644,14 +700,21 @@ mod tests {
         let mut conn = connect(&url).await.unwrap();
         conn.batch_execute("SELECT 1").await.unwrap();
         let database: Database = url.parse().unwrap();
-        let pool = diesel_async::pooled_connection::deadpool::Pool::builder(database.manager())
-            .build()
-            .unwrap();
-        pool.get()
-            .await
-            .unwrap()
-            .batch_execute("SELECT 1")
-            .await
-            .unwrap();
+        let pool = database.pool(None, None).unwrap();
+        // The other tests record nothing, so what is counted here is this test's.
+        latency::QUERIES.take();
+        latency::POOL_WAITS.take();
+        for _ in 0..2 {
+            pool.get()
+                .await
+                .unwrap()
+                .batch_execute("SELECT 1")
+                .await
+                .unwrap();
+        }
+        // Two statements, the pool's check of the connection it handed out again not among
+        // them, and two waits.
+        assert_eq!(latency::count(&latency::QUERIES.take()), 2);
+        assert_eq!(latency::count(&latency::POOL_WAITS.take()), 2);
     }
 }

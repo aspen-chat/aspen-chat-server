@@ -24,13 +24,13 @@
 //! is an arrival again; while the database cannot be read, those coming online show as offline.
 //! A listing that fails is made at the next mark too.
 
+use crate::database::Pool;
 use crate::presence_feed::PresenceFeed;
 use crate::presence_override::PresenceOverride;
 use crate::{CommunityId, UserId};
 use aspen_schema::community_user;
 use diesel::prelude::*;
-use diesel_async::pooled_connection::deadpool::Pool;
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::RunQueryDsl;
 use fred::interfaces::{KeysInterface, SortedSetsInterface};
 use fred::types::{Expiration, SetOptions};
 use std::collections::{HashMap, HashSet};
@@ -99,7 +99,7 @@ struct Arrived {
 
 /// What the task works with.
 struct Upkeep {
-    pool: Pool<AsyncPgConnection>,
+    pool: Pool,
     valkey: fred::clients::Client,
     feed: PresenceFeed,
     times: ListingTimes,
@@ -108,7 +108,7 @@ struct Upkeep {
 impl PresenceUpkeep {
     /// Starts the task that does the upkeep.
     pub fn start(
-        pool: Pool<AsyncPgConnection>,
+        pool: Pool,
         valkey: fred::clients::Client,
         feed: PresenceFeed,
         times: ListingTimes,

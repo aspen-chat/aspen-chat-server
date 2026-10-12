@@ -86,12 +86,25 @@ pub async fn sweep_sign_ins(state: &GlobalServerContext, _job: &Claimed) -> crat
 
 /// What has ended and nothing reads any more: community bans past their end, through
 /// `community_ban_until` (every read of bans already leaves them out); plugins' notices past
-/// `plugin::notice::KEPT`, through `plugin_notice_by_created`; and voice failure reports older
+/// `plugin::notice::KEPT`, through `plugin_notice_by_created`; voice failure reports older
 /// than `[voice] failure_window_seconds`, which count for nothing, through
-/// `voice_server_failure_reported`.
+/// `voice_server_failure_reported`; and steps of the database's latency older than their range
+/// reaches (`database_latency::Range::kept_seconds`), through the table's key.
 pub async fn sweep_expired(state: &GlobalServerContext, _job: &Claimed) -> crate::Result<Outcome> {
+    use strum::VariantArray;
     let window = state.config.voice.failure_window_seconds;
     let notices = crate::plugin::notice::KEPT.num_seconds();
+    let latency = crate::database_latency::Range::VARIANTS
+        .iter()
+        .map(|range| {
+            format!(
+                "DELETE FROM database_latency WHERE (step_seconds, at) IN (\
+                 SELECT step_seconds, at FROM database_latency WHERE step_seconds = {} \
+                   AND at < now() - make_interval(secs => {}) LIMIT $1)",
+                range.step_seconds(),
+                range.kept_seconds()
+            )
+        });
     let mut outcome = Outcome::Done;
     for sql in [
         "DELETE FROM community_ban WHERE (community, \"user\") IN (SELECT community, \"user\" \
@@ -105,7 +118,10 @@ pub async fn sweep_expired(state: &GlobalServerContext, _job: &Claimed) -> crate
             "DELETE FROM voice_server_failure WHERE ctid IN (SELECT ctid FROM voice_server_failure \
              WHERE reported_at < now() - make_interval(secs => {window}) LIMIT $1)"
         ),
-    ] {
+    ]
+    .into_iter()
+    .chain(latency)
+    {
         if let Outcome::Progress(_) = sweep(state, &sql).await? {
             outcome = Outcome::Progress(serde_json::Value::Null);
         }

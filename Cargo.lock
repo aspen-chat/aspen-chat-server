@@ -627,9 +627,12 @@ dependencies = [
 name = "aspen_database"
 version = "0.1.0"
 dependencies = [
+ "aspen_metrics",
+ "deadpool",
  "diesel",
  "diesel-async",
  "futures-util",
+ "metrics",
  "openssl",
  "percent-encoding",
  "postgres-openssl",

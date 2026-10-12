@@ -934,6 +934,126 @@ pub async fn get_fleet(
     }))
 }
 
+/// How far back the database latency charts reach.
+#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum DatabaseLatencyRange {
+    OneHour,
+    OneDay,
+    SevenDays,
+}
+
+impl From<DatabaseLatencyRange> for app::database_latency::Range {
+    fn from(range: DatabaseLatencyRange) -> Self {
+        match range {
+            DatabaseLatencyRange::OneHour => Self::OneHour,
+            DatabaseLatencyRange::OneDay => Self::OneDay,
+            DatabaseLatencyRange::SevenDays => Self::SevenDays,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct DatabaseLatencyQuery {
+    /// How far back to reach.
+    #[param(inline)]
+    pub range: DatabaseLatencyRange,
+}
+
+/// How long one kind of wait on the database took over a step, across every server.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LatencyFigures {
+    /// How many were timed.
+    pub count: u64,
+    /// The time half of them were within, in microseconds.
+    pub median_micros: u64,
+    /// The time 95% of them were within, in microseconds.
+    pub p95_micros: u64,
+    /// The time 99% of them were within, in microseconds.
+    pub p99_micros: u64,
+}
+
+impl From<app::database_latency::Figures> for LatencyFigures {
+    fn from(figures: app::database_latency::Figures) -> Self {
+        let micros =
+            |duration: std::time::Duration| u64::try_from(duration.as_micros()).unwrap_or(u64::MAX);
+        Self {
+            count: figures.count,
+            median_micros: micros(figures.median),
+            p95_micros: micros(figures.p95),
+            p99_micros: micros(figures.p99),
+        }
+    }
+}
+
+/// The database's latency over one step.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseLatencyPoint {
+    /// When the step began.
+    pub at: DateTime<Utc>,
+    /// Statements' round trips, from a server handing one to its connection until the answer
+    /// arrived; `null` when no server recorded any in the step.
+    pub queries: Option<LatencyFigures>,
+    /// Waits for a connection from a server's pool, the check that an idle connection still
+    /// answers included; `null` when no server recorded any in the step.
+    pub pool_waits: Option<LatencyFigures>,
+}
+
+impl From<app::database_latency::Point> for DatabaseLatencyPoint {
+    fn from(point: app::database_latency::Point) -> Self {
+        Self {
+            at: point.at,
+            queries: point.queries.map(Into::into),
+            pool_waits: point.pool_waits.map(Into::into),
+        }
+    }
+}
+
+/// How long the database took over a range, as the deployment's servers saw it.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseLatency {
+    /// The length of each step.
+    pub step_seconds: u32,
+    /// Every step of the range, oldest first; the last is the one the last whole minute fell
+    /// in.
+    pub points: Vec<DatabaseLatencyPoint>,
+}
+
+/// How long the database took over a range, by minute for an hour, by quarter of an hour for a
+/// day, and by hour for seven days: the median and the 95th and 99th percentiles of every
+/// statement's round trip and of every wait for a pooled connection, on every server together.
+#[utoipa::path(
+    get,
+    path = "/admin/database-latency",
+    tag = TAG_ADMIN,
+    params(DatabaseLatencyQuery),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = DatabaseLatency),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn get_database_latency(
+    State(state): State<GlobalServerContext>,
+    AdminUser(_session, access): AdminUser,
+    Query(query): Query<DatabaseLatencyQuery>,
+) -> ApiResult<Json<DatabaseLatency>> {
+    access.require(DeploymentPermission::ViewDashboard)?;
+    let series = app::database_latency::read(&state, query.range.into()).await?;
+    Ok(Json(DatabaseLatency {
+        step_seconds: series.step_seconds.unsigned_abs(),
+        points: series.points.into_iter().map(Into::into).collect(),
+    }))
+}
+
 /// What a ban from the deployment asks for.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

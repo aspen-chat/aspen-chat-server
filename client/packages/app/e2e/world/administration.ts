@@ -188,6 +188,32 @@ export function administration() {
       }
       return reply(null, 204);
     },
+    // Statements steady but for one slow minute, and no wait recorded in the last ten steps.
+    databaseLatency: (url: URL) => {
+      const range = url.searchParams.get("range");
+      const [stepSeconds, steps] =
+        range === "sevenDays" ? [3600, 168] : range === "oneDay" ? [900, 96] : [60, 60];
+      const end = Math.floor(Date.now() / (stepSeconds * 1000)) * stepSeconds * 1000;
+      return {
+        stepSeconds,
+        points: Array.from({ length: steps }, (_, i) => {
+          const slow = i === steps - 5 ? 40 : 1;
+          return {
+            at: new Date(end - (steps - i) * stepSeconds * 1000).toISOString(),
+            queries: {
+              count: 1200,
+              medianMicros: 800 * slow,
+              p95Micros: 2_400 * slow,
+              p99Micros: 6_000 * slow,
+            },
+            poolWaits:
+              i >= steps - 10
+                ? null
+                : { count: 400, medianMicros: 350, p95Micros: 900, p99Micros: 1_500_000 },
+          };
+        }),
+      };
+    },
     fleet: () => ({
       apiServers: [
         {

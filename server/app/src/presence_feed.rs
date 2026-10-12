@@ -31,12 +31,11 @@
 //! message) leaves a watcher behind until the next change or its client's slower full read.
 
 use crate::UserId;
+use crate::database::Pool;
 use crate::user_status::{presence_visible_pairs, raw_statuses, seen_by_others};
 use aspen_wire::ephemeral::EphemeralEvent;
 pub use aspen_wire::ephemeral::{MAX_WATCHED_PRESENCE, PRESENCE_WINDOW_MILLIS};
 use aspen_wire::user::{UserOnlineStatus, UserStatusRecord};
-use diesel_async::AsyncPgConnection;
-use diesel_async::pooled_connection::deadpool::Pool;
 use futures_util::StreamExt;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -126,7 +125,7 @@ impl PresenceFeed {
     pub fn start(
         nats: async_nats::Client,
         valkey: fred::clients::Client,
-        pool: Pool<AsyncPgConnection>,
+        pool: Pool,
         route: bool,
     ) -> Self {
         let (hints, published) = mpsc::channel(HINT_QUEUE);
@@ -569,7 +568,7 @@ impl Router {
 /// Reads the presence of the users in `pairs`, and which viewers may learn it.
 async fn read(
     valkey: &fred::clients::Client,
-    pool: &Pool<AsyncPgConnection>,
+    pool: &Pool,
     users: Vec<UserId>,
     viewer_pairs: Vec<(UserId, UserId)>,
 ) -> crate::Result<(HashMap<UserId, UserOnlineStatus>, HashSet<(UserId, UserId)>)> {
@@ -603,7 +602,7 @@ async fn subscribe_hints(nats: &async_nats::Client) -> async_nats::Subscriber {
 async fn route_presence(
     nats: async_nats::Client,
     valkey: fred::clients::Client,
-    pool: Pool<AsyncPgConnection>,
+    pool: Pool,
     mut registrations: mpsc::UnboundedReceiver<Registration>,
     mut watches: mpsc::Receiver<(u64, Vec<UserId>)>,
 ) {

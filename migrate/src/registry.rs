@@ -117,4 +117,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261009_094225_presence_override::M,
     &migrations::m20261011_053939_mention_recent::M,
     &migrations::m20261012_043722_stream_sizes::M,
+    &migrations::m20261012_162005_database_latency::M,
 ];

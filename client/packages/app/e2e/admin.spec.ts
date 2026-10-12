@@ -133,6 +133,38 @@ test("an administrator makes an invite, sees its QR code, copies it, and revokes
   await expect(made.getByRole("button", { name: /^Revoke invite / })).toHaveCount(0);
 });
 
+test("the fleet charts the database's latency by percentile, with gaps where none was recorded", async ({
+  page,
+}) => {
+  const fleet = await openSection(page, "Server fleet");
+  const statements = fleet.getByRole("group", { name: "Statements over 1 hour" });
+  await expect(statements).toBeVisible();
+  // Three lines, named by a legend.
+  const figure = fleet.getByRole("figure").filter({ hasText: "From a server sending" });
+  for (const name of ["Median", "95th percentile", "99th percentile"]) {
+    await expect(figure.getByRole("listitem").filter({ hasText: name })).toBeVisible();
+  }
+  await statements.focus();
+  const readout = statements.getByRole("status");
+  await expect(readout).toContainText("800μs");
+  await expect(readout).toContainText("2.4ms");
+  await expect(readout).toContainText("6ms");
+  // No wait was recorded in the last steps: the readout says so rather than drawing a value.
+  const waits = fleet.getByRole("group", { name: "Waiting for a connection over 1 hour" });
+  await waits.focus();
+  await expect(waits.getByRole("status")).toContainText("—");
+  await page.keyboard.press("Home");
+  await expect(waits.getByRole("status")).toContainText("350μs");
+  await expect(waits.getByRole("status")).toContainText("1.5s");
+  await fleet.getByRole("radio", { name: "7 days" }).click();
+  await expect(fleet.getByRole("group", { name: "Statements over 7 days" })).toBeVisible();
+  await fleet.getByRole("button", { name: "Show as table" }).click();
+  const table = fleet.getByRole("table", { name: "Waiting for a connection" });
+  // Only the steps with something recorded, under the heading row.
+  await expect(table.getByRole("row")).toHaveCount(159);
+  await expect(table.getByRole("row").nth(1)).toContainText("400");
+});
+
 test("the growth charts follow the range buttons, and read out on hover and keys", async ({
   page,
 }) => {

@@ -29,6 +29,16 @@ Why administration works as it does. The how is in the [Administration pages](in
 
 - **The directories use `offset` and `limit`, not keyset parameters.** A page must follow whatever column sorts it, which the keyset parameters the rest of the API uses cannot. See [The dashboard](dashboard.md#directories).
 
+### Database latency
+
+- **Every statement is timed, rather than a probe.** A `SELECT 1` each heartbeat measures the network and an idle backend, and a handful of probes have no meaningful 99th percentile. What people wait on is the statements their requests run.
+- **Waits for a connection are charted apart.** A slow database and a pool with no connection to give look the same from a request, and are put right differently: the one in PostgreSQL, the other by `database_pool_size` or by whatever holds connections.
+- **The pool's check of a connection counts as waiting, not as a statement.** It is a round trip no caller asked for; among the statements it would be half of all that a one-statement request counts, and pull their median toward the bare round trip.
+- **Servers add fixed buckets to shared rows, rather than each writing its percentiles.** Percentiles cannot be averaged: the 99th percentile of a deployment is not the mean of its servers'. Counts in the same buckets can be added, and the percentile read from the sum is the deployment's.
+- **A row for each step of each range, written as it happens.** Every read is then a few dozen to 168 rows by key, whatever the number of servers, with nothing to add up when the dashboard asks. The cost is three small upserts a minute from each server.
+- **Kept in PostgreSQL, though it measures PostgreSQL.** The record survives restarts and needs nothing new to run. While the database is away nothing can be written; each server keeps up to an hour of minutes to write when it returns, so the slow minutes before an outage are not lost with it.
+- **A linear scale from zero.** The 99th percentile is often many times the median, which then lies near the baseline. A logarithmic scale would lift it, but makes a tenfold rise look like a step, and the table view and the tooltip give every figure exactly.
+
 ### Fleet heartbeats
 
 - **Servers report health through `aspen_fleet` rather than being scraped.** The heartbeat is how the dashboard sees every server without reaching their loopback metrics endpoints. Entries expire, so a server that stops drops out on its own.

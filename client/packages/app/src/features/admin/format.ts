@@ -21,6 +21,14 @@ function figures(locale: string) {
   const inUnit = (name: string) =>
     numberFormat(locale, { style: "unit", unit: name, unitDisplay: "narrow" });
 
+  const durationIn = (name: string) =>
+    numberFormat(locale, {
+      style: "unit",
+      unit: name,
+      unitDisplay: "narrow",
+      maximumSignificantDigits: 3,
+    });
+
   /** A count as a headline figure: exact below ten thousand, compact above (12.9K). */
   function headline(n: number): string {
     return n < 10_000 ? whole.format(n) : compact.format(n);
@@ -51,6 +59,16 @@ function figures(locale: string) {
   /** `part` of `whole` as a whole percentage; none of nothing is 0%. */
   function share(part: number, whole: number): string {
     return percent.format(whole > 0 ? part / whole : 0);
+  }
+
+  /** A duration given in microseconds, in the largest of µs, ms, and s that keeps it above one. */
+  function duration(micros: number): string {
+    if (micros < 1_000) {
+      return inUnit("microsecond").format(micros);
+    }
+    return micros < 1_000_000
+      ? durationIn("millisecond").format(micros / 1_000)
+      : durationIn("second").format(micros / 1_000_000);
   }
 
   function day(iso: string): string {
@@ -91,5 +109,5 @@ function figures(locale: string) {
     }
     return inUnit("minute").format(minutes);
   }
-  return { headline, count, rate, bytes, share, day, moment, ago, since };
+  return { headline, count, rate, bytes, duration, share, day, moment, ago, since };
 }

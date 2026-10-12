@@ -2,7 +2,7 @@
 //! started with it.
 
 use crate::aspen_config::{AspenConfig, load_config};
-use diesel_async::{AsyncPgConnection, pooled_connection::deadpool::Pool};
+use crate::database::Pool;
 use fred::prelude::ClientLike;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -22,7 +22,7 @@ pub enum Role {
 
 #[derive(Clone)]
 pub struct GlobalServerContext {
-    pub connection_pool: Pool<AsyncPgConnection>,
+    pub connection_pool: Pool,
     pub nats_context: Arc<async_nats::jetstream::Context>,
     pub valkey: fred::clients::Client,
     pub media_store: Arc<crate::media_store::MediaStore>,
@@ -151,14 +151,10 @@ impl GlobalServerContext {
                 .database_url
                 .parse()
                 .map_err(|e: crate::database::Error| config::ConfigError::Message(e.to_string()))?;
-            let pool = Pool::builder(database.manager())
-                .runtime(::deadpool::Runtime::Tokio1)
-                .wait_timeout(Some(Duration::from_secs(config.database_pool_wait_seconds)));
-            match config.database_pool_size {
-                Some(size) => pool.max_size(size),
-                None => pool,
-            }
-            .build()?
+            database.pool(
+                config.database_pool_size,
+                Some(Duration::from_secs(config.database_pool_wait_seconds)),
+            )?
         };
         let (settings, code_key, join_token_key) = {
             let mut conn = connection_pool.get().await?;
@@ -234,14 +230,16 @@ impl GlobalServerContext {
 }
 
 /// Starts the app's background tasks: the settings watcher, the voice report listener and the
-/// answerer of voice servers' token key requests, the fleet heartbeat, the push dispatcher, the
-/// plugins with their observers, and the job runner (`app::jobs`), which does the rest, making
-/// the federation and push keys where they are missing.
+/// answerer of voice servers' token key requests, the fleet heartbeat, the recorder of the
+/// database's latency, the push dispatcher, the plugins with their observers, and the job
+/// runner (`app::jobs`), which does the rest, making the federation and push keys where they are
+/// missing.
 pub async fn start_background_tasks(context: &GlobalServerContext) -> Result<(), crate::Error> {
     crate::deployment_settings::spawn_watcher(context.clone());
     crate::voice::spawn_report_listener(context.clone()).await?;
     crate::voice::spawn_token_key_answerer(context.clone()).await?;
     crate::fleet::spawn_heartbeat(context.clone());
+    crate::database_latency::spawn_recorder(context.clone());
     if context.config.federation.domain.is_some() {
         crate::federation::ensure_key(context.connection_pool.get().await?.as_mut()).await?;
     }

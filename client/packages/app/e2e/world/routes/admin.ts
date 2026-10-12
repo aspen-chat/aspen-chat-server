@@ -88,6 +88,7 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
       () => admin.revoke(path.split("/").pop() ?? ""),
     ],
     ["GET", /^\/admin\/fleet$/, admin.fleet],
+    ["GET", /^\/admin\/database-latency$/, () => admin.databaseLatency(url)],
     ["GET", /^\/deployment$/, admin.profile],
     [
       "PATCH",

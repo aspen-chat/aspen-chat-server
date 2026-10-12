@@ -43,9 +43,13 @@ aspen-chat-server settings set --upload-quota-gib N
 lasts:
 
 - **Sign-ins:** add API servers or CPU.
-- **Database connections:** check NATS first: every write holds its connection until NATS
-  acknowledges its event. Then raise `database_pool_size` within what PostgreSQL's
-  `max_connections` allows, or add API servers.
+- **Database connections:** the dashboard's Server fleet tab charts, under **Database latency**,
+  how long statements took and how long work waited for a connection. Waits rising while
+  statements stay as they were mean connections are held, not that the database is slow: check
+  NATS first, since every write holds its connection until NATS acknowledges its event, then
+  raise `database_pool_size` within what PostgreSQL's `max_connections` allows, or add API
+  servers. Statements rising too mean the database itself is slow: look at PostgreSQL's load,
+  its disk, and the network to it.
 - **Valkey:** bring it back, or raise its `maxmemory` when `INFO memory` shows it full. Those
   endpoints are refused until it answers (`[rate_limits] fail_closed`).
 

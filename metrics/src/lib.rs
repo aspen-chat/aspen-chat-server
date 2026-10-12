@@ -39,6 +39,11 @@ pub mod api {
     /// Database connections, by `state`: `size` (open), `available` (idle), `waiting` (tasks
     /// waiting for one), and `max`.
     pub const DB_POOL: &str = "aspen_db_pool_connections";
+    /// Time for one statement's round trip to the database on a pooled connection.
+    pub const DB_QUERY_DURATION: &str = "aspen_db_query_duration_seconds";
+    /// Time a task waited for a database connection from the pool, the check that an idle one
+    /// still answers included.
+    pub const DB_POOL_WAIT_DURATION: &str = "aspen_db_pool_wait_duration_seconds";
     /// Time for JetStream to acknowledge a published event.
     pub const EVENT_PUBLISH_DURATION: &str = "aspen_event_publish_duration_seconds";
     /// Event copies published, one per subject an event goes to.

@@ -144,6 +144,7 @@ endpoints = [
   "POST /admin/registration-invites",
   "DELETE /admin/registration-invites/{code}",
   "GET /admin/fleet",
+  "GET /admin/database-latency",
   "GET /admin/growth",
   "GET /admin/roles",
   "POST /admin/roles",

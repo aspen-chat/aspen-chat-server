@@ -145,7 +145,14 @@ export function Growth() {
                     series: m.admin[key],
                     range: m.admin.ranges[shown?.range ?? range],
                   })}
-                  points={series.points.map((p) => ({ at: p.at, value: p[key] }))}
+                  ats={series.points.map((p) => p.at)}
+                  series={[
+                    {
+                      name: m.admin[key],
+                      color: "var(--color-accent)",
+                      values: series.points.map((p) => p[key]),
+                    },
+                  ]}
                   describe={describe}
                   axisDate={axisDate(locale, series.unit)}
                   dimmed={loading}

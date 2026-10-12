@@ -78,6 +78,14 @@
   --color-folder-rose: light-dark(#ffe4e6, #5c1426);
   --color-folder-amber: light-dark(#fef3c7, #4a2c08);
   --color-folder-slate: light-dark(#e2e8f0, #26303d);
+
+  /* The lines of a chart with several series (`LineChart`), given in this order and the same
+     whatever the palette: hues that stay apart from one another for every kind of color vision,
+     on the raised surface charts are drawn on. They are named by a legend too, and the third
+     falls short of 3:1 on a light surface, so they are never the only way to tell lines apart. */
+  --color-chart-1: light-dark(#2a78d6, #3987e5);
+  --color-chart-2: light-dark(#eb6834, #d95926);
+  --color-chart-3: light-dark(#1baf7a, #199e70);
 }
 
 /* Aspen: the default palette. Neutral greys with a forest-green accent. */

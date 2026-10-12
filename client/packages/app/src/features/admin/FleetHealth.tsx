@@ -10,6 +10,7 @@ import type { ComponentType, ReactNode } from "react";
 import { useCallback } from "react";
 import { useSync, useIdWizard } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
+import { DatabaseLatency } from "@/features/admin/DatabaseLatency";
 import { useFigures } from "@/features/admin/format";
 import { useAdminRead } from "@/features/admin/useAdminRead";
 import { useMessages } from "@/i18n/context";
@@ -23,8 +24,8 @@ const FLEET_REFRESH_MS = 10_000;
 /**
  * The deployment's servers: every API server that has sent a heartbeat in the last half
  * minute, every registered voice server with its last report, every voice server reporting
- * under an id that is not registered, whose reports are ignored, and the memory NATS keeps the
- * deployment's streams in.
+ * under an id that is not registered, whose reports are ignored, how long the database has
+ * taken, and the memory NATS keeps the deployment's streams in.
  */
 export function FleetHealth() {
   const m = useMessages();
@@ -95,6 +96,7 @@ export function FleetHealth() {
           </ul>
         </>
       )}
+      <DatabaseLatency />
       {/* A deployment that predates the figures gives none; one whose NATS is away, `null`. */}
       {data?.natsMemory !== undefined && (
         <>

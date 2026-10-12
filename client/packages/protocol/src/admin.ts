@@ -41,6 +41,10 @@ export type CommunitySort = NonNullable<
   NonNullable<paths["/api/v1/admin/communities"]["get"]["parameters"]["query"]>["sort"]
 >;
 export type Growth = components["schemas"]["Growth"];
+export type DatabaseLatency = components["schemas"]["DatabaseLatency"];
+export type LatencyFigures = components["schemas"]["LatencyFigures"];
+export type DatabaseLatencyRange =
+  paths["/api/v1/admin/database-latency"]["get"]["parameters"]["query"]["range"];
 export type DeploymentRole = components["schemas"]["DeploymentRole"];
 export type DeploymentPermission = components["schemas"]["DeploymentPermission"];
 export type AdminAccess = components["schemas"]["AdminAccess"];
@@ -473,6 +477,17 @@ export class AdminApi {
   /** The health of the deployment's API and voice servers. */
   async fleet(): Promise<Fleet> {
     return adminRead(await this.#client.api.GET("/api/v1/admin/fleet"));
+  }
+
+  /**
+   * How long the database took at each step of `range`, on every server together; `null` from
+   * a deployment that predates the record.
+   */
+  async databaseLatency(range: DatabaseLatencyRange): Promise<DatabaseLatency | null> {
+    const result = await this.#client.api.GET("/api/v1/admin/database-latency", {
+      params: { query: { range } },
+    });
+    return result.response.status === 404 ? null : adminRead(result);
   }
 
   /** What the caller may do across the deployment, and the roles that give it. */

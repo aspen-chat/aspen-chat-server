@@ -10,7 +10,7 @@ The Administration Dashboard is where holders of deployment permissions run the 
 | The caller's deployment permissions | `RecordStore.deploymentPermissions` (topic `admin`); `useDeploymentPermissions`, `useDeploymentCan`, `useIsAdmin` |
 | Moderators' reads | `useAdminRead` |
 | Directories | `Directory` |
-| Growth charts | `LineChart` |
+| Growth and database latency charts | `LineChart` |
 | Deployment roles | `deploymentRoleRecords.ts` |
 
 ## Layout
@@ -31,7 +31,7 @@ The permissions are read at bootstrap from `GET /users/@me/admin` and kept by `d
 | Tab | Permission | Notes |
 | --- | --- | --- |
 | Totals and growth | `viewDashboard` | See [Figures](#figures) |
-| Fleet | `viewDashboard` | |
+| Fleet, with the database's latency | `viewDashboard` | See [Database latency](#database-latency) |
 | Registration invites | `manageRegistrationInvites` | See [Registration invites](#registration-invites) |
 | Email newsletter | `sendNewsletters` | `Newsletter.tsx`; see [Newsletter](#newsletter) |
 | Directories | `viewDashboard`, `moderateCommunities`, `banUsers`, `reviewReports`, or `removeContent` | See [Directories](#directories) |
@@ -46,7 +46,7 @@ The permissions are read at bootstrap from `GET /users/@me/admin` and kept by `d
 
 ## Reads and refreshing
 
-Moderators' reads are the server's answer of the moment, not cached records. `useAdminRead` holds them where they are shown. It also re-reads the fleet every ten seconds while the page is visible.
+Moderators' reads are the server's answer of the moment, not cached records. `useAdminRead` holds them where they are shown. It also re-reads the fleet every ten seconds while the page is visible, and the database's latency every minute, as often as the servers write it.
 
 ## Figures
 
@@ -56,17 +56,28 @@ Figures follow the dataviz rules:
 - tables with aligned figures for the fleet
 - every state shown as an icon and a word, never colour alone
 
+### Charts
+
+`LineChart` (hand-drawn SVG) draws one or several lines over time on one scale. Every chart has:
+
+- 2px lines
+- round-number gridlines from zero
+- a crosshair on hover and from the arrow keys, with a readout beside it of every line's value there
+- a table view carrying every value
+
+A single series also has a 10% wash under it and its latest value at the line's end, and is named by the chart's title. Several are named by a legend of line keys and in the readout, and take the colors `--color-chart-1` to `-3` in order, the same in every palette. A step without a value breaks its line.
+
 ### Growth charts
 
-Growth is two single-series line charts (`LineChart`, hand-drawn SVG) under one row of range buttons. Users and communities are charted apart. **Why:** one chart with two scales would invent a relation between them.
+Growth is two single-series charts under one row of range buttons. Users and communities are charted apart. **Why:** one chart with two scales would invent a relation between them.
 
-Each chart has:
+### Database latency
 
-- a 2px line over a 10% wash
-- round-number gridlines from zero
-- its latest value at the end
-- a crosshair and readout on hover and from the arrow keys
-- a table view carrying every value
+`DatabaseLatency.tsx`, in the Server fleet tab, is two charts under one row of range buttons (an hour, a day, seven days): statements, and waits for a database connection. Each draws the median and the 95th and 99th percentiles as three lines, in microseconds, shown in the largest of µs, ms, and s that fits (`useFigures().duration`).
+
+- The two are charted apart. **Why:** waits are usually far shorter than statements, and would lie flat on a shared scale.
+- A step in which no server recorded anything is a gap in the lines, and is left out of the table view.
+- A deployment that predates the record answers 404, and the section is not shown.
 
 ## Newsletter
 

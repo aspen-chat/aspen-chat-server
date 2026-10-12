@@ -8,6 +8,9 @@ description = "Connecting to PostgreSQL as `database_url` says, over TLS when it
 [dependencies]
 diesel = { version = "2.2.10", features = ["postgres"] }
 diesel-async = { version = "0.7.4", features = ["deadpool", "postgres"] }
+deadpool = { version = "0.12.2", default-features = false, features = ["managed", "rt_tokio_1"] }
+aspen_metrics = { version = "0.1.0", path = "../../metrics" }
+metrics = "0.24"
 futures-util = "0.3.31"
 percent-encoding = "2.3.1"
 openssl = "0.10.81"

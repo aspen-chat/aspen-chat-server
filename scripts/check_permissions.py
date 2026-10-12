@@ -1642,6 +1642,10 @@ def review_powers(world: World, check: Checks) -> None:
           status("GET", "/admin/file-transfers") == 403)
     stack.command("admin", "allow", "moderateCommunities")
     check("Moderate any community does", status("GET", "/admin/file-transfers") == 200)
+    latency = "/admin/database-latency?range=oneHour"
+    check("View dashboard reads the database's latency", status("GET", latency) == 200)
+    check("which no one without a deployment role does",
+          stack.status("GET", latency, token=world.member["token"]) == 403)
     access = stack.api("GET", "/users/@me/admin", token=reviewer["token"])
     check("and includes Remove content, which the caller is told",
           "removeContent" in access["permissions"] and any(

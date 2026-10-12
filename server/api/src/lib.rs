@@ -365,6 +365,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         ))
         .routes(routes!(admin::revoke_registration_invite))
         .routes(routes!(admin::get_fleet))
+        .routes(routes!(admin::get_database_latency))
         .routes(routes!(admin::get_growth))
         .routes(routes!(admin::ban_user, admin::lift_ban))
         .routes(routes!(report::list_report_categories))

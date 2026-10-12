@@ -28,7 +28,7 @@ Each `JobKind` decides what its job does, step by step (see [Steps](steps.md)). 
 | [`makeVideoPoster`](#makevideoposter) | as `makePicturePreview` | | Takes one video's poster. |
 | [`releaseHeldMessage`](#releaseheldmessage) | interactive | | Posts one held message. |
 | [`firePluginTimer`](#fireplugintimer) | normal | | Hands a plugin one of its timers. |
-| [`sweepExpired`](#sweepexpired) | maintenance | hourly | Deletes ended community bans, old plugin notices, and old voice failure reports. |
+| [`sweepExpired`](#sweepexpired) | maintenance | hourly | Deletes ended community bans, old plugin notices, old voice failure reports, and old steps of the database's latency. |
 | [`recountMembers`](#recountmembers) | maintenance | hourly | Recounts each community's members. |
 | [`recordStats`](#recordstats) | maintenance | hourly | Writes today's deployment totals. |
 | [`forgetIcon`](#forgeticon) | maintenance | | Deletes one icon nothing uses. |
@@ -103,10 +103,11 @@ A hundred of each a step.
 Hourly, a thousand of each a step (`jobs::upkeep::sweep_expired`), deletes:
 
 - community bans past their `until`,
-- plugins' notices past a week (`plugin::notice::KEPT`), and
-- voice failure reports older than `failure_window_seconds`.
+- plugins' notices past a week (`plugin::notice::KEPT`),
+- voice failure reports older than `failure_window_seconds`, and
+- steps of the database's latency older than their range reaches (see [Database latency](../administration/dashboard.md#database-latency)).
 
-Each goes through an index on when it ends or was made. Reads already leave out what it deletes.
+Each goes through an index on when it ends or was made, the latency steps through their table's key. Reads already leave out what it deletes.
 
 ### `recountMembers`
 

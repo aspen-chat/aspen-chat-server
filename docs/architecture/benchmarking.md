@@ -93,7 +93,7 @@ Both servers export Prometheus metrics on a loopback listener. A new metric gets
 ### API server
 
 - Requests by route and status, with latency. A route is the method and path template; a method that is not a standard HTTP one is named `OTHER`, so the series stay bounded.
-- Database pool connections.
+- Database pool connections, and how long statements and waits for a connection took: `aspen_db_query_duration_seconds`, `aspen_db_pool_wait_duration_seconds`.
 - Event publish latency, event streams, and deliveries.
 - The event feed's retained window, routing time, and dropped streams.
 - Rate limit checks and refusals.

@@ -227,6 +227,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    database_latency (step_seconds, at) {
+        step_seconds -> Int4,
+        at -> Timestamptz,
+        queries -> Array<Nullable<Int8>>,
+        pool_waits -> Array<Nullable<Int8>>,
+    }
+}
+
+diesel::table! {
     deployment_role (id) {
         id -> Uuid,
         name -> Text,
@@ -1121,6 +1130,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     community_role,
     community_user,
     custom_emoji,
+    database_latency,
     deployment_role,
     deployment_settings,
     deployment_stats,

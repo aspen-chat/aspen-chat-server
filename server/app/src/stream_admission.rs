@@ -18,8 +18,7 @@
 //! A refused stream is closed with `serverBusy`, naming [`BUSY_RETRY_AFTER`]; its client waits at
 //! least that long and spreads its return over as long again.
 
-use diesel_async::AsyncPgConnection;
-use diesel_async::pooled_connection::deadpool::Pool;
+use crate::database::Pool;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -34,7 +33,7 @@ pub const BUSY_RETRY_AFTER: Duration = Duration::from_secs(10);
 #[derive(Clone)]
 pub struct StreamAdmission {
     identifying: Arc<Semaphore>,
-    pool: Pool<AsyncPgConnection>,
+    pool: Pool,
 }
 
 /// One stream's place while it identifies, given back when dropped.
@@ -44,7 +43,7 @@ pub struct Identifying {
 
 impl StreamAdmission {
     /// `limit` places, or half of `pool`'s connections when `None`.
-    pub fn new(limit: Option<usize>, pool: Pool<AsyncPgConnection>) -> Self {
+    pub fn new(limit: Option<usize>, pool: Pool) -> Self {
         let places = limit.unwrap_or(pool.status().max_size / 2).max(1);
         Self {
             identifying: Arc::new(Semaphore::new(places.min(Semaphore::MAX_PERMITS))),
@@ -76,12 +75,9 @@ mod tests {
     use super::*;
 
     /// A pool of `size` that never connects: admission reads only its status.
-    fn pool(size: usize) -> Pool<AsyncPgConnection> {
+    fn pool(size: usize) -> Pool {
         let database: crate::database::Database = "postgres://127.0.0.1:1/none".parse().unwrap();
-        Pool::builder(database.manager())
-            .max_size(size)
-            .build()
-            .unwrap()
+        database.pool(Some(size), None).unwrap()
     }
 
     #[tokio::test(start_paused = true)]
