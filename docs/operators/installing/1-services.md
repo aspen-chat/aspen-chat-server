@@ -5,7 +5,7 @@ development, with passwords written into it. It is not a production setup.
 
 | Service | What it needs |
 | --- | --- |
-| PostgreSQL | Any supported version. The migrations create the `pg_trgm` extension, which the database's owner may do on PostgreSQL 13 and later. |
+| PostgreSQL | Any supported version. The migrations create the `pg_trgm` and `btree_gin` extensions, which the database's owner may do on PostgreSQL 13 and later. |
 | NATS | 2.10 or later, with JetStream on (`--jetstream`) and a token (`--auth <token>`). |
 | Valkey | Or anything that speaks the Redis protocol. A memory limit and no eviction: see [Valkey](#valkey). |
 | Object storage | Anything that speaks S3: SeaweedFS, Garage, MinIO, or AWS S3. See [Object storage](#object-storage). |

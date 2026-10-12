@@ -162,4 +162,5 @@ FROM "user" u WHERE u.id = cu."user";
 -- A community's members by the name it shows, a page at a time, and searched by any part of
 -- any of their names within the community alone.
 CREATE INDEX community_user_by_shown_name ON community_user (community, shown_name, "user");
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX community_user_search ON community_user USING gin (community, search_name gin_trgm_ops);

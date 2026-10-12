@@ -294,6 +294,7 @@ This ensures that if JetStream rejects or fails to acknowledge the event, the da
 1. **Create a migration**:
    - Scaffold with `cargo run -p aspen-migrate -- new <slug>`. This creates a `migrate/src/migrations/m<ts>_<slug>/{mod.rs,up.sql,down.sql}` directory AND registers the module (`pub mod m<ts>_<slug>;` in `migrations/mod.rs`, `&migrations::m<ts>_<slug>::M,` appended to `MIGRATIONS` in `registry.rs`).
    - Edit `up.sql` and `down.sql`. For migrations that need real Rust work (data backfills, calls into `MediaStore`, etc.), replace `mod.rs` with a hand-written `impl Migration` instead of `SqlMigration`.
+   - A migration that relies on a PostgreSQL extension (`pg_trgm` for `gin_trgm_ops`, `btree_gin` for a scalar column in a GIN index) runs `CREATE EXTENSION IF NOT EXISTS` for it before its first use, whether or not another migration creates it too. No `down.sql` drops an extension. A new extension is named in the PostgreSQL row of `docs/operators/installing/1-services.md`.
    - Apply it: `cargo run -p aspen-migrate -- up`.
    - Regenerate `server/schema/src/schema.rs`: `cd server/schema && diesel print-schema > src/schema.rs`.
 2. **Add the entity to `message_enum.rs`** — add a new variant to the `MessageEnumSource` enum with appropriate field annotations.

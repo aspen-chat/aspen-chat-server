@@ -36,6 +36,7 @@ CREATE TABLE federated_deployment (
     CONSTRAINT federated_deployment_contact_time CHECK ((public_key IS NULL) = (first_contact_at IS NULL))
 );
 
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX federated_deployment_domain_trgm ON federated_deployment USING gin (domain gin_trgm_ops);
 
 -- Which lists each deployment is on. A list is named by who it governs (users or bots), which
