@@ -34,14 +34,18 @@ type Count =
   | "customEmojiLimit"
   | "uploadQuotaGib"
   | "evidenceRetentionDays";
+type StreamSize = "eventStreamMib" | "voiceReportStreamMib";
+
+/** The least a stream may be set to hold, in MiB, as the server checks. */
+const MIN_STREAM_MIB = 16;
 
 /**
  * The deployment's policies, for holders of Manage deployment settings: whether registering
  * takes an invite, whether every account needs a second factor, email (an address to register, a
  * verified one to use the server, and a newsletter, each offered only where the server can send
  * mail), bots, the limits on communities and on uploads, how long deleted messages' files are
- * kept for reports, and files in calls. A change reaches every server at
- * once.
+ * kept for reports, files in calls, and how much of NATS's memory each stream takes. A change
+ * reaches every server at once.
  */
 export function DeploymentSettingsSection() {
   const m = useMessages();
@@ -116,6 +120,22 @@ function PoliciesForm({ initial }: { initial: DeploymentSettings }) {
       )}
     </NumberField>
   );
+  // Empty is automatic, which the server keeps as `null`.
+  const streamSize = (key: StreamSize, label: string) => (
+    <NumberField
+      value={draft[key] ?? NaN}
+      onChange={(value) => {
+        set(key, Number.isNaN(value) ? null : value);
+      }}
+      minValue={MIN_STREAM_MIB}
+      maxValue={MAX_COUNT}
+      formatOptions={{ maximumFractionDigits: 0 }}
+      className={fieldClass}
+    >
+      <Label className={labelClass}>{label}</Label>
+      <Input placeholder={m.admin.streamSizeAutomatic} className={inputClass + " sm:max-w-40"} />
+    </NumberField>
+  );
 
   return (
     <Form
@@ -178,6 +198,19 @@ function PoliciesForm({ initial }: { initial: DeploymentSettings }) {
           m.admin.evidenceRetentionDaysHint,
         )}
       </div>
+      {/* A deployment that predates the sizes gives none, and would refuse them. */}
+      {saved.eventStreamMib !== undefined && saved.voiceReportStreamMib !== undefined && (
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-2 text-sm font-semibold text-ink-muted">
+            {m.admin.streamsHeading}
+          </legend>
+          <p className={hintClass}>{m.admin.streamsHint}</p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {streamSize("eventStreamMib", m.admin.eventStreamMib)}
+            {streamSize("voiceReportStreamMib", m.admin.voiceReportStreamMib)}
+          </div>
+        </fieldset>
+      )}
       {error !== null && (
         <p role="alert" className={alertClass}>
           {error}

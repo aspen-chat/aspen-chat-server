@@ -104,7 +104,7 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
     [
       "PATCH",
       /^\/admin\/settings$/,
-      () => admin.updateSettings(request.postDataJSON() as Record<string, number | boolean>),
+      () => admin.updateSettings(request.postDataJSON() as Record<string, number | boolean | null>),
     ],
     ["GET", /^\/admin\/federation\/deployments$/, () => admin.federation.list(url)],
     [

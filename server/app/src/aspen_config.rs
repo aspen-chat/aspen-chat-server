@@ -512,6 +512,10 @@ pub struct NatsUser {
 #[serde(deny_unknown_fields)]
 pub struct NatsConfig {
     pub tls: Option<TlsFiles>,
+    /// The NATS server's monitoring port (`http://nats:8222`), where the server says how much
+    /// memory its streams may reserve (`app::nats_memory`). Left out, the streams are sized
+    /// without knowing, unless NATS limits this deployment's account.
+    pub monitor_url: Option<String>,
 }
 
 /// `[valkey]`: how Valkey is reached besides its address.
@@ -651,6 +655,15 @@ impl AspenConfig {
         if let Some(tls) = &self.nats.tls {
             tls.identity("nats.tls")
                 .map_err(config::ConfigError::Message)?;
+        }
+        if let Some(monitor) = &self.nats.monitor_url
+            && !url::Url::parse(monitor)
+                .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.has_host())
+        {
+            return Err(config::ConfigError::Message(format!(
+                "[nats] monitor_url: {monitor:?} is not an http or https address; give the NATS \
+                 server's monitoring port, as http://localhost:8222"
+            )));
         }
         match (&self.nats_user, &self.nats_auth_token) {
             (Some(_), None) | (None, Some(_)) => Ok(()),
@@ -1257,7 +1270,8 @@ mod tests {
 
     /// Certificate files for a service are refused where its address would not use them, and a
     /// client certificate without its key; Valkey's password travels only encrypted, except to
-    /// this machine; and `[nats]` takes only `tls`, a NATS user being `[nats_user]`.
+    /// this machine; and `[nats]` takes `tls` and an http or https `monitor_url`, a NATS user
+    /// being `[nats_user]`.
     #[test]
     fn tls_files_go_with_tls() {
         let parse = |toml: &str| -> Result<AspenConfig, String> {
@@ -1299,6 +1313,9 @@ mod tests {
         assert!(
             parse("valkey_url = \"redis://x\"\n[nats]\nuser = \"a\"\npassword = \"p\"").is_err()
         );
+        assert!(nats("[nats]\nmonitor_url = \"http://nats.internal:8222\"").is_ok());
+        assert!(nats("[nats]\nmonitor_url = \"nats://nats.internal:4222\"").is_err());
+        assert!(nats("[nats]\nmonitor_url = \"nats.internal:8222\"").is_err());
 
         let s3 = |toml: &str| {
             parse(&format!("valkey_url = \"redis://x\"\n[media.s3]\n{toml}"))

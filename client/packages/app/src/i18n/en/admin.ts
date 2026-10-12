@@ -59,6 +59,35 @@ export const admin = {
   unregisteredVoiceServerFix:
     "Set id in its voice_server.toml to the id of the registered server it should be, shown in the table above, and restart it. A new voice server is registered first, here or with aspen-chat-server voice-servers add, which prints its id.",
   disabled: "Disabled",
+  natsMemory: "NATS memory",
+  natsMemoryUnread: "NATS did not answer, so its memory cannot be shown.",
+  natsMemoryOfServer:
+    "{reserved} of {limit} reserved by every stream on the NATS server, holding {used}.",
+  natsMemoryOfAccount:
+    "{reserved} of {limit} reserved by this deployment's NATS account, holding {used}.",
+  natsMemoryNoLimit:
+    "{reserved} reserved by this deployment's NATS account, holding {used}. NATS does not tell an account how much the server has: name its monitoring port as monitor_url under [nats] in aspen.toml to see the limit here and size automatic streams to it.",
+  natsMemoryHint:
+    "A stream reserves its whole size when it is made, whatever it holds. Sizes are set under Settings.",
+  natsMonitorUnreachable:
+    "The NATS monitoring port named in aspen.toml (monitor_url under [nats]) is not answering, so these are this deployment's account's figures, and automatic streams keep the sizes they have. Check the address, and that NATS serves monitoring there.",
+  natsStreams: "Streams",
+  natsStream: "Stream",
+  natsEventStream: "Events",
+  natsEventStreamHint: "The last minute of events",
+  natsVoiceReportStream: "Voice reports",
+  natsVoiceReportStreamHint: "Voice servers' reports not yet applied",
+  natsStreamHolds: "Holds",
+  natsStreamHoldsOf: "{bytes} ({percent})",
+  natsStreamSize: "Size",
+  natsStreamAutomatic: "{size}, automatic",
+  natsStreamSet: "{size}, set",
+  natsStreamMessages: "Messages",
+  natsStreamOldest: "Oldest",
+  natsStreamEmpty: "Empty",
+  natsStreamMissing: "NATS is without this stream. The server makes it again within moments.",
+  natsEventStreamFull:
+    "The events stream is nearly full. Past its size its oldest events go before their minute is up, and apps that reconnect reload instead of catching up. Give it a larger size under Settings, or more memory in NATS (max_memory_store).",
   invites: "Registration invites",
   invitesHint: "Anyone with a usable invite can create an account.",
   invitesHintOpen:
@@ -250,6 +279,12 @@ export const admin = {
   evidenceRetentionDays: "Days deleted messages' files are kept for reports",
   evidenceRetentionDaysHint:
     "Kept out of everyone's reach for reviewing reports, and as long again after a report about them closes. 0 keeps them for good.",
+  streamsHeading: "NATS memory",
+  streamsHint:
+    "NATS keeps these in memory, and reserves a stream's whole size when it changes. Leave a size empty to fit it to what NATS has. A stream made smaller lets its oldest go at once. The server fleet shows what each holds.",
+  eventStreamMib: "MiB for the last minute of events",
+  voiceReportStreamMib: "MiB for voice servers' reports",
+  streamSizeAutomatic: "Automatic",
   fileTransfersAllowed: "People may send files in calls",
   fileTransfersAllowedHint:
     "Off, no one may, whatever a channel's permissions say. Calls in progress follow at once.",

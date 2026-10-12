@@ -1,4 +1,10 @@
-import type { ApiServerHealth, UnregisteredVoiceServer, VoiceServerHealth } from "@aspen/protocol";
+import type {
+  ApiServerHealth,
+  NatsMemory,
+  NatsStreamMemory,
+  UnregisteredVoiceServer,
+  VoiceServerHealth,
+} from "@aspen/protocol";
 import { CheckCircleIcon, ProhibitIcon, WarningIcon, XCircleIcon } from "@phosphor-icons/react";
 import type { ComponentType, ReactNode } from "react";
 import { useCallback } from "react";
@@ -16,8 +22,9 @@ const FLEET_REFRESH_MS = 10_000;
 
 /**
  * The deployment's servers: every API server that has sent a heartbeat in the last half
- * minute, every registered voice server with its last report, and every voice server reporting
- * under an id that is not registered, whose reports are ignored.
+ * minute, every registered voice server with its last report, every voice server reporting
+ * under an id that is not registered, whose reports are ignored, and the memory NATS keeps the
+ * deployment's streams in.
  */
 export function FleetHealth() {
   const m = useMessages();
@@ -88,7 +95,134 @@ export function FleetHealth() {
           </ul>
         </>
       )}
+      {/* A deployment that predates the figures gives none; one whose NATS is away, `null`. */}
+      {data?.natsMemory !== undefined && (
+        <>
+          <h3 className="text-sm font-semibold text-ink-muted">{m.admin.natsMemory}</h3>
+          {data.natsMemory === null ? (
+            <p className="text-sm text-ink-muted">{m.admin.natsMemoryUnread}</p>
+          ) : (
+            <NatsMemoryFigures memory={data.natsMemory} now={now} />
+          )}
+        </>
+      )}
     </Section>
+  );
+}
+
+/** The share of its size past which the events stream is called nearly full. */
+const NEARLY_FULL = 0.9;
+
+function NatsMemoryFigures({ memory, now }: { memory: NatsMemory; now: number }) {
+  const m = useMessages();
+  const { bytes } = useFigures();
+  const figures = {
+    reserved: bytes(memory.reservedBytes),
+    used: bytes(memory.usedBytes),
+    limit: memory.limitBytes == null ? "" : bytes(memory.limitBytes),
+  };
+  const events = memory.eventStream ?? null;
+  return (
+    <>
+      <p className="text-sm">
+        {format(
+          memory.limitBytes == null
+            ? m.admin.natsMemoryNoLimit
+            : memory.scope === "server"
+              ? m.admin.natsMemoryOfServer
+              : m.admin.natsMemoryOfAccount,
+          figures,
+        )}
+        <span className="block text-ink-muted">{m.admin.natsMemoryHint}</span>
+      </p>
+      {memory.monitorUnreachable && <Caution>{m.admin.natsMonitorUnreachable}</Caution>}
+      {events !== null && events.bytes >= events.maxBytes * NEARLY_FULL && (
+        <Caution>{m.admin.natsEventStreamFull}</Caution>
+      )}
+      <Table
+        label={m.admin.natsStreams}
+        headings={[
+          m.admin.natsStream,
+          m.admin.natsStreamHolds,
+          m.admin.natsStreamSize,
+          m.admin.natsStreamMessages,
+          m.admin.natsStreamOldest,
+        ]}
+        numeric={[1, 2, 3]}
+      >
+        <NatsStreamRow
+          name={m.admin.natsEventStream}
+          hint={m.admin.natsEventStreamHint}
+          stream={events}
+          now={now}
+        />
+        <NatsStreamRow
+          name={m.admin.natsVoiceReportStream}
+          hint={m.admin.natsVoiceReportStreamHint}
+          stream={memory.voiceReportStream ?? null}
+          now={now}
+        />
+      </Table>
+    </>
+  );
+}
+
+function NatsStreamRow({
+  name,
+  hint,
+  stream,
+  now,
+}: {
+  name: string;
+  hint: string;
+  stream: NatsStreamMemory | null;
+  now: number;
+}) {
+  const m = useMessages();
+  const { bytes, count, share, ago } = useFigures();
+  const title = (
+    <Cell>
+      <span className="font-medium">{name}</span>
+      <span className="block text-xs text-ink-muted">{hint}</span>
+    </Cell>
+  );
+  if (stream === null) {
+    return (
+      <tr>
+        {title}
+        <td colSpan={4} className="px-3 py-2 align-top text-ink-muted">
+          {m.admin.natsStreamMissing}
+        </td>
+      </tr>
+    );
+  }
+  return (
+    <tr>
+      {title}
+      <Cell numeric>
+        {format(m.admin.natsStreamHoldsOf, {
+          bytes: bytes(stream.bytes),
+          percent: share(stream.bytes, stream.maxBytes),
+        })}
+      </Cell>
+      <Cell numeric>
+        {format(stream.automatic ? m.admin.natsStreamAutomatic : m.admin.natsStreamSet, {
+          size: bytes(stream.maxBytes),
+        })}
+      </Cell>
+      <Cell numeric>{count(stream.messages)}</Cell>
+      <Cell>{stream.oldestAt == null ? m.admin.natsStreamEmpty : ago(stream.oldestAt, now)}</Cell>
+    </tr>
+  );
+}
+
+/** Something about the fleet an operator should act on. */
+function Caution({ children }: { children: ReactNode }) {
+  return (
+    <p className="flex gap-2 rounded-lg border border-line bg-surface-raised px-3 py-2 text-sm">
+      <WarningIcon size={16} weight="fill" aria-hidden className="mt-0.5 shrink-0 text-away" />
+      <span className="min-w-0">{children}</span>
+    </p>
   );
 }
 

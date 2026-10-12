@@ -17,7 +17,9 @@
 //! What a change does to what is already open is done once, by whoever made it, after it
 //! commits ([`after_change`]): calls are rechecked when file transfers are turned on or off,
 //! and the users of other deployments a closing immigration gate no longer admits are signed
-//! out. Each server's open event streams follow their copy: a stream whose account owes a
+//! out. A stream's size is the one exception: NATS is asked for it inside the change's
+//! transaction (`app::nats_memory::fit`), so that a size it refuses is never saved. Each
+//! server's open event streams follow their copy: a stream whose account owes a
 //! second factor the deployment now requires is closed (`api::event_stream`).
 
 use crate::IconId;
@@ -92,6 +94,11 @@ pub struct DeploymentSettings {
     pub email_verification_required: bool,
     /// Whether the deployment has a newsletter its users may subscribe to.
     pub newsletter_enabled: bool,
+    /// How many MiB of NATS's memory the events of the last minute may take; `None` sizes
+    /// their stream to what NATS has (`app::nats_memory`).
+    pub event_stream_mib: Option<u32>,
+    /// The same for the voice servers' reports not yet applied.
+    pub voice_report_stream_mib: Option<u32>,
     pub federation: FederationPolicy,
 }
 
@@ -122,6 +129,8 @@ struct SettingsRow {
     email_required: bool,
     email_verification_required: bool,
     newsletter_enabled: bool,
+    event_stream_mib: Option<i32>,
+    voice_report_stream_mib: Option<i32>,
     users_emigration: Gate,
     users_immigration: Gate,
     users_shared_list: bool,
@@ -153,6 +162,8 @@ impl From<SettingsRow> for DeploymentSettings {
             email_required: row.email_required,
             email_verification_required: row.email_verification_required,
             newsletter_enabled: row.newsletter_enabled,
+            event_stream_mib: row.event_stream_mib.map(count),
+            voice_report_stream_mib: row.voice_report_stream_mib.map(count),
             federation: FederationPolicy {
                 users: MigrationRules {
                     emigration: row.users_emigration,
@@ -197,6 +208,10 @@ pub struct SettingsChange {
     pub email_required: Option<bool>,
     pub email_verification_required: Option<bool>,
     pub newsletter_enabled: Option<bool>,
+    #[diesel(skip_update)]
+    pub event_stream_mib: Option<Option<u32>>,
+    #[diesel(skip_update)]
+    pub voice_report_stream_mib: Option<Option<u32>>,
     pub users_emigration: Option<Gate>,
     pub users_immigration: Option<Gate>,
     pub users_shared_list: Option<bool>,
@@ -263,6 +278,8 @@ impl SettingsChange {
             email_required => next.email_required,
             email_verification_required => next.email_verification_required,
             newsletter_enabled => next.newsletter_enabled,
+            event_stream_mib => next.event_stream_mib,
+            voice_report_stream_mib => next.voice_report_stream_mib,
             users_emigration => users.emigration,
             users_immigration => users.immigration,
             users_shared_list => users.shared_list,
@@ -319,6 +336,17 @@ impl SettingsCache {
 pub async fn load(conn: &mut AsyncPgConnection) -> crate::Result<DeploymentSettings> {
     Ok(deployment_settings::table
         .select(SettingsRow::as_select())
+        .first(conn)
+        .await?
+        .into())
+}
+
+/// The settings as the row holds them, with the row locked until the transaction ends, so that
+/// what is done with them is done before any change to them.
+pub(crate) async fn load_locked(conn: &mut AsyncPgConnection) -> crate::Result<DeploymentSettings> {
+    Ok(deployment_settings::table
+        .select(SettingsRow::as_select())
+        .for_update()
         .first(conn)
         .await?
         .into())
@@ -410,7 +438,14 @@ pub async fn update_as(
             .await?;
         }
     }
-    let changed = update(state, conn.as_mut(), crate::email::available(state), change).await?;
+    let changed = update(
+        state,
+        conn.as_mut(),
+        crate::email::available(state),
+        &state.nats_monitor,
+        change,
+    )
+    .await?;
     state.settings.offer(changed.clone());
     drop(conn);
     read_with_icon(state).await
@@ -420,11 +455,13 @@ pub async fn update_as(
 /// with them as they now are. A display name is trimmed and from 1 to 64 characters; an icon
 /// must be one whose upload is confirmed; a gate opens only on a deployment with a domain, and a
 /// shared list needs both of its gates to read the same kind of list; what needs mail turns on
-/// only where `email_available`, `[email]` being configured.
+/// only where `email_available`, `[email]` being configured; a stream's size is one NATS, read
+/// through `monitor`, has the memory for, and the streams are that size before this answers.
 pub async fn update(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     email_available: bool,
+    monitor: &crate::nats_memory::Monitor,
     mut change: SettingsChange,
 ) -> crate::Result<DeploymentSettings> {
     if let Some(Some(name)) = &change.display_name {
@@ -444,12 +481,7 @@ pub async fn update(
     let (before, after) = conn
         .transaction(|conn| {
             async move {
-                let before: DeploymentSettings = deployment_settings::table
-                    .select(SettingsRow::as_select())
-                    .for_update()
-                    .first(conn)
-                    .await?
-                    .into();
+                let before = load_locked(conn).await?;
                 let wanted = change.applied_to(&before);
                 validate(&wanted)?;
                 let turns_on = |now: bool, then: bool| now && !then;
@@ -479,6 +511,10 @@ pub async fn update(
                         deployment_settings::upload_quota_gib.eq(count(wanted.upload_quota_gib)),
                         deployment_settings::evidence_retention_days
                             .eq(count(wanted.evidence_retention_days)),
+                        deployment_settings::event_stream_mib
+                            .eq(wanted.event_stream_mib.map(count)),
+                        deployment_settings::voice_report_stream_mib
+                            .eq(wanted.voice_report_stream_mib.map(count)),
                         deployment_settings::revision.eq(deployment_settings::revision + 1),
                     ))
                     .returning(deployment_settings::revision)
@@ -493,6 +529,12 @@ pub async fn update(
                         .execute(conn)
                         .await?;
                 }
+                // Last but the doorbell, so that little can fail after the streams change; a
+                // failure that does leaves them to the next `fitStreams`.
+                let sizes = crate::nats_memory::Wanted::from(&wanted);
+                if sizes != crate::nats_memory::Wanted::from(&before) {
+                    crate::nats_memory::fit(state.nats(), monitor, sizes, false).await?;
+                }
                 ring(state.nats(), revision).await?;
                 Ok::<_, crate::Error>((before, DeploymentSettings { revision, ..wanted }))
             }
@@ -506,6 +548,7 @@ pub async fn update(
 /// Checks the settings as a change would leave them.
 fn validate(settings: &DeploymentSettings) -> crate::Result<()> {
     let largest = i32::MAX.unsigned_abs();
+    let sizes = [settings.event_stream_mib, settings.voice_report_stream_mib];
     if [
         settings.bots_max_per_user,
         settings.everyone_mention_limit,
@@ -514,11 +557,22 @@ fn validate(settings: &DeploymentSettings) -> crate::Result<()> {
         settings.evidence_retention_days,
     ]
     .into_iter()
+    .chain(sizes.into_iter().flatten())
     .any(|count| count > largest)
     {
         return Err(crate::Error::Validation(t!(
             "settingCountTooLarge",
             max = largest
+        )));
+    }
+    if sizes
+        .into_iter()
+        .flatten()
+        .any(|mib| mib < crate::nats_memory::MIN_STREAM_MIB)
+    {
+        return Err(crate::Error::Validation(t!(
+            "streamSizeTooSmall",
+            min = crate::nats_memory::MIN_STREAM_MIB
         )));
     }
     let policy = &settings.federation;

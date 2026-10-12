@@ -34,9 +34,6 @@ use voice_protocol::control::{
 /// for any outage of the API servers to be over; a snapshot repairs whatever is let go.
 const REPORT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// The most the stream holds, its oldest reports going first past it.
-const REPORT_MAX_BYTES: i64 = 1024 * 1024 * 1024;
-
 /// How long a report may go unacknowledged before it is handed out again: an API server that
 /// stopped while applying it holds up its lane this long.
 const ACK_WAIT: Duration = Duration::from_secs(10);
@@ -70,24 +67,28 @@ impl Kind {
     }
 }
 
-/// Makes the report stream, and starts reading every lane.
+/// The stream voice servers publish their reports to, which keeps each until an API server has
+/// applied it, for at most [`REPORT_MAX_AGE`], and holds at most `max_bytes`, its oldest going
+/// first past it (`app::nats_memory` chooses the size).
+pub fn stream_config(max_bytes: u64) -> jetstream::stream::Config {
+    jetstream::stream::Config {
+        name: REPORT_STREAM.to_string(),
+        subjects: vec![
+            format!("{REPORT_SUBJECT_ROOT}.*.*"),
+            format!("{SPEAKING_SUBJECT_ROOT}.*.*"),
+        ],
+        retention: RetentionPolicy::WorkQueue,
+        storage: StorageType::Memory,
+        max_age: REPORT_MAX_AGE,
+        max_bytes: i64::try_from(max_bytes).unwrap_or(i64::MAX),
+        discard: DiscardPolicy::Old,
+        ..Default::default()
+    }
+}
+
+/// Starts reading every lane of the report stream, which the server made as it started
+/// (`app::nats_memory::fit`).
 pub async fn spawn_report_listener(state: GlobalServerContext) -> crate::Result<()> {
-    state
-        .nats_context
-        .create_or_update_stream(jetstream::stream::Config {
-            name: REPORT_STREAM.to_string(),
-            subjects: vec![
-                format!("{REPORT_SUBJECT_ROOT}.*.*"),
-                format!("{SPEAKING_SUBJECT_ROOT}.*.*"),
-            ],
-            retention: RetentionPolicy::WorkQueue,
-            storage: StorageType::Memory,
-            max_age: REPORT_MAX_AGE,
-            max_bytes: REPORT_MAX_BYTES,
-            discard: DiscardPolicy::Old,
-            ..Default::default()
-        })
-        .await?;
     let stream = state.nats_context.get_stream(REPORT_STREAM).await?;
     let applying = Arc::new(Semaphore::new(
         (state.connection_pool.status().max_size / 2).max(1),

@@ -67,6 +67,13 @@ pub struct SettingsArgs {
     /// Whether the deployment has a newsletter its users may subscribe to.
     #[clap(long)]
     newsletter_enabled: Option<bool>,
+    /// How many MiB of NATS's memory the events of the last minute may take, at least 16, or
+    /// `auto` to size their stream to what NATS has.
+    #[clap(long)]
+    event_stream_mib: Option<StreamSize>,
+    /// The same for the voice servers' reports not yet applied.
+    #[clap(long)]
+    voice_report_stream_mib: Option<StreamSize>,
     /// Whether this deployment's users may use others: closed, open, allowList, or blockList.
     #[clap(long)]
     users_emigration: Option<Gate>,
@@ -96,6 +103,32 @@ pub struct SettingsArgs {
     bots_immigration_invite_required: Option<bool>,
 }
 
+/// A stream's size as the terminal takes and prints it: a count of MiB, or `auto`.
+#[derive(Debug, Clone, Copy)]
+struct StreamSize(Option<u32>);
+
+const AUTOMATIC: &str = "auto";
+
+impl std::str::FromStr for StreamSize {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text == AUTOMATIC {
+            return Ok(Self(None));
+        }
+        text.parse().map(|mib| Self(Some(mib)))
+    }
+}
+
+impl Serialize for StreamSize {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            Some(mib) => serializer.serialize_u32(mib),
+            None => serializer.serialize_str(AUTOMATIC),
+        }
+    }
+}
+
 impl From<SettingsArgs> for SettingsChange {
     fn from(args: SettingsArgs) -> Self {
         Self {
@@ -115,6 +148,8 @@ impl From<SettingsArgs> for SettingsChange {
             email_required: args.email_required,
             email_verification_required: args.email_verification_required,
             newsletter_enabled: args.newsletter_enabled,
+            event_stream_mib: args.event_stream_mib.map(|size| size.0),
+            voice_report_stream_mib: args.voice_report_stream_mib.map(|size| size.0),
             users_emigration: args.users_emigration,
             users_immigration: args.users_immigration,
             users_shared_list: args.users_shared_list,
@@ -145,6 +180,8 @@ impl From<&DeploymentSettings> for SettingsArgs {
             email_required: Some(settings.email_required),
             email_verification_required: Some(settings.email_verification_required),
             newsletter_enabled: Some(settings.newsletter_enabled),
+            event_stream_mib: Some(StreamSize(settings.event_stream_mib)),
+            voice_report_stream_mib: Some(StreamSize(settings.voice_report_stream_mib)),
             users_emigration: Some(users.emigration),
             users_immigration: Some(users.immigration),
             users_shared_list: Some(users.shared_list),
@@ -189,10 +226,12 @@ pub async fn settings(config: &AspenConfig, command: SettingsCommand) -> Result<
                 .await
                 .map_err(fail)?;
             let publisher = publisher(config).await?;
+            let monitor = aspen_app::nats_memory::Monitor::new(config).map_err(fail)?;
             let (changed, noted) = noting(deployment_settings::update(
                 &publisher,
                 &mut conn,
                 config.email.is_some(),
+                &monitor,
                 args.into(),
             ))
             .await;

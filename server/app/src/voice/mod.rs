@@ -14,7 +14,7 @@ mod ring;
 mod servers;
 mod sessions;
 
-pub use reports::spawn_report_listener;
+pub use reports::{spawn_report_listener, stream_config as report_stream_config};
 use ring::clear_spent_rings;
 pub use ring::{decline_ring, read_channels_rings};
 use servers::reap_silent_servers;

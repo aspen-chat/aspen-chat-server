@@ -14,6 +14,7 @@ function figures(locale: string) {
   const whole = numberFormat(locale);
   const compact = numberFormat(locale, { notation: "compact", maximumFractionDigits: 1 });
   const oneDecimal = numberFormat(locale, { maximumFractionDigits: 1 });
+  const percent = numberFormat(locale, { style: "percent", maximumFractionDigits: 0 });
   const date = dateFormat(locale, { dateStyle: "medium" });
   const dateTime = dateFormat(locale, { dateStyle: "medium", timeStyle: "short" });
   const relative = relativeTimeFormat(locale, { numeric: "auto" });
@@ -45,6 +46,11 @@ function figures(locale: string) {
       unit += 1;
     }
     return `${oneDecimal.format(value)} ${units[unit] ?? "B"}`;
+  }
+
+  /** `part` of `whole` as a whole percentage; none of nothing is 0%. */
+  function share(part: number, whole: number): string {
+    return percent.format(whole > 0 ? part / whole : 0);
   }
 
   function day(iso: string): string {
@@ -85,5 +91,5 @@ function figures(locale: string) {
     }
     return inUnit("minute").format(minutes);
   }
-  return { headline, count, rate, bytes, day, moment, ago, since };
+  return { headline, count, rate, bytes, share, day, moment, ago, since };
 }

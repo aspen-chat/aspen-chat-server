@@ -182,6 +182,11 @@ pub struct DeploymentSettings {
     /// Whether this server can send mail (`[email]` in `aspen.toml`), without which the three
     /// above cannot be turned on.
     pub email_available: bool,
+    /// How many MiB of NATS's memory the events of the last minute may take, at least 16;
+    /// `null` sizes their stream to what NATS has. `GET /admin/fleet` gives the size in use.
+    pub event_stream_mib: Option<u32>,
+    /// The same for the voice servers' reports not yet applied.
+    pub voice_report_stream_mib: Option<u32>,
 }
 
 impl DeploymentSettings {
@@ -203,6 +208,8 @@ impl DeploymentSettings {
             email_verification_required: settings.email_verification_required,
             newsletter_enabled: settings.newsletter_enabled,
             email_available: aspen_app::email::available(state),
+            event_stream_mib: settings.event_stream_mib,
+            voice_report_stream_mib: settings.voice_report_stream_mib,
         }
     }
 }
@@ -224,6 +231,16 @@ pub struct DeploymentSettingsUpdateRequest {
     pub email_required: Option<bool>,
     pub email_verification_required: Option<bool>,
     pub newsletter_enabled: Option<bool>,
+    /// At least 16, and no more than NATS has memory for, or the change is refused with
+    /// `validation`; `null` for automatic. The stream is that size before this answers, and
+    /// one made smaller lets its oldest events go at once.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(nullable)]
+    pub event_stream_mib: Option<Option<u32>>,
+    /// As `eventStreamMib`.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(nullable)]
+    pub voice_report_stream_mib: Option<Option<u32>>,
 }
 
 impl From<DeploymentSettingsUpdateRequest> for SettingsChange {
@@ -241,6 +258,8 @@ impl From<DeploymentSettingsUpdateRequest> for SettingsChange {
             email_required: request.email_required,
             email_verification_required: request.email_verification_required,
             newsletter_enabled: request.newsletter_enabled,
+            event_stream_mib: request.event_stream_mib,
+            voice_report_stream_mib: request.voice_report_stream_mib,
             ..Self::default()
         }
     }

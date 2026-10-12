@@ -75,6 +75,25 @@ use tracing::{error, info, warn};
 /// first connection replays.
 pub const MAX_EVENT_AGE: Duration = Duration::from_secs(60);
 
+/// The stream every event is published to, which holds the last [`MAX_EVENT_AGE`] of them and at
+/// most `max_bytes`, its oldest going first past either (`app::nats_memory` chooses the size).
+pub fn stream_config(max_bytes: u64) -> jetstream::stream::Config {
+    jetstream::stream::Config {
+        name: ASPEN_NATS_STREAM_NAME.to_string(),
+        subjects: vec![format!("{}.>", crate::events::SUBJECT_ROOT)],
+        discard: jetstream::stream::DiscardPolicy::Old,
+        max_messages: 1_000_000_000,
+        max_bytes: i64::try_from(max_bytes).unwrap_or(i64::MAX),
+        max_age: MAX_EVENT_AGE,
+        storage: jetstream::stream::StorageType::Memory,
+        consumer_limits: Some(jetstream::stream::ConsumerLimits {
+            max_ack_pending: 1000,
+            inactive_threshold: Duration::from_secs(60),
+        }),
+        ..Default::default()
+    }
+}
+
 /// How long a starting server waits for the retained events before serving connections with
 /// what it has.
 const LOAD_DEADLINE: Duration = Duration::from_secs(10);

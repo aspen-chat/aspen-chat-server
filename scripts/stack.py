@@ -271,17 +271,25 @@ class Stack:
         process = subprocess.Popen(args, cwd=self.work, env=clean_env(), stdout=log, stderr=subprocess.STDOUT)
         self.processes.append((process, self.work / log_name))
 
+    def nats_arguments(self) -> list[str]:
+        """What `docker run` takes after the container's name and its client port: the image and
+        how NATS is started, after any options of the container's own."""
+        return [NATS_IMAGE, "--jetstream", "--auth", "aspen_test"]
+
+    def start_nats(self) -> None:
+        subprocess.run(
+            ["docker", "run", "-d", "--rm", "--name", self.nats, "-p", f"127.0.0.1:{self.ports.nats}:4222",
+             *self.nats_arguments()],
+            check=True, capture_output=True,
+        )
+        wait_for("NATS", lambda: socket.create_connection(("127.0.0.1", self.ports.nats), timeout=1).close() is None, 30)
+
     def _start(self) -> None:
         for binary in ["aspen-chat-server", "voice_server", "aspen-migrate"]:
             if not (self.bins / binary).exists():
                 raise Failed(f"{self.bins / binary} does not exist")
         psql(f"CREATE DATABASE {self.database}")
-        subprocess.run(
-            ["docker", "run", "-d", "--rm", "--name", self.nats, "-p", f"127.0.0.1:{self.ports.nats}:4222",
-             NATS_IMAGE, "--jetstream", "--auth", "aspen_test"],
-            check=True, capture_output=True,
-        )
-        wait_for("NATS", lambda: socket.create_connection(("127.0.0.1", self.ports.nats), timeout=1).close() is None, 30)
+        self.start_nats()
         self._write_configs()
         migrated = subprocess.run(
             [str(self.bins / "aspen-migrate"), "up", "--database-url", self.database_url],

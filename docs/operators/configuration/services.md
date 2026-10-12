@@ -13,6 +13,7 @@ Where the API server finds PostgreSQL, NATS, and Valkey.
 | `nats_auth_token` | | The token NATS was started with, when NATS takes one token from everyone. |
 | `[nats_user] user`, `password` | | The API servers' NATS user, when NATS has users. Give exactly one of this and `nats_auth_token`. |
 | `[nats.tls]` | | TLS settings for NATS. See [TLS to the services](#tls-to-the-services). Given, TLS is required whatever `nats_url` names. |
+| `[nats] monitor_url` | | The NATS server's monitoring port, as `http://host:8222`. See [NATS memory](#nats-memory). |
 | `valkey_url` | required | Valkey, as `redis://host:6379`, or `rediss://host:6380` over TLS. The server refuses to start with a password in a `redis://` address unless the host is this machine. |
 | `[valkey.tls]` | | TLS settings for Valkey. See [TLS to the services](#tls-to-the-services). Needs a `rediss://` `valkey_url`. |
 
@@ -34,6 +35,32 @@ It takes libpq's TLS parameters:
 `aspen-migrate` and the operator commands read it the same way. See
 [Network exposure](../installing/network-exposure.md#postgresql) for how to set PostgreSQL up for
 TLS.
+
+### NATS memory
+
+NATS keeps Aspen's two streams in memory, and reserves each stream's whole size when it is made.
+What it may reserve is `max_memory_store` in the NATS server's configuration, three quarters of
+the machine's memory when left out:
+
+```
+jetstream {
+  max_memory_store: 4GB
+}
+```
+
+- With `monitor_url`, Aspen reads that limit from NATS's monitoring port, sizes the streams to
+  fill it, and shows it in the dashboard. Turn the port on with `http_port: 8222` in the NATS
+  configuration (or `-m 8222`).
+- Without it, Aspen cannot read the limit (unless your NATS gives Aspen's account one), and gives
+  the streams 1 GiB and 128 MiB. A NATS with less than that refuses them, and the server does not
+  start: see [Troubleshooting](../troubleshooting/server.md#nats-does-not-have-the-memory-for-the-streams).
+- The monitoring port has no password. Keep it on the deployment's own network, like NATS itself.
+- An `https` `monitor_url` is read with `[nats.tls]`'s `ca_file` and client certificate.
+- NATS does not take a new `max_memory_store` on a reload. Restart NATS to change it; the streams
+  are made again to fit within fifteen seconds, and connected apps reload.
+- In a NATS cluster, name the monitoring port of one server; the limit read is that server's.
+
+The sizes themselves are [deployment settings](deployment-settings.md#nats-memory).
 
 ### TLS to the services
 

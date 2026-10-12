@@ -12,7 +12,7 @@ The Administration Dashboard is the deployment's console. This page covers what 
 | `/admin/moderation-log` | The [moderation log](moderation.md#reading-the-log) | View dashboard |
 | `/admin/file-transfers` | The record of files offered in calls ([File transfers](../file-transfers.md)) | Moderate any community |
 | `/admin/registration-invites` | [Registration invites](registration-invites.md) | Manage registration invites |
-| The fleet | [Fleet health](#fleet-health) | View dashboard |
+| The fleet | [Fleet health](#fleet-health), with [NATS memory](#nats-memory) | View dashboard |
 | `/admin/jobs` | A preview of background jobs ([Jobs](../jobs/index.md)) | View jobs |
 
 Powers too strong for even a privileged web API, such as suspending rate limits, stay terminal commands.
@@ -72,3 +72,13 @@ A load report from an id no registered server has (a voice server given the wron
 2. The note lasts as long as a heartbeat does, so it stays while the voice server keeps reporting every fifteen seconds.
 3. The fleet lists these as `unregisteredVoiceServers`.
 4. The dashboard shows each with what to do, and shows every registered server's id beside them, to copy.
+
+### NATS memory
+
+`GET /admin/fleet` also gives `natsMemory` (`nats_memory::usage`), read from NATS as the request arrives. See [NATS memory](../nats-memory.md).
+
+- The scope's figures: bytes held, bytes reserved, and the limit. They are the NATS server's where `[nats] monitor_url` names its monitoring port and it answers, and this deployment's NATS account's otherwise, whose limit NATS gives only when the account has one.
+- `monitorUnreachable` when a monitoring port is named and did not answer.
+- Each stream: what it holds, the most it may, its messages, when its oldest was published, and whether its size is automatic. A stream NATS is without is `null` until the next `fitStreams`.
+- The dashboard warns when the events stream holds nine tenths of its size, past which events go before their minute is up.
+- `natsMemory` is `null` when NATS did not answer. The servers are still listed.

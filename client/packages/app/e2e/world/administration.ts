@@ -103,7 +103,7 @@ export function administration() {
     icon: null,
   };
   // The deployment's policies, as `GET /admin/settings` answers and its `PATCH` changes.
-  const settings: Record<string, number | boolean> = {
+  const settings: Record<string, number | boolean | null> = {
     registrationInviteRequired: true,
     requireTwoFactor: false,
     botsEnabled: true,
@@ -112,11 +112,14 @@ export function administration() {
     customEmojiLimit: 1000,
     evidenceRetentionDays: 365,
     fileTransfers: true,
+    eventStreamMib: null,
+    voiceReportStreamMib: 64,
   };
   return {
     profile: () => profile,
     settings: () => settings,
-    updateSettings: (change: Record<string, number | boolean>) => Object.assign(settings, change),
+    updateSettings: (change: Record<string, number | boolean | null>) =>
+      Object.assign(settings, change),
     updateProfile: (change: { displayName?: string | null }) => {
       if (change.displayName !== undefined) {
         profile.displayName = change.displayName;
@@ -249,6 +252,27 @@ export function administration() {
       unregisteredVoiceServers: [
         { id: "0190f0a0-0000-7000-8000-000000000099", reportedAt: minutesAgo(0) },
       ],
+      natsMemory: {
+        scope: "server",
+        usedBytes: 245 * 1024 * 1024,
+        reservedBytes: 327 * 1024 * 1024,
+        limitBytes: 327 * 1024 * 1024,
+        monitorUnreachable: false,
+        eventStream: {
+          bytes: 245 * 1024 * 1024,
+          maxBytes: 263 * 1024 * 1024,
+          messages: 181_204,
+          oldestAt: minutesAgo(0),
+          automatic: true,
+        },
+        voiceReportStream: {
+          bytes: 0,
+          maxBytes: 64 * 1024 * 1024,
+          messages: 0,
+          oldestAt: null,
+          automatic: settings.voiceReportStreamMib === null,
+        },
+      },
     }),
   };
 }

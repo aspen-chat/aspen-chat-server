@@ -1,9 +1,7 @@
 //! The state every request handler and background task shares, and the background tasks
 //! started with it.
 
-use crate::ASPEN_NATS_STREAM_NAME;
 use crate::aspen_config::{AspenConfig, load_config};
-use async_nats::jetstream::stream::{ConsumerLimits, DiscardPolicy, StorageType};
 use diesel_async::{AsyncPgConnection, pooled_connection::deadpool::Pool};
 use fred::prelude::ClientLike;
 use std::collections::HashSet;
@@ -80,6 +78,8 @@ pub struct GlobalServerContext {
     pub join_token_key: crate::server_secret::JoinTokenKey,
     /// This server's copy of the deployment's settings (`app::deployment_settings`).
     pub settings: crate::deployment_settings::SettingsCache,
+    /// Where NATS's memory limit is read from (`app::nats_memory`).
+    pub nats_monitor: crate::nats_memory::Monitor,
     /// The plugins this server runs (`app::plugin`).
     pub plugins: Arc<crate::plugin::Plugins>,
     /// What this server sends mail with, when `[email]` is configured (`app::email`).
@@ -111,22 +111,6 @@ impl GlobalServerContext {
         aspen_tls::warn_if_nats_unencrypted(&config.nats_url, config.nats.tls.as_ref(), &client);
         aspen_limits::suspension::watch(client.clone(), rate_limiter.suspension().clone(), "api");
         let context = async_nats::jetstream::new(client);
-        context
-            .create_or_update_stream(async_nats::jetstream::stream::Config {
-                name: ASPEN_NATS_STREAM_NAME.to_string(),
-                subjects: vec![format!("{}.>", crate::events::SUBJECT_ROOT)],
-                discard: DiscardPolicy::Old,
-                max_messages: 1_000_000_000,
-                max_bytes: 8 * 1024 * 1024 * 1024,
-                max_age: crate::event_feed::MAX_EVENT_AGE,
-                storage: StorageType::Memory,
-                consumer_limits: Some(ConsumerLimits {
-                    max_ack_pending: 1000,
-                    inactive_threshold: Duration::from_secs(60),
-                }),
-                ..Default::default()
-            })
-            .await?;
         let mut valkey_config = fred::prelude::Config::from_url(&config.valkey_url)?;
         // A `rediss://` URL alone trusts the system's authorities; `check_valkey` refused
         // `[valkey.tls]` without one.
@@ -161,6 +145,7 @@ impl GlobalServerContext {
             .map(|email| crate::email::Mailer::new(email, &config.public_url))
             .transpose()?
             .map(Arc::new);
+        let nats_monitor = crate::nats_memory::Monitor::new(&config)?;
         let connection_pool = {
             let database: crate::database::Database = config
                 .database_url
@@ -182,6 +167,8 @@ impl GlobalServerContext {
                 crate::federation::own_domain(&config.federation).as_ref(),
             )
             .await?;
+            // Before anything reads or publishes to the streams, which this makes.
+            crate::nats_memory::fit_locked(conn.as_mut(), &context, &nats_monitor, true).await?;
             (
                 crate::deployment_settings::load(conn.as_mut()).await?,
                 crate::server_secret::CodeKey::load(conn.as_mut()).await?,
@@ -238,6 +225,7 @@ impl GlobalServerContext {
             code_key,
             join_token_key,
             settings: crate::deployment_settings::SettingsCache::new(settings),
+            nats_monitor,
             plugins: Arc::new(crate::plugin::Plugins::new(&config.plugins)?),
             mailer,
             config: config.into(),
