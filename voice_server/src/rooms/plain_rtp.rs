@@ -3,32 +3,36 @@
 //! `consumeRtp`).
 
 use super::{ReceiveTransport, Room, RoomError, Rooms, Seat, Unconnected, seated, seated_mut};
-use crate::media::{h264_parameters, local_tuple};
+use crate::config::MediaAddress;
+use crate::media::{h264_parameters, listen_info, local_tuple};
 use mediasoup::prelude::*;
 use mediasoup::types::srtp_parameters::SrtpParameters;
+use std::net::IpAddr;
 use std::num::{NonZeroU8, NonZeroU32};
 use std::sync::Arc;
 use uuid::Uuid;
 use voice_protocol::signal::{MediaKind as WireKind, MediaSource, ServerMessage};
 
 impl Rooms {
+    /// Where a plain transport for the client at `client` listens. It has one address, with
+    /// no ICE to try several, so it takes the family the client's signalling arrived over,
+    /// which the client is known to reach this deployment by, when media is received on it.
+    fn plain_address(&self, client: IpAddr) -> &MediaAddress {
+        let client = client.to_canonical();
+        self.media_addresses
+            .iter()
+            .find(|address| address.ip.is_ipv4() == client.is_ipv4())
+            .unwrap_or(&self.media_addresses[0])
+    }
+
     /// A plain transport for a client that sends or receives SRTP itself: RTP and RTCP on one
     /// port, the client's address learned from its first packet, and one key both ways.
     async fn plain_transport(
         &self,
         room: &Room,
+        client: IpAddr,
     ) -> Result<(PlainTransport, SrtpParameters), RoomError> {
-        let listen = ListenInfo {
-            protocol: Protocol::Udp,
-            ip: self.rtc_ip,
-            announced_address: self.announced_address.clone(),
-            expose_internal_ip: false,
-            port: None,
-            port_range: None,
-            flags: None,
-            send_buffer_size: None,
-            recv_buffer_size: None,
-        };
+        let listen = listen_info(self.plain_address(client), Protocol::Udp);
         let mut options = PlainTransportOptions::new(listen);
         options.rtcp_mux = true;
         options.comedia = true;
@@ -51,8 +55,13 @@ impl Rooms {
 
     /// Moves the participant's consumers onto a plain SRTP transport (`consumeRtp`). Consumers
     /// already made on a WebRTC transport are left where they are; the participant, not being a
-    /// browser, has none.
-    pub async fn consume_rtp(self: &Arc<Self>, seat: Seat) -> Result<(), RoomError> {
+    /// browser, has none. `client` is the address its signalling comes from, as `produce_rtp`'s
+    /// is (`plain_address`).
+    pub async fn consume_rtp(
+        self: &Arc<Self>,
+        seat: Seat,
+        client: IpAddr,
+    ) -> Result<(), RoomError> {
         let room = self.room(seat.channel)?;
         {
             let participants = room.participants.lock().expect("room lock");
@@ -63,7 +72,7 @@ impl Rooms {
                 ));
             }
         }
-        let (transport, srtp) = self.plain_transport(&room).await?;
+        let (transport, srtp) = self.plain_transport(&room, client).await?;
         let (local_address, local_port) = local_tuple(&transport);
         self.expire_unconnected(&room, seat, Unconnected::PlainReceive(transport.id()));
         {
@@ -88,6 +97,7 @@ impl Rooms {
         self: &Arc<Self>,
         seat: Seat,
         source: MediaSource,
+        client: IpAddr,
     ) -> Result<(), RoomError> {
         let user = seat.user;
         let room = self.room(seat.channel)?;
@@ -97,7 +107,7 @@ impl Rooms {
             participant.ensure_source_free(source)?;
             participant.silenced()
         };
-        let (transport, srtp) = self.plain_transport(&room).await?;
+        let (transport, srtp) = self.plain_transport(&room, client).await?;
         let ssrc = (Uuid::now_v7().as_u128() as u32) | 1;
         // Video is H.264 (the helper's x264), audio Opus (the helper's ffmpeg encoder, or a
         // simulated participant's); the payload types are the producer's own and need only be

@@ -2,7 +2,8 @@ use aspen_limits::RuleTable;
 use serde::Deserialize;
 use smart_default::SmartDefault;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::str::FromStr;
 use uuid::Uuid;
 
 /// Read from `voice_server.toml` in the working directory, with `ASPEN_VOICE_SERVER_`
@@ -35,9 +36,11 @@ pub struct VoiceServerConfig {
     /// TLS to NATS: `[nats.tls]`'s certificate files, which also make TLS required.
     #[serde(default)]
     pub nats: NatsConfig,
-    /// Where the HTTP server, health check, and signalling socket listen.
-    #[serde(default = "default_listen_addr")]
-    pub listen_addr: SocketAddr,
+    /// Where the HTTP server, health check, and signalling socket listen: one address or
+    /// several. Left unset, `DEFAULT_PORT` on every interface over IPv4 and IPv6
+    /// (`listen_addrs`).
+    #[serde(default, deserialize_with = "optional_one_or_many")]
+    pub listen_addr: Option<Vec<SocketAddr>>,
     #[serde(default)]
     pub rtc: RtcConfig,
     #[serde(default)]
@@ -206,16 +209,21 @@ impl LimitSettings {
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct RtcConfig {
-    /// The interface media is bound to; every interface by default.
-    #[default(IpAddr::V4(Ipv4Addr::UNSPECIFIED))]
-    pub ip: IpAddr,
-    /// The address clients are told to send media to. Required in effect when `ip` is
-    /// unspecified (`0.0.0.0`), since a client cannot send to that; left unset, the host's
-    /// primary interface address is announced, which suits a development machine and a server
-    /// with a public address on an interface. A server behind NAT sets its public address.
-    /// It must never be a loopback address: Firefox does not pair its own host candidates
-    /// with a loopback peer, so media never connects.
-    pub announced_address: Option<String>,
+    /// The interfaces media is bound to, at most one address of each family. Left unset,
+    /// every interface over IPv4 and IPv6 (`0.0.0.0` and `::`), each family only where this
+    /// machine has it (`media_addresses`).
+    #[serde(deserialize_with = "optional_one_or_many")]
+    pub ip: Option<Vec<IpAddr>>,
+    /// The addresses clients are told to send media to: an IPv4 address for the IPv4
+    /// interface, an IPv6 one for the IPv6 interface, or a host name, which stands for every
+    /// interface that has no address of its own here. Required in effect for an unspecified
+    /// interface (`0.0.0.0`, `::`), since a client cannot send to that; left unset, the
+    /// address the host reaches the internet from in that family is announced, which suits a
+    /// development machine and a server with a public address on an interface. A server
+    /// behind NAT sets its public address. None may be a loopback address: Firefox does not
+    /// pair its own host candidates with a loopback peer, so media never connects.
+    #[serde(deserialize_with = "one_or_many")]
+    pub announced_address: Vec<String>,
     #[default = 40000]
     pub min_port: u16,
     #[default = 40999]
@@ -223,7 +231,7 @@ pub struct RtcConfig {
 }
 
 /// File transfers between the people of a call (`transfer`): a STUN and TURN server on one UDP
-/// port, on the media interface (`rtc.ip`) and announced at `rtc.announced_address` like media.
+/// port, on the media interfaces (`rtc.ip`) and announced at `rtc.announced_address` like media.
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct TransferConfig {
@@ -268,26 +276,230 @@ fn default_workers() -> usize {
     num_cpus::get().max(1)
 }
 
-fn default_listen_addr() -> SocketAddr {
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9001)
+/// The port the HTTP server listens on when `listen_addr` is unset.
+const DEFAULT_PORT: u16 = 9001;
+
+/// Every interface, over IPv4 and over IPv6.
+const EVERY_INTERFACE: [IpAddr; 2] = [
+    IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+    IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+];
+
+/// A setting given as one value or a list of them. One string may hold several separated by
+/// commas, which is how an environment variable gives a list.
+fn one_or_many<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    let values = match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(value) => value.split(',').map(str::to_string).collect(),
+        OneOrMany::Many(values) => values,
+    };
+    values
+        .iter()
+        .map(|value| value.trim().parse().map_err(serde::de::Error::custom))
+        .collect()
+}
+
+/// `one_or_many` for a setting whose absence means something a list cannot say.
+fn optional_one_or_many<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    one_or_many(deserializer).map(Some)
+}
+
+impl VoiceServerConfig {
+    /// Where the HTTP server listens, and whether each must be bound: an address the settings
+    /// name must, while of the defaults a family this machine lacks is left out (`main`).
+    pub fn listen_addrs(&self) -> (Vec<SocketAddr>, bool) {
+        match &self.listen_addr {
+            Some(addrs) => (addrs.clone(), true),
+            None => (
+                EVERY_INTERFACE
+                    .map(|ip| SocketAddr::new(ip, DEFAULT_PORT))
+                    .to_vec(),
+                false,
+            ),
+        }
+    }
+}
+
+/// One interface media is received on, and what clients are told to send to in its place.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaAddress {
+    pub ip: IpAddr,
+    /// An address or host name; `None` announces `ip` itself.
+    pub announced: Option<String>,
+}
+
+impl MediaAddress {
+    /// What clients are told to send to.
+    pub fn host(&self) -> String {
+        self.announced
+            .clone()
+            .unwrap_or_else(|| self.ip.to_string())
+    }
+}
+
+fn family(ip: IpAddr) -> &'static str {
+    if ip.is_ipv4() { "IPv4" } else { "IPv6" }
+}
+
+/// What a machine has of an address family, which `RtcConfig::media_addresses` asks of this
+/// one and its tests of ones they make up.
+pub(crate) trait Interfaces {
+    /// Whether media can be bound to `ip`.
+    fn bind(&self, ip: IpAddr) -> std::io::Result<()>;
+    /// The address this machine reaches the internet from in `like`'s family, which clients
+    /// can send to when it is a public one.
+    fn primary(&self, like: IpAddr) -> Result<IpAddr, String>;
+}
+
+struct ThisMachine;
+
+impl Interfaces for ThisMachine {
+    fn bind(&self, ip: IpAddr) -> std::io::Result<()> {
+        std::net::UdpSocket::bind((ip, 0)).map(drop)
+    }
+
+    fn primary(&self, like: IpAddr) -> Result<IpAddr, String> {
+        let found = if like.is_ipv4() {
+            local_ip_address::local_ip()
+        } else {
+            local_ip_address::local_ipv6()
+        }
+        .map_err(|e| e.to_string())?;
+        // A link-local address means nothing without the interface it is on, which an ICE
+        // candidate cannot name.
+        let link_local = match found {
+            IpAddr::V4(ip) => ip.is_link_local(),
+            IpAddr::V6(ip) => ip.is_unicast_link_local(),
+        };
+        if found.is_loopback() || found.is_unspecified() || link_local {
+            return Err(format!("{found} is not an address clients can send to"));
+        }
+        Ok(found)
+    }
 }
 
 impl RtcConfig {
-    /// The address to put in ICE candidates: the configured one, else the primary interface's
-    /// address when bound to every interface, else nothing, which announces `ip` itself.
-    pub fn resolved_announced_address(&self) -> anyhow::Result<Option<String>> {
-        if let Some(configured) = &self.announced_address {
-            return Ok(Some(configured.clone()));
+    /// Where media is received and what each interface announces: `ip` (or every interface),
+    /// each with the `announced_address` of its family, else the host name among them, else,
+    /// for an unspecified interface, this machine's own address in that family.
+    ///
+    /// A family the settings name (in `ip`, or by an announced address of that family) must
+    /// be there, and the server does not start without it. One that only the defaults name is
+    /// left out, with a log line, when this machine cannot bind it or has no address to
+    /// announce, so a machine with one family runs on that one.
+    pub fn media_addresses(&self) -> anyhow::Result<Vec<MediaAddress>> {
+        self.media_addresses_on(&ThisMachine)
+    }
+
+    pub(crate) fn media_addresses_on(
+        &self,
+        machine: &impl Interfaces,
+    ) -> anyhow::Result<Vec<MediaAddress>> {
+        let ips = self.ip.as_deref().unwrap_or(&EVERY_INTERFACE);
+        anyhow::ensure!(!ips.is_empty(), "rtc.ip names no address");
+        let of_family = |ip: IpAddr| {
+            ips.iter()
+                .copied()
+                .filter(move |other| other.is_ipv4() == ip.is_ipv4())
+        };
+        for &ip in ips {
+            anyhow::ensure!(
+                of_family(ip).count() == 1,
+                "rtc.ip names more than one {} address; it takes one of each family at most",
+                family(ip)
+            );
         }
-        if !self.ip.is_unspecified() {
-            return Ok(None);
+        let mut literals: Vec<IpAddr> = Vec::new();
+        let mut host_name = None;
+        for announced in &self.announced_address {
+            let Ok(ip) = announced.parse::<IpAddr>() else {
+                anyhow::ensure!(
+                    host_name.replace(announced).is_none(),
+                    "rtc.announced_address names more than one host name"
+                );
+                continue;
+            };
+            anyhow::ensure!(
+                !ip.is_loopback(),
+                "rtc.announced_address {ip} is a loopback address, which browsers cannot send media to"
+            );
+            anyhow::ensure!(
+                !ip.is_unspecified(),
+                "rtc.announced_address {ip} is not an address clients can send to"
+            );
+            anyhow::ensure!(
+                literals.iter().all(|other| other.is_ipv4() != ip.is_ipv4()),
+                "rtc.announced_address names more than one {} address",
+                family(ip)
+            );
+            anyhow::ensure!(
+                of_family(ip).next().is_some(),
+                "rtc.announced_address {ip} is an {} address, but rtc.ip has none to receive on",
+                family(ip)
+            );
+            literals.push(ip);
         }
-        let detected = local_ip_address::local_ip().map_err(|e| {
-            anyhow::anyhow!(
-                "rtc.ip is unspecified and no primary interface address could be found ({e}); set rtc.announced_address"
-            )
-        })?;
-        Ok(Some(detected.to_string()))
+
+        let mut addresses = Vec::new();
+        for &ip in ips {
+            let family = family(ip);
+            let literal = literals
+                .iter()
+                .find(|other| other.is_ipv4() == ip.is_ipv4());
+            let required = self.ip.is_some() || literal.is_some();
+            if let Err(e) = machine.bind(ip) {
+                anyhow::ensure!(
+                    !required && crate::sockets::family_missing(&e),
+                    "rtc.ip {ip} cannot be bound: {e}"
+                );
+                tracing::info!("no media over {family}: {ip} cannot be bound ({e})");
+                continue;
+            }
+            let announced = match literal.map(IpAddr::to_string).or(host_name.cloned()) {
+                Some(announced) => Some(announced),
+                None if ip.is_unspecified() => match machine.primary(ip) {
+                    Ok(primary) => Some(primary.to_string()),
+                    Err(e) => {
+                        anyhow::ensure!(
+                            !required,
+                            "rtc.ip is {ip} and this machine has no {family} address to                              announce ({e}); add one to rtc.announced_address"
+                        );
+                        tracing::info!(
+                            "no media over {family}: this machine has no {family} address to                              announce ({e}); add one to rtc.announced_address if it has"
+                        );
+                        continue;
+                    }
+                },
+                None => {
+                    anyhow::ensure!(
+                        !ip.is_loopback(),
+                        "rtc.ip {ip} is a loopback address, which browsers cannot send media                          to; bind an interface or leave it unspecified"
+                    );
+                    None
+                }
+            };
+            addresses.push(MediaAddress { ip, announced });
+        }
+        anyhow::ensure!(
+            !addresses.is_empty(),
+            "this machine has no address to receive media on over IPv4 or IPv6; set rtc.ip and              rtc.announced_address"
+        );
+        Ok(addresses)
     }
 }
 
@@ -355,4 +567,173 @@ pub fn load_config() -> Result<VoiceServerConfig, config::ConfigError> {
                 .overlay(std::mem::take(&mut config.rate_limit_overrides));
             Ok(config)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A machine with the families and primary addresses a test gives it.
+    #[derive(Default)]
+    struct Machine {
+        v4: Option<&'static str>,
+        v6: Option<&'static str>,
+        /// Whether `::` can be bound; an IPv4 address always can.
+        binds_v6: bool,
+    }
+
+    impl Interfaces for Machine {
+        fn bind(&self, ip: IpAddr) -> std::io::Result<()> {
+            if ip.is_ipv4() || self.binds_v6 {
+                Ok(())
+            } else {
+                Err(std::io::ErrorKind::AddrNotAvailable.into())
+            }
+        }
+
+        fn primary(&self, like: IpAddr) -> Result<IpAddr, String> {
+            let primary = if like.is_ipv4() { self.v4 } else { self.v6 };
+            primary
+                .map(|ip| ip.parse().expect("an address"))
+                .ok_or_else(|| "none".to_string())
+        }
+    }
+
+    const DUAL: Machine = Machine {
+        v4: Some("192.0.2.7"),
+        v6: Some("2001:db8::7"),
+        binds_v6: true,
+    };
+    const V4_ONLY: Machine = Machine {
+        v4: Some("192.0.2.7"),
+        v6: None,
+        binds_v6: true,
+    };
+
+    fn rtc(toml: &str) -> RtcConfig {
+        config::Config::builder()
+            .add_source(config::File::from_str(toml, config::FileFormat::Toml))
+            .build()
+            .expect("settings")
+            .try_deserialize()
+            .expect("an [rtc] table")
+    }
+
+    fn resolved(toml: &str, machine: &Machine) -> Vec<(String, Option<String>)> {
+        rtc(toml)
+            .media_addresses_on(machine)
+            .expect("media addresses")
+            .into_iter()
+            .map(|address| (address.ip.to_string(), address.announced))
+            .collect()
+    }
+
+    fn pair(ip: &str, announced: &str) -> (String, Option<String>) {
+        (ip.to_string(), Some(announced.to_string()))
+    }
+
+    #[test]
+    fn defaults_take_both_families() {
+        assert_eq!(
+            resolved("", &DUAL),
+            [pair("0.0.0.0", "192.0.2.7"), pair("::", "2001:db8::7")]
+        );
+    }
+
+    #[test]
+    fn defaults_leave_out_a_family_the_machine_lacks() {
+        assert_eq!(resolved("", &V4_ONLY), [pair("0.0.0.0", "192.0.2.7")]);
+        let unbindable = Machine {
+            binds_v6: false,
+            ..DUAL
+        };
+        assert_eq!(resolved("", &unbindable), [pair("0.0.0.0", "192.0.2.7")]);
+        let v6_only = Machine { v4: None, ..DUAL };
+        assert_eq!(resolved("", &v6_only), [pair("::", "2001:db8::7")]);
+        assert!(rtc("").media_addresses_on(&Machine::default()).is_err());
+    }
+
+    #[test]
+    fn a_named_family_must_be_there() {
+        assert!(
+            rtc(r#"ip = ["0.0.0.0", "::"]"#)
+                .media_addresses_on(&V4_ONLY)
+                .is_err()
+        );
+        let unbindable = Machine {
+            binds_v6: false,
+            ..DUAL
+        };
+        assert!(
+            rtc(r#"announced_address = ["203.0.113.10", "2001:db8::10"]"#)
+                .media_addresses_on(&unbindable)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn announced_addresses_go_to_their_family() {
+        assert_eq!(
+            resolved(
+                r#"announced_address = ["2001:db8::10", "203.0.113.10"]"#,
+                &DUAL
+            ),
+            [pair("0.0.0.0", "203.0.113.10"), pair("::", "2001:db8::10")]
+        );
+        // One address, as a server set up for IPv4 alone has it: the other family announces
+        // the machine's own, or is left out.
+        assert_eq!(
+            resolved(r#"announced_address = "203.0.113.10""#, &DUAL),
+            [pair("0.0.0.0", "203.0.113.10"), pair("::", "2001:db8::7")]
+        );
+        assert_eq!(
+            resolved(r#"announced_address = "203.0.113.10""#, &V4_ONLY),
+            [pair("0.0.0.0", "203.0.113.10")]
+        );
+        assert_eq!(
+            resolved(
+                r#"announced_address = ["voice.example.org", "203.0.113.10"]"#,
+                &DUAL
+            ),
+            [
+                pair("0.0.0.0", "203.0.113.10"),
+                pair("::", "voice.example.org")
+            ]
+        );
+    }
+
+    #[test]
+    fn one_interface_is_one_family() {
+        assert_eq!(
+            resolved(r#"ip = "0.0.0.0""#, &DUAL),
+            [pair("0.0.0.0", "192.0.2.7")]
+        );
+        assert_eq!(
+            resolved(r#"ip = "2001:db8::7""#, &DUAL),
+            [("2001:db8::7".to_string(), None)]
+        );
+        // The form an environment variable gives a list in.
+        assert_eq!(
+            resolved(r#"ip = "0.0.0.0, ::""#, &DUAL),
+            [pair("0.0.0.0", "192.0.2.7"), pair("::", "2001:db8::7")]
+        );
+    }
+
+    #[test]
+    fn refuses_what_clients_cannot_send_to() {
+        for toml in [
+            r#"ip = "127.0.0.1""#,
+            r#"ip = "::1""#,
+            r#"announced_address = "127.0.0.1""#,
+            r#"announced_address = "::""#,
+            r#"ip = []"#,
+            r#"ip = ["192.0.2.7", "192.0.2.8"]"#,
+            r#"announced_address = ["203.0.113.10", "203.0.113.11"]"#,
+            r#"announced_address = ["a.example.org", "b.example.org"]"#,
+            // An IPv6 address to announce, and no IPv6 interface to receive on.
+            "ip = \"0.0.0.0\"\nannounced_address = \"2001:db8::10\"",
+        ] {
+            assert!(rtc(toml).media_addresses_on(&DUAL).is_err(), "{toml}");
+        }
+    }
 }

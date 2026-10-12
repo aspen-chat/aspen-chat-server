@@ -80,6 +80,10 @@ Why the voice pieces are shaped as they are. The how is in the [voice pages](ind
 ## The voice server
 
 - **The announced address may never be loopback.** Firefox does not pair its own host candidates with a loopback peer, so signalling would succeed and media would never flow. ([The voice server process](voice-server.md#the-announced-address))
+- **Both address families by default, each on a socket of its own.** A client on an IPv6-only network (many phones) reaches a call without a translator in the path, and one with both lets ICE pick. One `::` socket taking IPv4 too would show clients at IPv4-mapped addresses, which the address limits and `trusted_proxies` would have to see through, and would depend on the machine's `bindv6only`. ([The voice server process](voice-server.md#ipv4-and-ipv6))
+- **A family the defaults name is given up when the machine lacks it; one the settings name is not.** A machine with no IPv6 starts unchanged, and an operator who asked for a family learns at startup that it is not there, rather than from the people who could not connect.
+- **Only a missing family is given up, never a port in use.** Otherwise a server started beside another would come up half listening.
+- **A plain transport takes the family of the client's signalling.** It is one socket with no ICE to try several, and the family signalling arrived over is the one the client is known to reach the deployment by.
 - **A warning when listening on loopback with no trusted proxies.** Behind a proxy on its own machine every client would share the proxy's address.
 - **Connection limits and the header timeout.** Connections that send nothing or trickle their headers are let go.
 - **The outbox is bounded in bytes and a lagging socket is closed.** A client that stops reading cannot pile up everyone else's frames on the server. Bytes, because frames differ in size.

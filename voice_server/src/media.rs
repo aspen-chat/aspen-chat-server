@@ -3,9 +3,9 @@
 //! transport listens, and the conversion between mediasoup's media kinds and the signalling
 //! protocol's.
 
+use crate::config::MediaAddress;
 use mediasoup::prelude::*;
-use mediasoup::types::data_structures::TransportTuple;
-use std::net::IpAddr;
+use mediasoup::types::data_structures::{SocketFlags, TransportTuple};
 use std::num::{NonZeroU8, NonZeroU32};
 use voice_protocol::signal::MediaKind as WireKind;
 
@@ -16,27 +16,42 @@ use voice_protocol::signal::MediaKind as WireKind;
 /// making every share blurry while the estimate climbs.
 const INITIAL_OUTGOING_BITRATE: u64 = 10_000_000;
 
-/// How a client's WebRTC transport listens: on `ip`, over UDP and TCP, UDP preferred, telling
-/// clients `announced_address` in its place when there is one.
-pub(crate) fn webrtc_transport_options(
-    ip: IpAddr,
-    announced_address: Option<String>,
-) -> WebRtcTransportOptions {
-    let mut listen = ListenInfo {
-        protocol: Protocol::Udp,
-        ip,
-        announced_address,
+/// How a transport listens on `address` over `protocol`, on a port of the worker's range.
+pub(crate) fn listen_info(address: &MediaAddress, protocol: Protocol) -> ListenInfo {
+    ListenInfo {
+        protocol,
+        ip: address.ip,
+        announced_address: address.announced.clone(),
         expose_internal_ip: false,
         port: None,
         port_range: None,
-        flags: None,
+        // An IPv6 socket takes IPv6 alone, so each port of the range serves both families,
+        // one socket each, and the range carries as many people as it does with one family.
+        flags: address.ip.is_ipv6().then_some(SocketFlags {
+            ipv6_only: true,
+            udp_reuse_port: false,
+        }),
         send_buffer_size: None,
         recv_buffer_size: None,
-    };
-    let udp = listen.clone();
-    listen.protocol = Protocol::Tcp;
-    let mut options =
-        WebRtcTransportOptions::new(WebRtcTransportListenInfos::new(udp).insert(listen));
+    }
+}
+
+/// How a client's WebRTC transport listens: on each of `addresses` (never empty), over UDP and
+/// TCP, UDP preferred. The client's ICE picks the one it reaches.
+pub(crate) fn webrtc_transport_options(addresses: &[MediaAddress]) -> WebRtcTransportOptions {
+    let mut listen_infos = [Protocol::Udp, Protocol::Tcp]
+        .into_iter()
+        .flat_map(|protocol| {
+            addresses
+                .iter()
+                .map(move |address| listen_info(address, protocol))
+        });
+    let first = listen_infos.next().expect("a media address");
+    let listen_infos = listen_infos.fold(
+        WebRtcTransportListenInfos::new(first),
+        WebRtcTransportListenInfos::insert,
+    );
+    let mut options = WebRtcTransportOptions::new(listen_infos);
     options.enable_udp = true;
     options.enable_tcp = true;
     options.prefer_udp = true;

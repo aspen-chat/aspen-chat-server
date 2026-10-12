@@ -8,6 +8,7 @@
 mod plain_rtp;
 mod transfers;
 
+use crate::config::MediaAddress;
 use crate::media::{media_codecs, media_kind, webrtc_transport_options, wire_kind};
 use crate::reporter::Reporter;
 use crate::transfer::Relay;
@@ -15,7 +16,6 @@ use mediasoup::prelude::*;
 use mediasoup::types::data_structures::{DtlsState, TransportTuple};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
 use std::num::NonZeroU16;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -376,8 +376,8 @@ pub struct Rooms {
     server: Uuid,
     workers: Vec<Worker>,
     next_worker: AtomicUsize,
-    rtc_ip: IpAddr,
-    announced_address: Option<String>,
+    /// Where media is received (`RtcConfig::media_addresses`); never empty.
+    media_addresses: Vec<MediaAddress>,
     reporter: Reporter,
     relay: Arc<Relay>,
     rooms: Mutex<HashMap<Uuid, Arc<Room>>>,
@@ -391,8 +391,7 @@ impl Rooms {
     pub fn new(
         server: Uuid,
         workers: Vec<Worker>,
-        rtc_ip: IpAddr,
-        announced_address: Option<String>,
+        media_addresses: Vec<MediaAddress>,
         reporter: Reporter,
         relay: Arc<Relay>,
         limits: &crate::config::LimitSettings,
@@ -401,8 +400,7 @@ impl Rooms {
             server,
             workers,
             next_worker: AtomicUsize::new(0),
-            rtc_ip,
-            announced_address,
+            media_addresses,
             reporter,
             relay,
             rooms: Mutex::new(HashMap::new()),
@@ -815,7 +813,7 @@ impl Rooms {
             }
         }
         room.require(seat)?;
-        let options = webrtc_transport_options(self.rtc_ip, self.announced_address.clone());
+        let options = webrtc_transport_options(&self.media_addresses);
         let transport = room.router.create_webrtc_transport(options).await?;
         self.expire_unconnected(&room, seat, Unconnected::WebRtc(transport.id()));
         let message = ServerMessage::TransportCreated {

@@ -64,13 +64,13 @@ The network side is `voice_server/src/transfer.rs`.
 
 ### STUN
 
-One UDP port (`[transfer] port`, 3478) answers STUN, so no third party learns who is connecting.
+One UDP port (`[transfer] port`, 3478) answers STUN, so no third party learns who is connecting. It is bound on each media address (see [Voice](voice/voice-server.md#ipv4-and-ipv6)), and a transfer's ICE servers name every one, an IPv6 address in brackets; a client uses those it can reach.
 
 ### TURN credentials
 
 - A credential names one side of one transfer, by the offer's `record` (the id the server made for it, never the client's).
 - It works only while that transfer is live.
-- It works only from `ADDRESSES_PER_CREDENTIAL` (two) client addresses. So one side holds at most two allocations, and no credential can take the relay's ports.
+- It works only from `ADDRESSES_PER_CREDENTIAL` (four) client addresses: a browser allocates from each interface it gathers on, once over each family. So one side holds at most four allocations, and no credential can take the relay's ports.
 - Its allocations are deleted the moment the transfer ends.
 
 ### Relay
@@ -78,6 +78,7 @@ One UDP port (`[transfer] port`, 3478) answers STUN, so no third party learns wh
 - The relay forwards only between its own live allocations (`LivePorts`), so never to a port of its range on the machine that no allocation holds. Every relayed transfer is relayed at both ends.
 - Its ports may not overlap the media range or the STUN port. The server refuses to start otherwise.
 - It is looped back inside the server, so it needs no hairpin NAT.
+- Every allocation is announced at one address (`relay_address`): the IPv4 media address's when there is one, else the IPv6 one's, whichever family the client reached TURN over. A request for an IPv6 allocation is refused where that address is IPv4.
 
 ### Relay bandwidth
 

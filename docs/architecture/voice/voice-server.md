@@ -38,9 +38,9 @@ It reads `voice_server.toml` from the working directory (gitignored). `ASPEN_VOI
 | `nats_url` | The NATS address |
 | `[nats_user]` | This server's own NATS user (see [NATS users](voice-reports.md#nats-users)), or `nats_auth_token` instead |
 | `[nats]` | TLS to NATS (`[nats.tls]`) |
-| `listen_addr` | HTTP listen address |
+| `listen_addr` | HTTP listen addresses, one or a list; `0.0.0.0:9001` and `[::]:9001` by default |
 | `workers` | mediasoup workers, each at most one core |
-| `[rtc]` | Media interface `ip`, `announced_address`, and the port range |
+| `[rtc]` | Media interfaces `ip`, their `announced_address`es, and the port range |
 | `[transfer]` | STUN and TURN for file transfers (see [File transfers](../file-transfers.md)) |
 | `[rate_limits]` | Laid over `limits.toml` the way the API server's are |
 | `trusted_proxies` | Proxies whose forwarded address is honoured |
@@ -50,11 +50,27 @@ It reads `voice_server.toml` from the working directory (gitignored). `ASPEN_VOI
 
 ### The announced address
 
-The announced address is what goes into ICE candidates.
+The announced address is what goes into ICE candidates. `RtcConfig::media_addresses` pairs each interface of `[rtc] ip` with one, as a `MediaAddress`.
 
+- `ip` holds at most one address of each family, and `announced_address` at most one address of each family and one host name.
+- An interface announces the `announced_address` of its family, else the host name, else itself. An unspecified interface (`0.0.0.0`, `::`) with neither announces the address the host reaches the internet from in that family (`local_ip_address`), unless that is loopback or link-local.
 - Set it for a server behind NAT.
-- Left unset, with `ip` bound to every interface (the default), the host's primary interface address is announced. This suits a development machine.
 - **It must never be a loopback address.** The server refuses to start with one. Firefox does not pair its own host candidates with a loopback peer, so signalling would succeed and media would never flow.
+
+### IPv4 and IPv6
+
+Left unset, `listen_addr` and `[rtc] ip` name every interface over both families.
+
+| Listener | Per family |
+|---|---|
+| HTTP and signalling | One TCP listener for each `listen_addr`; `serve` accepts from them in turn |
+| WebRTC transports | A UDP and a TCP listen info for each media address, so every transport has candidates of both families and the client's ICE picks |
+| Plain transports | One media address: the family the client's signalling came over (`Rooms::plain_address`), else the first |
+| STUN and TURN | One UDP socket for each media address; see [File transfers](../file-transfers.md#stun-and-turn) |
+
+- Every IPv6 socket takes IPv6 alone (`sockets`, and `SocketFlags::ipv6_only` for mediasoup's). A port then has an IPv4 and an IPv6 socket, and a client's address is never an IPv4-mapped one.
+- A family the settings name must work: an `ip` that cannot be bound or has nothing to announce, or a `listen_addr` that cannot be bound, stops the server.
+- A family only the defaults name is left out, with a log line, when the machine lacks it (`sockets::family_missing`, or no address to announce). Any other failure to bind, a port in use for one, stops the server.
 
 ## Connections
 

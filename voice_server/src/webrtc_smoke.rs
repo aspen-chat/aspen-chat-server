@@ -6,6 +6,7 @@
 //! system's (`mediasoup-sys`'s `system-openssl`), so this fails if that OpenSSL cannot
 //! handshake, export keys, or encrypt as libsrtp needs.
 
+use crate::config::MediaAddress;
 use crate::media::{media_codecs, webrtc_transport_options};
 use async_trait::async_trait;
 use dtls::config::Config as DtlsConfig;
@@ -15,7 +16,7 @@ use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use mediasoup::prelude::*;
 use mediasoup::types::data_structures::{DtlsFingerprint, DtlsRole, DtlsState};
 use sha2::{Digest, Sha256};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::{NonZeroU8, NonZeroU32};
 use std::sync::Arc;
 use std::time::Duration;
@@ -71,8 +72,33 @@ async fn media_flows_over_dtls_srtp_with_every_profile() {
             ProtectionProfile::Aes128CmHmacSha1_32,
         ),
     ] {
-        round_trip(&router, offered, profile).await;
+        round_trip(&router, &[Ipv4Addr::LOCALHOST.into()], offered, profile).await;
     }
+}
+
+/// A transport listening on both families carries media over IPv6, on a socket that leaves
+/// IPv4 to the one beside it. Skipped on a machine without IPv6.
+#[tokio::test]
+async fn media_flows_over_ipv6_beside_ipv4() {
+    if std::net::UdpSocket::bind((Ipv6Addr::LOCALHOST, 0)).is_err() {
+        return;
+    }
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let worker = WorkerManager::new()
+        .create_worker(WorkerSettings::default())
+        .await
+        .expect("worker starts");
+    let router = worker
+        .create_router(RouterOptions::new(media_codecs()))
+        .await
+        .expect("router");
+    round_trip(
+        &router,
+        &[Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into()],
+        SrtpProtectionProfile::Srtp_Aead_Aes_256_Gcm,
+        ProtectionProfile::AeadAes256Gcm,
+    )
+    .await;
 }
 
 /// The worker's OpenSSL is the system's shared library, not a copy built into it: only
@@ -93,16 +119,27 @@ async fn the_worker_uses_the_shared_system_openssl() {
     }
 }
 
-/// One participant's transport, negotiated to `offered`: ICE, DTLS, then `PACKETS` sent to a
-/// producer and the same ones received back from a consumer of it.
-async fn round_trip(router: &Router, offered: SrtpProtectionProfile, profile: ProtectionProfile) {
+/// One participant's transport, listening on `interfaces` and negotiated to `offered`: ICE,
+/// DTLS, then `PACKETS` sent to a producer and the same ones received back from a consumer of
+/// it, over the last of the interfaces.
+async fn round_trip(
+    router: &Router,
+    interfaces: &[IpAddr],
+    offered: SrtpProtectionProfile,
+    profile: ProtectionProfile,
+) {
+    let addresses: Vec<MediaAddress> = interfaces
+        .iter()
+        .map(|&ip| MediaAddress {
+            ip,
+            announced: None,
+        })
+        .collect();
     let transport = router
-        .create_webrtc_transport(webrtc_transport_options(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            None,
-        ))
+        .create_webrtc_transport(webrtc_transport_options(&addresses))
         .await
         .expect("transport");
+    let client_ip = *interfaces.last().expect("an interface");
     // The worker reports its DTLS state in a notification, which may arrive after the client
     // has finished its side of the handshake.
     let (dtls_state_tx, mut dtls_state) = watch::channel(transport.dtls_state());
@@ -112,12 +149,14 @@ async fn round_trip(router: &Router, offered: SrtpProtectionProfile, profile: Pr
     let candidate = transport
         .ice_candidates()
         .iter()
-        .find(|candidate| candidate.protocol == Protocol::Udp)
+        .find(|candidate| {
+            candidate.protocol == Protocol::Udp && candidate.address == client_ip.to_string()
+        })
         .expect("a UDP candidate")
         .clone();
-    let server: SocketAddr = format!("{}:{}", candidate.address, candidate.port)
-        .parse()
-        .expect("candidate address");
+    let server = SocketAddr::new(client_ip, candidate.port);
+    // Each interface has a UDP and a TCP candidate.
+    assert_eq!(transport.ice_candidates().len(), interfaces.len() * 2);
     let ice = transport.ice_parameters().clone();
     let server_fingerprint = transport
         .dtls_parameters()
@@ -145,7 +184,7 @@ async fn round_trip(router: &Router, offered: SrtpProtectionProfile, profile: Pr
         .expect("transport connects");
 
     let socket = Arc::new(
-        UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        UdpSocket::bind((client_ip, 0))
             .await
             .expect("client socket"),
     );

@@ -68,7 +68,7 @@ password = "…"
 trusted_proxies = ["127.0.0.1"]
 
 [rtc]
-announced_address = "203.0.113.10"
+announced_address = ["203.0.113.10", "2001:db8::10"]
 min_port = 40000
 max_port = 40999
 ```
@@ -167,7 +167,7 @@ Clients reach a voice server in three ways, and all must be open to them:
 | Traffic | Protocol and port | Notes |
 | --- | --- | --- |
 | Signalling and the latency check | HTTPS: `GET /health` and the WebSocket `GET /ws` | Through a TLS proxy (below). |
-| Media | UDP (and TCP where UDP is blocked), `[rtc] min_port` to `max_port` | Clients send media to `announced_address`. |
+| Media | UDP (and TCP where UDP is blocked), `[rtc] min_port` to `max_port` | Clients send media to `announced_address`, over IPv4 or IPv6. |
 | File transfers | UDP `[transfer] port` (3478) | STUN, and the TURN relay. |
 
 ### Signalling
@@ -183,11 +183,17 @@ The server warns at startup when it listens on loopback with no trusted proxies.
 
 ### Media
 
-`announced_address` is the address clients send media to.
+`announced_address` is the address clients send media to: one for IPv4, one for IPv6.
 
-- Behind NAT, set it to the server's public address.
-- Leave it out only when the machine has a public address on an interface.
+- Behind NAT, set the IPv4 one to the server's public address.
+- Set the IPv6 one to the server's stable public IPv6 address. Left out, the server announces
+  the address it reaches the internet from, which for IPv6 is often a temporary one.
+- Leave both out only when the machine has a public address on an interface.
 - **Never set it to a loopback address.**
+- A machine without IPv6 needs nothing: the server says `no media over IPv6` in its log and
+  serves IPv4. Give `announced_address` only the IPv4 address there.
+- Open the media and file transfer ports over both families. See
+  [IPv4 and IPv6](../configuration/voice-server.md#ipv4-and-ipv6).
 
 ### File transfers
 

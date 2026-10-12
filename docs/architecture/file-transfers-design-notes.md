@@ -10,9 +10,10 @@ Why [File transfers](file-transfers.md) work as they do.
 ## Network
 
 - The voice server answers STUN itself, so no third party learns who is connecting.
-- TURN credentials name the offer's `record`, the id the server made, never the client's id, and work from at most two addresses. One side then holds at most two allocations, and no credential can take the relay's ports.
+- TURN credentials name the offer's `record`, the id the server made, never the client's id, and work from at most four addresses (two interfaces, each over IPv4 and IPv6). One side then holds at most four allocations, and no credential can take the relay's ports.
 - The relay forwards only between its own live allocations, so it never forwards to a port of its range on the machine that no allocation holds.
 - The relay is looped back inside the server, so it needs no hairpin NAT.
+- Every allocation has an address of one family, though TURN is reached over both. A transfer's two relay candidates pair only when they are of one family, and nothing is ever sent to the address: it only names the allocation to the other side. IPv4 where the server has it, since a TURN client that asks for no family expects IPv4.
 - The pacer drops the odd datagram with rising probability past half full, rather than only dropping on overflow. A data channel's congestion control then settles near the limit rather than stalling on a run of losses.
 
 ## The record

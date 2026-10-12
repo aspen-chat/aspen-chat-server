@@ -302,8 +302,8 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
                     .produce(seat, &transport_id, kind, source, rtp_parameters)
                     .await
             }
-            ClientMessage::ProduceRtp { source } => state.rooms.produce_rtp(seat, source).await,
-            ClientMessage::ConsumeRtp => state.rooms.consume_rtp(seat).await,
+            ClientMessage::ProduceRtp { source } => state.rooms.produce_rtp(seat, source, ip).await,
+            ClientMessage::ConsumeRtp => state.rooms.consume_rtp(seat, ip).await,
             ClientMessage::CloseProducer { producer_id } => {
                 state.rooms.close_producer(seat, &producer_id).await
             }

@@ -15,7 +15,7 @@ Registering voice servers with the API servers is on [Voice calls](voice.md#voic
 | `[nats_user] user`, `password` | | This voice server's own NATS user, allowed only its own subjects. [Installing](../installing/6-voice-servers.md#give-it-a-nats-user) gives its permissions. |
 | `nats_auth_token` | | The API servers' token instead, which lets this server do anything they can; the server warns at startup. Give exactly one of this and `[nats_user]`. |
 | `[nats.tls]` | | As the API servers' [`[nats.tls]`](services.md#tls-to-the-services). |
-| `listen_addr` | `0.0.0.0:9001` | Where the health check and signalling listen, as plain HTTP. Put a [TLS proxy](#behind-a-tls-proxy) in front. |
+| `listen_addr` | `["0.0.0.0:9001", "[::]:9001"]` | Where the health check and signalling listen, as plain HTTP: one address or a list. Put a [TLS proxy](#behind-a-tls-proxy) in front. See [IPv4 and IPv6](#ipv4-and-ipv6). |
 | `workers` | one per CPU | Media worker processes, each using at most one core. Run the server [under a supervisor](#workers). |
 
 See [Voice servers](../installing/6-voice-servers.md) and
@@ -37,6 +37,25 @@ See [Voice servers](../installing/6-voice-servers.md) and
   address.
 - The server warns at startup when `listen_addr` is a loopback address and no proxy is trusted.
 
+### IPv4 and IPv6
+
+A voice server serves both families at once. Left to its defaults it listens on every interface
+over IPv4 and IPv6, for signalling, media, and file transfers.
+
+- Each of `listen_addr`, `[rtc] ip`, and `[rtc] announced_address` takes one value or a list:
+  `ip = ["0.0.0.0", "::"]`. In an environment variable, separate them with commas:
+  `ASPEN_VOICE_SERVER_RTC__IP="0.0.0.0,::"`.
+- An IPv6 address takes IPv6 only, so `[::]:9001` and `0.0.0.0:9001` are two listeners and a
+  client's address is always its own, never an IPv4 one written as IPv6.
+- **A family you name must work.** The server refuses to start when an address in `listen_addr`
+  or `[rtc] ip` cannot be bound, or has nothing to announce.
+- **A family only the defaults name is left out when the machine lacks it**, with a line in the
+  log (`no media over IPv6: …`). A machine without IPv6 runs on IPv4 alone with no setting
+  changed.
+- To serve one family only, name it: `listen_addr = "0.0.0.0:9001"` and `ip = "0.0.0.0"`.
+- Open the same ports to clients over both families; an IPv6 firewall is usually a separate
+  one (`ip6tables`, the cloud's IPv6 rules).
+
 ### Workers
 
 If one worker dies, the server stops, sends everyone in its calls to rejoin, and exits with an
@@ -47,9 +66,18 @@ error. Run it under a supervisor that restarts it: `Restart=on-failure` under sy
 
 | Setting | Default | |
 | --- | --- | --- |
-| `ip` | `0.0.0.0` | The interface media is received on. |
-| `announced_address` | the primary interface's address | The address clients send media to. Set it to the public address when the server is behind NAT. Never a loopback address: the server refuses to start with one. |
-| `min_port`, `max_port` | `40000`, `40999` | The media ports, UDP and TCP; open them to clients. The range bounds how many people the server can carry. |
+| `ip` | `["0.0.0.0", "::"]` | The interfaces media is received on: one address, or one of each family. |
+| `announced_address` | each family's primary address | The addresses clients send media to: one address, or one of each family, each used for the interface of its family. Set the public address when the server is behind NAT. Never a loopback address: the server refuses to start with one. |
+| `min_port`, `max_port` | `40000`, `40999` | The media ports, UDP and TCP, the same range over each family; open them to clients. The range bounds how many people the server can carry. |
+
+What a family announces when `announced_address` has no address of that family:
+
+- An interface given by its own address (`ip = "203.0.113.10"`) announces that address.
+- `0.0.0.0` and `::` announce the address the machine reaches the internet from in that family.
+  For IPv6 that is often a temporary address that changes, so a server sets it explicitly:
+  `announced_address = ["203.0.113.10", "2001:db8::10"]`.
+- A host name in `announced_address` is announced for every family that has no address there.
+  Browsers do not all resolve names in what a server announces, so prefer addresses.
 
 ## `[transfer]`
 
@@ -65,7 +93,7 @@ encrypted end to end.
 | Setting | Default | |
 | --- | --- | --- |
 | `relay_mbps` | `50` | The most every relayed transfer on this server may carry together, in megabits a second. People are told this limit before they choose the relay. `0` turns relaying off: transfers then go directly between devices or not at all. |
-| `port` | `3478` | The UDP port STUN and TURN answer on; open it to clients. |
+| `port` | `3478` | The UDP port STUN and TURN answer on, on each `[rtc] ip`; open it to clients over both families. |
 | `relay_min_port`, `relay_max_port` | `42000`, `42999` | The UDP ports relayed transfers use, two for each (one per side). They are used inside the server only and need not be open to clients. |
 
 The server refuses to start when the relay ports overlap the media ports or `port`.

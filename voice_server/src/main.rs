@@ -10,6 +10,7 @@ mod outbox;
 mod reporter;
 mod rooms;
 mod signalling;
+mod sockets;
 mod token_keys;
 mod transfer;
 #[cfg(test)]
@@ -106,9 +107,14 @@ async fn main() -> anyhow::Result<()> {
     // Listening on loopback means a proxy on this machine passes every client on, and without
     // it trusted every client has the proxy's address: the per-address limits then count
     // everyone together, and a few clients lock out the rest.
-    if config.listen_addr.ip().is_loopback() && config.rate_limits.trusted_proxies.is_empty() {
+    let (listen_addrs, listen_required) = config.listen_addrs();
+    if listen_addrs.iter().any(|addr| addr.ip().is_loopback())
+        && config.rate_limits.trusted_proxies.is_empty()
+    {
         tracing::warn!(
-            "listen_addr is a loopback address but [rate_limits] trusted_proxies is empty: every              client behind the proxy counts as the proxy's address, so the per-address limits              apply to everyone at once; list the proxy (trusted_proxies = [\"127.0.0.1\"])"
+            "listen_addr is a loopback address but [rate_limits] trusted_proxies is empty: every \
+             client behind the proxy counts as the proxy's address, so the per-address limits \
+             apply to everyone at once; list the proxy (trusted_proxies = [\"127.0.0.1\"])"
         );
     }
 
@@ -146,44 +152,24 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to connect to NATS")?;
     aspen_limits::suspension::watch(reporter.client(), limits.suspension().clone(), "voice");
     let token_keys = token_keys::TokenKeys::start(reporter.client(), config.id);
-    let announced_address = config.rtc.resolved_announced_address()?;
-    if let Some(address) = &announced_address {
-        if address
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
-        {
-            anyhow::bail!(
-                "rtc.announced_address is a loopback address, which browsers cannot send media to"
-            );
-        }
-    } else if config.rtc.ip.is_loopback() {
-        anyhow::bail!(
-            "rtc.ip is a loopback address, which browsers cannot send media to; bind an interface or leave it unspecified"
+    let media_addresses = config.rtc.media_addresses()?;
+    for address in &media_addresses {
+        info!(
+            ip = %address.ip,
+            announced = address.host(),
+            ports = format!("{}-{}", config.rtc.min_port, config.rtc.max_port),
+            "media listening"
         );
     }
-    info!(
-        ip = %config.rtc.ip,
-        announced = announced_address.as_deref().unwrap_or("(same as ip)"),
-        ports = format!("{}-{}", config.rtc.min_port, config.rtc.max_port),
-        "media listening"
-    );
     let relay = Arc::new(
-        transfer::Relay::start(
-            &config.transfer,
-            config.rtc.ip,
-            announced_address
-                .clone()
-                .unwrap_or_else(|| config.rtc.ip.to_string())
-                .as_str(),
-        )
-        .await
-        .context("could not start STUN and TURN for file transfers")?,
+        transfer::Relay::start(&config.transfer, &media_addresses)
+            .await
+            .context("could not start STUN and TURN for file transfers")?,
     );
     let rooms = rooms::Rooms::new(
         config.id,
         workers,
-        config.rtc.ip,
-        announced_address,
+        media_addresses,
         reporter.clone(),
         Arc::clone(&relay),
         &config.rate_limits,
@@ -236,13 +222,29 @@ async fn main() -> anyhow::Result<()> {
                 .allow_methods(Any)
                 .expose_headers([axum::http::header::RETRY_AFTER]),
         );
-    let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;
-    info!(
-        addr = config.listen_addr.to_string(),
-        server = config.id.to_string(),
-        "voice server listening"
+    let mut listeners = Vec::new();
+    for addr in listen_addrs {
+        match sockets::tcp_listener(addr) {
+            Ok(listener) => {
+                info!(
+                    addr = addr.to_string(),
+                    server = config.id.to_string(),
+                    "voice server listening"
+                );
+                listeners.push(listener);
+            }
+            // One of the defaults, on a machine without its family.
+            Err(e) if !listen_required && sockets::family_missing(&e) => {
+                info!("not listening on {addr}: {e}");
+            }
+            Err(e) => return Err(e).with_context(|| format!("could not listen on {addr}")),
+        }
+    }
+    anyhow::ensure!(
+        !listeners.is_empty(),
+        "could not listen over IPv4 or IPv6; set listen_addr"
     );
-    let stopped = serve(listener, app, config.rate_limits.max_connections, async {
+    let stopped = serve(listeners, app, config.rate_limits.max_connections, async {
         tokio::select! {
             () = worker_died.notified() => Stopped::WorkerDied,
             () = token_keys.unregistered() => Stopped::Unregistered,
@@ -277,12 +279,33 @@ enum Stopped {
 /// and sends nothing, cannot hold them.
 const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Serves `app` on `listener` until the process is told to stop or `failed` completes:
+/// The next connection on any of `listeners`. `turn` moves the search's start on by one each
+/// time, so a listener that always has connections waiting cannot keep the others from being
+/// accepted.
+async fn accept_any(
+    listeners: &[tokio::net::TcpListener],
+    turn: &mut usize,
+) -> std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)> {
+    let first = *turn;
+    *turn = turn.wrapping_add(1);
+    std::future::poll_fn(|cx| {
+        for offset in 0..listeners.len() {
+            let listener = &listeners[first.wrapping_add(offset) % listeners.len()];
+            if let std::task::Poll::Ready(accepted) = listener.poll_accept(cx) {
+                return std::task::Poll::Ready(accepted);
+            }
+        }
+        std::task::Poll::Pending
+    })
+    .await
+}
+
+/// Serves `app` on `listeners` until the process is told to stop or `failed` completes:
 /// at most `max_connections` at once (past that, new ones wait in the listen backlog), each
 /// given `HEADER_READ_TIMEOUT` for every request's headers, with WebSocket upgrades. Each
 /// request carries its peer's address as axum's `ConnectInfo`.
 async fn serve(
-    listener: tokio::net::TcpListener,
+    listeners: Vec<tokio::net::TcpListener>,
     app: Router,
     max_connections: usize,
     failed: impl std::future::Future<Output = Stopped>,
@@ -296,13 +319,14 @@ async fn serve(
             stopped = failed => stopped,
         }
     });
+    let mut turn = 0;
     let stopped = loop {
         let permit = tokio::select! {
             permit = Arc::clone(&permits).acquire_owned() => permit.expect("never closed"),
             stopped = &mut stopping => break stopped,
         };
         let (stream, peer) = tokio::select! {
-            accepted = listener.accept() => match accepted {
+            accepted = accept_any(&listeners, &mut turn) => match accepted {
                 Ok(accepted) => accepted,
                 Err(e) => {
                     // Out of file descriptors, most likely; accepting again at once would spin.

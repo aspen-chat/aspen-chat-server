@@ -28,7 +28,7 @@
 //! The data channel between the two devices is encrypted end to end (DTLS), so the relay
 //! carries only ciphertext.
 
-use crate::config::TransferConfig;
+use crate::config::{MediaAddress, TransferConfig};
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -36,7 +36,7 @@ use hmac::{Hmac, Mac};
 use rand::RngExt as _;
 use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -54,10 +54,11 @@ use webrtc_util::Conn;
 /// The realm TURN credentials are for.
 const REALM: &str = "aspen";
 /// The client addresses one side of one transfer may use the relay from, and so the most
-/// allocations it holds (the relay listens on one socket, so each allocation is one client
-/// address). A browser allocates from each network interface it gathers on; two leave room for
-/// a second interface or one change of address on the way.
-const ADDRESSES_PER_CREDENTIAL: usize = 2;
+/// allocations it holds (the relay listens on one socket for each address family, so each
+/// allocation is one client address). A browser allocates from each network interface it
+/// gathers on, once over each family the interface has; four leave room for both families of
+/// a second interface, or of one change of address on the way.
+const ADDRESSES_PER_CREDENTIAL: usize = 4;
 /// How much the relay holds waiting to be sent, in seconds of its rate.
 const QUEUE_SECONDS: f64 = 0.2;
 /// The least it holds, so that a slow rate still queues a window's worth.
@@ -74,8 +75,9 @@ const MIN_PACER_BURST_BYTES: f64 = 16.0 * 1024.0;
 /// The server's STUN and TURN, and the transfers whose credentials it accepts.
 pub struct Relay {
     policy: TransferPolicy,
-    /// Where clients reach STUN and TURN, as ICE server URLs name it.
-    host: String,
+    /// Where clients reach STUN and TURN, one for each media address, as ICE server URLs
+    /// name them: an IPv6 address in brackets.
+    hosts: Vec<String>,
     port: u16,
     secret: [u8; 32],
     live: Arc<Mutex<LiveCredentials>>,
@@ -106,36 +108,37 @@ impl LivePorts {
 }
 
 impl Relay {
-    /// Starts STUN and TURN on `config.port` of `bind`, announced as `announced` (the media
-    /// address clients already reach), relaying at most `config.relay_mbps` in all.
+    /// Starts STUN and TURN on `config.port` of each of `addresses` (the media addresses
+    /// clients already reach), relaying at most `config.relay_mbps` in all.
     pub async fn start(
         config: &TransferConfig,
-        bind: IpAddr,
-        announced: &str,
+        addresses: &[MediaAddress],
     ) -> anyhow::Result<Self> {
-        let announced_ip = tokio::net::lookup_host((announced, 0))
-            .await?
-            .map(|address| address.ip())
-            .find(IpAddr::is_ipv4)
-            .ok_or_else(|| anyhow::anyhow!("{announced} has no IPv4 address to relay on"))?;
-        let listener = UdpSocket::bind(SocketAddr::new(bind, config.port)).await?;
+        let (bind, announced) = relay_address(addresses).await?;
         let live: Arc<Mutex<LiveCredentials>> = Arc::default();
         let secret = rand::rng().random::<[u8; 32]>();
         let relaying = config.relay_mbps > 0;
-        let pacer = Pacer::start(config.relay_mbps);
-        let server = Server::new(ServerConfig {
-            conn_configs: vec![ConnConfig {
+        let allocations = Allocations {
+            bind,
+            announced,
+            min_port: config.relay_min_port,
+            max_port: config.relay_max_port,
+            next: Arc::new(AtomicU16::new(config.relay_min_port)),
+            pacer: Pacer::start(config.relay_mbps),
+            live: Arc::default(),
+        };
+        let mut conn_configs = Vec::new();
+        for address in addresses {
+            let listen = SocketAddr::new(address.ip, config.port);
+            let listener = crate::sockets::udp_socket(listen)
+                .map_err(|e| anyhow::anyhow!("could not bind {listen}: {e}"))?;
+            conn_configs.push(ConnConfig {
                 conn: Arc::new(listener),
-                relay_addr_generator: Box::new(Allocations {
-                    bind,
-                    announced: announced_ip,
-                    min_port: config.relay_min_port,
-                    max_port: config.relay_max_port,
-                    next: AtomicU16::new(config.relay_min_port),
-                    pacer,
-                    live: Arc::default(),
-                }),
-            }],
+                relay_addr_generator: Box::new(allocations.clone()),
+            });
+        }
+        let server = Server::new(ServerConfig {
+            conn_configs,
             realm: REALM.to_string(),
             auth_handler: Arc::new(Credentials {
                 relaying,
@@ -155,12 +158,17 @@ impl Relay {
             policy: TransferPolicy {
                 relay_mbps: relaying.then_some(config.relay_mbps),
             },
-            host: announced.to_string(),
+            hosts: addresses.iter().map(url_host).collect(),
             port: config.port,
             secret,
             live,
             server,
         })
+    }
+
+    /// One URL for each address STUN and TURN listen on; a client uses those it can reach.
+    fn urls(&self, url: impl Fn(&str, u16) -> String) -> Vec<String> {
+        self.hosts.iter().map(|host| url(host, self.port)).collect()
     }
 
     /// Whether transfers may be relayed here, and how fast.
@@ -183,7 +191,7 @@ impl Relay {
         let mut servers = Vec::new();
         if mode == TransferMode::DirectPreferred {
             servers.push(IceServer {
-                urls: vec![format!("stun:{}:{}", self.host, self.port)],
+                urls: self.urls(|host, port| format!("stun:{host}:{port}")),
                 username: None,
                 credential: None,
             });
@@ -197,7 +205,7 @@ impl Relay {
                 .entry(username.clone())
                 .or_default();
             servers.push(IceServer {
-                urls: vec![format!("turn:{}:{}?transport=udp", self.host, self.port)],
+                urls: self.urls(|host, port| format!("turn:{host}:{port}?transport=udp")),
                 username: Some(username),
                 credential: Some(credential),
             });
@@ -370,14 +378,48 @@ impl Pacer {
     }
 }
 
-/// Makes each allocation's relay socket: a port from the relay range, announced at the media
-/// address, wrapped so it forwards only to other allocations, at the shared rate.
+/// `address` as the host of a STUN or TURN URL.
+fn url_host(address: &MediaAddress) -> String {
+    let host = address.host();
+    match host.parse() {
+        Ok(IpAddr::V6(ip)) => format!("[{ip}]"),
+        _ => host,
+    }
+}
+
+/// The interface relay sockets bind and the address every allocation is announced at: those of
+/// the IPv4 media address when there is one, else the IPv6 one's. Every allocation has the one
+/// address, whichever family its client reached the relay over, because a transfer's two relay
+/// candidates pair only when they are of one family; and IPv4 when there is a choice, because
+/// that is what a TURN client asking for no family expects (`Allocations::allocate_conn`).
+async fn relay_address(addresses: &[MediaAddress]) -> anyhow::Result<(IpAddr, IpAddr)> {
+    let address = addresses
+        .iter()
+        .find(|address| address.ip.is_ipv4())
+        .or(addresses.first())
+        .ok_or_else(|| anyhow::anyhow!("no media address to relay on"))?;
+    let host = address.host();
+    let announced = tokio::net::lookup_host((host.as_str(), 0))
+        .await?
+        .map(|resolved| resolved.ip())
+        .find(|ip| ip.is_ipv4() == address.ip.is_ipv4())
+        .ok_or_else(|| {
+            let family = if address.ip.is_ipv4() { "IPv4" } else { "IPv6" };
+            anyhow::anyhow!("{host} has no {family} address to relay on")
+        })?;
+    Ok((address.ip, announced))
+}
+
+/// Makes each allocation's relay socket: a port from the relay range, announced at the relay
+/// address, wrapped so it forwards only to other allocations, at the shared rate. Its clones,
+/// one for each socket the relay listens on, share the range and the live ports.
+#[derive(Clone)]
 struct Allocations {
     bind: IpAddr,
     announced: IpAddr,
     min_port: u16,
     max_port: u16,
-    next: AtomicU16,
+    next: Arc<AtomicU16>,
     pacer: Arc<Pacer>,
     live: Arc<LivePorts>,
 }
@@ -393,7 +435,10 @@ impl RelayAddressGenerator for Allocations {
         use_ipv4: bool,
         _requested_port: u16,
     ) -> Result<(Arc<dyn Conn + Send + Sync>, SocketAddr), turn::Error> {
-        if !use_ipv4 {
+        // A client that asks for no family is taken to ask for IPv4, so on a server with
+        // IPv6 alone every request is given its one address; where the address is IPv4, a
+        // request for IPv6 is refused, as a relay without that family does.
+        if !use_ipv4 && self.announced.is_ipv4() {
             return Err(turn::Error::Other(
                 "transfers are relayed over IPv4".to_string(),
             ));
@@ -409,10 +454,10 @@ impl RelayAddressGenerator for Allocations {
                     live: self.live.clone(),
                     socket: Arc::new(socket),
                     announced: self.announced,
-                    loopback: if self.bind.is_unspecified() {
-                        IpAddr::V4(Ipv4Addr::LOCALHOST)
-                    } else {
-                        self.bind
+                    loopback: match self.bind {
+                        IpAddr::V4(ip) if ip.is_unspecified() => Ipv4Addr::LOCALHOST.into(),
+                        IpAddr::V6(ip) if ip.is_unspecified() => Ipv6Addr::LOCALHOST.into(),
+                        bound => bound,
                     },
                     pacer: self.pacer.clone(),
                 };
@@ -566,6 +611,44 @@ mod tests {
         assert!(!live.holds(42000));
     }
 
+    fn media(ip: &str, announced: Option<&str>) -> MediaAddress {
+        MediaAddress {
+            ip: ip.parse().unwrap(),
+            announced: announced.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn urls_bracket_ipv6_addresses() {
+        assert_eq!(
+            url_host(&media("0.0.0.0", Some("203.0.113.10"))),
+            "203.0.113.10"
+        );
+        assert_eq!(
+            url_host(&media("::", Some("2001:db8::10"))),
+            "[2001:db8::10]"
+        );
+        assert_eq!(url_host(&media("2001:db8::7", None)), "[2001:db8::7]");
+        assert_eq!(
+            url_host(&media("::", Some("voice.example.org"))),
+            "voice.example.org"
+        );
+    }
+
+    #[tokio::test]
+    async fn allocations_are_announced_at_ipv4_when_there_is_one() {
+        let v4 = media("0.0.0.0", Some("203.0.113.10"));
+        let v6 = media("::", Some("2001:db8::10"));
+        assert_eq!(
+            relay_address(&[v6.clone(), v4]).await.unwrap(),
+            ("0.0.0.0".parse().unwrap(), "203.0.113.10".parse().unwrap())
+        );
+        assert_eq!(
+            relay_address(&[v6]).await.unwrap(),
+            ("::".parse().unwrap(), "2001:db8::10".parse().unwrap())
+        );
+    }
+
     #[test]
     fn credentials_name_one_side_of_one_transfer() {
         let secret = [7; 32];
@@ -593,11 +676,21 @@ mod tests {
             credentials.auth_handle(&sender_side, REALM, from).unwrap(),
             generate_auth_key(&sender_side, REALM, &password(&secret, &sender_side))
         );
-        // A second address is taken, a third refused, and the first still works.
-        let second = SocketAddr::from(([192, 0, 2, 1], 5001));
-        let third = SocketAddr::from(([192, 0, 2, 2], 5000));
-        assert!(credentials.auth_handle(&sender_side, REALM, second).is_ok());
-        assert!(credentials.auth_handle(&sender_side, REALM, third).is_err());
+        // Addresses are taken up to the limit, the next refused, and the first still works.
+        let address = |n: usize| SocketAddr::from(([192, 0, 2, 1], 5000 + n as u16));
+        for n in 1..ADDRESSES_PER_CREDENTIAL {
+            assert!(
+                credentials
+                    .auth_handle(&sender_side, REALM, address(n))
+                    .is_ok()
+            );
+        }
+        let one_more = address(ADDRESSES_PER_CREDENTIAL);
+        assert!(
+            credentials
+                .auth_handle(&sender_side, REALM, one_more)
+                .is_err()
+        );
         assert!(credentials.auth_handle(&sender_side, REALM, from).is_ok());
         let off = Credentials {
             relaying: false,

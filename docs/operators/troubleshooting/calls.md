@@ -53,6 +53,15 @@ Signalling works but media does not flow. Either:
 - `[rtc] announced_address` is not the address clients can reach. Behind NAT it must be the
   public one.
 
+When only some people are affected, or calls take seconds to connect, check each family apart:
+the startup log has one `media listening` line for each family the server announces.
+
+- The media ports are open over IPv4 but not IPv6 (or the other way). A client with both tries
+  both and uses the one that answers; one with only the closed family hears nothing.
+- The announced IPv6 address is a temporary one that has since changed. Set the stable one in
+  `[rtc] announced_address`.
+- To take a family out of calls while you fix it, name the other alone: `ip = "0.0.0.0"`.
+
 ## A voice server's snapshot repaired the record of a call
 
 The log warns that a voice server's snapshot repaired the record of a call, or that a voice
