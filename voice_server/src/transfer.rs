@@ -130,7 +130,7 @@ impl Relay {
         let mut conn_configs = Vec::new();
         for address in addresses {
             let listen = SocketAddr::new(address.ip, config.port);
-            let listener = crate::sockets::udp_socket(listen)
+            let listener = aspen_sockets::udp_socket(listen)
                 .map_err(|e| anyhow::anyhow!("could not bind {listen}: {e}"))?;
             conn_configs.push(ConnConfig {
                 conn: Arc::new(listener),

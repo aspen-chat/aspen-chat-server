@@ -9,7 +9,14 @@ aspen-chat-server --cert fullchain.pem --key privkey.pem
 | Flag | What it does |
 | --- | --- |
 | `--port` | The port to listen on. 443 by default. |
-| `--listen-addr` | The address to listen on. Every interface by default. May be given more than once. |
+| `--listen-addr` | The address to listen on. May be given more than once. Every interface over IPv4 and IPv6 by default (`0.0.0.0` and `::`). |
+
+- **An address you give must bind**, or the server refuses to start.
+- Given none, a machine without IPv6 listens over IPv4 alone, and says `not listening on [::]:443`
+  in its log.
+- An IPv6 address takes IPv6 only. To listen over one family, give its address alone:
+  `--listen-addr 0.0.0.0`.
+- Open the port over both families; an IPv6 firewall is usually a separate one.
 
 The server does not notice a renewed certificate. Restart it after renewing.
 

@@ -409,6 +409,7 @@ dependencies = [
  "aspen_limits",
  "aspen_metrics",
  "aspen_schema",
+ "aspen_sockets",
  "aspen_wire",
  "async-nats",
  "chrono",
@@ -755,6 +756,16 @@ name = "aspen_schema"
 version = "0.1.0"
 dependencies = [
  "diesel",
+]
+
+[[package]]
+name = "aspen_sockets"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "socket2 0.6.3",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -8168,6 +8179,7 @@ dependencies = [
  "anyhow",
  "aspen_limits",
  "aspen_metrics",
+ "aspen_sockets",
  "aspen_tls",
  "async-nats",
  "async-trait",
@@ -8194,7 +8206,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "smart-default",
- "socket2 0.6.3",
  "strum",
  "stun",
  "thiserror 2.0.18",

@@ -10,7 +10,6 @@ mod outbox;
 mod reporter;
 mod rooms;
 mod signalling;
-mod sockets;
 mod token_keys;
 mod transfer;
 #[cfg(test)]
@@ -222,28 +221,14 @@ async fn main() -> anyhow::Result<()> {
                 .allow_methods(Any)
                 .expose_headers([axum::http::header::RETRY_AFTER]),
         );
-    let mut listeners = Vec::new();
-    for addr in listen_addrs {
-        match sockets::tcp_listener(addr) {
-            Ok(listener) => {
-                info!(
-                    addr = addr.to_string(),
-                    server = config.id.to_string(),
-                    "voice server listening"
-                );
-                listeners.push(listener);
-            }
-            // One of the defaults, on a machine without its family.
-            Err(e) if !listen_required && sockets::family_missing(&e) => {
-                info!("not listening on {addr}: {e}");
-            }
-            Err(e) => return Err(e).with_context(|| format!("could not listen on {addr}")),
-        }
+    let listeners = aspen_sockets::tcp_listeners(&listen_addrs, listen_required)?;
+    for listener in &listeners {
+        info!(
+            addr = listener.local_addr()?.to_string(),
+            server = config.id.to_string(),
+            "voice server listening"
+        );
     }
-    anyhow::ensure!(
-        !listeners.is_empty(),
-        "could not listen over IPv4 or IPv6; set listen_addr"
-    );
     let stopped = serve(listeners, app, config.rate_limits.max_connections, async {
         tokio::select! {
             () = worker_died.notified() => Stopped::WorkerDied,

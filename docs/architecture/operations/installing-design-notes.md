@@ -21,6 +21,18 @@ asks what it does.
   belong to: other deployments pin the key they find there, and passkeys are bound to the host.
   See [Step 3](../../operators/installing/3-configuring.md#choosing-public_url).
 
+## Listening
+
+- **Both servers listen over IPv4 and IPv6 unless told otherwise, each family on a socket of its
+  own.** People on IPv6-only networks reach the deployment without a translator in the path. One
+  `::` socket taking IPv4 too would show clients at IPv4-mapped addresses, which the address
+  limits and `trusted_proxies` would have to see through, and whether it takes IPv4 at all
+  follows the machine's `bindv6only`.
+- **A default address is given up only when the machine lacks its family; an address the
+  operator gave must bind.** A machine without IPv6 starts unchanged, a port already in use
+  never leaves a server half listening, and an operator who asked for an address learns at
+  startup that it is not there.
+
 ## Outbound requests
 
 - **Fetches to addresses others choose ignore `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`.** A

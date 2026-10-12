@@ -9,6 +9,7 @@ description = "An Aspen voice server: a mediasoup SFU that carries the media of 
 anyhow = "1.0.102"
 aspen_limits = { version = "0.1.0", path = "../limits" }
 aspen_tls = { version = "0.1.0", path = "../tls" }
+aspen_sockets = { version = "0.1.0", path = "../sockets" }
 aspen_metrics = { version = "0.1.0", path = "../metrics", features = ["jemalloc"] }
 # The global allocator, replacing malloc for the whole process (C and C++ libraries included),
 # so its statistics describe all of the process's memory.
@@ -39,7 +40,6 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 uuid = { version = "1.16.0", features = ["serde", "v7"] }
 voice_protocol = { path = "../voice_protocol" }
 smart-default = "0.7.1"
-socket2 = "0.6.3"
 strum = { version = "0.28.0", features = ["derive"] }
 turn = "0.17.2"
 webrtc-util = "0.17.2"

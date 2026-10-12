@@ -1,8 +1,9 @@
 use aspen_limits::RuleTable;
+use aspen_sockets::EVERY_INTERFACE;
 use serde::Deserialize;
 use smart_default::SmartDefault;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -279,12 +280,6 @@ fn default_workers() -> usize {
 /// The port the HTTP server listens on when `listen_addr` is unset.
 const DEFAULT_PORT: u16 = 9001;
 
-/// Every interface, over IPv4 and over IPv6.
-const EVERY_INTERFACE: [IpAddr; 2] = [
-    IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-    IpAddr::V6(Ipv6Addr::UNSPECIFIED),
-];
-
 /// A setting given as one value or a list of them. One string may hold several separated by
 /// commas, which is how an environment variable gives a list.
 fn one_or_many<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
@@ -321,7 +316,8 @@ where
 
 impl VoiceServerConfig {
     /// Where the HTTP server listens, and whether each must be bound: an address the settings
-    /// name must, while of the defaults a family this machine lacks is left out (`main`).
+    /// name must, while of the defaults a family this machine lacks is left out
+    /// (`aspen_sockets::tcp_listeners`).
     pub fn listen_addrs(&self) -> (Vec<SocketAddr>, bool) {
         match &self.listen_addr {
             Some(addrs) => (addrs.clone(), true),
@@ -464,7 +460,7 @@ impl RtcConfig {
             let required = self.ip.is_some() || literal.is_some();
             if let Err(e) = machine.bind(ip) {
                 anyhow::ensure!(
-                    !required && crate::sockets::family_missing(&e),
+                    !required && aspen_sockets::family_missing(&e),
                     "rtc.ip {ip} cannot be bound: {e}"
                 );
                 tracing::info!("no media over {family}: {ip} cannot be bound ({e})");

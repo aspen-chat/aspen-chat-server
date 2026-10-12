@@ -3,7 +3,7 @@
 
 use std::{
     fs, io,
-    net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr},
+    net::{IpAddr, SocketAddr as StdSocketAddr},
     panic,
     path::PathBuf,
     sync::Arc,
@@ -22,7 +22,7 @@ use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
 };
-use tokio::{net::TcpListener, runtime, sync::oneshot};
+use tokio::{runtime, sync::oneshot};
 use tokio_rustls::TlsAcceptor;
 use tower::Service as _;
 use tracing::{error, info, level_filters::LevelFilter, warn};
@@ -69,8 +69,10 @@ struct Opt {
     #[clap(short = 'c', long, requires = "key")]
     cert: Option<PathBuf>,
     /// Address(es) to listen on, can be either IPv4 or IPv6.
-    /// Pass multiple times to listen on more than one address.
-    #[clap(long, default_values_t = [IpAddr::V4(Ipv4Addr::UNSPECIFIED)])]
+    /// Pass multiple times to listen on more than one address. Each one given must bind, and an
+    /// IPv6 address takes IPv6 alone. Given none, the server listens on every interface over
+    /// IPv4 and IPv6 (0.0.0.0 and ::), leaving out a family this machine does not have.
+    #[clap(long)]
     listen_addr: Vec<IpAddr>,
 
     /// The network port to use for all given listen addresses.
@@ -333,19 +335,18 @@ async fn run(options: Opt) -> Result<()> {
         })
         .transpose()?;
 
-    let mut listeners = Vec::new();
-    for addr in options.listen_addr {
-        match TcpListener::bind(StdSocketAddr::new(addr, options.port)).await {
-            Ok(listener) => {
-                info!("listening on {}", listener.local_addr()?);
-                listeners.push(listener);
-            }
-            Err(e) => warn!("unable to bind listen address {addr} due to {e}"),
-        }
+    let listen_required = !options.listen_addr.is_empty();
+    let listen_addrs: Vec<StdSocketAddr> = if listen_required {
+        &options.listen_addr[..]
+    } else {
+        &aspen_sockets::EVERY_INTERFACE[..]
     }
-
-    if listeners.is_empty() {
-        bail!("all listen addresses failed to bind")
+    .iter()
+    .map(|&addr| StdSocketAddr::new(addr, options.port))
+    .collect();
+    let listeners = aspen_sockets::tcp_listeners(&listen_addrs, listen_required)?;
+    for listener in &listeners {
+        info!("listening on {}", listener.local_addr()?);
     }
 
     if options.no_https {

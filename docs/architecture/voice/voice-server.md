@@ -68,9 +68,9 @@ Left unset, `listen_addr` and `[rtc] ip` name every interface over both families
 | Plain transports | One media address: the family the client's signalling came over (`Rooms::plain_address`), else the first |
 | STUN and TURN | One UDP socket for each media address; see [File transfers](../file-transfers.md#stun-and-turn) |
 
-- Every IPv6 socket takes IPv6 alone (`sockets`, and `SocketFlags::ipv6_only` for mediasoup's). A port then has an IPv4 and an IPv6 socket, and a client's address is never an IPv4-mapped one.
+- Every IPv6 socket takes IPv6 alone (`aspen_sockets`, and `SocketFlags::ipv6_only` for mediasoup's). A port then has an IPv4 and an IPv6 socket, and a client's address is never an IPv4-mapped one.
 - A family the settings name must work: an `ip` that cannot be bound or has nothing to announce, or a `listen_addr` that cannot be bound, stops the server.
-- A family only the defaults name is left out, with a log line, when the machine lacks it (`sockets::family_missing`, or no address to announce). Any other failure to bind, a port in use for one, stops the server.
+- A family only the defaults name is left out, with a log line, when the machine lacks it (`aspen_sockets::family_missing`, or no address to announce). Any other failure to bind, a port in use for one, stops the server.
 
 ## Connections
 

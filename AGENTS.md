@@ -158,7 +158,7 @@ Federation, letting a user of one deployment use others, is built in five phases
 - `--gen-openapi-schema` — Generate schema files and exit; it reads no configuration
 - `--no-https` — Disable TLS (development only)
 - `-k, --key` / `-c, --cert` — TLS key/cert paths (PEM format)
-- `--listen-addr` — Bind address (default `0.0.0.0`, repeatable)
+- `--listen-addr` — Bind address, repeatable; each one given must bind. Given none, `0.0.0.0` and `::`, each family only where the machine has it (`aspen_sockets`)
 - `--port` — Port (default `443`)
 - `--private-worker` — Serve nothing: open no listening socket, need no web client, read no events for connections, and do only the background work every API server shares (mail and digests, voice reports, standing checks, plugins' observers and timers, push; `app::context::Role`). Refuses the listening and TLS flags. Without it a server refuses to start without the web client
 
@@ -211,6 +211,7 @@ The server is split into three layers, each a crate of its own:
 - `aspen_previews` (`server/previews/`): decoding, resizing, and encoding attachments' previews, and videos' posters.
 - `aspen_plugin_runtime` (`server/plugin_runtime/`): the bindings `spec/plugin.wit` generates, the engine and its epoch, and a call's limits.
 - `aspen_database` (`server/database/`, `app::database`): connecting to PostgreSQL as `database_url` says, with libpq's TLS parameters over OpenSSL (`postgres-openssl`), for the pool, the operator commands, `aspen-migrate`, and tests. Connect through it, never `AsyncPgConnection::establish`, which cannot use TLS.
+- `aspen_sockets` (`sockets/`, shared with the voice server): listening sockets of one address family each, so a server listens over IPv4 and IPv6 on one port, and which default addresses a machine without a family leaves out.
 - `aspen_tls` (`tls/`, shared with the voice server): each service's TLS files, NATS connections made with them, and the warning for NATS reached without TLS.
 - `aspen_outbound` (`server/outbound/`, `app::outbound`) and `aspen_link_preview` (`server/link_preview/`): requests to other hosts, and fetching and reading pages for link previews.
 - `aspen_webpush` (`server/webpush/`, `app::push::webpush`), `aspen_federation_core` (`server/federation_core/`, `app::federation::jws` and `policy`), and `aspen_email_templates` (`server/email_templates/`).
