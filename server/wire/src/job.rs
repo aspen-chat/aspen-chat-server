@@ -137,6 +137,8 @@ pub enum JobKind {
     ForgetIcon,
     /// Deleting the files of deleted messages kept past the deployment's retention.
     PurgeEvidence,
+    /// Sizing the NATS streams to their settings and the memory NATS has.
+    FitStreams,
 }
 
 crate::wire_name_traits!(JobKind);

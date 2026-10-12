@@ -15,6 +15,8 @@ pub enum Error {
     NatsConnect(#[from] async_nats::ConnectError),
     #[error("error while creating or updating NATS stream {0}")]
     NatsCreateStream(#[from] async_nats::jetstream::context::CreateStreamError),
+    #[error("error while reading the NATS account {0}")]
+    NatsAccount(#[from] async_nats::jetstream::context::AccountError),
     #[error("error while getting NATS stream {0}")]
     NatsGetStream(#[from] async_nats::jetstream::context::GetStreamError),
     #[error("error while querying NATS stream state {0}")]

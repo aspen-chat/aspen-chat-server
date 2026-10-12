@@ -757,6 +757,91 @@ pub struct Fleet {
     /// Every voice server reporting in the last half minute under an id no registered server
     /// has, whose reports are therefore dropped.
     pub unregistered_voice_servers: Vec<UnregisteredVoiceServer>,
+    /// The memory NATS keeps the deployment's streams in; `null` when NATS did not answer.
+    pub nats_memory: Option<NatsMemory>,
+}
+
+/// Whose memory a `NatsMemory` counts.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum NatsMemoryScope {
+    /// The whole NATS server's, read from its monitoring port (`[nats] monitor_url`).
+    Server,
+    /// This deployment's NATS account's.
+    Account,
+}
+
+impl From<app::nats_memory::Scope> for NatsMemoryScope {
+    fn from(scope: app::nats_memory::Scope) -> Self {
+        match scope {
+            app::nats_memory::Scope::Server => Self::Server,
+            app::nats_memory::Scope::Account => Self::Account,
+        }
+    }
+}
+
+/// The memory NATS keeps streams in. A stream reserves the most it may hold when it is made,
+/// so `reservedBytes` is what counts against `limitBytes`, whatever the streams hold.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NatsMemory {
+    pub scope: NatsMemoryScope,
+    /// Bytes every in-memory stream in the scope holds.
+    pub used_bytes: u64,
+    /// Bytes every in-memory stream in the scope has reserved.
+    pub reserved_bytes: u64,
+    /// The most the scope's streams may reserve; `null` when NATS does not say, as an account
+    /// without a limit of its own does not.
+    pub limit_bytes: Option<u64>,
+    /// Whether `[nats] monitor_url` names a monitoring port that did not answer, so that these
+    /// are the account's figures instead.
+    pub monitor_unreachable: bool,
+    /// The stream of the last minute's events; `null` while NATS is without it, which the
+    /// server puts right within moments.
+    pub event_stream: Option<NatsStreamMemory>,
+    /// The stream of the voice servers' reports not yet applied.
+    pub voice_report_stream: Option<NatsStreamMemory>,
+}
+
+/// One stream's use of NATS's memory.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NatsStreamMemory {
+    /// Bytes it holds.
+    pub bytes: u64,
+    /// The most it may hold, past which its oldest messages go.
+    pub max_bytes: u64,
+    pub messages: u64,
+    /// When the oldest message it holds was published.
+    pub oldest_at: Option<DateTime<Utc>>,
+    /// Whether its size follows NATS's memory rather than a deployment setting.
+    pub automatic: bool,
+}
+
+impl From<app::nats_memory::StreamUsage> for NatsStreamMemory {
+    fn from(stream: app::nats_memory::StreamUsage) -> Self {
+        Self {
+            bytes: stream.bytes,
+            max_bytes: stream.max_bytes,
+            messages: stream.messages,
+            oldest_at: stream.oldest_at,
+            automatic: stream.automatic,
+        }
+    }
+}
+
+impl From<app::nats_memory::Usage> for NatsMemory {
+    fn from(usage: app::nats_memory::Usage) -> Self {
+        Self {
+            scope: usage.scope.into(),
+            used_bytes: usage.used,
+            reserved_bytes: usage.reserved,
+            limit_bytes: usage.limit,
+            monitor_unreachable: usage.monitor_unreachable,
+            event_stream: usage.events.map(Into::into),
+            voice_report_stream: usage.voice_reports.map(Into::into),
+        }
+    }
 }
 
 /// A voice server reporting under an id that is not registered: its `id` in
@@ -796,11 +881,21 @@ pub async fn get_fleet(
     AdminUser(_session, access): AdminUser,
 ) -> ApiResult<Json<Fleet>> {
     access.require(DeploymentPermission::ViewDashboard)?;
-    let (api_servers, voice_servers, unregistered_voice_servers) = tokio::try_join!(
-        app::fleet::read_api_servers(&state),
-        app::fleet::read_voice_servers(&state),
-        app::fleet::read_unregistered_voice_servers(&state),
-    )?;
+    let (servers, nats_memory) = tokio::join!(
+        async {
+            tokio::try_join!(
+                app::fleet::read_api_servers(&state),
+                app::fleet::read_voice_servers(&state),
+                app::fleet::read_unregistered_voice_servers(&state),
+            )
+        },
+        app::nats_memory::usage(&state),
+    );
+    let (api_servers, voice_servers, unregistered_voice_servers) = servers?;
+    // The rest of the fleet is worth showing without it.
+    let nats_memory = nats_memory
+        .inspect_err(|e| tracing::warn!(error = %e, "could not read NATS's memory"))
+        .ok();
     Ok(Json(Fleet {
         api_servers: api_servers
             .into_iter()
@@ -835,6 +930,7 @@ pub async fn get_fleet(
             .into_iter()
             .map(UnregisteredVoiceServer::from)
             .collect(),
+        nats_memory: nats_memory.map(Into::into),
     }))
 }
 

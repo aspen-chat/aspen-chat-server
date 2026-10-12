@@ -319,6 +319,11 @@ fn recurring(state: &GlobalServerContext) -> Vec<Recurring> {
             every: 24 * HOUR,
         },
         Recurring {
+            kind: JobKind::FitStreams,
+            class: JobClass::Normal,
+            every: crate::nats_memory::FIT_EVERY,
+        },
+        Recurring {
             kind: JobKind::ConfirmStanding,
             class: JobClass::Normal,
             every: crate::federation::standing::pass_every(&state.config.federation),
@@ -470,6 +475,7 @@ async fn step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outco
         JobKind::RecordStats => upkeep::record_stats(state, job).await,
         JobKind::ForgetIcon => crate::icon::forget_step(state, job).await,
         JobKind::PurgeEvidence => crate::attachment::evidence::purge_step(state, job).await,
+        JobKind::FitStreams => crate::nats_memory::fit_step(state, job).await,
     }
 }
 

@@ -263,6 +263,8 @@ diesel::table! {
         newsletter_enabled -> Bool,
         upload_quota_gib -> Int4,
         evidence_retention_days -> Int4,
+        event_stream_mib -> Nullable<Int4>,
+        voice_report_stream_mib -> Nullable<Int4>,
     }
 }
 

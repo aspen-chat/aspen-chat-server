@@ -141,6 +141,8 @@ export {
   type RegistrationInvite,
   type RegistrationInviteRequest,
   type UnregisteredVoiceServer,
+  type NatsMemory,
+  type NatsStreamMemory,
   type VoiceServerHealth,
   type ContactResult,
   type FederatedDeployment,

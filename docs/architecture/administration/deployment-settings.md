@@ -48,6 +48,7 @@ The profile is a display name and an icon.
 | `evidence_retention_days` | [Reports](../reports/evidence.md#purging-evidence) |
 | `file_transfers` | [File transfers](../file-transfers.md) |
 | `email_required`, `email_verification_required`, `newsletter_enabled` | [Email](../email/index.md) |
+| `event_stream_mib`, `voice_report_stream_mib` | [NATS memory](../nats-memory.md) |
 
 The email settings turn on only where `[email]` is configured. `emailAvailable` in the policies and `email` in the profile say whether it is.
 
@@ -56,6 +57,7 @@ The email settings turn on only where `[email]` is configured. `emailAvailable` 
 - A display name is trimmed and from 1 to 64 characters, in any script.
 - An icon must be one whose upload is confirmed, or the change is refused with `deploymentIconMissing`.
 - A count is at most what `INTEGER` holds.
+- A stream's size is `NULL` for automatic, or at least 16 MiB, and one NATS has the memory for (see [NATS memory](../nats-memory.md#sizes)).
 
 ## The terminal
 
@@ -80,7 +82,8 @@ A change:
 2. checks the settings as it would leave them;
 3. writes them with `revision` one higher;
 4. renames the system account if the name changed;
-5. before committing, writes the revision to the NATS key-value bucket `aspen_settings`.
+5. resizes the NATS streams if a size changed, which fails the change when NATS refuses;
+6. before committing, writes the revision to the NATS key-value bucket `aspen_settings`.
 
 Each server watches the bucket (`spawn_watcher`):
 
@@ -110,9 +113,11 @@ Whoever made the change brings what is open in line once it commits (`after_chan
 | `require_two_factor` turned on | Each server's open event streams follow its copy. A stream whose account lacked a second factor when it identified closes with 4403 (`api::event_stream`), and the client asks for one as at sign-in |
 | Bots turned off | Bots already made keep working |
 | A lower limit | Not applied to what already exceeds it: bots owned, emoji held, or communities already past the everyone mention limit |
+| A stream's size | The stream is that size before the change answers. Made smaller than what it holds, its oldest go at once, and clients that needed them reload ([NATS memory](../nats-memory.md#what-a-smaller-stream-loses)) |
 | The gates, for CORS | CORS follows the gates as each request arrives |
 
 ## Checks
 
 - `scripts/check_permissions.py` checks file transfers reaching a call, two factors closing a stream from the terminal, and the permission.
 - `scripts/dev_federation_check.py` checks a gate closed from the dashboard ending a visitor's session.
+- `scripts/check_nats_memory.py` checks the stream sizes.

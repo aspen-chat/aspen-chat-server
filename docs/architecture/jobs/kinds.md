@@ -33,6 +33,7 @@ Each `JobKind` decides what its job does, step by step (see [Steps](steps.md)). 
 | [`recordStats`](#recordstats) | maintenance | hourly | Writes today's deployment totals. |
 | [`forgetIcon`](#forgeticon) | maintenance | | Deletes one icon nothing uses. |
 | [`purgeEvidence`](#purgeevidence) | maintenance | daily | Deletes deleted messages' files past the retention. |
+| [`fitStreams`](#fitstreams) | normal | every fifteen seconds | Sizes the NATS streams to their settings and NATS's memory. |
 
 ## Polls, calls, and upkeep
 
@@ -117,6 +118,14 @@ Hourly, recounts each community's members into `community.member_count`, which t
 ### `recordStats`
 
 Hourly, writes today's row of `deployment_stats` (UTC) from the latest row and what was made and deleted since (`admin::current_totals`). The dashboard's overview and growth read it (see [Dashboard](../administration/dashboard.md)).
+
+### `fitStreams`
+
+Every `nats_memory::FIT_EVERY` (fifteen seconds), makes the two in-memory NATS streams the sizes their settings and NATS's memory give them (`nats_memory::fit_step`; see [NATS memory](../nats-memory.md)).
+
+- It holds the settings row's lock while it does, as a change to the sizes does.
+- It writes to NATS only when a stream is missing or the wrong size.
+- A pass that fails is logged and left to the next, so its period never grows into a backoff.
 
 ### `forgetIcon`
 

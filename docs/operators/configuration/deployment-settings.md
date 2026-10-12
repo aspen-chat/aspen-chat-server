@@ -74,6 +74,23 @@ An invite made in the dashboard may also name a community.
 - `false` turns the whole feature off: no one can offer a file, whatever the channels'
   permissions, and calls in progress follow at once.
 
+## NATS memory
+
+| Setting | Default | |
+| --- | --- | --- |
+| `event-stream-mib` | `auto` | How many MiB of NATS's memory the last minute of events may take, at least `16`. |
+| `voice-report-stream-mib` | `auto` | The same for the voice servers' reports not yet applied. |
+
+- `auto` sizes a stream to what NATS has: see [NATS memory](services.md#nats-memory). In the
+  dashboard, an empty field is `auto`.
+- NATS sets a stream's whole size aside whatever it holds. A size NATS has no memory for is
+  refused, saying how much there is where Aspen can read it.
+- A change resizes the stream at once. One made smaller than what it holds lets its oldest go,
+  and connected apps that needed them reload.
+- The dashboard's **Server fleet** shows what each stream holds and may hold, and warns when the
+  events stream is nearly full. Past its size, events go before their minute is up, and apps that
+  reconnect reload instead of catching up.
+
 ## Email
 
 All of these need [`[email]`](email.md).

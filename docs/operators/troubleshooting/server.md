@@ -11,6 +11,22 @@ It says why on standard error. The usual causes:
   one once it has a domain;
 - a service it cannot reach.
 
+## NATS does not have the memory for the streams
+
+The server stops as it starts, or a change to a stream's size is refused, saying NATS does not
+have the memory. NATS sets a stream's whole size aside when the stream is made, out of
+`max_memory_store` (three quarters of the machine's memory when its configuration does not say).
+
+Do one of these:
+
+- Choose sizes that fit: `aspen-chat-server settings set --event-stream-mib 256
+  --voice-report-stream-mib 32`. This works while no server runs.
+- Give NATS more: raise `max_memory_store` in its configuration and restart it.
+- Let Aspen size the streams to what NATS has: name NATS's monitoring port as `monitor_url`
+  under `[nats]`, and leave the sizes `auto`.
+
+See [NATS memory](../configuration/services.md#nats-memory).
+
 ## Something that should follow a decision does not happen
 
 For example, a banned person's messages stay, or mail is not sent. It is a job that has not run.

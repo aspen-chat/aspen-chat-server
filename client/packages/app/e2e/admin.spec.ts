@@ -61,6 +61,39 @@ test("the fleet names each server's state in words", async ({ page }) => {
   await expect(voice.getByRole("row").filter({ hasText: "voice-spare" })).toContainText("Disabled");
 });
 
+test("the fleet shows what NATS's memory holds, and says when the events stream is nearly full", async ({
+  page,
+}) => {
+  const fleet = await openSection(page, "Server fleet");
+  await expect(fleet).toContainText(
+    "327 MiB of 327 MiB reserved by every stream on the NATS server, holding 245 MiB.",
+  );
+  const streams = fleet.getByRole("table", { name: "Streams" });
+  const events = streams.getByRole("row").filter({ hasText: "Events" });
+  await expect(events).toContainText("245 MiB (93%)");
+  await expect(events).toContainText("263 MiB, automatic");
+  const reports = streams.getByRole("row").filter({ hasText: "Voice reports" });
+  await expect(reports).toContainText("64 MiB, set");
+  await expect(reports).toContainText("Empty");
+  await expect(fleet).toContainText("The events stream is nearly full.");
+});
+
+test("a stream's size is set in MiB, and emptied to make it automatic", async ({ page }) => {
+  const policies = await openSection(page, "Policies");
+  const events = policies.getByRole("textbox", { name: "MiB for the last minute of events" });
+  const reports = policies.getByRole("textbox", { name: "MiB for voice servers' reports" });
+  await expect(events).toHaveValue("");
+  await expect(reports).toHaveValue("64");
+  await events.fill("512");
+  await reports.fill("");
+  const saved = page.waitForRequest(
+    (request) => request.method() === "PATCH" && request.url().endsWith("/api/v1/admin/settings"),
+  );
+  await policies.getByRole("button", { name: "Save" }).click();
+  expect((await saved).postDataJSON()).toEqual({ eventStreamMib: 512, voiceReportStreamMib: null });
+  await expect(policies.getByRole("status")).toHaveText("Saved.");
+});
+
 test("the fleet names a voice server reporting under an unregistered id, and shows the ids to copy", async ({
   page,
 }) => {
