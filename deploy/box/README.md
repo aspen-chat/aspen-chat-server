@@ -12,7 +12,7 @@ real domain, or behind a home router.
 | | |
 | --- | --- |
 | A machine | 64-bit Linux, 2 GiB of memory or more (4 is comfortable), and an SSD. Not an SD card: see [At home](#at-home). |
-| Docker | The system's, with Compose. Not rootless Docker, whose containers nothing can reach. |
+| Docker | The system's, with Compose 2.20 or later. Not rootless Docker, whose containers nothing can reach. |
 | Python 3.9 | Nothing else: the tool uses only what comes with it. |
 | A domain | One name for the deployment, **for good** ([Choosing `public_url`](../../docs/operators/installing/3-configuring.md#choosing-public_url)), and the right to add records under it. |
 | An address the internet reaches | The machine's own, or a router's that forwards to it. |
@@ -20,8 +20,8 @@ real domain, or behind a home router.
 
 ## Setting up
 
-1. Describe the deployment. It asks for the domain, and whether to keep people's files on the
-   machine or in an S3 bucket elsewhere:
+1. Describe the deployment. It asks for the domain, and whether to keep people's files and the
+   database on the machine or elsewhere:
 
    ```
    deploy/box/aspen-box init --api-image aspen-api:TAG --voice-image aspen-voice:TAG
@@ -103,6 +103,34 @@ its own certificates and calls go straight to its address.
   prefixes and nothing else
   ([The storage's read path](../../docs/operators/installing/storage-read-path.md)).
   `aspen-box doctor` checks that it refuses the rest.
+
+## Where the database is kept
+
+- **On the machine** (the default). PostgreSQL runs beside everything else, listening on
+  loopback, with its files in `~/aspen/data/postgres`.
+- **Elsewhere**: a PostgreSQL you run or rent. Answer `elsewhere` when `init` asks, and give its
+  address as `postgres://user:password@host:5432/database`. For an existing box, set
+  `"database": {"kind": "external", "url": "…", "ca_file": null}` in `box.json`.
+
+For a database elsewhere:
+
+- **It must be PostgreSQL 18 or later**, and empty the first time. `aspen-box up` checks the
+  version before anything touches it. Its user must be allowed to create the `pg_trgm` and
+  `btree_gin` extensions, as a database's owner is.
+- **Its certificate is checked** unless the address says otherwise with `sslmode`. Providers
+  whose certificates come from a public authority need nothing more. For one with an authority
+  of its own (AWS RDS, or your own server), give its file as `ca_file`, or to `init` as
+  `--database-ca`.
+- **Every query crosses a network**, so keep the database near the machine.
+- `aspen-box backup` and `restore` work on it too, over that connection. `restore` fills it
+  only when it holds no tables: emptying a database you keep elsewhere is yours to do. Your
+  provider's own backups are the better first line.
+- **To move a box's own database out**: `aspen-box backup`, change `box.json` to the database
+  elsewhere, then `aspen-box restore` that backup.
+
+Given on a command line, the address shows its password to anyone who can list the machine's
+processes for that moment. Answer `init`'s question instead, or put it in
+`ASPEN_BOX_DATABASE_URL`.
 
 ## At home
 

@@ -7,7 +7,7 @@
     aspen-box doctor               check the machine, the network, and the deployment
     aspen-box dns [--apply]        show the DNS records it needs, or make them with an API token
     aspen-box run -- COMMAND…      an operator command: aspen-chat-server admin grant <username>
-    aspen-box backup | restore FILE
+    aspen-box backup | restore FILE  the database, wherever it is kept
     aspen-box capacity             measure how many people the voice server carries
     aspen-box refresh-address      follow a public address that changed
     aspen-box status | logs [SERVICE] | down
@@ -31,6 +31,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -44,6 +45,11 @@ SLOTS = {"api-a": 8080, "api-b": 8081}
 # Answers with the caller's address as text, over whichever family the name was reached by.
 ADDRESS_SERVICES = {4: "https://1.1.1.1/cdn-cgi/trace", 6: "https://[2606:4700:4700::1111]/cdn-cgi/trace"}
 BACKUPS_KEPT = 7
+# Where the servers find the authorities of a database kept elsewhere (compose.yaml).
+DATABASE_CA = "/etc/aspen/database-ca.pem"
+# The migrations use `uuidv7()`, which earlier versions lack.
+MINIMUM_POSTGRES = 18
+DATABASE_URL_VARIABLE = "ASPEN_BOX_DATABASE_URL"
 GIB = 1 << 30
 
 
@@ -71,12 +77,13 @@ class Box:
         self.file.chmod(0o600)
         self.file.write_text(json.dumps(box, indent=2) + "\n")
 
-    def compose(self, *arguments: str, capture: bool = False, check: bool = True, stdin=None, stdout=None):
+    def compose(self, *arguments: str, capture: bool = False, check: bool = True, stdin=None, stdout=None, env: dict | None = None):
         files = [str(HERE / "compose.yaml"), *filter(None, os.environ.get("ASPEN_BOX_COMPOSE_FILES", "").split(":"))]
         command = ["docker", "compose", "--project-directory", str(self.dir), "--env-file", str(self.dir / ".env")]
         for file in files:
             command += ["-f", file]
-        done = subprocess.run([*command, *arguments], text=stdout is None, capture_output=capture, stdin=stdin, stdout=stdout)
+        done = subprocess.run([*command, *arguments], text=stdout is None, capture_output=capture, stdin=stdin, stdout=stdout,
+                              env={**os.environ, **env} if env else None)  # fmt: skip
         if check and done.returncode != 0:
             detail = f": {done.stderr.strip()[-600:]}" if capture else ""
             raise Failed(f"`docker compose {' '.join(arguments[:4])}` failed{detail}")
@@ -85,6 +92,86 @@ class Box:
     def running(self) -> set:
         done = self.compose("ps", "--services", "--status", "running", capture=True)
         return set(done.stdout.split())
+
+
+# ---- the database
+
+
+def external_database(box: dict) -> dict | None:
+    """The database's `url` and `ca_file` when it is kept elsewhere, None when the box runs it."""
+    database = box.get("database") or {}
+    return database if database.get("kind") == "external" else None
+
+
+def check_database_url(url: str) -> None:
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("postgres", "postgresql") or not parts.hostname or not parts.username:
+        raise Failed("the database's address is a URL: postgres://user:password@host:5432/database")
+    for unsupported in {"sslcert", "sslkey"} & set(dict(urllib.parse.parse_qsl(parts.query))):
+        raise Failed(f"the box cannot give the servers a client certificate ({unsupported}): sign in to the database with a password")
+
+
+def database_url(box: dict) -> str:
+    """`database_url` as the servers are given it. A database kept elsewhere is reached over a
+    network, so unless its URL says otherwise its certificate is checked: against `ca_file`
+    when the box was given one, and the system's authorities when not."""
+    external = external_database(box)
+    if external is None:
+        return f"postgres://aspen:{box['secrets']['database']}@127.0.0.1:5432/aspen"
+    parts = urllib.parse.urlsplit(external["url"])
+    query = dict(urllib.parse.parse_qsl(parts.query))
+    if external.get("ca_file"):
+        query.setdefault("sslmode", "verify-full")
+        query["sslrootcert"] = DATABASE_CA
+    elif "sslmode" not in query:
+        query.update(sslmode="verify-full", sslrootcert=query.get("sslrootcert", "system"))
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query, safe="/")))
+
+
+def database_name(box: dict) -> str:
+    parts = urllib.parse.urlsplit(database_url(box))
+    return urllib.parse.unquote(parts.path.lstrip("/")) or urllib.parse.unquote(parts.username)
+
+
+def pg(store: "Box", box: dict, tool: str, *arguments: str, **how):
+    """Runs one of PostgreSQL's own tools against the deployment's database: in its container
+    when the box runs it, and otherwise in a container of the same image, which is told where
+    the database is through its environment, so that no password is on a command line."""
+    if external_database(box) is None:
+        return store.compose("exec", "-T", "-e", "PGHOST=127.0.0.1", "-e", "PGUSER=aspen", "postgres", tool, *arguments, **how)
+    parts = urllib.parse.urlsplit(database_url(box))
+    query = dict(urllib.parse.parse_qsl(parts.query))
+    env = {
+        "PGHOST": parts.hostname,
+        "PGPORT": str(parts.port or 5432),
+        "PGUSER": urllib.parse.unquote(parts.username),
+        "PGPASSWORD": urllib.parse.unquote(parts.password or ""),
+    }
+    for setting, variable in (("sslmode", "PGSSLMODE"), ("sslrootcert", "PGSSLROOTCERT"), ("channel_binding", "PGCHANNELBINDING"), ("options", "PGOPTIONS")):
+        if setting in query:
+            env[variable] = query[setting]
+    passed = [flag for name in env for flag in ("-e", name)]
+    return store.compose(
+        "run", "--rm", "--no-deps", "-T", *passed,
+        "-v", f"{store.dir / 'config' / 'database-ca.pem'}:{DATABASE_CA}:ro",
+        "postgres", tool, *arguments, env=env, **how,
+    )  # fmt: skip
+
+
+def database_version(store: "Box", box: dict) -> int:
+    """The database's major version, having reached it and signed in."""
+    done = pg(store, box, "psql", "--no-psqlrc", "--tuples-only", "--no-align", f"--dbname={database_name(box)}",
+              "--command=SHOW server_version_num", capture=True, check=False)  # fmt: skip
+    if done.returncode != 0:
+        said = (done.stderr.strip().splitlines() or ["no reason given"])[-1]
+        raise Failed(f"the database could not be reached: {said}")
+    return int(done.stdout.strip()) // 10000
+
+
+def require_postgres(store: "Box", box: dict) -> None:
+    version = database_version(store, box)
+    if version < MINIMUM_POSTGRES:
+        raise Failed(f"the database is PostgreSQL {version}, and Aspen needs {MINIMUM_POSTGRES} or later")
 
 
 # ---- writing the configuration
@@ -132,8 +219,15 @@ def render(store: Box, box: dict) -> set:
     config = store.dir / "config"
     # Only this user reads the directory; the files in it are read by the containers' users.
     config.mkdir(mode=0o700, parents=True, exist_ok=True)
-    for name in ("postgres", "caddy", "garage/meta", "garage/data"):
+    external = external_database(box)
+    for name in ("caddy", "garage/meta", "garage/data", *(() if external else ("postgres",))):
         (store.dir / "data" / name).mkdir(parents=True, exist_ok=True)
+    authorities = ""
+    if external and external.get("ca_file"):
+        try:
+            authorities = pathlib.Path(external["ca_file"]).expanduser().read_text()
+        except OSError as error:
+            raise Failed(f"the database's authorities, {external['ca_file']}, could not be read: {error}") from None
     (store.dir / "backups").mkdir(mode=0o700, exist_ok=True)
     secret, storage, domain = box["secrets"], box["storage"], box["domain"]
     announced = addresses(box)
@@ -163,7 +257,7 @@ def render(store: Box, box: dict) -> set:
         "aspen.toml": fill(TEMPLATES / "aspen.toml.tftpl", {
             **encoded(dict(
                 public_url=f"https://{domain}",
-                database_url=f"postgres://aspen:{secret['database']}@127.0.0.1:5432/aspen",
+                database_url=database_url(box),
                 valkey_url="redis://127.0.0.1:6379",
                 nats_url="nats://127.0.0.1:4222",
                 nats_password=secret["nats_server"],
@@ -209,6 +303,8 @@ def render(store: Box, box: dict) -> set:
             media_site=fill(HERE / "Caddyfile.media.tmpl", dict(media_domain=f"media.{domain}", bucket=BUCKET)) if bundled else "",
         )),  # fmt: skip
         "postgres.env": f"POSTGRES_USER=aspen\nPOSTGRES_DB=aspen\nPOSTGRES_PASSWORD={secret['database']}\n",
+        # Always there, empty when unused: the servers' containers mount it either way.
+        "database-ca.pem": authorities,
         "garage.toml": (HERE / "garage.toml.tmpl").read_text(),
         "garage.env": (
             f"GARAGE_RPC_SECRET={secret['garage_rpc']}\nGARAGE_DEFAULT_BUCKET={BUCKET}\n"
@@ -232,7 +328,7 @@ def render(store: Box, box: dict) -> set:
         "ASPEN_API_IMAGE_B": images["api"] if active == "api-b" else images.get("api_idle", images["api"]),
         "ASPEN_VOICE_IMAGE": images["voice"],
         "ASPEN_TOOL_IMAGE": images["api"],
-        "COMPOSE_PROFILES": "bundled-storage" if bundled else "",
+        "COMPOSE_PROFILES": ",".join((["bundled-storage"] if bundled else []) + ([] if external else ["bundled-database"])),
     }
     (store.dir / ".env").write_text("".join(f"{name}={value}\n" for name, value in env.items()))
     return changed
@@ -411,6 +507,16 @@ def init(store: Box, opt: argparse.Namespace) -> None:
             "secret_key": field("secret_key", "Secret key"),
             "public_base_url": field("public_base_url", "Where its read path is served (https://media.chat.example.org)"),
         }
+    database = {"kind": "bundled"}
+    given_url = opt.database_url or os.environ.get(DATABASE_URL_VARIABLE)
+    where = "elsewhere" if given_url else ("machine" if not interactive else ask("Keep the database on this machine, or use a PostgreSQL elsewhere? (machine/elsewhere)", "machine"))
+    if where not in ("machine", "elsewhere"):
+        raise Failed("answer machine or elsewhere")
+    if where == "elsewhere":
+        url = given_url or ask(f"Its address (postgres://user:password@host:5432/database), PostgreSQL {MINIMUM_POSTGRES} or later")
+        check_database_url(url)
+        ca_file = opt.database_ca or (ask("A file of the authorities its certificate comes from, if they are its provider's own (- for the usual public ones)", "-") if interactive else "-")
+        database = {"kind": "external", "url": url, "ca_file": None if ca_file == "-" else str(pathlib.Path(ca_file).expanduser().resolve())}
     dns_choice = opt.dns or (ask("Make the DNS records for you? It needs an API token for your DNS provider, kept on this machine (no/cloudflare)", "no") if interactive else "no")
     if dns_choice not in ("no", *DNS_PROVIDERS):
         raise Failed(f"records can be made at: {', '.join(DNS_PROVIDERS)}. Answer no to make them yourself")
@@ -426,6 +532,7 @@ def init(store: Box, opt: argparse.Namespace) -> None:
         "address4": opt.address4,
         "address6": opt.address6,
         "storage": storage,
+        "database": database,
         "email": None,
         "images": {"api": opt.api_image, "voice": opt.voice_image},
         "voice": {"id": str(uuid.uuid4()), "capacity": opt.voice_capacity, "min_port": 40000, "max_port": 40199},
@@ -508,7 +615,10 @@ def converge(store: Box, box: dict) -> set:
     except Failed:
         was_running = set()
     changed = render(store, box)
-    store.compose("up", "-d", "--wait", "postgres", "valkey", "nats", "caddy")
+    if external_database(box):
+        # Before a release meets it: the one thing here the box did not start itself.
+        require_postgres(store, box)
+    store.compose("up", "-d", "--wait", *(() if external_database(box) else ("postgres",)), "valkey", "nats", "caddy")
     if "nats.conf" in changed and "nats" in was_running:
         store.compose("restart", "nats")
     if "Caddyfile" in changed and "caddy" in was_running:
@@ -557,7 +667,7 @@ def up(store: Box, opt: argparse.Namespace) -> None:
     changed = converge(store, box)
     release(store, box)
     slot = box.get("active_slot", "api-a")
-    if slot in was_running and "aspen.toml" in changed:
+    if slot in was_running and changed & {"aspen.toml", "database-ca.pem"}:
         roll(store, box, box["images"])
     else:
         store.compose("up", "-d", slot)
@@ -665,6 +775,13 @@ def doctor(store: Box, opt: argparse.Namespace) -> None:
         )
     else:
         report.ok("Docker")
+    compose = subprocess.run(["docker", "compose", "version", "--short"], capture_output=True, text=True)
+    version = tuple(int(part) for part in re.findall(r"\d+", compose.stdout)[:2])
+    if compose.returncode != 0 or version < (2, 20):
+        report.fail(
+            f"Docker Compose {compose.stdout.strip() or 'is missing'}",
+            "The box needs Compose 2.20 or later, as Docker's own packages install it (the `docker-compose-plugin` package).",
+        )
     memory = memory_bytes() / GIB
     if memory < 1.8:
         report.fail(f"{memory:.1f} GiB of memory", "The deployment idles at about 0.7 GiB and needs room to work: use a machine with 2 GiB or more.")
@@ -688,7 +805,24 @@ def doctor(store: Box, opt: argparse.Namespace) -> None:
     except Failed:
         running = set()
     slot = box.get("active_slot", "api-a")
-    wanted = {"postgres", "valkey", "nats", "caddy", "voice", slot} | ({"garage"} if bundled else set())
+    wanted = {"valkey", "nats", "caddy", "voice", slot} | ({"garage"} if bundled else set()) | (set() if external_database(box) else {"postgres"})
+    if external_database(box):
+        url = urllib.parse.urlsplit(database_url(box))
+        try:
+            version = database_version(store, box)
+        except Failed as failure:
+            report.fail(f"The database at {url.hostname}: {failure}", "Check it is running, that this machine may reach it, and database.url in box.json.")
+        else:
+            if version < MINIMUM_POSTGRES:
+                report.fail(f"The database at {url.hostname} is PostgreSQL {version}", f"Aspen needs {MINIMUM_POSTGRES} or later.")
+            else:
+                report.ok(f"The database at {url.hostname} answers, and is PostgreSQL {version}")
+        mode = dict(urllib.parse.parse_qsl(url.query)).get("sslmode")
+        if mode not in ("verify-full", "verify-ca"):
+            report.note(
+                f"The database is reached with sslmode={mode}, which does not check who answers",
+                "Anything between this machine and it can read every query. Unless that network is yours alone, take sslmode out of database.url, and give database.ca_file if its certificate is from its provider's own authority.",
+            )
     missing = sorted(wanted - running)
     if missing:
         report.fail(f"Not running: {', '.join(missing)}", "`aspen-box up` starts them, and `aspen-box logs <name>` says why one stopped.")
@@ -803,15 +937,15 @@ def run_command(store: Box, opt: argparse.Namespace) -> None:
 
 
 def backup(store: Box, opt: argparse.Namespace) -> None:
-    store.load()
+    box = store.load()
     target = store.dir / "backups" / f"aspen-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}.dump"
     partial = target.with_suffix(".partial")
     # One consistent moment of the whole database, taken while it runs.
     with partial.open("wb") as out:
-        done = store.compose("exec", "-T", "postgres", "pg_dump", "--format=custom", "--host=127.0.0.1", "--username=aspen", "aspen", stdout=out, check=False)
+        done = pg(store, box, "pg_dump", "--format=custom", f"--dbname={database_name(box)}", stdout=out, check=False)
     if done.returncode != 0:
         partial.unlink(missing_ok=True)
-        raise Failed("the database could not be dumped: `aspen-box logs postgres` shows why")
+        raise Failed("the database could not be dumped; what PostgreSQL said is above")
     partial.chmod(0o600)
     partial.rename(target)
     dumps = sorted((store.dir / "backups").glob("aspen-*.dump"))
@@ -820,7 +954,7 @@ def backup(store: Box, opt: argparse.Namespace) -> None:
     print(
         f"{target} ({target.stat().st_size >> 10} KiB). It is every account's data: keep a copy off this machine.\n"
         "It does not hold people's files"
-        + (f", which are in {store.dir / 'data' / 'garage'}." if (store.dir / "data" / "garage" / "meta").exists() else ", which are in your bucket.")
+        + (f", which are in {store.dir / 'data' / 'garage'}." if box["storage"]["kind"] == "bundled" else ", which are in your bucket.")
     )
 
 
@@ -828,19 +962,29 @@ def restore(store: Box, opt: argparse.Namespace) -> None:
     box = store.load()
     if not opt.file.exists():
         raise Failed(f"{opt.file} does not exist")
+    external = external_database(box)
+    host = urllib.parse.urlsplit(database_url(box)).hostname
     if not opt.yes:
-        if input(f"This replaces the database of https://{box['domain']} with {opt.file.name}. Type the domain to go on: ").strip() != box["domain"]:
+        does = f"fills the database at {host}, which must be empty," if external else "replaces the database"
+        if input(f"This {does} of https://{box['domain']} with {opt.file.name}. Type the domain to go on: ").strip() != box["domain"]:
             raise Failed("not confirmed")
     converge(store, box)
     store.compose("stop", *SLOTS, "voice")
-    psql = ("exec", "-T", "postgres", "psql", "--host=127.0.0.1", "--username=aspen", "--dbname=postgres", "--set=ON_ERROR_STOP=1")
-    store.compose(*psql, "--command=DROP DATABASE IF EXISTS aspen WITH (FORCE)", "--command=CREATE DATABASE aspen OWNER aspen")
+    if not external:
+        # The box's own database is its to drop. One kept elsewhere is emptied by whoever
+        # keeps it.
+        pg(store, box, "psql", "--dbname=postgres", "--set=ON_ERROR_STOP=1",
+           "--command=DROP DATABASE IF EXISTS aspen WITH (FORCE)", "--command=CREATE DATABASE aspen OWNER aspen")  # fmt: skip
     with opt.file.open("rb") as dump:
-        # All of it or none.
-        done = store.compose("exec", "-T", "postgres", "pg_restore", "--single-transaction", "--exit-on-error", "--no-owner", "--no-acl",
-                             "--host=127.0.0.1", "--username=aspen", "--dbname=aspen", stdin=dump, check=False)  # fmt: skip
+        # All of it or none: a database that already holds tables is left as it was.
+        done = pg(store, box, "pg_restore", "--single-transaction", "--exit-on-error", "--no-owner", "--no-acl",
+                  f"--dbname={database_name(box)}", stdin=dump, check=False)  # fmt: skip
     if done.returncode != 0:
-        raise Failed("the dump could not be restored, and the database is empty: restore another, or `aspen-box up` starts afresh")
+        raise Failed(
+            f"the dump could not be restored into the database at {host}, which is as it was. It must hold no tables: empty it where it is kept"
+            if external
+            else "the dump could not be restored, and the database is empty: restore another, or `aspen-box up` starts afresh"
+        )
     up(store, opt)
 
 
@@ -869,6 +1013,8 @@ def main() -> None:
     start.add_argument("--address4", default="auto", help="the public IPv4 address clients send media to; `auto` looks it up")
     start.add_argument("--address6", default="auto", help="likewise for IPv6; `none` announces none")
     start.add_argument("--storage", choices=["machine", "s3"])
+    start.add_argument("--database-url", help=f"a PostgreSQL elsewhere, in place of one on this machine (or {DATABASE_URL_VARIABLE}, which keeps its password off the command line)")
+    start.add_argument("--database-ca", help="its certificate's authorities, when they are its provider's own")
     for name in ("endpoint", "bucket", "region", "access-key", "secret-key", "public-base-url"):
         start.add_argument(f"--s3-{name}")
     start.add_argument("--dns", choices=["no", *DNS_PROVIDERS], help="make the DNS records with an API token, kept in box.json")

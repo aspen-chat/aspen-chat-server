@@ -194,3 +194,20 @@ Aspen most wants to reach: a small rented server, or a small computer at home.
   one type is someone's choice or someone's mistake, and either way not the tool's to settle.
 - **The token is checked when it is given**, against the zone the domain is in, so a token for
   the wrong zone is found at `init` rather than when certificates fail to arrive.
+- **A database elsewhere is the same box with one service fewer.** PostgreSQL is in a Compose
+  profile, like the bundled storage, and the servers' dependence on it is one that may be
+  absent. Nothing else about the box changes, so someone can start with everything on the
+  machine and move the database out later with a backup and a restore.
+- **Its certificate is checked unless the address asks otherwise.** On the machine the database
+  is on loopback; elsewhere every query crosses a network, where an unchecked connection can be
+  read and asked for its password. The default is the safe one, and `doctor` says so when the
+  address has chosen another.
+- **PostgreSQL's tools run from its image, told where the database is by their environment.**
+  Neither server's image has `pg_dump` or `psql`, and the PostgreSQL image is the one piece
+  sure to match the version asked for. The password is in the container's environment, never
+  in an argument, which every user of the machine can read.
+- **The version is checked before a release meets the database.** A migration failing on a
+  function PostgreSQL 17 lacks says nothing a person can act on.
+- **`restore` never empties a database kept elsewhere.** It drops and remakes the box's own,
+  which is the box's to drop. Elsewhere it restores in one transaction, which a database with
+  tables in it refuses whole.

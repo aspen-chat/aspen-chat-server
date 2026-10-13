@@ -5,6 +5,9 @@
 # UDP ports, which Docker's port publishing handles badly), and every service but Caddy and the
 # voice server's media listens on loopback: nothing here is reachable from another machine
 # unless it is meant to be, whatever the machine's firewall says.
+#
+# PostgreSQL and the object storage are each started only for a box that keeps its own
+# (`COMPOSE_PROFILES`). Needs Compose 2.20 or later, for dependencies that may be absent.
 name: aspen
 
 x-service: &service
@@ -21,15 +24,19 @@ x-api: &api
   profiles: ["api"]
   volumes:
     - ./config/aspen.toml:/etc/aspen/aspen.toml:ro
+    # The authorities of a database kept elsewhere; empty for one kept here.
+    - ./config/database-ca.pem:/etc/aspen/database-ca.pem:ro
   depends_on:
-    postgres: { condition: service_healthy }
+    postgres: { condition: service_healthy, required: false }
     nats: { condition: service_started }
     valkey: { condition: service_started }
 
 services:
   postgres:
     <<: *service
-    # 18 or later, which the migrations need.
+    profiles: ["bundled-database"]
+    # 18 or later, which the migrations need. `aspen-box` also runs this image's tools against
+    # a database kept elsewhere.
     image: postgres:18-alpine
     command: ["postgres", "-c", "listen_addresses=127.0.0.1"]
     env_file: ./config/postgres.env
@@ -117,5 +124,6 @@ services:
     image: ${ASPEN_TOOL_IMAGE}
     volumes:
       - ./config/aspen.toml:/etc/aspen/aspen.toml:ro
+      - ./config/database-ca.pem:/etc/aspen/database-ca.pem:ro
     depends_on:
-      postgres: { condition: service_healthy }
+      postgres: { condition: service_healthy, required: false }
