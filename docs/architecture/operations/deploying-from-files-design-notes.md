@@ -101,3 +101,41 @@ over managed services runs as containers on one machine.
 - **The two configurations share modules for the cluster and the storage**, and the templates.
   The rest differs in kind, not in size, so it is written twice rather than switched on a
   variable.
+
+## Moving from one machine to the larger configuration
+
+- **Only the database is copied.** Everything else a deployment keeps is in the bucket, which
+  the larger deployment takes over where it is, or is not worth keeping (Valkey, NATS).
+- **A dump and a restore, with the old deployment stopped.** Someone on one machine has
+  accepted being down for a release, and a small database copies in less time than that.
+  Replicating instead would need a network path between the two deployments and a database
+  that takes no schema change meanwhile, for minutes saved once.
+- **The restore runs before the new deployment's first release**, while it has a database and
+  no servers: the state an apply without `image_tag` leaves. The release then finds the old
+  deployment's tables and brings them up to date, exactly as an upgrade does.
+- **The restore is one transaction that refuses a database with tables in it.** Run twice, or
+  after a release made empty tables, it changes nothing rather than mixing two databases.
+- **The dump travels through the bucket**, under a prefix the read path does not serve and a
+  rule deletes after a week. The two deployments are in separate networks with their databases
+  closed to everything outside, and the bucket is the one thing both already reach.
+- **The export and restore tasks are stock images in two containers**, one for PostgreSQL's
+  tools and one for S3, sharing a volume. Neither server's image has `pg_dump`, and an image
+  of our own for one use would have to be built and pushed at every release to be there when
+  wanted.
+- **Each task's role allows the one object.** The servers' own key pair could write it, but it
+  is inside `aspen.toml` and allows the whole bucket.
+- **The larger deployment imports the bucket and the distribution, and makes the rest of the
+  storage anew** (its key pair, certificate, access control). Those two cannot be made twice:
+  the bucket holds the files, and `media.<domain>` belongs to one distribution at a time. The
+  bucket's policy names the distribution, so both deployments read through it while they
+  overlap.
+- **The old configuration forgets what was taken over instead of destroying it** (`tofu state
+  rm`, from the list the media module gives as `handed_over`). A `removed` block cannot do it:
+  the module still declares those resources for deployments that are staying.
+- **The name changes hands in the release's apply** (`public_dns`). Until then the larger
+  deployment exists beside the old one without the name, so everything slow (the database, the
+  certificates, the load balancer) is made while the old one still serves.
+- **The old data volume is forgotten too, not deleted.** It is the old database, and the way
+  back if the move turns out badly a day later.
+- **The script does what is not an apply, and prints the apply to run.** Plans that import or
+  take over a name are the ones a person should read.

@@ -41,6 +41,18 @@ variable "route53_zone_id" {
   type        = string
 }
 
+variable "public_dns" {
+  description = "Whether `domain` points at this deployment. False while it is made ready beside the deployment it replaces, which keeps the name until the move (README.md#moving-from-one-machine)."
+  type        = bool
+  default     = true
+}
+
+variable "media_bucket" {
+  description = "The bucket of the deployment this one replaced, kept and imported rather than copied (README.md#moving-from-one-machine). Null makes a bucket of this deployment's own. Once set it stays set: it is the bucket's name."
+  type        = string
+  default     = null
+}
+
 variable "image_tag" {
   description = "The tag of the images to run, as pushed to the two repositories this makes. Null runs no servers: the first apply, before there is a repository to push to."
   type        = string

@@ -73,13 +73,13 @@ locals {
   })
 
   configs = merge(
-    { aspen-toml = local.aspen_toml, nats-conf = local.nats_conf },
+    { aspen-toml = local.aspen_toml, nats-conf = local.nats_conf, database-password = random_password.database.result },
     { for name, toml in local.voice_server_toml : "voice-${name}" => toml },
   )
 }
 
 resource "aws_secretsmanager_secret" "config" {
-  for_each    = toset(concat(["aspen-toml", "nats-conf"], [for name in keys(var.voice_servers) : "voice-${name}"]))
+  for_each    = toset(concat(["aspen-toml", "nats-conf", "database-password"], [for name in keys(var.voice_servers) : "voice-${name}"]))
   name_prefix = "${var.name}/${each.key}-"
 }
 

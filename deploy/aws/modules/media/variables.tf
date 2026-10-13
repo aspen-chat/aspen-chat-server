@@ -12,3 +12,9 @@ variable "route53_zone_id" {
   description = "The hosted zone that holds `domain`."
   type        = string
 }
+
+variable "bucket" {
+  description = "The name of a bucket to keep rather than name one after this deployment: the bucket of the deployment this one replaces, imported into this module. Null makes a bucket."
+  type        = string
+  default     = null
+}

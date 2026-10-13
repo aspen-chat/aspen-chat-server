@@ -4,3 +4,5 @@
 *.tfvars
 !*.tfvars.example
 __pycache__/
+*.tfvars.json
+adopt_media.tf

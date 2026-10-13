@@ -20,7 +20,8 @@ import subprocess
 import sys
 import time
 
-# The container the commands run in (servers.tf).
+# The container a command given here replaces the command of, and the last to run in a task of
+# several (servers.tf, migration.tf).
 CONTAINER = "aspen"
 # How long a release may take: a migration that rewrites a large table is slow.
 DEFAULT_TIMEOUT_SECONDS = 3600
@@ -104,8 +105,8 @@ def wait(opt: argparse.Namespace, task: str) -> dict:
     raise Failed(f"the task was still running after {opt.timeout} seconds, and has been stopped")
 
 
-def print_logs(opt: argparse.Namespace, task: str) -> None:
-    stream = f"{opt.log_prefix}/{CONTAINER}/{task.rsplit('/', 1)[-1]}"
+def print_logs(opt: argparse.Namespace, task: str, container: str) -> None:
+    stream = f"{opt.log_prefix}/{container}/{task.rsplit('/', 1)[-1]}"
     arguments = [
         "logs", "get-log-events",
         "--log-group-name", opt.log_group,
@@ -117,7 +118,7 @@ def print_logs(opt: argparse.Namespace, task: str) -> None:
         try:
             page = aws(opt.region, *arguments, *(["--next-token", token] if token else []))
         except Failed:
-            # A task that never started its container wrote no stream.
+            # A container that never started wrote no stream.
             return
         for event in page.get("events", []):
             print(event["message"])
@@ -132,16 +133,24 @@ def main() -> int:
     task = start(opt)
     print(f"started {task}", file=sys.stderr)
     state = wait(opt, task)
-    print_logs(opt, task)
-    container = next(c for c in state["containers"] if c["name"] == CONTAINER)
-    code = container.get("exitCode")
-    if code is None:
-        # The container never ran: the image could not be pulled, or the configuration read.
-        reason = container.get("reason") or state.get("stoppedReason") or "no reason given"
-        raise Failed(f"the task stopped without running: {reason}")
-    if code != 0:
-        print(f"the task exited with {code}", file=sys.stderr)
-    return code
+    # A task of several containers runs them in turn, each waiting for the one before to
+    # succeed, so the first that failed is why the task did.
+    containers = sorted(state["containers"], key=lambda c: c["name"] == CONTAINER)
+    for container in containers:
+        if len(containers) > 1:
+            print(f"--- {container['name']}", file=sys.stderr)
+        print_logs(opt, task, container["name"])
+    for container in containers:
+        code = container.get("exitCode")
+        if code is None:
+            # It never ran: its image could not be pulled, its configuration could not be
+            # read, or a container before it failed.
+            reason = container.get("reason") or state.get("stoppedReason") or "no reason given"
+            raise Failed(f"{container['name']} stopped without running: {reason}")
+        if code != 0:
+            print(f"{container['name']} exited with {code}", file=sys.stderr)
+            return code
+    return 0
 
 
 if __name__ == "__main__":

@@ -102,6 +102,20 @@ run "release" {
   }
 }
 
+run "export" {
+  command = plan
+
+  assert {
+    condition     = contains(local.dump_command, "--host=127.0.0.1") && contains(local.dump_command, "--format=custom")
+    error_message = "The export dumps this machine's database in the format the restore reads."
+  }
+
+  assert {
+    condition     = alltrue([for address in module.media.handed_over : !strcontains(address, "iam")])
+    error_message = "A deployment taking the storage over makes a key pair of its own; this one's is destroyed with it."
+  }
+}
+
 run "arm" {
   command = plan
 

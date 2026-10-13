@@ -10,7 +10,8 @@ files a tool applies.
 | [`aws-single/`](aws-single/README.md) | A small deployment on one AWS machine, which costs a fraction of that and is down whenever the machine is. |
 
 Both are prototypes: planned, never applied. They share the images, the configuration
-templates in `aws/templates/`, the modules in `aws/modules/`, and `aws/run_task.py`.
+templates in `aws/templates/`, the modules in `aws/modules/`, and `aws/run_task.py`. A deployment
+that outgrows one machine [moves to the larger configuration](aws/README.md#moving-from-one-machine).
 
 ## The images
 

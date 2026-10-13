@@ -7,7 +7,7 @@ module "cluster" {
   region             = var.region
   image_tag          = var.image_tag
   log_retention_days = var.log_retention_days
-  log_roles          = keys(local.containers)
+  log_roles          = concat(keys(local.containers), ["export"])
   config_secret_arns = [for secret in aws_secretsmanager_secret.config : secret.arn]
 }
 
@@ -96,7 +96,7 @@ locals {
           [ "$tries" -lt 12 ] || exit 1
           sleep 5
         done
-        aspen-chat-server voice-servers add voice --url https://${local.voice_domain} --capacity ${var.voice_capacity} --id ${random_uuid.voice.result}
+        aspen-chat-server voice-servers add ${local.voice_server_name} --url https://${local.voice_domain} --capacity ${var.voice_capacity} --id ${random_uuid.voice.result}
       EOT
       ]
       secrets = { ASPEN_TOML = "aspen-toml" }

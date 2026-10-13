@@ -110,6 +110,93 @@ apply follows [Upgrading](../../docs/operators/installing/upgrading.md):
 | Move a voice server to the current machine image | `tofu apply -replace='aws_instance.voice["<name>"]'`. It keeps its address. |
 | Change a voice server's capacity | Change it in `voice_servers`. A capacity set in the dashboard is overwritten at the next release. |
 
+## Moving from one machine
+
+A deployment made with [`../aws-single`](../aws-single/README.md) moves here with its accounts,
+messages, sign-ins, and address. Its storage is kept, not copied: this deployment takes the
+bucket and its read path over. Only the database is copied.
+
+**Not rehearsed on AWS.** The copy itself has been run between local stand-ins of the two
+deployments. The steps around it (taking the storage over, the name changing hands) have only
+been planned. Read each plan before approving it.
+
+| Step | The old deployment | Takes |
+| --- | --- | --- |
+| 1 to 3 | Serves as usual | As long as you like |
+| 4 | Down | The copy, a release, and up to five minutes for the name to follow |
+| 5 | Gone | |
+
+1. In `deploy/aws-single`, apply this release of the configuration to the old deployment. It
+   adds the task that exports the database.
+
+2. In `deploy/aws`, write `terraform.tfvars`. Give it a `name` the old deployment does not
+   have, and no voice server called `voice`. Leave out `region`, `domain`, and
+   `route53_zone_id`, which the next command takes from the old deployment. Then:
+
+   ```
+   ./migrate_from_single.py prepare
+   tofu init
+   tofu apply
+   ```
+
+   The plan imports two things, the bucket and the CloudFront distribution, and changes the
+   distribution in place. **Stop if it would replace or destroy either.** Everything else is
+   new. `domain` still points at the old deployment.
+
+3. Build and push the images to this deployment's repositories
+   ([step 3 above](#the-first-deployment)). Do not set `image_tag` yet: the first release must
+   find the old deployment's database, not make an empty one.
+
+4. Move. This stops the old deployment:
+
+   ```
+   ./migrate_from_single.py copy
+   ```
+
+   It stops the old servers, dumps the database into the bucket, and restores it here. Then
+   set `image_tag` in `terraform.tfvars` and release:
+
+   ```
+   tofu apply
+   ```
+
+   The release brings the database up to this release, registers the voice servers, starts
+   every server, and points `domain` here. People stay signed in. Calls in progress ended when
+   the old servers stopped.
+
+5. When the deployment answers at its address, let go of the old one:
+
+   ```
+   ./migrate_from_single.py finish
+   tofu -chdir=../aws-single destroy
+   ```
+
+   `finish` removes the old voice server's registration and has the old configuration forget
+   what this one now uses, so destroying it leaves the storage alone. The old data volume and
+   its snapshots are kept as the old database; delete them yourself once you are sure.
+
+   Keep `migration.auto.tfvars.json`. Its `media_bucket` is this deployment's bucket from now
+   on.
+
+The dump is deleted from the bucket after seven days. It is never served: the read path has no
+`migration/` prefix.
+
+### Going back
+
+Before `finish`, the old deployment is whole. **Whatever was written here since the copy is
+lost.**
+
+1. Here, have this configuration forget the storage, so destroying it later leaves it alone:
+
+   ```
+   tofu state rm module.media.aws_s3_bucket.media module.media.aws_cloudfront_distribution.media
+   ```
+
+2. In `deploy/aws-single`, `tofu apply`. It starts the old servers again and takes back the
+   name and the read path.
+
+3. Here, `tofu destroy`.
+
 ## What it does not do yet
 
 - **IPv6.** Everything is IPv4. Voice servers carry no media over IPv6.

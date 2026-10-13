@@ -142,6 +142,30 @@ run "release" {
 
 }
 
+run "beside_the_deployment_it_replaces" {
+  command = plan
+
+  variables {
+    media_bucket = "old-media-0123"
+    public_dns   = false
+  }
+
+  assert {
+    condition     = length(aws_route53_record.deployment) == 0
+    error_message = "The name stays with the old deployment until the move."
+  }
+
+  assert {
+    condition     = module.media.bucket == "old-media-0123"
+    error_message = "The old deployment's bucket is kept under its own name."
+  }
+
+  assert {
+    condition     = contains(local.restore_command, "--single-transaction") && contains(local.restore_command, "--exit-on-error")
+    error_message = "A restore changes nothing unless all of it succeeds."
+  }
+}
+
 run "arm" {
   command = plan
 

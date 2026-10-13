@@ -5,6 +5,8 @@ locals {
   arm           = var.cpu_architecture == "ARM64"
   instance_type = coalesce(var.instance_type, local.arm ? "t4g.medium" : "t3a.medium")
   voice_domain  = "voice.${var.domain}"
+  # Its name in the registry, and its NATS user.
+  voice_server_name = "voice"
 
   # Where the volume appears on the machine, whatever order its disks are found in.
   data_device = "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${replace(aws_ebs_volume.data.id, "-", "")}"

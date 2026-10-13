@@ -20,3 +20,34 @@ output "public_prefixes" {
   description = "The prefixes the read path serves."
   value       = local.public_prefixes
 }
+
+output "bucket_arn" {
+  value = aws_s3_bucket.media.arn
+}
+
+output "distribution_id" {
+  value = aws_cloudfront_distribution.media.id
+}
+
+output "migration_dump" {
+  description = "Where a database dump is put while a deployment moves to another configuration."
+  value = {
+    key = "${local.migration_prefix}/database.dump"
+    uri = "s3://${aws_s3_bucket.media.bucket}/${local.migration_prefix}/database.dump"
+    arn = "${aws_s3_bucket.media.arn}/${local.migration_prefix}/database.dump"
+  }
+}
+
+output "handed_over" {
+  description = "What a deployment that takes this storage over goes on using, by address in this module: the deployment giving it up forgets these rather than destroying them. The rest of the module is this deployment's own."
+  value = [
+    "aws_s3_bucket.media",
+    "aws_s3_bucket_public_access_block.media",
+    "aws_s3_bucket_cors_configuration.media",
+    "aws_s3_bucket_lifecycle_configuration.media",
+    "aws_s3_bucket_policy.media",
+    "aws_cloudfront_distribution.media",
+    "aws_route53_record.this",
+    "aws_route53_record.certificate_validation",
+  ]
+}

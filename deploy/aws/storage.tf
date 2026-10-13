@@ -4,6 +4,7 @@ module "media" {
   name            = var.name
   domain          = "media.${var.domain}"
   route53_zone_id = var.route53_zone_id
+  bucket          = var.media_bucket
 
   providers = {
     aws           = aws

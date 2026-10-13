@@ -25,8 +25,9 @@ The deployment is at `<domain>` and its voice server at `voice.<domain>`.
 - **It is down whenever its one machine or its one API server is**: during every release (a
   minute or so), when the machine is replaced, and when AWS has trouble with it or its zone.
 - **The backups are a day apart.** A lost volume loses what was said since the last snapshot.
-- **It does not grow.** A bigger `instance_type` is the only step up. Past that, move to the
-  larger configuration, which means moving the database.
+- **It does not grow.** A bigger `instance_type` is the only step up. Past that,
+  [move to the larger configuration](../aws/README.md#moving-from-one-machine), which copies
+  the database and keeps everything else, in an outage of some minutes.
 - **PostgreSQL is yours to upgrade** between major versions.
 
 ## Before you start

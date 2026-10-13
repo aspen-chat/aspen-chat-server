@@ -50,7 +50,7 @@ locals {
 
     voice-server-toml = templatefile("${path.module}/../aws/templates/voice_server.toml.tftpl", {
       id              = random_uuid.voice.result
-      name            = "voice"
+      name            = local.voice_server_name
       nats_url        = "nats://127.0.0.1:4222"
       listen_addr     = "127.0.0.1:9000"
       nats_password   = random_password.this["nats-voice"].result
@@ -65,7 +65,7 @@ locals {
       max_memory_store_bytes = var.nats_stream_mib * 1024 * 1024
       server_password        = random_password.this["nats-server"].result
       voice_servers = {
-        voice = { id = random_uuid.voice.result, password = random_password.this["nats-voice"].result }
+        (local.voice_server_name) = { id = random_uuid.voice.result, password = random_password.this["nats-voice"].result }
       }
     })
 

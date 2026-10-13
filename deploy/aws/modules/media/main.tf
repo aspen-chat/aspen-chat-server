@@ -10,8 +10,31 @@ terraform {
   }
 }
 
+# A bucket's name is for good: changing it means a new bucket. `var.bucket` keeps one made
+# under another deployment's name, when this deployment takes that one's storage over.
 resource "aws_s3_bucket" "media" {
-  bucket_prefix = "${var.name}-media-"
+  bucket        = var.bucket
+  bucket_prefix = var.bucket == null ? "${var.name}-media-" : null
+}
+
+# `migration/` holds a dump of the database while a deployment moves from one configuration to
+# another (../../migrate_from_single.py). The read path does not serve it, and a dump is every
+# account's data, so one is not left there.
+resource "aws_s3_bucket_lifecycle_configuration" "media" {
+  bucket = aws_s3_bucket.media.id
+
+  rule {
+    id     = "expire-migration-dumps"
+    status = "Enabled"
+
+    filter {
+      prefix = "${local.migration_prefix}/"
+    }
+
+    expiration {
+      days = 7
+    }
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "media" {
@@ -73,7 +96,8 @@ resource "aws_iam_access_key" "media" {
 # its own, which the bucket lets read the four prefixes clients read and nothing else. It has
 # no permission to list, so `evidence/`, `uploads/`, and the bucket's root answer 403.
 locals {
-  public_prefixes = ["attachments", "attachment-previews", "icons", "link-preview-images"]
+  public_prefixes  = ["attachments", "attachment-previews", "icons", "link-preview-images"]
+  migration_prefix = "migration"
 }
 
 resource "aws_cloudfront_origin_access_control" "media" {
@@ -179,6 +203,8 @@ resource "aws_route53_record" "this" {
   zone_id = var.route53_zone_id
   name    = var.domain
   type    = "A"
+  # A deployment taking another's storage over takes this record over with the distribution.
+  allow_overwrite = true
 
   alias {
     name                   = aws_cloudfront_distribution.media.domain_name

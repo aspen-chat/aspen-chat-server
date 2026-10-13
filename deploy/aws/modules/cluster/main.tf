@@ -15,6 +15,9 @@ resource "aws_ecr_repository" "image" {
   for_each             = toset(["api", "voice"])
   name                 = "${var.name}/${each.key}"
   image_tag_mutability = "IMMUTABLE"
+  # Images are built from the repository, so a deployment being destroyed loses nothing with
+  # them.
+  force_delete = true
 
   image_scanning_configuration {
     scan_on_push = true
