@@ -95,6 +95,14 @@ impl GlobalServerContext {
     }
 }
 
+/// How long Valkey has to answer a command. Its commands here are counters and small reads,
+/// which take about as long as the network between, so one that takes this long is not coming.
+const VALKEY_ANSWER_WITHIN: Duration = Duration::from_secs(1);
+/// The shortest and longest waits between attempts to reach Valkey again, doubling from one to
+/// the other.
+const VALKEY_RECONNECT_MIN_MILLIS: u32 = 100;
+const VALKEY_RECONNECT_MAX_MILLIS: u32 = 5_000;
+
 impl GlobalServerContext {
     /// Connects to everything the server needs. `routes` are the API's routes, which the rate
     /// limits are checked against.
@@ -131,8 +139,28 @@ impl GlobalServerContext {
             },
             ..Default::default()
         };
-        let valkey =
-            fred::prelude::Client::new(valkey_config.clone(), None, Some(valkey_connection), None);
+        // Without a time limit a command sent while Valkey is away is never answered, and every
+        // request that counts a rate limit waits with it. With one, the command fails, and the
+        // request is let through or refused as its endpoint says (`app::rate_limit`).
+        let valkey_performance = fred::types::config::PerformanceConfig {
+            default_command_timeout: VALKEY_ANSWER_WITHIN,
+            ..Default::default()
+        };
+        // Tried again for as long as it takes, so Valkey restarting needs no server restarted.
+        // The first connection is not: a server whose `valkey_url` reaches nothing stops as it
+        // starts.
+        let valkey_reconnect = fred::types::config::ReconnectPolicy::new_exponential(
+            0,
+            VALKEY_RECONNECT_MIN_MILLIS,
+            VALKEY_RECONNECT_MAX_MILLIS,
+            2,
+        );
+        let valkey = fred::prelude::Client::new(
+            valkey_config.clone(),
+            Some(valkey_performance),
+            Some(valkey_connection),
+            Some(valkey_reconnect),
+        );
         valkey.init().await?;
 
         let media_store = Arc::new(crate::media_store::MediaStore::new(&config).await?);

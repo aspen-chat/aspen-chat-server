@@ -36,7 +36,16 @@ It takes libpq's TLS parameters:
 [Network exposure](../installing/network-exposure.md#postgresql) for how to set PostgreSQL up for
 TLS.
 
-### NATS memory
+### When Valkey is away
+
+- A command Valkey does not answer within a second counts as failed. Requests then go on
+  without their rate limits being counted, each up to a second slower, except on the sign-in,
+  password reset, registration, and invite endpoints, which answer
+  [`serverBusy`](../troubleshooting/load.md#serverbusy).
+- The server keeps trying to reach Valkey, from every tenth of a second to every five seconds,
+  and carries on when it is back. No server needs restarting.
+- A server that cannot reach Valkey when it starts stops with an error.
+
 
 NATS keeps Aspen's two streams in memory, and reserves each stream's whole size when it is made.
 What it may reserve is `max_memory_store` in the NATS server's configuration, three quarters of
