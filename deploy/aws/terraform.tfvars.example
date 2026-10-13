@@ -1,0 +1,19 @@
+region = "eu-central-1"
+
+# `public_url` becomes https://chat.example.org, for good. The hosted zone must hold it.
+domain          = "chat.example.org"
+route53_zone_id = "Z0123456789ABCDEFGHIJ"
+
+# Leave out for the first apply, which makes the repositories to push the images to.
+# image_tag = "2026-10-12"
+
+voice_servers = {
+  # At https://voice-1.chat.example.org. Measure the capacity on the instance type it runs on:
+  # voice_server estimate-capacity
+  voice-1 = { capacity = 120 }
+}
+
+# email = {
+#   smtp_url = "smtps://aspen:password@smtp.example.org"
+#   from     = "Example Chat <noreply@chat.example.org>"
+# }

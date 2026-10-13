@@ -5,7 +5,8 @@
 //! user's permissions.
 
 use super::{database, operator, publisher};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
+use aspen_app::VoiceServerId;
 use aspen_app::aspen_config::AspenConfig;
 use aspen_app::voice::{self, VoiceServer, VoiceServerChangeset};
 use clap::Subcommand;
@@ -25,6 +26,10 @@ pub enum VoiceServersCommand {
         /// The most participants it carries at once.
         #[clap(long)]
         capacity: u32,
+        /// The id to register it under, for a deployment whose configuration names its voice
+        /// servers' ids before they are registered. Left out, one is made.
+        #[clap(long)]
+        id: Option<uuid::Uuid>,
     },
     /// Change a registered voice server.
     Set {
@@ -89,9 +94,22 @@ pub async fn voice_servers(config: &AspenConfig, command: VoiceServersCommand) -
             name,
             url,
             capacity: wanted,
+            id,
         } => {
+            let id = id.map(VoiceServerId::from);
             let server = match servers.iter().find(|server| server.name == name) {
                 Some(existing) => {
+                    // A voice server's NATS user and its join tokens name its id, so giving
+                    // a registered server another would cut off the one running under it.
+                    if let Some(id) = id.filter(|id| *id != existing.id) {
+                        bail!(
+                            "{name} is already registered with the id {}, not {}, and a \
+                             registered server's id never changes; to give it another, remove \
+                             it and add it again",
+                            existing.id.0,
+                            id.0
+                        );
+                    }
                     let changes = VoiceServerChangeset {
                         name: None,
                         url: Some(url),
@@ -102,9 +120,19 @@ pub async fn voice_servers(config: &AspenConfig, command: VoiceServersCommand) -
                         .await
                         .map_err(fail)?
                 }
-                None => voice::create_server_in(config, &mut conn, name, url, capacity(wanted)?)
-                    .await
-                    .map_err(fail)?,
+                None => {
+                    if let Some(holder) = servers.iter().find(|server| Some(server.id) == id) {
+                        bail!(
+                            "the id {} is already {}'s; give {name} an id of its own",
+                            holder.id.0,
+                            holder.name
+                        );
+                    }
+                    let id = id.unwrap_or_else(VoiceServerId::new);
+                    voice::create_server_in(config, &mut conn, id, name, url, capacity(wanted)?)
+                        .await
+                        .map_err(fail)?
+                }
             };
             tracing::info!(
                 name = server.name,

@@ -94,6 +94,7 @@ pub async fn create_server(
     create_server_in(
         &state.config,
         state.connection_pool.get().await?.as_mut(),
+        VoiceServerId::new(),
         name,
         url,
         capacity,
@@ -101,18 +102,19 @@ pub async fn create_server(
     .await
 }
 
-/// Registers a server, enabled, at an address [`check_url`] allows. A name already taken is a
-/// unique violation.
+/// Registers a server as `id`, enabled, at an address [`check_url`] allows. A name or an id
+/// already taken is a unique violation.
 pub async fn create_server_in(
     config: &crate::aspen_config::AspenConfig,
     conn: &mut AsyncPgConnection,
+    id: VoiceServerId,
     name: String,
     url: String,
     capacity: i32,
 ) -> crate::Result<VoiceServer> {
     check_url(config, &url)?;
     let row = VoiceServer {
-        id: VoiceServerId::new(),
+        id,
         name,
         url,
         capacity,

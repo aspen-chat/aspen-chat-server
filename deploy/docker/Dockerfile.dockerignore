@@ -1,0 +1,19 @@
+# Read by BuildKit for deploy/docker/Dockerfile alone. Everything a build writes, and what no
+# stage reads.
+.git
+**/target
+**/node_modules
+**/dist
+**/test-results
+**/__pycache__
+client/packages/app/app.tar.gz
+/aspen.toml
+/voice_server.toml
+/.env
+/openapi.yaml
+/event_schema.json
+/federation_schema.json
+/voice_signal_schema.json
+deploy/aws/.terraform
+deploy/aws/*.tfstate*
+deploy/aws/*.tfvars

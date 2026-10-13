@@ -37,7 +37,7 @@ add, change, disable, and remove them in the Administration Dashboard. From the 
 
 | Command | What it does |
 | --- | --- |
-| `aspen-chat-server voice-servers add NAME --url URL --capacity N` | Registers one, or gives the one already registered by that name this address and capacity. A deployment script may run it every time it deploys. It prints the server's id; see [The voice server's id](#the-voice-servers-id). |
+| `aspen-chat-server voice-servers add NAME --url URL --capacity N [--id ID]` | Registers one, or gives the one already registered by that name this address and capacity. A deployment script may run it every time it deploys. It prints the server's id; see [The voice server's id](#the-voice-servers-id). |
 | `voice-servers set NAME [--url URL] [--capacity N] [--enabled true\|false]` | Changes one. A disabled server is offered to no one joining a call; calls already on it go on. |
 | `voice-servers remove NAME` | Removes one that holds no calls. Disable it first and let its calls end, or remove it from the dashboard, which ends them. |
 | `voice-servers list` | Lists them, with their ids. |
@@ -55,3 +55,8 @@ add, change, disable, and remove them in the Administration Dashboard. From the 
 `voice-servers add` prints the server's id. The voice server's `id` must be that id, and so must
 the subjects its NATS user's permissions name (see
 [Step 6: Voice servers](../installing/6-voice-servers.md#configure-it)).
+
+`--id` registers the server under an id you chose, a UUID, instead of one made for it. It is for
+deployments described in files that must name the id before the server is registered, such as
+[the AWS configuration](../../../deploy/aws/README.md). The command refuses an id another server
+has, and refuses to give a registered server a different id.

@@ -72,6 +72,11 @@ See [Step 5](../../operators/installing/5-web-client.md).
   user's subjects all name it, so it is written once into `voice_server.toml` and the NATS
   permissions. `voice-servers add` prints it with those lines so an operator need not query the
   database.
+- **`voice-servers add --id` takes the id from the operator.** A deployment described in files
+  writes the id into the voice server's configuration and its NATS user before anything is
+  running to register it with, so it must be able to choose the id first. A registered server's
+  id is still never changed: the command refuses rather than cut off the server running under
+  the old one.
 - **A voice server checks its id against the registry at startup, and the API servers report
   unregistered ids they hear from.** A wrong id otherwise only shows as a Silent server, since its
   reports match no server and are dropped.

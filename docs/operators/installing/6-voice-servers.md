@@ -48,6 +48,8 @@ Each voice server is its own machine (or container) with its own `voice_server.t
 - The id never changes for as long as the server stays registered, so it is written once.
 - **A server removed and registered again gets a new id.** Its `voice_server.toml` and NATS user
   must be given it.
+- To choose the id yourself, give `voice-servers add` a UUID with `--id`. See
+  [The voice server's id](../configuration/voice.md#the-voice-servers-id).
 
 ## Configure it
 
