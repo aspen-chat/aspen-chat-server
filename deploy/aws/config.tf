@@ -37,11 +37,11 @@ locals {
     nats_monitor_url = local.nats_monitor_url
     trusted_proxies  = local.trusted_proxies
     s3_endpoint      = "https://s3.${var.region}.amazonaws.com"
-    media_url        = "https://${local.media_domain}"
-    bucket           = aws_s3_bucket.media.bucket
+    media_url        = module.media.public_base_url
+    bucket           = module.media.bucket
     region           = var.region
-    s3_access_key    = aws_iam_access_key.media.id
-    s3_secret_key    = aws_iam_access_key.media.secret
+    s3_access_key    = module.media.access_key
+    s3_secret_key    = module.media.secret_key
     email            = var.email
   })
 
@@ -50,6 +50,7 @@ locals {
       id              = random_uuid.voice[name].result
       name            = name
       nats_url        = local.nats_url
+      listen_addr     = "0.0.0.0:9000"
       nats_password   = random_password.nats_voice[name].result
       trusted_proxies = local.trusted_proxies
       public_address  = aws_eip.voice[name].public_ip
@@ -61,6 +62,7 @@ locals {
   nats_conf = templatefile("${path.module}/templates/nats.conf.tftpl", {
     # NATS reads the machine's memory, not its container's, so it is told what it may reserve.
     max_memory_store_bytes = floor(var.nats.memory * 5 / 8) * 1024 * 1024
+    listen_address         = "0.0.0.0"
     server_password        = random_password.nats_server.result
     voice_servers = {
       for name, _ in var.voice_servers : name => {

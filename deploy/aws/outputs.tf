@@ -4,7 +4,7 @@ output "public_url" {
 
 output "image_repositories" {
   description = "Where to push the images built from deploy/docker/Dockerfile, each with its target's name."
-  value       = { for target, repository in aws_ecr_repository.image : target => repository.repository_url }
+  value       = module.cluster.repositories
 }
 
 output "voice_servers" {
@@ -23,11 +23,11 @@ output "run_task" {
   value = join(" ", [
     "python3 ${path.module}/run_task.py",
     "--region ${var.region}",
-    "--cluster ${aws_ecs_cluster.this.name}",
+    "--cluster ${module.cluster.name}",
     "--task-definition ${aws_ecs_task_definition.server["release"].family}",
     "--subnets ${join(",", aws_subnet.public[*].id)}",
     "--security-group ${local.sg["server"]}",
-    "--log-group ${aws_cloudwatch_log_group.this.name}",
+    "--log-group ${module.cluster.log_group}",
     "--log-prefix release",
     "--",
   ])

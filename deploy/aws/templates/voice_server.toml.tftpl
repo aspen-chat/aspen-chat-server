@@ -1,6 +1,6 @@
 id = ${jsonencode(id)}
 nats_url = ${jsonencode(nats_url)}
-listen_addr = "0.0.0.0:9000"
+listen_addr = ${jsonencode(listen_addr)}
 
 [nats_user]
 user = ${jsonencode(name)}

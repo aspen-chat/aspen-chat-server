@@ -26,7 +26,7 @@ resource "aws_ecs_task_definition" "nats" {
   network_mode             = "awsvpc"
   cpu                      = var.nats.cpu
   memory                   = var.nats.memory
-  execution_role_arn       = aws_iam_role.execution.arn
+  execution_role_arn       = module.cluster.execution_role_arn
 
   runtime_platform {
     operating_system_family = local.runtime_platform.operating_system_family
@@ -50,13 +50,13 @@ resource "aws_ecs_task_definition" "nats" {
       { containerPort = 4222, protocol = "tcp" },
       { containerPort = 8222, protocol = "tcp" },
     ]
-    logConfiguration = local.log_configuration["nats"]
+    logConfiguration = module.cluster.log_configuration["nats"]
   }])
 }
 
 resource "aws_ecs_service" "nats" {
   name            = "nats"
-  cluster         = aws_ecs_cluster.this.id
+  cluster         = module.cluster.id
   task_definition = aws_ecs_task_definition.nats.arn
   launch_type     = "FARGATE"
   desired_count   = 1

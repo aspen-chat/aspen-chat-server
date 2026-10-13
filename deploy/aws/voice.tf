@@ -61,7 +61,7 @@ resource "aws_instance" "voice" {
   user_data = <<-EOT
     #!/bin/bash
     cat >> /etc/ecs/ecs.config <<'CONFIG'
-    ECS_CLUSTER=${aws_ecs_cluster.this.name}
+    ECS_CLUSTER=${module.cluster.name}
     ECS_INSTANCE_ATTRIBUTES={"aspen.voice":"${each.key}"}
     CONFIG
   EOT
@@ -94,11 +94,11 @@ resource "aws_ecs_task_definition" "voice" {
   requires_compatibilities = ["EC2"]
   # The host's own network: the media ports are a range, taken as calls need them.
   network_mode       = "host"
-  execution_role_arn = aws_iam_role.execution.arn
+  execution_role_arn = module.cluster.execution_role_arn
 
   container_definitions = jsonencode([{
     name              = "voice"
-    image             = local.image["voice"]
+    image             = module.cluster.image["voice"]
     essential         = true
     memoryReservation = 512
     entryPoint        = ["sh", "-ec"]
@@ -112,7 +112,7 @@ resource "aws_ecs_task_definition" "voice" {
     secrets          = [{ name = "VOICE_SERVER_TOML", valueFrom = local.config_secret["voice-${each.key}"] }]
     portMappings     = [{ containerPort = 9000, hostPort = 9000, protocol = "tcp" }]
     ulimits          = [{ name = "nofile", softLimit = 65536, hardLimit = 65536 }]
-    logConfiguration = local.log_configuration["voice"]
+    logConfiguration = module.cluster.log_configuration["voice"]
   }])
 }
 
@@ -168,7 +168,7 @@ resource "aws_route53_record" "voice" {
 resource "aws_ecs_service" "voice" {
   for_each        = var.voice_servers
   name            = each.key
-  cluster         = aws_ecs_cluster.this.id
+  cluster         = module.cluster.id
   task_definition = aws_ecs_task_definition.voice[each.key].arn
   launch_type     = "EC2"
   desired_count   = local.deployed ? 1 : 0

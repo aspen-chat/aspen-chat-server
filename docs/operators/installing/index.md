@@ -20,8 +20,9 @@ administrator.
 These steps can be written down once and applied by a tool:
 
 - [Container images](../../../deploy/README.md#the-images) of both servers, with the web client.
-- [A deployment on AWS](../../../deploy/aws/README.md), described for OpenTofu. It is a
-  prototype: it has been planned and never applied.
+- [A deployment on AWS](../../../deploy/aws/README.md), described for OpenTofu, and
+  [a small one on a single machine](../../../deploy/aws-single/README.md). Both are prototypes:
+  they have been planned and never applied.
 
 ## Securing and maintaining
 

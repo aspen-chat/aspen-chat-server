@@ -1,5 +1,5 @@
-port: 4222
-http_port: 8222
+listen: "${listen_address}:4222"
+http: "${listen_address}:8222"
 
 jetstream {
   store_dir: "/tmp/jetstream"

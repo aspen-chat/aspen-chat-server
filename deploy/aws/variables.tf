@@ -104,10 +104,10 @@ variable "nats" {
 }
 
 variable "database" {
-  description = "The PostgreSQL instance."
+  description = "The PostgreSQL instance. The migrations need PostgreSQL 18 or later."
   type = object({
     instance_class        = optional(string, "db.t4g.small")
-    engine_version        = optional(string, "17")
+    engine_version        = optional(string, "18")
     allocated_storage     = optional(number, 20)
     max_allocated_storage = optional(number, 200)
     multi_az              = optional(bool, false)

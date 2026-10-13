@@ -11,11 +11,11 @@ resource "terraform_data" "release" {
 
     environment = {
       ASPEN_RUN_REGION          = var.region
-      ASPEN_RUN_CLUSTER         = aws_ecs_cluster.this.name
+      ASPEN_RUN_CLUSTER         = module.cluster.name
       ASPEN_RUN_TASK_DEFINITION = aws_ecs_task_definition.server["release"].arn
       ASPEN_RUN_SUBNETS         = join(",", aws_subnet.public[*].id)
       ASPEN_RUN_SECURITY_GROUP  = local.sg["server"]
-      ASPEN_RUN_LOG_GROUP       = aws_cloudwatch_log_group.this.name
+      ASPEN_RUN_LOG_GROUP       = module.cluster.log_group
       ASPEN_RUN_LOG_PREFIX      = "release"
     }
   }
@@ -26,8 +26,6 @@ resource "terraform_data" "release" {
     aws_vpc_security_group_ingress_rule.internal,
     aws_vpc_security_group_egress_rule.all,
     aws_route_table_association.public,
-    aws_iam_role_policy.execution_config,
-    aws_iam_role_policy_attachment.execution,
     aws_secretsmanager_secret_version.config,
   ]
 }

@@ -66,3 +66,38 @@ secret, and writes it into its working directory before starting the server.
   cannot use their task's role.
 - **Voice servers ignore newer machine images** until replaced by name. Otherwise whichever
   apply came after AWS published an image would replace every voice server and end its calls.
+
+## One machine on AWS
+
+`deploy/aws-single` trades staying up for cost: everything the larger configuration spreads
+over managed services runs as containers on one machine.
+
+- **What costs money in the larger configuration is mostly what keeps it up**: a second API
+  server, the load balancer, and managed PostgreSQL and Valkey. A deployment of a few dozen
+  people that may be down for some minutes needs none of them.
+- **ECS still runs the containers**, on the one machine. A release is then the same `tofu
+  apply` as in the larger configuration, with the same release task and `run_task.py`, and
+  nothing is copied to the machine or run on it by hand.
+- **Every container is on the machine's own network, and every service listens on loopback.**
+  The voice server needs the host's network for its media ports, and with the rest beside it
+  the servers reach PostgreSQL, NATS, and Valkey at 127.0.0.1: no password or event crosses a
+  network, and no container port is published past a firewall.
+- **Caddy terminates TLS** in the load balancer's place, and renews its own certificates. It
+  keeps them on the data volume, since Let's Encrypt issues only so many for a name each week
+  and a replaced machine would otherwise ask again.
+- **The database's files are on a volume of their own**, so replacing the machine keeps them.
+  The machine's first boot waits for that volume before the ECS agent may start anything:
+  PostgreSQL started without it would make an empty database on the machine's own disk.
+- **Backups are snapshots of that volume.** One taken while PostgreSQL runs restores the way a
+  database that lost power does, which PostgreSQL is built to survive.
+- **Storage stays in S3 behind CloudFront.** It costs by use, which at this size is cents, and
+  keeping attachments on the machine would put them on the one disk that can be lost.
+- **NATS is told how much memory its streams may reserve** (`nats_stream_mib`), and the servers
+  size the streams to it through its monitoring port, rather than the gigabyte they ask for
+  when they cannot see a limit.
+- **The configuration files are in Secrets Manager rather than Parameter Store**, which would
+  be free: the machine's own role may read every parameter, so anything on the machine could
+  read them without going through ECS.
+- **The two configurations share modules for the cluster and the storage**, and the templates.
+  The rest differs in kind, not in size, so it is written twice rather than switched on a
+  variable.

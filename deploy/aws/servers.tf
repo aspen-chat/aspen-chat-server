@@ -40,7 +40,7 @@ resource "aws_ecs_task_definition" "server" {
   network_mode             = "awsvpc"
   cpu                      = local.server_sizes[each.key].cpu
   memory                   = local.server_sizes[each.key].memory
-  execution_role_arn       = aws_iam_role.execution.arn
+  execution_role_arn       = module.cluster.execution_role_arn
 
   runtime_platform {
     operating_system_family = local.runtime_platform.operating_system_family
@@ -49,7 +49,7 @@ resource "aws_ecs_task_definition" "server" {
 
   container_definitions = jsonencode([{
     name       = "aspen"
-    image      = local.image["api"]
+    image      = module.cluster.image["api"]
     essential  = true
     entryPoint = local.server_entry_point
     command    = each.value
@@ -62,7 +62,7 @@ resource "aws_ecs_task_definition" "server" {
     # Every connection and event stream is a file; Fargate's default allows 65535, fewer than
     # `[connections] max`.
     ulimits          = [{ name = "nofile", softLimit = 262144, hardLimit = 262144 }]
-    logConfiguration = local.log_configuration[each.key]
+    logConfiguration = module.cluster.log_configuration[each.key]
   }])
 }
 
@@ -130,7 +130,7 @@ resource "aws_lb_listener" "http" {
 
 resource "aws_ecs_service" "api" {
   name            = "api"
-  cluster         = aws_ecs_cluster.this.id
+  cluster         = module.cluster.id
   task_definition = aws_ecs_task_definition.server["api"].arn
   launch_type     = "FARGATE"
   desired_count   = local.deployed ? var.api.count : 0
@@ -158,7 +158,7 @@ resource "aws_ecs_service" "api" {
 
 resource "aws_ecs_service" "worker" {
   name            = "worker"
-  cluster         = aws_ecs_cluster.this.id
+  cluster         = module.cluster.id
   task_definition = aws_ecs_task_definition.server["worker"].arn
   launch_type     = "FARGATE"
   desired_count   = local.deployed ? var.workers.count : 0

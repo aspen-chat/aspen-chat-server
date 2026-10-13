@@ -123,7 +123,7 @@ run "release" {
   }
 
   assert {
-    condition     = local.public_prefixes == ["attachments", "attachment-previews", "icons", "link-preview-images"]
+    condition     = module.media.public_prefixes == ["attachments", "attachment-previews", "icons", "link-preview-images"]
     error_message = "The read path serves the four prefixes clients read (docs/operators/installing/storage-read-path.md)."
   }
 

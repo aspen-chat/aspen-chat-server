@@ -6,7 +6,11 @@ files a tool applies.
 | Directory | What it holds |
 | --- | --- |
 | [`docker/`](docker/Dockerfile) | The container images of both servers. |
-| [`aws/`](aws/README.md) | A whole deployment on AWS, for [OpenTofu](https://opentofu.org). A prototype: planned, never applied. |
+| [`aws/`](aws/README.md) | A whole deployment on AWS, for [OpenTofu](https://opentofu.org): managed services, several API servers, a machine for each voice server. |
+| [`aws-single/`](aws-single/README.md) | A small deployment on one AWS machine, which costs a fraction of that and is down whenever the machine is. |
+
+Both are prototypes: planned, never applied. They share the images, the configuration
+templates in `aws/templates/`, the modules in `aws/modules/`, and `aws/run_task.py`.
 
 ## The images
 
