@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: System packages
         run: |
           sudo apt-get update
@@ -81,7 +81,7 @@ jobs:
           python3 scripts/check_permissions.py --bin target/debug --start-services
       - name: The NATS streams fit their settings and NATS's memory
         run: python3 scripts/check_nats_memory.py --bin target/debug
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: schemas
           path: |
@@ -100,16 +100,16 @@ jobs:
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The code generator reads these from the repository root, and would otherwise run cargo.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: schemas
           path: .
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: client/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -141,15 +141,15 @@ jobs:
       # bindgen reads libobs's headers through libclang, which the runner's LLVM provides.
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: schemas
           path: .
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: client/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -159,8 +159,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: client/packages/desktop/native/capture
-      # MSVC's `lib` writes the import library the helper links obs.dll through.
-      - uses: ilammy/msvc-dev-cmd@v1
       - run: pnpm install --frozen-lockfile
       - run: pnpm codegen
       # The OBS Project's own signed release files, pinned by checksum (`scripts/fetch-libobs.mjs`).
@@ -198,7 +196,7 @@ jobs:
             if ($signature.Status -ne 'Valid') { throw "$($file.Name) has no valid signature: $($signature.StatusMessage)" }
             if ($signature.SignerCertificate.Subject.StartsWith($publisher)) { throw "$($file.Name) carries our signature in place of the OBS Project's" }
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-windows
           path: client/packages/desktop/release/*.exe
@@ -214,21 +212,21 @@ jobs:
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: schemas
           path: .
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: client/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
       # Capacitor 8's Android build wants JDK 21; the runner already has the Android SDK.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 21
@@ -267,7 +265,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: System packages
         run: |
           sudo apt-get update
@@ -310,7 +308,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential \
             pkg-config libssl-dev libpq-dev python3 python3-pip python3-venv binutils
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
@@ -328,7 +326,7 @@ jobs:
           mkdir dist
           cp target/release/aspen-chat-server target/release/voice_server target/release/aspen-migrate dist/
           tar -C dist -czf aspen-aarch64-bookworm.tar.gz .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: aspen-aarch64-bookworm
           path: aspen-aarch64-bookworm.tar.gz
@@ -338,7 +336,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: System packages
         run: |
           sudo apt-get update
@@ -358,7 +356,7 @@ jobs:
             cp "target/aarch64-unknown-linux-gnu/release/$binary" dist/
           done
           tar -C dist -czf aspen-aarch64-bookworm-cross.tar.gz .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: aspen-aarch64-bookworm-cross
           path: aspen-aarch64-bookworm-cross.tar.gz
@@ -373,8 +371,8 @@ jobs:
       matrix:
         build: [aspen-aarch64-bookworm, aspen-aarch64-bookworm-cross]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.build }}
       - name: Unpack

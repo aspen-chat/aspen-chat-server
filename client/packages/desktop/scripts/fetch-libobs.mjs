@@ -157,12 +157,44 @@ function exportsOf(dll) {
   return `LIBRARY obs.dll\nEXPORTS\n${exported.map((name) => `    ${name}`).join("\n")}\n`;
 }
 
+/**
+ * MSVC's `lib.exe` as Visual Studio's own locator finds it, for a shell that is not a developer
+ * prompt and so has no `lib` on its `PATH`. `vswhere` is at this path wherever Visual Studio or
+ * its Build Tools are installed.
+ */
+function installedMsvcLib() {
+  const vswhere = join(
+    process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
+    "Microsoft Visual Studio",
+    "Installer",
+    "vswhere.exe",
+  );
+  const found = spawnSync(
+    vswhere,
+    [
+      "-latest",
+      "-products",
+      "*",
+      "-requires",
+      "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+      "-find",
+      "VC\\Tools\\MSVC\\**\\bin\\Hostx64\\x64\\lib.exe",
+    ],
+    { encoding: "utf8" },
+  );
+  if (found.status !== 0) return [];
+  // One line per toolset installed; any of them writes an import library.
+  return found.stdout.split(/\r?\n/).filter((line) => line.trim() !== "");
+}
+
 /** Makes `obs.lib` from `obs.def` with whichever tool is at hand; says so when none is. */
 function importLibrary() {
   const def = join(out, "obs.def");
   const lib = join(out, "obs.lib");
+  const libArgs = ["/nologo", `/def:${def}`, "/machine:x64", `/out:${lib}`];
   const attempts = [
-    ["lib", ["/nologo", `/def:${def}`, "/machine:x64", `/out:${lib}`]],
+    ["lib", libArgs],
+    ...installedMsvcLib().map((tool) => [tool, libArgs]),
     ["llvm-dlltool", ["-m", "i386:x86-64", "-d", def, "-l", lib]],
     ["C:\\Program Files\\LLVM\\bin\\llvm-dlltool.exe", ["-m", "i386:x86-64", "-d", def, "-l", lib]],
   ];
@@ -174,7 +206,7 @@ function importLibrary() {
     }
   }
   console.log(
-    "no `lib` (MSVC) or `llvm-dlltool` (LLVM) found; obs.lib was not written, so the helper cannot link until one is on the PATH and this runs again",
+    "no `lib` (MSVC) or `llvm-dlltool` (LLVM) found; obs.lib was not written, so the helper cannot link until Visual Studio's C++ tools or LLVM are installed and this runs again",
   );
   return false;
 }
