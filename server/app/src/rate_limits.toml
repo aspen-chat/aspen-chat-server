@@ -327,6 +327,16 @@ ip = { requests = 60, per_seconds = 60, burst = 20 }
 [rate_limits.endpoints."GET /auth/methods"]
 ip = { requests = 60, per_seconds = 60, burst = 20 }
 
+# Load balancers, proxies, and deployment tools ask these from one address, many times a
+# minute, and a limit reached would read as the server being down. Neither costs more for
+# being asked more: the first asks nothing of anything, and the second asks the services at
+# most once a second however often it is asked (`app::health`).
+[rate_limits.endpoints."GET /health"]
+ip = false
+
+[rate_limits.endpoints."GET /health/ready"]
+ip = false
+
 [rate_limits.endpoints."GET /deployment"]
 # The sign-in screen reads it each time it opens.
 ip = { requests = 60, per_seconds = 60, burst = 20 }

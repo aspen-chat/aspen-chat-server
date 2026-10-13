@@ -462,8 +462,23 @@ def exec_ok(store: Box, service: str, *command: str) -> bool:
 
 
 def healthy(store: Box, port: int) -> bool:
-    """Asked from inside Caddy's container, which is where the answer matters."""
-    return exec_ok(store, "caddy", "wget", "-q", "-O", "/dev/null", f"http://127.0.0.1:{port}/api/v1/deployment")
+    """Whether the API server at `port` reaches everything it needs. Asked from inside Caddy's
+    container, which is where the answer matters."""
+    return exec_ok(store, "caddy", "wget", "-q", "-O", "/dev/null", f"http://127.0.0.1:{port}/api/v1/health/ready")
+
+
+def unready_reason(port: int) -> str | None:
+    """What the API server at `port` says it cannot reach, when it is running and says so."""
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v1/health/ready", timeout=5)
+    except urllib.error.HTTPError as error:
+        try:
+            return json.loads(error.read()).get("detail")
+        except ValueError:
+            return None
+    except OSError:
+        return None
+    return None
 
 
 def wait_for(what: str, check, seconds: int = 120) -> None:
@@ -680,9 +695,9 @@ def doctor(store: Box, opt: argparse.Namespace) -> None:
     else:
         report.ok("Every service is running")
         if healthy(store, SLOTS[slot]):
-            report.ok("The API server answers")
+            report.ok("The API server answers, and reaches its database, NATS, and Valkey")
         else:
-            report.fail("The API server does not answer", f"`aspen-box logs {slot}` says why.")
+            report.fail("The API server is not ready", unready_reason(SLOTS[slot]) or f"`aspen-box logs {slot}` says why.")
         if exec_ok(store, "caddy", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/health"):
             report.ok("The voice server answers")
         else:

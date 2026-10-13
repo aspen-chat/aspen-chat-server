@@ -89,9 +89,11 @@ resource "aws_lb_target_group" "api" {
   deregistration_delay = 30
 
   health_check {
-    # Needs no session, and is answered from the server's copy of the deployment settings.
-    path                = "/api/v1/deployment"
-    matcher             = "200"
+    # Whether the server is running, not whether its database is: every server shares the
+    # database, and with it down they should still answer, saying so, rather than all be
+    # taken out at once.
+    path                = "/api/v1/health"
+    matcher             = "204"
     interval            = 15
     timeout             = 5
     healthy_threshold   = 2

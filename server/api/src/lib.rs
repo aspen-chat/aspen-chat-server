@@ -37,6 +37,7 @@ pub mod error;
 mod event_stream;
 pub mod extract;
 pub mod federation;
+pub mod health;
 pub mod icon;
 pub mod include;
 pub mod invite;
@@ -141,7 +142,7 @@ pub const TAG_PLUGINS: &str = "plugins";
         (name = TAG_INVITES, description = "Invite codes for joining communities"),
         (name = TAG_ATTACHMENTS, description = "Files attached to messages (two-phase direct-to-storage upload)"),
         (name = TAG_ICONS, description = "User and community icons (two-phase direct-to-storage upload)"),
-        (name = TAG_DEPLOYMENT, description = "How the deployment presents itself: its display name and icon"),
+        (name = TAG_DEPLOYMENT, description = "How the deployment presents itself: its display name and icon. And whether the server answering is up, and reaches what it needs"),
         (name = TAG_PLUGINS, description = "The deployment's plugins: their catalogue, communities turning them on and configuring them, what they say about people, and the dashboard's view of them. Each plugin's own routes, `/plugins/{plugin}/routes/{*path}`, are the plugin's and not described here."),
     )
 )]
@@ -195,6 +196,8 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(auth::login))
         .routes(routes!(auth::login_second_factor))
         .routes(routes!(auth::auth_methods))
+        .routes(routes!(health::health))
+        .routes(routes!(health::ready))
         .routes(routes!(
             deployment_settings::get_deployment_profile,
             deployment_settings::update_deployment_profile

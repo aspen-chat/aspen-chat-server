@@ -160,9 +160,11 @@ Aspen most wants to reach: a small rented server, or a small computer at home.
   request that finds one gone to the other. A small deployment then has no outage for a
   release, and a release that does not start changes nothing. The cost is a second server's
   memory for the seconds both run.
-- **Caddy's health check asks for one of the web client's files.** Every API endpoint is rate
-  limited by address, and on one machine every check comes from the same one. A check that
-  reached a limit would read as the server being down.
+- **What routes requests asks `GET /health`; what starts a server asks `GET /health/ready`.**
+  Caddy and the load balancer need to know a server is there. Were they to ask whether it
+  reaches its database, a database outage would take every server out at once, and people would
+  get a proxy's error in place of the server's own, which says what is wrong. An upgrade waits
+  for readiness instead, before it stops the server it replaces.
 - **Garage for files kept on the machine**, since it is one small process that keeps to a
   few megabytes idle, and it makes its own bucket and key pair from its environment. Its S3
   API and its read path share `media.<domain>`: paths under the bucket's name are the S3 API,

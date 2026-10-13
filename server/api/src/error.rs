@@ -132,6 +132,8 @@ pub enum ProblemCode {
     /// A plugin of this deployment that must decide what is about to be saved could not;
     /// `detail` names it. Retrying shortly may succeed.
     PluginUnavailable,
+    /// `GET /health/ready`: this server cannot reach a service it needs. `detail` names which.
+    NotReady,
     /// Something failed on the server. Retrying later may succeed.
     Internal,
 }
@@ -181,7 +183,9 @@ impl ProblemCode {
             }
             ProblemCode::AssertionInvalid => StatusCode::UNAUTHORIZED,
             ProblemCode::PluginRefused => StatusCode::UNPROCESSABLE_ENTITY,
-            ProblemCode::PluginUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            ProblemCode::PluginUnavailable | ProblemCode::NotReady => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             ProblemCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -230,6 +234,7 @@ impl ProblemCode {
             ProblemCode::StrongerSignInRequired => t!("problemStrongerSignInRequired"),
             ProblemCode::PluginRefused => t!("problemPluginRefused"),
             ProblemCode::PluginUnavailable => t!("problemPluginUnavailable"),
+            ProblemCode::NotReady => t!("problemNotReady"),
             ProblemCode::Internal => t!("tryAgainLater"),
         }
     }

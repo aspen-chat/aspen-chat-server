@@ -40,6 +40,20 @@ trusted_proxies = ["127.0.0.1"]
 
 **Without this, the rate limits count every client as the proxy.**
 
+## Health checks
+
+Point whatever stands before the server at one of these. Neither needs a session, and neither
+is rate limited.
+
+| Ask | Answers | For |
+| --- | --- | --- |
+| `GET /api/v1/health` | `204` while the server is running. | A load balancer's or reverse proxy's health check. |
+| `GET /api/v1/health/ready` | `204` when it also reaches its database, NATS, and Valkey; otherwise `503` [`notReady`](../troubleshooting/server.md#notready), naming those it does not. | Waiting for a new server before stopping the one it replaces, and finding what is wrong. |
+
+**Use the first for a load balancer.** Every server shares the same services, so with the
+second a database outage would take every server out of the load balancer at once, and people
+would see its error page instead of the server's own message.
+
 ## Outbound requests
 
 The server fetches some things from addresses others choose: link previews, plugins' calls,

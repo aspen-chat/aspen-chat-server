@@ -36,6 +36,8 @@ pub struct GlobalServerContext {
     pub standing_backoff: Arc<tokio::sync::Mutex<crate::federation::standing::StandingBackoff>>,
     /// This server's side of the places deep searches' steps run in (`app::deep_search`).
     pub deep_searches: crate::deep_search::DeepSearches,
+    /// Whether this server last reached its services (`app::health`).
+    pub readiness: Arc<crate::health::LastChecked>,
     /// The places for rechecks of calls this server runs at once (`app::voice::recheck`).
     pub rechecks: Arc<tokio::sync::Semaphore>,
     /// Each channel's recent count of who is online in it (`app::channel_presence`).
@@ -185,6 +187,7 @@ impl GlobalServerContext {
                 crate::federation::standing::StandingBackoff::new(&config.federation),
             )),
             deep_searches: crate::deep_search::DeepSearches::new(config.search.deep_concurrency),
+            readiness: Arc::default(),
             rechecks: Arc::new(tokio::sync::Semaphore::new(crate::voice::RECHECKS_AT_ONCE)),
             community_online: Arc::default(),
             voice_session_homes: Arc::default(),

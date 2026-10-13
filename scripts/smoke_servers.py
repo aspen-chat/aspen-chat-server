@@ -6,6 +6,7 @@
 It makes a database and a NATS of its own, runs the migrations, starts the chat server and the
 voice server on ports of their own (so a development stack can keep running beside it), and then:
 
+- asks the chat server whether it is up and ready (`GET /health`, `GET /health/ready`);
 - registers a user, signs in, and reads the user back;
 - makes a community with a voice channel and joins its call, which needs the voice server to
   have registered and reported in over NATS;
@@ -45,6 +46,11 @@ def say(message: str) -> None:
 
 def smoke(stack: Stack) -> None:
     api = stack.api
+    say("asking whether the chat server is up and ready")
+    for path in ("/health", "/health/ready"):
+        if (status := stack.status("GET", path)) != 204:
+            raise Failed(f"GET {path} answered {status}, not 204")
+
     say("registering, signing in, and reading the user back")
     name = f"smoke{os.getpid()}"
     api("POST", "/users", {"name": name, "password": "smoke-test-password"})

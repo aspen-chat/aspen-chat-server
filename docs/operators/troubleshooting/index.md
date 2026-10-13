@@ -58,6 +58,7 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | `uploadQuotaExceeded` | [Load](load.md#uploadquotaexceeded) |
 | `serverBusy` | [Load](load.md#serverbusy) |
 | `internal` | [Load](load.md#internal) |
+| `notReady` | [The server](server.md#notready) |
 | `deploymentUnreachable` | [Federation](federation.md#deploymentunreachable) |
 | `federationRefused` | [Federation](federation.md#federationrefused) |
 | `assertionInvalid` | [Federation](federation.md#assertioninvalid) |

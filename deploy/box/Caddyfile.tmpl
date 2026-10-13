@@ -9,10 +9,9 @@ ${domain} {
 	# Whichever API server is running, and both for the moment an upgrade has two: a request
 	# that finds one gone is given to the other.
 	reverse_proxy 127.0.0.1:8080 127.0.0.1:8081 {
-		# One of the web client's files, which the server does not rate limit. Every API
-		# endpoint is limited by address, and these checks all come from this machine's: a
-		# limit reached would read as the server being down.
-		health_uri /favicon.ico
+		# Whether the server is running, not whether its database is: one that cannot reach it
+		# still tells people so, which no server answering does not.
+		health_uri /api/v1/health
 		health_interval 2s
 		health_timeout 2s
 		lb_policy first

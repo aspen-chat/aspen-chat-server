@@ -49,6 +49,7 @@ pub mod everyone_limit;
 pub mod federation;
 pub mod file_transfer;
 pub mod fleet;
+pub mod health;
 pub mod icon;
 pub mod invite;
 pub mod jobs;

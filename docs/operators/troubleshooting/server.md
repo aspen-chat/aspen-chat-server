@@ -11,6 +11,17 @@ It says why on standard error. The usual causes:
   one once it has a domain;
 - a service it cannot reach.
 
+## `notReady`
+
+**Means:** `GET /api/v1/health/ready` found that this server cannot reach a service it needs.
+Its `detail` names which of PostgreSQL, NATS, and Valkey. The server logs `this server is not
+ready` once, with the same names, and `this server is ready again` when they are back.
+
+**What to do:** for each service named, check that it is running, that this server's machine
+can reach it, and that `aspen.toml` gives its address and credentials
+([Services](../configuration/services.md)). The server keeps trying by itself and needs no
+restart.
+
 ## NATS does not have the memory for the streams
 
 The server stops as it starts, or a change to a stream's size is refused, saying NATS does not
