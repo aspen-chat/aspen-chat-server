@@ -1,0 +1,27 @@
+{
+${acme_email}	# No HTTP/3: UDP 443 is not asked to be open, so it is not offered.
+	servers {
+		protocols h1 h2
+	}
+}
+
+${domain} {
+	# Whichever API server is running, and both for the moment an upgrade has two: a request
+	# that finds one gone is given to the other.
+	reverse_proxy 127.0.0.1:8080 127.0.0.1:8081 {
+		# One of the web client's files, which the server does not rate limit. Every API
+		# endpoint is limited by address, and these checks all come from this machine's: a
+		# limit reached would read as the server being down.
+		health_uri /favicon.ico
+		health_interval 2s
+		health_timeout 2s
+		lb_policy first
+		lb_try_duration 15s
+		lb_try_interval 250ms
+	}
+}
+
+${voice_domain} {
+	reverse_proxy 127.0.0.1:9000
+}
+${media_site}

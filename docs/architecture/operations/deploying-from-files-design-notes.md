@@ -139,3 +139,45 @@ over managed services runs as containers on one machine.
   back if the move turns out badly a day later.
 - **The script does what is not an apply, and prints the apply to run.** Plans that import or
   take over a name are the ones a person should read.
+
+## The box
+
+`deploy/box` is the one-machine deployment with nothing of any provider in it, for the people
+Aspen most wants to reach: a small rented server, or a small computer at home.
+
+- **One tool that asks a few questions, rather than files to edit.** It makes every password,
+  writes every file, and starts things in the order they need. What it was told is one JSON
+  file, which is also how a setting is changed later.
+- **Python's standard library and Docker Compose, and nothing to install.** A small computer's
+  system has both, or one package away. A compiled tool would need building for each
+  architecture before it could help anyone start.
+- **Every container on the machine's network, every service on loopback.** The voice server's
+  media is a range of UDP ports, which Docker publishes one process a port. With everything
+  beside it, no service is reachable from another machine whatever the firewall says, which
+  matters most where there is no firewall but a home router.
+- **Two places for the API server, one running.** An upgrade, or a changed `aspen.toml`, starts
+  the server in the other place and stops the first once the second answers; Caddy gives a
+  request that finds one gone to the other. A small deployment then has no outage for a
+  release, and a release that does not start changes nothing. The cost is a second server's
+  memory for the seconds both run.
+- **Caddy's health check asks for one of the web client's files.** Every API endpoint is rate
+  limited by address, and on one machine every check comes from the same one. A check that
+  reached a limit would read as the server being down.
+- **Garage for files kept on the machine**, since it is one small process that keeps to a
+  few megabytes idle, and it makes its own bucket and key pair from its environment. Its S3
+  API and its read path share `media.<domain>`: paths under the bucket's name are the S3 API,
+  which answers only what the server signed, and the four public prefixes are the read path.
+  One name to make a record for, not two.
+- **Uploads' CORS is answered by Caddy**, with any origin allowed, as on S3. Setting it in the
+  store would take an S3 client the box otherwise has no use for.
+- **`doctor` is where the know-how goes.** Most of what goes wrong with a first deployment is
+  outside the servers: a record that points elsewhere, a port not forwarded, a certificate not
+  yet issued, storage that serves too much. It checks each, and gives the record to write or
+  the command to run. What it cannot see from inside the network (whether media ports are
+  reachable) it says it has not checked, and how to.
+- **The templates hold placeholders alone.** OpenTofu and Python each fill `${name}` and
+  nothing more, so one set of files serves the box and both AWS configurations. A template
+  with conditions or loops could be rendered by only one of them.
+- **The AWS one-machine configuration is not built on the box yet.** It runs its containers
+  with ECS, which the box cannot use elsewhere. Rebuilt as a machine that runs the box, it
+  would share everything but making the machine.

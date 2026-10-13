@@ -1,0 +1,14 @@
+listen: ${listen}
+http: ${monitor}
+
+jetstream {
+  store_dir: "/tmp/jetstream"
+  max_memory_store: ${max_memory_store_bytes}
+  max_file_store: 1GB
+}
+
+authorization {
+  users = [
+    { user: "aspen", password: ${server_password} }
+${voice_users}  ]
+}

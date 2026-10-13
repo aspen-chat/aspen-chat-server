@@ -28,48 +28,57 @@ locals {
   # the security groups let reach either server.
   trusted_proxies = local.public_cidrs
 
-  aspen_toml = templatefile("${path.module}/templates/aspen.toml.tftpl", {
-    public_url       = local.public_url
-    database_url     = local.database_url
-    valkey_url       = local.valkey_url
-    nats_url         = local.nats_url
-    nats_password    = random_password.nats_server.result
-    nats_monitor_url = local.nats_monitor_url
-    trusted_proxies  = local.trusted_proxies
-    s3_endpoint      = "https://s3.${var.region}.amazonaws.com"
-    media_url        = module.media.public_base_url
-    bucket           = module.media.bucket
-    region           = var.region
-    s3_access_key    = module.media.access_key
-    s3_secret_key    = module.media.secret_key
-    email            = var.email
-  })
+  # The templates take every value as it is written in the file (../templates/README.md).
+  email_toml = var.email == null ? "" : "\n[email]\nsmtp_url = ${jsonencode(var.email.smtp_url)}\nfrom = ${jsonencode(var.email.from)}\n"
+
+  aspen_toml = templatefile("${path.module}/../templates/aspen.toml.tftpl", merge(
+    { for key, value in {
+      public_url       = local.public_url
+      database_url     = local.database_url
+      valkey_url       = local.valkey_url
+      nats_url         = local.nats_url
+      nats_password    = random_password.nats_server.result
+      nats_monitor_url = local.nats_monitor_url
+      trusted_proxies  = local.trusted_proxies
+      s3_endpoint      = "https://s3.${var.region}.amazonaws.com"
+      media_url        = module.media.public_base_url
+      bucket           = module.media.bucket
+      region           = var.region
+      s3_access_key    = module.media.access_key
+      s3_secret_key    = module.media.secret_key
+    } : key => jsonencode(value) },
+    { s3_more = "", more = local.email_toml },
+  ))
 
   voice_server_toml = {
-    for name, voice in var.voice_servers : name => templatefile("${path.module}/templates/voice_server.toml.tftpl", {
-      id              = random_uuid.voice[name].result
-      name            = name
-      nats_url        = local.nats_url
-      listen_addr     = "0.0.0.0:9000"
-      nats_password   = random_password.nats_voice[name].result
-      trusted_proxies = local.trusted_proxies
-      public_address  = aws_eip.voice[name].public_ip
-      min_port        = var.voice_media_ports.min
-      max_port        = var.voice_media_ports.max
+    for name, voice in var.voice_servers : name => templatefile("${path.module}/../templates/voice_server.toml.tftpl", {
+      for key, value in {
+        id                = random_uuid.voice[name].result
+        name              = name
+        nats_url          = local.nats_url
+        listen_addr       = "0.0.0.0:9000"
+        nats_password     = random_password.nats_voice[name].result
+        trusted_proxies   = local.trusted_proxies
+        announced_address = [aws_eip.voice[name].public_ip]
+        min_port          = var.voice_media_ports.min
+        max_port          = var.voice_media_ports.max
+      } : key => jsonencode(value)
     })
   }
 
-  nats_conf = templatefile("${path.module}/templates/nats.conf.tftpl", {
+  nats_conf = templatefile("${path.module}/../templates/nats.conf.tftpl", {
+    listen  = jsonencode("0.0.0.0:4222")
+    monitor = jsonencode("0.0.0.0:8222")
     # NATS reads the machine's memory, not its container's, so it is told what it may reserve.
     max_memory_store_bytes = floor(var.nats.memory * 5 / 8) * 1024 * 1024
-    listen_address         = "0.0.0.0"
-    server_password        = random_password.nats_server.result
-    voice_servers = {
-      for name, _ in var.voice_servers : name => {
+    server_password        = jsonencode(random_password.nats_server.result)
+    voice_users = join("", [
+      for name, _ in var.voice_servers : templatefile("${path.module}/../templates/nats_voice_user.tftpl", {
+        user     = jsonencode(name)
+        password = jsonencode(random_password.nats_voice[name].result)
         id       = random_uuid.voice[name].result
-        password = random_password.nats_voice[name].result
-      }
-    }
+      })
+    ])
   })
 
   configs = merge(

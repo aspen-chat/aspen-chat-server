@@ -1,0 +1,746 @@
+#!/usr/bin/env python3
+"""Runs one whole Aspen deployment on one Linux machine, with Docker.
+
+    aspen-box init                 ask what the deployment is, and write its configuration
+    aspen-box up                   start it, or bring it in line with its configuration
+    aspen-box upgrade --tag TAG    move to new images, the API never stopping
+    aspen-box doctor               check the machine, the network, and the deployment
+    aspen-box run -- COMMAND…      an operator command: aspen-chat-server admin grant <username>
+    aspen-box backup | restore FILE
+    aspen-box capacity             measure how many people the voice server carries
+    aspen-box refresh-address      follow a public address that changed
+    aspen-box status | logs [SERVICE] | down
+
+Everything it keeps is in one directory (`--dir`, ~/aspen by default): `box.json`, what `init`
+was told and the passwords it made; `config/`, the files written from it; `data/`, the
+database, the certificates, and the bundled storage; `backups/`. README.md beside this file is
+the guide. It needs Python 3.9 and Docker with Compose, and nothing else.
+"""
+
+import argparse
+import ipaddress
+import json
+import os
+import pathlib
+import re
+import secrets
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+HERE = pathlib.Path(__file__).resolve().parent
+TEMPLATES = HERE.parent / "templates"
+BUCKET = "aspen-media"
+VOICE_SERVER = "voice"
+# The two places an API server may run, by compose service: an upgrade starts the one that is
+# not running before it stops the one that is.
+SLOTS = {"api-a": 8080, "api-b": 8081}
+# Answers with the caller's address as text, over whichever family the name was reached by.
+ADDRESS_SERVICES = {4: "https://1.1.1.1/cdn-cgi/trace", 6: "https://[2606:4700:4700::1111]/cdn-cgi/trace"}
+BACKUPS_KEPT = 7
+GIB = 1 << 30
+
+
+class Failed(Exception):
+    pass
+
+
+# ---- the box's directory
+
+
+class Box:
+    def __init__(self, directory: pathlib.Path):
+        self.dir = directory
+        self.file = directory / "box.json"
+
+    def load(self) -> dict:
+        if not self.file.exists():
+            raise Failed(f"{self.dir} holds no deployment yet: run `aspen-box init`")
+        return json.loads(self.file.read_text())
+
+    def save(self, box: dict) -> None:
+        self.dir.mkdir(parents=True, exist_ok=True)
+        # It holds every password.
+        self.file.touch(mode=0o600, exist_ok=True)
+        self.file.chmod(0o600)
+        self.file.write_text(json.dumps(box, indent=2) + "\n")
+
+    def compose(self, *arguments: str, capture: bool = False, check: bool = True, stdin=None, stdout=None):
+        files = [str(HERE / "compose.yaml"), *filter(None, os.environ.get("ASPEN_BOX_COMPOSE_FILES", "").split(":"))]
+        command = ["docker", "compose", "--project-directory", str(self.dir), "--env-file", str(self.dir / ".env")]
+        for file in files:
+            command += ["-f", file]
+        done = subprocess.run([*command, *arguments], text=stdout is None, capture_output=capture, stdin=stdin, stdout=stdout)
+        if check and done.returncode != 0:
+            detail = f": {done.stderr.strip()[-600:]}" if capture else ""
+            raise Failed(f"`docker compose {' '.join(arguments[:4])}` failed{detail}")
+        return done
+
+    def running(self) -> set:
+        done = self.compose("ps", "--services", "--status", "running", capture=True)
+        return set(done.stdout.split())
+
+
+# ---- writing the configuration
+
+
+def fill(template: pathlib.Path, values: dict) -> str:
+    """A template with each `${name}` replaced. A name the values lack is an error, as it is to
+    OpenTofu's `templatefile`, which fills the shared templates the same way."""
+    return re.sub(r"\$\{(\w+)\}", lambda match: str(values[match.group(1)]), template.read_text())
+
+
+def encoded(values: dict) -> dict:
+    """Each value as TOML and NATS write it, which is as JSON does."""
+    return {name: json.dumps(value) for name, value in values.items()}
+
+
+def detect_address(family: int) -> str | None:
+    """This machine's public address as the internet sees it, or None when it has none of that
+    family or the service that says is unreachable."""
+    try:
+        with urllib.request.urlopen(ADDRESS_SERVICES[family], timeout=6) as response:
+            found = re.search(r"^ip=(\S+)$", response.read().decode(), re.M)
+            return str(ipaddress.ip_address(found.group(1))) if found else None
+    except (OSError, ValueError):
+        return None
+
+
+def addresses(box: dict) -> list:
+    """The addresses clients send media to: those `init` was given, `auto` looked up now."""
+    found = []
+    for family in (4, 6):
+        wanted = box[f"address{family}"]
+        address = detect_address(family) if wanted == "auto" else (None if wanted == "none" else wanted)
+        if address:
+            found.append(address)
+    return found
+
+
+def memory_bytes() -> int:
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+
+
+def render(store: Box, box: dict) -> set:
+    """Writes `config/` and `.env` from `box`, and answers which of its files changed."""
+    config = store.dir / "config"
+    # Only this user reads the directory; the files in it are read by the containers' users.
+    config.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for name in ("postgres", "caddy", "garage/meta", "garage/data"):
+        (store.dir / "data" / name).mkdir(parents=True, exist_ok=True)
+    (store.dir / "backups").mkdir(mode=0o700, exist_ok=True)
+    secret, storage, domain = box["secrets"], box["storage"], box["domain"]
+    announced = addresses(box)
+    if not announced:
+        raise Failed(
+            "this machine's public address could not be found, and the voice server must announce "
+            "one: give `init` --address4 (and --address6), or check the machine reaches the internet"
+        )
+    small = memory_bytes() < 3.5 * GIB
+    bundled = storage["kind"] == "bundled"
+    media_url = f"https://media.{domain}" if bundled else storage["public_base_url"]
+    s3 = (
+        dict(endpoint="http://127.0.0.1:3900", bucket=BUCKET, region="garage",
+             access_key=secret["s3_access_key"], secret_key=secret["s3_secret_key"],
+             public_endpoint=media_url)  # fmt: skip
+        if bundled
+        else storage
+    )
+    more = ""
+    if s3.get("public_endpoint"):
+        s3_more = f"public_endpoint = {json.dumps(s3['public_endpoint'])}\n"
+    else:
+        s3_more = ""
+    if box.get("email"):
+        more = f"\n[email]\nsmtp_url = {json.dumps(box['email']['smtp_url'])}\nfrom = {json.dumps(box['email']['from'])}\n"
+    files = {
+        "aspen.toml": fill(TEMPLATES / "aspen.toml.tftpl", {
+            **encoded(dict(
+                public_url=f"https://{domain}",
+                database_url=f"postgres://aspen:{secret['database']}@127.0.0.1:5432/aspen",
+                valkey_url="redis://127.0.0.1:6379",
+                nats_url="nats://127.0.0.1:4222",
+                nats_password=secret["nats_server"],
+                nats_monitor_url="http://127.0.0.1:8222",
+                # Caddy, the only thing that reaches either server.
+                trusted_proxies=["127.0.0.1"],
+                s3_endpoint=s3["endpoint"],
+                media_url=media_url,
+                bucket=s3["bucket"],
+                region=s3["region"],
+                s3_access_key=s3["access_key"],
+                s3_secret_key=s3["secret_key"],
+            )),
+            "s3_more": s3_more,
+            "more": more,
+        }),  # fmt: skip
+        "voice_server.toml": fill(TEMPLATES / "voice_server.toml.tftpl", encoded(dict(
+            id=box["voice"]["id"],
+            name=VOICE_SERVER,
+            nats_url="nats://127.0.0.1:4222",
+            listen_addr="127.0.0.1:9000",
+            nats_password=secret["nats_voice"],
+            trusted_proxies=["127.0.0.1"],
+            announced_address=announced,
+            min_port=box["voice"]["min_port"],
+            max_port=box["voice"]["max_port"],
+        ))),  # fmt: skip
+        "nats.conf": fill(TEMPLATES / "nats.conf.tftpl", dict(
+            listen=json.dumps("127.0.0.1:4222"),
+            monitor=json.dumps("127.0.0.1:8222"),
+            # What the two in-memory streams may reserve, which the servers size them to. Each
+            # needs 16 MiB, and voice reports take an eighth.
+            max_memory_store_bytes=(144 if small else 256) << 20,
+            server_password=json.dumps(secret["nats_server"]),
+            voice_users=fill(TEMPLATES / "nats_voice_user.tftpl", dict(
+                user=json.dumps(VOICE_SERVER), password=json.dumps(secret["nats_voice"]), id=box["voice"]["id"],
+            )),
+        )),  # fmt: skip
+        "Caddyfile": fill(HERE / "Caddyfile.tmpl", dict(
+            acme_email=f"\temail {box['acme_email']}\n" if box.get("acme_email") else "",
+            domain=domain,
+            voice_domain=f"voice.{domain}",
+            media_site=fill(HERE / "Caddyfile.media.tmpl", dict(media_domain=f"media.{domain}", bucket=BUCKET)) if bundled else "",
+        )),  # fmt: skip
+        "postgres.env": f"POSTGRES_USER=aspen\nPOSTGRES_DB=aspen\nPOSTGRES_PASSWORD={secret['database']}\n",
+        "garage.toml": (HERE / "garage.toml.tmpl").read_text(),
+        "garage.env": (
+            f"GARAGE_RPC_SECRET={secret['garage_rpc']}\nGARAGE_DEFAULT_BUCKET={BUCKET}\n"
+            f"GARAGE_DEFAULT_ACCESS_KEY={secret['s3_access_key']}\nGARAGE_DEFAULT_SECRET_KEY={secret['s3_secret_key']}\n"
+        ),
+    }
+    changed = set()
+    for name, text in files.items():
+        path = config / name
+        if not path.exists() or path.read_text() != text:
+            changed.add(name)
+            # Written in place: a container that has the file mounted sees what is written.
+            path.write_text(text)
+    images = box["images"]
+    active = box.get("active_slot", "api-a")
+    env = {
+        "VALKEY_MEMORY_MB": 64 if small else 128,
+        # The slot that is not running keeps the image it last ran, until an upgrade gives it
+        # the next.
+        "ASPEN_API_IMAGE_A": images["api"] if active == "api-a" else images.get("api_idle", images["api"]),
+        "ASPEN_API_IMAGE_B": images["api"] if active == "api-b" else images.get("api_idle", images["api"]),
+        "ASPEN_VOICE_IMAGE": images["voice"],
+        "ASPEN_TOOL_IMAGE": images["api"],
+        "COMPOSE_PROFILES": "bundled-storage" if bundled else "",
+    }
+    (store.dir / ".env").write_text("".join(f"{name}={value}\n" for name, value in env.items()))
+    return changed
+
+
+# ---- init
+
+
+def ask(question: str, default: str | None = None) -> str:
+    suffix = f" [{default}]" if default else ""
+    while True:
+        answer = input(f"{question}{suffix}: ").strip() or (default or "")
+        if answer:
+            return answer
+
+
+def init(store: Box, opt: argparse.Namespace) -> None:
+    if store.file.exists() and not opt.force:
+        raise Failed(
+            f"{store.dir} already holds a deployment. Edit its box.json and run `aspen-box up`, or "
+            "start over with --force, which makes new passwords and so needs an empty data/"
+        )
+    interactive = opt.domain is None
+    if interactive:
+        print("A deployment's address is for good: its accounts' passkeys and other deployments both")
+        print("know it by that name (docs/operators/installing/3-configuring.md).\n")
+    domain = (opt.domain or ask("The deployment's address, without https:// (chat.example.org)")).lower()
+    if not re.fullmatch(r"([a-z0-9-]+\.)+[a-z0-9-]+", domain):
+        raise Failed(f"{domain!r} is not a host name")
+    acme_email = opt.acme_email or (ask("Email for Let's Encrypt to write to about certificates (- for none)", "-") if interactive else "-")
+    storage_kind = opt.storage or (ask("Keep people's files on this machine, or in an S3 bucket elsewhere? (machine/s3)", "machine") if interactive else "machine")
+    if storage_kind in ("machine", "bundled"):
+        storage = {"kind": "bundled"}
+    else:
+        field = lambda name, question: getattr(opt, f"s3_{name}") or ask(question)  # noqa: E731
+        storage = {
+            "kind": "external",
+            "endpoint": field("endpoint", "The bucket's S3 API (https://<account>.r2.cloudflarestorage.com)"),
+            "bucket": field("bucket", "The bucket's name"),
+            "region": field("region", "Its region (auto, for R2)"),
+            "access_key": field("access_key", "Access key"),
+            "secret_key": field("secret_key", "Secret key"),
+            "public_base_url": field("public_base_url", "Where its read path is served (https://media.chat.example.org)"),
+        }
+    box = {
+        "domain": domain,
+        "acme_email": None if acme_email == "-" else acme_email,
+        "address4": opt.address4,
+        "address6": opt.address6,
+        "storage": storage,
+        "email": None,
+        "images": {"api": opt.api_image, "voice": opt.voice_image},
+        "voice": {"id": str(uuid.uuid4()), "capacity": opt.voice_capacity, "min_port": 40000, "max_port": 40199},
+        # Letters and digits alone, so none needs escaping where it is written.
+        "secrets": {
+            "database": secrets.token_hex(20),
+            "nats_server": secrets.token_hex(20),
+            "nats_voice": secrets.token_hex(20),
+            "garage_rpc": secrets.token_hex(32),
+            # The forms Garage's own key pairs have.
+            "s3_access_key": "GK" + secrets.token_hex(12),
+            "s3_secret_key": secrets.token_hex(32),
+        },
+        "active_slot": "api-a",
+    }
+    store.save(box)
+    render(store, box)
+    announced = addresses(box)
+    names = [domain, f"voice.{domain}"] + ([f"media.{domain}"] if storage["kind"] == "bundled" else [])
+    print(f"\nWrote {store.dir}.\n\nPoint these names at this machine, in your domain's DNS:\n")
+    for name in names:
+        for address in announced:
+            print(f"    {name}.  {'AAAA' if ':' in address else 'A'}  {address}")
+    print(
+        "\nIf the machine is behind a router, forward to it: TCP 80 and 443, UDP 3478, and UDP and\n"
+        f"TCP {box['voice']['min_port']}-{box['voice']['max_port']}.\n\nThen: aspen-box up, and aspen-box doctor."
+    )
+
+
+# ---- starting and upgrading
+
+
+def exec_ok(store: Box, service: str, *command: str) -> bool:
+    return store.compose("exec", "-T", service, *command, capture=True, check=False).returncode == 0
+
+
+def healthy(store: Box, port: int) -> bool:
+    """Asked from inside Caddy's container, which is where the answer matters."""
+    return exec_ok(store, "caddy", "wget", "-q", "-O", "/dev/null", f"http://127.0.0.1:{port}/api/v1/deployment")
+
+
+def wait_for(what: str, check, seconds: int = 120) -> None:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if check():
+            return
+        time.sleep(2)
+    raise Failed(f"{what} did not come up in {seconds} seconds: `aspen-box logs` shows why")
+
+
+def release(store: Box, box: dict) -> None:
+    """A release's one-off work, before any server of it starts: the tables it expects, and the
+    voice server under the id its NATS user and its own configuration name."""
+    store.compose("run", "--rm", "tool", "aspen-migrate", "up")
+    store.compose(
+        "run", "--rm", "tool", "aspen-chat-server", "voice-servers", "add", VOICE_SERVER,
+        "--url", f"https://voice.{box['domain']}", "--capacity", str(box["voice"]["capacity"]), "--id", box["voice"]["id"],
+    )  # fmt: skip
+
+
+def converge(store: Box, box: dict) -> set:
+    """Writes the configuration, starts what both servers need, and has each service that was
+    already running take up a file of its that changed. Answers the files that changed."""
+    try:
+        was_running = store.running()
+    except Failed:
+        was_running = set()
+    changed = render(store, box)
+    store.compose("up", "-d", "--wait", "postgres", "valkey", "nats", "caddy")
+    if "nats.conf" in changed and "nats" in was_running:
+        store.compose("restart", "nats")
+    if "Caddyfile" in changed and "caddy" in was_running:
+        store.compose("exec", "-T", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile")
+    if box["storage"]["kind"] == "bundled":
+        store.compose("up", "-d", "garage")
+        if changed & {"garage.toml", "garage.env"} and "garage" in was_running:
+            store.compose("restart", "garage")
+        # The read path is Garage's web endpoint, which serves only buckets told to be served.
+        wait_for("the bundled storage", lambda: exec_ok(store, "garage", "/garage", "bucket", "website", "--allow", BUCKET))
+    return changed
+
+
+def roll(store: Box, box: dict, images: dict) -> None:
+    """Moves the API to its other slot, on `images` and the configuration as written, without
+    a moment in which neither answers; then saves the box as it now runs. The old server goes
+    on serving if the new one does not come up."""
+    old = box.get("active_slot", "api-a")
+    new = next(slot for slot in SLOTS if slot != old)
+    moved = {**box, "images": {**images, "api_idle": box["images"]["api"]}, "active_slot": new}
+    render(store, moved)
+    store.compose("up", "-d", "--force-recreate", new)
+    try:
+        wait_for("the new API server", lambda: healthy(store, SLOTS[new]))
+    except Failed:
+        store.compose("stop", new)
+        render(store, box)
+        raise Failed(
+            f"the new API server did not come up, and the old one is still serving. `aspen-box logs {new}` "
+            "shows why. The deployment is on the release it was on"
+        ) from None
+    store.save(moved)
+    box.clear()
+    box.update(moved)
+    store.compose("stop", old)
+
+
+def up(store: Box, opt: argparse.Namespace) -> None:
+    box = store.load()
+    try:
+        was_running = store.running()
+    except Failed:
+        was_running = set()
+    changed = converge(store, box)
+    release(store, box)
+    slot = box.get("active_slot", "api-a")
+    if slot in was_running and "aspen.toml" in changed:
+        roll(store, box, box["images"])
+    else:
+        store.compose("up", "-d", slot)
+        wait_for("the API server", lambda: healthy(store, SLOTS[slot]))
+    # A changed voice_server.toml ends its calls, which rejoin on their own.
+    store.compose("up", "-d", *(["--force-recreate"] if "voice_server.toml" in changed and "voice" in was_running else []), "voice")
+    print(f"\nhttps://{box['domain']} is up. `aspen-box doctor` checks what the internet sees of it.")
+
+
+def upgrade(store: Box, opt: argparse.Namespace) -> None:
+    box = store.load()
+    current = box["images"]
+    retag = lambda image: re.sub(r":[^:/]+$", f":{opt.tag}", image) if opt.tag else image  # noqa: E731
+    images = {"api": opt.api_image or retag(current["api"]), "voice": opt.voice_image or retag(current["voice"])}
+    if images["api"] == current["api"] and images["voice"] == current["voice"]:
+        raise Failed("give the release to move to: --tag, or --api-image and --voice-image")
+    converge(store, box)
+    # The order docs/operators/installing/upgrading.md gives: the tables first, with the new
+    # release's tools, which the old server goes on using while the new one starts.
+    (store.dir / ".env").write_text(re.sub(r"(?m)^ASPEN_TOOL_IMAGE=.*$", f"ASPEN_TOOL_IMAGE={images['api']}", (store.dir / ".env").read_text()))
+    release(store, box)
+    roll(store, box, images)
+    # Its calls end, and their clients rejoin on their own.
+    store.compose("up", "-d", "voice")
+    print(f"\nOn {images['api']}. The API did not stop; calls in progress ended and rejoin.")
+
+
+# ---- doctor
+
+
+class Report:
+    def __init__(self):
+        self.failed = 0
+
+    def line(self, mark: str, text: str, fix: str | None = None) -> None:
+        print(f"  {mark}  {text}")
+        if fix:
+            print(f"        {fix}")
+
+    def ok(self, text: str) -> None:
+        self.line("ok  ", text)
+
+    def note(self, text: str, fix: str | None = None) -> None:
+        self.line("note", text, fix)
+
+    def fail(self, text: str, fix: str) -> None:
+        self.failed += 1
+        self.line("FAIL", text, fix)
+
+
+def resolve(name: str, family: int) -> set:
+    try:
+        infos = socket.getaddrinfo(name, 443, socket.AF_INET if family == 4 else socket.AF_INET6, socket.SOCK_STREAM)
+    except socket.gaierror:
+        return set()
+    return {str(ipaddress.ip_address(info[4][0])) for info in infos}
+
+
+def local_address(family: int) -> str | None:
+    """The address this machine sends from, which is its public one only when no router
+    translates it. Nothing is sent: a UDP socket only chooses a route."""
+    target = ("1.1.1.1", 9) if family == 4 else ("2606:4700:4700::1111", 9)
+    try:
+        with socket.socket(socket.AF_INET if family == 4 else socket.AF_INET6, socket.SOCK_DGRAM) as probe:
+            probe.connect(target)
+            return probe.getsockname()[0]
+    except OSError:
+        return None
+
+
+def status_of(url: str, method: str = "GET") -> int | None:
+    request = urllib.request.Request(url, method=method, data=b"x" if method == "PUT" else None)
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+    except (OSError, ValueError):
+        return None
+
+
+def data_device(directory: pathlib.Path) -> str:
+    """The device the box's data is on, as /proc/mounts names it."""
+    best = ("", "")
+    for line in pathlib.Path("/proc/mounts").read_text().splitlines():
+        device, mount = line.split()[:2]
+        if str(directory.resolve()).startswith(mount) and len(mount) > len(best[1]):
+            best = (device, mount)
+    return best[0]
+
+
+def doctor(store: Box, opt: argparse.Namespace) -> None:
+    box = store.load()
+    report = Report()
+    domain, bundled = box["domain"], box["storage"]["kind"] == "bundled"
+
+    print("The machine")
+    info = subprocess.run(["docker", "info", "--format", "{{json .SecurityOptions}}"], capture_output=True, text=True)
+    if info.returncode != 0:
+        report.fail("Docker does not answer", "Start Docker, and let this user run it.")
+    elif "rootless" in info.stdout:
+        report.fail(
+            "Docker is running rootless",
+            "Its containers are on a network of their own, so nothing would be reachable. Use the system's Docker.",
+        )
+    else:
+        report.ok("Docker")
+    memory = memory_bytes() / GIB
+    if memory < 1.8:
+        report.fail(f"{memory:.1f} GiB of memory", "The deployment idles at about 0.7 GiB and needs room to work: use a machine with 2 GiB or more.")
+    else:
+        report.ok(f"{memory:.1f} GiB of memory")
+    free = shutil.disk_usage(store.dir).free / GIB
+    (report.ok if free >= 5 else report.note)(f"{free:.0f} GiB free where the data is kept")
+    device = data_device(store.dir)
+    if "mmcblk" in device:
+        report.note(
+            f"The data is on an SD card ({device})",
+            "SD cards wear out under a database and lose writes when power is cut. Keep the box's directory on an SSD, and run `aspen-box backup` daily.",
+        )
+    page = os.sysconf("SC_PAGE_SIZE")
+    if page != 4096:
+        report.note(f"The kernel's pages are {page // 1024} KiB", "The servers are built for it. If a service will not start, `aspen-box logs` says which.")
+
+    print("\nThe deployment")
+    try:
+        running = store.running()
+    except Failed:
+        running = set()
+    slot = box.get("active_slot", "api-a")
+    wanted = {"postgres", "valkey", "nats", "caddy", "voice", slot} | ({"garage"} if bundled else set())
+    missing = sorted(wanted - running)
+    if missing:
+        report.fail(f"Not running: {', '.join(missing)}", "`aspen-box up` starts them, and `aspen-box logs <name>` says why one stopped.")
+    else:
+        report.ok("Every service is running")
+        if healthy(store, SLOTS[slot]):
+            report.ok("The API server answers")
+        else:
+            report.fail("The API server does not answer", f"`aspen-box logs {slot}` says why.")
+        if exec_ok(store, "caddy", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/health"):
+            report.ok("The voice server answers")
+        else:
+            report.fail("The voice server does not answer", "`aspen-box logs voice` says why. It stops when its id is not registered: `aspen-box up` registers it.")
+
+    print("\nThe network")
+    config = (store.dir / "config" / "voice_server.toml").read_text()
+    announced = json.loads(re.search(r"^announced_address = (.*)$", config, re.M).group(1))
+    public = {}
+    for family in (4, 6):
+        public[family] = detect_address(family)
+        mine = [address for address in announced if (":" in address) == (family == 6)]
+        if box[f"address{family}"] == "none":
+            public[family] = None
+            report.note(f"IPv{family} is turned off for this box")
+        elif public[family] is None:
+            report.note(f"No public IPv{family} address found", None if family == 6 else "The machine did not reach the internet over IPv4, or the service that tells its address.")
+        elif public[family] not in mine:
+            report.fail(
+                f"The voice server announces {', '.join(mine) or 'no IPv' + str(family) + ' address'}, and this machine's is {public[family]}",
+                "`aspen-box refresh-address` follows a changed address; run it on a schedule if yours changes.",
+            )
+        else:
+            report.ok(f"IPv{family} address {public[family]}")
+    if public[4] and local_address(4) != public[4]:
+        report.note(
+            f"This machine is behind a router (its own address is {local_address(4)})",
+            f"The router must forward to it: TCP 80 and 443, UDP 3478, and UDP and TCP {box['voice']['min_port']}-{box['voice']['max_port']}. "
+            "If the router's own outside address is not the one above, the provider shares addresses between customers and nothing can be forwarded.",
+        )
+    names = [domain, f"voice.{domain}"] + ([f"media.{domain}"] if bundled else [])
+    dns_ready = True
+    for name in names:
+        for family, kind in ((4, "A"), (6, "AAAA")):
+            if not public[family]:
+                continue
+            found = resolve(name, family)
+            if public[family] in found:
+                report.ok(f"{name} {kind} {public[family]}")
+            else:
+                dns_ready = False
+                report.fail(
+                    f"{name} has {'no ' + kind + ' record' if not found else kind + ' ' + ', '.join(sorted(found))}",
+                    f"In your domain's DNS: {name}.  {kind}  {public[family]}",
+                )
+
+    print("\nFrom the internet")
+    if not dns_ready:
+        report.note("Not checked until the names above point here")
+    else:
+        for name, path, want in ((domain, "/api/v1/deployment", 200), (f"voice.{domain}", "/health", 204)):
+            got = status_of(f"https://{name}{path}")
+            if got == want:
+                report.ok(f"https://{name} answers, with a certificate browsers accept")
+            else:
+                report.fail(
+                    f"https://{name}{path} {'did not answer' if got is None else 'answered ' + str(got)}",
+                    "Caddy gets its certificate once ports 80 and 443 reach this machine: check the router and any firewall, then `aspen-box logs caddy`. "
+                    "A router that cannot reach its own outside address makes this fail from inside the network alone: try from a phone off the Wi-Fi.",
+                )
+        base = f"https://media.{domain}" if bundled else box["storage"]["public_base_url"].rstrip("/")
+        # docs/operators/installing/storage-read-path.md: what the read path must refuse.
+        refusals = (
+            ("lists the bucket", "GET", "/?list-type=2", "Anyone can see every file ever posted."),
+            ("takes writes", "PUT", "/attachments/aspen-box-write-check", "Anyone can put files at your media address."),
+            ("serves deleted messages' files", "GET", "/evidence/aspen-box-read-check", None),
+            ("serves unconfirmed uploads", "GET", "/uploads/aspen-box-read-check", None),
+        )
+        for what, method, path, consequence in refusals:
+            got = status_of(base + path, method)
+            if got is None:
+                report.fail(f"{base} did not answer", "The read path must be reachable by everyone's apps.")
+                break
+            if got in (200, 201, 204):
+                report.fail(f"The read path {what}", (consequence + " " if consequence else "") + "See docs/operators/installing/storage-read-path.md.")
+        else:
+            report.ok("The read path refuses listing, writes, and what it must not serve")
+        report.note(
+            "Not checked: whether the internet reaches the voice server's media ports",
+            "Join a call from a phone off the Wi-Fi. If it connects and no one is heard, those ports are not forwarded.",
+        )
+
+    print()
+    if report.failed:
+        raise Failed(f"{report.failed} thing{'s' if report.failed > 1 else ''} to fix, above")
+    print("Nothing to fix.")
+
+
+# ---- the rest
+
+
+def run_command(store: Box, opt: argparse.Namespace) -> None:
+    store.load()
+    if not opt.command:
+        raise Failed("give the command after --: aspen-box run -- aspen-chat-server admin grant <username>")
+    sys.exit(store.compose("run", "--rm", "tool", *opt.command, check=False).returncode)
+
+
+def backup(store: Box, opt: argparse.Namespace) -> None:
+    store.load()
+    target = store.dir / "backups" / f"aspen-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}.dump"
+    partial = target.with_suffix(".partial")
+    # One consistent moment of the whole database, taken while it runs.
+    with partial.open("wb") as out:
+        done = store.compose("exec", "-T", "postgres", "pg_dump", "--format=custom", "--host=127.0.0.1", "--username=aspen", "aspen", stdout=out, check=False)
+    if done.returncode != 0:
+        partial.unlink(missing_ok=True)
+        raise Failed("the database could not be dumped: `aspen-box logs postgres` shows why")
+    partial.chmod(0o600)
+    partial.rename(target)
+    dumps = sorted((store.dir / "backups").glob("aspen-*.dump"))
+    for stale in dumps[: -opt.keep]:
+        stale.unlink()
+    print(
+        f"{target} ({target.stat().st_size >> 10} KiB). It is every account's data: keep a copy off this machine.\n"
+        "It does not hold people's files"
+        + (f", which are in {store.dir / 'data' / 'garage'}." if (store.dir / "data" / "garage" / "meta").exists() else ", which are in your bucket.")
+    )
+
+
+def restore(store: Box, opt: argparse.Namespace) -> None:
+    box = store.load()
+    if not opt.file.exists():
+        raise Failed(f"{opt.file} does not exist")
+    if not opt.yes:
+        if input(f"This replaces the database of https://{box['domain']} with {opt.file.name}. Type the domain to go on: ").strip() != box["domain"]:
+            raise Failed("not confirmed")
+    converge(store, box)
+    store.compose("stop", *SLOTS, "voice")
+    psql = ("exec", "-T", "postgres", "psql", "--host=127.0.0.1", "--username=aspen", "--dbname=postgres", "--set=ON_ERROR_STOP=1")
+    store.compose(*psql, "--command=DROP DATABASE IF EXISTS aspen WITH (FORCE)", "--command=CREATE DATABASE aspen OWNER aspen")
+    with opt.file.open("rb") as dump:
+        # All of it or none.
+        done = store.compose("exec", "-T", "postgres", "pg_restore", "--single-transaction", "--exit-on-error", "--no-owner", "--no-acl",
+                             "--host=127.0.0.1", "--username=aspen", "--dbname=aspen", stdin=dump, check=False)  # fmt: skip
+    if done.returncode != 0:
+        raise Failed("the dump could not be restored, and the database is empty: restore another, or `aspen-box up` starts afresh")
+    up(store, opt)
+
+
+def capacity(store: Box, opt: argparse.Namespace) -> None:
+    store.load()
+    store.compose("exec", "-T", "voice", "voice_server", "estimate-capacity")
+    print("\nTo use it: set voice.capacity in box.json, and `aspen-box up`.")
+
+
+def refresh_address(store: Box, opt: argparse.Namespace) -> None:
+    box = store.load()
+    if "voice_server.toml" in render(store, box):
+        store.compose("up", "-d", "--force-recreate", "voice")
+        print("The public address changed. The voice server announces the new one; its calls ended and rejoin.")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split("\n\n")[1])
+    parser.add_argument("--dir", type=pathlib.Path, default=pathlib.Path(os.environ.get("ASPEN_BOX_DIR", pathlib.Path.home() / "aspen")),
+                        help="the box's directory (or ASPEN_BOX_DIR; ~/aspen)")  # fmt: skip
+    commands = parser.add_subparsers(dest="step", required=True)
+    start = commands.add_parser("init", help="every answer may be given as an option instead of asked")
+    start.add_argument("--domain")
+    start.add_argument("--acme-email")
+    start.add_argument("--address4", default="auto", help="the public IPv4 address clients send media to; `auto` looks it up")
+    start.add_argument("--address6", default="auto", help="likewise for IPv6; `none` announces none")
+    start.add_argument("--storage", choices=["machine", "s3"])
+    for name in ("endpoint", "bucket", "region", "access-key", "secret-key", "public-base-url"):
+        start.add_argument(f"--s3-{name}")
+    start.add_argument("--api-image", required=True, help="the `api` image of deploy/docker/Dockerfile, with its tag")
+    start.add_argument("--voice-image", required=True, help="the `voice` image, with its tag")
+    start.add_argument("--voice-capacity", type=int, default=25, help="a guess; `aspen-box capacity` measures it")
+    start.add_argument("--force", action="store_true")
+    commands.add_parser("up")
+    move = commands.add_parser("upgrade")
+    move.add_argument("--tag", help="the new tag of both images")
+    move.add_argument("--api-image")
+    move.add_argument("--voice-image")
+    commands.add_parser("doctor")
+    commands.add_parser("run").add_argument("command", nargs="*")
+    commands.add_parser("backup").add_argument("--keep", type=int, default=BACKUPS_KEPT, help="how many dumps to keep")
+    back = commands.add_parser("restore")
+    back.add_argument("file", type=pathlib.Path)
+    back.add_argument("--yes", action="store_true")
+    commands.add_parser("capacity")
+    commands.add_parser("refresh-address")
+    commands.add_parser("status")
+    commands.add_parser("logs").add_argument("service", nargs="*")
+    commands.add_parser("down")
+    opt = parser.parse_args()
+    store = Box(opt.dir.expanduser().resolve())
+    steps = {
+        "init": init, "up": up, "upgrade": upgrade, "doctor": doctor, "run": run_command, "backup": backup,
+        "restore": restore, "capacity": capacity, "refresh-address": refresh_address,
+        "status": lambda store, opt: store.compose("ps", "--all"),
+        "logs": lambda store, opt: store.compose("logs", "--tail", "200", *opt.service),
+        "down": lambda store, opt: store.compose("--profile", "api", "--profile", "bundled-storage", "down"),
+    }  # fmt: skip
+    steps[opt.step](store, opt)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Failed as failure:
+        print(f"aspen-box: {failure}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        sys.exit(130)

@@ -6,11 +6,13 @@ files a tool applies.
 | Directory | What it holds |
 | --- | --- |
 | [`docker/`](docker/Dockerfile) | The container images of both servers. |
+| [`box/`](box/README.md) | A whole deployment on one Linux machine, anyone's: `aspen-box` writes its configuration, starts it, upgrades it without stopping the API, and checks it. |
+| [`templates/`](templates/README.md) | `aspen.toml`, `voice_server.toml`, and NATS's configuration, as everything here writes them. |
 | [`aws/`](aws/README.md) | A whole deployment on AWS, for [OpenTofu](https://opentofu.org): managed services, several API servers, a machine for each voice server. |
 | [`aws-single/`](aws-single/README.md) | A small deployment on one AWS machine, which costs a fraction of that and is down whenever the machine is. |
 
-Both are prototypes: planned, never applied. They share the images, the configuration
-templates in `aws/templates/`, the modules in `aws/modules/`, and `aws/run_task.py`. A deployment
+The two AWS configurations are prototypes: planned, never applied. They share the modules in
+`aws/modules/` and `aws/run_task.py`. A deployment
 that outgrows one machine [moves to the larger configuration](aws/README.md#moving-from-one-machine).
 
 ## The images

@@ -1,0 +1,23 @@
+public_url = ${public_url}
+database_url = ${database_url}
+valkey_url = ${valkey_url}
+nats_url = ${nats_url}
+
+[nats_user]
+user = "aspen"
+password = ${nats_password}
+
+[nats]
+monitor_url = ${nats_monitor_url}
+
+[rate_limits]
+trusted_proxies = ${trusted_proxies}
+
+[media.s3]
+endpoint = ${s3_endpoint}
+public_base_url = ${media_url}
+bucket = ${bucket}
+region = ${region}
+access_key = ${s3_access_key}
+secret_key = ${s3_secret_key}
+${s3_more}${more}

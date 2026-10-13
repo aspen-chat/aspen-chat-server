@@ -1,0 +1,121 @@
+# One whole deployment on one Linux machine, run by `aspen-box` beside this file, which writes
+# the files and variables it names into the box's directory and starts things in order.
+#
+# Every container is on the machine's own network (the voice server takes media on a range of
+# UDP ports, which Docker's port publishing handles badly), and every service but Caddy and the
+# voice server's media listens on loopback: nothing here is reachable from another machine
+# unless it is meant to be, whatever the machine's firewall says.
+name: aspen
+
+x-service: &service
+  network_mode: host
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    # A small machine's disk is not for logs.
+    options: { max-size: "10m", max-file: "3" }
+
+x-api: &api
+  <<: *service
+  # Started by name: one of the two runs, and an upgrade starts the other before stopping it.
+  profiles: ["api"]
+  volumes:
+    - ./config/aspen.toml:/etc/aspen/aspen.toml:ro
+  depends_on:
+    postgres: { condition: service_healthy }
+    nats: { condition: service_started }
+    valkey: { condition: service_started }
+
+services:
+  postgres:
+    <<: *service
+    # 18 or later, which the migrations need.
+    image: postgres:18-alpine
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1"]
+    env_file: ./config/postgres.env
+    volumes:
+      - ./data/postgres:/var/lib/postgresql
+    # Long enough for PostgreSQL to finish what it is writing and stop cleanly.
+    stop_grace_period: 2m
+    healthcheck:
+      test: ["CMD", "pg_isready", "--host=127.0.0.1", "--username=aspen", "--dbname=aspen"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  valkey:
+    <<: *service
+    image: valkey/valkey:8-alpine
+    # Nothing in it is worth keeping across a restart, and it must never evict
+    # (docs/operators/installing/1-services.md).
+    command:
+      - valkey-server
+      - --bind
+      - 127.0.0.1
+      - --save
+      - ""
+      - --maxmemory
+      - ${VALKEY_MEMORY_MB}mb
+      - --maxmemory-policy
+      - noeviction
+
+  nats:
+    <<: *service
+    image: nats:2.11-alpine
+    command: ["--config", "/etc/nats/nats.conf"]
+    volumes:
+      - ./config/nats.conf:/etc/nats/nats.conf:ro
+
+  # Object storage on the machine's own disk, for a box that keeps its files itself.
+  garage:
+    <<: *service
+    profiles: ["bundled-storage"]
+    image: dxflrs/garage:v2.4.1
+    # Makes its one-node layout, the bucket, and the key pair `garage.env` names, when they
+    # are not there yet.
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    env_file: ./config/garage.env
+    volumes:
+      - ./config/garage.toml:/etc/garage.toml:ro
+      - ./data/garage/meta:/var/lib/garage/meta
+      - ./data/garage/data:/var/lib/garage/data
+
+  caddy:
+    <<: *service
+    image: caddy:2-alpine
+    volumes:
+      - ./config/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Its certificates, which Let's Encrypt gives only so many of a week.
+      - ./data/caddy:/data
+
+  api-a:
+    <<: *api
+    image: ${ASPEN_API_IMAGE_A}
+    command: ["aspen-chat-server", "--no-https", "--listen-addr", "127.0.0.1", "--port", "8080"]
+
+  api-b:
+    <<: *api
+    image: ${ASPEN_API_IMAGE_B}
+    command: ["aspen-chat-server", "--no-https", "--listen-addr", "127.0.0.1", "--port", "8081"]
+    environment:
+      # Both may run at once during an upgrade, and each serves its metrics.
+      ASPEN_METRICS__LISTEN_ADDR: 127.0.0.1:9466
+
+  voice:
+    <<: *service
+    image: ${ASPEN_VOICE_IMAGE}
+    volumes:
+      - ./config/voice_server.toml:/etc/aspen/voice_server.toml:ro
+    depends_on:
+      nats: { condition: service_started }
+
+  # `aspen-box` runs the migrations and the operator commands in this, with the image a
+  # release is moving to.
+  tool:
+    network_mode: host
+    profiles: ["tool"]
+    image: ${ASPEN_TOOL_IMAGE}
+    volumes:
+      - ./config/aspen.toml:/etc/aspen/aspen.toml:ro
+    depends_on:
+      postgres: { condition: service_healthy }

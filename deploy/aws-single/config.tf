@@ -1,5 +1,5 @@
-# The configuration files, written from the templates the larger configuration (../aws) uses,
-# with every service at this machine's loopback address.
+# The configuration files, written from the templates every deployment from files uses
+# (../templates), with every service at this machine's loopback address.
 
 resource "random_password" "this" {
   for_each = toset(["database", "nats-server", "nats-voice"])
@@ -30,43 +30,53 @@ locals {
   # Caddy, the only thing that reaches either server.
   trusted_proxies = ["127.0.0.1"]
 
+  # The templates take every value as it is written in the file (../templates/README.md).
+  email_toml = var.email == null ? "" : "\n[email]\nsmtp_url = ${jsonencode(var.email.smtp_url)}\nfrom = ${jsonencode(var.email.from)}\n"
+
   configs = {
-    aspen-toml = templatefile("${path.module}/../aws/templates/aspen.toml.tftpl", {
-      public_url       = local.public_url
-      database_url     = "postgres://aspen:${random_password.this["database"].result}@127.0.0.1:5432/aspen"
-      valkey_url       = "redis://127.0.0.1:6379"
-      nats_url         = "nats://127.0.0.1:4222"
-      nats_password    = random_password.this["nats-server"].result
-      nats_monitor_url = "http://127.0.0.1:8222"
-      trusted_proxies  = local.trusted_proxies
-      s3_endpoint      = "https://s3.${var.region}.amazonaws.com"
-      media_url        = module.media.public_base_url
-      bucket           = module.media.bucket
-      region           = var.region
-      s3_access_key    = module.media.access_key
-      s3_secret_key    = module.media.secret_key
-      email            = var.email
+    aspen-toml = templatefile("${path.module}/../templates/aspen.toml.tftpl", merge(
+      { for key, value in {
+        public_url       = local.public_url
+        database_url     = "postgres://aspen:${random_password.this["database"].result}@127.0.0.1:5432/aspen"
+        valkey_url       = "redis://127.0.0.1:6379"
+        nats_url         = "nats://127.0.0.1:4222"
+        nats_password    = random_password.this["nats-server"].result
+        nats_monitor_url = "http://127.0.0.1:8222"
+        trusted_proxies  = local.trusted_proxies
+        s3_endpoint      = "https://s3.${var.region}.amazonaws.com"
+        media_url        = module.media.public_base_url
+        bucket           = module.media.bucket
+        region           = var.region
+        s3_access_key    = module.media.access_key
+        s3_secret_key    = module.media.secret_key
+      } : key => jsonencode(value) },
+      { s3_more = "", more = local.email_toml },
+    ))
+
+    voice-server-toml = templatefile("${path.module}/../templates/voice_server.toml.tftpl", {
+      for key, value in {
+        id                = random_uuid.voice.result
+        name              = local.voice_server_name
+        nats_url          = "nats://127.0.0.1:4222"
+        listen_addr       = "127.0.0.1:9000"
+        nats_password     = random_password.this["nats-voice"].result
+        trusted_proxies   = local.trusted_proxies
+        announced_address = [aws_eip.this.public_ip]
+        min_port          = var.voice_media_ports.min
+        max_port          = var.voice_media_ports.max
+      } : key => jsonencode(value)
     })
 
-    voice-server-toml = templatefile("${path.module}/../aws/templates/voice_server.toml.tftpl", {
-      id              = random_uuid.voice.result
-      name            = local.voice_server_name
-      nats_url        = "nats://127.0.0.1:4222"
-      listen_addr     = "127.0.0.1:9000"
-      nats_password   = random_password.this["nats-voice"].result
-      trusted_proxies = local.trusted_proxies
-      public_address  = aws_eip.this.public_ip
-      min_port        = var.voice_media_ports.min
-      max_port        = var.voice_media_ports.max
-    })
-
-    nats-conf = templatefile("${path.module}/../aws/templates/nats.conf.tftpl", {
-      listen_address         = "127.0.0.1"
+    nats-conf = templatefile("${path.module}/../templates/nats.conf.tftpl", {
+      listen                 = jsonencode("127.0.0.1:4222")
+      monitor                = jsonencode("127.0.0.1:8222")
       max_memory_store_bytes = var.nats_stream_mib * 1024 * 1024
-      server_password        = random_password.this["nats-server"].result
-      voice_servers = {
-        (local.voice_server_name) = { id = random_uuid.voice.result, password = random_password.this["nats-voice"].result }
-      }
+      server_password        = jsonencode(random_password.this["nats-server"].result)
+      voice_users = templatefile("${path.module}/../templates/nats_voice_user.tftpl", {
+        user     = jsonencode(local.voice_server_name)
+        password = jsonencode(random_password.this["nats-voice"].result)
+        id       = random_uuid.voice.result
+      })
     })
 
     database-password = random_password.this["database"].result

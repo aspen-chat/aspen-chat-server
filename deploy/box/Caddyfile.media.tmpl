@@ -1,0 +1,38 @@
+
+# The bundled storage, at an origin of its own. Downloads are the four prefixes clients read
+# and nothing else (docs/operators/installing/storage-read-path.md); everything under the
+# bucket's own name is the S3 API, which answers only what the server signed: uploads, and
+# the files of deleted messages for those reviewing reports.
+${media_domain} {
+	@upload_preflight {
+		method OPTIONS
+		path /${bucket}/*
+	}
+	handle @upload_preflight {
+		header Access-Control-Allow-Origin *
+		header Access-Control-Allow-Methods PUT
+		header Access-Control-Allow-Headers *
+		header Access-Control-Max-Age 3600
+		respond 204
+	}
+
+	handle /${bucket}/* {
+		header Access-Control-Allow-Origin *
+		header Access-Control-Expose-Headers ETag
+		reverse_proxy 127.0.0.1:3900
+	}
+
+	@public {
+		method GET HEAD
+		path_regexp ^/(attachments|attachment-previews|icons|link-preview-images)/[^/]+$
+	}
+	handle @public {
+		header X-Content-Type-Options nosniff
+		reverse_proxy 127.0.0.1:3902 {
+			# Garage's web endpoint serves the bucket the request's host names.
+			header_up Host ${bucket}
+		}
+	}
+
+	respond 404
+}

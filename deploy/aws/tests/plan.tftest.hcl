@@ -194,3 +194,39 @@ run "refuses_a_voice_server_named_media" {
 
   expect_failures = [var.voice_servers]
 }
+
+# Applied against the made-up providers, which makes nothing but gives every value, so the
+# configuration files can be read as they would be written. Without an image tag: a release
+# would run a task.
+run "configuration_files" {
+  command = apply
+
+  assert {
+    condition = (
+      strcontains(nonsensitive(local.aspen_toml), "trusted_proxies = [\"10.42.0.0/20\",\"10.42.16.0/20\"]")
+      && strcontains(nonsensitive(local.aspen_toml), "sslmode=verify-full")
+      && strcontains(nonsensitive(local.aspen_toml), "valkey_url = \"rediss://")
+    )
+    error_message = "aspen.toml: ${nonsensitive(local.aspen_toml)}"
+  }
+
+  assert {
+    condition = alltrue([
+      for name, id in random_uuid.voice :
+      strcontains(nonsensitive(local.nats_conf), "{ user: \"${name}\", password: ")
+      && strcontains(nonsensitive(local.nats_conf), "\"aspen.voice.command.${id.result}\"")
+      && strcontains(nonsensitive(local.nats_conf), "\"_INBOX_voice.${id.result}.>\"")
+    ])
+    error_message = "nats.conf: ${nonsensitive(local.nats_conf)}"
+  }
+
+  assert {
+    condition = alltrue([
+      for name, id in random_uuid.voice :
+      strcontains(nonsensitive(local.voice_server_toml[name]), "id = \"${id.result}\"")
+      && strcontains(nonsensitive(local.voice_server_toml[name]), "user = \"${name}\"")
+      && strcontains(nonsensitive(local.voice_server_toml[name]), "min_port = 40000")
+    ])
+    error_message = "voice_server.toml: ${nonsensitive(local.voice_server_toml["voice-1"])}"
+  }
+}

@@ -31,9 +31,13 @@ COPY . .
 # checkout's sources for already built: the image would then hold another checkout's servers.
 # Each server writes its schemas to the repository root, where the web client is generated
 # from them.
+# jemalloc fixes its page size when compiled. A Raspberry Pi 5's kernel has 16 KiB pages, where
+# a jemalloc built for 4 KiB aborts at startup, and 64 KiB pages serve every smaller size.
+ARG TARGETARCH
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
-    cargo build --locked --release -p aspen-chat-server -p aspen-migrate -p voice_server \
+    if [ "$TARGETARCH" = arm64 ]; then export JEMALLOC_SYS_WITH_LG_PAGE=16; fi \
+    && cargo build --locked --release -p aspen-chat-server -p aspen-migrate -p voice_server \
     && mkdir -p /out/bin \
     && cp target/release/aspen-chat-server target/release/aspen-migrate target/release/voice_server /out/bin/ \
     && /out/bin/aspen-chat-server --gen-openapi-schema \

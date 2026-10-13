@@ -1,0 +1,19 @@
+    { user: ${user}, password: ${password}, permissions: {
+        publish: { allow: [
+          "aspen.voice.report.*.${id}",
+          "aspen.voice.speaking.*.${id}",
+          "aspen.voice.token-key",
+          "$JS.API.INFO",
+          "$JS.API.STREAM.INFO.KV_aspen_rate_limits",
+          "$JS.API.CONSUMER.CREATE.KV_aspen_rate_limits",
+          "$JS.API.CONSUMER.CREATE.KV_aspen_rate_limits.>",
+          "$JS.API.CONSUMER.DELETE.KV_aspen_rate_limits.>",
+          "$JS.API.DIRECT.GET.KV_aspen_rate_limits.>",
+          "$JS.API.STREAM.MSG.GET.KV_aspen_rate_limits",
+          "$JS.FC.KV_aspen_rate_limits.>"
+        ] }
+        subscribe: { allow: [
+          "aspen.voice.command.${id}",
+          "_INBOX_voice.${id}.>"
+        ] }
+    } }

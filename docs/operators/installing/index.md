@@ -20,6 +20,8 @@ administrator.
 These steps can be written down once and applied by a tool:
 
 - [Container images](../../../deploy/README.md#the-images) of both servers, with the web client.
+- [One machine](../../../deploy/box/README.md), rented or your own: `aspen-box` sets up a whole
+  small deployment on it and checks it.
 - [A deployment on AWS](../../../deploy/aws/README.md), described for OpenTofu, and
   [a small one on a single machine](../../../deploy/aws-single/README.md). Both are prototypes:
   they have been planned and never applied.
