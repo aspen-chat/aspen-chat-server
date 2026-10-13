@@ -31,7 +31,8 @@ real domain, or behind a home router.
    make: the domain, `voice.` under it, and `media.` under it when files are kept on the
    machine.
 
-2. Make those records. If the machine is behind a router, forward the ports `init` listed.
+2. Make those records, yourself or [with an API token](#dns-records). If the machine is behind
+   a router, forward the ports `init` listed.
 
 3. Start it, and check it:
 
@@ -72,6 +73,26 @@ real domain, or behind a home router.
 People's files are not in the database's backups. Kept on the machine, they are in
 `~/aspen/data/garage`: copy that directory too, with the deployment stopped (`aspen-box down`).
 
+## DNS records
+
+The deployment needs an `A` record (and an `AAAA` record, where the machine has IPv6) for each
+of its names. `aspen-box dns` lists them, with what each resolves to now. There are three ways
+to make them, by how far you trust this tool with your DNS:
+
+| | What you do | What the tool holds |
+| --- | --- | --- |
+| By hand | Write the records at your DNS provider, and again whenever the machine's address changes. | Nothing. This is what happens unless you choose otherwise. |
+| A token for one command | `ASPEN_BOX_DNS_TOKEN=… aspen-box dns --apply --provider cloudflare` | The token for that command. It is written nowhere. |
+| A token it keeps | Answer `cloudflare` when `init` asks, or put `"dns": {"provider": "cloudflare", "token": "…"}` in `box.json`. | The token, in `box.json`, which only your user can read. `aspen-box up` and `refresh-address` then keep the records right, which is what a home connection whose address changes needs. |
+
+With a token, the tool makes or corrects the records `aspen-box dns` lists and touches no
+other. It never deletes a record: where a name has two of one type it stops and says so.
+
+Cloudflare is the one provider so far. Make the token at Cloudflare under API Tokens with the
+"Edit zone DNS" template, limited to the one zone: it can then change that zone's DNS and
+nothing else of your account. The records are made unproxied ("DNS only"), since the box gets
+its own certificates and calls go straight to its address.
+
 ## Where people's files are kept
 
 - **On the machine** (the default). A small object store, Garage, runs beside everything else
@@ -94,8 +115,9 @@ A computer at home works, with more to get right than a rented one:
 - **Some providers share one address between customers**, and then nothing can be forwarded.
   `doctor` shows the address the internet sees; if your router's own outside address is a
   different one, this is why. IPv6 alone does not help people whose own network lacks it.
-- **An address that changes**: run `aspen-box refresh-address` from cron every few minutes,
-  and keep the DNS records following it with your registrar's dynamic DNS.
+- **An address that changes**: run `aspen-box refresh-address` from cron every few minutes.
+  With [a DNS token it keeps](#dns-records) it corrects the records too; otherwise keep them
+  following the address with your provider's dynamic DNS.
 - **Calls are limited by your upload speed**, which `aspen-box capacity` cannot see: it reads
   the network card's. Each participant takes about 3 Mbit/s of upload when everyone sends
   video, so 20 Mbit/s carries about four or five.
@@ -105,7 +127,7 @@ A computer at home works, with more to get right than a rented one:
 ## What it does not do yet
 
 - **Published images.** You build them, for now.
-- **Records made for you.** You write the DNS records by hand.
+- **DNS providers other than Cloudflare.** Elsewhere you write the records by hand.
 - **A machine with no address the internet reaches.** There is no relay for one yet.
 - **Moving to the larger configuration with files kept on the machine.** A backup restores
   into it ([Moving from one machine](../aws/README.md#moving-from-one-machine) does this for

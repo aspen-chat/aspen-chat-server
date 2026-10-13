@@ -181,3 +181,14 @@ Aspen most wants to reach: a small rented server, or a small computer at home.
 - **The AWS one-machine configuration is not built on the box yet.** It runs its containers
   with ECS, which the box cannot use elsewhere. Rebuilt as a machine that runs the box, it
   would share everything but making the machine.
+- **Making DNS records is offered, never needed.** A token that can edit someone's DNS is a lot
+  to ask, so the box works without one and says which records to write. Between that and
+  keeping a token there is a middle: a token in the environment of one command, written
+  nowhere, for someone who will let the tool act once but not hold the key.
+- **A kept token is what follows a changing address**, which is why keeping one is offered at
+  all: a home connection's address changes, and `refresh-address` can then correct the records
+  as well as what the voice server announces.
+- **The tool writes only the records it lists and deletes none.** A name with two records of
+  one type is someone's choice or someone's mistake, and either way not the tool's to settle.
+- **The token is checked when it is given**, against the zone the domain is in, so a token for
+  the wrong zone is found at `init` rather than when certificates fail to arrive.

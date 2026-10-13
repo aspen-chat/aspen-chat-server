@@ -5,6 +5,7 @@
     aspen-box up                   start it, or bring it in line with its configuration
     aspen-box upgrade --tag TAG    move to new images, the API never stopping
     aspen-box doctor               check the machine, the network, and the deployment
+    aspen-box dns [--apply]        show the DNS records it needs, or make them with an API token
     aspen-box run -- COMMAND…      an operator command: aspen-chat-server admin grant <username>
     aspen-box backup | restore FILE
     aspen-box capacity             measure how many people the voice server carries
@@ -237,6 +238,140 @@ def render(store: Box, box: dict) -> set:
     return changed
 
 
+# ---- DNS records
+
+
+def wanted_records(box: dict, announced: list) -> list:
+    """Every record the deployment needs, as (name, type, address)."""
+    domain = box["domain"]
+    names = [domain, f"voice.{domain}"] + ([f"media.{domain}"] if box["storage"]["kind"] == "bundled" else [])
+    return [(name, "AAAA" if ":" in address else "A", address) for name in names for address in announced]
+
+
+class Cloudflare:
+    """Cloudflare's DNS, with a token that may read one zone and edit its DNS records (its
+    "Edit zone DNS" template, limited to the zone). Only the records of `wanted_records` are
+    read or written, and none is ever deleted."""
+
+    api = os.environ.get("ASPEN_BOX_CLOUDFLARE_API", "https://api.cloudflare.com/client/v4")
+
+    def __init__(self, token: str):
+        self.token = token
+        self.zones = {}
+
+    def call(self, method: str, path: str, body: dict | None = None):
+        request = urllib.request.Request(
+            self.api + path,
+            method=method,
+            data=json.dumps(body).encode() if body is not None else None,
+            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return json.loads(response.read())["result"]
+        except urllib.error.HTTPError as error:
+            try:
+                said = "; ".join(e.get("message", "") for e in json.loads(error.read()).get("errors", []))
+            except ValueError:
+                said = ""
+            if error.code in (401, 403):
+                raise Failed(
+                    f"Cloudflare refused the token ({said or error.code}). It must be an API token (not the global key) "
+                    "that may read the zone and edit its DNS records"
+                ) from None
+            raise Failed(f"Cloudflare answered {error.code} to {method} {path.split('?')[0]}: {said}") from None
+        except OSError as error:
+            raise Failed(f"Cloudflare could not be reached: {error}") from None
+
+    def zone(self, name: str) -> str:
+        """The id of the zone `name` is in: the longest of its parents the token can see."""
+        labels = name.split(".")
+        for start in range(len(labels) - 1):
+            candidate = ".".join(labels[start:])
+            if candidate not in self.zones:
+                found = self.call("GET", f"/zones?name={candidate}")
+                self.zones[candidate] = found[0]["id"] if found else None
+            if self.zones[candidate]:
+                return self.zones[candidate]
+        raise Failed(f"the Cloudflare token sees no zone that holds {name}: check the token is for that domain's zone")
+
+    def current(self, name: str, kind: str) -> list:
+        """The records of that name and type, as (id, address)."""
+        found = self.call("GET", f"/zones/{self.zone(name)}/dns_records?type={kind}&name={name}")
+        return [(record["id"], record["content"]) for record in found]
+
+    def point(self, name: str, kind: str, address: str) -> str:
+        existing = self.current(name, kind)
+        if len(existing) > 1:
+            raise Failed(
+                f"{name} has {len(existing)} {kind} records ({', '.join(a for _, a in existing)}). "
+                "Remove all but one in Cloudflare's dashboard: this tool deletes nothing"
+            )
+        # Not proxied: Caddy gets the certificates itself, and media goes straight to the
+        # address. A short life, for an address that may change.
+        record = {"type": kind, "name": name, "content": address, "ttl": 300, "proxied": False}
+        if not existing:
+            self.call("POST", f"/zones/{self.zone(name)}/dns_records", record)
+            return "made"
+        if existing[0][1] == address:
+            return "as it should be"
+        self.call("PUT", f"/zones/{self.zone(name)}/dns_records/{existing[0][0]}", record)
+        return f"changed from {existing[0][1]}"
+
+
+DNS_PROVIDERS = {"cloudflare": Cloudflare}
+# A token given here is used for the one command and written nowhere.
+DNS_TOKEN_VARIABLE = "ASPEN_BOX_DNS_TOKEN"
+
+
+def dns_provider(box: dict):
+    """The provider to make records with, or None when the box was given none and they are
+    made by hand. The token is the one kept in box.json, or this command's own."""
+    chosen = box.get("dns") or {}
+    token = os.environ.get(DNS_TOKEN_VARIABLE) or chosen.get("token")
+    if not chosen.get("provider") or not token:
+        return None
+    return DNS_PROVIDERS[chosen["provider"]](token)
+
+
+def apply_dns(box: dict, announced: list, quiet: bool = False) -> bool:
+    """Makes or corrects every record, when the box has a provider and a token. Answers
+    whether it had."""
+    provider = dns_provider(box)
+    if provider is None:
+        return False
+    for name, kind, address in wanted_records(box, announced):
+        did = provider.point(name, kind, address)
+        if not quiet or did != "as it should be":
+            print(f"  {name}  {kind}  {address}  ({did})")
+    return True
+
+
+def dns(store: Box, opt: argparse.Namespace) -> None:
+    box = store.load()
+    if opt.provider:
+        box["dns"] = {**(box.get("dns") or {}), "provider": opt.provider}
+    announced = addresses(box)
+    if opt.apply:
+        if not apply_dns(box, announced):
+            raise Failed(
+                f"there is no token to make records with. Give one for this command alone in {DNS_TOKEN_VARIABLE} "
+                "(with --provider, if box.json names none), or keep one in box.json under dns.token"
+            )
+        return
+    provider = dns_provider(box)
+    print("The records this deployment needs" + ("" if provider else ", and what this machine's resolver finds for each") + ":\n")
+    for name, kind, address in wanted_records(box, announced):
+        found = [a for _, a in provider.current(name, kind)] if provider else sorted(resolve(name, 6 if kind == "AAAA" else 4))
+        state = "ok" if found == [address] else ("missing" if not found else "is " + ", ".join(found))
+        print(f"  {name}.  {kind}  {address}    {state}")
+    print(
+        "\nMake them at your DNS provider"
+        + (", or `aspen-box dns --apply`." if provider else f". Or, with Cloudflare, let this tool: `aspen-box dns --apply --provider cloudflare` "
+           f"with an API token in {DNS_TOKEN_VARIABLE} for that one command, or in box.json to have the box keep them right.")
+    )
+
+
 # ---- init
 
 
@@ -276,9 +411,18 @@ def init(store: Box, opt: argparse.Namespace) -> None:
             "secret_key": field("secret_key", "Secret key"),
             "public_base_url": field("public_base_url", "Where its read path is served (https://media.chat.example.org)"),
         }
+    dns_choice = opt.dns or (ask("Make the DNS records for you? It needs an API token for your DNS provider, kept on this machine (no/cloudflare)", "no") if interactive else "no")
+    if dns_choice not in ("no", *DNS_PROVIDERS):
+        raise Failed(f"records can be made at: {', '.join(DNS_PROVIDERS)}. Answer no to make them yourself")
+    dns_token = None
+    if dns_choice != "no":
+        dns_token = opt.dns_token or os.environ.get(DNS_TOKEN_VARIABLE) or ask("An API token that may read the domain's zone and edit its DNS records")
+        # Found out now rather than at `up`: a token for another zone, or one that may not read it.
+        DNS_PROVIDERS[dns_choice](dns_token).zone(domain)
     box = {
         "domain": domain,
         "acme_email": None if acme_email == "-" else acme_email,
+        "dns": None if dns_choice == "no" else {"provider": dns_choice, "token": dns_token},
         "address4": opt.address4,
         "address6": opt.address6,
         "storage": storage,
@@ -300,11 +444,10 @@ def init(store: Box, opt: argparse.Namespace) -> None:
     store.save(box)
     render(store, box)
     announced = addresses(box)
-    names = [domain, f"voice.{domain}"] + ([f"media.{domain}"] if storage["kind"] == "bundled" else [])
-    print(f"\nWrote {store.dir}.\n\nPoint these names at this machine, in your domain's DNS:\n")
-    for name in names:
-        for address in announced:
-            print(f"    {name}.  {'AAAA' if ':' in address else 'A'}  {address}")
+    print(f"\nWrote {store.dir}.\n")
+    print("`aspen-box up` will point these names at this machine:\n" if box["dns"] else "Point these names at this machine, in your domain's DNS:\n")
+    for name, kind, address in wanted_records(box, announced):
+        print(f"    {name}.  {kind}  {address}")
     print(
         "\nIf the machine is behind a router, forward to it: TCP 80 and 443, UDP 3478, and UDP and\n"
         f"TCP {box['voice']['min_port']}-{box['voice']['max_port']}.\n\nThen: aspen-box up, and aspen-box doctor."
@@ -394,6 +537,8 @@ def up(store: Box, opt: argparse.Namespace) -> None:
         was_running = store.running()
     except Failed:
         was_running = set()
+    # Before Caddy asks for certificates, which Let's Encrypt gives to whoever the names reach.
+    apply_dns(box, addresses(box))
     changed = converge(store, box)
     release(store, box)
     slot = box.get("active_slot", "api-a")
@@ -573,6 +718,10 @@ def doctor(store: Box, opt: argparse.Namespace) -> None:
     for name in names:
         for family, kind in ((4, "A"), (6, "AAAA")):
             if not public[family]:
+                stale = resolve(name, family)
+                if stale:
+                    # Whoever is given it tries an address nothing answers at.
+                    report.fail(f"{name} has {kind} {', '.join(sorted(stale))}, and this box has no IPv{family} address", "Remove that record at your DNS provider.")
                 continue
             found = resolve(name, family)
             if public[family] in found:
@@ -581,7 +730,9 @@ def doctor(store: Box, opt: argparse.Namespace) -> None:
                 dns_ready = False
                 report.fail(
                     f"{name} has {'no ' + kind + ' record' if not found else kind + ' ' + ', '.join(sorted(found))}",
-                    f"In your domain's DNS: {name}.  {kind}  {public[family]}",
+                    "`aspen-box dns --apply` writes it; a record just written can take some minutes to be seen."
+                    if (box.get("dns") or {}).get("provider")
+                    else f"In your domain's DNS: {name}.  {kind}  {public[family]}",
                 )
 
     print("\nFrom the internet")
@@ -686,6 +837,7 @@ def capacity(store: Box, opt: argparse.Namespace) -> None:
 
 def refresh_address(store: Box, opt: argparse.Namespace) -> None:
     box = store.load()
+    apply_dns(box, addresses(box), quiet=True)
     if "voice_server.toml" in render(store, box):
         store.compose("up", "-d", "--force-recreate", "voice")
         print("The public address changed. The voice server announces the new one; its calls ended and rejoin.")
@@ -704,6 +856,8 @@ def main() -> None:
     start.add_argument("--storage", choices=["machine", "s3"])
     for name in ("endpoint", "bucket", "region", "access-key", "secret-key", "public-base-url"):
         start.add_argument(f"--s3-{name}")
+    start.add_argument("--dns", choices=["no", *DNS_PROVIDERS], help="make the DNS records with an API token, kept in box.json")
+    start.add_argument("--dns-token", help=f"(or {DNS_TOKEN_VARIABLE})")
     start.add_argument("--api-image", required=True, help="the `api` image of deploy/docker/Dockerfile, with its tag")
     start.add_argument("--voice-image", required=True, help="the `voice` image, with its tag")
     start.add_argument("--voice-capacity", type=int, default=25, help="a guess; `aspen-box capacity` measures it")
@@ -714,6 +868,9 @@ def main() -> None:
     move.add_argument("--api-image")
     move.add_argument("--voice-image")
     commands.add_parser("doctor")
+    records = commands.add_parser("dns")
+    records.add_argument("--apply", action="store_true", help="make or correct the records")
+    records.add_argument("--provider", choices=list(DNS_PROVIDERS), help="for a box whose box.json names none")
     commands.add_parser("run").add_argument("command", nargs="*")
     commands.add_parser("backup").add_argument("--keep", type=int, default=BACKUPS_KEPT, help="how many dumps to keep")
     back = commands.add_parser("restore")
@@ -727,7 +884,7 @@ def main() -> None:
     opt = parser.parse_args()
     store = Box(opt.dir.expanduser().resolve())
     steps = {
-        "init": init, "up": up, "upgrade": upgrade, "doctor": doctor, "run": run_command, "backup": backup,
+        "init": init, "up": up, "upgrade": upgrade, "doctor": doctor, "dns": dns, "run": run_command, "backup": backup,
         "restore": restore, "capacity": capacity, "refresh-address": refresh_address,
         "status": lambda store, opt: store.compose("ps", "--all"),
         "logs": lambda store, opt: store.compose("logs", "--tail", "200", *opt.service),
