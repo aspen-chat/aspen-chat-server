@@ -33,11 +33,48 @@ pub struct Limit {
 }
 
 /// A limit, or `false` to remove one set elsewhere.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LimitSetting {
     Off(bool),
     Limit(Limit),
+}
+
+/// Read by what is given rather than by trying each variant, so that text stands for what it
+/// spells: an environment variable can only hold text, and gives `false` and a limit's fields
+/// as `"false"` and `"60"`, which the configuration reads as a boolean and a number where one is
+/// wanted.
+impl<'de> Deserialize<'de> for LimitSetting {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Setting;
+        impl<'de> serde::de::Visitor<'de> for Setting {
+            type Value = LimitSetting;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("false, or a limit: { requests, per_seconds, burst?, bucket? }")
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<LimitSetting, E> {
+                Ok(LimitSetting::Off(value))
+            }
+
+            fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<LimitSetting, E> {
+                match text.trim() {
+                    "false" => Ok(LimitSetting::Off(false)),
+                    "true" => Ok(LimitSetting::Off(true)),
+                    _ => Err(E::invalid_value(serde::de::Unexpected::Str(text), &self)),
+                }
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<LimitSetting, A::Error> {
+                Limit::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(LimitSetting::Limit)
+            }
+        }
+        deserializer.deserialize_any(Setting)
+    }
 }
 
 /// Limits keyed by dimension (`ip`, `user`, `per_channel`, ...).

@@ -57,7 +57,8 @@ Without it, the deployment works without email.
 ### Environment variables
 
 Each setting can also be given in the environment, which overrides the file. Write `ASPEN_` and
-the key, with `__` between nested keys: `ASPEN_DATABASE_URL`, `ASPEN_VOICE__TOKEN_SECRET`.
+the key, with `__` between nested keys: `ASPEN_DATABASE_URL`, `ASPEN_VOICE__TOKEN_SECRET`. Lists
+and tables can be given too: see [How settings are read](../configuration/index.md#how-settings-are-read).
 
 ## Create the tables
 

@@ -4,7 +4,6 @@ use serde::Deserialize;
 use smart_default::SmartDefault;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
 use uuid::Uuid;
 
 /// Read from `voice_server.toml` in the working directory, with `ASPEN_VOICE_SERVER_`
@@ -40,7 +39,7 @@ pub struct VoiceServerConfig {
     /// Where the HTTP server, health check, and signalling socket listen: one address or
     /// several. Left unset, `DEFAULT_PORT` on every interface over IPv4 and IPv6
     /// (`listen_addrs`).
-    #[serde(default, deserialize_with = "optional_one_or_many")]
+    #[serde(default, deserialize_with = "aspen_config_values::optional_list")]
     pub listen_addr: Option<Vec<SocketAddr>>,
     #[serde(default)]
     pub rtc: RtcConfig,
@@ -145,6 +144,7 @@ pub struct LimitSettings {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct LimitOverrides {
     pub enabled: Option<bool>,
+    #[serde(default, deserialize_with = "aspen_config_values::optional_list")]
     pub trusted_proxies: Option<Vec<String>>,
     pub ipv6_prefix: Option<u8>,
     pub max_suspension_seconds: Option<u64>,
@@ -153,9 +153,9 @@ pub struct LimitOverrides {
     pub max_connections: Option<usize>,
     pub max_seats_per_user: Option<usize>,
     pub max_participants_per_call: Option<usize>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "aspen_config_values::table")]
     pub http: HashMap<String, RuleTable>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "aspen_config_values::table")]
     pub frames: HashMap<String, RuleTable>,
 }
 
@@ -213,7 +213,7 @@ pub struct RtcConfig {
     /// The interfaces media is bound to, at most one address of each family. Left unset,
     /// every interface over IPv4 and IPv6 (`0.0.0.0` and `::`), each family only where this
     /// machine has it (`media_addresses`).
-    #[serde(deserialize_with = "optional_one_or_many")]
+    #[serde(deserialize_with = "aspen_config_values::optional_list")]
     pub ip: Option<Vec<IpAddr>>,
     /// The addresses clients are told to send media to: an IPv4 address for the IPv4
     /// interface, an IPv6 one for the IPv6 interface, or a host name, which stands for every
@@ -223,7 +223,7 @@ pub struct RtcConfig {
     /// development machine and a server with a public address on an interface. A server
     /// behind NAT sets its public address. None may be a loopback address: Firefox does not
     /// pair its own host candidates with a loopback peer, so media never connects.
-    #[serde(deserialize_with = "one_or_many")]
+    #[serde(deserialize_with = "aspen_config_values::list")]
     pub announced_address: Vec<String>,
     #[default = 40000]
     pub min_port: u16,
@@ -279,40 +279,6 @@ fn default_workers() -> usize {
 
 /// The port the HTTP server listens on when `listen_addr` is unset.
 const DEFAULT_PORT: u16 = 9001;
-
-/// A setting given as one value or a list of them. One string may hold several separated by
-/// commas, which is how an environment variable gives a list.
-fn one_or_many<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: FromStr,
-    T::Err: std::fmt::Display,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum OneOrMany {
-        One(String),
-        Many(Vec<String>),
-    }
-    let values = match OneOrMany::deserialize(deserializer)? {
-        OneOrMany::One(value) => value.split(',').map(str::to_string).collect(),
-        OneOrMany::Many(values) => values,
-    };
-    values
-        .iter()
-        .map(|value| value.trim().parse().map_err(serde::de::Error::custom))
-        .collect()
-}
-
-/// `one_or_many` for a setting whose absence means something a list cannot say.
-fn optional_one_or_many<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: FromStr,
-    T::Err: std::fmt::Display,
-{
-    one_or_many(deserializer).map(Some)
-}
 
 impl VoiceServerConfig {
     /// Where the HTTP server listens, and whether each must be bound: an address the settings

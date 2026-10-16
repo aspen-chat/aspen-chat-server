@@ -11,6 +11,14 @@ deployment settings kept in the database. Why the settings are shaped as they ar
    - Write `ASPEN_` followed by the key.
    - Put `__` between a section and its keys.
    - Examples: `ASPEN_PUBLIC_URL`, `ASPEN_DATABASE_URL`, `ASPEN_VOICE__IDLE_SESSION_SECONDS`.
+   - A list is its values separated by commas, `ASPEN_RATE_LIMITS__TRUSTED_PROXIES="10.0.0.0/8,::1"`,
+     or a JSON array when a value holds a comma. Empty, it is an empty list.
+   - A table whose keys are names can be given a key at a time:
+     `ASPEN_RATE_LIMITS__DEFAULT__IP__REQUESTS=3000`.
+   - A table whose keys are not names an environment variable can spell, such as rate limits by
+     endpoint, is given whole as a JSON object:
+     `ASPEN_RATE_LIMITS__ENDPOINTS='{"POST /users": {"ip": {"requests": 5, "per_seconds": 3600}}}'`.
+     Any table can be given this way.
 3. A setting left out takes the default shown on its page.
 4. A value the server cannot read stops it at startup, with a message naming the setting.
 5. In `[federation]`, `[web_client]`, and `[email]`, a key the server does not know also stops it.

@@ -133,23 +133,28 @@ pub struct RateLimitConfig {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct RateLimitOverrides {
     pub enabled: Option<bool>,
+    #[serde(default, deserialize_with = "aspen_config_values::optional_list")]
     pub trusted_proxies: Option<Vec<String>>,
     pub ipv6_prefix: Option<u8>,
     pub max_suspension_seconds: Option<u64>,
     /// Replaces the built-in list whole.
+    #[serde(default, deserialize_with = "aspen_config_values::optional_list")]
     pub fail_closed: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "aspen_config_values::table")]
     pub default: RuleTable,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "aspen_config_values::table")]
     pub groups: BTreeMap<String, RateLimitGroupOverride>,
-    #[serde(default)]
+    /// Keyed by method and path, which no environment variable's name can spell: from the
+    /// environment, a JSON object of them all (`aspen_config_values::table`).
+    #[serde(default, deserialize_with = "aspen_config_values::table")]
     pub endpoints: HashMap<String, RuleTable>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct RateLimitGroupOverride {
+    #[serde(default, deserialize_with = "aspen_config_values::optional_list")]
     pub endpoints: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "aspen_config_values::table")]
     pub limits: RuleTable,
 }
 
@@ -393,6 +398,7 @@ pub struct FederationDevelopment {
     /// PEM files of certificate authorities trusted, besides the system's, when this server
     /// calls other deployments: a development authority that signed certificates for names
     /// such as `beta.localhost`.
+    #[serde(deserialize_with = "aspen_config_values::list")]
     pub extra_root_certificates: Vec<std::path::PathBuf>,
     /// Lets this server call deployments at loopback and private network addresses, which it
     /// otherwise refuses so that naming a deployment cannot make it reach inside its own
@@ -962,19 +968,33 @@ pub fn default_event_retained_mib() -> usize {
 /// The built-in rate limits, beneath whatever `aspen.toml` sets.
 const DEFAULT_RATE_LIMITS: &str = include_str!("rate_limits.toml");
 
-/// Loads or reloads the config.
+/// Loads or reloads the config: `aspen.toml` in the working directory, and the environment.
 pub fn load_config() -> Result<AspenConfig, config::ConfigError> {
+    load_from(
+        config::File::new("aspen.toml", config::FileFormat::Toml),
+        environment(),
+    )
+}
+
+/// The `ASPEN_` variables, which override the file. `ASPEN_DATABASE_URL` sets `database_url`;
+/// `ASPEN_VOICE__IDLE_SESSION_SECONDS` sets `voice.idle_session_seconds`. The prefix separator
+/// is set explicitly because it would otherwise follow the nesting separator and every flat key
+/// would need two underscores. Settings that are lists or tables read text as
+/// `aspen_config_values` says.
+fn environment() -> config::Environment {
+    config::Environment::with_prefix("ASPEN")
+        .prefix_separator("_")
+        .separator("__")
+}
+
+fn load_from(
+    file: impl config::Source + Send + Sync + 'static,
+    environment: config::Environment,
+) -> Result<AspenConfig, config::ConfigError> {
     let mut loaded = config::Config::builder()
-        .add_source(config::File::new("aspen.toml", config::FileFormat::Toml))
-        // Sources added later take precedence, so the environment overrides `aspen.toml`.
-        // `ASPEN_DATABASE_URL` sets `database_url`; `ASPEN_VOICE__IDLE_SESSION_SECONDS` sets
-        // `voice.idle_session_seconds`. The prefix separator is set explicitly because it would
-        // otherwise follow the nesting separator and every flat key would need two underscores.
-        .add_source(
-            config::Environment::with_prefix("ASPEN")
-                .prefix_separator("_")
-                .separator("__"),
-        )
+        // Sources added later take precedence.
+        .add_source(file)
+        .add_source(environment)
         .build()?
         .try_deserialize::<AspenConfig>()?;
     // Merged here rather than as one more config source, which would merge a limit given in
@@ -1148,6 +1168,60 @@ impl AspenConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every setting can be given in the environment, lists and tables too.
+    #[test]
+    fn the_environment_gives_lists_and_tables() {
+        let file = "public_url = \"http://localhost:5173\"\ndatabase_url = \"postgres://x\"\n\
+                    nats_url = \"nats://x\"\nnats_auth_token = \"t\"\nvalkey_url = \"redis://x\"\n";
+        let variables = [
+            (
+                "ASPEN_RATE_LIMITS__TRUSTED_PROXIES",
+                "127.0.0.1, 10.0.0.0/8",
+            ),
+            (
+                "ASPEN_RATE_LIMITS__ENDPOINTS",
+                r#"{"POST /users": {"ip": {"requests": 2, "per_seconds": 60}}}"#,
+            ),
+            ("ASPEN_RATE_LIMITS__DEFAULT__USER", "false"),
+            ("ASPEN_RATE_LIMITS__DEFAULT__IP__REQUESTS", "100"),
+            ("ASPEN_RATE_LIMITS__DEFAULT__IP__PER_SECONDS", "60"),
+            (
+                "ASPEN_FEDERATION__DEVELOPMENT__EXTRA_ROOT_CERTIFICATES",
+                "/a.pem,/b.pem",
+            ),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+        let config = load_from(
+            config::File::from_str(file, config::FileFormat::Toml),
+            environment().source(Some(variables)),
+        )
+        .unwrap();
+        assert_eq!(
+            config.rate_limits.trusted_proxies,
+            ["127.0.0.1", "10.0.0.0/8"]
+        );
+        let users = &config.rate_limits.endpoints["POST /users"]["ip"];
+        assert!(
+            matches!(users, LimitSetting::Limit(limit) if limit.requests == 2),
+            "{users:?}"
+        );
+        assert!(matches!(
+            config.rate_limits.default["user"],
+            LimitSetting::Off(false)
+        ));
+        let ip = &config.rate_limits.default["ip"];
+        assert!(
+            matches!(ip, LimitSetting::Limit(limit) if limit.requests == 100),
+            "{ip:?}"
+        );
+        assert_eq!(
+            config.federation.development.extra_root_certificates.len(),
+            2
+        );
+    }
 
     type Derived = (String, Option<String>, Option<String>);
 

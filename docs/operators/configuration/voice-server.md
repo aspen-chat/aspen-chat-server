@@ -43,7 +43,8 @@ A voice server serves both families at once. Left to its defaults it listens on 
 over IPv4 and IPv6, for signalling, media, and file transfers.
 
 - Each of `listen_addr`, `[rtc] ip`, and `[rtc] announced_address` takes one value or a list:
-  `ip = ["0.0.0.0", "::"]`. In an environment variable, separate them with commas:
+  `ip = ["0.0.0.0", "::"]`. In an environment variable, separate them with commas, as every
+  list is ([How settings are read](index.md#how-settings-are-read)):
   `ASPEN_VOICE_SERVER_RTC__IP="0.0.0.0,::"`.
 - An IPv6 address takes IPv6 only, so `[::]:9001` and `0.0.0.0:9001` are two listeners and a
   client's address is always its own, never an IPv4 one written as IPv6.

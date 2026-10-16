@@ -7,6 +7,7 @@ description = "An Aspen voice server: a mediasoup SFU that carries the media of 
 
 [dependencies]
 anyhow = "1.0.102"
+aspen_config_values = { version = "0.1.0", path = "../config_values" }
 aspen_limits = { version = "0.1.0", path = "../limits" }
 aspen_tls = { version = "0.1.0", path = "../tls" }
 aspen_sockets = { version = "0.1.0", path = "../sockets" }

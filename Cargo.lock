@@ -509,6 +509,7 @@ dependencies = [
  "argon2",
  "askama 0.16.1",
  "aspen_bench_protocol",
+ "aspen_config_values",
  "aspen_database",
  "aspen_email_templates",
  "aspen_federation_core",
@@ -621,6 +622,15 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "uuid",
+]
+
+[[package]]
+name = "aspen_config_values"
+version = "0.1.0"
+dependencies = [
+ "config",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -8180,6 +8190,7 @@ name = "voice_server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aspen_config_values",
  "aspen_limits",
  "aspen_metrics",
  "aspen_sockets",

@@ -55,6 +55,7 @@ hmac = "0.12"
 sha1 = "0.10"
 data-encoding = "2.9"
 subtle = "2.6"
+aspen_config_values = { version = "0.1.0", path = "../../config_values" }
 aspen_limits = { version = "0.1.0", path = "../../limits" }
 aspen_metrics = { version = "0.1.0", path = "../../metrics", features = ["jemalloc"] }
 metrics = "0.24"
