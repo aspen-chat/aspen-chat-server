@@ -187,7 +187,7 @@ export function useEmojiCompletion({
     setCaret(event.currentTarget.selectionStart);
   };
 
-  const announcement = open ? format(m.emoji.suggestions, { count: shown.length }) : "";
+  const announcement = open ? format(m.emoji.suggestionsAnnouncement, { count: shown.length }) : "";
 
   return {
     /** Whether the list is open, which decides which completion names the box's list. */

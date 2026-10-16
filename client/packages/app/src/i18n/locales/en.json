@@ -618,12 +618,14 @@
   },
   "emoji": {
     "unknown": "Unknown emoji",
-    "suggestions": "{count, plural, one {# emoji matches. Enter or Tab inserts it; Escape closes.} other {# emoji match. Up and down arrows choose, Enter or Tab inserts; Escape closes.}}",
+    "suggestions": "Emoji to insert",
+    "suggestionsAnnouncement": "{count, plural, one {# emoji matches. Enter or Tab inserts it; Escape closes.} other {# emoji match. Up and down arrows choose, Enter or Tab inserts; Escape closes.}}",
     "customDetail": "This community's emoji",
     "customCategory": "This community"
   },
   "tagging": {
-    "suggestions": "{count, plural, one {# suggestion to tag. Enter or Tab tags it; Escape closes.} other {# suggestions to tag. Up and down arrows choose, Enter or Tab tags; Escape closes.}}",
+    "suggestions": "People and roles to tag",
+    "suggestionsAnnouncement": "{count, plural, one {# suggestion to tag. Enter or Tab tags it; Escape closes.} other {# suggestions to tag. Up and down arrows choose, Enter or Tab tags; Escape closes.}}",
     "role": "Role",
     "everyone": "Everyone here"
   },
@@ -640,8 +642,10 @@
     "readOnly": "These are notices from {name}, and can't be answered here."
   },
   "commands": {
-    "suggestions": "{count, plural, one {# command. Enter or Tab picks it; Escape closes.} other {# commands. Up and down arrows choose, Enter or Tab picks; Escape closes.}}",
-    "values": "{count, plural, one {# suggestion for {parameter}. Enter or Tab picks it; Escape closes.} other {# suggestions for {parameter}. Up and down arrows choose, Enter or Tab picks; Escape closes.}}",
+    "suggestions": "Bots' commands",
+    "suggestionsAnnouncement": "{count, plural, one {# command. Enter or Tab picks it; Escape closes.} other {# commands. Up and down arrows choose, Enter or Tab picks; Escape closes.}}",
+    "values": "Suggestions for {parameter}",
+    "valuesAnnouncement": "{count, plural, one {# suggestion for {parameter}. Enter or Tab picks it; Escape closes.} other {# suggestions for {parameter}. Up and down arrows choose, Enter or Tab picks; Escape closes.}}",
     "optional": "optional",
     "takes": {
       "userId": "A person",
