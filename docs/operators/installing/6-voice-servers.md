@@ -13,6 +13,11 @@ Each voice server is its own machine (or container) with its own `voice_server.t
    This measures the CPU, reads the machine's memory, network, and port range, and prints a
    capacity.
 
+   It reads the network card's speed, which is not the internet connection's. On a machine at
+   home, or anywhere the connection is slower than the card, run a speed test on the machine,
+   and give its upload as `[rtc] upload_mbps` in `voice_server.toml` (or `--link-mbps`) before
+   measuring. Each participant takes about 3 Mbit/s of upload when everyone sends video.
+
 2. Where an API server runs, register it:
 
    ```

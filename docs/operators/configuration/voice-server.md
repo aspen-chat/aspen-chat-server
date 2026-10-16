@@ -70,6 +70,7 @@ error. Run it under a supervisor that restarts it: `Restart=on-failure` under sy
 | `ip` | `["0.0.0.0", "::"]` | The interfaces media is received on: one address, or one of each family. |
 | `announced_address` | each family's primary address | The addresses clients send media to: one address, or one of each family, each used for the interface of its family. Set the public address when the server is behind NAT. Never a loopback address: the server refuses to start with one. |
 | `min_port`, `max_port` | `40000`, `40999` | The media ports, UDP and TCP, the same range over each family; open them to clients. The range bounds how many people the server can carry. |
+| `upload_mbps` | none | The upload speed of the machine's internet connection, in Mbit/s, as a speed test run on it measures. `estimate-capacity` counts it in place of the network card's speed, which a connection at home is often far below. Nothing else reads it. |
 
 What a family announces when `announced_address` has no address of that family:
 

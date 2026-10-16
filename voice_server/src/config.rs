@@ -229,6 +229,10 @@ pub struct RtcConfig {
     pub min_port: u16,
     #[default = 40999]
     pub max_port: u16,
+    /// The most this machine's internet connection carries out, in Mbit/s, as a speed test
+    /// measures its upload. Only `estimate-capacity` reads it, in place of the network card's
+    /// speed, which a connection at home is often far below.
+    pub upload_mbps: Option<f64>,
 }
 
 /// File transfers between the people of a call (`transfer`): a STUN and TURN server on one UDP

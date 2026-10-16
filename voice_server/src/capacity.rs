@@ -1,8 +1,9 @@
 //! `voice_server estimate-capacity`: a conservative estimate of how many people this machine
-//! can hold in calls, for the `capacity` of its `[[voice.servers]]` entry.
+//! can hold in calls, for the `capacity` it is registered with (`voice-servers add`).
 //!
 //! It reads the hardware (logical cores and any container CPU quota, memory and any container
-//! limit, the link speed of the interface that holds the default route) and the media settings
+//! limit, and the bandwidth out: `--link-mbps`, else `[rtc] upload_mbps`, else the link speed of
+//! the interface that holds the default route) and the media settings
 //! (`workers`, each of which uses at most one core, and the RTC port range). Then it measures what
 //! one forwarded stream costs on this CPU: a mediasoup worker on loopback forwards synthetic
 //! Opus and H.264 streams, each to five SRTP consumers as in a call of six, for a few seconds,
@@ -53,8 +54,8 @@ pub struct EstimateArgs {
     /// retransmissions, the rest of the machine).
     #[arg(long, default_value_t = 0.3)]
     pub margin: f64,
-    /// The machine's usable bandwidth out, in Mbit/s, where the interface's speed is unknown or
-    /// is not what the host provides (a cloud instance's network allowance, say).
+    /// The machine's usable bandwidth out, in Mbit/s, over `[rtc] upload_mbps` and the
+    /// interface's speed: what the host provides (a cloud instance's network allowance, say).
     #[arg(long)]
     pub link_mbps: Option<f64>,
     /// How long each kind of stream is measured for.
@@ -98,7 +99,7 @@ pub struct Hardware {
     /// Memory the process may use, after any container limit.
     pub memory_bytes: u64,
     pub interface: Option<String>,
-    /// Bandwidth out, from `--link-mbps` or the interface's speed.
+    /// Bandwidth out, from `--link-mbps`, `[rtc] upload_mbps`, or the interface's speed.
     pub link_mbps: Option<f64>,
     pub ports: u32,
 }
@@ -281,7 +282,7 @@ fn estimate(
             ),
         }),
         None => warnings.push(
-            "the link speed is unknown, so bandwidth is not counted; pass --link-mbps with what the host provides".to_string(),
+            "the link speed is unknown, so bandwidth is not counted; set [rtc] upload_mbps to the upload a speed test measures".to_string(),
         ),
     }
     let ports_each = PORTS_PER_PARTICIPANT + PORTS_PER_SHARER * shape.screen_share;
@@ -407,7 +408,8 @@ fn describe(e: &Estimate) -> String {
     }
     let _ = writeln!(
         out,
-        "\nFor this server's [[voice.servers]] entry in aspen.toml:\ncapacity = {}",
+        "\nRegister this server with it, from the dashboard or where an API server runs:\n\
+         aspen-chat-server voice-servers add <name> --url <url> --capacity {}",
         e.capacity
     );
     out
@@ -431,7 +433,21 @@ fn inspect(media: &MediaConfig, link_mbps: Option<f64>, warnings: &mut Vec<Strin
         memory_bytes = limit;
     }
     let interface = default_route_interface();
-    let link_mbps = link_mbps.or_else(|| interface.as_deref().and_then(interface_speed_mbps));
+    let link_mbps = match link_mbps.or(media.rtc.upload_mbps) {
+        Some(given) => Some(given),
+        None => {
+            let card = interface.as_deref().and_then(interface_speed_mbps);
+            if card.is_some() {
+                warnings.push(
+                    "bandwidth out is the network card's speed; an internet connection slower than \
+                     it, as most at home are, carries fewer people: measure its upload with a speed \
+                     test, and set [rtc] upload_mbps"
+                        .to_string(),
+                );
+            }
+            card
+        }
+    };
     Hardware {
         cores,
         workers: media.workers.max(1),
@@ -1045,7 +1061,7 @@ mod tests {
         // Eight times the workers, eight times the cores: each limit is rounded down.
         assert!((cpu(&few) * 8..(cpu(&few) + 1) * 8).contains(&cpu(&many)));
         assert!(few.warnings.iter().any(|w| w.contains("workers")));
-        assert!(few.warnings.iter().any(|w| w.contains("--link-mbps")));
+        assert!(few.warnings.iter().any(|w| w.contains("upload_mbps")));
         assert!(few.limits.iter().all(|l| l.resource != "bandwidth out"));
     }
 }
