@@ -59,7 +59,11 @@ test("a new message starts on the deployment chosen", async ({ page }) => {
     .click();
   await page.getByRole("button", { name: "New message" }).click();
   const picker = page.getByRole("dialog", { name: "New message" });
-  await picker.getByRole("radio", { name: foreignDomain }).check({ force: true });
+  await picker
+    .getByRole("radiogroup", { name: "Start on" })
+    .getByText(foreignDomain, { exact: true })
+    .click();
+  await expect(picker.getByRole("radio", { name: foreignDomain })).toBeChecked();
   await picker.getByRole("option", { name: /Hostess/ }).click();
   await picker.getByRole("button", { name: "Message", exact: true }).click();
   await expect(page).toHaveURL(/\/at\/beta\.example\/dms\//);

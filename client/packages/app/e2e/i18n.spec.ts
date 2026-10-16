@@ -23,8 +23,8 @@ test("a language chosen in Settings shows at once and is asked of the server", a
   await expect(page.locator("html")).toHaveAttribute("lang", "en-XA");
   await expect(page.getByRole("dialog", { name: accented("Settings") })).toBeVisible();
   await page.keyboard.press("Escape");
-  const asked = page.waitForRequest(
-    (request) => request.url().includes("/communities/") && request.url().endsWith("/invites"),
+  const asked = page.waitForRequest((request) =>
+    /\/communities\/[^/]+\/invites$/.test(new URL(request.url()).pathname),
   );
   await page.getByRole("button", { name: accented("Invite people") }).click();
   expect((await asked).headers()["accept-language"]).toBe("en-XA");

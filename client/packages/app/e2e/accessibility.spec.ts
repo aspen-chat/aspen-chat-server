@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { PALETTES } from "../src/theme/palettes";
 import { bob, general, helper, signInToWorld, settleAnimations, type Publish } from "./world";
 
@@ -40,6 +40,26 @@ async function problems(page: Page, where: string, popover: boolean): Promise<st
 
 async function expectAccessible(page: Page, where: string, { popover = false } = {}) {
   expect.soft(await problems(page, where, popover)).toEqual([]);
+}
+
+/**
+ * Waits until a modal is drawn, not only in the page. On a touch screen React Aria holds a modal
+ * transparent while the keyboard its focused field raises opens, or for 600ms where none does
+ * (`runAfterKeyboard`), as on an emulated phone; audited before then, nothing on the page shows.
+ */
+async function untilDrawn(dialog: Locator) {
+  await expect
+    .poll(() =>
+      dialog.evaluate((element) => {
+        for (let at: Element | null = element; at !== null; at = at.parentElement) {
+          if (getComputedStyle(at).opacity === "0") {
+            return false;
+          }
+        }
+        return true;
+      }),
+    )
+    .toBe(true);
 }
 
 /** Opens a channel from the list, going back to the list first on a phone. */
@@ -178,6 +198,7 @@ for (const { palette, scheme, contrast } of combinations) {
       await openChannel(page, "general");
       await page.getByRole("button", { name: "Search messages" }).click();
       const dialog = page.getByRole("dialog", { name: "Search messages" });
+      await untilDrawn(dialog);
       await expectAccessible(page, "search");
       await dialog.getByRole("searchbox", { name: "Words" }).fill("lemonade");
       await dialog.getByRole("button", { name: "Search", exact: true }).click();

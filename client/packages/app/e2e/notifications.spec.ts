@@ -84,7 +84,8 @@ test("a tag elsewhere shows a system notification and plays the sound", async ({
     .toEqual([
       { title: expect.stringContaining("#roadmap (Family)"), body: "@kate can you look at this?" },
     ]);
-  expect(await page.evaluate(() => window.soundsPlayed)).toBeGreaterThan(0);
+  // The sound follows the notification once its file is loaded and its speaker found.
+  await expect.poll(() => page.evaluate(() => window.soundsPlayed)).toBeGreaterThan(0);
 
   post(publish, "Just thinking out loud");
   await page.waitForTimeout(500);

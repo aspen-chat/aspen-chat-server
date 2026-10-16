@@ -152,6 +152,8 @@ test("Manage nicknames clears the nickname of a member below the caller, never t
   await dialog.getByRole("button", { name: "Send report" }).click();
   await expect(page.getByText("Report sent. Thank you.")).toBeVisible();
   await expect(dialog).toHaveCount(0);
+  // Escape reaches the card once focus is back in it, a moment after the report dialog goes.
+  await expect(card.getByRole("button", { name: "Report the nickname Bobby" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(card).toHaveCount(0);
   expect(reported).toEqual([
