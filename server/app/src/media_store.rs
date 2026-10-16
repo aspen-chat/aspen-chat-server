@@ -186,17 +186,19 @@ impl MediaStore {
         if let Some(ca) = s3.tls.as_ref().and_then(|tls| tls.ca_file.as_ref()) {
             sdk_config = sdk_config.http_client(https_client_trusting(ca)?);
         }
-        let sdk_config = sdk_config
-            .region(Region::new(s3.region.clone()))
-            .credentials_provider(Credentials::new(
-                s3.access_key.clone(),
-                s3.secret_key.clone(),
+        sdk_config = sdk_config.region(Region::new(s3.region.clone()));
+        // Without a key pair the SDK's own chain finds credentials: the environment, then the
+        // role of the task or machine. Presigned URLs carry whatever session token they bring.
+        if let (Some(access_key), Some(secret_key)) = (&s3.access_key, &s3.secret_key) {
+            sdk_config = sdk_config.credentials_provider(Credentials::new(
+                access_key.clone(),
+                secret_key.clone(),
                 None,
                 None,
                 "aspen-media-config",
-            ))
-            .load()
-            .await;
+            ));
+        }
+        let sdk_config = sdk_config.load().await;
         let client_for = |endpoint: &str| {
             Client::from_conf(
                 aws_sdk_s3::config::Builder::from(&sdk_config)

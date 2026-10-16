@@ -64,7 +64,7 @@ them.
 | `public_base_url` | `http://127.0.0.1:3902/aspen-media` | Where clients download objects. It must be a [read-only path](#the-read-path) at an origin of its own. |
 | `bucket` | `aspen-media` | |
 | `region` | `garage` | Whatever your storage expects; many accept any. |
-| `access_key`, `secret_key` | development values | A key pair that may read, write, delete, and list in the bucket. A server at a public `https` address refuses the development values. |
+| `access_key`, `secret_key` | none | A key pair that may read, write, delete, and list in the bucket. Give both, or neither: without them the server takes its credentials as AWS's own tools do, from the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables, then from the role of the ECS task or EC2 machine it runs on. That role needs the same permissions. A server at a public `https` address refuses the key pair `docker-compose.yaml` publishes. |
 | `upload_url_ttl_seconds` | `900` | How long an upload URL works. |
 | `[media.s3.tls] ca_file` | | PEM authorities this server trusts besides the system's, for an `https` `endpoint`. See [`[media.s3.tls]`](#medias3tls). |
 

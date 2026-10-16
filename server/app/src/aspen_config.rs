@@ -870,9 +870,8 @@ pub struct MediaConfig {
 /// listing and no writes (Garage's `s3_web` website endpoint, an AWS bucket whose policy allows
 /// `s3:GetObject` alone, or a CDN before either;
 /// `docs/operators/installing/storage-read-path.md`). The addresses may name different hosts;
-/// the read path need not be reachable from the server itself. The defaults are a development
-/// storage's, which a public deployment refuses
-/// (`AspenConfig::check_development_credentials`). Its `Debug` leaves out `secret_key`.
+/// the read path need not be reachable from the server itself. The addresses' defaults are a
+/// development storage's. Its `Debug` leaves out `secret_key`.
 #[derive(Clone, Deserialize, SmartDefault)]
 #[serde(default)]
 pub struct MediaS3Config {
@@ -883,10 +882,11 @@ pub struct MediaS3Config {
     pub region: String,
     #[default = "aspen-media"]
     pub bucket: String,
-    #[default = "aspen_dev_key"]
-    pub access_key: String,
-    #[default = "aspen_dev_secret"]
-    pub secret_key: String,
+    /// The key pair the server signs with, both or neither. Neither, it takes credentials as
+    /// AWS's own tools do: `AWS_ACCESS_KEY_ID` and the rest of the environment, then the role
+    /// of the ECS task or EC2 machine it runs on (`check_credentials`).
+    pub access_key: Option<String>,
+    pub secret_key: Option<String>,
     /// By default the local Garage `s3_web` endpoint, exposed on port 3902 by
     /// `docker-compose.yaml`. Operators deploying against AWS S3 should override this to a
     /// CloudFront or custom-domain URL pointed at the public-read bucket.
@@ -930,6 +930,18 @@ impl std::fmt::Debug for MediaS3Config {
 }
 
 impl MediaS3Config {
+    /// Refuses a key pair given half.
+    fn check_credentials(&self) -> Result<(), config::ConfigError> {
+        if self.access_key.is_some() != self.secret_key.is_some() {
+            return Err(config::ConfigError::Message(
+                "[media.s3] access_key and secret_key are given together, or neither to take \
+                 credentials from the environment or the role this server runs as"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Refuses `[media.s3.tls]` with an `endpoint` that is not `https`, which would ignore it, and
     /// a client certificate, which the S3 client cannot present.
     fn check_tls(&self) -> Result<(), config::ConfigError> {
@@ -1005,6 +1017,7 @@ fn load_from(
     loaded.check_nats()?;
     loaded.check_valkey()?;
     loaded.media.s3.check_tls()?;
+    loaded.media.s3.check_credentials()?;
     loaded.check_development_credentials()?;
     loaded.check_federation_development()?;
     if let Some(email) = &loaded.email {
@@ -1013,12 +1026,10 @@ fn load_from(
     Ok(loaded)
 }
 
-/// Credentials written into this repository for development (`docker-compose.yaml`, the scripts,
-/// and `MediaS3Config`'s defaults), which anyone can read.
+/// Credentials written into this repository for development (`docker-compose.yaml` and the
+/// scripts), which anyone can read.
 const DEVELOPMENT_PASSWORDS: &[&str] = &["aspen_test"];
 const DEVELOPMENT_S3_KEYS: &[&str] = &[
-    "aspen_dev_key",
-    "aspen_dev_secret",
     "GK484e56c38fb7e14b182bf47a",
     "6b49da9e42f7959cc946d7987a504763f6ec405b88abeeec08aa926b61316027",
 ];
@@ -1101,10 +1112,14 @@ impl AspenConfig {
             return refuse("[nats_user] password");
         }
         let s3 = &self.media.s3;
-        if DEVELOPMENT_S3_KEYS.contains(&&*s3.access_key) {
+        let development = |key: &Option<String>| {
+            key.as_deref()
+                .is_some_and(|key| DEVELOPMENT_S3_KEYS.contains(&key))
+        };
+        if development(&s3.access_key) {
             return refuse("[media.s3] access_key");
         }
-        if DEVELOPMENT_S3_KEYS.contains(&&*s3.secret_key) {
+        if development(&s3.secret_key) {
             return refuse("[media.s3] secret_key");
         }
         Ok(())
@@ -1487,8 +1502,15 @@ mod tests {
                 .check_development_credentials()
                 .is_ok()
         );
-        // `MediaS3Config`'s defaults are development keys.
-        assert!(config(public, "").check_development_credentials().is_err());
+        // No key pair: credentials come from the environment or a role.
+        assert!(config(public, "").check_development_credentials().is_ok());
+        assert!(
+            config(public, "[media.s3]\naccess_key = \"own\"\n")
+                .media
+                .s3
+                .check_credentials()
+                .is_err()
+        );
         for development in ["http://192.168.2.220:8000", "https://alpha.localhost:8443"] {
             assert!(
                 config(development, "")
@@ -1505,7 +1527,7 @@ mod tests {
         nats.nats_auth_token = Some("aspen_test".to_string());
         assert!(nats.check_development_credentials().is_err());
         let mut s3 = config(public, own_s3);
-        s3.media.s3.access_key = "GK484e56c38fb7e14b182bf47a".to_string();
+        s3.media.s3.access_key = Some("GK484e56c38fb7e14b182bf47a".to_string());
         assert!(s3.check_development_credentials().is_err());
     }
 
