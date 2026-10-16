@@ -6,13 +6,14 @@ import { defineConfig, devices } from "@playwright/test";
  * phone-only `mobile.spec.ts`. Run `pnpm e2e:install` once to download the browsers.
  *
  * The specs start the dev server on `E2E_PORT` (5173 by default), or use one already running
- * there outside CI.
+ * there outside CI, and warm it before the first spec (`e2e/warm.ts`).
  */
 const port = process.env["E2E_PORT"] ?? "5173";
 const phoneOnly = /mobile\.spec\.ts$/;
 
 export default defineConfig({
   testDir: "./e2e",
+  globalSetup: "./e2e/warm.ts",
   fullyParallel: true,
   // Every worker runs its own browser. Playwright's default, half the cores, starts a dozen or
   // more on a large workstation, which with a desktop's own programs can exhaust its memory,
