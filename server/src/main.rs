@@ -89,10 +89,10 @@ struct Opt {
 
     #[clap(long)]
     gen_openapi_schema: bool,
-    /// Run without serving anything: open no listening socket, need no web client, and do only
-    /// the background work every API server shares (sending mail and making digests, voice
-    /// reports, standing checks, plugins' observers and timers, push). The metrics endpoint is
-    /// still served when it is on.
+    /// Run without serving requests: open no listening socket but the health checks' (`[health]
+    /// listen_addr`), need no web client, and do only the background work every API server
+    /// shares (sending mail and making digests, voice reports, standing checks, plugins'
+    /// observers and timers, push). The metrics endpoint is still served when it is on.
     #[clap(long, conflicts_with_all = ["key", "cert", "listen_addr", "port", "no_https", "keylog"])]
     private_worker: bool,
     /// Run a one-off companion migration task and exit.

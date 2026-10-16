@@ -7,7 +7,7 @@
 - An `index.html` with a `</head>`.
 - `open-graph.png`.
 
-A private worker is the exception (`--private-worker`, `app::context::Role::PrivateWorker`). It opens no listening socket, leaves its event feed idle, and does only the background work every API server shares, so it serves no web client.
+A private worker is the exception (`--private-worker`, `app::context::Role::PrivateWorker`). It takes no requests (its one listener answers health checks), leaves its event feed idle, and does only the background work every API server shares, so it serves no web client.
 
 The development stack keeps the same shape with the Vite dev server in front. Its `public_url` is Vite's origin, which proxies the server's own paths to the server.
 

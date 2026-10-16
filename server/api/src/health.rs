@@ -1,11 +1,13 @@
 //! Whether this server is up (`app::health`), for what stands before it or watches it: load
 //! balancers, reverse proxies, and deployment tools. Anyone may ask, without a session, and
 //! neither answer is rate limited: those that ask do so from one address, many times a minute.
+//! A private worker, which takes no requests, answers both on a listener of their own
+//! ([`serve_for_private_worker`]).
 
-use crate::TAG_DEPLOYMENT;
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::extract::NoContent;
 use crate::t;
+use crate::{API_PREFIX, TAG_DEPLOYMENT};
 use aspen_app::context::GlobalServerContext;
 use axum::extract::State;
 
@@ -47,4 +49,32 @@ pub async fn ready(State(state): State<GlobalServerContext>) -> ApiResult<NoCont
         "notReadyDetail",
         services = readiness.unreachable().join(", ")
     )))
+}
+
+/// Opens a private worker's health listener (`[health] listen_addr`), serving the two endpoints
+/// at the paths a server that takes requests serves them. Bound before this returns, so an
+/// address that cannot be had stops the worker as it starts.
+pub async fn serve_for_private_worker(state: GlobalServerContext) -> Result<(), aspen_app::Error> {
+    let address = state.config.health.listen_addr;
+    let listener = tokio::net::TcpListener::bind(address)
+        .await
+        .map_err(|error| {
+            aspen_app::Error::Config(config::ConfigError::Message(format!(
+                "[health] listen_addr {address} could not be listened on: {error}"
+            )))
+        })?;
+    let router = axum::Router::new()
+        .route(&format!("{API_PREFIX}/health"), axum::routing::get(health))
+        .route(
+            &format!("{API_PREFIX}/health/ready"),
+            axum::routing::get(ready),
+        )
+        .with_state(state);
+    tracing::info!(%address, "serving health checks");
+    tokio::spawn(async move {
+        if let Err(error) = axum::serve(listener, router).await {
+            tracing::error!("the health listener stopped: {error}");
+        }
+    });
+    Ok(())
 }

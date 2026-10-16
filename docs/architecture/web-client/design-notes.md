@@ -5,7 +5,7 @@ Why the web client is served as it is. The how is in the [main pages](index.md).
 ## One origin
 
 - **Every API server serves the web client at `public_url`.** So links, passkeys, and the pages the apps open all name one address, and the web client calls the API at the origin it was loaded from.
-- **A private worker serves no web client.** It opens no listening socket and does only the shared background work.
+- **A private worker serves no web client.** It takes no requests and does only the shared background work.
 
 ## Serving
 

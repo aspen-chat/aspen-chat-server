@@ -14,7 +14,8 @@ pub enum Role {
     /// Serves the deployment at `public_url`: the API, its event streams, the web client, and
     /// the pages beside them, and does its share of the background work.
     Public,
-    /// Opens no listening socket and does only the background work every API server shares (mail
+    /// Takes no requests, opening no listening socket but its health checks' (`api::health`), and
+    /// does only the background work every API server shares (mail
     /// and digests, the voice report listener, standing checks, plugins' observers and timers,
     /// push), so it needs no web client, and its event feed reads nothing.
     PrivateWorker,

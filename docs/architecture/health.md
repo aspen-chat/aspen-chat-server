@@ -7,7 +7,7 @@ balancers, reverse proxies, and deployment tools.
 
 | Part | Code |
 | --- | --- |
-| The handlers | `api::health` |
+| The handlers, and a private worker's listener | `api::health` |
 | Asking the services, and keeping the answer | `app::health` (`readiness`, `Readiness`, `LastChecked`) |
 | Their rate limits | `GET /health` and `GET /health/ready` in `server/app/src/rate_limits.toml` |
 | The problem code | `ProblemCode::NotReady` |
@@ -53,4 +53,6 @@ about the deployment's people or contents, and no address, credential, or error 
 are in the server's log, which says once when readiness changes (`this server is not ready`,
 with the services, and `this server is ready again`).
 
-A private worker (`--private-worker`) has no listening socket, and so neither endpoint.
+A private worker (`--private-worker`) takes no requests, and answers both on a listener of its
+own instead, `[health] listen_addr` (`api::health::serve_for_private_worker`), loopback by
+default, where a container's own health check asks. The images hold `curl` for asking it.

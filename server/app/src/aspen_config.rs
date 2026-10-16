@@ -72,6 +72,8 @@ pub struct AspenConfig {
     #[serde(default)]
     pub metrics: MetricsConfig,
     #[serde(default)]
+    pub health: HealthConfig,
+    #[serde(default)]
     pub connections: ConnectionsConfig,
     #[serde(default)]
     pub federation: FederationConfig,
@@ -233,6 +235,16 @@ pub struct MetricsConfig {
     /// Where `GET /metrics` is served. Loopback by default: the figures describe the
     /// deployment's inside, so expose them only to whatever scrapes them.
     #[default(std::net::SocketAddr::from(([127, 0, 0, 1], 9464)))]
+    pub listen_addr: std::net::SocketAddr,
+}
+
+/// A private worker's health checks (`api::health`), on a listener of their own, since it opens no
+/// other. A server that takes requests answers them on its own listener and opens none for them.
+#[derive(Clone, Debug, Deserialize, SmartDefault)]
+#[serde(default)]
+pub struct HealthConfig {
+    /// Loopback by default, where a container's own health check asks.
+    #[default(std::net::SocketAddr::from(([127, 0, 0, 1], 9467)))]
     pub listen_addr: std::net::SocketAddr,
 }
 
@@ -581,6 +593,7 @@ impl std::fmt::Debug for AspenConfig {
             presence,
             search,
             metrics,
+            health,
             connections,
             federation,
             push,
@@ -615,6 +628,7 @@ impl std::fmt::Debug for AspenConfig {
             .field("presence", presence)
             .field("search", search)
             .field("metrics", metrics)
+            .field("health", health)
             .field("connections", connections)
             .field("federation", federation)
             .field("push", push)

@@ -50,6 +50,8 @@ is rate limited.
 | `GET /api/v1/health` | `204` while the server is running. | A load balancer's or reverse proxy's health check. |
 | `GET /api/v1/health/ready` | `204` when it also reaches its database, NATS, and Valkey; otherwise `503` [`notReady`](../troubleshooting/server.md#notready), naming those it does not. | Waiting for a new server before stopping the one it replaces, and finding what is wrong. |
 
+A [private worker](#private-workers) answers both at the same paths on a listener of its own.
+
 **Use the first for a load balancer.** Every server shares the same services, so with the
 second a database outage would take every server out of the load balancer at once, and people
 would see its error page instead of the server's own message.
@@ -87,7 +89,9 @@ aspen-chat-server --private-worker
 
 A private worker:
 
-- opens no listening socket, so it takes no requests and holds no event streams;
+- takes no requests and holds no event streams;
+- answers the [health checks](#health-checks) on a listener of their own, `[health] listen_addr`
+  (`127.0.0.1:9467` by default; see [`[health]`](../configuration/metrics.md#health));
 - needs no web client;
 - takes none of the listening or TLS flags;
 - reads the same `aspen.toml` and needs the same services;

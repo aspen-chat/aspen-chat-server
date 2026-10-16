@@ -646,6 +646,7 @@ pub async fn start(write_schema: bool, role: Role) -> Result<Option<Serving>, ap
     }
     app::context::start_background_tasks(&context).await?;
     if role == Role::PrivateWorker {
+        health::serve_for_private_worker(context).await?;
         return Ok(None);
     }
     // A route layer runs only for matched routes, after routing, so it knows the route's
