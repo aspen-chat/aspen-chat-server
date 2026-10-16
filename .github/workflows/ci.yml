@@ -1,9 +1,10 @@
 # Every push and pull request: the Rust workspace is formatted, lint-free, and tested on
 # x86-64, and changes to access are checked to reach everything already open
-# (`scripts/check_permissions.py`); the client typechecks, lints, and passes its tests; two deployments federate and
-# wake a stand-in phone over real TLS; and the servers are built for
-# 64-bit ARM two ways, natively and with the cross-compile script, and each build is started
-# against real services on an ARM machine.
+# (`scripts/check_permissions.py`); the servers write the schemas the client is generated from;
+# the client typechecks, lints, and passes its tests, its browser tests split across three
+# runners; two deployments federate and wake a stand-in phone over real TLS; and the servers
+# are built for 64-bit ARM two ways, natively and with the cross-compile script, and each build
+# is started against real services on an ARM machine.
 #
 # The ARM binaries are built against Debian 12 (bookworm, glibc 2.36), so they run on
 # Raspberry Pi OS Bookworm and newer, and with jemalloc built for 64 KiB pages, which also
@@ -69,10 +70,6 @@ jobs:
             cargo test --locked --manifest-path plugins/$plugin/Cargo.toml
             cargo build --locked --release --manifest-path plugins/$plugin/Cargo.toml --target wasm32-wasip2
           done
-      - name: Write the API and signalling schemas for the client
-        run: |
-          cargo run --locked -p aspen-chat-server -- --gen-openapi-schema
-          cargo run --locked -p voice_server -- --gen-signal-schema
       # Every change to access tried against a deployment of its own, watching what each side
       # of it already has open: REST, event streams, calls, operator commands, attachments.
       - name: Changes to access reach everything already open
@@ -81,6 +78,27 @@ jobs:
           python3 scripts/check_permissions.py --bin target/debug --start-services
       - name: The NATS streams fit their settings and NATS's memory
         run: python3 scripts/check_nats_memory.py --bin target/debug
+
+  # The API, event, and signalling schemas the client's code generator reads, written by the two
+  # servers alone so the client, Android, and Windows jobs need not wait for the workspace's tests.
+  schemas:
+    name: Schemas — API, events, and signalling
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libpq-dev python3-pip \
+            libpipewire-0.3-dev libopus-dev libclang-dev
+      - name: Rust (the toolchain rust-toolchain.toml pins, with its targets)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Write the API and signalling schemas
+        run: |
+          cargo run --locked -p aspen-chat-server -- --gen-openapi-schema
+          cargo run --locked -p voice_server -- --gen-signal-schema
       - uses: actions/upload-artifact@v7
         with:
           name: schemas
@@ -91,7 +109,7 @@ jobs:
 
   client:
     name: Client — typecheck, lint, test
-    needs: rust
+    needs: schemas
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
@@ -122,16 +140,52 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
-      # The Playwright specs answer every request from stubs, so they need no server. Chromium
-      # covers a desktop and a phone; the full matrix is `pnpm e2e` locally.
+
+  # The Playwright specs answer every request from stubs, so they need no server. Chromium
+  # covers a desktop and a phone; the full matrix is `pnpm e2e` locally. They are split across
+  # runners, each starting its own dev server, so each part finishes well inside its limit.
+  client-browser:
+    name: Client — browser tests (${{ matrix.shard }}/3)
+    needs: schemas
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      # Every part runs to the end, so one failure does not hide another's.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    defaults:
+      run:
+        working-directory: client
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: schemas
+          path: .
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: client/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      # The dev server makes the Open Source Attributions list from `cargo metadata`.
+      - name: Rust (the toolchain rust-toolchain.toml pins)
+        run: rustup toolchain install
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm codegen
       - name: Browser tests (desktop and phone, Chromium)
         run: |
           pnpm --filter @aspen/app exec playwright install --with-deps chromium
-          pnpm --filter @aspen/app exec playwright test --project=chromium --project=phone-chromium
+          pnpm --filter @aspen/app exec playwright test --project=chromium --project=phone-chromium --shard=${{ matrix.shard }}/3
 
   desktop-windows:
     name: Desktop (Windows) — installer with libobs
-    needs: rust
+    needs: schemas
     runs-on: windows-latest
     timeout-minutes: 60
     defaults:
@@ -203,7 +257,7 @@ jobs:
 
   android:
     name: Android — build, unit, and device tests
-    needs: rust
+    needs: schemas
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
