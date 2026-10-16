@@ -45,13 +45,15 @@ button, and the desktop app in its title bar.
 - `followTitleBar` (`src/theme/titleBar.ts`) marks `<html>` with `data-title-bar` while the page
   is laid out under the buttons, and follows the overlay's `geometrychange`.
 - While it is, `--title-bar-height` (`src/styles.css`) is the buttons' height
-  (`env(titlebar-area-height)`), and never less than 2rem. Everything else keeps clear of it:
+  (`env(titlebar-area-height)`), and never less than 2rem, plus 1px for the line along its foot,
+  so the line runs below the buttons rather than under them. Everything else keeps clear of it:
   - `#root` pads its top by it;
   - every overlay (`overlayClass`, `Drawer`, `ImageGallery`, a screen share filling the window)
     starts below it, so a dialog leaves the title bar undimmed, as the system's own does;
   - the fallback toast region sits below it.
 - `TitleBar` (`src/features/layout/TitleBar.tsx`) draws the strip: fixed across the top, in
-  `bg-surface-rail`. The title is centred, in muted text, in the area beside the buttons
+  `bg-surface-rail`, ruled off from the page below by a 1px `border-line`, the colour of the
+  channel list's dividing lines. The title is centred, in muted text, in the area beside the buttons
   (`titlebar-area-x` and `titlebar-area-width`, which are physical whichever way the page is
   written).
 - The strip is hidden from assistive technology, which reads the document's title already.
