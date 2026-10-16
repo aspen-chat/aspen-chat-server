@@ -186,9 +186,16 @@ for (const { palette, scheme, contrast } of combinations) {
       await expect(page.getByRole("heading", { name: /^The app/, level: 2 })).toBeVisible({
         timeout: 60_000,
       });
+      // Narrowed to one package, every kind of thing the page shows is still there; the whole
+      // list, a thousand packages, takes axe longer than a test may on a CI runner, in each of
+      // the combinations.
+      await page.getByRole("searchbox", { name: "Find a package" }).fill("react-aria-components");
+      const named = /^react-aria-components/;
+      await expect(page.getByRole("listitem").filter({ hasNotText: named })).toHaveCount(0);
       await page
         .getByRole("listitem")
-        .filter({ hasText: /^react-aria-components/ })
+        .filter({ hasText: named })
+        .first()
         .getByRole("button", { name: "License text" })
         .click();
       await expectAccessible(page, "attributions");
