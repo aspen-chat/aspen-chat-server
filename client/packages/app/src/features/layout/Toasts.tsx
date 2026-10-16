@@ -54,7 +54,7 @@ export function Toasts({ fallback = false }: { fallback?: boolean }) {
       className={
         "pointer-events-none z-20 flex flex-col items-center gap-2 px-4 " +
         (fallback
-          ? "fixed inset-x-0 top-[max(0.75rem,env(safe-area-inset-top))] z-50"
+          ? "fixed inset-x-0 top-[calc(var(--title-bar-height)+max(0.75rem,env(safe-area-inset-top)))] z-50"
           : "absolute inset-x-0 top-3")
       }
     >

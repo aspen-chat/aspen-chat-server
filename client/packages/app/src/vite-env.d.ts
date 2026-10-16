@@ -83,6 +83,18 @@ interface AspenDesktopBridge {
     set(factor: number): Promise<void>;
     onStep(listener: (step: 1 | -1 | 0) => void): () => void;
   };
+  /**
+   * The title bar the page draws (`packages/desktop/src/main/titleBar.ts`): `paint` gives the
+   * window buttons their colours, as `#rrggbb`. `choice` is `null` where the system's title bar
+   * cannot be chosen instead; on Linux it says whether this launch's window draws its own
+   * (`drawn`) and whether the next launch's will (`next`), which `choose` sets.
+   */
+  readonly titleBar: {
+    paint(colors: { color: string; symbolColor: string }): void;
+    choice(): Promise<{ drawn: boolean; next: boolean } | null>;
+    choose(drawn: boolean): Promise<void>;
+    relaunch(): void;
+  };
   /** Chromium's notices (`packages/desktop/src/main/chromiumNotices.ts`); whether they opened. */
   readonly chromiumNotices: {
     open(): Promise<boolean>;
@@ -119,4 +131,16 @@ interface AspenDesktopBridge {
 
 interface Window {
   readonly aspenDesktop?: AspenDesktopBridge;
+}
+
+/**
+ * Chromium's Window Controls Overlay, which TypeScript's DOM types lack: whether the page is laid
+ * out under a window's buttons, as the desktop app's is when it draws its own title bar.
+ */
+interface WindowControlsOverlay extends EventTarget {
+  readonly visible: boolean;
+}
+
+interface Navigator {
+  readonly windowControlsOverlay?: WindowControlsOverlay;
 }

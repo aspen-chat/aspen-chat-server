@@ -1,6 +1,6 @@
 /** Tailwind class strings shared by the modal dialogs. */
 export const overlayClass =
-  "overlay-inset fixed inset-0 z-10 flex items-center justify-center bg-black/40 motion-backdrop";
+  "overlay-inset fixed inset-x-0 top-(--title-bar-height) bottom-0 z-10 flex items-center justify-center bg-black/40 motion-backdrop";
 /**
  * The frame every modal is drawn in. It is never taller than the overlay leaves room for, and
  * scrolls within itself when its content is taller than that, as a long form is on a phone;

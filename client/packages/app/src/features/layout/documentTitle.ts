@@ -3,9 +3,9 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
 /**
- * The page's title, which browsers show on its tab and the system on the window and its taskbar
- * button. It names where the reader is no more closely than a community, never a channel or a
- * conversation.
+ * The page's title, which browsers show on its tab, the system on the window and its taskbar
+ * button, and the desktop app in the title bar it draws (`TitleBar.tsx`). It names where the
+ * reader is no more closely than a community, never a channel or a conversation.
  *
  * Each screen names itself with `useDocumentTitle`; the one mounted last is the one shown, and the
  * app's name alone stands while none is mounted or the one shown is still loading.

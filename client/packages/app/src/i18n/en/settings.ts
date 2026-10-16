@@ -35,6 +35,11 @@ export const settings = {
   nameColors: "Colour names by role",
   nameColorsHint:
     "Draws people's names in their roles' colours. Only this device follows this setting.",
+  titleBar: "Draw the title bar in Aspen's colours",
+  titleBarHint:
+    "Draws the window's title bar in the community rail's colour. Off, your desktop draws it as it draws every other window's.",
+  titleBarRestart: "Aspen's window changes when it restarts.",
+  restartNow: "Restart now",
   title: "Settings",
   account: "Account",
   audio: "Audio and video",

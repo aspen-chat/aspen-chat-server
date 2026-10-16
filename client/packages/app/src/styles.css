@@ -427,11 +427,29 @@ body,
   margin: 0;
 }
 
+/* Where the desktop app draws its own title bar (`theme/titleBar.ts`, which marks the root),
+   the strip's height: the window buttons' (`titlebar-area-height`), which the shell grows with
+   the zoom from 32px (`STRIP_HEIGHT` in `packages/desktop/src/main/titleBar.ts`), and never
+   less than 2rem, since macOS's do not grow. The page, and every overlay, starts below it. */
+:root {
+  --title-bar-height: 0px;
+}
+:root[data-title-bar] {
+  --title-bar-height: max(env(titlebar-area-height, 0px), 2rem);
+}
+
 /* The page is laid out edge to edge (`viewport-fit=cover`), so on a phone with a notch or a
    home indicator, and in the mobile shell, the app keeps clear of both. */
 #root {
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
-    env(safe-area-inset-left);
+  padding: calc(env(safe-area-inset-top) + var(--title-bar-height)) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* The title bar's strip is where the window is dragged by, and a drag region takes every click
+   in it, whatever is drawn over it. Overlays (popovers, menus, tooltips) are rendered beside
+   `#root`, and one that opens over the strip must still be clicked. */
+:root[data-title-bar] body > :not(#root) {
+  -webkit-app-region: no-drag;
 }
 
 /* A modal's overlay covers the whole screen outside `#root`, so it keeps its content clear of the

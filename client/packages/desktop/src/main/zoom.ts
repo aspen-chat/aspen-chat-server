@@ -2,6 +2,7 @@ import { BrowserWindow, app, ipcMain } from "electron";
 import { readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fitTitleBar } from "./titleBar";
 
 /**
  * The window's zoom, as a browser's: the factor is kept in the profile (`zoom.json`) and given
@@ -97,6 +98,7 @@ export function serveZoom(): void {
     current = factor;
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.setZoomFactor(factor);
+      fitTitleBar(window, factor);
     }
     // One write at a time, in order, so held keys stepping quickly leave the last factor kept.
     keeping = keeping.then(async () => {

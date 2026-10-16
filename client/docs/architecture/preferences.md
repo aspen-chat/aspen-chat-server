@@ -86,6 +86,7 @@ page loads, so nothing jumps at launch.
   - Ctrl 0;
   - Ctrl with the wheel.
 - The page picks the next of `ZOOM_STEPS` and sets it back.
+- The title bar the desktop app draws grows with the zoom ([title-bar.md](title-bar.md)).
 - Nowhere else does the app zoom itself.
 
 | Platform | What zooms |

@@ -89,7 +89,7 @@ same commit, as with comments.
 - [`sign-in.md`](docs/architecture/sign-in.md): the signed-out screens, the server each shell signs in to, passkey ceremonies and their hand-off to the system browser, and signing in from another device by a QR code.
 - [`tagging.md`](docs/architecture/tagging.md): rendering tags, completing them in the message box, and mention counts.
 - [`threads-and-dms.md`](docs/architecture/threads-and-dms.md): threads, following them, echoes, DMs and group DMs, the DM list, and the system account's DM.
-- [`title-bar.md`](docs/architecture/title-bar.md): the page's title in every shell, and what each screen names it.
+- [`title-bar.md`](docs/architecture/title-bar.md): the page's title in every shell, and the desktop app's title bar in the rail's colour: the hidden system title bar, the strip, dragging, the buttons' colours, and keeping the system's on Linux.
 - [`unread-and-muting.md`](docs/architecture/unread-and-muting.md): read states, unread marks, marking read, the New Messages line, and muting.
 - [`voice.md`](docs/architecture/voice/index.md): `VoiceCall`: joining, media, screens and cameras, call state, per-person volume, the call screen, DM calls and rings, and moderation.
 

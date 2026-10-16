@@ -6,6 +6,7 @@ import { serveChromiumNotices } from "./chromiumNotices";
 import { serveGameCapture } from "./gameCapture";
 import { externalUrl, isAppPage, permitted } from "./navigation";
 import { servePasskeyHandoff } from "./passkeyHandoff";
+import { serveTitleBar, titleBarOptions } from "./titleBar";
 import { serveZoom, storedZoom, zoomWindow } from "./zoom";
 
 /** Where `pnpm dev` serves the app; override with `ASPEN_DEV_SERVER_URL`. */
@@ -93,6 +94,7 @@ function createWindow(): void {
     minHeight: 400,
     show: false,
     autoHideMenuBar: true,
+    ...titleBarOptions(storedZoom()),
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.cjs"),
       // A hidden window must keep decoding and sending media for the drives that use it.
@@ -246,6 +248,7 @@ app
     servePermissions();
     serveGameCapture();
     servePasskeyHandoff();
+    serveTitleBar();
     serveZoom();
     createWindow();
     app.on("activate", () => {
