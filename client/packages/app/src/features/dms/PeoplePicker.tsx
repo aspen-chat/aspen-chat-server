@@ -186,8 +186,8 @@ function PickerBody({
       )}
       <p className="text-xs text-ink-muted">
         {tooMany
-          ? format(m.dms.tooMany, { max: String(max + 1) })
-          : format(m.dms.selected, { count: String(selected.size) })}
+          ? format(m.dms.tooMany, { max: max + 1 })
+          : format(m.dms.selected, { count: selected.size })}
       </p>
       {error !== null && (
         <p role="alert" className="text-sm text-danger">

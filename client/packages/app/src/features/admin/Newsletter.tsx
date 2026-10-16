@@ -17,7 +17,6 @@ import {
 import { useSync } from "@/api/hooks";
 import { problemText } from "@/api/problemText";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
-import { useFigures } from "@/features/admin/format";
 import { useAdminRead } from "@/features/admin/useAdminRead";
 import {
   alertClass,
@@ -107,7 +106,6 @@ function PostList({
   const m = useMessages();
   const sync = useSync();
   const when = useDateFormat({ dateStyle: "medium", timeStyle: "short" });
-  const figures = useFigures();
   const [deleting, setDeleting] = useState<NewsletterPost | null>(null);
   const [error, setError] = useState<string | null>(null);
   if (posts.length === 0) {
@@ -134,11 +132,11 @@ function PostList({
                   : post.queuedAt == null
                     ? format(m.email.postSending, {
                         when: when.format(new Date(post.sentAt)),
-                        count: figures.count(post.recipients),
+                        count: post.recipients,
                       })
                     : format(m.email.postSent, {
                         when: when.format(new Date(post.sentAt)),
-                        count: figures.count(post.recipients),
+                        count: post.recipients,
                       })}
               </p>
             </div>

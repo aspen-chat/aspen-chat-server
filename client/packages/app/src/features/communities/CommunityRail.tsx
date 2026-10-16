@@ -440,14 +440,10 @@ export function CommunityRail() {
 function AdminLink({ inAdmin }: { inAdmin: boolean }) {
   const m = useMessages();
   const reports = useOpenReports() ?? 0;
-  const label =
-    reports === 0 ? m.admin.open : format(m.admin.openWithReports, { count: String(reports) });
+  const label = reports === 0 ? m.admin.open : format(m.admin.openWithReports, { count: reports });
   return (
     <div className="relative isolate">
-      <RailBadge
-        count={reports}
-        title={format(m.admin.reportsWaiting, { count: String(reports) })}
-      />
+      <RailBadge count={reports} title={format(m.admin.reportsWaiting, { count: reports })} />
       <Tooltip text={label}>
         <Link
           to="/admin"
@@ -526,22 +522,14 @@ function FolderRow({
   const m = useMessages();
   const { folder, entries } = row;
   const name = folderName(m, folder);
-  const count = String(entries.length);
   // Closed, it speaks for its communities: their unread mark, their tags, the current one.
   const unread = !folder.open && entries.some((entry) => entry.unread);
   const tags = folder.open ? 0 : entries.reduce((sum, entry) => sum + entry.tags, 0);
   const current = !folder.open && entries.some((entry) => entry.key === currentKey);
-  const one = entries.length === 1;
-  const label = format(
-    folder.open
-      ? one
-        ? m.folders.labelOpenOne
-        : m.folders.labelOpen
-      : one
-        ? m.folders.labelOne
-        : m.folders.label,
-    { name, count },
-  );
+  const label = format(folder.open ? m.folders.labelOpen : m.folders.label, {
+    name,
+    count: entries.length,
+  });
   const tile = useRef<HTMLDivElement>(null);
   return (
     <GridListItem

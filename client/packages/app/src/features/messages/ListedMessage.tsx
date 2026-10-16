@@ -8,6 +8,7 @@ import { MessageBody } from "@/features/messages/MessageBody";
 import { PersonAvatar, PersonName } from "@/features/users/PersonName";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
+import { format } from "@/i18n/messages";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
@@ -79,7 +80,9 @@ export function ListedMessage({
           <span className="text-xs text-ink-muted">{where}</span>
         )}
         {blocked ? (
-          <span className="text-ink-faint italic">{m.blocking.oneBlockedMessage}</span>
+          <span className="text-ink-faint italic">
+            {format(m.blocking.blockedMessages, { count: 1 })}
+          </span>
         ) : message === undefined ? (
           <>
             <LoadingLabel />

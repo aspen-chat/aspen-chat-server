@@ -45,7 +45,6 @@ import {
 import { useChannelPlace, useMessagePlace } from "@/features/messages/place";
 import { mergeResults, type SourceResults } from "@/features/search/merge";
 import { useMessages } from "@/i18n/context";
-import { useNumberFormat } from "@/i18n/format";
 import { format, type Messages } from "@/i18n/messages";
 import { useDocumentTitle } from "@/features/layout/documentTitle";
 
@@ -657,7 +656,6 @@ function ChannelItem({
   domain: string | null;
 }) {
   const m = useMessages();
-  const numbers = useNumberFormat();
   const { place, home, where } = useChannelPlace(channelId, domain);
   const lastRead = useReadState(channelId)?.lastRead ?? "";
   const { window, failed } = useLatestWindow(channelId);
@@ -671,7 +669,7 @@ function ChannelItem({
           window.hasOlder && unread.length === window.ids.length
             ? m.activity.unreadCountOrMore
             : m.activity.unreadCount,
-          { count: numbers.format(unread.length) },
+          { count: unread.length },
         );
   return (
     <li className="flex flex-col gap-1 py-1.5">

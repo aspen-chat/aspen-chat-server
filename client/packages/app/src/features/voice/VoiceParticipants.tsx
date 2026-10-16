@@ -55,7 +55,7 @@ export function VoiceParticipants({ channelId }: { channelId: string }) {
       {voice.participants.length > shown.length && (
         <li className="px-2 text-xs text-ink-faint">
           {format(m.voice.moreParticipants, {
-            count: String(voice.participants.length - shown.length),
+            count: voice.participants.length - shown.length,
           })}
         </li>
       )}

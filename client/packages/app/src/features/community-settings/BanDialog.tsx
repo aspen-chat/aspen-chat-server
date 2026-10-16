@@ -53,7 +53,7 @@ export function BanDialog({
       const deleted = await sync.banMember(communityId, userId, banRequest(choice, mayDelete));
       toast(
         deleted > 0
-          ? format(m.members.bannedAndDeleted, { name, count: String(deleted) })
+          ? format(m.members.bannedAndDeleted, { name, count: deleted })
           : format(m.members.banned, { name }),
       );
       onOpenChange(false);

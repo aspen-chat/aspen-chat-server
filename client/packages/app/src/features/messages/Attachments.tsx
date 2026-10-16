@@ -182,10 +182,10 @@ export function MessageMedia({
             onPress={() => {
               setGallery(shown.length);
             }}
-            aria-label={format(m.viewAllImages, { count: String(pictures.length) })}
+            aria-label={format(m.viewAllImages, { count: pictures.length })}
             className="flex h-32 w-32 items-center justify-center rounded-md border border-line bg-surface-sunken text-lg font-semibold text-ink-muted outline-none hover:bg-surface-hover pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
           >
-            {format(m.moreImages, { count: String(hidden) })}
+            {format(m.moreImages, { count: hidden })}
           </Button>
         </li>
       )}

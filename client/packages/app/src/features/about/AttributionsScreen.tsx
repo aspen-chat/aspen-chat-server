@@ -6,7 +6,6 @@ import { fieldClass, inputClass, labelClass, linkButtonClass } from "@/features/
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useMessages } from "@/i18n/context";
-import { useNumberFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 import type {
   AttributedComponent,
@@ -141,14 +140,13 @@ function ComponentSection({
   texts: readonly string[];
 }) {
   const m = useMessages();
-  const numbers = useNumberFormat();
   const heading = useId();
   return (
     <section aria-labelledby={heading} className="flex flex-col gap-2">
       <h2 id={heading} className="flex items-baseline gap-2 text-lg font-semibold">
         {m.about.component[component.id]}
         <span className="text-sm font-normal text-ink-muted">
-          {format(m.about.packageCount, { count: numbers.format(packages.length) })}
+          {format(m.about.packageCount, { count: packages.length })}
         </span>
       </h2>
       <ul className="flex flex-col divide-y divide-line rounded-lg border border-line bg-surface-raised">

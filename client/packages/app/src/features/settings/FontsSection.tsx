@@ -176,9 +176,7 @@ export function FontsSection() {
                     {family.name}
                   </span>
                   <span className="text-xs text-ink-muted">
-                    {family.faces.length === 1
-                      ? m.fonts.oneFile
-                      : format(m.fonts.files, { count: String(family.faces.length) })}
+                    {format(m.fonts.files, { count: family.faces.length })}
                   </span>
                 </span>
                 <Button

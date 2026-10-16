@@ -377,13 +377,8 @@ export function useCommandLine({
   const announcement = !open
     ? ""
     : naming !== null
-      ? format(shown.length === 1 ? m.commands.oneSuggestion : m.commands.someSuggestions, {
-          count: String(shown.length),
-        })
-      : format(shown.length === 1 ? m.commands.oneValue : m.commands.someValues, {
-          count: String(shown.length),
-          parameter: parameter?.name ?? "",
-        });
+      ? format(m.commands.suggestions, { count: shown.length })
+      : format(m.commands.values, { count: shown.length, parameter: parameter?.name ?? "" });
 
   /**
    * What sending the draft comes to: a message where it is not a command of a bot here, a

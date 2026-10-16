@@ -113,9 +113,7 @@ function LoadedPollCard({ poll }: { poll: Poll }) {
       </ul>
       {canWriteIn && <WriteInField pollId={poll.id} />}
       <p className="flex flex-wrap gap-x-3 text-xs text-ink-faint">
-        <span>
-          {total === 1 ? m.poll.voteSingular : format(m.poll.votesTotal, { count: String(total) })}
-        </span>
+        <span>{format(m.poll.votesTotal, { count: total })}</span>
         {poll.multipleChoice && <span>{m.poll.multipleTag}</span>}
         {poll.anonymous && <span>{m.poll.anonymousTag}</span>}
         <span>
@@ -236,7 +234,7 @@ function ChoiceRow({ poll, choice, open }: { poll: Poll; choice: PollChoice; ope
           {names !== null && names.length > 0 && (
             <span className="truncate text-xs text-ink-muted">
               {unnamed > 0
-                ? format(m.poll.votedByMore, { names, count: String(unnamed) })
+                ? format(m.poll.votedByMore, { names, count: unnamed })
                 : format(m.poll.votedBy, { names })}
             </span>
           )}

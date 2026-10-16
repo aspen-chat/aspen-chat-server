@@ -691,7 +691,7 @@ function RecoverySection({ settings, change }: { settings: api.SecuritySettings;
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm">
             {format(m.security.recoveryRemaining, {
-              count: String(settings.recoveryCodesRemaining),
+              count: settings.recoveryCodesRemaining,
             })}
           </p>
           <Button

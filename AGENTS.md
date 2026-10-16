@@ -442,7 +442,7 @@ Each request is answered in its own language (`app::locale`, which is `aspen_loc
 
 ### File layout
 
-- `server/locales/en.yml` — English translations (the default, and the only catalogue besides the pseudo-locales made from it). Additional locale files (e.g., `fr.yml`, `de.yml`) go alongside it and are negotiated with no further change; the client needs a catalogue of its own for each (`LANGUAGES` in `client/packages/app/src/i18n/locales.ts`).
+- `server/locales/en.yml` — English translations (the default, and the only catalogue besides the pseudo-locales made from it). Additional locale files (e.g., `fr.yml`, `de.yml`) go alongside it and are negotiated with no further change; the client needs a catalogue of its own for each (`client/packages/app/src/i18n/locales/<language>.json`, beside its `en.json`, named in `LANGUAGES` and `TRANSLATIONS` in `client/packages/app/src/i18n/locales.ts`). The client's strings are ICU MessageFormat, with plurals; see `client/AGENTS.md`.
 
 ## Git Policy
 

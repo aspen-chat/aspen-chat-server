@@ -265,7 +265,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     // The server takes at most `MAX_ATTACHMENTS` in one message; files past that are not uploaded.
     const files = chosen.slice(0, Math.max(0, MAX_ATTACHMENTS - pending.length));
     if (files.length < chosen.length) {
-      setError(format(m.tooManyAttachments, { max: String(MAX_ATTACHMENTS) }));
+      setError(format(m.tooManyAttachments, { max: MAX_ATTACHMENTS }));
     }
     for (const file of files) {
       const key = nextKey++;

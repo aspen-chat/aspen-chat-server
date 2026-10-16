@@ -34,7 +34,7 @@ export function EmojiPanel({ communityId }: { communityId: string }) {
       {manage && <AddEmoji communityId={communityId} />}
       <section className={planeClass} aria-labelledby="emoji-list-heading">
         <h3 id="emoji-list-heading" className="font-medium">
-          {format(m.emojiPanel.listHeading, { count: String(emoji.length) })}
+          {format(m.emojiPanel.listHeading, { count: emoji.length })}
         </h3>
         {emoji.length === 0 ? (
           <p className={hintClass}>{manage ? m.emojiPanel.emptyManage : m.emojiPanel.empty}</p>
