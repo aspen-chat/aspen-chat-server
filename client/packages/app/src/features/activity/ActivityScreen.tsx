@@ -47,6 +47,7 @@ import { mergeResults, type SourceResults } from "@/features/search/merge";
 import { useMessages } from "@/i18n/context";
 import { useNumberFormat } from "@/i18n/format";
 import { format, type Messages } from "@/i18n/messages";
+import { useDocumentTitle } from "@/features/layout/documentTitle";
 
 /** How many of a thread's latest replies, or a channel's latest unread messages, its entry shows. */
 const ENTRY_MESSAGES_SHOWN = 5;
@@ -90,6 +91,7 @@ function tabName(m: Messages, tab: ActivityTab): string {
  */
 export function ActivityScreen() {
   const m = useMessages();
+  useDocumentTitle(m.activity.heading);
   const sync = useSync();
   const tab = usePreference(ACTIVITY_TAB);
   return (

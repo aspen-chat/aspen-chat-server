@@ -1,6 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { FollowDocumentTitle } from "./features/layout/documentTitle";
+import { TitleBar } from "./features/layout/TitleBar";
 import { I18nProvider } from "./i18n/I18nProvider";
 import { applyStoredFonts } from "./theme/fonts";
 import {
@@ -12,6 +14,7 @@ import {
   storedThemeMode,
 } from "./theme/palettes";
 import { followSystemTextSize } from "./theme/systemTextSize";
+import { followTitleBar } from "./theme/titleBar";
 import { followZoom } from "./theme/zoom";
 // Aspen's own typefaces.
 import "./faces.css";
@@ -25,6 +28,7 @@ applyContrastMode(storedContrastMode());
 void applyStoredFonts();
 followZoom();
 followSystemTextSize();
+followTitleBar();
 // The Noto faces themselves, whose rules are too long to hold up the first paint for; text in
 // their scripts shows in the system's fonts until they load.
 void import("./generated/fontFaces.css");
@@ -37,6 +41,8 @@ if (root === null) {
 createRoot(root).render(
   <StrictMode>
     <I18nProvider>
+      <FollowDocumentTitle />
+      <TitleBar />
       <App />
     </I18nProvider>
   </StrictMode>,

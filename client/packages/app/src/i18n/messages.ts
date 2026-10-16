@@ -60,6 +60,8 @@ import { voice } from "./en/voice";
  */
 export const en = {
   appName: "Aspen",
+  /** The page's title (`documentTitle.ts`): where the reader is, and the app. */
+  documentTitle: "{page} · {app}",
   loginHeading: "Sign in",
   welcomeNamed: "Welcome to {name}, an Aspen Chat instance.",
   welcomeUnnamed: "Welcome to our Aspen Chat instance.",

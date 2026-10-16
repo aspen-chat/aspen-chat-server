@@ -41,6 +41,7 @@ import { format } from "@/i18n/messages";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
 import { OnceOpen } from "@/features/layout/OnceOpen";
+import { useDocumentTitle } from "@/features/layout/documentTitle";
 
 /**
  * `/dms`: the caller's DMs and group DMs beside the route's content, on their home and every
@@ -49,6 +50,7 @@ import { OnceOpen } from "@/features/layout/OnceOpen";
  */
 export function DmLayout() {
   const m = useMessages();
+  useDocumentTitle(m.dms.label);
   const onePane = useOnePane();
   const { channelId } = useParams({ strict: false });
   const showing = channelId !== undefined;

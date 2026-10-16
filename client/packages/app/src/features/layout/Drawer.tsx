@@ -247,7 +247,7 @@ export function Drawer({
         }
       }}
       isDismissable
-      className="fixed inset-0 z-10"
+      className="fixed inset-x-0 top-(--title-bar-height) bottom-0 z-10"
     >
       <div
         aria-hidden="true"

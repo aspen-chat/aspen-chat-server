@@ -11,6 +11,7 @@ import { ListedMessage, listedActionClass } from "@/features/messages/ListedMess
 import { useMessagePlace } from "@/features/messages/place";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { useDocumentTitle } from "@/features/layout/documentTitle";
 
 /** How far one deployment's saved messages have been read. */
 interface Read {
@@ -32,6 +33,7 @@ const UNREAD: Read = { count: 0, last: undefined, exhausted: false, problem: nul
  */
 export function SavedScreen() {
   const m = useMessages();
+  useDocumentTitle(m.saved.heading);
   const saves = useEverywhere(["saved"], (sources) =>
     sources
       .flatMap((source) => source.sync.store.saves().map((save) => ({ source, save })))

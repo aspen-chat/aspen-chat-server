@@ -13,6 +13,7 @@ import type {
   AttributedPackage,
   Attributions,
 } from "@/features/about/attributionTypes";
+import { useDocumentTitle } from "@/features/layout/documentTitle";
 
 /**
  * The Open Source Attributions page (`/attributions`, signed in or out): every package each
@@ -23,6 +24,7 @@ import type {
  */
 export function AttributionsScreen({ signedOut = false }: { signedOut?: boolean }) {
   const m = useMessages();
+  useDocumentTitle(m.about.attributions);
   const attributions = useAttributions();
   const [typed, setTyped] = useState("");
   const query = useDeferredValue(typed.trim().toLocaleLowerCase());

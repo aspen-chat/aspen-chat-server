@@ -63,6 +63,7 @@ import { MotionSpeedSlider } from "@/features/settings/MotionSpeedSlider";
 import { MessageTextSizeSlider } from "@/features/settings/MessageTextSizeSlider";
 import { MessageSpacingSlider } from "@/features/settings/MessageSpacingSlider";
 import { AccessibilitySection } from "@/features/settings/AccessibilitySection";
+import { TitleBarCheckbox } from "@/features/settings/TitleBarCheckbox";
 import { ZoomSlider } from "@/features/settings/ZoomSlider";
 
 /**
@@ -115,6 +116,7 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
                     <MessageSpacingSlider />
                     <MotionSpeedSlider />
                     <NameColorsCheckbox />
+                    <TitleBarCheckbox />
                   </section>
                   <AccessibilitySection />
                   <FontsSection />

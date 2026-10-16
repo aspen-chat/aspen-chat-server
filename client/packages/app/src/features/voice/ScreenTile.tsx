@@ -68,7 +68,7 @@ export function ScreenTile({
       className={
         "group overflow-hidden bg-black [&:fullscreen]:rounded-none " +
         (filling
-          ? "fixed inset-0 z-50 p-[env(safe-area-inset-top)_env(safe-area-inset-right)_env(safe-area-inset-bottom)_env(safe-area-inset-left)]"
+          ? "fixed inset-x-0 top-(--title-bar-height) bottom-0 z-50 p-[env(safe-area-inset-top)_env(safe-area-inset-right)_env(safe-area-inset-bottom)_env(safe-area-inset-left)]"
           : "relative rounded-lg " + (className ?? ""))
       }
     >

@@ -66,6 +66,17 @@ contextBridge.exposeInMainWorld("aspenDesktop", {
       };
     },
   },
+  // The title bar the page draws: the window buttons' colours, and on Linux whether to draw it.
+  titleBar: {
+    paint: (colors: unknown) => {
+      ipcRenderer.send("title-bar:paint", colors);
+    },
+    choice: () => ipcRenderer.invoke("title-bar:choice"),
+    choose: (drawn: unknown) => ipcRenderer.invoke("title-bar:choose", drawn),
+    relaunch: () => {
+      ipcRenderer.send("title-bar:relaunch");
+    },
+  },
   // Chromium's notices, opened in the system's browser; answers whether they could be.
   chromiumNotices: {
     open: () => ipcRenderer.invoke("chromium-notices:open"),
