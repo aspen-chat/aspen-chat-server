@@ -15,6 +15,15 @@ describe("pseudo-locales", () => {
     }
   });
 
+  it("change only text, leaving MessageFormat's syntax as written", () => {
+    expect(accented("{count, plural, one {# vote} other {# votes}} for {name}")).toBe(
+      "[{count, plural, one {# ṽööţéé} other {# ṽööţééš}} ƒööŕ {name}]",
+    );
+    expect(mirrored("{count, plural, one {# vote} other {# votes}}")).toBe(
+      "{count, plural, one {# \u202evote\u202c} other {# \u202evotes\u202c}}",
+    );
+  });
+
   it("make every string of a catalogue, keeping its shape", () => {
     expect(pseudoCatalogue({ a: "Hi", b: { c: "{n} ok" } }, accented)).toEqual({
       a: "[Ĥîî]",

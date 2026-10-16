@@ -129,14 +129,14 @@ export function outcomeText(m: Messages, poll: Poll): string {
     case "noVotes":
       return m.poll.noVotes;
     case "winner":
-      return format(outcome.count === 1 ? m.poll.winnerSingular : m.poll.winner, {
+      return format(m.poll.winner, {
         option: optionName(choiceAt(poll, outcome.option)),
-        count: String(outcome.count),
+        count: outcome.count,
       });
     case "tie":
-      return format(outcome.count === 1 ? m.poll.tieSingular : m.poll.tie, {
+      return format(m.poll.tie, {
         options: outcome.options.map((i) => optionName(choiceAt(poll, i))).join(", "),
-        count: String(outcome.count),
+        count: outcome.count,
       });
   }
 }

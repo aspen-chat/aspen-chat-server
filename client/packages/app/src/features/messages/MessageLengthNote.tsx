@@ -1,6 +1,5 @@
 import { MESSAGE_MAX_CHARS } from "@/features/messages/messageLength";
 import { useMessages } from "@/i18n/context";
-import { useNumberFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 
 /** From how near the limit the message box counts what is written. */
@@ -12,7 +11,6 @@ const COUNT_FROM = MESSAGE_MAX_CHARS - 1_000;
  */
 export function MessageLengthNote({ length }: { length: number }) {
   const m = useMessages();
-  const numbers = useNumberFormat();
   if (length < COUNT_FROM) {
     return null;
   }
@@ -22,15 +20,15 @@ export function MessageLengthNote({ length }: { length: number }) {
       {over && (
         <span role="alert" className="flex-1">
           {format(m.messageTooLong, {
-            max: numbers.format(MESSAGE_MAX_CHARS),
-            over: numbers.format(length - MESSAGE_MAX_CHARS),
+            max: MESSAGE_MAX_CHARS,
+            over: length - MESSAGE_MAX_CHARS,
           })}
         </span>
       )}
       <span aria-hidden={!over} className="ms-auto tabular-nums">
         {format(m.messageLengthCount, {
-          count: numbers.format(length),
-          max: numbers.format(MESSAGE_MAX_CHARS),
+          count: length,
+          max: MESSAGE_MAX_CHARS,
         })}
       </span>
     </p>

@@ -148,12 +148,12 @@ export function AdminDashboard({ tab }: { tab: string | undefined }) {
                         <>
                           <MentionBadge
                             count={openReports}
-                            title={format(m.admin.reportsWaiting, { count: String(openReports) })}
+                            title={format(m.admin.reportsWaiting, { count: openReports })}
                             className="ms-auto"
                           />
                           {openReports > 0 && (
                             <span className="sr-only">
-                              {format(m.admin.reportsWaiting, { count: String(openReports) })}
+                              {format(m.admin.reportsWaiting, { count: openReports })}
                             </span>
                           )}
                         </>

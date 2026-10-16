@@ -77,20 +77,20 @@ export function MemberGroups({
       {groups.map(({ role, users }) => (
         <MemberGroup
           key={role.id}
-          heading={format(m.roleGroup, { role: role.name, count: String(users.length) })}
+          heading={format(m.roleGroup, { role: role.name, count: users.length })}
           headingLevel={headingLevel}
           users={users.sort(byName)}
           communityId={communityId}
         />
       ))}
       <MemberGroup
-        heading={format(m.onlineGroup, { count: String(online.length) })}
+        heading={format(m.onlineGroup, { count: online.length })}
         headingLevel={headingLevel}
         users={online.sort(byName)}
         communityId={communityId}
       />
       <MemberGroup
-        heading={format(m.offlineGroup, { count: String(offline.length) })}
+        heading={format(m.offlineGroup, { count: offline.length })}
         headingLevel={headingLevel}
         users={offline.sort(byName)}
         communityId={communityId}

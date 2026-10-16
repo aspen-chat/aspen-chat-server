@@ -124,9 +124,9 @@ export function ReactionChips({
       ))}
       {hidden > 0 && (
         <li>
-          <Tooltip text={format(m.moreReactions, { count: String(hidden) })}>
+          <Tooltip text={format(m.moreReactions, { count: hidden })}>
             <Button
-              aria-label={format(m.moreReactions, { count: String(hidden) })}
+              aria-label={format(m.moreReactions, { count: hidden })}
               onPress={() => {
                 setListEmoji(null);
                 setListOpen(true);
@@ -201,7 +201,7 @@ function ReactionChip({
   const named = useEmojiName(communityId, emoji);
   const who =
     more > 0
-      ? format(m.reactedByMore, { names: names.join(", "), count: String(more), emoji: named })
+      ? format(m.reactedByMore, { names: names.join(", "), count: more, emoji: named })
       : format(m.reactedBy, { names: names.join(", "), emoji: named });
   return (
     <span
@@ -379,7 +379,7 @@ function ReactionTab({
   return (
     <Tab
       id={emoji}
-      aria-label={format(m.reactionCount, { emoji: named, count: String(count) })}
+      aria-label={format(m.reactionCount, { emoji: named, count })}
       className="flex shrink-0 cursor-default items-center justify-between gap-2 rounded-md px-2 py-1 text-sm outline-none hover:bg-surface-hover selected:bg-accent-soft selected:text-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <span>

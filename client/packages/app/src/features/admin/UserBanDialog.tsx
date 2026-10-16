@@ -61,7 +61,7 @@ export function UserBanDialog({
         outcome.deletedMessages > 0
           ? format(m.deployments.bannedAndDeleted, {
               name,
-              count: String(outcome.deletedMessages),
+              count: outcome.deletedMessages,
             })
           : format(m.deployments.bannedNamed, { name }),
       );

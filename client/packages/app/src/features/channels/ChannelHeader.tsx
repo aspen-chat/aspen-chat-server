@@ -7,7 +7,6 @@ import { Tooltip } from "@/features/layout/Tooltip";
 import { useMembersPanel } from "@/features/members/membersPanel";
 import { useChannelOnline } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
-import { useNumberFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { useDomain, communityLink } from "@/features/messages/links";
@@ -74,7 +73,6 @@ export function ChannelHeader({
 /** How many who may view the channel are online, behind the online status's dot. */
 function OnlineCount({ channelId }: { channelId: string }) {
   const m = useMessages();
-  const numbers = useNumberFormat();
   const online = useChannelOnline(channelId);
   if (online === undefined) {
     return null;
@@ -82,7 +80,7 @@ function OnlineCount({ channelId }: { channelId: string }) {
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-sm text-ink-muted">
       <PresenceMark status="online" className="h-2.5 w-2.5" />
-      {format(m.channelOnline, { count: numbers.format(online) })}
+      {format(m.channelOnline, { count: online })}
     </span>
   );
 }

@@ -490,7 +490,7 @@ function SearchResult({
         {message.kind === "poll" && <span className="text-ink-muted">{m.search.poll}</span>}
         {message.attachments.length > 0 && (
           <span className="text-xs text-ink-muted">
-            {format(m.search.attachments, { count: String(message.attachments.length) })}
+            {format(m.search.attachments, { count: message.attachments.length })}
           </span>
         )}
       </Link>

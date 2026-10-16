@@ -763,12 +763,7 @@ function ThreadSummary({
   const m = useMessages();
   const thread = useChannel(threadId);
   const count = thread?.replyCount ?? 0;
-  const label =
-    count === 0
-      ? m.threads.viewThread
-      : count === 1
-        ? m.threads.oneReply
-        : format(m.threads.replies, { count: String(count) });
+  const label = count === 0 ? m.threads.viewThread : format(m.threads.replies, { count });
   const last = thread?.lastReplyAt;
   return (
     <Link

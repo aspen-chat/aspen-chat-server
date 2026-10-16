@@ -213,11 +213,7 @@ export function useTagging({
     "aria-activedescendant": open ? `${listId}-${String(current)}` : undefined,
   };
 
-  const announcement = open
-    ? format(shown.length === 1 ? m.tagging.oneSuggestion : m.tagging.someSuggestions, {
-        count: String(shown.length),
-      })
-    : "";
+  const announcement = open ? format(m.tagging.suggestions, { count: shown.length }) : "";
 
   const suggestionList = open ? (
     <SuggestionList

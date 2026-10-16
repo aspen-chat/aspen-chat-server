@@ -1,9 +1,19 @@
-import { en, type Messages } from "./messages";
+import { en, register, type Messages, type StringTree } from "./messages";
 import { accented, mirrored, pseudoCatalogue } from "./pseudo";
 
-/** The catalogues the app has, by BCP 47 tag: English, and the two pseudo-locales made from it. */
+/**
+ * The catalogues the app has, by BCP 47 tag: English, the two pseudo-locales made from it, and
+ * each translation in `TRANSLATIONS`.
+ */
 export const LANGUAGES = ["en", "en-XA", "ar-XB"] as const;
 export type Language = (typeof LANGUAGES)[number];
+
+/**
+ * The translations of English, by the tag `LANGUAGES` names each by: each `locales/<tag>.json`
+ * as a translation platform writes it, any of English's strings in English's places. One it
+ * lacks reads in English.
+ */
+const TRANSLATIONS: Readonly<Partial<Record<Language, StringTree>>> = {};
 
 /** The language choice that follows the platform's languages. */
 export const AUTOMATIC = "automatic";
@@ -13,12 +23,35 @@ const PSEUDO: readonly string[] = ["en-XA", "ar-XB"];
 /** Languages written right to left, by primary subtag. */
 const RIGHT_TO_LEFT = new Set(["ar", "ckb", "dv", "fa", "he", "ps", "sd", "ug", "ur", "yi"]);
 
+/** `english` with each string `translation` has in its place, and English wherever it has none. */
+export function translated<T extends StringTree>(english: T, translation: StringTree): T {
+  return Object.fromEntries(
+    Object.entries(english).map(([key, value]) => {
+      const given = translation[key];
+      if (typeof value === "string") {
+        return [key, typeof given === "string" && given !== "" ? given : value];
+      }
+      return [key, translated(value, typeof given === "object" ? given : {})];
+    }),
+  ) as T;
+}
+
 const made = new Map<Language, Messages>([["en", en]]);
 
 function catalogue(language: Language): Messages {
   let messages = made.get(language);
   if (messages === undefined) {
-    messages = pseudoCatalogue(en, language === "ar-XB" ? mirrored : accented);
+    switch (language) {
+      case "en-XA":
+        messages = pseudoCatalogue(en, accented);
+        break;
+      case "ar-XB":
+        messages = pseudoCatalogue(en, mirrored);
+        break;
+      default:
+        messages = translated(en, TRANSLATIONS[language] ?? {});
+    }
+    register(messages, language);
     made.set(language, messages);
   }
   return messages;

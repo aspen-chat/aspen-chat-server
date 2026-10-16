@@ -235,9 +235,7 @@ function CaseCard({
           </span>
         )}
         <span className="ms-auto text-xs text-ink-muted">
-          {c.reportCount === 1
-            ? m.reports.oneReport
-            : format(m.reports.reportCount, { count: String(c.reportCount) })}
+          {format(m.reports.reportCount, { count: c.reportCount })}
           {" · "}
           {format(m.reports.lastReported, { time: time(c.lastReportedAt) })}
         </span>
@@ -325,7 +323,7 @@ function CaseCard({
         ))}
         {c.reportCount > c.reports.length && (
           <li className="text-xs text-ink-muted">
-            {format(m.reports.earlierReports, { count: String(c.reportCount - c.reports.length) })}
+            {format(m.reports.earlierReports, { count: c.reportCount - c.reports.length })}
           </li>
         )}
       </ul>

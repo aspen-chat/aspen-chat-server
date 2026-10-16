@@ -372,8 +372,16 @@ same commit, as with comments.
 - User-facing strings live in `packages/app/src/i18n/locales/en.json`, nested by feature, with
   camelCase keys matching the server's locale files; `messages.ts` gives it to the app as `en`
   and its shape as `Messages`. It is plain JSON so translation platforms read and write it as
-  they find it: each language is a file of the same shape beside it. Server Problem text is
-  already localized and is shown as-is.
+  they find it: each language is a file of the same shape beside it, laid over English
+  (`translated` in `locales.ts`) so a string not yet translated reads in English. Each string is
+  an ICU MessageFormat template, which `format` (and `formatNodes`, for elements) fills: a
+  count of something is given as a number, not as text, so a translation may choose a plural
+  form by it even where English needs none, and words that change with it are a plural in the
+  template
+  (`{count, plural, one {# reply} other {# replies}}`), never a second key for one, which
+  English alone would get right. A template's plural forms, and how `#` and `{n, number}`
+  write their number, are those of the catalogue it comes from (`register`). Server Problem
+  text is already localized and is shown as-is.
   The language shown (`src/i18n/locales.ts`, `I18nProvider`) is the account preference
   `LANGUAGE`, which Settings sets and `FollowLanguagePreference` applies once the account's
   preferences are read, or `automatic`, which follows the browser's languages; this install

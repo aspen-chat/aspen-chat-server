@@ -33,10 +33,7 @@ export function BlockedRun({
       setOpen(true);
     }
   }
-  const count =
-    ids.length === 1
-      ? m.blocking.oneBlockedMessage
-      : format(m.blocking.blockedMessages, { count: String(ids.length) });
+  const count = format(m.blocking.blockedMessages, { count: ids.length });
   const toggle = (
     <Button
       onPress={() => {
