@@ -5,7 +5,8 @@ import { hexColor, useTitleBarShown } from "@/theme/titleBar";
 /**
  * The window's title bar where the desktop app draws its own (`theme/titleBar.ts`): a strip
  * across the top in the community rail's colour, holding the page's title, by which the window is
- * dragged. The system draws its buttons over one end; the title is centred in the rest.
+ * dragged, and ruled off from the page below in the colour of its dividing lines. The system
+ * draws its buttons over one end; the title is centred in the rest.
  */
 export function TitleBar() {
   return useTitleBarShown() ? <TitleStrip /> : null;
@@ -20,7 +21,7 @@ function TitleStrip() {
     <div
       ref={strip}
       aria-hidden="true"
-      className="fixed inset-x-0 top-0 h-(--title-bar-height) bg-surface-rail text-ink [-webkit-app-region:drag]"
+      className="fixed inset-x-0 top-0 h-(--title-bar-height) border-b border-line bg-surface-rail text-ink [-webkit-app-region:drag]"
     >
       {/* The area beside the buttons is given in physical terms, from the window's left edge,
           whichever way the page is written. */}

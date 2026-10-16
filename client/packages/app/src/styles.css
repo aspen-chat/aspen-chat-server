@@ -430,12 +430,14 @@ body,
 /* Where the desktop app draws its own title bar (`theme/titleBar.ts`, which marks the root),
    the strip's height: the window buttons' (`titlebar-area-height`), which the shell grows with
    the zoom from 32px (`STRIP_HEIGHT` in `packages/desktop/src/main/titleBar.ts`), and never
-   less than 2rem, since macOS's do not grow. The page, and every overlay, starts below it. */
+   less than 2rem, since macOS's do not grow, and 1px more for the line along its foot, which
+   so runs below the buttons rather than under them. The page, and every overlay, starts below
+   it. */
 :root {
   --title-bar-height: 0px;
 }
 :root[data-title-bar] {
-  --title-bar-height: max(env(titlebar-area-height, 0px), 2rem);
+  --title-bar-height: calc(max(env(titlebar-area-height, 0px), 2rem) + 1px);
 }
 
 /* The page is laid out edge to edge (`viewport-fit=cover`), so on a phone with a notch or a

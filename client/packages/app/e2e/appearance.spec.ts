@@ -13,6 +13,8 @@ declare global {
   interface Window {
     zoomSet: number[];
     zoomStep: ((step: 1 | -1 | 0) => void) | null;
+    titleBarChosen: boolean[];
+    relaunched: boolean;
   }
 }
 
@@ -69,15 +71,18 @@ test("a browser is told how to use its own zoom", async ({ page }) => {
   await expect(settings.getByRole("slider", { name: "Zoom" })).toHaveCount(0);
 });
 
-test("the desktop app's zoom steps with the slider and with the keys", async ({
-  page,
-  baseURL,
-}) => {
+/**
+ * Stands in for the desktop shell on Linux through its bridge: the zoom at 125%, and the title
+ * bar drawn by the app, as it will be next launch too.
+ */
+async function standInForDesktop(page: Page, baseURL: string | undefined) {
   const origin = new URL(baseURL ?? "").origin;
   await page.addInitScript((server) => {
     localStorage.setItem("aspen.serverUrl", server);
     window.zoomSet = [];
     window.zoomStep = null;
+    window.titleBarChosen = [];
+    window.relaunched = false;
     (window as { aspenDesktop?: unknown }).aspenDesktop = {
       platform: "linux",
       versions: { electron: "0", chrome: "0" },
@@ -94,8 +99,26 @@ test("the desktop app's zoom steps with the slider and with the keys", async ({
           };
         },
       },
+      titleBar: {
+        paint: () => undefined,
+        choice: () => Promise.resolve({ drawn: true, next: true }),
+        choose: (drawn: boolean) => {
+          window.titleBarChosen.push(drawn);
+          return Promise.resolve();
+        },
+        relaunch: () => {
+          window.relaunched = true;
+        },
+      },
     };
   }, origin);
+}
+
+test("the desktop app's zoom steps with the slider and with the keys", async ({
+  page,
+  baseURL,
+}) => {
+  await standInForDesktop(page, baseURL);
   await signInToWorld(page);
   const settings = await openSettings(page);
   const slider = settings.getByRole("slider", { name: "Zoom" });
@@ -117,6 +140,28 @@ test("the desktop app's zoom steps with the slider and with the keys", async ({
   });
   await expect(slider).toHaveAttribute("aria-valuetext", "100%");
   expect(await page.evaluate(() => window.zoomSet)).toEqual([1.5, 1.25, 1]);
+});
+
+test("the desktop app on Linux may keep the system's title bar from its next launch", async ({
+  page,
+  baseURL,
+}) => {
+  await standInForDesktop(page, baseURL);
+  await signInToWorld(page);
+  const settings = await openSettings(page);
+  const drawn = settings.getByRole("checkbox", { name: /Draw the title bar in Aspen's colours/ });
+  await expect(drawn).toBeChecked();
+  await expect(settings.getByRole("button", { name: "Restart now" })).toHaveCount(0);
+
+  await settings.getByText("Draw the title bar in Aspen's colours", { exact: true }).click();
+  await expect(drawn).not.toBeChecked();
+  expect(await page.evaluate(() => window.titleBarChosen)).toEqual([false]);
+  await settings.getByRole("button", { name: "Restart now" }).click();
+  expect(await page.evaluate(() => window.relaunched)).toBe(true);
+
+  // Chosen back, the window is as it launched, and nothing waits on a restart.
+  await settings.getByText("Draw the title bar in Aspen's colours", { exact: true }).click();
+  await expect(settings.getByRole("button", { name: "Restart now" })).toHaveCount(0);
 });
 
 test("the line spacing is kept with the account and spaces messages", async ({ page }) => {
