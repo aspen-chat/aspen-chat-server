@@ -12,6 +12,7 @@ import { useMessages } from "@/i18n/context";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { useDomain, channelLink } from "@/features/messages/links";
 import { ChannelListSkeleton, ChannelSkeleton } from "@/features/layout/ScreenSkeletons";
+import { useDocumentTitle } from "@/features/layout/documentTitle";
 
 /**
  * `/communities/{community}`: the channel sidebar beside the route's content, with the member
@@ -29,6 +30,7 @@ export function ChannelSidebarLayout() {
   const communityId = useParams({ strict: false }).communityId ?? "";
   const { channelId } = useParams({ strict: false });
   const community = useCommunity(communityId);
+  useDocumentTitle(community?.name ?? null);
   const sync = useSync();
   const live = useSyncStatus() === "live";
   const moderator = useDeploymentCan("moderateCommunities");

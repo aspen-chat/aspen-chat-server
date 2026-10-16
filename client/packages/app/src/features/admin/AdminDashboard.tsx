@@ -47,6 +47,7 @@ import { ADMIN_TABS, useAdminTabLabel, type AdminTab } from "@/features/admin/ad
 import { RegistrationInvites } from "@/features/admin/RegistrationInvites";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
+import { useDocumentTitle } from "@/features/layout/documentTitle";
 
 /** Which tabs the caller may open: each needs the deployment permission its content does. */
 function useAllowedTabs(): AdminTab[] {
@@ -109,6 +110,7 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
  */
 export function AdminDashboard({ tab }: { tab: string | undefined }) {
   const m = useMessages();
+  useDocumentTitle(m.admin.title);
   const admin = useIsAdmin();
   const allowed = useAllowedTabs();
   const label = useAdminTabLabel();
