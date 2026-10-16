@@ -12,7 +12,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use aspen_migrate::{
-    MIGRATIONS, run_apply, run_down, run_import_diesel, run_redo, run_revert, run_status, run_up,
+    MIGRATIONS, lock, run_apply, run_down, run_import_diesel, run_redo, run_revert, run_status,
+    run_up,
 };
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
@@ -118,6 +119,10 @@ async fn main() -> Result<()> {
     let mut conn = aspen_database::connect(&url)
         .await
         .context("failed to connect to the database")?;
+    // `status` only reads, and may be asked while another run migrates.
+    if !matches!(cli.cmd, Cmd::Status) {
+        lock(&mut conn).await?;
+    }
 
     match cli.cmd {
         Cmd::Up => run_up(&mut conn, MIGRATIONS).await?,

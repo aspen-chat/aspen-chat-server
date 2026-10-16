@@ -69,7 +69,8 @@ It reads the database from `--database-url`, then `DATABASE_URL`, then `database
 `aspen.toml`.
 
 Run it again after every upgrade, before starting the new servers. It applies only what has not
-been applied.
+been applied. Runs started at once against one database take turns: each waits for the one
+before it to finish, then finds its migrations applied.
 
 ---
 

@@ -9,7 +9,7 @@ pub mod migrations;
 pub mod registry;
 
 pub use migration::{
-    AppliedMigration, Migration, SqlMigration, ensure_migrations_table, list_applied, run_apply,
-    run_down, run_import_diesel, run_redo, run_revert, run_status, run_up,
+    AppliedMigration, Migration, SqlMigration, ensure_migrations_table, list_applied, lock,
+    run_apply, run_down, run_import_diesel, run_redo, run_revert, run_status, run_up,
 };
 pub use registry::MIGRATIONS;

@@ -60,8 +60,9 @@ secret, and writes it into its working directory before starting the server.
 - **Voice server ids are made by the configuration** (`voice-servers add --id`). The id goes
   into the voice server's file and its NATS user's permissions, both written before anything
   runs that could register it.
-- **Migrations run as a task during the apply, not in each API server's container.**
-  `aspen-migrate` takes no lock, so servers starting together would run it together.
+- **Migrations run as a task during the apply, not in each API server's container.** A release
+  whose migrations fail then stops before any server is replaced, and the old ones go on
+  serving. The same task registers the voice servers.
 - **The storage key pair is an IAM user's.** `[media.s3]` takes a key pair only, so the servers
   cannot use their task's role.
 - **Voice servers ignore newer machine images** until replaced by name. Otherwise whichever

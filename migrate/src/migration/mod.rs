@@ -82,6 +82,40 @@ pub struct AppliedMigration {
     pub applied_at: DateTime<Utc>,
 }
 
+/// The advisory lock every command that changes the schema holds, so that two runs against one
+/// database, as when several servers start at once and each migrates first, take turns: the
+/// second finds the first's migrations applied. Its value is arbitrary, and fixed for good.
+const MIGRATION_LOCK: i64 = 0x4153_5045_4e4d_4947;
+
+#[derive(QueryableByName)]
+struct Locked {
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    locked: bool,
+}
+
+/// Takes the migration lock, waiting while another run holds it. It is held for as long as this
+/// connection is open, whatever transactions come and go on it, and let go when it closes,
+/// however the run ends.
+pub async fn lock(conn: &mut AsyncPgConnection) -> Result<()> {
+    let taken = sql_query("SELECT pg_try_advisory_lock($1) AS locked")
+        .bind::<diesel::sql_types::BigInt, _>(MIGRATION_LOCK)
+        .get_result::<Locked>(conn)
+        .await
+        .context("failed to ask for the migration lock")?;
+    if taken.locked {
+        return Ok(());
+    }
+    tracing::info!(
+        "another aspen-migrate is running against this database; waiting for it to finish"
+    );
+    sql_query("SELECT pg_advisory_lock($1)")
+        .bind::<diesel::sql_types::BigInt, _>(MIGRATION_LOCK)
+        .execute(conn)
+        .await
+        .context("failed to take the migration lock")?;
+    Ok(())
+}
+
 /// Create the bookkeeping table on first run. Idempotent.
 pub async fn ensure_migrations_table(conn: &mut AsyncPgConnection) -> Result<()> {
     conn.batch_execute(
