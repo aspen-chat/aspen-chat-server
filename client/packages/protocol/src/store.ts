@@ -247,6 +247,11 @@ export class RecordStore {
   /** The options the caller wrote in, by poll, which an anonymous poll's record never says. */
   readonly #myWriteIns = new Map<string, ReadonlySet<number>>();
   readonly #readStates = new Map<string, ReadState>();
+  /**
+   * Channels and threads marked unread, which the lists showing them leave unread rather than
+   * marking read as they show them, until opened again or posted in.
+   */
+  readonly #unreadHolds = new Set<string>();
   readonly #mutes = new Map<string, ChannelMute>();
   /** What the caller chose to show of their presence, while it lasts. */
   #chosenPresence: ChosenPresence | null = null;
@@ -1197,6 +1202,33 @@ export class RecordStore {
    */
   threadRead(threadId: string): string | undefined {
     return this.#threadReads.get(threadId);
+  }
+
+  /**
+   * Topic `read:<channelId>`: whether the caller marked the channel or thread unread, on this
+   * device or another, and has neither opened it since nor posted in it. A list showing it
+   * leaves it unread meanwhile.
+   */
+  unreadHeld(channelId: string): boolean {
+    return this.#unreadHolds.has(channelId);
+  }
+
+  /**
+   * Records that the caller marked a channel or thread unread, ahead of the server's
+   * `channelMarkedUnread` or from it: its position moves to `state.lastRead`, back or forward,
+   * and it is held unread (`unreadHeld`). A thread keeps only the position.
+   */
+  markUnread(state: ReadState): void {
+    this.#batch(() => {
+      this.#markUnread(state);
+    });
+  }
+
+  /** Lets the lists showing a channel or thread mark it read again (`unreadHeld`). */
+  releaseUnreadHold(channelId: string): void {
+    this.#batch(() => {
+      this.#releaseUnreadHold(channelId);
+    });
   }
 
   /**
@@ -2412,6 +2444,7 @@ export class RecordStore {
       this.#myVotes.clear();
       this.#myWriteIns.clear();
       this.#readStates.clear();
+      this.#unreadHolds.clear();
       this.#mutes.clear();
       this.#chosenPresence = null;
       this.#collapsed.clear();
@@ -2796,6 +2829,14 @@ export class RecordStore {
           }
           break;
         }
+        case "channelMarkedUnread":
+          this.#markUnread({
+            channel: event.channel,
+            lastRead: event.lastRead,
+            lastMessage: event.lastMessage ?? null,
+            mentions: event.mentions,
+          });
+          break;
         case "voiceSpeaking": {
           const session = Array.from(this.#voiceSessions.values()).find(
             (s) => s.channel === event.channel,
@@ -3559,6 +3600,25 @@ export class RecordStore {
     }
   }
 
+  #markUnread(state: ReadState): void {
+    this.#unreadHolds.add(state.channel);
+    if (
+      this.#threadReads.has(state.channel) ||
+      this.#channels.get(state.channel)?.ty === "thread"
+    ) {
+      this.#threadReads.set(state.channel, state.lastRead);
+      this.#touch(`read:${state.channel}`);
+    } else {
+      this.#putReadState(state);
+    }
+  }
+
+  #releaseUnreadHold(channelId: string): void {
+    if (this.#unreadHolds.delete(channelId)) {
+      this.#touch(`read:${channelId}`);
+    }
+  }
+
   #putReadState(given: ReadState): void {
     // Tags are among the unread, so a channel read to its newest message holds none.
     const read = given.lastMessage == null || given.lastMessage <= given.lastRead;
@@ -3593,6 +3653,9 @@ export class RecordStore {
    */
   #noteNewMessage(message: Message): void {
     const channel = this.#channels.get(message.channelId);
+    if (message.author === this.#myUserId) {
+      this.#releaseUnreadHold(message.channelId);
+    }
     if (channel?.ty === "thread" && message.author === this.#myUserId) {
       this.#moveThreadRead(channel.id, message.id);
     }

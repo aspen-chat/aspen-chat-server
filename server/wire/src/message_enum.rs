@@ -100,11 +100,22 @@ enum MessageEnumSource {
     EmailAccountChanged { user: UserId, unverified: bool },
     // How far the user has read a channel moved forward, on one of their devices or by their
     // posting there; the others follow. `last_read` is a position among the channel's message
-    // ids (see `app::read_state`), and it only ever moves forward.
+    // ids (see `app::read_state`); only `ChannelMarkedUnread` ever moves it back.
     #[message_gen(custom_event)]
     ChannelRead {
         channel: ChannelId,
         last_read: MessageId,
+    },
+    // The user marked a channel or thread unread from a message on, on one of their devices:
+    // its position moved back to just before that message. It carries the channel's read state
+    // as it now is (`ReadState`), so their devices take it whole rather than read it again, and
+    // stop marking the channel read as they show it until it is opened again or they post there.
+    #[message_gen(custom_event)]
+    ChannelMarkedUnread {
+        channel: ChannelId,
+        last_read: MessageId,
+        last_message: Option<MessageId>,
+        mentions: u32,
     },
     // An attachment's preview was made: the smaller copy of a picture or video that apps show
     // inline in place of the original (`app::attachment::preview`). Published in the channel of

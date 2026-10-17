@@ -6,6 +6,7 @@ use crate::TAG_CHANNELS;
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Json, NoContent, Path};
+use crate::t;
 use aspen_app::context::GlobalServerContext;
 use aspen_app::{self as app, ChannelId, MessageId};
 use axum::extract::State;
@@ -41,12 +42,23 @@ impl From<app::read_state::ReadState> for ReadState {
     }
 }
 
-/// Where the caller has read a channel up to.
+/// Where the caller has read a channel up to, or where it is unread from. Exactly one of the
+/// fields is given.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadStateUpdate {
-    /// A message of the channel, deleted or not, that the caller has now seen.
-    pub last_read: MessageId,
+    /// A message of the channel, deleted or not, that the caller has now seen. The position
+    /// moves forward to it, never back.
+    #[serde(default)]
+    pub last_read: Option<MessageId>,
+    /// A message of the channel, not deleted, to mark unread with everything after it: the
+    /// position moves to just before it, back or forward.
+    #[serde(default)]
+    pub unread_from: Option<MessageId>,
+    /// `true` marks the channel unread from its newest message by neither the caller nor anyone
+    /// they blocked, among its newest `app::read_state::NEWEST_LOOKED_AT` (100).
+    #[serde(default)]
+    pub unread_newest: bool,
 }
 
 /// The caller's read position in a channel or thread they belong to.
@@ -73,9 +85,11 @@ pub async fn get_read_state(
     Ok(Json(ReadState::from(read)))
 }
 
-/// Moves the caller's read position in a channel forward to a message they have seen. A
-/// position already past it is left where it is, so devices reporting out of order never move
-/// it back. A move is announced to the caller's devices as `channelRead`.
+/// Moves the caller's read position in a channel forward to a message they have seen
+/// (`lastRead`), or marks the channel unread from a message on (`unreadFrom`, `unreadNewest`).
+/// Reading leaves a position already past the message where it is, so devices reporting out of
+/// order never move it back; marking unread is the one way back. A read is announced to the
+/// caller's devices as `channelRead`, marking unread as `channelMarkedUnread`.
 #[utoipa::path(
     put,
     path = "/channels/{channel}/read-states/@me",
@@ -85,7 +99,7 @@ pub async fn get_read_state(
     security(("bearerAuth" = [])),
     responses(
         (status = NO_CONTENT, description = "Recorded"),
-        (status = BAD_REQUEST, body = Problem),
+        (status = BAD_REQUEST, description = "`validation`: not exactly one field given, or nothing by anyone else to mark unread among the channel's newest messages", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, description = "No such channel, or no such message in it", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -97,7 +111,22 @@ pub async fn put_read_state(
     Path(channel): Path<ChannelId>,
     Json(update): Json<ReadStateUpdate>,
 ) -> ApiResult<NoContent> {
-    app::read_state::mark_read(&state, user.id, channel, update.last_read).await?;
+    use app::read_state::UnreadFrom;
+    match (update.last_read, update.unread_from, update.unread_newest) {
+        (Some(last_read), None, false) => {
+            app::read_state::mark_read(&state, user.id, channel, last_read).await?;
+        }
+        (None, Some(message), false) => {
+            app::read_state::mark_unread(&state, user.id, channel, UnreadFrom::Message(message))
+                .await?;
+        }
+        (None, None, true) => {
+            app::read_state::mark_unread(&state, user.id, channel, UnreadFrom::Newest).await?;
+        }
+        _ => {
+            return Err(app::Error::Validation(t!("readStateUpdateOneField")).into());
+        }
+    }
     Ok(NoContent)
 }
 

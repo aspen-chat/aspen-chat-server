@@ -2,11 +2,12 @@
 //!
 //! A read position is a message id rather than a reference to a message: ids are UUIDv7 and
 //! ordered by time, so "read up to this id" stays exact after the message it names is deleted,
-//! and deleting a message never writes here. A position only moves forward, whichever device
-//! reports it, and each move is published to the user's own subject as `channelRead` so their
-//! other devices follow. Posting in a channel moves the poster's position to their message.
-//! Several positions move in one request ([`mark_many_read`]), as when a user marks everything
-//! read at once.
+//! and deleting a message never writes here. Reading only moves a position forward, whichever
+//! device reports it, and each move is published to the user's own subject as `channelRead` so
+//! their other devices follow. Posting in a channel moves the poster's position to their
+//! message. Several positions move in one request ([`mark_many_read`]), as when a user marks
+//! everything read at once. Marking a channel unread ([`mark_unread`]) is the one way back,
+//! published as `channelMarkedUnread`.
 //!
 //! Nothing a member's channels held before they joined (the community, or the DM) is unread to
 //! them: until they have read past it, their position is that moment. A channel is unread while
@@ -274,6 +275,136 @@ pub async fn mark_read(
     .await
 }
 
+/// Where marking a channel unread starts it ([`mark_unread`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnreadFrom {
+    /// A message of the channel, not deleted.
+    Message(MessageId),
+    /// The newest message by neither the user nor anyone they blocked, among the channel's
+    /// newest [`NEWEST_LOOKED_AT`].
+    Newest,
+}
+
+/// How many of a channel's newest messages marking it unread from its newest looks through for
+/// one by someone else ([`UnreadFrom::Newest`]).
+pub const NEWEST_LOOKED_AT: i64 = 100;
+
+/// The position just before `message`: it and every later message are after it. A position
+/// need name no message, so this one is exact whatever ids the messages around it have.
+fn just_before(message: MessageId) -> MessageId {
+    MessageId(uuid::Uuid::from_u128(message.0.as_u128().saturating_sub(1)))
+}
+
+#[derive(QueryableByName)]
+struct Found {
+    #[diesel(sql_type = PgUuid)]
+    id: MessageId,
+}
+
+/// The message `from` names in `channel`, if it is one the user may mark unread from.
+async fn unread_start(
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    channel: ChannelId,
+    from: UnreadFrom,
+) -> crate::Result<Option<MessageId>> {
+    match from {
+        UnreadFrom::Message(message_id) => Ok(message::table
+            .select(message::id)
+            .filter(message::id.eq(message_id))
+            .filter(message::channel.eq(channel))
+            .filter(message::deleted_at.is_null())
+            .first(conn)
+            .await
+            .optional()?),
+        UnreadFrom::Newest => {
+            let found: Option<Found> = diesel::sql_query(
+                r#"
+                SELECT newest.id FROM (
+                    SELECT id, author FROM message
+                    WHERE channel = $2 AND deleted_at IS NULL
+                    ORDER BY id DESC
+                    LIMIT $3
+                ) newest
+                WHERE newest.author <> $1
+                  AND NOT EXISTS (
+                      SELECT 1 FROM user_block
+                      WHERE user_block.blocker = $1 AND user_block.blocked = newest.author
+                  )
+                ORDER BY newest.id DESC
+                LIMIT 1
+                "#,
+            )
+            .bind::<PgUuid, _>(user.0)
+            .bind::<PgUuid, _>(channel.0)
+            .bind::<diesel::sql_types::BigInt, _>(NEWEST_LOOKED_AT)
+            .get_result(conn)
+            .await
+            .optional()?;
+            Ok(found.map(|f| f.id))
+        }
+    }
+}
+
+/// Marks `channel_id` unread for the user from `from` on, the one way a position moves back:
+/// it is set just before that message, wherever it was, and published as `channelMarkedUnread`
+/// with the read state that results. Nothing from before the user joined becomes unread, since
+/// joining still bounds what is unread. A message not of the channel, or deleted, is not
+/// found; a channel whose newest messages are all the user's own, or of people they blocked,
+/// is refused with `validation`.
+pub async fn mark_unread(
+    state: &GlobalServerContext,
+    user: UserId,
+    channel_id: ChannelId,
+    from: UnreadFrom,
+) -> crate::Result<()> {
+    let mut conn = state.connection_pool.get().await?;
+    crate::permissions::channel_access(state, conn.as_mut(), user, channel_id).await?;
+    let Some(start) = unread_start(conn.as_mut(), user, channel_id, from).await? else {
+        return Err(match from {
+            UnreadFrom::Message(_) => crate::Error::Diesel(diesel::result::Error::NotFound),
+            UnreadFrom::Newest => {
+                crate::Error::Validation(t!("nothingToMarkUnread", count = NEWEST_LOOKED_AT))
+            }
+        });
+    };
+    conn.transaction(|conn| {
+        async move {
+            diesel::sql_query(
+                r#"
+                INSERT INTO read_state ("user", channel, message) VALUES ($1, $2, $3)
+                ON CONFLICT ("user", channel) DO UPDATE SET message = excluded.message
+                "#,
+            )
+            .bind::<PgUuid, _>(user.0)
+            .bind::<PgUuid, _>(channel_id.0)
+            .bind::<PgUuid, _>(just_before(start).0)
+            .execute(conn.as_mut())
+            .await?;
+            let now = read(conn.as_mut(), user, &[channel_id])
+                .await?
+                .into_iter()
+                .next()
+                .ok_or(crate::Error::Diesel(diesel::result::Error::NotFound))?;
+            publish_event(
+                state,
+                conn,
+                EventScope::User(user),
+                &ServerEvent::ChannelMarkedUnread {
+                    channel: channel_id,
+                    last_read: now.last_read,
+                    last_message: now.last_message,
+                    mentions: now.mentions,
+                },
+            )
+            .await?;
+            Ok::<_, crate::Error>(())
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
 /// The most positions one request may move ([`mark_many_read`]), and so the most `channelRead`
 /// events one publishes.
 pub const MAX_MARKED: usize = 100;
@@ -479,6 +610,14 @@ mod tests {
                 message: newer.max(older),
             }]
         );
+    }
+
+    #[test]
+    fn marking_unread_puts_the_message_after_the_position() {
+        let message = MessageId::new();
+        let before = just_before(message);
+        assert!(before < message);
+        assert_eq!(before.0.as_u128() + 1, message.0.as_u128());
     }
 
     #[test]

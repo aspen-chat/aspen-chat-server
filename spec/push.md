@@ -288,7 +288,8 @@ tags them (by name, a role they hold, or everyone), unless:
 Their own notification settings, per community and channel ("all messages", "only tags",
 "nothing"), are part of notifications in general, not of this protocol, and narrow this further.
 When they read a channel that had woken their phone, the deployment sends `read`; when such a
-message is deleted, `deleted`.
+message is deleted, `deleted`. When they mark a channel unread, it sends `read` at the position
+the channel moved back to, which takes down nothing still shown but carries the new `badge`.
 
 ## Quotas and abuse
 
