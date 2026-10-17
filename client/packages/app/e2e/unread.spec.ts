@@ -9,7 +9,7 @@ import {
   signInToWorld,
   type Publish,
 } from "./world";
-import { messageId } from "./world/fixtures";
+import { me, message, messageId } from "./world/fixtures";
 
 /**
  * Unread channels and the "New Messages" line, against the stubbed world in `world.ts`, where
@@ -122,6 +122,39 @@ test("marking a message unread keeps the channel unread while it stays open", as
   await openChannel(page, "ideas");
   await openChannel(page, "general");
   await expect.poll(() => reports.slice(marked)).toContainEqual({ lastRead: messageId(207) });
+});
+
+test("marking unread above the caller's own newest message keeps the line until they post", async ({
+  page,
+  isMobile,
+}) => {
+  await channelList(page).getByText("general", { exact: true }).click();
+  const ownNewest = "Bringing the folding table too.";
+  publish({ serverEvent: "message", type: "create", ...message(208, me, ownNewest, 0) });
+  await expect(page.getByText(ownNewest)).toBeVisible();
+
+  const marked = page.locator("article").filter({ hasText: lastReadText }).last();
+  if (isMobile) {
+    await longPress(page, marked.locator(".message-body"));
+    await page
+      .getByRole("dialog", { name: "Message actions" })
+      .getByRole("button", { name: "Mark unread" })
+      .tap();
+  } else {
+    await marked.hover();
+    await marked.getByRole("button", { name: "Mark unread" }).click();
+  }
+  await expect(page.getByText("Marked unread")).toBeVisible();
+  const line = page.getByRole("separator", { name: "New Messages" });
+  await expect(line.locator("xpath=following-sibling::*[1]")).toContainText(lastReadText);
+
+  publish({
+    serverEvent: "message",
+    type: "create",
+    ...message(209, me, "And the umbrellas.", 0),
+  });
+  await expect(page.getByText("And the umbrellas.")).toBeVisible();
+  await expect(line).toHaveCount(0);
 });
 
 test("a read channel is marked unread from its menu, from its newest message", async ({ page }) => {

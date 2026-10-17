@@ -19,6 +19,8 @@ export function useNewMessagesLine(
   const held = useUnreadHeld(channelId);
   // Set once per channel, when its read state is first known.
   const [line, setLine] = useState<{ channelId: string; after: string | null } | null>(null);
+  // The newest message of the latest window at the last render, to tell a post from a load.
+  const [seen, setSeen] = useState<{ channelId: string; newest: string | undefined } | null>(null);
   if (readState !== undefined && line?.channelId !== channelId) {
     const unread = readState.lastMessage != null && readState.lastMessage > readState.lastRead;
     setLine({ channelId, after: unread ? readState.lastRead : null });
@@ -31,17 +33,26 @@ export function useNewMessagesLine(
   ) {
     setLine({ channelId, after: readState.lastRead });
   }
-  const after = line?.channelId === channelId ? line.after : null;
-  // Posting ends the line: what came before the reader's own message is read.
+  // Posting ends the line: what came before the reader's own message is read. Only a message
+  // that arrives while the channel is open counts, since one of the reader's own may already be
+  // the newest when it is marked unread, and the line then stays above the message marked.
   const newest = latest?.ids[latest.ids.length - 1];
-  if (
-    after !== null &&
-    newest !== undefined &&
-    newest > after &&
-    store.message(newest)?.author === store.myUserId
-  ) {
-    setLine({ channelId, after: null });
+  if (seen?.channelId !== channelId || seen.newest !== newest) {
+    setSeen({ channelId, newest });
+    if (
+      seen?.channelId === channelId &&
+      seen.newest !== undefined &&
+      newest !== undefined &&
+      newest > seen.newest &&
+      line?.channelId === channelId &&
+      line.after !== null &&
+      newest > line.after &&
+      store.message(newest)?.author === store.myUserId
+    ) {
+      setLine({ channelId, after: null });
+    }
   }
+  const after = line?.channelId === channelId ? line.after : null;
   return shown === undefined ? null : lineAt(shown, after);
 }
 
