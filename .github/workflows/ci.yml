@@ -278,10 +278,12 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
+      # librsvg2-common is the SVG loader appstreamcli compose reads the app's icon with; it is
+      # only recommended, and without it the build fails with `file-read-error`.
       - name: System packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder \
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder librsvg2-common \
             pkg-config libpipewire-0.3-dev libopus-dev libclang-dev
       # Flatpak builds and runs in sandboxes made with user namespaces, which the runner's
       # AppArmor keeps from programs it has no profile for.

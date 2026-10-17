@@ -286,12 +286,14 @@ def restore_as_the_fleet_does(dump: Path) -> None:
     run("docker", "run", "-d", "--name", name, "-e", "POSTGRES_USER=aspen", "-e", "POSTGRES_PASSWORD=pw",
         "-e", "POSTGRES_DB=aspen", "-v", f"{dump}:/dump/database.dump:ro", "postgres:18-alpine")  # fmt: skip
     try:
+        # Over TCP: the image first runs a server on its socket alone to make the database, and
+        # stops it before starting the one that stays.
         for _ in range(60):
-            if run("docker", "exec", name, "pg_isready", "-U", "aspen", "-d", "aspen", check=False).returncode == 0:
+            if run("docker", "exec", name, "pg_isready", "-h", "127.0.0.1", "-U", "aspen", "-d", "aspen", check=False).returncode == 0:
                 break
             time.sleep(1)
-        restored = run("docker", "exec", name, *json.loads(options), "--username=aspen", "--dbname=aspen", "/dump/database.dump", check=False)
-        expect("the larger configuration's restore takes the dump", restored.returncode, 0)
+        run("docker", "exec", name, *json.loads(options), "--username=aspen", "--dbname=aspen", "/dump/database.dump")
+        say("  ok: the larger configuration's restore takes the dump")
         users = run("docker", "exec", name, "psql", "-U", "aspen", "-d", "aspen", "-tAc", "SELECT name FROM \"user\" WHERE name = 'boxer'")
         expect("with the accounts in it", users.stdout.strip(), "boxer")
     finally:

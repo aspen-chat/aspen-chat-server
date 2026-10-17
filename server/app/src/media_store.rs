@@ -695,6 +695,16 @@ async fn sweep_unconfirmed(state: &crate::context::GlobalServerContext) -> crate
 mod tests {
     use super::*;
 
+    /// Storage with a key pair of its own, so signing never asks the SDK's chain, which on a
+    /// cloud machine (a CI runner) reaches its metadata service.
+    fn keyed() -> MediaS3Config {
+        MediaS3Config {
+            access_key: Some("test-access-key".to_string()),
+            secret_key: Some("test-secret-key".to_string()),
+            ..MediaS3Config::default()
+        }
+    }
+
     /// Evidence keeps its key beneath its own prefix, once however often it is moved.
     #[test]
     fn evidence_lives_under_its_own_prefix() {
@@ -713,7 +723,7 @@ mod tests {
     async fn upload_urls_name_storage_as_clients_reach_it() {
         let internal = MediaS3Config {
             endpoint: "http://127.0.0.1:8333".to_string(),
-            ..MediaS3Config::default()
+            ..keyed()
         };
         let store = MediaStore::from_s3(&internal).await.unwrap();
         let url = store
@@ -740,9 +750,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_urls_are_signed_for_their_type_and_size() {
-        let store = MediaStore::from_s3(&MediaS3Config::default())
-            .await
-            .unwrap();
+        let store = MediaStore::from_s3(&keyed()).await.unwrap();
         let signed_headers = |url: &str| {
             url::Url::parse(url)
                 .unwrap()
