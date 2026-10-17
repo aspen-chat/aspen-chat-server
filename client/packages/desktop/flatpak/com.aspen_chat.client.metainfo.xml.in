@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- What software centres show of the app. `scripts/flatpak.mjs` fills in the release. -->
+<component type="desktop-application">
+  <id>com.aspen_chat.client</id>
+  <name>Aspen</name>
+  <summary>Text, voice, and video chat for communities</summary>
+  <developer id="com.aspen_chat">
+    <name>The Aspen contributors</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MPL-2.0</project_license>
+  <description>
+    <p>
+      Aspen is free and open source chat for communities, which anyone may host. Sign in to a
+      deployment to talk in its communities' channels and threads, send direct messages, and join
+      voice calls with cameras and screen sharing.
+    </p>
+    <p>
+      Deployments federate: an account on one can join communities on others.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.aspen_chat.client.desktop</launchable>
+  <url type="homepage">https://github.com/aspen-chat/aspen-chat-server</url>
+  <url type="bugtracker">https://github.com/aspen-chat/aspen-chat-server/issues</url>
+  <url type="vcs-browser">https://github.com/aspen-chat/aspen-chat-server</url>
+  <categories>
+    <category>Network</category>
+    <category>InstantMessaging</category>
+    <category>Chat</category>
+  </categories>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-audio">intense</content_attribute>
+    <content_attribute id="social-contacts">intense</content_attribute>
+    <content_attribute id="social-info">mild</content_attribute>
+  </content_rating>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+  <requires>
+    <internet>always</internet>
+  </requires>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

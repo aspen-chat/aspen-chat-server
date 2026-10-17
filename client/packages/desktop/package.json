@@ -16,7 +16,8 @@
     "package:build": "install-electron && pnpm --filter @aspen/app build:desktop && pnpm build:native && electron-vite build",
     "package": "pnpm package:build && electron-builder --config electron-builder.yml",
     "package:dir": "pnpm package:build && electron-builder --config electron-builder.yml --dir",
-    "package:signed": "pnpm package:build && electron-builder --config electron-builder.signed.yml"
+    "package:signed": "pnpm package:build && electron-builder --config electron-builder.signed.yml",
+    "package:flatpak": "pnpm package:dir && node scripts/flatpak.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

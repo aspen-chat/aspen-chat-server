@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Aspen
+GenericName=Community Chat
+Comment=Text, voice, and video chat for communities
+Exec=aspen %U
+Icon=com.aspen_chat.client
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=chat;community;voice;video;call;message;
+MimeType=x-scheme-handler/aspen;
+StartupWMClass=com.aspen_chat.client

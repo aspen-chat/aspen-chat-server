@@ -256,6 +256,65 @@ jobs:
           name: desktop-windows
           path: client/packages/desktop/release/*.exe
 
+  desktop-flatpak:
+    name: Desktop (Linux) — Flatpak
+    needs: schemas
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: schemas
+          path: .
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: client/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder \
+            pkg-config libpipewire-0.3-dev libopus-dev libclang-dev
+      # Flatpak builds and runs in sandboxes made with user namespaces, which the runner's
+      # AppArmor keeps from programs it has no profile for.
+      - name: Allow user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # What `packages/desktop/flatpak/com.aspen_chat.client.yml` builds on and runs in.
+      - name: Flatpak runtime, SDK, and base app
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive flathub \
+            org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 org.electronjs.Electron2.BaseApp//25.08
+      - name: Rust (the toolchain rust-toolchain.toml pins, with its targets)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client/packages/desktop/native/capture
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm codegen
+      - run: pnpm --filter @aspen/desktop package:flatpak
+      # The capture helper answering inside the sandbox shows that the app's files are where
+      # the launcher expects them and that the runtime has the libraries the helper links.
+      - name: Install it, and ask the capture helper what it can capture
+        working-directory: client/packages/desktop/release/flatpak
+        run: |
+          flatpak install --user --noninteractive ./Aspen-*.flatpak
+          echo '{"type":"kinds","id":1}' \
+            | flatpak run --command=/app/aspen/resources/aspen-capture com.aspen_chat.client \
+            | grep '"type":"kinds"'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-flatpak
+          path: client/packages/desktop/release/flatpak/*.flatpak
+
   android:
     name: Android — build, unit, and device tests
     needs: schemas
