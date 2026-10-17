@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -271,8 +272,30 @@ def check_export(box: Box) -> None:
     expect("people's files are copied", (out / "files" / "attachments" / "check" / "file.txt").read_text(), stored)
     expect("it names the voice servers to unregister", json.loads((out / "export.json").read_text())["voice_servers"], ["voice"])
     expect("a second export refuses the same directory", box.tool("export", "--yes", str(out), check=False).returncode, 1)
+    restore_as_the_fleet_does(out / "database.dump")
     box.tool("up")
     expect("`up` starts it again", box.status(f"https://{DOMAIN}/api/v1/health/ready"), 204)
+
+
+def restore_as_the_fleet_does(dump: Path) -> None:
+    """Restores an export's dump into an empty PostgreSQL with the options of the larger AWS
+    configuration's restore task (deploy/aws/migration.tf), as a deployment the box moves to
+    would."""
+    options = re.search(r'restore_command = (\[.*\])', (REPO / "deploy" / "aws" / "migration.tf").read_text()).group(1)
+    name = "check-box-restore"
+    run("docker", "run", "-d", "--name", name, "-e", "POSTGRES_USER=aspen", "-e", "POSTGRES_PASSWORD=pw",
+        "-e", "POSTGRES_DB=aspen", "-v", f"{dump}:/dump/database.dump:ro", "postgres:18-alpine")  # fmt: skip
+    try:
+        for _ in range(60):
+            if run("docker", "exec", name, "pg_isready", "-U", "aspen", "-d", "aspen", check=False).returncode == 0:
+                break
+            time.sleep(1)
+        restored = run("docker", "exec", name, *json.loads(options), "--username=aspen", "--dbname=aspen", "/dump/database.dump", check=False)
+        expect("the larger configuration's restore takes the dump", restored.returncode, 0)
+        users = run("docker", "exec", name, "psql", "-U", "aspen", "-d", "aspen", "-tAc", "SELECT name FROM \"user\" WHERE name = 'boxer'")
+        expect("with the accounts in it", users.stdout.strip(), "boxer")
+    finally:
+        run("docker", "rm", "-f", name, check=False)
 
 
 def make_certificates() -> None:
