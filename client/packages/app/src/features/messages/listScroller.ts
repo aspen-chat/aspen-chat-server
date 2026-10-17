@@ -90,6 +90,21 @@ function rowOf(box: HTMLElement, id: string): HTMLElement | null {
 }
 
 /**
+ * Where `row` stands in the content and how tall it is, to the fraction of a pixel. A row's
+ * `offsetTop` and `offsetHeight` are rounded to whole pixels while WebKit lays rows out
+ * between them, so a row held by those, through a box WebKit also scrolls in whole pixels,
+ * drifts by up to a pixel with each change. Measured against the content, which a pull past an
+ * end moves with its rows, so the transform drawing the pull cancels.
+ */
+function placeOf(content: HTMLElement, row: HTMLElement): { top: number; height: number } {
+  const rect = row.getBoundingClientRect();
+  return {
+    top: rect.top - content.getBoundingClientRect().top + content.offsetTop,
+    height: rect.height,
+  };
+}
+
+/**
  * The message list's scroll position and everything that sets it: holding what is in view
  * still through every change (see `MessageList` for why and how), staying pinned to the
  * bottom, going to a linked message, and, where the list scrolls itself (`OWNS_SCROLLING`),
@@ -244,14 +259,16 @@ export class ListScroller {
       this.#highlightShown = null;
     } else if (this.#highlightShown !== link) {
       const target = rowOf(box, link);
-      if (target !== null) {
+      const content = this.#content.current;
+      if (target !== null && content !== null) {
         this.#highlightShown = link;
         this.stickToBottom = false;
         this.#stopMotion();
-        this.#over = 0;
-        target.scrollIntoView({ block: "center" });
-        this.#ownScrollTop = box.scrollTop;
-        this.#exactTop = null;
+        // Centred here rather than by `scrollIntoView`, and at a whole pixel, which every box
+        // holds exactly: WebKit truncates a position between pixels, which would leave the
+        // message up to a pixel below the middle, where rounding leaves it within half of one.
+        const { top, height } = placeOf(content, target);
+        this.#place(clamp(Math.round(top + height / 2 - box.clientHeight / 2), this.range));
         this.#afterMove(false);
         return;
       }
@@ -568,19 +585,22 @@ export class ListScroller {
       this.#still = null;
       return;
     }
+    const content = this.#content.current;
     const linked = this.#highlightId;
     const shownLink = linked !== undefined && this.#highlightShown === linked;
     const row = shownLink ? rowOf(box, linked) : rowsInView(box).first;
-    this.#still =
-      row === null
-        ? null
-        : {
-            id: row.dataset.messageId ?? "",
-            screenTop: row.offsetTop - box.scrollTop,
-            offsetTop: row.offsetTop,
-            height: row.offsetHeight,
-            linked: shownLink,
-          };
+    if (row === null || content === null) {
+      this.#still = null;
+      return;
+    }
+    const { top, height } = placeOf(content, row);
+    this.#still = {
+      id: row.dataset.messageId ?? "",
+      screenTop: top - this.#boxTop(),
+      offsetTop: top,
+      height,
+      linked: shownLink,
+    };
   }
 
   /**
@@ -588,15 +608,17 @@ export class ListScroller {
    * in view: half, for a linked message held by its middle, so it stays centred as what it
    * holds, a picture of its own, takes its size; none for a row held by its top.
    */
-  #stillRow(): { box: HTMLDivElement; noted: Still; row: HTMLElement; grown: number } | null {
+  #stillRow(): { noted: Still; top: number; grown: number } | null {
     const box = this.viewport.current;
+    const content = this.#content.current;
     const noted = this.#still;
     const row = box === null || noted === null ? null : rowOf(box, noted.id);
-    if (box === null || noted === null || row === null) {
+    if (content === null || noted === null || row === null) {
       return null;
     }
-    const grown = noted.linked ? (row.offsetHeight - noted.height) / 2 : 0;
-    return { box, noted, row, grown };
+    const { top, height } = placeOf(content, row);
+    const grown = noted.linked ? (height - noted.height) / 2 : 0;
+    return { noted, top, grown };
   }
 
   /**
@@ -606,8 +628,8 @@ export class ListScroller {
   #holdStill(why: string) {
     const still = this.#stillRow();
     if (still !== null) {
-      const { box, noted, row, grown } = still;
-      this.#absorb(row.offsetTop - noted.screenTop + grown - box.scrollTop, why);
+      const { noted, top, grown } = still;
+      this.#absorb(top - noted.screenTop + grown - this.#boxTop(), why);
     }
   }
 
@@ -624,8 +646,8 @@ export class ListScroller {
     if (still === null) {
       return;
     }
-    const { noted, row, grown } = still;
-    const by = row.offsetTop - noted.offsetTop + grown;
+    const { noted, top, grown } = still;
+    const by = top - noted.offsetTop + grown;
     if (Math.abs(by) >= 0.5) {
       this.measureRange();
       this.#absorb(by, "unseen change");
