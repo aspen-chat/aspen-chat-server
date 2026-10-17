@@ -6,6 +6,7 @@ license = "MPL-2.0"
 description = "What the API server and the voice servers agree on: the join token and the control messages they exchange over NATS."
 
 [dependencies]
+aspen_limits = { version = "0.1.0", path = "../limits" }
 base64 = "0.22.1"
 hmac = "0.12.1"
 aws-lc-rs = "1.13"

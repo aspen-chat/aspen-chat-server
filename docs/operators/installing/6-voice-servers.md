@@ -22,8 +22,8 @@ Each voice server is its own machine (or container) with its own `voice_server.t
    It may be run again with the same arguments, so a deployment script can run it every time.
    The dashboard registers servers too.
 
-3. Note the id it prints. It prints the id, the line to put in `voice_server.toml`, and the
-   subjects its NATS user's permissions must name, like this:
+3. Note the id it prints. It prints the id, the line to put in `voice_server.toml`, and the entry
+   for the voice server's NATS user ([below](#give-it-a-nats-user)), like this:
 
    ```
    voice-1  https://voice-1.chat.example.org  capacity 120  id 01a11de4-6cd9-7023-a882-a62812d5d6b9
@@ -32,10 +32,12 @@ Each voice server is its own machine (or container) with its own `voice_server.t
 
        id = "01a11de4-6cd9-7023-a882-a62812d5d6b9"
 
-   If it signs in to NATS as a user of its own, that user's permissions name the same id (docs/operators/installing/6-voice-servers.md):
+   Give it a NATS user of its own, allowed only what it needs: add this to the users of NATS's authorization, …
 
-       publish:   aspen.voice.report.*.01a11de4-…, aspen.voice.speaking.*.01a11de4-…
-       subscribe: aspen.voice.command.01a11de4-…, _INBOX_voice.01a11de4-….>
+       { user: "voice-1", password: "PASSWORD", permissions: {
+           publish: { allow: [
+             "aspen.voice.report.*.01a11de4-6cd9-7023-a882-a62812d5d6b9",
+             …
    ```
 
 ### The id
@@ -90,33 +92,17 @@ user = "aspen"
 password = "…"
 ```
 
-Start NATS with a configuration naming both. Add one entry like `voice-1` for each voice server,
-with its own id in place of `VOICE_SERVER_ID`:
+Start NATS with a configuration naming both. `voice-servers add` printed the entry for that
+voice server's user, with every permission it needs and no more: put it in `users`, with a
+password of your own in place of `PASSWORD`. For a server registered before, `voice-servers add`
+again with the same name and address prints it again.
 
 ```
 jetstream {}
 authorization {
   users = [
     { user: "aspen", password: "…" }
-    { user: "voice-1", password: "…", permissions: {
-        publish: { allow: [
-          "aspen.voice.report.*.VOICE_SERVER_ID",
-          "aspen.voice.speaking.*.VOICE_SERVER_ID",
-          "aspen.voice.token-key",
-          "$JS.API.INFO",
-          "$JS.API.STREAM.INFO.KV_aspen_rate_limits",
-          "$JS.API.CONSUMER.CREATE.KV_aspen_rate_limits",
-          "$JS.API.CONSUMER.CREATE.KV_aspen_rate_limits.>",
-          "$JS.API.CONSUMER.DELETE.KV_aspen_rate_limits.>",
-          "$JS.API.DIRECT.GET.KV_aspen_rate_limits.>",
-          "$JS.API.STREAM.MSG.GET.KV_aspen_rate_limits",
-          "$JS.FC.KV_aspen_rate_limits.>"
-        ] }
-        subscribe: { allow: [
-          "aspen.voice.command.VOICE_SERVER_ID",
-          "_INBOX_voice.VOICE_SERVER_ID.>"
-        ] }
-    } }
+    # The entry voice-servers add printed for each voice server.
   ]
 }
 ```

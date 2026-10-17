@@ -60,16 +60,18 @@ fn print(server: &VoiceServer) {
 /// What the voice server `server` names must be given to report as it, after `add`.
 fn print_setup(server: &VoiceServer) {
     let id = server.id.0;
-    let (publish, subscribe) = voice_protocol::control::own_subjects(id);
     println!(
         "\nGive the voice server this id in voice_server.toml (or ASPEN_VOICE_SERVER_ID):\n\n    id = \"{id}\"\n"
     );
     println!(
-        "If it signs in to NATS as a user of its own, that user's permissions name the same id \
-         (docs/operators/installing/6-voice-servers.md):\n"
+        "Give it a NATS user of its own, allowed only what it needs: add this to the users of \
+         NATS's authorization, with a password of your own, which its voice_server.toml gives \
+         under [nats_user] (docs/operators/installing/6-voice-servers.md):\n"
     );
-    println!("    publish:   {}", publish.join(", "));
-    println!("    subscribe: {}", subscribe.join(", "));
+    print!(
+        "{}",
+        voice_protocol::control::nats_permissions(id).nats_user(&server.name, "PASSWORD")
+    );
 }
 
 fn capacity(capacity: u32) -> Result<i32> {

@@ -109,20 +109,58 @@ pub fn is_voice_inbox(subject: &str, server: Option<Uuid>) -> bool {
     rest.is_some_and(|rest| rest.len() > 1 && rest.starts_with('.'))
 }
 
-/// The subjects naming `server` that its NATS user must be allowed: those it publishes on, and
-/// those it subscribes to. The rest of its permissions name no server
-/// (`docs/operators/installing/6-voice-servers.md`).
-pub fn own_subjects(server: Uuid) -> ([String; 2], [String; 2]) {
-    (
-        [
+/// Everything a voice server's NATS user must be allowed, and nothing more: the one list of it,
+/// which `voice-servers add` prints and `deploy/templates/nats_voice_user.tftpl` is checked
+/// against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NatsPermissions {
+    pub publish: Vec<String>,
+    pub subscribe: Vec<String>,
+}
+
+/// What `server`'s NATS user is allowed: to publish its own reports, to ask for the join token
+/// key, and to follow a suspension of rate limits (the key-value bucket
+/// `aspen_limits::suspension::BUCKET`); to receive its own commands, and the replies to its own
+/// requests.
+pub fn nats_permissions(server: Uuid) -> NatsPermissions {
+    let kv = format!("KV_{}", aspen_limits::suspension::BUCKET);
+    NatsPermissions {
+        publish: vec![
             format!("{REPORT_SUBJECT_ROOT}.*.{server}"),
             format!("{SPEAKING_SUBJECT_ROOT}.*.{server}"),
+            TOKEN_KEY_SUBJECT.to_string(),
+            "$JS.API.INFO".to_string(),
+            format!("$JS.API.STREAM.INFO.{kv}"),
+            format!("$JS.API.CONSUMER.CREATE.{kv}"),
+            format!("$JS.API.CONSUMER.CREATE.{kv}.>"),
+            format!("$JS.API.CONSUMER.DELETE.{kv}.>"),
+            format!("$JS.API.DIRECT.GET.{kv}.>"),
+            format!("$JS.API.STREAM.MSG.GET.{kv}"),
+            format!("$JS.FC.{kv}.>"),
         ],
-        [
+        subscribe: vec![
             command_subject(server),
             format!("{}.>", inbox_prefix(server)),
         ],
-    )
+    }
+}
+
+impl NatsPermissions {
+    /// The user's entry in a NATS configuration's `authorization { users = [...] }`.
+    pub fn nats_user(&self, user: &str, password: &str) -> String {
+        let quoted = |subjects: &[String]| {
+            subjects
+                .iter()
+                .map(|subject| format!("          \"{subject}\""))
+                .collect::<Vec<_>>()
+                .join(",\n")
+        };
+        format!(
+            "    {{ user: {user:?}, password: {password:?}, permissions: {{\n        publish: {{ allow: [\n{}\n        ] }}\n        subscribe: {{ allow: [\n{}\n        ] }}\n    }} }}\n",
+            quoted(&self.publish),
+            quoted(&self.subscribe),
+        )
+    }
 }
 
 /// How often a voice server reports its load, whether or not anything changed. The API server
@@ -335,6 +373,22 @@ impl VoiceCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The deployments write voice servers' NATS users from a template of their own (`deploy/`),
+    /// which must grant exactly this.
+    #[test]
+    fn the_deployments_template_grants_the_same() {
+        let template = include_str!("../../deploy/templates/nats_voice_user.tftpl");
+        let server = Uuid::now_v7();
+        let filled = template
+            .replace("${id}", &server.to_string())
+            .replace("${user}", "\"voice-1\"")
+            .replace("${password}", "\"secret\"");
+        assert_eq!(
+            filled,
+            nats_permissions(server).nats_user("voice-1", "secret")
+        );
+    }
 
     #[test]
     fn ending_sign_ins_reaches_the_participants_of_those_sign_ins() {
