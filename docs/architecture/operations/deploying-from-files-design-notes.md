@@ -16,8 +16,9 @@ Why `deploy/` is the way it is. How to use it is in `deploy/README.md` and
 - **The images hold no configuration, and the `api` image names its own web client** through
   `ASPEN_WEB_CLIENT__DIR`. The environment overrides `aspen.toml`, so whatever file a deployment
   mounts, the server serves the web client it was built with.
-- **The built image knows no commit.** `.git` is left out of the build, so About Aspen shows the
-  version alone.
+- **The image is told its commit** (`ASPEN_COMMIT`, `ASPEN_MODIFIED`), since `.git` is left
+  out of the build: what is sent to the builder is then the files alone, and an image built from
+  a checkout with changes says so in About Aspen.
 
 ## Configuration reaches a container as a whole file
 
@@ -26,9 +27,8 @@ secret, and writes it into its working directory before starting the server.
 
 - The files are the ones the operator guide documents, so the guide's every page applies to a
   deployment made this way.
-- Environment variables alone cannot say everything: a setting that is a list
-  (`[rate_limits] trusted_proxies`) has no form there in `aspen.toml`'s loader, and the server
-  refuses to start without the file.
+- Environment variables can say everything, lists and tables as JSON, but a file is what the
+  operator guide shows and what a person reads back when something is wrong.
 - Each task definition names one version of its secret. A changed file is then a changed task
   definition, which is what makes a service roll out, and a task that starts later reads the
   file it was deployed with rather than whatever is newest.
@@ -63,50 +63,66 @@ secret, and writes it into its working directory before starting the server.
 - **Migrations run as a task during the apply, not in each API server's container.** A release
   whose migrations fail then stops before any server is replaced, and the old ones go on
   serving. The same task registers the voice servers.
-- **The storage key pair is an IAM user's.** `[media.s3]` takes a key pair only, so the servers
-  cannot use their task's role.
+- **The servers reach the bucket as their task's role**, given no key pair. A key pair would be
+  a password in `aspen.toml` that never expires, and the role's credentials are short-lived and
+  renewed by the SDK.
+- **The images are pulled from where they are published**, without signing in. Repositories of
+  the deployment's own would need every release built and pushed before an apply could use it.
+- **IPv6 wherever the internet meets the deployment**: the load balancer, the voice servers, the
+  read path, and the servers' own requests out. People on networks with IPv6 alone reach it
+  without a translator. The database and Valkey keep to IPv4 in subnets of their own, which
+  nothing outside the network reaches.
+- **Fargate tasks take IPv6 through an account setting** (`dualStackIPv6`), the only way ECS
+  offers. It is the default for the account and region, so the README says so before the
+  first apply.
+- **Each voice server's IPv6 address follows from its name.** It is announced to clients in
+  its file, which must not change when the machine is replaced, and AWS gives a new machine a
+  new address unless told one. Derived from the name's hash, adding a server moves no other;
+  derived from the servers' order, it would replace machines, and end calls, on every
+  addition.
 - **Voice servers ignore newer machine images** until replaced by name. Otherwise whichever
   apply came after AWS published an image would replace every voice server and end its calls.
 
 ## One machine on AWS
 
-`deploy/aws-single` trades staying up for cost: everything the larger configuration spreads
-over managed services runs as containers on one machine.
+`deploy/aws-single` trades staying up for cost: it is a box, on one EC2 machine, with its files
+in S3.
 
 - **What costs money in the larger configuration is mostly what keeps it up**: a second API
   server, the load balancer, and managed PostgreSQL and Valkey. A deployment of a few dozen
   people that may be down for some minutes needs none of them.
-- **ECS still runs the containers**, on the one machine. A release is then the same `tofu
-  apply` as in the larger configuration, with the same release task and `run_task.py`, and
-  nothing is copied to the machine or run on it by hand.
-- **Every container is on the machine's own network, and every service listens on loopback.**
-  The voice server needs the host's network for its media ports, and with the rest beside it
-  the servers reach PostgreSQL, NATS, and Valkey at 127.0.0.1: no password or event crosses a
-  network, and no container port is published past a firewall.
-- **Caddy terminates TLS** in the load balancer's place, and renews its own certificates. It
-  keeps them on the data volume, since Let's Encrypt issues only so many for a name each week
-  and a replaced machine would otherwise ask again.
-- **The database's files are on a volume of their own**, so replacing the machine keeps them.
-  The machine's first boot waits for that volume before the ECS agent may start anything:
-  PostgreSQL started without it would make an empty database on the machine's own disk.
+- **The box, not containers of its own.** Everything a deployment on one machine needs (Caddy,
+  the two places for the API server, upgrades that do not stop it, backups, `doctor`) is the
+  box's already, and tried on any machine. The configuration makes the machine, its addresses,
+  its volume, and the bucket, and hands the box the answers `init` would ask for.
+- **A release is still a `tofu apply`.** It runs `aspen-release` on the machine through Session
+  Manager, which takes the tool from the release's own image and makes the box or upgrades it.
+  No port but the deployment's is open, and no key to the machine exists.
+- **box.json is the configuration after the first release.** The variables give only what the
+  box cannot change later (the domain, the bucket, the addresses) and the release. Everything
+  else is changed on the box, as on any other, so there is one way to change a setting rather
+  than two that disagree.
+- **The box is on a volume of its own**, so replacing the machine keeps the database, the
+  passwords, and the certificates (Let's Encrypt issues only so many for a name each week).
+  Docker waits for the volume's mount: a container started without it would make an empty
+  database on the machine's own disk.
 - **Backups are snapshots of that volume.** One taken while PostgreSQL runs restores the way a
   database that lost power does, which PostgreSQL is built to survive.
-- **Storage stays in S3 behind CloudFront.** It costs by use, which at this size is cents, and
-  keeping attachments on the machine would put them on the one disk that can be lost.
-- **NATS is told how much memory its streams may reserve** (`nats_stream_mib`), and the servers
-  size the streams to it through its monitoring port, rather than the gigabyte they ask for
-  when they cannot see a limit.
-- **The configuration files are in Secrets Manager rather than Parameter Store**, which would
-  be free: the machine's own role may read every parameter, so anything on the machine could
-  read them without going through ECS.
-- **The two configurations share modules for the cluster and the storage**, and the templates.
-  The rest differs in kind, not in size, so it is written twice rather than switched on a
-  variable.
+- **Storage stays in S3 behind CloudFront.** It costs by use, which at this size is cents,
+  keeping attachments on the machine would put them on the one disk that can be lost, and a
+  deployment that moves to the larger configuration takes the bucket over where it is.
+- **Ubuntu, for Docker with Compose from its own packages.** The box needs Compose 2.20 or
+  later, which Amazon Linux does not package.
 
-## Moving from one machine to the larger configuration
+## Moving a box to the larger configuration
 
-- **Only the database is copied.** Everything else a deployment keeps is in the bucket, which
-  the larger deployment takes over where it is, or is not worth keeping (Valkey, NATS).
+- **A box is exported whole, by the box** (`aspen-box export`): the database, people's files,
+  and what the next deployment must know (its voice servers' names). The box knows where its
+  database and its files are, wherever they are kept; the migration script needs to know only
+  the directory.
+- **From `deploy/aws-single`, only the database is copied.** Its files are in a bucket the
+  larger deployment takes over where it is. Everything else a deployment keeps is in one of
+  the two, or is not worth keeping (Valkey, NATS).
 - **A dump and a restore, with the old deployment stopped.** Someone on one machine has
   accepted being down for a release, and a small database copies in less time than that.
   Replicating instead would need a network path between the two deployments and a database
@@ -117,23 +133,22 @@ over managed services runs as containers on one machine.
 - **The restore is one transaction that refuses a database with tables in it.** Run twice, or
   after a release made empty tables, it changes nothing rather than mixing two databases.
 - **The dump travels through the bucket**, under a prefix the read path does not serve and a
-  rule deletes after a week. The two deployments are in separate networks with their databases
-  closed to everything outside, and the bucket is the one thing both already reach.
-- **The export and restore tasks are stock images in two containers**, one for PostgreSQL's
-  tools and one for S3, sharing a volume. Neither server's image has `pg_dump`, and an image
-  of our own for one use would have to be built and pushed at every release to be there when
-  wanted.
-- **Each task's role allows the one object.** The servers' own key pair could write it, but it
-  is inside `aspen.toml` and allows the whole bucket.
+  rule deletes after a week. The new deployment's database is closed to everything outside its
+  network, and the bucket is the one thing both sides already reach.
+- **The restore task is stock images in two containers**, one for S3 and one for PostgreSQL's
+  tools, sharing a volume. Neither server's image has `pg_restore`, and an image of our own for
+  one use would have to be built and published at every release to be there when wanted. Its
+  role allows the one object.
 - **The larger deployment imports the bucket and the distribution, and makes the rest of the
-  storage anew** (its key pair, certificate, access control). Those two cannot be made twice:
+  storage anew** (its certificate, access control). Those two cannot be made twice:
   the bucket holds the files, and `media.<domain>` belongs to one distribution at a time. The
   bucket's policy names the distribution, so both deployments read through it while they
   overlap.
 - **The old configuration forgets what was taken over instead of destroying it** (`tofu state
   rm`, from the list the media module gives as `handed_over`). A `removed` block cannot do it:
   the module still declares those resources for deployments that are staying.
-- **The name changes hands in the release's apply** (`public_dns`). Until then the larger
+- **The name changes hands in the release's apply** (`public_dns`), the read path's with it when
+  the files were copied rather than taken over. Until then the larger
   deployment exists beside the old one without the name, so everything slow (the database, the
   certificates, the load balancer) is made while the old one still serves.
 - **The old data volume is forgotten too, not deleted.** It is the old database, and the way

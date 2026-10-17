@@ -1,0 +1,36 @@
+#!/bin/bash
+# Brings the box on this machine to a release: makes it the first time, with the options after
+# the two images (aspen-box init's), and upgrades it after, the API never stopping. Each run
+# first takes the tool from the release's own `api` image. `tofu apply` runs it through Session
+# Manager (release.tf).
+#
+#   aspen-release API_IMAGE VOICE_IMAGE [INIT OPTION...]
+set -euo pipefail
+api=$1
+voice=$2
+shift 2
+box=/data/aspen/box.json
+
+cloud-init status --wait > /dev/null || {
+  echo "the machine's setup failed: \`cloud-init status --long\` says why" >&2
+  exit 1
+}
+
+tool=/opt/aspen-tool
+rm -rf "$tool.new" "$tool.old"
+mkdir -p "$tool.new"
+docker run --rm --entrypoint tar "$api" -C /usr/share/aspen -c . | tar -x -C "$tool.new"
+if [ -d "$tool" ]; then mv "$tool" "$tool.old"; fi
+mv "$tool.new" "$tool"
+
+if [ ! -e "$box" ]; then
+  aspen-box init --api-image "$api" --voice-image "$voice" "$@"
+  exec aspen-box up
+fi
+# A machine replaced, or an apply that changed nothing of the release: the box is on these
+# images already, and is only started.
+running=$(python3 -c 'import json, sys; images = json.load(open(sys.argv[1]))["images"]; print(images["api"], images["voice"])' "$box")
+if [ "$running" = "$api $voice" ]; then
+  exec aspen-box up
+fi
+exec aspen-box upgrade --api-image "$api" --voice-image "$voice"

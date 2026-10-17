@@ -1,6 +1,6 @@
-# Arriving from the one-machine configuration (README.md#moving-from-one-machine): a task that
-# restores that deployment's database, dumped into the bucket this one took over, into this
-# one's empty database. migrate_from_single.py runs it, before this deployment's first release.
+# Arriving from a box (README.md#moving-a-box-here): a task that restores the box's database,
+# copied into this deployment's bucket, into this one's empty database. migrate.py runs it,
+# before this deployment's first release.
 
 locals {
   restore_file = "/dump/database.dump"
@@ -91,7 +91,7 @@ resource "aws_ecs_task_definition" "restore" {
 }
 
 output "migration" {
-  description = "What migrate_from_single.py reads to move a one-machine deployment here."
+  description = "What migrate.py reads to move a box here."
   value = {
     name           = var.name
     region         = var.region
@@ -103,6 +103,8 @@ output "migration" {
     restore_task   = aws_ecs_task_definition.restore.family
     release_task   = aws_ecs_task_definition.server["release"].family
     voice_servers  = keys(var.voice_servers)
+    bucket         = module.media.bucket
+    dump           = module.media.migration_dump.uri
     load_balancer  = aws_lb.this.dns_name
   }
 }

@@ -104,11 +104,13 @@ Set `image_tag` to the new release, and `tofu apply`. The apply follows [Upgradi
 | Move a voice server to the current machine image | `tofu apply -replace='aws_instance.voice["<name>"]'`. It keeps its address. |
 | Change a voice server's capacity | Change it in `voice_servers`. A capacity set in the dashboard is overwritten at the next release. |
 
-## Moving from one machine
+## Moving a box here
 
-A deployment made with [`../aws-single`](../aws-single/README.md) moves here with its accounts,
-messages, sign-ins, and address. Its storage is kept, not copied: this deployment takes the
-bucket and its read path over. Only the database is copied.
+A deployment that runs on one machine with [`aspen-box`](../box/README.md), on AWS with
+[`../aws-single`](../aws-single/README.md) or anywhere else, moves here with its accounts,
+messages, sign-ins, and address. Its database is copied. From `../aws-single`, its storage is
+kept, not copied: this deployment takes the bucket and its read path over. From any other box,
+its files are copied into this deployment's bucket.
 
 **Not rehearsed on AWS.** The copy itself has been run between local stand-ins of the two
 deployments. The steps around it (taking the storage over, the name changing hands) have only
@@ -116,61 +118,85 @@ been planned. Read each plan before approving it.
 
 | Step | The old deployment | Takes |
 | --- | --- | --- |
-| 1 to 3 | Serves as usual | As long as you like |
-| 4 | Down | The copy, a release, and up to five minutes for the name to follow |
-| 5 | Gone | |
+| 1 and 2 | Serves as usual | As long as you like |
+| 3 | Down | The copy, a release, and up to five minutes for the name to follow |
+| 4 | Gone | |
 
-1. In `deploy/aws-single`, apply this release of the configuration to the old deployment. It
-   adds the task that exports the database.
+1. **A box elsewhere than AWS only:** its domain must be in a Route 53 hosted zone first. Make
+   the zone, write the records the box has now into it (`aspen-box doctor` lists them), move
+   the domain's name servers to it at your registrar, and wait until `dig NS <domain>` names
+   Route 53's.
 
-2. In `deploy/aws`, write `terraform.tfvars`. Give it a `name` the old deployment does not
-   have, and no voice server called `voice`. Leave out `region`, `domain`, and
-   `route53_zone_id`, which the next command takes from the old deployment. Then:
+2. In `deploy/aws`, write `terraform.tfvars`, without `image_tag`: with none, no server starts,
+   and the first release must find the old deployment's database, not make an empty one. Give
+   no voice server the name `voice`, which the box's own has. Then, from `../aws-single`:
 
    ```
-   ./migrate_from_single.py prepare
-   tofu init
+   ./migrate.py prepare --from-single
+   ```
+
+   which takes `region`, `domain`, and `route53_zone_id` from the old deployment (leave them
+   out), and needs a `name` the old deployment does not have. From any other box:
+
+   ```
+   ./migrate.py prepare --from-box --domain chat.example.org
+   ```
+
+   Then make everything:
+
+   ```
    tofu apply
    ```
 
-   The plan imports two things, the bucket and the CloudFront distribution, and changes the
-   distribution in place. **Stop if it would replace or destroy either.** Everything else is
-   new. `domain` still points at the old deployment.
+   From `../aws-single`, the plan imports two things, the bucket and the CloudFront
+   distribution, and changes the distribution in place. **Stop if it would replace or destroy
+   either.** Everything else is new. `domain` still points at the old deployment.
 
-3. Leave `image_tag` out of `terraform.tfvars` until the next step: with none, no server
-   starts, and the first release must find the old deployment's database, not make an empty
-   one.
-
-4. Move. This stops the old deployment:
+3. Move. This stops the old deployment. From `../aws-single`:
 
    ```
-   ./migrate_from_single.py copy
+   ./migrate.py copy
    ```
 
-   It stops the old servers, dumps the database into the bucket, and restores it here. Then
-   set `image_tag` in `terraform.tfvars` and release:
+   From any other box, export it on its machine, which stops it and writes everything into a
+   directory, with room for every file people have uploaded:
+
+   ```
+   aspen-box export ~/aspen-export
+   ```
+
+   Copy the directory to the machine you deploy from (`rsync -a`), keeping it where only you
+   can read it, since it is every account's data, and:
+
+   ```
+   ./migrate.py copy --export ~/aspen-export
+   ```
+
+   It copies the database into the bucket, and the files when they were copied out, and
+   restores the database here. Then set `image_tag` in `terraform.tfvars` and release:
 
    ```
    tofu apply
    ```
 
    The release brings the database up to this release, registers the voice servers, starts
-   every server, and points `domain` here. People stay signed in. Calls in progress ended when
-   the old servers stopped.
+   every server, and points `domain` (and `media.<domain>`, for a box elsewhere) here. People
+   stay signed in. Calls in progress ended when the old servers stopped.
 
-5. When the deployment answers at its address, let go of the old one:
+4. When the deployment answers at its address, let go of the old one:
 
    ```
-   ./migrate_from_single.py finish
-   tofu -chdir=../aws-single destroy
+   ./migrate.py finish
    ```
 
-   `finish` removes the old voice server's registration and has the old configuration forget
-   what this one now uses, so destroying it leaves the storage alone. The old data volume and
-   its snapshots are kept as the old database; delete them yourself once you are sure.
+   It removes the old voice servers' registrations. From `../aws-single`, it has the old
+   configuration forget what this one now uses, so that destroying it leaves the storage
+   alone: then `tofu -chdir=../aws-single destroy`. Its data volume and snapshots are kept as
+   the old deployment; delete them yourself once you are sure. From any other box, take it down
+   on its machine (`aspen-box down`), and any voice servers it had on other machines on theirs.
 
-   Keep `migration.auto.tfvars.json`. Its `media_bucket` is this deployment's bucket from now
-   on.
+   Keep `migration.auto.tfvars.json`: it holds `domain`, and from `../aws-single` the
+   `media_bucket` that is this deployment's bucket from now on.
 
 The dump is deleted from the bucket after seven days. It is never served: the read path has no
 `migration/` prefix.
@@ -180,16 +206,21 @@ The dump is deleted from the bucket after seven days. It is never served: the re
 Before `finish`, the old deployment is whole. **Whatever was written here since the copy is
 lost.**
 
+From `../aws-single`:
+
 1. Here, have this configuration forget the storage, so destroying it later leaves it alone:
 
    ```
    tofu state rm module.media.aws_s3_bucket.media module.media.aws_cloudfront_distribution.media
    ```
 
-2. In `deploy/aws-single`, `tofu apply`. It starts the old servers again and takes back the
-   name and the read path.
+2. In `deploy/aws-single`, `tofu apply`, which takes back the name and the read path, and
+   `$(tofu output -raw on_machine) aspen-box up`, which starts the old deployment again.
 
 3. Here, `tofu destroy`.
+
+From any other box: here, `tofu destroy`, which takes the records with it; write the box's
+records into the zone again, and `aspen-box up` on its machine.
 
 ## What it does not do yet
 

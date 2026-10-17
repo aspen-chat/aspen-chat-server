@@ -7,10 +7,8 @@ command in its place.
 
 `tofu apply` runs the first form for each release (release.tf), and `tofu output -raw run_task`
 prints the second with this deployment's options filled in. It prints what the task logged and
-exits with the task's exit code. It needs the AWS command line and the credentials `tofu` uses.
-
-Given subnets and a security group the task runs on Fargate in them; given neither, on the
-cluster's own machines, with the network its definition names.
+exits with the task's exit code. It runs the task on Fargate, in the subnets and security group
+given, and needs the AWS command line and the credentials `tofu` uses.
 """
 
 import argparse
@@ -61,8 +59,8 @@ def options() -> argparse.Namespace:
     option("region")
     option("cluster")
     option("task-definition")
-    option("subnets", default="")
-    option("security-group", default="")
+    option("subnets")
+    option("security-group")
     option("log-group")
     option("log-prefix")
     option("timeout", default=str(DEFAULT_TIMEOUT_SECONDS), type=int)
@@ -71,19 +69,18 @@ def options() -> argparse.Namespace:
 
 
 def start(opt: argparse.Namespace) -> str:
-    arguments = ["ecs", "run-task", "--cluster", opt.cluster, "--task-definition", opt.task_definition]
-    if opt.subnets:
-        network = {
-            "awsvpcConfiguration": {
-                "subnets": opt.subnets.split(","),
-                "securityGroups": [opt.security_group],
-                # The subnets are public ones; without an address the task cannot pull its image.
-                "assignPublicIp": "ENABLED",
-            }
+    network = {
+        "awsvpcConfiguration": {
+            "subnets": opt.subnets.split(","),
+            "securityGroups": [opt.security_group],
+            # The subnets are public ones; without an address the task cannot pull its image.
+            "assignPublicIp": "ENABLED",
         }
-        arguments += ["--launch-type", "FARGATE", "--network-configuration", json.dumps(network)]
-    else:
-        arguments += ["--launch-type", "EC2"]
+    }
+    arguments = [
+        "ecs", "run-task", "--cluster", opt.cluster, "--task-definition", opt.task_definition,
+        "--launch-type", "FARGATE", "--network-configuration", json.dumps(network),
+    ]  # fmt: skip
     if opt.command:
         overrides = {"containerOverrides": [{"name": CONTAINER, "command": opt.command}]}
         arguments += ["--overrides", json.dumps(overrides)]

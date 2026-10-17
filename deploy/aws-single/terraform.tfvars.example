@@ -5,10 +5,5 @@ domain          = "chat.example.org"
 route53_zone_id = "Z0123456789ABCDEFGHIJ"
 acme_email      = "admin@example.org"
 
-# Leave out for the first apply, which makes the repositories to push the images to.
-# image_tag = "2026-10-12"
-
-# email = {
-#   smtp_url = "smtps://aspen:password@smtp.example.org"
-#   from     = "Example Chat <noreply@chat.example.org>"
-# }
+# The release to run: a tag of ghcr.io/aspen-chat/aspen-api and aspen-voice.
+image_tag = "TAG"

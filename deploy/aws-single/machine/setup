@@ -1,0 +1,18 @@
+#!/bin/sh
+# Mounts the data volume at /data, the first time it boots on this machine. A volume that holds
+# no filesystem is given one; one that does is never formatted. Later boots mount it from
+# /etc/fstab, and a machine whose volume is missing does not finish booting, so nothing starts
+# on its own disk in the volume's place: Docker waits for the mount (docker-data.conf).
+set -eu
+device=$1
+for attempt in $(seq 1 120); do
+  [ -e "$device" ] && break
+  sleep 5
+done
+blkid "$device" > /dev/null || mkfs.ext4 -q "$device"
+uuid=$(blkid -s UUID -o value "$device")
+mkdir -p /data
+grep -q "^UUID=$uuid " /etc/fstab || echo "UUID=$uuid /data ext4 defaults 0 2" >> /etc/fstab
+systemctl daemon-reload
+mount /data
+systemctl restart docker

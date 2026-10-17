@@ -1,10 +1,10 @@
 output "public_url" {
-  value = local.public_url
+  value = "https://${var.domain}"
 }
 
-output "address" {
-  description = "The machine's address, which the deployment's names point at."
-  value       = aws_eip.this.public_ip
+output "addresses" {
+  description = "The machine's addresses, which the deployment's names point at."
+  value       = [aws_eip.this.public_ip, local.ipv6_address]
 }
 
 output "instance_id" {
@@ -12,19 +12,7 @@ output "instance_id" {
   value       = aws_instance.this.id
 }
 
-output "voice_server_id" {
-  value = random_uuid.voice.result
-}
-
-output "run_task" {
-  description = "Runs an operator command against the deployment, as a task of its own: append the command, such as `aspen-chat-server admin grant <username>`."
-  value = join(" ", [
-    "python3 ${path.module}/../aws/run_task.py",
-    "--region ${var.region}",
-    "--cluster ${module.cluster.name}",
-    "--task-definition ${aws_ecs_task_definition.this["release"].family}",
-    "--log-group ${module.cluster.log_group}",
-    "--log-prefix release",
-    "--",
-  ])
+output "on_machine" {
+  description = "Runs a command on the machine and prints what it wrote: append it, such as `aspen-box run -- aspen-chat-server admin grant <username>`."
+  value       = "python3 ${path.module}/on_machine.py --region ${var.region} --instance ${aws_instance.this.id} --"
 }

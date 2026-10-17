@@ -142,6 +142,12 @@ services:
       timeout: 3s
       start_period: 30s
 
+  # `aspen-box export` copies people's files out of the bucket with this, whichever S3 it is.
+  files:
+    network_mode: host
+    profiles: ["tool"]
+    image: public.ecr.aws/aws-cli/aws-cli:latest
+
   # `aspen-box` runs the migrations and the operator commands in this, with the image a
   # release is moving to.
   tool:

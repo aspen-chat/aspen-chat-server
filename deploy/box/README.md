@@ -4,9 +4,10 @@
 or a small computer you own. It is for a community of tens of people. More voice servers can
 run on other machines, each a box of its own.
 
-**New and lightly tried.** `scripts/check_box.py` starts, upgrades, backs up, and restores it,
-with a voice server on a second machine and a database elsewhere, every machine's network stood
-in for. It has not yet run on an ARM computer, on a real domain, or behind a home router.
+**New and lightly tried.** `scripts/check_box.py` starts, upgrades, backs up, restores, and
+exports it, with a voice server on a second machine and a database elsewhere, every machine's
+network stood in for. It has not yet run on an ARM computer, on a real domain, or behind a home
+router.
 
 ## What it needs
 
@@ -89,6 +90,7 @@ for x86-64 and 64-bit ARM, and `--tag` names a release of both. To run images of
 | Change a setting | Edit `~/aspen/box.json`, then `aspen-box up`, which restarts only what the change touches. |
 | Run an operator command | `aspen-box run -- aspen-chat-server …` |
 | See what is running, or why something stopped | `aspen-box status`, `aspen-box logs [SERVICE]` |
+| Move to a deployment that grows ([on AWS](../aws/README.md#moving-a-box-here)) | `aspen-box export DIR` stops the box and writes its database and people's files into `DIR`, which the next deployment is made from. `aspen-box up` starts the box again. |
 
 People's files are not in the database's backups. Kept on the machine, they are in
 `~/aspen/data/garage`: copy that directory too, with the deployment stopped (`aspen-box down`).

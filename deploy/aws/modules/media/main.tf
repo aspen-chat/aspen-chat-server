@@ -18,7 +18,7 @@ resource "aws_s3_bucket" "media" {
 }
 
 # `migration/` holds a dump of the database while a deployment moves from one configuration to
-# another (../../migrate_from_single.py). The read path does not serve it, and a dump is every
+# another (../../migrate.py). The read path does not serve it, and a dump is every
 # account's data, so one is not left there.
 resource "aws_s3_bucket_lifecycle_configuration" "media" {
   bucket = aws_s3_bucket.media.id

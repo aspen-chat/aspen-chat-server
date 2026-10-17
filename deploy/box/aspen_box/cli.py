@@ -7,6 +7,7 @@ another machine.
     aspen-box doctor               check the machine, the network, and the deployment
     aspen-box run -- COMMAND…      an operator command: aspen-chat-server admin grant <username>
     aspen-box backup | restore FILE  the database, wherever it is kept
+    aspen-box export DIR           stop, and write out everything, for a deployment that replaces it
     aspen-box voice add NAME | remove NAME | list   voice servers on other machines
     aspen-box init-voice --join FILE --tag TAG      a box for one of them, on its machine
     aspen-box capacity             measure how many people the voice server carries
@@ -29,7 +30,7 @@ import secrets
 import sys
 import uuid
 
-from . import data, doctor, lifecycle, voice
+from . import data, doctor, export, lifecycle, voice
 from .common import HERE_VOICE, Box, Failed, addresses, ask
 from .database import DATABASE_URL_VARIABLE, MINIMUM_POSTGRES, check_database_url
 from .render import render
@@ -168,6 +169,10 @@ def arguments() -> argparse.ArgumentParser:
     back = commands.add_parser("restore")
     back.add_argument("file", type=pathlib.Path)
     back.add_argument("--yes", action="store_true")
+    out = commands.add_parser("export", help="stops the deployment, and writes its database and people's files into DIR")
+    out.add_argument("directory", type=pathlib.Path)
+    out.add_argument("--database-only", action="store_true", help="leave the files in the bucket, which the next deployment takes over")
+    out.add_argument("--yes", action="store_true", help="do not ask before stopping the deployment")
     voices = commands.add_parser("voice").add_subparsers(dest="voice", required=True)
     added = voices.add_parser("add", help="a voice server on another machine")
     added.add_argument("name")
@@ -193,7 +198,7 @@ def main() -> None:
     store = Box(opt.dir.expanduser().resolve())
     steps = {
         "init": init, "up": lifecycle.up, "upgrade": lifecycle.upgrade, "doctor": doctor.doctor,
-        "run": data.run_command, "backup": data.backup, "restore": data.restore,
+        "run": data.run_command, "backup": data.backup, "restore": data.restore, "export": export.export,
         "init-voice": voice.init_voice, "capacity": data.capacity, "refresh-address": data.refresh_address,
         "status": lambda store, opt: store.compose("ps", "--all"),
         "logs": lambda store, opt: store.compose("logs", "--tail", "200", *opt.service),
