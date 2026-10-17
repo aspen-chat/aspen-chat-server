@@ -144,3 +144,6 @@ interface WindowControlsOverlay extends EventTarget {
 interface Navigator {
   readonly windowControlsOverlay?: WindowControlsOverlay;
 }
+
+/** This build's name (`webClientBuild` in `vite.config.ts`); `null` from the development server. */
+declare const __ASPEN_WEB_CLIENT_BUILD__: string | null;

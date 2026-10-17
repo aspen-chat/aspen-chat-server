@@ -73,6 +73,12 @@ restart.
 2. Once a release has been out for a few days, remove old files from `assets/`: delete what the
    newest build does not have.
 
+Each build names itself in its `index.html`, and the server tells every app that connects which
+build it serves. A web client open from before the release then shows a strip offering to
+reload, and reloads by itself the next time its tab is hidden. One that asks for a part the
+server no longer has reloads then. Drafts are kept either way. The desktop and mobile apps carry
+their own web client and are not affected.
+
 ---
 
 Previous: [Step 4: Starting the API server](4-api-server.md) · Next:

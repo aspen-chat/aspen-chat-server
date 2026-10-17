@@ -49,6 +49,43 @@ const ASPEN_IMAGE_SIZE: u32 = 512;
 /// The name a deployment that has not given one goes by.
 const ASPEN: &str = "Aspen";
 
+/// The `<meta>` in `index.html` that names its build (`client/packages/app/vite.config.ts`).
+const BUILD_META: &str = "aspen-web-client-build";
+/// How long one reading of the build stands, so that every event stream opening reads the file
+/// no more than this often.
+const BUILD_FRESH: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The build of the web client served, as its `index.html` names it, or `None` when it names
+/// none or cannot be read. A new release is seen within `BUILD_FRESH`.
+pub async fn build(config: &AspenConfig) -> Option<String> {
+    static LAST: std::sync::Mutex<Option<(std::time::Instant, Option<String>)>> =
+        std::sync::Mutex::new(None);
+    if let Some((at, build)) = LAST.lock().ok()?.as_ref()
+        && at.elapsed() < BUILD_FRESH
+    {
+        return build.clone();
+    }
+    let index = tokio::fs::read_to_string(config.web_client.dir.join(INDEX))
+        .await
+        .ok();
+    let build = index.as_deref().and_then(build_of);
+    if let Ok(mut last) = LAST.lock() {
+        *last = Some((std::time::Instant::now(), build.clone()));
+    }
+    build
+}
+
+/// The `content` of the build's `<meta>`, which the build writes as
+/// `<meta name="aspen-web-client-build" content="…">`.
+fn build_of(index: &str) -> Option<String> {
+    let at = index.find(&format!("name=\"{BUILD_META}\""))?;
+    let tag = &index[index[..at].rfind('<')?..];
+    let tag = &tag[..tag.find('>')?];
+    let content = &tag[tag.find("content=\"")? + "content=\"".len()..];
+    let build = &content[..content.find('"')?];
+    (!build.is_empty()).then(|| build.to_string())
+}
+
 /// What the page says about itself, written into its head by `open_graph.html`.
 struct Tags {
     site_name: String,
@@ -445,6 +482,17 @@ fn with_head(index: &str, head: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_build_its_page_names() {
+        let page = "<head><meta charset=\"utf-8\" />\n<meta name=\"aspen-web-client-build\" content=\"0f3a-77\">\n</head>";
+        assert_eq!(build_of(page).as_deref(), Some("0f3a-77"));
+        assert_eq!(build_of("<head></head>"), None);
+        assert_eq!(
+            build_of("<meta name=\"aspen-web-client-build\" content=\"\">"),
+            None
+        );
+    }
 
     const INDEX: &str = "<!doctype html>\n<html lang=\"en\">\n  <head>\n    \
         <meta charset=\"UTF-8\" />\n    <title>Aspen</title>\n    \

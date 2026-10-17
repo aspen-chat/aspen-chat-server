@@ -152,7 +152,11 @@ function harness(
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
     random,
-    onReady: (info) => log.push(`ready:${String(info.resumed)}`),
+    onReady: (info) =>
+      log.push(
+        `ready:${String(info.resumed)}` +
+          (info.webClientBuild === null ? "" : `:${info.webClientBuild}`),
+      ),
     onConnectionLost: (reason) => log.push(`lost:${reason}`),
     onResyncRequired: () => log.push("resync"),
     onEvent: (e) => log.push(`event:${e.serverEvent}`),
@@ -194,6 +198,19 @@ describe("EventStream", () => {
     socket?.onmessage?.({ data: JSON.stringify({ type: "event", sequence: 42, event: {} }) });
     expect(log).toEqual(["ready:false", "event:message", "invalid", "invalid"]);
     expect(stream.lastSequence).toBe(41);
+  });
+
+  it("tells which web client build the server serves, when it names one", async () => {
+    const { stream, log, sockets } = harness();
+    stream.start();
+    await flush();
+    const socket = sockets[0];
+    socket?.onopen?.();
+    socket?.onmessage?.({
+      data: JSON.stringify({ type: "ready", userId: uuid, resumed: false, webClientBuild: "b-2" }),
+    });
+    expect(log).toEqual(["ready:false:b-2"]);
+    stream.stop();
   });
 
   it("delivers each event id once, however many copies arrive", async () => {

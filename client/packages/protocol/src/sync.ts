@@ -337,6 +337,7 @@ export class AspenSync {
   readonly #listeners = new Set<SyncListener>();
   #status: SyncStatus = "stopped";
   #lastError: Problem | null = null;
+  #webClientBuild: string | null = null;
   /** Events received while a bootstrap is in flight, applied once it lands. `null` when live. */
   #held: ServerEvent[] | null = null;
   #bootstrappedAt = 0;
@@ -489,6 +490,7 @@ export class AspenSync {
       url: eventStreamUrl(options.client.baseUrl),
       authenticate: (o) => options.client.freshSessionToken(o),
       onReady: (info) => {
+        this.#setWebClientBuild(info.webClientBuild);
         this.#onReady(info.resumed);
       },
       onEvent: (event) => {
@@ -560,6 +562,15 @@ export class AspenSync {
 
   get lastError(): Problem | null {
     return this.#lastError;
+  }
+
+  /**
+   * The build of the web client this deployment serves, as of the stream's last connection, or
+   * `null` before one or when it names none. A web client this deployment served compares it
+   * with its own (`NewRelease`). Its change is told to `subscribe`'s listeners.
+   */
+  get webClientBuild(): string | null {
+    return this.#webClientBuild;
   }
 
   /**
@@ -3391,6 +3402,16 @@ export class AspenSync {
     }
     await Promise.all(ids.flatMap((id) => this.#userLoads.get(id) ?? []));
     return ids.map((id) => this.store.user(id));
+  }
+
+  #setWebClientBuild(build: string | null): void {
+    if (this.#webClientBuild === build) {
+      return;
+    }
+    this.#webClientBuild = build;
+    for (const listener of Array.from(this.#listeners)) {
+      listener();
+    }
   }
 
   #setStatus(status: SyncStatus): void {

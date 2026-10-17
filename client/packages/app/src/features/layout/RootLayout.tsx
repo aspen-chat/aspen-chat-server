@@ -17,6 +17,7 @@ import { DeviceLinkRoute } from "@/features/auth/DeviceLinkScreen";
 import { LoginForm } from "@/features/auth/LoginForm";
 import { RegisterForm } from "@/features/auth/RegisterForm";
 import { useServerChoice } from "@/features/auth/serverChoice";
+import { NewRelease } from "@/features/layout/NewRelease";
 import { SyncBanner } from "@/features/layout/SyncBanner";
 import { EnrollmentScreen } from "@/features/security/EnrollmentScreen";
 import { VerificationScreen } from "@/features/email/VerificationScreen";
@@ -148,6 +149,7 @@ function SignedIn() {
       <Announcer />
       <div className="flex h-full flex-col">
         <SyncBanner />
+        <NewRelease />
         <SourcePickerDialog />
         {/* Panels slide in from beyond the screen's edge; nothing there may widen the page. */}
         <div className="flex min-h-0 flex-1 overflow-x-clip">

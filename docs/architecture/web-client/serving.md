@@ -39,6 +39,16 @@ Everything is read from the directory as it is asked for. So a release copied in
 | Under `/assets/` (the build names them by their contents) | `public, max-age=31536000, immutable` |
 | Everything else, the page included | `no-cache`, so a new release reaches browsers on their next load |
 
+## Its build
+
+Each build of the web client names itself, in its `index.html` as
+`<meta name="aspen-web-client-build" content="…">` and in its code
+(`client/packages/app/vite.config.ts`). `api::web_client::build` reads the page's, at most once
+every `BUILD_FRESH` (five seconds) however many event streams open, and the event stream's
+`ready` frame carries it as `webClientBuild`. A web client this deployment served that finds
+another build there is out of date (the client's `NewRelease`). The files a page of an older
+release loads later may be gone, since every release replaces `assets/` in time.
+
 ## `view-fonts.css`
 
 The build writes `view-fonts.css` at the root: every `@font-face` the app bundles, under that one name.

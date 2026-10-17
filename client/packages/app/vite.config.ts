@@ -1,5 +1,6 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { attributions } from "./attributions/plugin";
@@ -74,7 +75,32 @@ function writtenPolicy(shell: "desktop" | "mobile"): Plugin {
   };
 }
 
-export default defineConfig(({ mode }) => {
+/**
+ * Names each build of the web client: in its page, as `<meta name="aspen-web-client-build">`,
+ * which the server serving it reads and gives every event stream (`api::web_client::build`), and
+ * in its code, as `__ASPEN_WEB_CLIENT_BUILD__`, so that a page open from before a release can
+ * tell it is out of date (`NewRelease`). The development server's page names none: it is not the
+ * build the server serves.
+ */
+function webClientBuild(command: "build" | "serve"): Plugin {
+  const build = command === "build" ? randomUUID() : null;
+  return {
+    name: "aspen-web-client-build",
+    config: () => ({ define: { __ASPEN_WEB_CLIENT_BUILD__: JSON.stringify(build) } }),
+    transformIndexHtml: () =>
+      build === null
+        ? []
+        : [
+            {
+              tag: "meta",
+              attrs: { name: "aspen-web-client-build", content: build },
+              injectTo: "head",
+            },
+          ],
+  };
+}
+
+export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const proxyTarget = env["VITE_DEV_PROXY_TARGET"] ?? defaultDevProxyTarget;
   return {
@@ -82,6 +108,7 @@ export default defineConfig(({ mode }) => {
       fallbackFonts(),
       viewFonts(),
       attributions(),
+      webClientBuild(command),
       react(),
       tailwindcss(),
       ...(mode === "desktop" || mode === "mobile" ? [writtenPolicy(mode)] : []),

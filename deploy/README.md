@@ -45,4 +45,5 @@ docker build -f deploy/docker/Dockerfile --target voice -t aspen-voice .
 A new `api` image holds only its own web client's files. People with the web client open during a
 release fetch some parts later, from the release they started with
 ([Releasing a new web client](../docs/operators/installing/5-web-client.md#releasing-a-new-web-client)),
-and those are gone once the old containers are.
+and those are gone once the old containers are. Those pages reload when they find it
+(`client/docs/architecture/new-release.md`).

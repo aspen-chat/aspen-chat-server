@@ -223,6 +223,13 @@ pub enum ServerMessage<'a> {
         /// `false` on a first connection, or when the requested position has already left the
         /// stream: the client must rebuild its cached state from REST.
         resumed: bool,
+        /// The build of the web client this server serves, as that build names itself. A web
+        /// client this deployment served that is of another build is out of date, and reloads:
+        /// the files it would load later may be gone. Absent when the web client names none. A
+        /// client served from elsewhere (the desktop and mobile apps, or a web client signed in
+        /// here from another deployment) has nothing to compare it with.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        web_client_build: Option<String>,
     },
     /// One server event. `sequence` increases monotonically within a connection and is what
     /// the client hands back as `resumeAfter`.
@@ -455,6 +462,7 @@ async fn handle_socket_conn(
     let ready = ServerMessage::Ready {
         user_id: session.user.id,
         resumed: subscription.resumed,
+        web_client_build: crate::web_client::build(&state.config).await,
     };
     if let Err(e) = send_json(&mut socket, &ready).await {
         log_send_error(&e);

@@ -55,6 +55,8 @@ export interface ReadyInfo {
   userId: string;
   /** Whether the server replayed everything since the last sequence this client had seen. */
   resumed: boolean;
+  /** The build of the web client the server serves, or `null` when it names none. */
+  webClientBuild: string | null;
 }
 
 export interface EventStreamHandlers {
@@ -375,7 +377,11 @@ export class EventStream {
           this.#lastSequence = null;
           this.#options.onResyncRequired?.();
         }
-        this.#options.onReady?.({ userId: frame.userId, resumed: frame.resumed });
+        this.#options.onReady?.({
+          userId: frame.userId,
+          resumed: frame.resumed,
+          webClientBuild: frame.webClientBuild ?? null,
+        });
         break;
       }
       case "event":
