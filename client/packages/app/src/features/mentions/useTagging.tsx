@@ -200,6 +200,22 @@ export function useTagging({
     return false;
   };
 
+  /**
+   * Puts `tag` at the end of the draft, picked as though chosen from the list, from somewhere
+   * outside the box (a user's Mention); the caret goes after it, in `box` when given.
+   */
+  const insert = useCallback(
+    (tag: PickedTag, box: HTMLTextAreaElement | null) => {
+      const before = draft === "" || /\s$/u.test(draft) ? draft : draft + " ";
+      const after = before + tag.text + " ";
+      setDraft(after);
+      setPicks((held) => (held.some((p) => p.token === tag.token) ? held : [...held, tag]));
+      setCaret(after.length);
+      placing.current = { box, at: after.length };
+    },
+    [draft, setDraft],
+  );
+
   const followCaret = (event: SyntheticEvent<HTMLTextAreaElement>) => {
     setCaret(event.currentTarget.selectionStart);
   };
@@ -237,6 +253,7 @@ export function useTagging({
     picks,
     /** The text as it is sent, picked tags and all. */
     encode: (text: string) => encodeTags(text, picks),
+    insert,
     /** Forgets the picks, once what they were for is sent. */
     reset: () => {
       setPicks([]);

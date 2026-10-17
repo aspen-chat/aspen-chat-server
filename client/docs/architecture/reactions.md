@@ -55,7 +55,9 @@ It lists every emoji and, for the chosen one, everyone who reacted, a page at a 
 ## Quick reactions
 
 Quick reactions sit atop a touch screen's message actions (`MessageActionSheet`): five emoji and
-an unnamed Add a reaction button. The button opens the full picker in the sheet's place.
+an unnamed Add a reaction button. The button opens the full picker in the sheet's place. A
+message's context menu (`MessageContextMenu`) has them atop it too, at a pointer's size
+(`compact`), its picker opening where the menu was.
 
 ### Which five
 

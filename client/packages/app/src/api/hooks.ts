@@ -437,6 +437,11 @@ export function useCollapsed(categoryId: string): boolean {
   return useTopic(`collapse:${categoryId}`, (s) => s.collapsed(categoryId));
 }
 
+/** Whether any of `channelIds` is unread, as a category's menu offers marking them read. */
+export function useAnyUnread(channelIds: readonly string[]): boolean {
+  return useTopic("unread", (store) => channelIds.some((id) => store.unread(id)));
+}
+
 /**
  * The channels among `channelIds` that stay in view under a collapsed category: the unread and
  * unmuted ones, and voice channels with someone in the call. Subscribes to `unread`, which

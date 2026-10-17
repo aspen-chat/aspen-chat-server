@@ -45,6 +45,11 @@ owner opens. It stays built afterwards, so it can move as it closes.
   plugin's annotation, and a link's menu.
 - Beside the list: each channel's and each DM's menu (`ChannelMenu`).
 
+Every context menu (`ContextMenu`, see [context-menus.md](../context-menus.md)) is built the same
+way, from its `opened`: a message's (`MessageContextMenu`), a person's under each name and picture
+(`UserMenu` in `ProfilePopover`), and a listed message's. Until then a row holds only
+`useContextMenu`'s few hooks for each.
+
 Wrap an overlay in `OnceOpen` wherever a list gives each of its rows one.
 
 ## Measuring

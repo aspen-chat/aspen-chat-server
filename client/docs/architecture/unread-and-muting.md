@@ -139,11 +139,13 @@ still shows inside it.
 | Mute | One of the offered lengths; or, while muted, until when and Unmute |
 | Notifications | Names the level in force |
 
+Mute and Notifications are offered on a text channel, a DM, and a channel of a plugin's kind
+(whose plugin's notices its mute and level govern). The menu holds more besides; see
+[context-menus.md](context-menus.md).
+
 It opens:
 
-- on a right click on the row of a text channel, a DM, or a channel of a plugin's kind (whose
-  plugin's notices its mute and level govern);
+- on a right click on the channel's or DM's row, at the pointer;
 - from the row's `ChannelMenuButton`, which keyboards and touch screens use, since a long press on
-  a row starts dragging it.
-
-It opens beside the row, and below it on a one-pane screen, where there is no room beside it.
+  a row starts dragging it. It opens beside the button, and below it on a one-pane screen, where
+  there is no room beside it.

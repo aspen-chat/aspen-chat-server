@@ -35,14 +35,37 @@ export function AddToCategoryDialog({ category }: { category: Category }) {
           <PlusIcon size={14} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ModalOverlay className={overlayClass} isDismissable>
-        <Modal className={modalClass}>
-          <Dialog className={dialogClass}>
-            {({ close }) => <Steps category={category} close={close} />}
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
+      <AddToCategoryModal category={category} />
     </DialogTrigger>
+  );
+}
+
+/**
+ * Picking a text or voice channel to make in the category, then naming it, in a modal opened by
+ * the trigger it is in, or by `isOpen` (from the category's menu).
+ */
+export function AddToCategoryModal({
+  category,
+  isOpen,
+  onOpenChange,
+}: {
+  category: Category;
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  return (
+    <ModalOverlay
+      className={overlayClass}
+      isDismissable
+      {...(isOpen === undefined ? {} : { isOpen })}
+      {...(onOpenChange === undefined ? {} : { onOpenChange })}
+    >
+      <Modal className={modalClass}>
+        <Dialog className={dialogClass}>
+          {({ close }) => <Steps category={category} close={close} />}
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
   );
 }
 

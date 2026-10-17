@@ -104,7 +104,9 @@ A folder left with one community goes.
 - A closed folder shows its first four icons two by two.
 - It speaks for its communities: the unread mark, the tag count, the current community's ring.
 - Pressing it opens it in place.
-- Its menu, from a right click or its options button, renames, tints, and ungroups it.
+- Its menu, from a right click or its options button, renames, tints, and ungroups it. A
+  community's icon has a menu of its own (`CommunityMenu`, see
+  [context-menus.md](context-menus.md)).
 - Each deployment still gets its own share of the order, folders opened in place
   (`railSequence`).
 

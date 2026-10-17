@@ -2329,5 +2329,37 @@
   "newRelease": {
     "ready": "A new version of Aspen is ready.",
     "reload": "Reload"
+  },
+  "contextMenu": {
+    "link": "Link",
+    "attachment": "Attachment",
+    "openLink": "Open link",
+    "openOriginal": "Open original",
+    "copyLinkAddress": "Copy link address",
+    "copyFileAddress": "Copy file address",
+    "copiedAddress": "Copied the address",
+    "joinMuted": "Join muted",
+    "markRead": "Mark as read",
+    "leaveHeading": "Leave {community}?",
+    "expandCategory": "Expand category",
+    "collapseCategory": "Collapse category",
+    "addChannel": "Add a channel",
+    "renameCategory": "Rename category",
+    "deleteCategory": "Delete category"
+  },
+  "userMenu": {
+    "label": "Actions for {name}",
+    "reach": "Reach them",
+    "personal": "Between you",
+    "moderation": "Moderation",
+    "profile": "Profile",
+    "call": "Call",
+    "mention": "Mention",
+    "copyUsername": "Copy username",
+    "copiedUsername": "Copied the username",
+    "changeNickname": "Change nickname",
+    "remove": "Remove from community",
+    "removeHeading": "Remove {name}?",
+    "ban": "Ban from community"
   }
 }

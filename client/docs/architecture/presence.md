@@ -100,7 +100,8 @@ yellow, in greyscale, and under forced colours.
 
 ## Choosing a status
 
-Pressing the user's picture and name in the user bar (`SidebarFooter`) opens `PresenceMenu`:
+Pressing the user's picture and name in the user bar (`SidebarFooter`), or right-clicking them,
+opens `PresenceMenu`:
 
 - **Online** ends any chosen status, so their connections say it again.
 - **Away**, **Do not disturb**, and **Invisible** each open how long to keep it: until they change

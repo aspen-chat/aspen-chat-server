@@ -1,6 +1,6 @@
 import type { PresenceOverride, User, UserOnlineStatus } from "@aspen/protocol";
 import { CaretRightIcon, CheckIcon } from "@phosphor-icons/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Button,
   Dialog,
@@ -15,6 +15,7 @@ import { useChosenPresence } from "@/api/hooks";
 import { problemText } from "@/api/problemText";
 import { UNTIL } from "@/features/channels/muteEnd";
 import { Avatar } from "@/features/communities/Avatar";
+import { claimContextMenu } from "@/features/layout/contextMenuState";
 import { toast } from "@/features/layout/toast";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { displayNameOf, statusLine } from "@/features/users/profile";
@@ -64,6 +65,7 @@ export function PresenceMenu({ me, groundClassName }: { me: User; groundClassNam
   const onePane = useOnePane();
   const status = knownStatus(me.onlineStatus);
   const name = displayNameOf(me);
+  const [open, setOpen] = useState(false);
   const choose = (presenceOverride: PresenceOverride | null, seconds: number | null) => {
     void Promise.all(
       sources.map((source) =>
@@ -94,27 +96,37 @@ export function PresenceMenu({ me, groundClassName }: { me: User; groundClassNam
         ? m.presence.forGood
         : format(m.presence.until, { time: until.format(new Date(chosen.until)) });
   return (
-    <DialogTrigger>
-      <Button
-        aria-label={format(m.presence.change, { status: m.status[status] })}
-        className="flex min-w-0 flex-1 items-center gap-3 rounded-md p-1 text-start outline-none hover:bg-surface-hover pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+    <DialogTrigger isOpen={open} onOpenChange={setOpen}>
+      {/* A right click on the user's own name opens the same menu, where it always opens. */}
+      <span
+        className="contents"
+        onContextMenu={(event) => {
+          if (claimContextMenu(event)) {
+            setOpen(true);
+          }
+        }}
       >
-        <span className="relative shrink-0">
-          <Avatar name={name} iconId={me.icon} size="lg" />
-          <StatusDot
-            status={status}
-            label={m.status[status]}
-            large
-            groundClassName={groundClassName}
-          />
-        </span>
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-base font-medium">{name}</span>
-          {me.status != null && (
-            <span className="truncate text-sm text-ink-muted">{statusLine(me.status)}</span>
-          )}
-        </span>
-      </Button>
+        <Button
+          aria-label={format(m.presence.change, { status: m.status[status] })}
+          className="flex min-w-0 flex-1 items-center gap-3 rounded-md p-1 text-start outline-none hover:bg-surface-hover pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+        >
+          <span className="relative shrink-0">
+            <Avatar name={name} iconId={me.icon} size="lg" />
+            <StatusDot
+              status={status}
+              label={m.status[status]}
+              large
+              groundClassName={groundClassName}
+            />
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-base font-medium">{name}</span>
+            {me.status != null && (
+              <span className="truncate text-sm text-ink-muted">{statusLine(me.status)}</span>
+            )}
+          </span>
+        </Button>
+      </span>
       <Popover placement="top start" className={popoverClass}>
         <Dialog aria-label={m.presence.menu} className="outline-none">
           {({ close }) => (

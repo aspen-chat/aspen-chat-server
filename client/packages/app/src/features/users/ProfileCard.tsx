@@ -1,6 +1,7 @@
 import type { User } from "@aspen/protocol";
 import {
   ChatCircleIcon,
+  DotsThreeIcon,
   EnvelopeSimpleIcon,
   FlagIcon,
   PhoneIcon,
@@ -8,8 +9,8 @@ import {
   ProhibitIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useNavigate, useParams } from "@tanstack/react-router";
-import { useEffect, useState, type ReactNode, type RefObject } from "react";
+import { useParams } from "@tanstack/react-router";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   Button,
   Dialog,
@@ -46,15 +47,17 @@ import { useNameColor } from "@/features/users/nameColor";
 import { displayNameOf, statusLine, handleOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
-import { useDomain, channelLink } from "@/features/messages/links";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { CopyIdButton } from "@/features/layout/CopyId";
 import { ReportModal } from "@/features/reports/ReportDialog";
 import { PluginAccount, UserAnnotations } from "@/features/plugins/Annotations";
 import { ClearNicknameButton, NicknameForm, ReportNicknameButton } from "@/features/users/Nickname";
 import { useNameIn } from "@/features/users/nameIn";
+import { useReach } from "@/features/users/reach";
 import { mailtoUrl } from "@/features/layout/safeUrl";
 import { OnceOpen } from "@/features/layout/OnceOpen";
+import { useContextMenu } from "@/features/layout/contextMenuState";
+import { UserMenu } from "@/features/users/UserMenu";
 
 /**
  * A user's profile as a card, its parts on planes: who they are, their pronouns, what they are up to, the
@@ -89,7 +92,7 @@ export function ProfileCard({ user }: { user: User }) {
       <div className={planeClass}>
         <div className="flex items-center gap-3">
           <Avatar name={name} iconId={user.icon} size="lg" />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <span className="truncate text-base font-semibold" style={{ color: nameColor }}>
                 {name}
@@ -111,6 +114,12 @@ export function ProfileCard({ user }: { user: User }) {
               </div>
             )}
           </div>
+          <MoreActions
+            user={user}
+            name={name}
+            communityId={communityId ?? null}
+            channelId={channelId ?? null}
+          />
         </div>
         {user.plugin != null ? (
           <PluginAccount pluginId={user.plugin} />
@@ -184,6 +193,54 @@ export function ProfileCard({ user }: { user: User }) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The card's way to everything else that can be done to the user (`UserMenu`), which a right
+ * click on their name offers elsewhere; on a touch screen it is the way to it.
+ */
+function MoreActions({
+  user,
+  name,
+  communityId,
+  channelId,
+}: {
+  user: User;
+  name: string;
+  communityId: string | null;
+  channelId: string | null;
+}) {
+  const m = useMessages();
+  const menu = useContextMenu();
+  const button = useRef<HTMLButtonElement>(null);
+  const label = format(m.userMenu.label, { name });
+  return (
+    <>
+      <Tooltip text={label}>
+        <Button
+          ref={button}
+          aria-label={label}
+          onPress={(event) => {
+            menu.toggleFromButton(event.pointerType === "keyboard");
+          }}
+          className="tap-target shrink-0 self-start rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
+        >
+          <DotsThreeIcon size={18} aria-hidden="true" />
+        </Button>
+      </Tooltip>
+      {menu.opened && (
+        <UserMenu
+          menu={menu}
+          user={user}
+          communityId={communityId}
+          channelId={channelId}
+          profile={false}
+          button={button}
+          placement="bottom end"
+        />
+      )}
+    </>
   );
 }
 
@@ -453,9 +510,7 @@ function BotMaker({ ownerId }: { ownerId: string | null }) {
  */
 function CallButton({ userId, name }: { userId: string; name: string }) {
   const m = useMessages();
-  const sync = useSync();
-  const navigate = useNavigate();
-  const domain = useDomain();
+  const reach = useReach();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const label = format(m.profile.call, { name });
@@ -468,21 +523,15 @@ function CallButton({ userId, name }: { userId: string; name: string }) {
           onPress={() => {
             setPending(true);
             setError(null);
-            sync
-              .openDm([userId])
-              .then((dm) => {
-                void navigate(channelLink({ domain, community: null }, dm.id));
-                return sync.voice.join(dm.id);
-              })
-              .then(
-                () => {
-                  setPending(false);
-                },
-                (failure: unknown) => {
-                  setError(failure instanceof Error ? failure.message : String(failure));
-                  setPending(false);
-                },
-              );
+            reach.call(userId).then(
+              () => {
+                setPending(false);
+              },
+              (failure: unknown) => {
+                setError(failure instanceof Error ? failure.message : String(failure));
+                setPending(false);
+              },
+            );
           }}
           className={secondaryButtonClass + " flex items-center justify-center px-3"}
         >
@@ -501,9 +550,7 @@ function CallButton({ userId, name }: { userId: string; name: string }) {
 /** Opens the caller's DM with the user, making it the first time. */
 function MessageButton({ userId }: { userId: string }) {
   const m = useMessages();
-  const sync = useSync();
-  const navigate = useNavigate();
-  const domain = useDomain();
+  const reach = useReach();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -513,15 +560,10 @@ function MessageButton({ userId }: { userId: string }) {
         onPress={() => {
           setPending(true);
           setError(null);
-          sync.openDm([userId]).then(
-            (dm) => {
-              void navigate(channelLink({ domain, community: null }, dm.id));
-            },
-            (failure: unknown) => {
-              setError(failure instanceof Error ? failure.message : String(failure));
-              setPending(false);
-            },
-          );
+          reach.message(userId).catch((failure: unknown) => {
+            setError(failure instanceof Error ? failure.message : String(failure));
+            setPending(false);
+          });
         }}
         className="flex items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-contrast outline-none hover:bg-accent-strong pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50"
       >
@@ -537,12 +579,18 @@ function MessageButton({ userId }: { userId: string }) {
   );
 }
 
-/** Wraps a trigger so pressing it opens the user's profile card beside it. */
+/**
+ * Wraps a trigger so pressing it opens the user's profile card beside it, and right-clicking it
+ * opens their menu (`UserMenu`), unless what holds it offers a menu of its own that already
+ * holds theirs (`contextMenu` false), as a DM's row and a call's participant do.
+ */
 export function ProfilePopover({
   user,
   children,
   placement = "bottom start",
   anchorRef,
+  channelId = null,
+  contextMenu = true,
 }: {
   user: User;
   children: ReactNode;
@@ -550,24 +598,45 @@ export function ProfilePopover({
   placement?: "bottom start" | "end";
   /** What the card is positioned against, when not the trigger itself: the whole row, say. */
   anchorRef?: RefObject<HTMLElement | null>;
+  /** The channel the trigger is shown in, whose message box their menu's Mention writes in. */
+  channelId?: string | null;
+  contextMenu?: boolean;
 }) {
   const m = useMessages();
   const { communityId } = useParams({ strict: false });
   const name = useNameIn(user, communityId) ?? displayNameOf(user);
+  const menu = useContextMenu();
   return (
-    <DialogTrigger>
-      {children}
-      <OnceOpen>
-        <Popover
-          placement={placement}
-          {...(anchorRef === undefined ? {} : { triggerRef: anchorRef })}
-          className="rounded-lg border border-line bg-surface shadow-lg"
-        >
-          <Dialog aria-label={format(m.profile.cardLabel, { name })} className="outline-none">
-            <ProfileCard user={user} />
-          </Dialog>
-        </Popover>
-      </OnceOpen>
-    </DialogTrigger>
+    <>
+      <DialogTrigger>
+        {contextMenu ? (
+          // Shaped by nothing, so the trigger is laid out as though it stood alone.
+          <span
+            className="contents"
+            onContextMenu={(event) => {
+              menu.onContextMenu(event);
+            }}
+          >
+            {children}
+          </span>
+        ) : (
+          children
+        )}
+        <OnceOpen>
+          <Popover
+            placement={placement}
+            {...(anchorRef === undefined ? {} : { triggerRef: anchorRef })}
+            className="rounded-lg border border-line bg-surface shadow-lg"
+          >
+            <Dialog aria-label={format(m.profile.cardLabel, { name })} className="outline-none">
+              <ProfileCard user={user} />
+            </Dialog>
+          </Popover>
+        </OnceOpen>
+      </DialogTrigger>
+      {menu.opened && (
+        <UserMenu menu={menu} user={user} communityId={communityId ?? null} channelId={channelId} />
+      )}
+    </>
   );
 }

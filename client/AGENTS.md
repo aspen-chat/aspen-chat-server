@@ -65,6 +65,7 @@ same commit, as with comments.
 - [`blocking.md`](docs/architecture/blocking.md): blocks as store state, collapsed runs of blocked messages, blocked DMs, and blocks in calls.
 - [`bots.md`](docs/architecture/bots.md): bot badges, developer mode and the ID wizard, the bots dialog, adding a bot, and slash commands in the message box.
 - [`composer-and-drafts.md`](docs/architecture/composer-and-drafts.md): the message box's layout and keys, keeping the bottom edge, Jump to latest, drafts, and who is typing.
+- [`context-menus.md`](docs/architecture/context-menus.md): right-click menus of messages, people, channels and DMs, categories, communities, and listed messages; when the browser's own menu is kept; opening from the keyboard; and passing right clicks on.
 - [`custom-emoji.md`](docs/architecture/custom-emoji.md): a community's emoji in messages, completion, reactions, and the Emoji tab.
 - [`deployments.md`](docs/architecture/deployments.md): the home and other deployments, `Deployments`, scopes, invites across deployments, protocol versions, blocks across deployments, and file transfers in calls.
 - [`flatpak.md`](docs/architecture/flatpak.md): the desktop app's Flatpak: its manifest and permissions, building and signing it, the base app, and the desktop entry.
@@ -307,6 +308,13 @@ same commit, as with comments.
   are built only then, with a way kept for the keyboard and assistive technology to reach them,
   as a message's actions are. `docs/architecture/message-list/memory.md` has the figures and how
   to measure a row.
+- A right click opens the app's menu of what is under it (`useContextMenu` and `ContextMenu`,
+  `src/features/layout`; see `docs/architecture/context-menus.md`), the actions it offers being
+  the components the place's buttons use (`IconAction` inside `ActionsAsMenuItems`, `MenuAction`)
+  so the two never drift apart. Every new thing a reader might act on that has actions of its own
+  takes a context menu with them. The browser's own menu is kept with Shift, in text fields, on
+  playing media, and over selected text (`wantsNativeMenu`); a right click that opens something
+  else claims the event with `claimContextMenu`. A finger's long press is never a context menu.
 - Copy to the clipboard with `copyText` (`src/features/layout/clipboard.ts`), never
   `navigator.clipboard` directly: the Clipboard API is missing on a page served over plain HTTP,
   such as a dev server a phone reaches by address, and `copyText` falls back to a copy that

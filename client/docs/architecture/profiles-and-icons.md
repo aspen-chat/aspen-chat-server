@@ -67,6 +67,10 @@ Opened within a community (a `communityId` in the route), the card:
 | Block | |
 | Report profile | See [reports.md](reports.md) |
 
+The dots at the top of the card (`MoreActions`) open the user's menu (`UserMenu`), everything else
+that can be done to them, moderation included, as a right click on their name does elsewhere; on a
+touch screen it is the way to it. See [context-menus.md](context-menus.md).
+
 ## Nicknames
 
 A nickname is a member's name in one community (`nickname` on their `userCommunity`).

@@ -62,6 +62,9 @@ import { useMessages } from "@/i18n/context";
 import { feelPress } from "@/features/messages/haptics";
 import { MessageActionSheet } from "@/features/messages/MessageActionSheet";
 import { MessageActions, actionClass, type MessageSheet } from "@/features/messages/MessageActions";
+import { MessageContextMenu } from "@/features/messages/MessageContextMenu";
+import { underPointer, type UnderPointer } from "@/features/messages/underPointer";
+import { useContextMenu } from "@/features/layout/contextMenuState";
 import { ACTION_ICON } from "@/features/messages/actionIcon";
 import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useDateFormat } from "@/i18n/format";
@@ -78,7 +81,10 @@ const TIME_OF_DAY: Intl.DateTimeFormatOptions = { timeStyle: "short" };
 /** How long a finger is held on a message before its actions are offered under it. */
 const LONG_PRESS_MS = 450;
 
-/** What a long press has open: the actions, or what one of them opened in their place. */
+/**
+ * What a long press has open: the actions, or what one of them, or one of the context menu's,
+ * opened in their place.
+ */
 type Sheet = "actions" | MessageSheet;
 
 /** How far the pointer's actions rise above their message's top, over the message before. */
@@ -214,20 +220,21 @@ export const MessageItem = memo(function MessageItem({
   // Whether the message has been pressed long, from when its sheets are drawn: they stay drawn
   // once it has, so each can slide away when it closes.
   const [pressed, setPressed] = useState(false);
+  // The actions a right click offers, with what was right-clicked inside the message.
+  const menu = useContextMenu();
+  const [under, setUnder] = useState<UnderPointer>(null);
+  // The reader's most used emoji are read as the finger goes down, or the menu opens, so the
+  // quick reactions have them by the time they show.
+  const readQuickReactions = () => {
+    if (permissions.has("addReactions") && sync.store.frequentEmoji(home.community) === undefined) {
+      void sync.loadFrequentEmoji(home.community).catch(() => undefined);
+    }
+  };
   const { longPressProps } = useLongPress({
     isDisabled: !touchOnly || editing,
     threshold: LONG_PRESS_MS,
     accessibilityDescription: m.longPressForActions,
-    // The reader's most used emoji are read as the finger goes down, so the quick reactions
-    // have them by the time the press is long enough to show them.
-    onLongPressStart: () => {
-      if (
-        permissions.has("addReactions") &&
-        sync.store.frequentEmoji(home.community) === undefined
-      ) {
-        void sync.loadFrequentEmoji(home.community).catch(() => undefined);
-      }
-    },
+    onLongPressStart: readQuickReactions,
     onLongPress: () => {
       feelPress();
       setPressed(true);
@@ -359,6 +366,15 @@ export const MessageItem = memo(function MessageItem({
       data-message-id={id}
       data-mentions-me={tagsMe ? "true" : undefined}
       {...rowProps}
+      onContextMenu={(event) => {
+        if (!editing) {
+          const target = event.target;
+          menu.onContextMenu(event, () => {
+            readQuickReactions();
+            setUnder(underPointer(target));
+          });
+        }
+      }}
       {...(touchOnly
         ? longPressProps
         : {
@@ -387,29 +403,43 @@ export const MessageItem = memo(function MessageItem({
           : "hover:bg-surface-hover/60 focus-within:bg-surface-hover/60")
       }
     >
-      {touchOnly && pressed && (
+      {menu.opened && (
+        <MessageContextMenu
+          menu={menu}
+          under={under}
+          canReact={permissions.has("addReactions")}
+          actions={actions}
+          open={setSheet}
+        />
+      )}
+      {(pressed || menu.opened) && (
         <>
-          <MessageActionSheet
-            messageId={id}
-            communityId={home.community}
-            sentAt={fullTime.format(sentAt)}
-            canReact={permissions.has("addReactions")}
-            {...sheetProps("actions")}
-            onMore={() => {
-              setSheet("react");
-            }}
-          >
-            <MessageActions
-              {...actions}
-              open={setSheet}
-              onDone={() => {
-                setSheet(null);
+          {touchOnly && (
+            <MessageActionSheet
+              messageId={id}
+              communityId={home.community}
+              sentAt={fullTime.format(sentAt)}
+              canReact={permissions.has("addReactions")}
+              {...sheetProps("actions")}
+              onMore={() => {
+                setSheet("react");
               }}
-            />
-          </MessageActionSheet>
+            >
+              <MessageActions
+                {...actions}
+                open={setSheet}
+                onDone={() => {
+                  setSheet(null);
+                }}
+              />
+            </MessageActionSheet>
+          )}
           <ReactionPickerOverlay
             messageId={id}
             communityId={home.community}
+            // Where a right click opened the menu that opened it; a touch screen's is a sheet.
+            triggerRef={menu.anchorRef}
+            placement="bottom start"
             {...sheetProps("react")}
           />
           <ReactionsDialog
@@ -432,7 +462,7 @@ export const MessageItem = memo(function MessageItem({
       ) : (
         // The picture opens the same card as the name. It stays out of the tab order, where the
         // name already offers the card, so a keyboard does not stop on each message twice.
-        <ProfilePopover user={author}>
+        <ProfilePopover user={author} channelId={channelId}>
           <Button
             aria-label={format(m.profile.show, { name: authorName ?? displayNameOf(author) })}
             excludeFromTabOrder
@@ -660,7 +690,7 @@ function MessageHeader({
           <span className="font-medium">{m.unknownUser}</span>
         )
       ) : (
-        <ProfilePopover user={author}>
+        <ProfilePopover user={author} channelId={channelId}>
           <Button
             aria-label={format(m.profile.show, { name: name ?? displayNameOf(author) })}
             className="rounded font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"

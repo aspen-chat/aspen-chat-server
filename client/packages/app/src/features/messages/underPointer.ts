@@ -1,0 +1,22 @@
+/**
+ * What was right-clicked inside a message, which its context menu offers first: a picture,
+ * video, or file attached to it (`data-media-url`), or a link in its text that opens elsewhere.
+ */
+export type UnderPointer =
+  | { readonly kind: "media"; readonly url: string }
+  | { readonly kind: "link"; readonly url: string; readonly anchor: HTMLAnchorElement }
+  | null;
+
+/** What of a message `target`, right-clicked inside it, is. */
+export function underPointer(target: EventTarget | null): UnderPointer {
+  if (!(target instanceof Element)) {
+    return null;
+  }
+  const media = target.closest<HTMLElement>("[data-media-url]")?.dataset.mediaUrl;
+  if (media !== undefined) {
+    return { kind: "media", url: media };
+  }
+  // Links within the app (invites, links to messages) offer their own menus or go nowhere new.
+  const anchor = target.closest<HTMLAnchorElement>("a[href][target='_blank']");
+  return anchor === null ? null : { kind: "link", url: anchor.href, anchor };
+}

@@ -1785,6 +1785,22 @@ export class AspenSync {
   }
 
   /**
+   * Marks each of `channelIds` that is unread read to its newest message, as marking everything
+   * read at once does (`markManyRead`): a community's channels from its menu on the rail, or a
+   * category's from its own.
+   */
+  async markChannelsRead(channelIds: readonly string[]): Promise<void> {
+    await this.markManyRead(
+      channelIds.flatMap((channelId) => {
+        const newest = this.store.readState(channelId)?.lastMessage;
+        return newest != null && this.store.unread(channelId)
+          ? [{ channelId, messageId: newest }]
+          : [];
+      }),
+    );
+  }
+
+  /**
    * Marks a channel, DM, or thread unread from `messageId` on, a message of it by someone else,
    * or, given none, from its newest message by someone else (which only the server knows). The
    * store moves back at once when the message is named, and holds it unread

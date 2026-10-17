@@ -19,7 +19,6 @@ import {
   useMemberRoles,
   useNickname,
   useRoles,
-  useStore,
   useSync,
 } from "@/api/hooks";
 import { alertClass, fieldClass, hintClass, inputClass, labelClass } from "@/features/auth/styles";
@@ -27,7 +26,10 @@ import { BanDialog } from "@/features/community-settings/BanDialog";
 import { BannedList } from "@/features/community-settings/BannedList";
 import { VoiceMutedList } from "@/features/community-settings/VoiceMutedList";
 import { useMemberSearch } from "@/features/community-settings/memberSearch";
-import { useAssignableRoles } from "@/features/community-settings/roleAssignment";
+import {
+  useAssignableRoles,
+  useMemberModeration,
+} from "@/features/community-settings/roleAssignment";
 import { Avatar } from "@/features/communities/Avatar";
 import {
   dangerButtonClass,
@@ -88,10 +90,8 @@ export function MembersPanel({ communityId }: { communityId: string }) {
 function MemberRow({ communityId, member }: { communityId: string; member: User }) {
   const m = useMessages();
   const sync = useSync();
-  const store = useStore();
   const me = useMe();
   const community = useCommunity(communityId);
-  const access = useAccess(communityId);
   const roles = useRoles(communityId);
   const held = useMemberRoles(communityId, member.id);
   const [confirming, setConfirming] = useState(false);
@@ -100,10 +100,7 @@ function MemberRow({ communityId, member }: { communityId: string; member: User 
   const name = nickname ?? displayNameOf(member);
   const owner = community?.owner === member.id;
   const self = me?.id === member.id;
-  const theirs = store.access(communityId, member.id);
-  const outranked = access !== null && theirs !== null && access.outranks(theirs.rank);
-  const mayRemove = access?.has("removeMembers") === true && !self && !owner && outranked;
-  const mayBan = access?.has("banMembers") === true && !self && !owner && outranked;
+  const { mayRemove, mayBan } = useMemberModeration(communityId, member.id);
   const [banning, setBanning] = useState(false);
   const assignable = useAssignableRoles(communityId, member.id);
   const shown = roles.filter((r) => !r.everyone && (held ?? []).includes(r.id));
