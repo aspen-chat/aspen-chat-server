@@ -1,16 +1,19 @@
 //! Plugins telling people of something (`notify`), as Aspen tells them of a message that tags
 //! them: only while they may view the channel, and only where their settings would tell them of
-//! such a message (it is not muted, and their level there is not "nothing"; a thread counts as
-//! its parent). A notice reaches their apps as `pluginNotice` and wakes their phones with the
+//! such a message (it is not muted, nor its category, and their level there is not "nothing";
+//! a thread counts as its parent). A notice reaches their apps as `pluginNotice` and wakes their phones with the
 //! push pointer `notice`, whose code reads it back (`read`); it is kept a week for that, and goes
 //! with its channel.
 
 use super::PluginText;
 use crate::context::GlobalServerContext;
-use crate::notification_setting::{NotificationLevel, default_level};
+use crate::notification_setting::{NotificationLevel, NotificationSetting, level_of};
 use crate::permissions::channel_access;
-use crate::{ChannelId, CommunityId, EventScope, MessageId, PluginNoticeId, UserId, publish_event};
-use aspen_schema::{channel, channel_mute, message, notification_setting, plugin_notice};
+use crate::{
+    CategoryId, ChannelId, CommunityId, EventScope, MessageId, PluginNoticeId, UserId,
+    publish_event,
+};
+use aspen_schema::{channel, message, notification_setting, plugin_notice};
 use aspen_wire::message_enum::server_event::ServerEvent;
 use chrono::{DateTime, Duration, Utc};
 use diesel::prelude::*;
@@ -22,75 +25,95 @@ use utoipa::ToSchema;
 /// How long a notice is kept for phones to read.
 pub const KEPT: Duration = Duration::days(7);
 
-/// The channel whose settings and mute decide for `channel_id`: a thread's parent, or itself,
-/// with its kind and community.
-async fn deciding(
-    conn: &mut AsyncPgConnection,
-    channel_id: ChannelId,
-) -> crate::Result<(ChannelId, crate::channel::ChannelType, Option<CommunityId>)> {
-    let (parent, ty, community): (
-        Option<ChannelId>,
-        crate::channel::ChannelType,
-        Option<CommunityId>,
-    ) = channel::table
-        .select((channel::parent_channel, channel::ty, channel::community))
-        .filter(channel::id.eq(channel_id))
-        .first(conn)
-        .await?;
-    match parent {
-        Some(parent) => {
-            let (ty, community) = channel::table
-                .select((channel::ty, channel::community))
-                .filter(channel::id.eq(parent))
-                .first(conn)
-                .await?;
-            Ok((parent, ty, community))
-        }
-        None => Ok((channel_id, ty, community)),
-    }
-}
-
-/// Whether `user`'s settings would tell them of a message that tags them in `place`.
-async fn would_tell(
-    conn: &mut AsyncPgConnection,
-    user: UserId,
+/// The channel whose settings and mute decide for `channel_id`: a thread's parent, or itself.
+#[derive(Debug, Clone, Copy)]
+struct Deciding {
     place: ChannelId,
     ty: crate::channel::ChannelType,
     community: Option<CommunityId>,
+    category: Option<CategoryId>,
+}
+
+async fn deciding(conn: &mut AsyncPgConnection, channel_id: ChannelId) -> crate::Result<Deciding> {
+    type Row = (
+        ChannelId,
+        Option<ChannelId>,
+        crate::channel::ChannelType,
+        Option<CommunityId>,
+        Option<CategoryId>,
+    );
+    let read = |conn: &mut AsyncPgConnection, id: ChannelId| {
+        channel::table
+            .select((
+                channel::id,
+                channel::parent_channel,
+                channel::ty,
+                channel::community,
+                channel::parent_category,
+            ))
+            .filter(channel::id.eq(id))
+            .first::<Row>(conn)
+    };
+    let mut row = read(conn, channel_id).await?;
+    if let Some(parent) = row.1 {
+        row = read(conn, parent).await?;
+    }
+    let (place, _, ty, community, category) = row;
+    Ok(Deciding {
+        place,
+        ty,
+        community,
+        category,
+    })
+}
+
+#[derive(QueryableByName)]
+struct Muted {
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    muted: bool,
+}
+
+/// Whether `user`'s settings would tell them of a message that tags them in `place`: it is not
+/// muted, by its own setting or its category's, and its level is not "nothing".
+async fn would_tell(
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    place: Deciding,
 ) -> crate::Result<bool> {
-    let muted: bool = diesel::select(diesel::dsl::exists(
-        channel_mute::table.filter(
-            channel_mute::user
-                .eq(user)
-                .and(channel_mute::channel.eq(place))
-                .and(
-                    channel_mute::until
-                        .is_null()
-                        .or(channel_mute::until.gt(diesel::dsl::now)),
-                ),
-        ),
+    let muted = diesel::sql_query(concat!(
+        "SELECT ",
+        crate::channel_mute::muted_sql!("$1", "$2"),
+        " AS muted"
     ))
-    .get_result(conn)
-    .await?;
+    .bind::<diesel::sql_types::Uuid, _>(user.0)
+    .bind::<diesel::sql_types::Uuid, _>(place.place.0)
+    .get_result::<Muted>(conn)
+    .await?
+    .muted;
     if muted {
         return Ok(false);
     }
-    let settings: Vec<(Option<ChannelId>, NotificationLevel)> = notification_setting::table
-        .select((notification_setting::channel, notification_setting::level))
+    let settings: Vec<NotificationSetting> = notification_setting::table
+        .select(NotificationSetting::as_select())
         .filter(notification_setting::user.eq(user))
         .filter(
             notification_setting::channel
-                .eq(place)
-                .or(notification_setting::community.nullable().eq(community)),
+                .eq(place.place)
+                .or(notification_setting::category.nullable().eq(place.category))
+                .or(notification_setting::community
+                    .nullable()
+                    .eq(place.community)),
         )
         .load(conn)
         .await?;
-    let level = settings
-        .iter()
-        .find(|(channel, _)| channel.is_some())
-        .or_else(|| <[_]>::first(&settings))
-        .map(|(_, level)| *level)
-        .unwrap_or_else(|| default_level(ty));
+    let find =
+        |pick: fn(&NotificationSetting) -> bool| settings.iter().find(|s| pick(s)).map(|s| s.level);
+    let level = level_of(
+        find(|s| s.channel.is_some()),
+        find(|s| s.category.is_some()),
+        find(|s| s.community.is_some()),
+        place.ty,
+    );
     Ok(level != NotificationLevel::Nothing)
 }
 
@@ -111,10 +134,13 @@ pub async fn notify(
     {
         return Ok(false);
     }
-    let (place, ty, community) = deciding(conn.as_mut(), channel_id).await?;
-    if !would_tell(conn.as_mut(), user, place, ty, community).await? {
+    let decided = deciding(conn.as_mut(), channel_id).await?;
+    if !would_tell(conn.as_mut(), user, decided).await? {
         return Ok(false);
     }
+    let Deciding {
+        place, community, ..
+    } = decided;
     if let Some(message_id) = message_id {
         // What it is about is in the channel, and there.
         message::table
@@ -213,7 +239,9 @@ pub async fn read(
         .first(conn.as_mut())
         .await?;
     channel_access(state, conn.as_mut(), caller, channel_id).await?;
-    let (place, _, community) = deciding(conn.as_mut(), channel_id).await?;
+    let Deciding {
+        place, community, ..
+    } = deciding(conn.as_mut(), channel_id).await?;
     let loaded = state.plugins.get(&plugin).ok_or_else(not_found)?;
     let locale = crate::locale::current();
     Ok(NoticeRead {

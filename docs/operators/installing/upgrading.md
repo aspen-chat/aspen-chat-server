@@ -12,6 +12,15 @@
 People's event streams reconnect by themselves when an API server restarts, and pick up exactly
 where they left off.
 
+## A read path that lets the apps read files
+
+The apps save and copy pictures and files by reading them from `[media.s3] public_base_url`, so
+the read path must send `Access-Control-Allow-Origin: *` (see
+[The storage's read path](storage-read-path.md#its-origin-and-headers)). `aspen-box` and the AWS
+configurations send it from this release; a read path set up by hand needs it added. Without it,
+everything else works, and saving or copying a picture says the storage does not let the app
+read files.
+
 ## From shared-secret join tokens
 
 Deployments whose `aspen.toml` has a `[voice] token_secret` signed join tokens with that secret.

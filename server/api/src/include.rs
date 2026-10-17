@@ -15,6 +15,7 @@
 
 use crate::attachment::Attachment;
 use crate::category_collapse::CategoryCollapse;
+use crate::category_mute::CategoryMute;
 use crate::channel_mute::ChannelMute;
 use crate::message_enum::{
     Category, CategoryOverride, Channel, ChannelOverride, Community, CustomEmoji, Message, Poll,
@@ -136,11 +137,17 @@ pub struct Included {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub read_states: Option<Vec<ReadState>>,
-    /// The caller's mutes in force among the channels in the read.
+    /// The caller's own settings in force among the channels in the read: mutes, and channels
+    /// kept unmuted while their category is muted.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub channel_mutes: Option<Vec<ChannelMute>>,
-    /// The caller's notification settings for the communities and channels in the read.
+    /// The caller's mutes in force of the categories in the read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub category_mutes: Option<Vec<CategoryMute>>,
+    /// The caller's notification settings for the communities, categories, and channels in the
+    /// read.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub notification_settings: Option<Vec<NotificationSetting>>,

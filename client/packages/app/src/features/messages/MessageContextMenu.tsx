@@ -1,4 +1,9 @@
-import { ArrowSquareOutIcon, LinkIcon } from "@phosphor-icons/react";
+import {
+  ArrowSquareOutIcon,
+  CopyIcon,
+  DownloadSimpleIcon,
+  LinkIcon,
+} from "@phosphor-icons/react";
 import type { ComponentProps } from "react";
 import { Menu, MenuSection } from "react-aria-components";
 import { copyText } from "@/features/layout/clipboard";
@@ -9,8 +14,15 @@ import { MenuAction, MenuRule, menuClass } from "@/features/layout/menu";
 import { toast } from "@/features/layout/toast";
 import { QuickReactions } from "@/features/messages/MessageActionSheet";
 import { MessageActions, type MessageSheet } from "@/features/messages/MessageActions";
+import {
+  UnreadableFile,
+  canCopyPictures,
+  copyPicture,
+  saveFrom,
+} from "@/features/messages/mediaFile";
 import type { UnderPointer } from "@/features/messages/underPointer";
 import { useMessages } from "@/i18n/context";
+import { format } from "@/i18n/messages";
 
 /** Opens `url` in a new tab, or the system's browser, as a link in a message would. */
 function openElsewhere(url: string) {
@@ -24,7 +36,8 @@ function openElsewhere(url: string) {
 /**
  * A message's actions, opened by right-clicking it: the reader's quick reactions, where they
  * may react, with Add a reaction beside them; what was right-clicked, when it is an attachment
- * (open it, copy its address) or a link (open it, copy its address); and then every action the
+ * or a link's picture (open it, save it, copy a picture, copy its address) or a link (open it,
+ * copy its address); and then every action the
  * row of buttons over the message offers, by name, through the same `MessageActions`. What an
  * action opens goes through `open`, outside the menu, which closes as it is chosen.
  */
@@ -51,6 +64,17 @@ export function MessageContextMenu({
         toast(m.contextMenu.copiedAddress);
       }
     });
+  };
+  // Says why a file could not be read: the storage's, which its administrators set up, or else
+  // what went wrong.
+  const failed = (failure: unknown) => {
+    toast(
+      failure instanceof UnreadableFile
+        ? m.contextMenu.unreadableFile
+        : format(m.contextMenu.fileFailed, {
+            problem: failure instanceof Error ? failure.message : String(failure),
+          }),
+    );
   };
   return (
     <ContextMenu menu={menu} label={m.messageActionsLabel}>
@@ -88,6 +112,26 @@ export function MessageContextMenu({
                   }
                 }}
               />
+              {under.kind === "media" && (
+                <MenuAction
+                  label={under.picture ? m.contextMenu.savePicture : m.contextMenu.saveFile}
+                  icon={<DownloadSimpleIcon aria-hidden="true" />}
+                  onAction={() => {
+                    saveFrom(under.url, under.name).catch(failed);
+                  }}
+                />
+              )}
+              {under.kind === "media" && under.picture && canCopyPictures() && (
+                <MenuAction
+                  label={m.contextMenu.copyPicture}
+                  icon={<CopyIcon aria-hidden="true" />}
+                  onAction={() => {
+                    copyPicture(under.url).then(() => {
+                      toast(m.contextMenu.copiedPicture);
+                    }, failed);
+                  }}
+                />
+              )}
               <MenuAction
                 label={
                   under.kind === "media"

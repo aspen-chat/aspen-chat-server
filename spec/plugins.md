@@ -353,7 +353,7 @@ channel's event neither fires nor counts against the plugin's timers.
 A plugin holding `notify` tells someone of something in a channel where it runs (`notify`), with
 text of its `messages` and optionally the message it is about. The host sends it only if they may
 view the channel now, and their settings would tell them of a message that tags them there (it is
-not muted, and their level for it is not "nothing"); it answers whether it did. They receive the
+not muted, nor its category, and their level for it is not "nothing"); it answers whether it did. They receive the
 `pluginNotice` event, which their apps show as a system notification and which opens the channel
 or message, and their phones are woken with the push pointer `notice` (`spec/push.md`). A notice
 is kept a week, for phones to read (`GET /users/@me/plugin-notices/{notice}`), and goes with the

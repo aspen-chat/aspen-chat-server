@@ -24,22 +24,28 @@ the message box, copying what the reader selected, and a video's playback contro
 the browser's menu, and Shift held keeps it anywhere, for whatever else the reader wants of it,
 such as saving a picture.
 
-## No Save or Copy image
+## Saving and copying read the storage's read path
 
-Saving a picture, or copying it to the clipboard, needs the app to read its bytes. Attachments are
-served from the deployment's object storage (`public_base_url`), which operators are told to open
-to the page's origin by CORS for uploads only, so a read from the page may be refused on a
-deployment configured as the operator guide says. A menu item that fails on some deployments and
-not others is worse than none. Open original and Copy file address work everywhere, and Shift
-with a right click offers the browser's Save image as.
+Saving a picture, or copying it to the clipboard, needs the app to read its bytes. They are read
+from the storage's read path itself, which every deployment's operators are told to open to any
+origin (`docs/operators/installing/storage-read-path.md`), rather than through the API servers,
+which would carry every save's bytes. The read path is public already and read without
+credentials, so opening it to any origin gives nothing away. A read path set up before that is
+named as the reason when a save fails, so the reader knows whose it is to fix.
 
-## No Collapse all, and no category mute
+## Collapse all in one request
 
-Folding every category at once would be one request per category, and folding is limited to
-twenty in a burst for each user (`rate_limits.toml`); a community with more categories would fold
-partway and refuse the rest. Muting is the server's per channel; a category's mute would be a mute
-of each of its channels, which would not follow channels added later. Both wait for the server to
-offer them whole.
+Folding is limited to twenty in a burst for each user (`rate_limits.toml`), so folding every
+category one request at a time would fold a large community partway and be refused the rest.
+The server folds a community's categories in one request instead, bounded by
+`MAX_CHANNELS_AND_CATEGORIES`, with one event naming those that changed.
+
+## A category's mute, and channels kept unmuted
+
+A category's mute is the server's own, read with each channel's category whenever a mute is
+asked about, rather than a mute of each channel in it: that way channels added or moved in later
+are muted too, and one moved out is not. A channel's own setting outranks it, which is how a
+reader keeps one channel of a muted category speaking to them.
 
 ## Passing right clicks on
 

@@ -9,7 +9,7 @@ Code: `notice::notify`, `notice::take_turn`, table `plugin_notice`.
 `notify` tells someone of something in a channel where the plugin runs, only while:
 
 - `channel_access` admits them; and
-- their settings for the channel (a thread's parent's) would tell them of a message that tags them: not muted, level not `nothing`.
+- their settings for the channel (a thread's parent's) would tell them of a message that tags them: not muted, nor its category, and its level (its own, its category's, or its community's) not `nothing`.
 
 A channel of a plugin's kind may be muted and given a level as a text channel may (`app::channel_mute`, `app::notification_setting`). That is how its notices are silenced.
 

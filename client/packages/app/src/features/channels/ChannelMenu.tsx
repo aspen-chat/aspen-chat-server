@@ -1,7 +1,5 @@
-import type { NotificationLevel, User } from "@aspen/protocol";
+import type { User } from "@aspen/protocol";
 import {
-  BellIcon,
-  BellSlashIcon,
   DotsThreeVerticalIcon,
   EnvelopeSimpleIcon,
   LinkIcon,
@@ -13,19 +11,10 @@ import {
   TrashIcon,
 } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
-import type { ReactNode, RefObject } from "react";
-import {
-  Button,
-  Header,
-  Menu,
-  MenuItem,
-  MenuSection,
-  Popover,
-  SubmenuTrigger,
-} from "react-aria-components";
+import type { RefObject } from "react";
+import { Button, Menu } from "react-aria-components";
 import {
   useChannel,
-  useMute,
   useNotificationLevel,
   useReadToItsEnd,
   useSync,
@@ -36,42 +25,16 @@ import { copyText } from "@/features/layout/clipboard";
 import { ContextMenu } from "@/features/layout/ContextMenu";
 import type { ContextMenuState } from "@/features/layout/contextMenuState";
 import { CopyIdMenuItem } from "@/features/layout/CopyId";
-import {
-  MenuAction,
-  MenuRule,
-  ParentLabel,
-  menuCheckClass,
-  menuClass,
-  menuHeaderClass,
-  menuItemClass,
-  menuParentClass,
-  menuPopoverClass,
-} from "@/features/layout/menu";
+import { MenuAction, MenuRule, menuClass, menuItemClass } from "@/features/layout/menu";
 import { toast } from "@/features/layout/toast";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useOnePane } from "@/features/layout/useMediaQuery";
-import { useMuteEnd } from "@/features/channels/muteEnd";
+import { ChannelMuteSubmenu, NotificationsSubmenu } from "@/features/channels/muteMenus";
 import { channelLink, channelUrl, useDomain } from "@/features/messages/links";
 import { markUnread } from "@/features/messages/markUnread";
 import { UserMenu } from "@/features/users/UserMenu";
 import { useMessages } from "@/i18n/context";
-import { format, type Messages } from "@/i18n/messages";
-
-/** The lengths of mute offered, in the menu's order; `null` lasts until the user unmutes. */
-const MUTE_DURATIONS: readonly {
-  key: keyof Messages["mute"]["durations"];
-  seconds: number | null;
-}[] = [
-  { key: "thirtyMinutes", seconds: 30 * 60 },
-  { key: "hour", seconds: 60 * 60 },
-  { key: "fiveHours", seconds: 5 * 60 * 60 },
-  { key: "eightHours", seconds: 8 * 60 * 60 },
-  { key: "day", seconds: 24 * 60 * 60 },
-  { key: "week", seconds: 7 * 24 * 60 * 60 },
-  { key: "forever", seconds: null },
-];
-
-const NOTIFICATION_LEVELS: readonly NotificationLevel[] = ["all", "tags", "nothing"];
+import { format } from "@/i18n/messages";
 
 /**
  * What the user can do to a channel or DM, opened by right-clicking its row (`menu`), or by its
@@ -183,18 +146,15 @@ function ChannelItems({
   onDelete?: () => void;
 }) {
   const m = useMessages();
-  const muteEnd = useMuteEnd();
   const sync = useSync();
   const client = useAspenClient();
   const navigate = useNavigate();
   const domain = useDomain();
-  const mute = useMute(channelId);
   const channel = useChannel(channelId);
   const notify = useNotificationLevel(channelId);
   const call = useVoiceCall();
   // Marking a channel already unread from its newest message would read the rest.
   const markable = useReadToItsEnd(channelId) && mutable;
-  const submenuPlacement = useOnePane() ? "bottom end" : "end top";
   const community = channel?.community ?? null;
   const inCall =
     call.channelId === channelId &&
@@ -246,87 +206,19 @@ function ChannelItems({
         />
       )}
       {mutable && (
-        <SubmenuTrigger>
-          <MenuItem textValue={m.mute.heading} className={menuParentClass}>
-            <MenuIcon>
-              <BellSlashIcon aria-hidden="true" />
-            </MenuIcon>
-            <ParentLabel>{mute === undefined ? m.mute.heading : muteEnd(mute)}</ParentLabel>
-          </MenuItem>
-          <Popover className={menuPopoverClass} placement={submenuPlacement}>
-            <Menu aria-label={m.mute.heading} className={menuClass}>
-              {mute === undefined ? (
-                MUTE_DURATIONS.map((d) => (
-                  <MenuItem
-                    key={d.key}
-                    id={d.key}
-                    className={menuItemClass}
-                    onAction={() => {
-                      close();
-                      void sync.muteChannel(channelId, d.seconds).catch(() => undefined);
-                    }}
-                  >
-                    {m.mute.durations[d.key]}
-                  </MenuItem>
-                ))
-              ) : (
-                <MenuItem
-                  id="unmute"
-                  className={menuItemClass}
-                  onAction={() => {
-                    close();
-                    void sync.unmuteChannel(channelId).catch(() => undefined);
-                  }}
-                >
-                  {m.mute.unmute}
-                </MenuItem>
-              )}
-            </Menu>
-          </Popover>
-        </SubmenuTrigger>
+        <ChannelMuteSubmenu
+          channelId={channelId}
+          categoryId={channel?.parentCategory ?? null}
+          close={close}
+        />
       )}
       {mutable && (
-        <SubmenuTrigger>
-          <MenuItem textValue={m.notifications.menu} className={menuParentClass}>
-            <MenuIcon>
-              <BellIcon aria-hidden="true" />
-            </MenuIcon>
-            <ParentLabel detail={m.notifications.levels[notify.level]}>
-              {m.notifications.menu}
-            </ParentLabel>
-          </MenuItem>
-          <Popover className={menuPopoverClass} placement={submenuPlacement}>
-            <Menu
-              aria-label={m.notifications.notifyMe}
-              className={menuClass}
-              selectionMode="single"
-              selectedKeys={[notify.own ?? "default"]}
-              onAction={(key) => {
-                close();
-                void sync
-                  .setChannelNotifications(
-                    channelId,
-                    key === "default" ? null : (key as NotificationLevel),
-                  )
-                  .catch(() => undefined);
-              }}
-            >
-              <MenuSection>
-                <Header className={menuHeaderClass}>{m.notifications.notifyMe}</Header>
-                <MenuItem id="default" className={menuItemClass + " " + menuCheckClass}>
-                  {format(m.notifications.default, {
-                    level: m.notifications.levels[notify.inherited],
-                  })}
-                </MenuItem>
-                {NOTIFICATION_LEVELS.map((level) => (
-                  <MenuItem key={level} id={level} className={menuItemClass + " " + menuCheckClass}>
-                    {m.notifications.levels[level]}
-                  </MenuItem>
-                ))}
-              </MenuSection>
-            </Menu>
-          </Popover>
-        </SubmenuTrigger>
+        <NotificationsSubmenu
+          own={notify.own}
+          inherited={notify.inherited}
+          choose={(level) => sync.setChannelNotifications(channelId, level)}
+          close={close}
+        />
       )}
       <MenuAction
         label={m.reports.copyLink}
@@ -376,13 +268,6 @@ function ChannelItems({
         className={menuItemClass}
       />
     </>
-  );
-}
-
-/** An icon before a submenu's item, drawn as `MenuAction` draws its own. */
-function MenuIcon({ children }: { children: ReactNode }) {
-  return (
-    <span className="flex shrink-0 text-ink-muted [&>svg]:h-3.5 [&>svg]:w-3.5">{children}</span>
   );
 }
 

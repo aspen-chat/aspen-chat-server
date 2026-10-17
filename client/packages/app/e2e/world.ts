@@ -38,6 +38,8 @@ export {
   missingPictureMessageId,
   organiserRole,
   organiserRoleWith,
+  PIXEL_PNG,
+  PIXEL_PNG_BYTES,
   deepSearchPosition,
   deepSearchText,
   ownText,
@@ -108,8 +110,14 @@ export async function signInToWorld(
   await page.route(/\/api\/v1\//, (route) =>
     answer(route, poll, publish, admin, blocks, bans, personal),
   );
+  // As a deployment's read path serves it, to any origin (storage-read-path.md); never kept, so
+  // a test may answer it otherwise.
   await page.route(PIXEL_PNG, (route) =>
-    route.fulfill({ contentType: "image/png", body: PIXEL_PNG_BYTES }),
+    route.fulfill({
+      contentType: "image/png",
+      headers: { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" },
+      body: PIXEL_PNG_BYTES,
+    }),
   );
   await before?.(page);
   await page.goto("/");

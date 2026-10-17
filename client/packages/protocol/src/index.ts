@@ -84,6 +84,8 @@ export type {
   HeldEntry,
   HeldMessage,
   ChannelMute,
+  CategoryMute,
+  MuteInForce,
   ChosenPresence,
   SavedMessage,
   NotificationLevel,

@@ -1,6 +1,5 @@
-import type { Community, NotificationLevel } from "@aspen/protocol";
+import type { Community } from "@aspen/protocol";
 import {
-  BellIcon,
   CheckCircleIcon,
   GearIcon,
   LinkIcon,
@@ -9,14 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import {
-  Header,
-  Menu,
-  MenuItem,
-  MenuSection,
-  Popover,
-  SubmenuTrigger,
-} from "react-aria-components";
+import { Menu } from "react-aria-components";
 import { useCan, useChannels, useCommunityNotificationLevel, useMe, useSync } from "@/api/hooks";
 import { useAspenClient } from "@/api/context";
 import { CommunitySettingsModal } from "@/features/community-settings/CommunitySettingsDialog";
@@ -26,23 +18,12 @@ import { ConfirmModal } from "@/features/layout/ConfirmModal";
 import { ContextMenu } from "@/features/layout/ContextMenu";
 import type { ContextMenuState } from "@/features/layout/contextMenuState";
 import { CopyIdMenuItem } from "@/features/layout/CopyId";
-import {
-  MenuAction,
-  MenuRule,
-  ParentLabel,
-  menuCheckClass,
-  menuClass,
-  menuHeaderClass,
-  menuItemClass,
-  menuParentClass,
-  menuPopoverClass,
-} from "@/features/layout/menu";
+import { MenuAction, MenuRule, menuClass, menuItemClass } from "@/features/layout/menu";
+import { NotificationsSubmenu } from "@/features/channels/muteMenus";
 import { toast } from "@/features/layout/toast";
 import { communityUrl } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
-
-const LEVELS: readonly NotificationLevel[] = ["all", "tags", "nothing"];
 
 /** What an item of a community's menu opens outside it, which closes as the item is chosen. */
 type CommunityDialog = "invite" | "settings" | "leave";
@@ -114,55 +95,12 @@ export function CommunityMenu({
               }}
             />
           )}
-          <SubmenuTrigger>
-            <MenuItem textValue={m.notifications.menu} className={menuParentClass}>
-              <span className="flex shrink-0 text-ink-muted [&>svg]:h-3.5 [&>svg]:w-3.5">
-                <BellIcon aria-hidden="true" />
-              </span>
-              <ParentLabel
-                detail={
-                  level === null
-                    ? format(m.notifications.default, { level: m.notifications.levels.tags })
-                    : m.notifications.levels[level]
-                }
-              >
-                {m.notifications.menu}
-              </ParentLabel>
-            </MenuItem>
-            <Popover className={menuPopoverClass} placement="end top">
-              <Menu
-                aria-label={m.notifications.notifyMe}
-                className={menuClass}
-                selectionMode="single"
-                selectedKeys={[level ?? "default"]}
-                onAction={(key) => {
-                  close();
-                  void sync
-                    .setCommunityNotifications(
-                      community.id,
-                      key === "default" ? null : (key as NotificationLevel),
-                    )
-                    .catch(() => undefined);
-                }}
-              >
-                <MenuSection>
-                  <Header className={menuHeaderClass}>{m.notifications.notifyMe}</Header>
-                  <MenuItem id="default" className={menuItemClass + " " + menuCheckClass}>
-                    {format(m.notifications.default, { level: m.notifications.levels.tags })}
-                  </MenuItem>
-                  {LEVELS.map((choice) => (
-                    <MenuItem
-                      key={choice}
-                      id={choice}
-                      className={menuItemClass + " " + menuCheckClass}
-                    >
-                      {m.notifications.levels[choice]}
-                    </MenuItem>
-                  ))}
-                </MenuSection>
-              </Menu>
-            </Popover>
-          </SubmenuTrigger>
+          <NotificationsSubmenu
+            own={level}
+            inherited="tags"
+            choose={(next) => sync.setCommunityNotifications(community.id, next)}
+            close={close}
+          />
           {(createInvites || manageInvites) && (
             <MenuAction
               label={m.invitePeople}

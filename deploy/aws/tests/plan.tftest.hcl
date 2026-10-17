@@ -165,6 +165,11 @@ run "release" {
   }
 
   assert {
+    condition     = one(module.media.cors_origins) == "*"
+    error_message = "Any origin may read what the read path serves (docs/operators/installing/storage-read-path.md)."
+  }
+
+  assert {
     condition = alltrue([
       for parameter in aws_elasticache_parameter_group.this.parameter : parameter.value == "noeviction"
       if parameter.name == "maxmemory-policy"

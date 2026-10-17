@@ -83,7 +83,7 @@ provided they may view its channel. It never wakes:
 
 - its author;
 - anyone who blocked the author here;
-- anyone who muted the channel (a thread counting as its parent);
+- anyone who muted the channel, or its category without keeping the channel unmuted (a thread counting as its parent; `app::channel_mute::muted_sql!`);
 - anyone in do not disturb (see [Presence](event-routing/presence.md#choosing-a-status));
 - anyone active on Aspen at that moment.
 
@@ -93,11 +93,11 @@ provided they may view its channel. It never wakes:
    - the members tagged by name;
    - the holders of tagged roles;
    - every member, when everyone is tagged;
-   - those whose setting asks for every message;
+   - those whose setting for the channel, its category, or its community asks for every message;
    - a DM's people;
    - the thread's followers, and a DM's thread's only while they are still its people.
-2. The same query resolves each one's level from the channel's setting, then the community's, then the default. A follower is told whatever theirs.
-3. It leaves out those who blocked the author, muted the channel, are in do not disturb, or have no phone.
+2. The same query resolves each one's level from the channel's setting, then its category's, then the community's, then the default. A follower is told whatever theirs.
+3. It leaves out those who blocked the author, muted the channel or its category, are in do not disturb, or have no phone.
 4. Who may view the channel is decided once for the candidates (`visibility::viewers`).
 5. Who is active is asked of Valkey, `ACTIVE_BATCH` (1000) at a time.
 

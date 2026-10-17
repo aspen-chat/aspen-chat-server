@@ -1,24 +1,27 @@
-//! What the caller wants to be told of, for a community or a channel (`app::notification_setting`).
+//! What the caller wants to be told of, for a community, a category, or a channel
+//! (`app::notification_setting`).
 //! Community and DM list reads sideload the caller's settings with `include=notifications`.
 
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Json, NoContent, Path};
-use crate::{TAG_CHANNELS, TAG_COMMUNITIES};
+use crate::{TAG_CATEGORIES, TAG_CHANNELS, TAG_COMMUNITIES};
 use aspen_app::context::GlobalServerContext;
 use aspen_app::notification_setting::{NotificationLevel, NotificationTarget};
-use aspen_app::{self as app, ChannelId, CommunityId};
+use aspen_app::{self as app, CategoryId, ChannelId, CommunityId};
 use axum::extract::State;
 use axum::http::StatusCode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-/// The caller's setting for a community (with `community`) or a channel (with `channel`).
+/// The caller's setting for a community (with `community`), a category (with `category`), or a
+/// channel (with `channel`).
 #[derive(Debug, Clone, Serialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationSetting {
     pub community: Option<CommunityId>,
+    pub category: Option<CategoryId>,
     pub channel: Option<ChannelId>,
     pub level: NotificationLevel,
 }
@@ -27,6 +30,7 @@ impl From<app::notification_setting::NotificationSetting> for NotificationSettin
     fn from(setting: app::notification_setting::NotificationSetting) -> Self {
         NotificationSetting {
             community: setting.community,
+            category: setting.category,
             channel: setting.channel,
             level: setting.level,
         }
@@ -82,6 +86,7 @@ pub async fn set_community_notifications(
         created(existed),
         Json(NotificationSetting {
             community: Some(community),
+            category: None,
             channel: None,
             level: request.level,
         }),
@@ -111,7 +116,8 @@ pub async fn reset_community_notifications(
     Ok(NoContent)
 }
 
-/// Sets what the caller is told of a text channel or DM, whatever its community's setting. A
+/// Sets what the caller is told of a text channel or DM, whatever its category's or community's
+/// setting. A
 /// thread follows its channel. The change reaches their devices as `notificationSettingChanged`.
 #[utoipa::path(
     put,
@@ -146,13 +152,81 @@ pub async fn set_channel_notifications(
         created(existed),
         Json(NotificationSetting {
             community: None,
+            category: None,
             channel: Some(channel),
             level: request.level,
         }),
     ))
 }
 
-/// Returns a channel to its community's setting, or for a DM to every message.
+/// Sets what the caller is told of a category's channels that have no setting of their own,
+/// whatever its community's setting. The change reaches their devices as
+/// `notificationSettingChanged`.
+#[utoipa::path(
+    put,
+    path = "/categories/{category}/notification-settings/@me",
+    tag = TAG_CATEGORIES,
+    params(("category" = CategoryId, Path)),
+    request_body = NotificationSettingRequest,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = CREATED, description = "Set", body = NotificationSetting),
+        (status = OK, description = "Replaced the caller's setting", body = NotificationSetting),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn set_category_notifications(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(category): Path<CategoryId>,
+    Json(request): Json<NotificationSettingRequest>,
+) -> ApiResult<(StatusCode, Json<NotificationSetting>)> {
+    let existed = app::notification_setting::set(
+        &state,
+        user.id,
+        NotificationTarget::Category(category),
+        request.level,
+    )
+    .await?;
+    Ok((
+        created(existed),
+        Json(NotificationSetting {
+            community: None,
+            category: Some(category),
+            channel: None,
+            level: request.level,
+        }),
+    ))
+}
+
+/// Returns a category's channels to their community's setting.
+#[utoipa::path(
+    delete,
+    path = "/categories/{category}/notification-settings/@me",
+    tag = TAG_CATEGORIES,
+    params(("category" = CategoryId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn reset_category_notifications(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(category): Path<CategoryId>,
+) -> ApiResult<NoContent> {
+    app::notification_setting::reset(&state, user.id, NotificationTarget::Category(category))
+        .await?;
+    Ok(NoContent)
+}
+
+/// Returns a channel to its category's setting, else its community's, or for a DM to every
+/// message.
 #[utoipa::path(
     delete,
     path = "/channels/{channel}/notification-settings/@me",

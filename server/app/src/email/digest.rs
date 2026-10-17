@@ -362,17 +362,16 @@ const PLACES_FROM: &str = r#"
     LEFT JOIN dm_recipient dr ON dr.channel = c.id AND dr."user" = $1
     LEFT JOIN read_state rs ON rs.channel = c.id AND rs."user" = $1
 "#;
-const PLACES_WHERE: &str = r#"
+const PLACES_WHERE: &str = concat!(
+    r#"
     c.id = ANY($2)
     AND c.deleted_at IS NULL
     AND c.parent_channel IS NULL
     AND (cu."user" IS NOT NULL OR dr."user" IS NOT NULL)
-    AND NOT EXISTS (
-        SELECT 1 FROM channel_mute cm
-        WHERE cm."user" = $1 AND cm.channel = c.id
-          AND (cm.until IS NULL OR cm.until > now())
-    )
-"#;
+    AND NOT "#,
+    crate::channel_mute::muted_sql!("$1", "c.id"),
+    "\n"
+);
 
 /// The digest of what arrived for `user` after `since`, or `None` when nothing did.
 pub async fn build(

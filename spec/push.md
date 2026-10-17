@@ -279,13 +279,13 @@ tags them (by name, a role they hold, or everyone), unless:
 
 - they wrote it, or they blocked its author on this deployment (a block made elsewhere is the
   app's to apply: it drops the notification of anyone it holds blocked);
-- the channel is muted for them (a thread's messages count as its parent's);
+- the channel is muted for them, by its own mute or its category's (a thread's messages count as its parent's);
 - they are using Aspen right now on any device (their `active` presence key is set), since that
   device shows it.
 - they are in do not disturb on this deployment, which also gives the `read` pointers sent them
   meanwhile a `badge` of 0.
 
-Their own notification settings, per community and channel ("all messages", "only tags",
+Their own notification settings, per community, category, and channel ("all messages", "only tags",
 "nothing"), are part of notifications in general, not of this protocol, and narrow this further.
 When they read a channel that had woken their phone, the deployment sends `read`; when such a
 message is deleted, `deleted`. When they mark a channel unread, it sends `read` at the position

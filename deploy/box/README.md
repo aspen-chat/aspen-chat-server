@@ -110,9 +110,9 @@ should say.
   up for. The files are as safe as the machine's disk.
 - **In a bucket elsewhere** (`--storage s3`): Cloudflare R2, AWS S3, or anything that speaks
   S3. You give its address and keys, and **you set up its read path**, which must serve four
-  prefixes and nothing else
+  prefixes and nothing else, to any origin
   ([The storage's read path](../../docs/operators/installing/storage-read-path.md)).
-  `aspen-box doctor` checks that it refuses the rest. On an AWS machine whose role may use the
+  `aspen-box doctor` checks that it refuses the rest, and that it lets the apps read files. On an AWS machine whose role may use the
   bucket, `--s3-role` gives no keys, and the server takes the machine's role.
 
 ## Where the database is kept

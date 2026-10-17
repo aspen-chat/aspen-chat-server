@@ -2,11 +2,12 @@
 //! this deployment, newest first. Apps signed in to several deployments merge each one's feed.
 //!
 //! A message tells its reader by the same rule as their notifications (`app::push`, and the
-//! apps' own): in a DM, a community, or a channel, every message where their level is `all`
-//! (a DM's by default), only those that tag them where it is `tags` (a community's by default),
-//! and nothing where it is `nothing`, a thread counting as its parent; and every reply in a thread
-//! they follow (`app::thread_follow`), whatever their level. Never in a channel they muted (a
-//! thread's parent included), never by them or anyone they blocked, never from before they
+//! apps' own): in a DM, a community, a category, or a channel, every message where their level
+//! is `all` (a DM's by default), only those that tag them where it is `tags` (a community's by
+//! default), and nothing where it is `nothing`, a thread counting as its parent; and every reply
+//! in a thread they follow (`app::thread_follow`), whatever their level. Never in a channel they
+//! muted, or whose category they muted unless they kept the channel unmuted (a thread's parent
+//! included), never by them or anyone they blocked, never from before they
 //! joined, and never a message that only records something (an echo, a poll's result, a call, a
 //! command). What is read is decided as they may read it now, as search decides it, and a page
 //! is read a place at a time ([`page_sql`]).
@@ -19,9 +20,9 @@
 use crate::channel::ChannelType;
 use crate::context::GlobalServerContext;
 use crate::message::{Message, MessageKind, MessageWithRelations};
-use crate::notification_setting::{NotificationLevel, default_level};
+use crate::notification_setting::{NotificationLevel, level_of};
 use crate::visibility::Visibility;
-use crate::{ChannelId, CommunityId, MessageId, RoleId, UserId};
+use crate::{CategoryId, ChannelId, CommunityId, MessageId, RoleId, UserId};
 use aspen_schema::{channel, community_member_role, dm_recipient, message, thread_follow};
 use diesel::prelude::*;
 use diesel::sql_types::{Array, Bool, Uuid as PgUuid};
@@ -344,54 +345,61 @@ pub async fn read_activity(
         .await?;
     drop(conn);
     let visible = Visibility::load(state, user, &communities).await?;
-    let (community_settings, dm_settings, community_mutes, dm_mutes) = tokio::try_join!(
+    let (community_settings, dm_settings, community_mutes, dm_mutes, category_mutes) = tokio::try_join!(
         crate::notification_setting::read_community_settings(state, &visible),
         crate::notification_setting::read_channel_settings(state, user, &dms),
         crate::channel_mute::read_community_mutes(state, &visible),
         crate::channel_mute::read_channel_mutes(state, user, &dms),
+        crate::category_mute::read_category_mutes(state, &visible),
     )?;
     let mut conn = state.connection_pool.get().await?;
     let channels = visible.visible_channels();
-    let homes: HashMap<ChannelId, Option<CommunityId>> = channel::table
-        .select((channel::id, channel::community))
+    let homes: HashMap<ChannelId, (Option<CommunityId>, Option<CategoryId>)> = channel::table
+        .select((channel::id, channel::community, channel::parent_category))
         .filter(channel::id.eq_any(&channels))
-        .load::<(ChannelId, Option<CommunityId>)>(conn.as_mut())
+        .load::<(ChannelId, Option<CommunityId>, Option<CategoryId>)>(conn.as_mut())
         .await?
         .into_iter()
+        .map(|(channel, community, category)| (channel, (community, category)))
         .collect();
     let mut for_channel = HashMap::new();
+    let mut for_category = HashMap::new();
     let mut for_community = HashMap::new();
     for setting in community_settings.into_iter().chain(dm_settings) {
-        match (setting.channel, setting.community) {
-            (Some(channel), _) => for_channel.insert(channel, setting.level),
-            (None, Some(community)) => for_community.insert(community, setting.level),
-            (None, None) => None,
+        match (setting.channel, setting.category, setting.community) {
+            (Some(channel), _, _) => for_channel.insert(channel, setting.level),
+            (None, Some(category), _) => for_category.insert(category, setting.level),
+            (None, None, Some(community)) => for_community.insert(community, setting.level),
+            (None, None, None) => None,
         };
     }
-    let muted: HashSet<ChannelId> = community_mutes
+    // A channel's own setting, muted or kept unmuted, outranks its category's mute.
+    let own_mute: HashMap<ChannelId, bool> = community_mutes
         .iter()
         .chain(&dm_mutes)
-        .map(|m| m.channel)
+        .map(|m| (m.channel, m.muted))
         .collect();
+    let muted_categories: HashSet<CategoryId> = category_mutes.iter().map(|m| m.category).collect();
     let places: Vec<Place> = channels
         .iter()
         .map(|channel| (*channel, ChannelType::Text))
         .chain(dms.iter().map(|dm| (*dm, ChannelType::Dm)))
-        .map(|(channel, ty)| Place {
-            channel,
-            dm: ty == ChannelType::Dm,
-            level: for_channel
-                .get(&channel)
-                .or_else(|| {
-                    homes
-                        .get(&channel)
-                        .copied()
-                        .flatten()
-                        .and_then(|community| for_community.get(&community))
-                })
-                .copied()
-                .unwrap_or_else(|| default_level(ty)),
-            muted: muted.contains(&channel),
+        .map(|(channel, ty)| {
+            let (community, category) = homes.get(&channel).copied().unwrap_or((None, None));
+            Place {
+                channel,
+                dm: ty == ChannelType::Dm,
+                level: level_of(
+                    for_channel.get(&channel).copied(),
+                    category.and_then(|c| for_category.get(&c)).copied(),
+                    community.and_then(|c| for_community.get(&c)).copied(),
+                    ty,
+                ),
+                muted: own_mute
+                    .get(&channel)
+                    .copied()
+                    .unwrap_or_else(|| category.is_some_and(|c| muted_categories.contains(&c))),
+            }
         })
         .collect();
     let readable: Vec<ChannelId> = places.iter().map(|p| p.channel).collect();

@@ -13,7 +13,7 @@ here are in [context-menus-design-notes.md](context-menus-design-notes.md).
 | Items and their look | `MenuAction`, `MenuRule`, `ParentLabel`, `menuItemClass` and the rest (`src/features/layout/menu.tsx`) |
 | Actions that are buttons elsewhere | `IconAction` inside `ActionsAsMenuItems` (`src/features/layout`) |
 | Asking before what is hard to undo | `ConfirmModal` (`src/features/layout`) |
-| A message | `MessageContextMenu`, `underPointer` (`src/features/messages`) |
+| A message | `MessageContextMenu`, `underPointer`, `saveFrom` and `copyPicture` (`mediaFile.ts`) (`src/features/messages`) |
 | A person | `UserMenu`, `UserMenuItems`, `UserDialogs` (`src/features/users`), opened through `ProfilePopover` |
 | A channel or DM | `ChannelMenu` (`src/features/channels`) |
 | A person in a call | `ParticipantMenu` (`src/features/voice`) |
@@ -88,8 +88,13 @@ edited.
 1. The reader's quick reactions, where they may react, at a pointer's size (`QuickReactions`
    `compact`), with Add a reaction beside them.
 2. What was right-clicked inside it (`underPointer`), when it is:
-   - an attachment (`data-media-url`, on pictures, video posters, and file chips): Open original,
-     Copy file address;
+   - an attachment or a link's picture (`data-media-url`, on pictures, video posters, and file
+     chips, with `data-media-name` and, on a picture, `data-media-picture`): Open original, Save
+     picture or Save file, Copy picture (a picture, where the clipboard takes one), and Copy file
+     address. Saving and copying read the file from the deployment's storage (`mediaFile.ts`),
+     whose read path lets any origin read it (`docs/operators/installing/storage-read-path.md`);
+     a picture is copied as a PNG. A storage that does not is named as the reason
+     (`UnreadableFile`);
    - a link in its text that opens elsewhere (`a[target=_blank]`): Open link, which follows the
      link itself, and Copy link address.
 3. Every action the row of buttons over the message offers (`MessageActions`), by name.
@@ -141,7 +146,8 @@ options button (`ChannelMenuButton`). Each channel's row has one, voice channels
 
 - A voice channel: Join the call, Join muted (`VoiceCall.setMuted` before joining), or Leave call
   while the user is in it. Joining opens the channel too.
-- Mark unread, Mute, and Notifications, as [unread-and-muting.md](unread-and-muting.md) says.
+- Mark unread, Mute (which also keeps a channel unmuted inside a muted category), and
+  Notifications, as [unread-and-muting.md](unread-and-muting.md) says.
 - Copy link, the channel's link to share (`channelUrl`).
 - Who can use this, Rename channel, and Delete channel, for those who may.
 
@@ -160,7 +166,12 @@ own row it is their own menu alone. See [participants and volume](voice/particip
 Right-clicking a category's heading opens `CategoryMenu`:
 
 - Collapse or Expand category, as the heading does.
+- Collapse all categories and Expand all categories, every one of the community's the reader may
+  see, in one request (`AspenSync.setAllCategoriesCollapsed`).
 - Mark as read, while one of its channels is unread (`useAnyUnread`, `AspenSync.markChannelsRead`).
+- Mute, which mutes its channels that have no mute of their own (`CategoryMuteSubmenu`; see
+  [unread-and-muting.md](unread-and-muting.md)), and Notifications, the level its channels without
+  one of their own take (`NotificationsSubmenu`; see [notifications.md](notifications.md)).
 - Add a channel (Manage channels), and Who can use this, Rename category, and Delete category
   (Manage categories), each opening the dialog the heading's buttons and the Layout tab use.
 

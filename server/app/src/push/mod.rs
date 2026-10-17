@@ -969,7 +969,7 @@ async fn channel_marked_unread(
 /// notification setting for the channel asks (`app::notification_setting`: every message, or
 /// only those that tag them), and those following the thread it is a reply in
 /// (`app::thread_follow`); never its author, anyone who blocked them, anyone who muted the
-/// channel (a thread counting as its parent), or anyone using Aspen right now.
+/// channel or its category (a thread counting as its parent), or anyone using Aspen right now.
 async fn recipients(
     state: &GlobalServerContext,
     found: &Message,
@@ -1005,6 +1005,7 @@ async fn recipients(
         .bind::<Bool, _>(mentions.everyone)
         .bind::<Text, _>(default_level(place.ty))
         .bind::<Nullable<PgUuid>, _>(posted_in_thread.then_some(channel_id.0))
+        .bind::<Nullable<PgUuid>, _>(place.parent_category.as_ref().map(|c| c.id().0))
         .load::<Recipient>(conn.as_mut())
         .await?
         .into_iter()
@@ -1056,14 +1057,16 @@ struct Recipient {
 /// Who a message wakes, before who may view it and who is using Aspen are decided: `$1` the
 /// community (`NULL` in a DM), `$2` the channel whose settings and mutes count (a thread's
 /// parent), `$3` the author, `$4`/`$5`/`$6` whom it tags (users, roles, everyone), `$7` the level
-/// with no setting, `$8` the thread it is a reply in (`NULL` when it is in none). Candidates come
-/// from indexed branches: the members tagged by name (`community_user`'s key), holders of tagged
-/// roles (`community_member_role_by_role`), every member when everyone is, those whose setting
-/// asks for every message (`notification_setting_all_*`), a DM's people, and the thread's
-/// followers (`thread_follow_by_thread`), a DM's thread's only while they are still its people.
-/// Each one's level is the channel's setting, else the community's, else `$7`, and a follower is
-/// told whatever theirs; those with a phone who neither blocked the author, muted the channel,
-/// nor are in do not disturb (`app::presence_override`) remain.
+/// with no setting, `$8` the thread it is a reply in (`NULL` when it is in none), `$9` the
+/// channel's category (`NULL` when it is in none). Candidates come from indexed branches: the
+/// members tagged by name (`community_user`'s key), holders of tagged roles
+/// (`community_member_role_by_role`), every member when everyone is, those whose setting asks for
+/// every message (`notification_setting_all_*`), a DM's people, and the thread's followers
+/// (`thread_follow_by_thread`), a DM's thread's only while they are still its people. Each one's
+/// level is the channel's setting, else its category's, else the community's, else `$7`, and a
+/// follower is told whatever theirs; those with a phone who neither blocked the author, muted
+/// the channel or its category (`app::channel_mute::muted_sql`), nor are in do not disturb
+/// (`app::presence_override`) remain.
 const RECIPIENTS_SQL: &str = concat!(
     r#"
     WITH candidate AS (
@@ -1078,6 +1081,9 @@ const RECIPIENTS_SQL: &str = concat!(
         UNION ALL
         SELECT ns."user", false, false FROM notification_setting ns
         WHERE $1 IS NOT NULL AND ns.level = 'all' AND ns.channel = $2
+        UNION ALL
+        SELECT ns."user", false, false FROM notification_setting ns
+        WHERE ns.level = 'all' AND ns.category = $9
         UNION ALL
         SELECT ns."user", false, false FROM notification_setting ns
         WHERE ns.level = 'all' AND ns.community = $1
@@ -1107,6 +1113,8 @@ const RECIPIENTS_SQL: &str = concat!(
             (SELECT level FROM notification_setting
              WHERE "user" = p."user" AND channel = $2),
             (SELECT level FROM notification_setting
+             WHERE "user" = p."user" AND category = $9),
+            (SELECT level FROM notification_setting
              WHERE "user" = p."user" AND community = $1),
             $7
         ) AS level
@@ -1116,11 +1124,9 @@ const RECIPIENTS_SQL: &str = concat!(
       AND NOT EXISTS (
           SELECT 1 FROM user_block b WHERE b.blocker = p."user" AND b.blocked = $3
       )
-      AND NOT EXISTS (
-          SELECT 1 FROM channel_mute m
-          WHERE m."user" = p."user" AND m.channel = $2
-            AND (m.until IS NULL OR m.until > now())
-      )
+      AND NOT "#,
+    crate::channel_mute::muted_sql!("p.\"user\"", "$2"),
+    r#"
       AND NOT EXISTS (
           SELECT 1 FROM "user" u WHERE u.id = p."user" AND "#,
     crate::presence_override::do_not_disturb_sql!("u"),

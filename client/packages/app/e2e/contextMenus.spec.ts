@@ -1,5 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
-import { bob, lounge, ownText, reactedText, signInToWorld, type Publish } from "./world";
+import {
+  bob,
+  gifPageLink,
+  lounge,
+  ownText,
+  PIXEL_PNG,
+  reactedText,
+  signInToWorld,
+  type Publish,
+} from "./world";
 
 /**
  * Right-click menus, against the stubbed world in `world.ts`: a message's actions by name, with
@@ -222,4 +231,109 @@ test("editing the reader's own message from its menu puts the editor in its plac
   await own.getByText(ownText).click({ button: "right" });
   await messageMenu(page).getByRole("menuitem", { name: "Edit message" }).click();
   await expect(own.getByRole("textbox")).toBeFocused();
+});
+
+test("a category's menu folds every category at once, and unfolds them", async ({ page }) => {
+  const planningHeading = page.getByRole("heading", { level: 2, name: "Planning" });
+  const archiveHeading = page.getByRole("heading", { level: 2, name: "Archive" });
+  await planningHeading.click({ button: "right" });
+  await page
+    .getByRole("menu", { name: "Options for Planning" })
+    .getByRole("menuitem", { name: "Collapse all categories" })
+    .click();
+  await expect(planningHeading.getByRole("button")).toHaveAttribute("aria-expanded", "false");
+  await expect(archiveHeading.getByRole("button")).toHaveAttribute("aria-expanded", "false");
+  await archiveHeading.click({ button: "right" });
+  await page
+    .getByRole("menu", { name: "Options for Archive" })
+    .getByRole("menuitem", { name: "Expand all categories" })
+    .click();
+  await expect(planningHeading.getByRole("button")).toHaveAttribute("aria-expanded", "true");
+});
+
+test("muting a category mutes its channels, one of which can be kept unmuted", async ({ page }) => {
+  await page.getByRole("heading", { level: 2, name: "Planning" }).click({ button: "right" });
+  await page
+    .getByRole("menu", { name: "Options for Planning" })
+    .getByRole("menuitem", { name: "Mute" })
+    .click();
+  await page
+    .getByRole("menu", { name: "Mute" })
+    .getByRole("menuitem", { name: "For 1 hour" })
+    .click();
+  await expect(page.getByText("roadmap, muted")).toBeAttached();
+  await expect(page.getByText("ideas, muted")).toBeAttached();
+
+  const channels = page.getByRole("grid", { name: /Planning/ });
+  await channels.getByText("roadmap", { exact: true }).click({ button: "right" });
+  const roadmap = page.getByRole("menu", { name: "Options for roadmap" });
+  await roadmap.getByRole("menuitem", { name: /with its category/ }).click();
+  await page
+    .getByRole("menu", { name: "Mute" })
+    .getByRole("menuitem", { name: "Keep unmuted" })
+    .click();
+  await expect(page.getByText("roadmap, unread")).toBeAttached();
+  await expect(page.getByText("ideas, muted")).toBeAttached();
+});
+
+test("a category's level is what its channels without their own take", async ({ page }) => {
+  await page.getByRole("heading", { level: 2, name: "Planning" }).click({ button: "right" });
+  await page
+    .getByRole("menu", { name: "Options for Planning" })
+    .getByRole("menuitem", { name: "Notifications" })
+    .click();
+  await page
+    .getByRole("menu", { name: /^Notifications/ })
+    .getByRole("menuitemradio", { name: "All messages" })
+    .click();
+  await page
+    .getByRole("grid", { name: /Planning/ })
+    .getByText("ideas", { exact: true })
+    .click({ button: "right" });
+  await expect(
+    page
+      .getByRole("menu", { name: "Options for ideas" })
+      .getByRole("menuitem", { name: /Notifications/ }),
+  ).toContainText("All messages");
+});
+
+const picture = (page: Page) =>
+  page
+    .locator("article")
+    .filter({ has: page.locator(`[alt*="${gifPageLink}"]`) })
+    .locator("[data-media-url]");
+
+test("a picture right-clicked in a message is saved or copied from the menu", async ({
+  page,
+  context,
+  browserName,
+}) => {
+  await picture(page).scrollIntoViewIfNeeded();
+  await picture(page).click({ button: "right" });
+  const menu = messageMenu(page);
+  const saved = page.waitForEvent("download");
+  await menu.getByRole("menuitem", { name: "Save picture" }).click();
+  expect((await saved).suggestedFilename()).toContain("ghost");
+  test.skip(
+    browserName !== "chromium",
+    "Only Chromium lets a test grant writing to the clipboard.",
+  );
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await picture(page).click({ button: "right" });
+  await menu.getByRole("menuitem", { name: "Copy picture" }).click();
+  await expect(page.getByText("Copied the picture")).toBeVisible();
+  const types = await page.evaluate(async () =>
+    (await navigator.clipboard.read()).flatMap((item) => item.types),
+  );
+  expect(types).toContain("image/png");
+});
+
+test("a storage that does not let the app read files is named as the reason", async ({ page }) => {
+  // A read the browser refuses by CORS reaches the page as a network error, as this does; a
+  // response the test fills in skips the browser's CORS check.
+  await page.route(PIXEL_PNG, (route) => route.abort("failed"));
+  await picture(page).scrollIntoViewIfNeeded();
+  await picture(page).click({ button: "right" });
+  await messageMenu(page).getByRole("menuitem", { name: "Save picture" }).click();
+  await expect(page.getByText(/file storage doesn't let the app read files/)).toBeVisible();
 });

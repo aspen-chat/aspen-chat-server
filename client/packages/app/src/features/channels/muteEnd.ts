@@ -1,4 +1,4 @@
-import type { ChannelMute } from "@aspen/protocol";
+
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
@@ -15,7 +15,7 @@ export const UNTIL: Intl.DateTimeFormatOptions = {
 };
 
 /** Until when a mute lasts, as the Mute submenu and the muted bell's tooltip both say it. */
-export function useMuteEnd(): (mute: ChannelMute) => string {
+export function useMuteEnd(): (mute: { readonly until?: string | null }) => string {
   const m = useMessages();
   const until = useDateFormat(UNTIL);
   return (mute) =>

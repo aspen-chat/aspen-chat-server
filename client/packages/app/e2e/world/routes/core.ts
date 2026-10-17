@@ -231,7 +231,11 @@ export function coreRoutes({
       /^\/categories\/[^/]+\/collapses\/@me$/,
       () => {
         const category = path.split("/")[2] ?? "";
-        publish({ serverEvent: "categoryCollapseChanged", category, collapsed: true });
+        publish({
+          serverEvent: "categoryCollapseChanged",
+          categories: [category],
+          collapsed: true,
+        });
         return reply({ category }, 201);
       },
     ],
@@ -240,7 +244,36 @@ export function coreRoutes({
       /^\/categories\/[^/]+\/collapses\/@me$/,
       () => {
         const category = path.split("/")[2] ?? "";
-        publish({ serverEvent: "categoryCollapseChanged", category, collapsed: false });
+        publish({
+          serverEvent: "categoryCollapseChanged",
+          categories: [category],
+          collapsed: false,
+        });
+        return reply(null, 204);
+      },
+    ],
+    // A community's categories all at once: the world's two.
+    [
+      "PUT",
+      /^\/communities\/[^/]+\/category-collapses\/@me$/,
+      () => {
+        publish({
+          serverEvent: "categoryCollapseChanged",
+          categories: [planning, archive],
+          collapsed: true,
+        });
+        return reply({ categories: [planning, archive] }, 200);
+      },
+    ],
+    [
+      "DELETE",
+      /^\/communities\/[^/]+\/category-collapses\/@me$/,
+      () => {
+        publish({
+          serverEvent: "categoryCollapseChanged",
+          categories: [planning, archive],
+          collapsed: false,
+        });
         return reply(null, 204);
       },
     ],
@@ -437,29 +470,40 @@ export function coreRoutes({
         return reply(null, 204);
       },
     ],
-    // Muting answers as the server does, and tells the caller's devices by event.
+    // Muting, a channel or a category, and keeping a channel unmuted, answers as the server
+    // does, and tells the caller's devices by event.
     [
       "PUT",
-      /^\/channels\/[^/]+\/mutes\/@me$/,
+      /^\/(channels|categories)\/[^/]+\/mutes\/@me$/,
       () => {
-        const channel = path.split("/")[2] ?? "";
-        const { durationSeconds } = request.postDataJSON() as { durationSeconds: number | null };
+        const [, kind, id = ""] = path.split("/");
+        const body = request.postDataJSON() as {
+          durationSeconds?: number | null;
+          muted?: boolean;
+        };
+        const durationSeconds = body.durationSeconds ?? null;
         const until =
           durationSeconds === null
             ? null
             : new Date(Date.now() + durationSeconds * 1000).toISOString();
-        publish({ serverEvent: "channelMuteChanged", channel, muted: true, until });
-        return reply({ channel, until }, 201);
+        if (kind === "categories") {
+          publish({ serverEvent: "categoryMuteChanged", category: id, muted: true, until });
+          return reply({ category: id, until }, 201);
+        }
+        const muted = body.muted ?? true;
+        publish({ serverEvent: "channelMuteChanged", channel: id, muted, until });
+        return reply({ channel: id, until, muted }, 201);
       },
     ],
     [
       "PUT",
-      /^\/(channels|communities)\/[^/]+\/notification-settings\/@me$/,
+      /^\/(channels|categories|communities)\/[^/]+\/notification-settings\/@me$/,
       () => {
         const [, kind, id] = path.split("/");
         const { level } = request.postDataJSON() as { level: string };
         const setting = {
           community: kind === "communities" ? (id ?? null) : null,
+          category: kind === "categories" ? (id ?? null) : null,
           channel: kind === "channels" ? (id ?? null) : null,
           level,
         };
@@ -469,12 +513,13 @@ export function coreRoutes({
     ],
     [
       "DELETE",
-      /^\/(channels|communities)\/[^/]+\/notification-settings\/@me$/,
+      /^\/(channels|categories|communities)\/[^/]+\/notification-settings\/@me$/,
       () => {
         const [, kind, id] = path.split("/");
         publish({
           serverEvent: "notificationSettingChanged",
           community: kind === "communities" ? (id ?? null) : null,
+          category: kind === "categories" ? (id ?? null) : null,
           channel: kind === "channels" ? (id ?? null) : null,
           level: null,
         });
@@ -483,13 +528,14 @@ export function coreRoutes({
     ],
     [
       "DELETE",
-      /^\/channels\/[^/]+\/mutes\/@me$/,
+      /^\/(channels|categories)\/[^/]+\/mutes\/@me$/,
       () => {
-        publish({
-          serverEvent: "channelMuteChanged",
-          channel: path.split("/")[2] ?? "",
-          muted: false,
-        });
+        const [, kind, id = ""] = path.split("/");
+        publish(
+          kind === "categories"
+            ? { serverEvent: "categoryMuteChanged", category: id, muted: false, until: null }
+            : { serverEvent: "channelMuteChanged", channel: id, muted: null, until: null },
+        );
         return reply(null, 204);
       },
     ],

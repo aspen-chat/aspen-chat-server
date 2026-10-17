@@ -1859,6 +1859,44 @@ export class AspenSync {
    * Mutes a channel or DM for the caller, for `durationSeconds` or, with `null`, until they
    * unmute it. The store follows the `channelMuteChanged` event.
    */
+  /**
+   * Keeps a channel unmuted while its category is muted, until the caller changes it. The store
+   * follows the event.
+   */
+  async keepChannelUnmuted(channelId: string): Promise<void> {
+    const result = await this.#client.api.PUT("/api/v1/channels/{channel}/mutes/@me", {
+      params: { path: { channel: channelId } },
+      body: { muted: false },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Mutes a category for `durationSeconds` or, with `null`, until the caller unmutes it, and
+   * with it its channels that have no setting of their own. The store follows the event.
+   */
+  async muteCategory(categoryId: string, durationSeconds: number | null): Promise<void> {
+    const result = await this.#client.api.PUT("/api/v1/categories/{category}/mutes/@me", {
+      params: { path: { category: categoryId } },
+      body: { durationSeconds },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** Lifts the caller's mute of a category. The store follows the event. */
+  async unmuteCategory(categoryId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/categories/{category}/mutes/@me", {
+      params: { path: { category: categoryId } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
   async muteChannel(channelId: string, durationSeconds: number | null): Promise<void> {
     const result = await this.#client.api.PUT("/api/v1/channels/{channel}/mutes/@me", {
       params: { path: { channel: channelId } },
@@ -1920,7 +1958,39 @@ export class AspenSync {
     this.store.applyEvent({
       serverEvent: "notificationSettingChanged",
       community: null,
+      category: null,
       channel: channelId,
+      level,
+    });
+  }
+
+  /**
+   * Sets how much of a category's channels without a setting of their own the user is told of,
+   * or with `null` returns them to the community's setting. The store follows at once.
+   */
+  async setCategoryNotifications(
+    categoryId: string,
+    level: NotificationLevel | null,
+  ): Promise<void> {
+    const path = { params: { path: { category: categoryId } } };
+    const result =
+      level === null
+        ? await this.#client.api.DELETE(
+            "/api/v1/categories/{category}/notification-settings/@me",
+            path,
+          )
+        : await this.#client.api.PUT("/api/v1/categories/{category}/notification-settings/@me", {
+            ...path,
+            body: { level },
+          });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.applyEvent({
+      serverEvent: "notificationSettingChanged",
+      community: null,
+      category: categoryId,
+      channel: null,
       level,
     });
   }
@@ -1947,6 +2017,7 @@ export class AspenSync {
     this.store.applyEvent({
       serverEvent: "notificationSettingChanged",
       community: communityId,
+      category: null,
       channel: null,
       level,
     });
@@ -2044,6 +2115,23 @@ export class AspenSync {
     const result = collapsed
       ? await this.#client.api.PUT("/api/v1/categories/{category}/collapses/@me", params)
       : await this.#client.api.DELETE("/api/v1/categories/{category}/collapses/@me", params);
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Collapses or expands every category of a community the caller may see, at once. The store
+   * follows the event.
+   */
+  async setAllCategoriesCollapsed(communityId: string, collapsed: boolean): Promise<void> {
+    const params = { params: { path: { community: communityId } } };
+    const result = collapsed
+      ? await this.#client.api.PUT("/api/v1/communities/{community}/category-collapses/@me", params)
+      : await this.#client.api.DELETE(
+          "/api/v1/communities/{community}/category-collapses/@me",
+          params,
+        );
     if (result.error !== undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
@@ -3578,10 +3666,13 @@ export class AspenSync {
       this.store.setBootstrap(me.data, communities.data.data, communities.data.included);
       this.store.ingest(dms.data.included);
       this.store.setDms(dms.data.data, dms.data.data.length < DM_PAGE);
-      this.store.replaceMutes([
-        ...(communities.data.included.channelMutes ?? []),
-        ...(dms.data.included.channelMutes ?? []),
-      ]);
+      this.store.replaceMutes(
+        [
+          ...(communities.data.included.channelMutes ?? []),
+          ...(dms.data.included.channelMutes ?? []),
+        ],
+        communities.data.included.categoryMutes ?? [],
+      );
       this.#scheduleMuteEnd();
       // A deployment that keeps no presence overrides has none.
       const chosen = chosenPresence.data?.presenceOverride;

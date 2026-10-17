@@ -25,6 +25,7 @@ import {
   useCan,
   useDeploymentCan,
   useCategories,
+  useCategoryMute,
   useMe,
   useMemberRoles,
   usePluginKind,
@@ -174,6 +175,7 @@ function CategorySection({
     ? channels.filter((c) => c.id === current || shown.has(c.id))
     : channels;
   const menu = useContextMenu();
+  const mute = useCategoryMute(category.id);
   return (
     <section className="group mt-3">
       <div
@@ -199,6 +201,12 @@ function CategorySection({
             <span className="truncate">{category.name}</span>
           </Button>
         </h2>
+        {mute !== undefined && (
+          <MuteBell
+            mute={{ until: mute.until ?? null, category: null }}
+            className="text-ink-faint"
+          />
+        )}
         <CategoryAccessButton category={category} />
         <AddToCategoryDialog category={category} />
         <CopyIdButton id={category.id} thing="category" className="p-0.5" />

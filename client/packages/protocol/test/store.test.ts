@@ -896,11 +896,11 @@ describe("RecordStore mutes", () => {
     store.ingest({ readStates: [unreadGeneral] });
     expect(Array.from(store.unreadPlaces())).toEqual([aspen.id]);
     store.applyEvent({ serverEvent: "channelMuteChanged", channel: general.id, muted: true });
-    expect(store.mute(general.id)).toEqual({ channel: general.id, until: null });
+    expect(store.mute(general.id)).toEqual({ until: null, category: null });
     expect(store.unreadPlaces().size).toBe(0);
     // Still unread underneath, for when the mute ends.
     expect(store.unread(general.id)).toBe(true);
-    store.applyEvent({ serverEvent: "channelMuteChanged", channel: general.id, muted: false });
+    store.applyEvent({ serverEvent: "channelMuteChanged", channel: general.id, muted: null });
     expect(store.mute(general.id)).toBeUndefined();
     expect(Array.from(store.unreadPlaces())).toEqual([aspen.id]);
   });
@@ -909,8 +909,8 @@ describe("RecordStore mutes", () => {
     const store = bootstrapped();
     store.ingest({
       channelMutes: [
-        { channel: general.id, until: "2026-09-28T12:00:00Z" },
-        { channel: dev.id, until: "2026-09-28T13:00:00Z" },
+        { channel: general.id, until: "2026-09-28T12:00:00Z", muted: true },
+        { channel: dev.id, until: "2026-09-28T13:00:00Z", muted: true },
       ],
     });
     expect(store.nextMuteEnd()).toBe(Date.parse("2026-09-28T12:00:00Z"));
@@ -920,12 +920,56 @@ describe("RecordStore mutes", () => {
     expect(store.nextMuteEnd()).toBe(Date.parse("2026-09-28T13:00:00Z"));
   });
 
+  it("mutes a category's channels, but not one kept unmuted or with its own mute", () => {
+    const store = bootstrapped();
+    store.ingest({ categoryMutes: [{ category: work.id, until: "2026-09-28T12:00:00Z" }] });
+    expect(store.mute(dev.id)).toEqual({ until: "2026-09-28T12:00:00Z", category: work.id });
+    expect(store.mute(general.id)).toBeUndefined();
+    store.applyEvent({
+      serverEvent: "channelMuteChanged",
+      channel: dev.id,
+      muted: false,
+      until: null,
+    });
+    expect(store.mute(dev.id)).toBeUndefined();
+    expect(store.ownMute(dev.id)?.muted).toBe(false);
+    store.applyEvent({
+      serverEvent: "channelMuteChanged",
+      channel: dev.id,
+      muted: true,
+      until: "2026-09-28T13:00:00Z",
+    });
+    expect(store.mute(dev.id)).toEqual({ until: "2026-09-28T13:00:00Z", category: null });
+    store.applyEvent({ serverEvent: "channelMuteChanged", channel: dev.id, muted: null, until: null });
+    expect(store.mute(dev.id)?.category).toBe(work.id);
+    store.expireMutes(Date.parse("2026-09-28T12:00:00Z"));
+    expect(store.mute(dev.id)).toBeUndefined();
+  });
+
+  it("gives a channel moved into a muted category that category's mute", () => {
+    const store = bootstrapped();
+    store.applyEvent({
+      serverEvent: "categoryMuteChanged",
+      category: work.id,
+      muted: true,
+      until: null,
+    });
+    expect(store.mute(general.id)).toBeUndefined();
+    store.applyEvent({
+      serverEvent: "channel",
+      type: "update",
+      id: general.id,
+      parentCategory: work.id,
+    });
+    expect(store.mute(general.id)).toEqual({ until: null, category: work.id });
+  });
+
   it("replaces every mute with what a bootstrap read", () => {
     const store = bootstrapped();
-    store.ingest({ channelMutes: [{ channel: general.id, until: null }] });
-    store.replaceMutes([{ channel: dev.id, until: null }]);
+    store.ingest({ channelMutes: [{ channel: general.id, until: null, muted: true }] });
+    store.replaceMutes([{ channel: dev.id, until: null, muted: true }], []);
     expect(store.mute(general.id)).toBeUndefined();
-    expect(store.mute(dev.id)).toEqual({ channel: dev.id, until: null });
+    expect(store.mute(dev.id)).toEqual({ until: null, category: null });
   });
 });
 
@@ -997,13 +1041,13 @@ describe("RecordStore collapsed categories", () => {
     expect(store.collapsed(work.id)).toBe(true);
     store.applyEvent({
       serverEvent: "categoryCollapseChanged",
-      category: work.id,
+      categories: [work.id],
       collapsed: false,
     });
     expect(store.collapsed(work.id)).toBe(false);
     store.applyEvent({
       serverEvent: "categoryCollapseChanged",
-      category: work.id,
+      categories: [work.id],
       collapsed: true,
     });
     store.replaceCollapsed([]);
@@ -1914,6 +1958,28 @@ describe("RecordStore notifications", () => {
     expect(store.communityNotificationLevel(aspen.id)).toBe("all");
   });
 
+  it("puts a category's level between its channels' own and its community's", () => {
+    const store = bootstrapped();
+    store.replaceNotificationSettings([
+      { community: aspen.id, channel: null, level: "nothing" },
+      { community: null, category: work.id, channel: null, level: "all" },
+    ]);
+    expect(store.notificationLevel(dev.id)).toEqual({ level: "all", own: null, inherited: "all" });
+    expect(store.notificationLevel(general.id).level).toBe("nothing");
+    expect(store.categoryNotificationLevel(work.id, aspen.id)).toEqual({
+      own: "all",
+      inherited: "nothing",
+    });
+    store.applyEvent({
+      serverEvent: "notificationSettingChanged",
+      community: null,
+      category: work.id,
+      channel: null,
+      level: null,
+    });
+    expect(store.notificationLevel(dev.id).level).toBe("nothing");
+  });
+
   it("notifies of others' unread messages as the level asks, never muted or blocked ones", () => {
     const store = bootstrapped();
     store.ingest({
@@ -1930,9 +1996,9 @@ describe("RecordStore notifications", () => {
     expect(store.notifies({ ...tagging, id: id(999) })).toBe(false);
     store.replaceNotificationSettings([{ community: null, channel: general.id, level: "all" }]);
     expect(store.notifies(plain)).toBe(true);
-    store.replaceMutes([{ channel: general.id, until: null }]);
+    store.replaceMutes([{ channel: general.id, until: null, muted: true }], []);
     expect(store.notifies(plain)).toBe(false);
-    store.replaceMutes([]);
+    store.replaceMutes([], []);
     store.setBlocked(bob.id, true);
     expect(store.notifies(plain)).toBe(false);
   });
@@ -1958,11 +2024,11 @@ describe("RecordStore notifications", () => {
     store.applyEvent({ serverEvent: "threadFollowChanged", thread: thread.id, following: true });
     expect(views(reply)).toEqual(["all", "threads"]);
     expect(views({ ...tagging, author: me.id })).toEqual([]);
-    store.replaceMutes([{ channel: general.id, until: null }]);
+    store.replaceMutes([{ channel: general.id, until: null, muted: true }], []);
     expect(views(tagging)).toEqual([]);
     expect(views(reply)).toEqual([]);
     expect(views(direct)).toEqual(["all", "dms"]);
-    store.replaceMutes([]);
+    store.replaceMutes([], []);
     store.setBlocked(bob.id, true);
     expect(views(direct)).toEqual([]);
   });
@@ -1983,7 +2049,7 @@ describe("RecordStore notifications", () => {
       { channel: other.id, community: general.community, lastMessage: id(1005) },
       { channel: general.id, community: general.community, lastMessage: id(1001) },
     ]);
-    store.replaceMutes([{ channel: other.id, until: null }]);
+    store.replaceMutes([{ channel: other.id, until: null, muted: true }], []);
     expect(store.unreadChannels().map((unread) => unread.channel)).toEqual([general.id]);
     store.setLastRead(general.id, id(1001));
     expect(store.unreadChannels()).toEqual([]);
@@ -2010,9 +2076,9 @@ describe("RecordStore notifications", () => {
     expect(store.notifies(reply)).toBe(true);
     store.replaceNotificationSettings([{ community: null, channel: general.id, level: "nothing" }]);
     expect(store.notifies(reply)).toBe(true);
-    store.replaceMutes([{ channel: general.id, until: null }]);
+    store.replaceMutes([{ channel: general.id, until: null, muted: true }], []);
     expect(store.notifies(reply)).toBe(false);
-    store.replaceMutes([]);
+    store.replaceMutes([], []);
     store.applyEvent({ serverEvent: "channelRead", channel: thread.id, lastRead: id(1002) });
     expect(store.threadRead(thread.id)).toBe(id(1002));
     expect(store.notifies(reply)).toBe(false);

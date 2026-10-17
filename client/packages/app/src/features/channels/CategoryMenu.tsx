@@ -1,5 +1,7 @@
 import type { Category } from "@aspen/protocol";
 import {
+  ArrowsInLineVerticalIcon,
+  ArrowsOutLineVerticalIcon,
   CaretDownIcon,
   CaretRightIcon,
   CheckCircleIcon,
@@ -10,7 +12,15 @@ import {
 } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Menu } from "react-aria-components";
-import { useAnyUnread, useCan, useCollapsed, useSync } from "@/api/hooks";
+import {
+  useAnyUnread,
+  useCan,
+  useCategoryNotificationLevel,
+  useCollapsed,
+  useSync,
+} from "@/api/hooks";
+import { CategoryMuteSubmenu, NotificationsSubmenu } from "@/features/channels/muteMenus";
+import { problemText } from "@/api/problemText";
 import { AddToCategoryModal } from "@/features/channels/AddToCategoryDialog";
 import { DeleteCategoryDialog, RenameCategoryDialog } from "@/features/channels/CategoryDialogs";
 import { AccessDialog } from "@/features/community-settings/AccessDialog";
@@ -22,12 +32,19 @@ import { toast } from "@/features/layout/toast";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
+/** Says why something failed, in a toast, as a menu that has closed cannot. */
+function sayFailure(failure: unknown) {
+  toast(problemText(failure));
+}
+
 /** What an item of a category's menu opens outside it, which closes as the item is chosen. */
 type CategoryDialog = "add" | "access" | "rename" | "delete";
 
 /**
  * What the reader can do to a category from its heading, opened by right-clicking it: fold it
- * away or back, as the heading does; mark its channels read, while one is unread; and, for
+ * away or back, as the heading does, or every category of the community at once; mute it, and
+ * with it its channels that have no mute of their own; choose what its channels without a
+ * setting of their own tell of; mark its channels read, while one is unread; and, for
  * those who may, add a channel to it (Manage channels), or set who can use it, rename it, or
  * delete it (Manage categories).
  */
@@ -47,7 +64,11 @@ export function CategoryMenu({
   const unread = useAnyUnread(channelIds);
   const addChannels = useCan(category.community, "manageChannels");
   const manage = useCan(category.community, "manageCategories");
+  const levels = useCategoryNotificationLevel(category.id, category.community);
   const [dialog, setDialog] = useState<CategoryDialog | null>(null);
+  const close = () => {
+    menu.onOpenChange(false);
+  };
   const label = format(m.mute.options, { name: category.name });
   const open = (next: CategoryDialog) => () => {
     setDialog(next);
@@ -84,17 +105,36 @@ export function CategoryMenu({
               void sync.setCategoryCollapsed(category.id, !collapsed).catch(() => undefined);
             }}
           />
+          <MenuAction
+            label={m.contextMenu.collapseAll}
+            icon={<ArrowsInLineVerticalIcon aria-hidden="true" />}
+            onAction={() => {
+              sync.setAllCategoriesCollapsed(category.community, true).catch(sayFailure);
+            }}
+          />
+          <MenuAction
+            label={m.contextMenu.expandAll}
+            icon={<ArrowsOutLineVerticalIcon aria-hidden="true" />}
+            onAction={() => {
+              sync.setAllCategoriesCollapsed(category.community, false).catch(sayFailure);
+            }}
+          />
           {unread && (
             <MenuAction
               label={m.contextMenu.markRead}
               icon={<CheckCircleIcon aria-hidden="true" />}
               onAction={() => {
-                sync.markChannelsRead(channelIds).catch((failure: unknown) => {
-                  toast(failure instanceof Error ? failure.message : String(failure));
-                });
+                sync.markChannelsRead(channelIds).catch(sayFailure);
               }}
             />
           )}
+          <CategoryMuteSubmenu categoryId={category.id} close={close} />
+          <NotificationsSubmenu
+            own={levels.own}
+            inherited={levels.inherited}
+            choose={(level) => sync.setCategoryNotifications(category.id, level)}
+            close={close}
+          />
           {(addChannels || manage) && <MenuRule />}
           {addChannels && (
             <MenuAction

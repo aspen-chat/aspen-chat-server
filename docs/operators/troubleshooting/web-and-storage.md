@@ -22,6 +22,13 @@ Pictures load from `[media.s3] public_base_url`. It must serve the bucket's obje
 credentials, and only them. [The storage's read path](../installing/storage-read-path.md) gives
 the checks, which also show whether it lists or takes writes, as it must not.
 
+## Saving or copying a picture says the storage does not let the app read files
+
+The apps read the file from `[media.s3] public_base_url` themselves to save or copy it, which the
+browser allows only when the read path sends `Access-Control-Allow-Origin`. Add it as
+[The storage's read path](../installing/storage-read-path.md#its-origin-and-headers) says, and
+check it with the `curl` there. `aspen-box doctor` checks it on a box.
+
 ## Videos show as downloads, without a poster
 
 No server that makes previews can run `ffmpeg` and `ffprobe`. Each says so in its log as it
