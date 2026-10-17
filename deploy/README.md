@@ -17,8 +17,13 @@ The two AWS configurations are prototypes: planned, never applied. They share th
 
 ## The images
 
-Build them from the repository root, with Docker's BuildKit (`docker buildx`, the default builder
-of current Docker):
+They are published at `ghcr.io/aspen-chat/aspen-api` and `ghcr.io/aspen-chat/aspen-voice`, for
+x86-64 and 64-bit ARM: `main` and each commit's first twelve characters for every change to
+`main`, and each release's tag (`.github/workflows/images.yml`). Everything here runs those,
+by tag, unless told other images.
+
+To build them yourself, from the repository root, with Docker's BuildKit (`docker buildx`, the
+default builder of current Docker):
 
 ```
 docker build -f deploy/docker/Dockerfile --target api -t aspen-api . \

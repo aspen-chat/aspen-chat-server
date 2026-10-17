@@ -1,0 +1,130 @@
+# Publishes both servers' images to the GitHub Container Registry, as ghcr.io/<owner>/aspen-api
+# and aspen-voice, for x86-64 and 64-bit ARM under one tag: each architecture is built on a
+# runner of its own (an emulated Rust build takes hours), pushed by digest alone, and the two
+# are then joined under the tags.
+#
+# Every push to `main` is published as `main` and as its commit's first twelve characters, every
+# tag `v*` as itself, and a run started by hand on another branch as its commit alone. `deploy/box` and both AWS configurations run these images, by tag.
+#
+# A package the registry makes for an organization is private until an owner makes it public,
+# once, in the package's settings; until then nothing can pull it without signing in.
+
+name: Images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push publishes after this one, never before it, and none is cut short: `main` names
+# whichever finished last.
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Names
+        id: names
+        run: |
+          echo "registry=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          echo "commit=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+      # Both targets share the build stage, which the second finds in the builder's cache.
+      - name: api
+        id: api
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          target: api
+          platforms: linux/${{ matrix.arch }}
+          build-args: ASPEN_COMMIT=${{ steps.names.outputs.commit }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          outputs: type=image,name=${{ steps.names.outputs.registry }}/aspen-api,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.arch }}
+      - name: voice
+        id: voice
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          target: voice
+          platforms: linux/${{ matrix.arch }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          outputs: type=image,name=${{ steps.names.outputs.registry }}/aspen-voice,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=image-${{ matrix.arch }}
+      - name: Digests
+        run: |
+          mkdir digests
+          echo "${{ steps.api.outputs.digest }}" > "digests/api-${{ matrix.arch }}"
+          echo "${{ steps.voice.outputs.digest }}" > "digests/voice-${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.arch }}
+          path: digests
+          retention-days: 1
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: digests-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag both architectures together
+        run: |
+          registry="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tags=("$GITHUB_REF_NAME")
+          elif [ "$GITHUB_REF" = refs/heads/main ]; then
+            tags=(main "${GITHUB_SHA::12}")
+          else
+            tags=("${GITHUB_SHA::12}")
+          fi
+          for image in api voice; do
+            arguments=()
+            for tag in "${tags[@]}"; do arguments+=(--tag "$registry/aspen-$image:$tag"); done
+            docker buildx imagetools create "${arguments[@]}" \
+              "$registry/aspen-$image@$(cat "digests/$image-amd64")" \
+              "$registry/aspen-$image@$(cat "digests/$image-arm64")"
+            docker buildx imagetools inspect "$registry/aspen-$image:${tags[0]}"
+          done

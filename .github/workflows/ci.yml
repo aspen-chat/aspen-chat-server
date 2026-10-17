@@ -2,9 +2,10 @@
 # x86-64, and changes to access are checked to reach everything already open
 # (`scripts/check_permissions.py`); the servers write the schemas the client is generated from;
 # the client typechecks, lints, and passes its tests, its browser tests split across three
-# runners; two deployments federate and wake a stand-in phone over real TLS; and the servers
-# are built for 64-bit ARM two ways, natively and with the cross-compile script, and each build
-# is started against real services on an ARM machine.
+# runners; two deployments federate and wake a stand-in phone over real TLS; the box runs from
+# images built here, and both AWS configurations pass their plan tests; and the servers are
+# built for 64-bit ARM two ways, natively and with the cross-compile script, and each build is
+# started against real services on an ARM machine.
 #
 # The ARM binaries are built against Debian 12 (bookworm, glibc 2.36), so they run on
 # Raspberry Pi OS Bookworm and newer, and with jemalloc built for 64 KiB pages, which also
@@ -340,6 +341,55 @@ jobs:
       - name: Server logs
         if: failure()
         run: tail -n 200 target/dev-federation/*/server.log
+
+  deploy-configurations:
+    name: Deployment configurations — OpenTofu tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: 1.13.1
+          tofu_wrapper: false
+      - run: tofu fmt -check -recursive deploy
+      # Each plans against made-up providers, so it needs no AWS account.
+      - name: Validate and test each
+        run: |
+          for configuration in deploy/aws deploy/aws-single; do
+            tofu -chdir="$configuration" init -backend=false -input=false
+            tofu -chdir="$configuration" validate
+            tofu -chdir="$configuration" test
+          done
+
+  box:
+    name: The box — start, upgrade, restore, export
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      # The images workflow's cache for this architecture, read but not written: a pull
+      # request's build is not one to build from.
+      - name: api image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          target: api
+          load: true
+          tags: aspen-api:check
+          cache-from: type=gha,scope=image-amd64
+      - name: voice image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          target: voice
+          load: true
+          tags: aspen-voice:check
+          cache-from: type=gha,scope=image-amd64
+      - run: python3 scripts/check_box.py --api-image aspen-api:check --voice-image aspen-voice:check
 
   arm64-native:
     name: ARM64 (Debian 12) — build and test natively
