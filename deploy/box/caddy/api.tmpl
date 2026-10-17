@@ -1,0 +1,15 @@
+${domain} {
+	# Whichever API server is running, and both for the moment an upgrade has two: a request
+	# that finds one gone is given to the other.
+	reverse_proxy 127.0.0.1:8080 127.0.0.1:8081 {
+		# Whether the server is running, not whether its database is: a server that cannot
+		# reach its database still tells people what is wrong, which a proxy with no server to
+		# send them to cannot.
+		health_uri /api/v1/health
+		health_interval 2s
+		health_timeout 2s
+		lb_policy first
+		lb_try_duration 15s
+		lb_try_interval 250ms
+	}
+}

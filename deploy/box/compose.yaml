@@ -1,14 +1,17 @@
-# One whole deployment on one Linux machine, run by `aspen-box` beside this file, which writes
-# the files and variables it names into the box's directory and starts things in order.
+# One whole deployment on one Linux machine, or a voice server of one on another, run by
+# `aspen-box` beside this file, which writes the files and variables it names into the box's
+# directory and starts things in order.
 #
 # Every container is on the machine's own network (the voice server takes media on a range of
-# UDP ports, which Docker's port publishing handles badly), and every service but Caddy and the
-# voice server's media listens on loopback: nothing here is reachable from another machine
-# unless it is meant to be, whatever the machine's firewall says.
+# UDP ports, which Docker's port publishing handles badly), and every service but Caddy, the
+# voice server's media, and NATS when voice servers elsewhere reach it listens on loopback:
+# nothing here is reachable from another machine unless it is meant to be, whatever the
+# machine's firewall says.
 #
-# PostgreSQL and the object storage are each started only for a box that keeps its own
-# (`COMPOSE_PROFILES`). Needs Compose 2.20 or later, for dependencies that may be absent.
-name: aspen
+# A deployment's own box runs the `main` profile and Caddy; a voice server's box runs Caddy and
+# the voice server alone. PostgreSQL and the object storage each run only for a box that keeps
+# its own (`COMPOSE_PROFILES`). Needs Compose 2.20 or later, for dependencies that may be
+# absent.
 
 x-service: &service
   network_mode: host
@@ -24,8 +27,10 @@ x-api: &api
   profiles: ["api"]
   volumes:
     - ./config/aspen.toml:/etc/aspen/aspen.toml:ro
-    # The authorities of a database kept elsewhere; empty for one kept here.
+    # The authorities of a database kept elsewhere, and of NATS opened over TLS; each empty
+    # when unused.
     - ./config/database-ca.pem:/etc/aspen/database-ca.pem:ro
+    - ./config/nats-ca.pem:/etc/aspen/nats-ca.pem:ro
   depends_on:
     postgres: { condition: service_healthy, required: false }
     nats: { condition: service_started }
@@ -52,6 +57,7 @@ services:
 
   valkey:
     <<: *service
+    profiles: ["main"]
     image: valkey/valkey:8-alpine
     # Nothing in it is worth keeping across a restart, and it must never evict
     # (docs/operators/installing/1-services.md).
@@ -68,10 +74,13 @@ services:
 
   nats:
     <<: *service
+    profiles: ["main"]
     image: nats:2.11-alpine
     command: ["--config", "/etc/nats/nats.conf"]
     volumes:
       - ./config/nats.conf:/etc/nats/nats.conf:ro
+      # Its certificate and key, when voice servers elsewhere reach it (`aspen_box.nats_tls`).
+      - ./config/nats-tls:/etc/nats/tls:ro
 
   # Object storage on the machine's own disk, for a box that keeps its files itself.
   garage:
@@ -99,6 +108,11 @@ services:
     <<: *api
     image: ${ASPEN_API_IMAGE_A}
     command: ["aspen-chat-server", "--no-https", "--listen-addr", "127.0.0.1", "--port", "8080"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 5s
+      timeout: 3s
+      start_period: 60s
 
   api-b:
     <<: *api
@@ -107,14 +121,26 @@ services:
     environment:
       # Both may run at once during an upgrade, and each serves its metrics.
       ASPEN_METRICS__LISTEN_ADDR: 127.0.0.1:9466
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8081/api/v1/health"]
+      interval: 5s
+      timeout: 3s
+      start_period: 60s
 
   voice:
     <<: *service
     image: ${ASPEN_VOICE_IMAGE}
     volumes:
       - ./config/voice_server.toml:/etc/aspen/voice_server.toml:ro
+      - ./config/nats-ca.pem:/etc/aspen/nats-ca.pem:ro
     depends_on:
-      nats: { condition: service_started }
+      # On a voice server's own box, NATS is the deployment's, elsewhere.
+      nats: { condition: service_started, required: false }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9000/health"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
 
   # `aspen-box` runs the migrations and the operator commands in this, with the image a
   # release is moving to.
@@ -125,5 +151,6 @@ services:
     volumes:
       - ./config/aspen.toml:/etc/aspen/aspen.toml:ro
       - ./config/database-ca.pem:/etc/aspen/database-ca.pem:ro
+      - ./config/nats-ca.pem:/etc/aspen/nats-ca.pem:ro
     depends_on:
       postgres: { condition: service_healthy, required: false }

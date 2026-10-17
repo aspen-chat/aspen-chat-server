@@ -44,14 +44,12 @@ locals {
       media_url        = module.media.public_base_url
       bucket           = module.media.bucket
       region           = var.region
-      s3_access_key    = module.media.access_key
-      s3_secret_key    = module.media.secret_key
     } : key => jsonencode(value) },
-    { s3_more = "", more = local.email_toml },
+    { s3_more = "access_key = ${jsonencode(module.media.access_key)}\nsecret_key = ${jsonencode(module.media.secret_key)}\n", more = local.email_toml },
   ))
 
   voice_server_toml = {
-    for name, voice in var.voice_servers : name => templatefile("${path.module}/../templates/voice_server.toml.tftpl", {
+    for name, voice in var.voice_servers : name => templatefile("${path.module}/../templates/voice_server.toml.tftpl", merge({
       for key, value in {
         id                = random_uuid.voice[name].result
         name              = name
@@ -63,10 +61,11 @@ locals {
         min_port          = var.voice_media_ports.min
         max_port          = var.voice_media_ports.max
       } : key => jsonencode(value)
-    })
+    }, { rtc_more = "", more = "" }))
   }
 
   nats_conf = templatefile("${path.module}/../templates/nats.conf.tftpl", {
+    tls     = ""
     listen  = jsonencode("0.0.0.0:4222")
     monitor = jsonencode("0.0.0.0:8222")
     # NATS reads the machine's memory, not its container's, so it is told what it may reserve.

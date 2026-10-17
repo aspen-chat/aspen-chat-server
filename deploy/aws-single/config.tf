@@ -47,13 +47,11 @@ locals {
         media_url        = module.media.public_base_url
         bucket           = module.media.bucket
         region           = var.region
-        s3_access_key    = module.media.access_key
-        s3_secret_key    = module.media.secret_key
       } : key => jsonencode(value) },
-      { s3_more = "", more = local.email_toml },
+      { s3_more = "access_key = ${jsonencode(module.media.access_key)}\nsecret_key = ${jsonencode(module.media.secret_key)}\n", more = local.email_toml },
     ))
 
-    voice-server-toml = templatefile("${path.module}/../templates/voice_server.toml.tftpl", {
+    voice-server-toml = templatefile("${path.module}/../templates/voice_server.toml.tftpl", merge({
       for key, value in {
         id                = random_uuid.voice.result
         name              = local.voice_server_name
@@ -65,9 +63,10 @@ locals {
         min_port          = var.voice_media_ports.min
         max_port          = var.voice_media_ports.max
       } : key => jsonencode(value)
-    })
+    }, { rtc_more = "", more = "" }))
 
     nats-conf = templatefile("${path.module}/../templates/nats.conf.tftpl", {
+      tls                    = ""
       listen                 = jsonencode("127.0.0.1:4222")
       monitor                = jsonencode("127.0.0.1:8222")
       max_memory_store_bytes = var.nats_stream_mib * 1024 * 1024

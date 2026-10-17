@@ -181,20 +181,21 @@ Aspen most wants to reach: a small rented server, or a small computer at home.
 - **The templates hold placeholders alone.** OpenTofu and Python each fill `${name}` and
   nothing more, so one set of files serves the box and both AWS configurations. A template
   with conditions or loops could be rendered by only one of them.
-- **The AWS one-machine configuration is not built on the box yet.** It runs its containers
-  with ECS, which the box cannot use elsewhere. Rebuilt as a machine that runs the box, it
-  would share everything but making the machine.
-- **Making DNS records is offered, never needed.** A token that can edit someone's DNS is a lot
-  to ask, so the box works without one and says which records to write. Between that and
-  keeping a token there is a middle: a token in the environment of one command, written
-  nowhere, for someone who will let the tool act once but not hold the key.
-- **A kept token is what follows a changing address**, which is why keeping one is offered at
-  all: a home connection's address changes, and `refresh-address` can then correct the records
-  as well as what the voice server announces.
-- **The tool writes only the records it lists and deletes none.** A name with two records of
-  one type is someone's choice or someone's mistake, and either way not the tool's to settle.
-- **The token is checked when it is given**, against the zone the domain is in, so a token for
-  the wrong zone is found at `init` rather than when certificates fail to arrive.
+- **The box makes no DNS records.** A provider's API is often closed to the people the box is
+  for (an account of few domains, an address that changes and so cannot be allow-listed),
+  which is when it would be most wanted. `init` prints the records and `doctor` checks them.
+- **A voice server elsewhere is a box of its own, told everything in one file.** The deployment's
+  box registers it and makes its NATS user, so the other machine needs no access to the
+  deployment's database or secrets: only its own NATS password, its id, and the authority to
+  trust NATS by.
+- **NATS opens to the network only while a voice server elsewhere needs it**, and then only
+  over TLS from an authority the box makes for itself. A certificate from a public authority
+  would need its name renewed for a port no browser asks for; the voice servers are told the
+  authority in their join file instead. The box's own servers reach NATS over loopback, also
+  over TLS then, since NATS asks it of every client or none.
+- **The tool is a package of modules, launched by one small script**, and is copied into every
+  `api` image. A machine with Docker and no checkout takes it out of the release it will run,
+  so the tool and the images always match.
 - **A database elsewhere is the same box with one service fewer.** PostgreSQL is in a Compose
   profile, like the bundled storage, and the servers' dependence on it is one that may be
   absent. Nothing else about the box changes, so someone can start with everything on the

@@ -1,11 +1,12 @@
 # Aspen on one machine
 
 `aspen-box` runs a whole deployment on one Linux machine with Docker: a small server you rent,
-or a small computer you own. It is for a community of tens of people.
+or a small computer you own. It is for a community of tens of people. More voice servers can
+run on other machines, each a box of its own.
 
-**New and lightly tried.** It has been started, upgraded, backed up, and restored on one x86
-machine, with the machine's network stood in for. It has not yet run on an ARM computer, on a
-real domain, or behind a home router.
+**New and lightly tried.** `scripts/check_box.py` starts, upgrades, backs up, and restores it,
+with a voice server on a second machine and a database elsewhere, every machine's network stood
+in for. It has not yet run on an ARM computer, on a real domain, or behind a home router.
 
 ## What it needs
 
@@ -16,23 +17,38 @@ real domain, or behind a home router.
 | Python 3.9 | Nothing else: the tool uses only what comes with it. |
 | A domain | One name for the deployment, **for good** ([Choosing `public_url`](../../docs/operators/installing/3-configuring.md#choosing-public_url)), and the right to add records under it. |
 | An address the internet reaches | The machine's own, or a router's that forwards to it. |
-| The images | `api` and `voice`, built from [`../docker/Dockerfile`](../README.md#the-images) for the machine's architecture. Building them on a small computer takes hours; build them elsewhere and `docker save` them across, until there are published ones. |
+
+## Getting the tool
+
+From a checkout of the repository, it is `deploy/box/aspen-box`. Without one, every release's
+`api` image holds it:
+
+```
+mkdir ~/aspen-tool
+docker run --rm --entrypoint tar ghcr.io/aspen-chat/aspen-api:TAG -C /usr/share/aspen -c . \
+  | tar -x -C ~/aspen-tool
+~/aspen-tool/box/aspen-box --help
+```
+
+The images are published at `ghcr.io/aspen-chat/aspen-api` and `ghcr.io/aspen-chat/aspen-voice`,
+for x86-64 and 64-bit ARM, and `--tag` names a release of both. To run images of your own, give
+`--api-image` and `--voice-image` instead.
 
 ## Setting up
 
-1. Describe the deployment. It asks for the domain, and whether to keep people's files and the
-   database on the machine or elsewhere:
+1. Describe the deployment. It asks for the domain, whether to keep people's files and the
+   database on the machine or elsewhere, and the machine's internet upload:
 
    ```
-   deploy/box/aspen-box init --api-image aspen-api:TAG --voice-image aspen-voice:TAG
+   aspen-box init --tag TAG
    ```
 
    It writes everything into `~/aspen` (`--dir` for elsewhere), and prints the DNS records to
    make: the domain, `voice.` under it, and `media.` under it when files are kept on the
    machine.
 
-2. Make those records, yourself or [with an API token](#dns-records). If the machine is behind
-   a router, forward the ports `init` listed.
+2. Make those records at your DNS provider. If the machine is behind a router, forward the ports
+   `init` listed.
 
 3. Start it, and check it:
 
@@ -52,12 +68,16 @@ real domain, or behind a home router.
    aspen-box run -- aspen-chat-server admin grant <username>
    ```
 
-5. Measure what the voice server carries, and set `voice.capacity` in `~/aspen/box.json` to
-   it, then `aspen-box up`:
+5. Measure what the voice server carries, set its `capacity` under `voice_servers` in
+   `~/aspen/box.json`, and `aspen-box up`:
 
    ```
    aspen-box capacity
    ```
+
+   It counts the internet upload you gave `init` (`rtc.upload_mbps`). Without one it counts the
+   network card's speed, which a connection at home is far below: run a speed test on the
+   machine, and give its upload.
 
 ## Day to day
 
@@ -76,22 +96,10 @@ People's files are not in the database's backups. Kept on the machine, they are 
 ## DNS records
 
 The deployment needs an `A` record (and an `AAAA` record, where the machine has IPv6) for each
-of its names. `aspen-box dns` lists them, with what each resolves to now. There are three ways
-to make them, by how far you trust this tool with your DNS:
-
-| | What you do | What the tool holds |
-| --- | --- | --- |
-| By hand | Write the records at your DNS provider, and again whenever the machine's address changes. | Nothing. This is what happens unless you choose otherwise. |
-| A token for one command | `ASPEN_BOX_DNS_TOKEN=… aspen-box dns --apply --provider cloudflare` | The token for that command. It is written nowhere. |
-| A token it keeps | Answer `cloudflare` when `init` asks, or put `"dns": {"provider": "cloudflare", "token": "…"}` in `box.json`. | The token, in `box.json`, which only your user can read. `aspen-box up` and `refresh-address` then keep the records right, which is what a home connection whose address changes needs. |
-
-With a token, the tool makes or corrects the records `aspen-box dns` lists and touches no
-other. It never deletes a record: where a name has two of one type it stops and says so.
-
-Cloudflare is the one provider so far. Make the token at Cloudflare under API Tokens with the
-"Edit zone DNS" template, limited to the one zone: it can then change that zone's DNS and
-nothing else of your account. The records are made unproxied ("DNS only"), since the box gets
-its own certificates and calls go straight to its address.
+of its names, which `init` prints. Write them at your DNS provider, and again whenever the
+machine's address changes: a home connection's often does, and your provider's dynamic DNS can
+follow it. `aspen-box doctor` says which records are missing or point elsewhere, and what each
+should say.
 
 ## Where people's files are kept
 
@@ -102,7 +110,8 @@ its own certificates and calls go straight to its address.
   S3. You give its address and keys, and **you set up its read path**, which must serve four
   prefixes and nothing else
   ([The storage's read path](../../docs/operators/installing/storage-read-path.md)).
-  `aspen-box doctor` checks that it refuses the rest.
+  `aspen-box doctor` checks that it refuses the rest. On an AWS machine whose role may use the
+  bucket, `--s3-role` gives no keys, and the server takes the machine's role.
 
 ## Where the database is kept
 
@@ -132,6 +141,42 @@ Given on a command line, the address shows its password to anyone who can list t
 processes for that moment. Answer `init`'s question instead, or put it in
 `ASPEN_BOX_DATABASE_URL`.
 
+## Voice servers on other machines
+
+A voice server elsewhere carries calls for people nearer it than the deployment's machine, or
+more calls than one machine can. Each is a box of its own, holding the voice server alone.
+
+1. On the deployment's box, name it, and give a guess at its capacity:
+
+   ```
+   aspen-box voice add voice-2 --capacity 50
+   ```
+
+   This registers it, gives it a NATS user of its own, and writes `voice-voice-2.join`, which
+   holds everything the other machine needs, its NATS password among it. The first voice server
+   elsewhere also opens the deployment's NATS to the network: it listens on TCP 4222, over TLS
+   from an authority the box makes. Forward that port to the deployment's machine if it is
+   behind a router, and let only the voice servers' machines reach it where you can.
+
+2. On the other machine, with the tool and Docker:
+
+   ```
+   aspen-box init-voice --join voice-voice-2.join --tag TAG
+   aspen-box up
+   aspen-box doctor
+   ```
+
+   Then delete the join file. Make the record `init-voice` prints (`voice-2.<domain>`), and
+   forward the ports it lists.
+
+3. Measure its capacity there (`aspen-box capacity`), and set it under `voice_servers` in the
+   deployment's `box.json`.
+
+`aspen-box voice list` lists them, and `aspen-box voice remove voice-2` removes one: it is
+taken out of the registry once it holds no calls, its NATS user goes, and NATS keeps to the
+machine again when it was the last. Upgrade each voice server's box with `aspen-box upgrade
+--tag` on its own machine, after the deployment's.
+
 ## At home
 
 A computer at home works, with more to get right than a rented one:
@@ -143,28 +188,24 @@ A computer at home works, with more to get right than a rented one:
 - **Some providers share one address between customers**, and then nothing can be forwarded.
   `doctor` shows the address the internet sees; if your router's own outside address is a
   different one, this is why. IPv6 alone does not help people whose own network lacks it.
-- **An address that changes**: run `aspen-box refresh-address` from cron every few minutes.
-  With [a DNS token it keeps](#dns-records) it corrects the records too; otherwise keep them
-  following the address with your provider's dynamic DNS.
-- **Calls are limited by your upload speed**, which `aspen-box capacity` cannot see: it reads
-  the network card's. Each participant takes about 3 Mbit/s of upload when everyone sends
-  video, so 20 Mbit/s carries about four or five.
+- **An address that changes**: run `aspen-box refresh-address` from cron every few minutes,
+  which has the voice server announce the new one, and keep the DNS records following it with
+  your provider's dynamic DNS.
+- **Calls are limited by your upload speed.** Each participant takes about 3 Mbit/s of upload
+  when everyone sends video, so 20 Mbit/s carries about four or five. Give it to `init`, or as
+  `rtc.upload_mbps` in `box.json`.
 - **Mail** from a home address is refused nearly everywhere. Give `box.json` an `email` with a
   mail provider's SMTP address ([Email](../../docs/operators/installing/3-configuring.md#email)).
 
 ## What it does not do yet
 
-- **Published images.** You build them, for now.
-- **DNS providers other than Cloudflare.** Elsewhere you write the records by hand.
-- **A machine with no address the internet reaches.** There is no relay for one yet.
-- **Moving to the larger configuration with files kept on the machine.** A backup restores
-  into it ([Moving from one machine](../aws/README.md#moving-from-one-machine) does this for
-  the AWS one-machine deployment), but nothing yet copies the bundled storage across.
-- **More than one voice server**, or one somewhere else.
+- **A machine with no address the internet reaches.** There is no relay for one.
 
 ## Trying it without a machine's own network
 
 Where Docker cannot give containers the machine's network (rootless Docker), or its loopback
 ports are taken, `ASPEN_BOX_COMPOSE_FILES` names further Compose files laid over
-`compose.yaml`. One that gives every service `network_mode: "service:<one container>"` stands
-in for the machine, reachable only from inside that container's network.
+`compose.yaml`, and `ASPEN_BOX_PROJECT` names the Compose project, so that boxes stand side by
+side. A file that gives every service `network_mode: "service:<one container>"` stands in for a
+machine, reachable only from inside that container's network; `scripts/check_box.py` runs every
+box it checks that way.
