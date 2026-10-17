@@ -139,6 +139,21 @@ export async function settleAnimations(page: Page): Promise<void> {
 }
 
 /**
+ * How large the app draws text against its size at the system's default text size
+ * (`--system-text-scale`, `theme/systemTextSize.ts`), which the text sizes a spec reads are
+ * drawn at: 1 where the app follows no system text size, and 13/17 in Playwright's iPhone on
+ * macOS, whose WebKit gives the Mac's body text as the system's.
+ */
+export async function systemTextScale(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const scale = Number.parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue("--system-text-scale"),
+    );
+    return Number.isFinite(scale) ? scale : 1;
+  });
+}
+
+/**
  * Sends what is in the message box as the device would: Enter on a computer, the Send button
  * on a touch screen, whose keyboard writes a new line with Enter.
  */

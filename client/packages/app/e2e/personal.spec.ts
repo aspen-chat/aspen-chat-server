@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { longPress, reactedText, signInToWorld } from "./world";
+import { longPress, reactedText, signInToWorld, systemTextScale } from "./world";
 
 /**
  * Saved messages and the activity feed, against the stubbed world in `world.ts`: saving Bob's
@@ -150,7 +150,17 @@ test("the feed's tabs hold DMs, mentions, followed threads, and everything, as f
   await expect(replies.getByRole("listitem")).toHaveCount(2);
   await expect(replies.getByText("Perfect, thank you!")).toBeVisible();
   await expect(feed.getByRole("textbox")).toBeVisible();
-  await expect(replies.locator(".message-body").first()).toHaveCSS("font-size", "16px");
+  const scale = await systemTextScale(page);
+  await expect
+    .poll(async () =>
+      Number.parseFloat(
+        await replies
+          .locator(".message-body")
+          .first()
+          .evaluate((element) => getComputedStyle(element).fontSize),
+      ),
+    )
+    .toBeCloseTo(16 * scale, 2);
 
   // All holds what is said in channels too, whatever would notify.
   await tab(page, "All").click();

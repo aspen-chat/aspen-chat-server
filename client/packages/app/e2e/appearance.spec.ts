@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { bob, general, ownText, signInToWorld } from "./world";
+import { bob, general, ownText, signInToWorld, systemTextScale } from "./world";
 
 /**
  * Appearance and accessibility, against the stubbed world: the message text size and line
@@ -42,7 +42,9 @@ test("the message text size is kept with the account and sizes messages", async 
   const message = page.locator("[data-message-id] .message-body").first();
   await expect(message).toBeVisible();
   const fontSize = (element: Element) => getComputedStyle(element).fontSize;
-  expect(await message.evaluate(fontSize)).toBe("16px");
+  const px = async () => Number.parseFloat(await message.evaluate(fontSize));
+  const scale = await systemTextScale(page);
+  expect(await px()).toBeCloseTo(16 * scale, 2);
   const heading = page.getByRole("main").getByRole("heading").first();
   const headingSize = await heading.evaluate(fontSize);
 
@@ -59,7 +61,7 @@ test("the message text size is kept with the account and sizes messages", async 
   await page.keyboard.press("Escape");
   await openGeneral(page);
 
-  await expect.poll(() => message.evaluate(fontSize)).toBe("24px");
+  await expect.poll(px).toBeCloseTo(24 * scale, 2);
   // The rest of the app keeps its size.
   expect(await heading.evaluate(fontSize)).toBe(headingSize);
 });
@@ -180,11 +182,12 @@ test("the line spacing is kept with the account and spaces messages", async ({ p
   await openGeneral(page);
   const message = page.locator("[data-message-id] .message-body").first();
   // 16px text at 1.5 lines, 1.4 times as far apart; WebKit gives it as 33.599998px.
+  const scale = await systemTextScale(page);
   await expect
     .poll(async () =>
       Number.parseFloat(await message.evaluate((element) => getComputedStyle(element).lineHeight)),
     )
-    .toBeCloseTo(33.6, 2);
+    .toBeCloseTo(33.6 * scale, 2);
 });
 
 test("contrast follows the system, and the reader's choice over it", async ({ page }) => {
