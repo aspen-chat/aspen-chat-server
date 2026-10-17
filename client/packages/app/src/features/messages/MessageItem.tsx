@@ -555,7 +555,9 @@ export const MessageItem = memo(function MessageItem({
  *
  * It is a plain `button`, not React Aria's: every row holds one, a pointer never presses it,
  * and it is gone the moment it has focus, so it has no use for the press, hover, and focus
- * state that one keeps, close to a hundred hooks a button.
+ * state that one keeps, close to a hundred hooks a button. It takes `tabIndex` as React Aria's
+ * buttons do, since Safari on macOS, by default, tabs only to fields and what names a
+ * `tabindex`, and would pass over the row's actions while stopping at its author's name.
  */
 function ActionsStandIn({
   onReach,
@@ -568,6 +570,7 @@ function ActionsStandIn({
   return (
     <button
       type="button"
+      tabIndex={0}
       aria-label={m.showMessageActions}
       onFocus={(event) => {
         const from = event.relatedTarget;

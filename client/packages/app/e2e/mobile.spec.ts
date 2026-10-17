@@ -107,8 +107,13 @@ const messageWith = (page: Page, text: string) =>
   page.locator("article").filter({ hasText: text }).last();
 const actionsOf = (article: Locator) => article.getByRole("group", { name: "Message actions" });
 
+/**
+ * Opens a channel with a tap, as on a phone. A click would leave the mouse resting where the
+ * list then draws the channel, and WebKit on macOS moves a resting mouse over whatever is drawn
+ * under it, opening a tooltip there that takes the next Escape.
+ */
 async function openChannel(page: Page, name: string) {
-  await channelList(page).getByText(name, { exact: true }).click();
+  await channelList(page).getByText(name, { exact: true }).tap();
   await expect(page.getByRole("heading", { name })).toBeVisible();
 }
 
