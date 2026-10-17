@@ -193,6 +193,21 @@ export const READ_REPORT_MS = 1_000;
 export const READ_REPORTS_MAX = 100;
 
 /**
+ * The read position just before message `id`, as the server sets one marked unread from it:
+ * the id one less, as a 128-bit number. A position need name no message.
+ */
+export function positionBefore(id: string): string {
+  const hex = (BigInt(`0x${id.replaceAll("-", "")}`) - 1n).toString(16).padStart(32, "0");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join("-");
+}
+
+/**
  * How far before this sync began a message may say it was posted and still notify, allowing for
  * the server's clock and the device's disagreeing; well inside the minute a connection replays.
  */
@@ -1715,9 +1730,11 @@ export class AspenSync {
   /**
    * Records that the caller has seen `messageId` in `channelId`, a channel, DM, or thread: at
    * once in the store, and to the server within `READ_REPORT_MS`, together with whatever else
-   * was read meanwhile. Reading behind the current position changes nothing.
+   * was read meanwhile. Reading behind the current position changes nothing. It lets the lists
+   * mark a channel held unread read again (`RecordStore.unreadHeld`).
    */
   markRead(channelId: string, messageId: string): void {
+    this.store.releaseUnreadHold(channelId);
     if (!this.#readInStore(channelId, messageId)) {
       return;
     }
@@ -1736,6 +1753,9 @@ export class AspenSync {
   async markManyRead(
     positions: readonly { channelId: string; messageId: string }[],
   ): Promise<void> {
+    for (const { channelId } of positions) {
+      this.store.releaseUnreadHold(channelId);
+    }
     const moved = positions.filter((p) => this.#readInStore(p.channelId, p.messageId));
     for (let start = 0; start < moved.length; start += READ_REPORTS_MAX) {
       const group = moved.slice(start, start + READ_REPORTS_MAX);
@@ -1750,6 +1770,43 @@ export class AspenSync {
       for (const { channelId } of group) {
         this.#recountTags(channelId);
       }
+    }
+  }
+
+  /**
+   * Marks a channel, DM, or thread unread from `messageId` on, a message of it by someone else,
+   * or, given none, from its newest message by someone else (which only the server knows). The
+   * store moves back at once when the message is named, and holds it unread
+   * (`RecordStore.unreadHeld`) so the list showing it does not mark it read again; the server's
+   * `channelMarkedUnread` then brings the state it counted. A read of it not yet reported is
+   * dropped, as it would undo the marking. A refusal releases the hold, reads the state back, and
+   * rejects with it.
+   */
+  async markUnread(channelId: string, messageId?: string): Promise<void> {
+    this.#unreported.delete(channelId);
+    const held = this.store.readState(channelId);
+    if (messageId !== undefined) {
+      this.store.markUnread({
+        channel: channelId,
+        lastRead: positionBefore(messageId),
+        lastMessage:
+          held?.lastMessage != null && held.lastMessage > messageId ? held.lastMessage : messageId,
+        mentions: held?.mentions ?? 0,
+      });
+    } else if (held !== undefined) {
+      this.store.markUnread(held);
+    }
+    const result = await this.#client.api.PUT("/api/v1/channels/{channel}/read-states/@me", {
+      params: { path: { channel: channelId } },
+      body: messageId === undefined ? { unreadNewest: true } : { unreadFrom: messageId },
+    });
+    if (result.error !== undefined) {
+      this.store.releaseUnreadHold(channelId);
+      // A thread's position is not among the read states a channel's read brings back.
+      if (held !== undefined) {
+        void this.#reloadReadState(channelId);
+      }
+      throw new ApiProblemError(problemOf(result.error, result.response));
     }
   }
 

@@ -2,6 +2,7 @@ import type { Permission } from "@aspen/protocol";
 import {
   ChatsCircleIcon,
   CopyIcon,
+  EnvelopeSimpleIcon,
   FlagIcon,
   LinkIcon,
   PencilSimpleIcon,
@@ -9,7 +10,7 @@ import {
   UsersIcon,
 } from "@phosphor-icons/react";
 import { useRef, type ReactNode } from "react";
-import { useReactions } from "@/api/hooks";
+import { useKeepsReadPosition, useReactions, useSync } from "@/api/hooks";
 import { copyText } from "@/features/layout/clipboard";
 import { CopyIdButton } from "@/features/layout/CopyId";
 import { IconAction } from "@/features/layout/IconAction";
@@ -19,6 +20,7 @@ import { ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactio
 import { PinButton } from "@/features/messages/PinButton";
 import { SaveButton } from "@/features/messages/SaveButton";
 import { ACTION_ICON } from "@/features/messages/actionIcon";
+import { markUnread } from "@/features/messages/markUnread";
 import { ReportMessageButton } from "@/features/reports/ReportDialog";
 import { EchoReplyButton } from "@/features/threads/EchoReplyButton";
 import { useMessages } from "@/i18n/context";
@@ -42,11 +44,11 @@ const listDangerClass = listRowClass + " text-danger";
 export type MessageSheet = "react" | "reactions" | "delete" | "report";
 
 /**
- * What can be done to a message: react, pin, see who reacted, reply in a thread, also send a
- * thread reply to its channel, edit, delete, copy its text, copy a link to it, report it, and
- * copy its id. A computer shows them as a row of icon buttons at the message's corner while
- * the pointer is over it or focus is in it, and the picker and the dialogs open from their
- * buttons. A touch screen shows them as a list of icons and names, in a sheet under a
+ * What can be done to a message: react, save it, mark it unread, pin, see who reacted, reply in
+ * a thread, also send a thread reply to its channel, edit, delete, copy its text, copy a link
+ * to it, report it, and copy its id. A computer shows them as a row of icon buttons at the
+ * message's corner while the pointer is over it or focus is in it, and the picker and the
+ * dialogs open from their buttons. A touch screen shows them as a list of icons and names, in a sheet under a
  * long press (`MessageActionSheet`), which every action closes: the ones that open something
  * hand that to `open`, since what opens from inside the sheet would go with it. The list
  * leaves out reacting, which the sheet offers above it, and ends with deleting, the one that
@@ -63,6 +65,7 @@ export function MessageActions({
   editable,
   deletable,
   reportable,
+  markableUnread,
   link,
   onOpenThread,
   onEdit,
@@ -83,6 +86,11 @@ export function MessageActions({
   deletable: boolean;
   /** Whether the reader may report it to the moderators: not their own, nor a notice. */
   reportable: boolean;
+  /**
+   * Whether Mark unread is offered: for a message by someone else, since the reader's own
+   * messages never make a channel unread to them.
+   */
+  markableUnread: boolean;
   /** The link to share for it, which Copy link copies. */
   link: string;
   onOpenThread: () => void;
@@ -116,6 +124,14 @@ export function MessageActions({
         {...action}
         {...(onDone === undefined ? {} : { onPressed: onDone })}
       />
+      {markableUnread && (
+        <MarkUnreadButton
+          messageId={messageId}
+          channelId={channelId}
+          {...action}
+          {...(onDone === undefined ? {} : { onDone })}
+        />
+      )}
       {permissions.has("pinMessages") && (
         <PinButton
           messageId={messageId}
@@ -225,6 +241,42 @@ export function MessageActions({
         />
       )}
     </>
+  );
+}
+
+/**
+ * Marks the channel unread from the message on, where the reader keeps a read position: a
+ * channel or DM they belong to, or a thread.
+ */
+function MarkUnreadButton({
+  messageId,
+  channelId,
+  labelled,
+  className,
+  onDone,
+}: {
+  messageId: string;
+  channelId: string;
+  labelled: boolean;
+  className: string;
+  onDone?: () => void;
+}) {
+  const m = useMessages();
+  const sync = useSync();
+  if (!useKeepsReadPosition(channelId)) {
+    return null;
+  }
+  return (
+    <IconAction
+      label={m.markUnread}
+      labelled={labelled}
+      onPress={() => {
+        onDone?.();
+        markUnread(sync, m, channelId, messageId);
+      }}
+      className={className}
+      icon={<EnvelopeSimpleIcon size={ACTION_ICON} aria-hidden="true" />}
+    />
   );
 }
 

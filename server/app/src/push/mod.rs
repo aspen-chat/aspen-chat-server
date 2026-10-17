@@ -608,6 +608,7 @@ struct Seen {
     id: Option<MessageId>,
     channel: Option<ChannelId>,
     last_read: Option<MessageId>,
+    last_message: Option<MessageId>,
 }
 
 async fn handle(state: &GlobalServerContext, subject: &str, payload: &[u8]) -> crate::Result<()> {
@@ -636,6 +637,13 @@ async fn handle(state: &GlobalServerContext, subject: &str, payload: &[u8]) -> c
                 (subject_owner(subject), seen.channel, seen.last_read)
             {
                 channel_read(state, user, channel, last_read).await?;
+            }
+        }
+        ("channelMarkedUnread", _) => {
+            if let (Some(SubjectOwner::User(user)), Some(channel), Some(last_read)) =
+                (subject_owner(subject), seen.channel, seen.last_read)
+            {
+                channel_marked_unread(state, user, channel, last_read, seen.last_message).await?;
             }
         }
         _ => {}
@@ -888,6 +896,57 @@ async fn channel_read(
             .then_some(()))
     })
     .await?;
+    let phones = phones_of(state, &[user]).await?;
+    let Some(phones) = phones.get(&user) else {
+        return Ok(());
+    };
+    wake(
+        state,
+        phones,
+        Pointer::Read {
+            channel,
+            message: last_read,
+        },
+        shown_badge(state, user).await.ok(),
+    )
+    .await;
+    Ok(())
+}
+
+/// Tells `user`'s phones their badge after they marked `channel` unread on any device, as a
+/// `read` pointer at the new position, which takes down no notification the position had not
+/// already passed. A channel that is still read once marked (`last_message` is `None`) changes no
+/// badge, and wakes nothing.
+async fn channel_marked_unread(
+    state: &GlobalServerContext,
+    user: UserId,
+    channel: ChannelId,
+    last_read: MessageId,
+    last_message: Option<MessageId>,
+) -> crate::Result<()> {
+    if last_message.is_none() {
+        return Ok(());
+    }
+    // The badge is counted afresh once the position has moved back. A position the join bounds is
+    // recorded before it, so the recorded one is at most `last_read` once committed.
+    once_committed(|| async move {
+        let mut conn = state.connection_pool.get().await?;
+        let recorded: Option<MessageId> = read_state::table
+            .select(read_state::message)
+            .filter(
+                read_state::user
+                    .eq(user)
+                    .and(read_state::channel.eq(channel)),
+            )
+            .first(conn.as_mut())
+            .await
+            .optional()?;
+        Ok(recorded
+            .is_some_and(|recorded| recorded <= last_read)
+            .then_some(()))
+    })
+    .await?;
+    forget_badge(state, user).await;
     let phones = phones_of(state, &[user]).await?;
     let Some(phones) = phones.get(&user) else {
         return Ok(());

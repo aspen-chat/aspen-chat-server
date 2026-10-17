@@ -8,6 +8,7 @@
 | Unread places | `unreadPlaces()` (topic `unread`), `useUnreadPlaces`, `UNREAD_DMS` |
 | Unread channels | `unreadChannels()` (topic `unread`), which the activity feed's Unread tab lists |
 | Marking read | `MessageList`, `AspenSync.markRead` |
+| Marking unread | `AspenSync.markUnread`, `markUnread`, `MarkUnreadButton`, `ChannelMenu`, `unreadHeld` |
 | Thread positions | `threadRead` (topic `read:<threadId>`) |
 | Mutes | `replaceMutes`, `useMute`, `MuteBell`, `useMuteEnd`, `nextMuteEnd`, `expireMutes` |
 | The channel menu | `ChannelMenu`, `ChannelMenuButton` (`src/features/channels`) |
@@ -26,6 +27,7 @@ A channel is unread while `lastMessage` sorts after `lastRead`.
 | Someone else's new message | Moves `lastMessage` |
 | The caller's own new message | Moves `lastRead` |
 | `channelRead` | Brings another device's reading |
+| `channelMarkedUnread` | Moves the position back, and holds the channel unread |
 | A deleted message that was a channel's `lastMessage` | `AspenSync` reads that channel's state again |
 
 ### Unread places
@@ -56,6 +58,36 @@ for the DMs. They drive the rail's dots, which sit half under the entry's icon.
 The activity feed marks places read without opening them, one at a time through `markRead` and
 all at once through `AspenSync.markManyRead`, which reports many positions in one request (see
 [Saved messages and activity](saved-and-activity.md)).
+
+### Marking unread
+
+The one way a position moves back. It is offered:
+
+- in a message's actions, hover bar and long-press sheet alike (`MarkUnreadButton`), on messages
+  by someone else, where the caller keeps a position: a channel or DM they belong to, or a thread;
+- in `ChannelMenu`, on a channel or DM read to its end, from its newest message by someone else,
+  which only the server finds.
+
+`AspenSync.markUnread`:
+
+1. drops that channel's read not yet reported, which would undo the marking;
+2. moves the store back at once when a message is named (`positionBefore`, the id less one) and
+   holds the channel unread (`unreadHeld`);
+3. sends the request, after which `channelMarkedUnread` brings the state the server counted.
+
+A refusal releases the hold, reads the state back, and is said in a toast, as success is.
+
+#### The hold
+
+While a channel is held unread, `useReadMarking` marks nothing in it read as it is shown, so it
+stays unread on the screen it was marked on. Marking on another device holds it on every device.
+The hold ends when:
+
+- the channel's list is opened or left (`useReadReports`);
+- the caller posts there;
+- the caller marks it read by hand (`markRead`, `markManyRead`).
+
+The "New Messages" line follows the position while the channel is held.
 
 ### Threads
 

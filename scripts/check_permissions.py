@@ -2617,6 +2617,61 @@ def activity_views(world: World, check: Checks) -> None:
     check("and its position cannot be moved meanwhile", read_state(room)["lastRead"] == twice, read_state(room))
 
 
+def marking_unread(world: World, check: Checks) -> None:
+    say("a channel is marked unread only where its reader may read it, and the reader's devices hear of it")
+    stack, member = world.stack, world.member["token"]
+    room = world.channel("unread-room")
+    other = world.channel("unread-other")
+
+    def read_state(channel: str) -> dict:
+        return stack.api("GET", f"/channels/{channel}/read-states/@me", token=member)
+
+    def mark(channel: str, body: dict) -> int:
+        return stack.status("PUT", f"/channels/{channel}/read-states/@me", body, member)
+
+    first = world.post(room, "first")
+    tagged = world.post(room, f"<@{world.member['id']}> second")
+    last = world.post(room, "third")
+    elsewhere = world.post(other, "not here")
+    stack.api("PUT", f"/channels/{room}/read-states/@me", {"lastRead": last}, member)
+    world.stream.gather(0.5)
+    status = mark(room, {"unreadFrom": tagged})
+    got = world.stream.gather(1.0)
+    state = read_state(room)
+    check("marking unread from a message moves the position back to just before it",
+          status == 204 and first < state["lastRead"] < tagged and state["lastMessage"] == last
+          and state["mentions"] == 1, state)
+    check("and the reader's devices hear the state it left",
+          [(e["lastRead"], e["lastMessage"], e["mentions"]) for e in of(got, "channelMarkedUnread", channel=room)]
+          == [(state["lastRead"], last, 1)], got)
+    stack.api("PUT", f"/channels/{room}/read-states/@me", {"lastRead": first}, member)
+    check("reading still never moves it back", read_state(room)["lastRead"] == state["lastRead"])
+    stack.api("PUT", f"/channels/{room}/read-states/@me", {"lastRead": last}, member)
+    own = stack.api("POST", f"/channels/{room}/messages", {"content": "my own", "attachments": []}, member)["id"]
+    check("marking unread from the newest passes over the reader's own messages",
+          mark(room, {"unreadNewest": True}) == 204
+          and tagged < read_state(room)["lastRead"] < last and read_state(room)["lastMessage"] == last,
+          read_state(room))
+    alone = world.channel("unread-alone")
+    stack.api("POST", f"/channels/{alone}/messages", {"content": "talking to myself", "attachments": []}, member)
+    check("a channel holding only the reader's own messages has nothing to mark unread",
+          mark(alone, {"unreadNewest": True}) == 400)
+    check("a request naming two ways, or none, is refused",
+          mark(room, {"lastRead": own, "unreadFrom": tagged}) == 400 and mark(room, {}) == 400)
+    check("a message of another channel is not found", mark(room, {"unreadFrom": elsewhere}) == 404)
+    world.as_owner("DELETE", f"/messages/{first}")
+    check("nor is a deleted one", mark(room, {"unreadFrom": first}) == 404)
+
+    world.as_owner("PUT", f"/channels/{room}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.8)
+    status = mark(room, {"unreadFrom": tagged})
+    got = world.stream.gather(0.8)
+    check("once the channel is lost it cannot be marked unread, and nothing of it is heard",
+          status == 404 and not of(got, "channelMarkedUnread"), got)
+    world.as_owner("DELETE", f"/channels/{room}/overrides/{world.everyone}")
+    world.stream.gather(0.8)
+
+
 def emoji_deletions(world: World, check: Checks) -> None:
     say("a deleted custom emoji is gone at once, and its reactions by a job soon after")
     stack, member = world.stack, world.member
@@ -2685,7 +2740,8 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              operators, deployment_settings, sign_ins, removal, presence, chosen_presence, lost_presence_keys, typing, name_colours, dual_invites, device_links,
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
-             deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views]
+             deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
+             marking_unread]
 
 
 def main() -> None:

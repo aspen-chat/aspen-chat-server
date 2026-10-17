@@ -23,7 +23,8 @@ export function useReadMarking({
   const seenFrame = useRef<number | null>(null);
 
   /**
-   * Marks the newest message with any part on screen as read, when the reader can see the page.
+   * Marks the newest message with any part on screen as read, when the reader can see the page
+   * and has not marked the channel unread since opening it (`RecordStore.unreadHeld`).
    * Messages of other channels drawn inside this one's, such as the reply an echo shows, are
    * not this channel's to mark.
    */
@@ -32,6 +33,7 @@ export function useReadMarking({
     if (
       box === null ||
       !tracked ||
+      sync.store.unreadHeld(channelId) ||
       ids === undefined ||
       document.visibilityState !== "visible" ||
       !document.hasFocus()
@@ -95,14 +97,19 @@ export function useReadReports({
     };
   });
 
-  // Leaving the channel reports what was read in it straight away.
+  // Opening the channel reads it again though it was marked unread, and leaving it reports
+  // what was read in it straight away.
   useEffect(
-    () => () => {
-      if (seenFrame.current !== null) {
-        cancelAnimationFrame(seenFrame.current);
-        seenFrame.current = null;
-      }
-      sync.flushReads();
+    () => {
+      sync.store.releaseUnreadHold(channelId);
+      return () => {
+        if (seenFrame.current !== null) {
+          cancelAnimationFrame(seenFrame.current);
+          seenFrame.current = null;
+        }
+        sync.store.releaseUnreadHold(channelId);
+        sync.flushReads();
+      };
     },
     // `seenFrame` is a ref, which the rule cannot tell from a parameter.
     // eslint-disable-next-line react-hooks/exhaustive-deps

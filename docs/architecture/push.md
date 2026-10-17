@@ -41,7 +41,7 @@ Every push is Web Push.
 - It counts tags only in channels the person may view.
 - Once counted (`push::badge_of`, a few queries), it is kept in Valkey for five minutes (`BADGE_KEPT`).
 - While kept, it grows by one for each new message tagging the person in a community.
-- It is forgotten when the person reads, when a DM of theirs speaks, or when a message that woke them is deleted.
+- It is forgotten when the person reads, when they mark a channel unread, when a DM of theirs speaks, or when a message that woke them is deleted.
 - A change no push follows (a role or a channel taken from them) shows on the badge within those five minutes.
 - A `read` push to someone in do not disturb carries 0 (`shown_badge`, which reads their presence override's Valkey copy). Pushes that tell of something new never reach them then.
 
@@ -142,4 +142,5 @@ Each push is a task of its own. It waits for a slot of its endpoint's origin, th
 
 - Whom a message woke is remembered in Valkey for a week.
 - Reading that channel elsewhere sends `read`, and deleting the message sends `deleted`, both `Urgency: low`.
+- Marking a channel unread (`channelMarkedUnread`) sends `read` at the position it moved back to, once that is committed, with the badge counted afresh. It takes down nothing the position had not already passed. A channel still read once marked sends nothing.
 - Relays whose iOS app cannot hide a notification leave these undelivered.

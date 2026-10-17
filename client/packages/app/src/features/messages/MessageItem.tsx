@@ -344,6 +344,7 @@ export const MessageItem = memo(function MessageItem({
     editable,
     deletable,
     reportable,
+    markableUnread: !own,
     link: messageUrl(client.baseUrl, home.community, channelId, id),
     onOpenThread: openThread,
     onEdit: () => {

@@ -431,7 +431,8 @@ per_poll = { requests = 60, per_seconds = 60, burst = 10 }
 user = { requests = 30, per_seconds = 60, burst = 10 }
 
 # Clients report reading as it happens, at most every few seconds per channel, and a reader
-# moving between channels reports each one.
+# moving between channels reports each one. Marking a channel unread is the same request, made
+# by hand.
 [rate_limits.endpoints."PUT /channels/{channel}/read-states/@me"]
 user = { requests = 120, per_seconds = 60, burst = 30 }
 

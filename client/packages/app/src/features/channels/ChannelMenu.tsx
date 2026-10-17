@@ -12,13 +12,14 @@ import {
   Separator,
   SubmenuTrigger,
 } from "react-aria-components";
-import { useChannel, useMute, useNotificationLevel, useSync } from "@/api/hooks";
+import { useChannel, useMute, useNotificationLevel, useReadToItsEnd, useSync } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { useMessages } from "@/i18n/context";
 import { format, type Messages } from "@/i18n/messages";
 import { CopyIdMenuItem } from "@/features/layout/CopyId";
 import { useMuteEnd } from "@/features/channels/muteEnd";
+import { markUnread } from "@/features/messages/markUnread";
 
 /** The lengths of mute offered, in the menu's order; `null` lasts until the user unmutes. */
 const MUTE_DURATIONS: readonly {
@@ -45,10 +46,11 @@ const NOTIFICATION_LEVELS: readonly NotificationLevel[] = ["all", "tags", "nothi
 
 /**
  * What the user can do to a channel or DM, opened by right-clicking its row or by its options
- * button. A text channel or DM has two submenus: Mute, to mute it for a while or until they
- * unmute it, which reads until when while it is muted and then offers unmuting; and
- * Notifications, naming the level in force, to choose what it tells them of. With `onAccess`
- * the user can set who can use it, and with `onRename` and `onDelete` rename or delete it.
+ * button. A text channel or DM read to its end offers Mark unread, from its newest message by
+ * someone else. It has two submenus: Mute, to mute it for a while or until they unmute it,
+ * which reads until when while it is muted and then offers unmuting; and Notifications, naming
+ * the level in force, to choose what it tells them of. With `onAccess` the user can set who can
+ * use it, and with `onRename` and `onDelete` rename or delete it.
  */
 export function ChannelMenu({
   channelId,
@@ -80,6 +82,8 @@ export function ChannelMenu({
   const mute = useMute(channelId);
   const channel = useChannel(channelId);
   const notify = useNotificationLevel(channelId);
+  // Marking a channel already unread from its newest message would read the rest.
+  const markable = useReadToItsEnd(channelId) && mutable;
   const label = format(m.mute.options, { name });
   // Beside the row where there is room for it and its submenus; a phone has none beside a row
   // that spans the screen, and a popover is only shifted along its other axis, so there the
@@ -101,7 +105,9 @@ export function ChannelMenu({
           className="outline-none"
           onAction={(key) => {
             onOpenChange(false);
-            if (key === "access") {
+            if (key === "markUnread") {
+              markUnread(sync, m, channelId);
+            } else if (key === "access") {
               onAccess?.();
             } else if (key === "rename") {
               onRename?.();
@@ -110,6 +116,11 @@ export function ChannelMenu({
             }
           }}
         >
+          {markable && (
+            <MenuItem id="markUnread" className={itemClass}>
+              {m.markUnread}
+            </MenuItem>
+          )}
           {mutable && (
             <SubmenuTrigger>
               <MenuItem id="mute" className={parentClass}>

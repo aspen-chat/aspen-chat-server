@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { positionBefore } from "../src/sync";
 import {
   AspenClient,
   AspenSync,
@@ -242,6 +243,17 @@ async function goLive(sync: AspenSync): Promise<FakeSocket> {
   expect(sync.status).toBe("live");
   return socket;
 }
+
+describe("positionBefore", () => {
+  it("is the id one less, borrowing across its groups", () => {
+    expect(positionBefore("0190f0a0-0000-7000-8000-000000000010")).toBe(
+      "0190f0a0-0000-7000-8000-00000000000f",
+    );
+    expect(positionBefore("0190f0a0-0000-7000-8000-000000000000")).toBe(
+      "0190f0a0-0000-7000-7fff-ffffffffffff",
+    );
+  });
+});
 
 describe("AspenSync", () => {
   it("reports activity at most once a minute, and recent activity once the stream is up", async () => {

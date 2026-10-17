@@ -1,12 +1,13 @@
 import type { MessageWindow } from "@aspen/protocol";
 import { useState } from "react";
-import { useReadState, useStore } from "@/api/hooks";
+import { useReadState, useStore, useUnreadHeld } from "@/api/hooks";
 
 /**
  * Where the "New Messages" line goes in the shown window of a channel: under the message it
  * had been read up to when opened, kept there while it stays open though reading moves the
- * position at once, or nowhere when nothing was unread then. The line goes when the reader
- * leaves or posts. The index is `lineAt`'s.
+ * position at once, or nowhere when nothing was unread then. Marking the channel unread while
+ * it is open moves the line to the new position. The line goes when the reader leaves or posts.
+ * The index is `lineAt`'s.
  */
 export function useNewMessagesLine(
   channelId: string,
@@ -15,11 +16,20 @@ export function useNewMessagesLine(
 ): number | null {
   const store = useStore();
   const readState = useReadState(channelId);
+  const held = useUnreadHeld(channelId);
   // Set once per channel, when its read state is first known.
   const [line, setLine] = useState<{ channelId: string; after: string | null } | null>(null);
   if (readState !== undefined && line?.channelId !== channelId) {
     const unread = readState.lastMessage != null && readState.lastMessage > readState.lastRead;
     setLine({ channelId, after: unread ? readState.lastRead : null });
+  }
+  if (
+    held &&
+    readState !== undefined &&
+    line?.channelId === channelId &&
+    line.after !== readState.lastRead
+  ) {
+    setLine({ channelId, after: readState.lastRead });
   }
   const after = line?.channelId === channelId ? line.after : null;
   // Posting ends the line: what came before the reader's own message is read.

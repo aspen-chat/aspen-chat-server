@@ -819,6 +819,45 @@ describe("RecordStore read states", () => {
     expect(store.channelsLastMessaged(at(105))).toEqual([general.id]);
   });
 
+  it("moves back when marked unread, and holds the channel unread until posted in", () => {
+    const store = bootstrapped();
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: at(105), lastMessage: null, mentions: 0 }],
+    });
+    expect(store.unreadHeld(general.id)).toBe(false);
+    store.applyEvent({
+      serverEvent: "channelMarkedUnread",
+      channel: general.id,
+      lastRead: at(101),
+      lastMessage: at(104),
+      mentions: 2,
+    });
+    expect(readOf(store)).toEqual({
+      channel: general.id,
+      lastRead: at(101),
+      lastMessage: at(104),
+      mentions: 2,
+    });
+    expect(store.unread(general.id)).toBe(true);
+    expect(store.unreadHeld(general.id)).toBe(true);
+    // Reading elsewhere still moves it on, and the hold stays until opened or posted in.
+    store.applyEvent({ serverEvent: "channelRead", channel: general.id, lastRead: at(102) });
+    expect(readOf(store)?.lastRead).toBe(at(102));
+    expect(store.unreadHeld(general.id)).toBe(true);
+    store.applyEvent({
+      serverEvent: "message",
+      type: "create",
+      ...message(106, general.id, me.id),
+    });
+    expect(store.unreadHeld(general.id)).toBe(false);
+    expect(store.unread(general.id)).toBe(false);
+    store.markUnread({ channel: general.id, lastRead: at(103), lastMessage: at(106), mentions: 0 });
+    expect(store.unreadHeld(general.id)).toBe(true);
+    store.releaseUnreadHold(general.id);
+    expect(store.unreadHeld(general.id)).toBe(false);
+    expect(readOf(store)?.lastRead).toBe(at(103));
+  });
+
   it("keeps no read state for threads, nor for a channel once it is gone", () => {
     const store = bootstrapped();
     const thread: Channel = {

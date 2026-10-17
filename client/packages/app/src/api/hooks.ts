@@ -695,6 +695,36 @@ export function useLastRead(channelId: string): string | undefined {
   );
 }
 
+/**
+ * Whether the caller marked a channel, DM, or thread unread and has not opened it or posted in
+ * it since (`RecordStore.unreadHeld`).
+ */
+export function useUnreadHeld(channelId: string): boolean {
+  return useTopic(`read:${channelId}`, (s) => s.unreadHeld(channelId));
+}
+
+/**
+ * Whether the caller keeps a read position in a channel, DM, or thread, which marking it
+ * unread moves: one whose read state the store holds, or a thread.
+ */
+export function useKeepsReadPosition(channelId: string): boolean {
+  return useTopic(
+    `read:${channelId}`,
+    (s) => s.readState(channelId) !== undefined || s.channel(channelId)?.ty === "thread",
+  );
+}
+
+/**
+ * Whether the caller keeps a read position in a channel or DM and has read it to its end, in
+ * do not disturb too, which only hides what is unread.
+ */
+export function useReadToItsEnd(channelId: string): boolean {
+  return useTopic(
+    `read:${channelId}`,
+    (s) => s.readState(channelId) !== undefined && !s.unread(channelId),
+  );
+}
+
 /** What the caller finds at a message another links to, once a read has said. */
 export function useLinkedMessage(id: string): LinkedMessage | undefined {
   return useTopic(`link:${id}`, (s) => s.linkedMessage(id));
