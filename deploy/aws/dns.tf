@@ -25,10 +25,10 @@ resource "aws_acm_certificate_validation" "deployment" {
 }
 
 resource "aws_route53_record" "deployment" {
-  count   = var.public_dns ? 1 : 0
-  zone_id = var.route53_zone_id
-  name    = var.domain
-  type    = "A"
+  for_each = var.public_dns ? toset(["A", "AAAA"]) : toset([])
+  zone_id  = var.route53_zone_id
+  name     = var.domain
+  type     = each.key
   # The deployment this one replaces holds the name until this record takes it.
   allow_overwrite = true
 

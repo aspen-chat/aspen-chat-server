@@ -27,5 +27,6 @@ resource "terraform_data" "release" {
     aws_vpc_security_group_egress_rule.all,
     aws_route_table_association.public,
     aws_secretsmanager_secret_version.config,
+    aws_iam_role_policy.server_media,
   ]
 }

@@ -50,6 +50,14 @@ resource "aws_ecs_task_definition" "nats" {
       { containerPort = 4222, protocol = "tcp" },
       { containerPort = 8222, protocol = "tcp" },
     ]
+    # The image's own BusyBox fetches NATS's health from its monitoring port.
+    healthCheck = {
+      command     = ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/healthz"]
+      interval    = 15
+      timeout     = 5
+      retries     = 3
+      startPeriod = 15
+    }
     logConfiguration = module.cluster.log_configuration["nats"]
   }])
 }

@@ -12,11 +12,6 @@ output "instance_id" {
   value       = aws_instance.this.id
 }
 
-output "image_repositories" {
-  description = "Where to push the images built from deploy/docker/Dockerfile, each with its target's name."
-  value       = module.cluster.repositories
-}
-
 output "voice_server_id" {
   value = random_uuid.voice.result
 }

@@ -48,11 +48,27 @@ resource "aws_eip" "voice" {
   tags     = { Name = "${var.name}-${each.key}" }
 }
 
+locals {
+  # Each voice server's subnet, and its IPv6 address there, which clients send media to over
+  # IPv6 (`[rtc] announced_address`). Both follow from its name alone, so the address stays the
+  # same when the machine is replaced, as its Elastic IP does, and adding or removing another
+  # server moves none: a number from the name's hash, at least 2^32 into the subnet, far from
+  # the addresses AWS hands out.
+  voice_hash = { for name in keys(var.voice_servers) : name => parseint(substr(sha256(name), 0, 8), 16) }
+  voice_placement = {
+    for name, hash in local.voice_hash : name => {
+      subnet = hash % length(local.zones)
+      ipv6   = cidrhost(local.public_ipv6_cidrs[hash % length(local.zones)], 4294967296 + hash)
+    }
+  }
+}
+
 resource "aws_instance" "voice" {
   for_each               = var.voice_servers
   ami                    = data.aws_ssm_parameter.ecs_ami.value
   instance_type          = coalesce(each.value.instance_type, local.voice_instance_type)
-  subnet_id              = aws_subnet.public[index(sort(keys(var.voice_servers)), each.key) % length(local.zones)].id
+  subnet_id              = aws_subnet.public[local.voice_placement[each.key].subnet].id
+  ipv6_addresses         = [local.voice_placement[each.key].ipv6]
   vpc_security_group_ids = [local.sg["voice"]]
   iam_instance_profile   = aws_iam_instance_profile.voice.name
   tags                   = { Name = "${var.name}-${each.key}" }
@@ -153,10 +169,10 @@ resource "aws_lb_listener_rule" "voice" {
 }
 
 resource "aws_route53_record" "voice" {
-  for_each = var.voice_servers
+  for_each = { for pair in setproduct(keys(var.voice_servers), ["A", "AAAA"]) : "${pair[0]} ${pair[1]}" => pair }
   zone_id  = var.route53_zone_id
-  name     = "${each.key}.${var.domain}"
-  type     = "A"
+  name     = "${each.value[0]}.${var.domain}"
+  type     = each.value[1]
 
   alias {
     name                   = aws_lb.this.dns_name

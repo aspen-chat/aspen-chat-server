@@ -2,13 +2,23 @@ output "bucket" {
   value = aws_s3_bucket.media.bucket
 }
 
-output "access_key" {
-  value = aws_iam_access_key.media.id
-}
-
-output "secret_key" {
-  value     = aws_iam_access_key.media.secret
-  sensitive = true
+output "access_policy" {
+  description = "An IAM policy document of what the servers may do with the bucket, for the role they run as: read, write, and delete its objects, and list it."
+  value = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
+        Resource = "${aws_s3_bucket.media.arn}/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.media.arn
+      },
+    ]
+  })
 }
 
 output "public_base_url" {

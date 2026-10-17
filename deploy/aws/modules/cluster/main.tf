@@ -1,6 +1,5 @@
-# What every container of a deployment shares: the ECS cluster, its log group, the repositories
-# its images are pushed to, and the role ECS starts its tasks with. Both AWS configurations use
-# it.
+# What every container of a deployment shares: the ECS cluster, its log group, and the role ECS
+# starts its tasks with.
 
 resource "aws_ecs_cluster" "this" {
   name = var.name
@@ -11,21 +10,8 @@ resource "aws_cloudwatch_log_group" "this" {
   retention_in_days = var.log_retention_days
 }
 
-resource "aws_ecr_repository" "image" {
-  for_each             = toset(["api", "voice"])
-  name                 = "${var.name}/${each.key}"
-  image_tag_mutability = "IMMUTABLE"
-  # Images are built from the repository, so a deployment being destroyed loses nothing with
-  # them.
-  force_delete = true
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
 # What ECS itself does for a task before it starts: pull its image, read its configuration
-# file, and write its logs. The servers hold no AWS permissions of their own.
+# file, and write its logs. What a task may do once it runs is its own role's.
 resource "aws_iam_role" "execution" {
   name = "${var.name}-task-execution"
 

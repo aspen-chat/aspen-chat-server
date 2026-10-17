@@ -2,18 +2,14 @@ output "public_url" {
   value = local.public_url
 }
 
-output "image_repositories" {
-  description = "Where to push the images built from deploy/docker/Dockerfile, each with its target's name."
-  value       = module.cluster.repositories
-}
-
 output "voice_servers" {
-  description = "Each voice server's id in the registry, its signalling address, and the address it takes media on."
+  description = "Each voice server's id in the registry, its signalling address, and the addresses it takes media on."
   value = {
     for name, _ in var.voice_servers : name => {
       id      = random_uuid.voice[name].result
       url     = "https://${name}.${var.domain}"
       address = aws_eip.voice[name].public_ip
+      ipv6    = local.voice_placement[name].ipv6
     }
   }
 }

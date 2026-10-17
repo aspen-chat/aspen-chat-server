@@ -54,13 +54,22 @@ variable "media_bucket" {
 }
 
 variable "image_tag" {
-  description = "The tag of the images to run, as pushed to the two repositories this makes. Null runs no servers: the first apply, before there is a repository to push to."
+  description = "The release to run, a tag of both images. Null runs no servers: a deployment made ready beside the one it replaces, before its database is copied (README.md#moving-from-one-machine)."
   type        = string
   default     = null
 }
 
+variable "image_repositories" {
+  description = "Where the images are pulled from. The published ones by default; images of your own must be in a repository ECS may pull from without signing in, or in ECR."
+  type = object({
+    api   = optional(string, "ghcr.io/aspen-chat/aspen-api")
+    voice = optional(string, "ghcr.io/aspen-chat/aspen-voice")
+  })
+  default = {}
+}
+
 variable "cpu_architecture" {
-  description = "What the images were built for: X86_64 or ARM64 (Graviton, which costs less; build the images on an ARM machine)."
+  description = "What the servers run on: X86_64 or ARM64 (Graviton, which costs less). The published images are made for both."
   type        = string
   default     = "X86_64"
 

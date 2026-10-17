@@ -48,7 +48,7 @@ locals {
         bucket           = module.media.bucket
         region           = var.region
       } : key => jsonencode(value) },
-      { s3_more = "access_key = ${jsonencode(module.media.access_key)}\nsecret_key = ${jsonencode(module.media.secret_key)}\n", more = local.email_toml },
+      { s3_more = "public_endpoint = ${jsonencode("https://s3.dualstack.${var.region}.amazonaws.com")}\n", more = local.email_toml },
     ))
 
     voice-server-toml = templatefile("${path.module}/../templates/voice_server.toml.tftpl", merge({
@@ -106,4 +106,25 @@ locals {
     for key, version in aws_secretsmanager_secret_version.config :
     key => "${version.secret_arn}:::${version.version_id}"
   }
+}
+
+# What the servers may do as themselves: use the bucket, with the role's credentials, which the
+# server finds itself given no key pair.
+resource "aws_iam_role" "server" {
+  name = "${var.name}-server"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "server_media" {
+  name   = "media"
+  role   = aws_iam_role.server.id
+  policy = module.media.access_policy
 }

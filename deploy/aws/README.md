@@ -11,24 +11,30 @@ AWS account, so expect to fix things the first time.
 | Part of the deployment | On AWS |
 | --- | --- |
 | API servers, private workers | Fargate tasks behind an Application Load Balancer, which holds the certificate |
-| Voice servers | One EC2 machine each, with an Elastic IP for media; signalling through the load balancer |
+| Voice servers | One EC2 machine each, with an Elastic IP and an IPv6 address of its own for media; signalling through the load balancer |
 | PostgreSQL | RDS, reached over TLS with its certificate checked |
 | Valkey | ElastiCache, with a password, TLS, and no eviction |
 | NATS | One Fargate task, with a user for the API servers and one for each voice server |
-| Object storage | A private S3 bucket; uploads go to it directly |
+| Object storage | A private S3 bucket, which the servers reach as their task role; uploads go to it directly |
 | The storage's read path | CloudFront at `media.<domain>`, which may read the four public prefixes only |
 | `aspen.toml`, `voice_server.toml`, NATS's configuration | Written from [`templates/`](templates) into Secrets Manager |
 | Migrations, registering voice servers | A task run during each `tofu apply`, before servers are replaced |
 
 Nothing but the load balancer (80 and 443) and the voice servers' media and file transfer ports
-is open to the internet.
+is open to the internet. All of them, and the read path, answer over IPv4 and IPv6, and the
+servers reach the internet over both.
+
+The servers run the published images, `ghcr.io/aspen-chat/aspen-api` and `aspen-voice`, built
+for x86-64 and 64-bit ARM. To run images of your own, build them from
+[`deploy/docker/Dockerfile`](../docker/Dockerfile), push them where ECS can pull them without
+signing in (a public repository) or to ECR, and name them in `image_repositories`.
 
 ## Before you start
 
 - A domain for the deployment, in a Route 53 hosted zone. **Choose it for good**
   ([Choosing `public_url`](../../docs/operators/installing/3-configuring.md#choosing-public_url)).
-- OpenTofu 1.8 or later, the AWS command line with credentials, Docker, and Python 3, on the
-  machine you deploy from.
+- OpenTofu 1.8 or later, the AWS command line with credentials, and Python 3, on the machine you
+  deploy from.
 - Somewhere safe for the state. It holds every password this configuration makes. Use a
   [remote backend](https://opentofu.org/docs/language/settings/backends/s3/) and
   [state encryption](https://opentofu.org/docs/language/state/encryption/).
@@ -42,42 +48,31 @@ is open to the internet.
    cp terraform.tfvars.example terraform.tfvars
    ```
 
-   Edit it. [`variables.tf`](variables.tf) describes every variable.
+   Edit it. [`variables.tf`](variables.tf) describes every variable. `image_tag` names the
+   release to run.
 
-2. Make everything but the servers. With no `image_tag`, no server is started:
+2. Make it:
 
    ```
    tofu init
    tofu apply
    ```
 
-3. Build and push the images, from the repository root:
+   This makes everything, creates the tables, registers the voice servers, and then starts
+   every server.
 
-   ```
-   TAG=$(git rev-parse --short HEAD)
-   API=$(tofu -chdir=deploy/aws output -json image_repositories | jq -r .api)
-   VOICE=$(tofu -chdir=deploy/aws output -json image_repositories | jq -r .voice)
-   aws ecr get-login-password | docker login --username AWS --password-stdin "${API%%/*}"
-   docker build -f deploy/docker/Dockerfile --target api -t "$API:$TAG" . && docker push "$API:$TAG"
-   docker build -f deploy/docker/Dockerfile --target voice -t "$VOICE:$TAG" . && docker push "$VOICE:$TAG"
-   ```
+   It also turns on IPv6 for every Fargate task in the account and region that does not say
+   otherwise (`dualStackIPv6`, an account setting), which tasks elsewhere in a dual-stack
+   subnet then take too.
 
-4. Set `image_tag` in `terraform.tfvars` to the tag, and apply again:
-
-   ```
-   tofu apply
-   ```
-
-   This creates the tables, registers the voice servers, and then starts every server.
-
-5. Create your account in the web client, then make it the first administrator
+3. Create your account in the web client, then make it the first administrator
    ([Step 7](../../docs/operators/installing/7-first-administrator.md)):
 
    ```
    $(tofu output -raw run_task) aspen-chat-server admin grant <username>
    ```
 
-6. Check [the storage's read path](../../docs/operators/installing/storage-read-path.md#checking-it)
+4. Check [the storage's read path](../../docs/operators/installing/storage-read-path.md#checking-it)
    from outside. `BASE` is `https://media.<domain>`.
 
 ## Operator commands
@@ -92,8 +87,7 @@ $(tofu output -raw run_task) aspen-chat-server invites create
 
 ## Upgrading
 
-Build and push the images under a new tag (step 3), set `image_tag` to it, and `tofu apply`. The
-apply follows [Upgrading](../../docs/operators/installing/upgrading.md):
+Set `image_tag` to the new release, and `tofu apply`. The apply follows [Upgrading](../../docs/operators/installing/upgrading.md):
 
 1. It runs `aspen-migrate up`. If that fails the apply stops, and the old servers keep running.
 2. It replaces the API servers, new ones taking requests before old ones stop.
@@ -103,7 +97,7 @@ apply follows [Upgrading](../../docs/operators/installing/upgrading.md):
 
 | To | Do |
 | --- | --- |
-| Change a setting this configuration does not write | Add it to `server_environment` as its environment variable. Settings that are lists cannot be given that way. |
+| Change a setting this configuration does not write | Add it to `server_environment` as its environment variable ([How settings are read](../../docs/operators/configuration/index.md#how-settings-are-read)): lists and tables too. |
 | Run more API servers, or private workers | Raise `api.count` or `workers.count`. |
 | Add a voice server | Add it to `voice_servers`. Its id is made for it. |
 | Remove a voice server | Run `voice-servers remove <name>` (above) first, then take it out of `voice_servers`. |
@@ -143,9 +137,9 @@ been planned. Read each plan before approving it.
    distribution in place. **Stop if it would replace or destroy either.** Everything else is
    new. `domain` still points at the old deployment.
 
-3. Build and push the images to this deployment's repositories
-   ([step 3 above](#the-first-deployment)). Do not set `image_tag` yet: the first release must
-   find the old deployment's database, not make an empty one.
+3. Leave `image_tag` out of `terraform.tfvars` until the next step: with none, no server
+   starts, and the first release must find the old deployment's database, not make an empty
+   one.
 
 4. Move. This stops the old deployment:
 
@@ -199,7 +193,6 @@ lost.**
 
 ## What it does not do yet
 
-- **IPv6.** Everything is IPv4. Voice servers carry no media over IPv6.
 - **TLS to NATS.** NATS is reached in plaintext inside the private network, and both servers
   warn about it at startup.
 - **Metrics.** Both servers' Prometheus endpoints stay on loopback, unscraped.

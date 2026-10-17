@@ -5,6 +5,9 @@
 # The provider checks the shape of an ARN wherever one is given, and the certificates' records
 # are read by name, so those the mocks must answer in kind.
 mock_provider "aws" {
+  mock_resource "aws_vpc" {
+    defaults = { ipv6_cidr_block = "2001:db8:42:ab00::/56" }
+  }
   mock_resource "aws_iam_role" {
     defaults = { arn = "arn:aws:iam::123456789012:role/mock" }
   }
@@ -106,15 +109,49 @@ run "release" {
 
   assert {
     condition = toset([
-      for rule in aws_vpc_security_group_ingress_rule.public : "${rule.description}:${rule.ip_protocol}:${rule.from_port}-${rule.to_port}"
-      ]) == toset([
-      "load-balancer-http:tcp:80-80",
-      "load-balancer-https:tcp:443-443",
-      "voice-media-udp:udp:40000-40999",
-      "voice-media-tcp:tcp:40000-40999",
-      "voice-file-transfers:udp:3478-3478",
-    ])
-    error_message = "Only the load balancer's ports and the voice servers' media and file transfer ports are open to the internet (docs/operators/installing/network-exposure.md)."
+      for rule in aws_vpc_security_group_ingress_rule.public : "${rule.ip_protocol}:${rule.from_port}-${rule.to_port}:${coalesce(rule.cidr_ipv4, rule.cidr_ipv6)}"
+      ]) == toset(flatten([for cidr in ["0.0.0.0/0", "::/0"] : [
+        "tcp:80-80:${cidr}",
+        "tcp:443-443:${cidr}",
+        "udp:40000-40999:${cidr}",
+        "tcp:40000-40999:${cidr}",
+        "udp:3478-3478:${cidr}",
+    ]]))
+    error_message = "Only the load balancer's ports and the voice servers' media and file transfer ports are open to the internet, over both families (docs/operators/installing/network-exposure.md)."
+  }
+
+  assert {
+    condition     = aws_lb.this.ip_address_type == "dualstack" && toset(keys(aws_route53_record.deployment)) == toset(["A", "AAAA"])
+    error_message = "The deployment answers over IPv6 too."
+  }
+
+  assert {
+    condition = (
+      local.voice_placement["voice-1"].ipv6 == "2001:db8:42:ab01:0:1:7666:a5f9"
+      && local.voice_placement["voice-2"].ipv6 == "2001:db8:42:ab00:0:1:e858:41dc"
+      && aws_instance.voice["voice-2"].ipv6_addresses == tolist(["2001:db8:42:ab00:0:1:e858:41dc"])
+    )
+    error_message = "Each voice server takes an IPv6 address in its subnet that follows from its name."
+  }
+
+  assert {
+    condition = alltrue([
+      for server in aws_ecs_task_definition.server : server.task_role_arn == aws_iam_role.server.arn
+    ]) && jsondecode(aws_iam_role_policy.server_media.policy).Statement[0].Action == ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
+    error_message = "The servers reach the bucket as their task role."
+  }
+
+  assert {
+    condition     = startswith(jsondecode(aws_ecs_task_definition.server["api"].container_definitions)[0].image, "ghcr.io/aspen-chat/aspen-api:2026-10-12")
+    error_message = "The servers run the published images by default."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_ecs_task_definition.server["worker"].container_definitions)[0].healthCheck.command[0] == "CMD"
+      && !can(jsondecode(aws_ecs_task_definition.server["api"].container_definitions)[0].healthCheck.command)
+    )
+    error_message = "A worker is replaced when its health endpoint stops answering."
   }
 
   assert {
@@ -185,6 +222,23 @@ run "arm" {
   }
 }
 
+run "another_voice_server_moves_none" {
+  command = plan
+
+  variables {
+    voice_servers = {
+      voice-1 = { capacity = 120 }
+      voice-2 = { capacity = 60 }
+      a-first = { capacity = 60 }
+    }
+  }
+
+  assert {
+    condition     = local.voice_placement["voice-1"].ipv6 == "2001:db8:42:ab01:0:1:7666:a5f9" && local.voice_placement["voice-2"].subnet == 0
+    error_message = "Adding a voice server must not move another to a new address or subnet, which would replace its machine."
+  }
+}
+
 run "refuses_a_voice_server_named_media" {
   command = plan
 
@@ -206,6 +260,8 @@ run "configuration_files" {
       strcontains(nonsensitive(local.aspen_toml), "trusted_proxies = [\"10.42.0.0/20\",\"10.42.16.0/20\"]")
       && strcontains(nonsensitive(local.aspen_toml), "sslmode=verify-full")
       && strcontains(nonsensitive(local.aspen_toml), "valkey_url = \"rediss://")
+      && strcontains(nonsensitive(local.aspen_toml), "public_endpoint = \"https://s3.dualstack.eu-central-1.amazonaws.com\"")
+      && !strcontains(nonsensitive(local.aspen_toml), "access_key")
     )
     error_message = "aspen.toml: ${nonsensitive(local.aspen_toml)}"
   }
@@ -226,6 +282,7 @@ run "configuration_files" {
       strcontains(nonsensitive(local.voice_server_toml[name]), "id = \"${id.result}\"")
       && strcontains(nonsensitive(local.voice_server_toml[name]), "user = \"${name}\"")
       && strcontains(nonsensitive(local.voice_server_toml[name]), "min_port = 40000")
+      && strcontains(nonsensitive(local.voice_server_toml[name]), "\"${local.voice_placement[name].ipv6}\"]")
     ])
     error_message = "voice_server.toml: ${nonsensitive(local.voice_server_toml["voice-1"])}"
   }

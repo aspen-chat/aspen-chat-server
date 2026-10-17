@@ -7,8 +7,13 @@ variable "region" {
   type = string
 }
 
+variable "image_repositories" {
+  description = "Where each of the Dockerfile's targets is pulled from, by target: `api` and `voice`."
+  type        = map(string)
+}
+
 variable "image_tag" {
-  description = "The tag of the images to run, or null before any is pushed."
+  description = "The tag of the images to run, or null to run none."
   type        = string
 }
 

@@ -10,16 +10,11 @@ output "log_group" {
   value = aws_cloudwatch_log_group.this.name
 }
 
-output "repositories" {
-  description = "Where to push each of the Dockerfile's targets."
-  value       = { for target, repository in aws_ecr_repository.image : target => repository.repository_url }
-}
-
 output "image" {
   description = "The image each target runs from. With no tag it names an image that does not exist, which nothing may be started from."
   value = {
-    for target, repository in aws_ecr_repository.image :
-    target => "${repository.repository_url}:${coalesce(var.image_tag, "none")}"
+    for target, repository in var.image_repositories :
+    target => "${repository}:${coalesce(var.image_tag, "none")}"
   }
 }
 

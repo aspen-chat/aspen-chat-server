@@ -45,7 +45,9 @@ locals {
       bucket           = module.media.bucket
       region           = var.region
     } : key => jsonencode(value) },
-    { s3_more = "access_key = ${jsonencode(module.media.access_key)}\nsecret_key = ${jsonencode(module.media.secret_key)}\n", more = local.email_toml },
+    # Clients upload to the bucket over IPv6 too: the dual-stack name, path-style as the server
+    # signs.
+    { s3_more = "public_endpoint = ${jsonencode("https://s3.dualstack.${var.region}.amazonaws.com")}\n", more = local.email_toml },
   ))
 
   voice_server_toml = {
@@ -57,7 +59,7 @@ locals {
         listen_addr       = "0.0.0.0:9000"
         nats_password     = random_password.nats_voice[name].result
         trusted_proxies   = local.trusted_proxies
-        announced_address = [aws_eip.voice[name].public_ip]
+        announced_address = [aws_eip.voice[name].public_ip, local.voice_placement[name].ipv6]
         min_port          = var.voice_media_ports.min
         max_port          = var.voice_media_ports.max
       } : key => jsonencode(value)

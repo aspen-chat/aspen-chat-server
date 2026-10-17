@@ -5,6 +5,7 @@ module "cluster" {
 
   name               = var.name
   region             = var.region
+  image_repositories = { api = "ghcr.io/aspen-chat/aspen-api", voice = "ghcr.io/aspen-chat/aspen-voice" }
   image_tag          = var.image_tag
   log_retention_days = var.log_retention_days
   log_roles          = concat(keys(local.containers), ["export"])
@@ -115,6 +116,7 @@ resource "aws_ecs_task_definition" "this" {
   requires_compatibilities = ["EC2"]
   network_mode             = "host"
   execution_role_arn       = module.cluster.execution_role_arn
+  task_role_arn            = contains(["api", "release"], each.key) ? aws_iam_role.server.arn : null
 
   dynamic "volume" {
     for_each = try(each.value.volumes, {})

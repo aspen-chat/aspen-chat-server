@@ -41,6 +41,7 @@ resource "aws_ecs_task_definition" "server" {
   cpu                      = local.server_sizes[each.key].cpu
   memory                   = local.server_sizes[each.key].memory
   execution_role_arn       = module.cluster.execution_role_arn
+  task_role_arn            = aws_iam_role.server.arn
 
   runtime_platform {
     operating_system_family = local.runtime_platform.operating_system_family
@@ -59,6 +60,16 @@ resource "aws_ecs_task_definition" "server" {
       [for name, value in var.server_environment : { name = name, value = value }],
     )
     portMappings = each.key == "api" ? [{ containerPort = 8080, protocol = "tcp" }] : []
+    # A worker serves nothing but its health endpoint (`[health] listen_addr`), on loopback, and
+    # is replaced when that stops answering. An API server's health is the load balancer's to
+    # judge, and the release task's is whether its command succeeds.
+    healthCheck = each.key == "worker" ? {
+      command     = ["CMD", "curl", "--fail", "--silent", "--max-time", "4", "http://127.0.0.1:9467/api/v1/health"]
+      interval    = 15
+      timeout     = 5
+      retries     = 3
+      startPeriod = 60
+    } : null
     # Every connection and event stream is a file; Fargate's default allows 65535, fewer than
     # `[connections] max`.
     ulimits          = [{ name = "nofile", softLimit = 262144, hardLimit = 262144 }]
@@ -69,6 +80,7 @@ resource "aws_ecs_task_definition" "server" {
 resource "aws_lb" "this" {
   name               = var.name
   load_balancer_type = "application"
+  ip_address_type    = "dualstack"
   subnets            = aws_subnet.public[*].id
   security_groups    = [local.sg["load-balancer"]]
 
@@ -155,7 +167,7 @@ resource "aws_ecs_service" "api" {
     container_port   = 8080
   }
 
-  depends_on = [aws_lb_listener.https, aws_ecs_service.nats, terraform_data.release]
+  depends_on = [aws_lb_listener.https, aws_ecs_service.nats, terraform_data.release, aws_ecs_account_setting_default.dual_stack]
 }
 
 resource "aws_ecs_service" "worker" {
@@ -171,5 +183,5 @@ resource "aws_ecs_service" "worker" {
     assign_public_ip = true
   }
 
-  depends_on = [aws_ecs_service.nats, terraform_data.release]
+  depends_on = [aws_ecs_service.nats, terraform_data.release, aws_ecs_account_setting_default.dual_stack]
 }

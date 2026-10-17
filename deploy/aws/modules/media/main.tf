@@ -1,5 +1,5 @@
-# A deployment's object storage: the bucket, the key pair the servers sign with, and the read
-# path clients download from. Both AWS configurations use it.
+# A deployment's object storage: the bucket, what the servers' role may do with it
+# (`access_policy`), and the read path clients download from. Both AWS configurations use it.
 
 terraform {
   required_providers {
@@ -59,37 +59,6 @@ resource "aws_s3_bucket_cors_configuration" "media" {
     allowed_headers = ["*"]
     max_age_seconds = 3600
   }
-}
-
-# The server signs with a key pair, which `[media.s3]` takes and nothing else: it does not read
-# a task's role.
-resource "aws_iam_user" "media" {
-  name = "${var.name}-media"
-}
-
-resource "aws_iam_user_policy" "media" {
-  name = "media"
-  user = aws_iam_user.media.name
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
-        Resource = "${aws_s3_bucket.media.arn}/*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = "s3:ListBucket"
-        Resource = aws_s3_bucket.media.arn
-      },
-    ]
-  })
-}
-
-resource "aws_iam_access_key" "media" {
-  user = aws_iam_user.media.name
 }
 
 # The read path (docs/operators/installing/storage-read-path.md): CloudFront at an origin of
@@ -199,11 +168,14 @@ resource "aws_acm_certificate_validation" "this" {
   validation_record_fqdns = [aws_route53_record.certificate_validation.fqdn]
 }
 
+# Held back, by `public_dns`, while the name is still another deployment's: one this deployment
+# replaces, whose storage it does not take over. One that takes it over takes this record over
+# with the distribution.
 resource "aws_route53_record" "this" {
-  zone_id = var.route53_zone_id
-  name    = var.domain
-  type    = "A"
-  # A deployment taking another's storage over takes this record over with the distribution.
+  for_each        = var.public_dns ? toset(["A", "AAAA"]) : toset([])
+  zone_id         = var.route53_zone_id
+  name            = var.domain
+  type            = each.key
   allow_overwrite = true
 
   alias {

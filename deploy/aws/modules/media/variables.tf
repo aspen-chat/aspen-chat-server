@@ -18,3 +18,9 @@ variable "bucket" {
   type        = string
   default     = null
 }
+
+variable "public_dns" {
+  description = "Whether `domain` points at the read path. False while another deployment's storage still answers there."
+  type        = bool
+  default     = true
+}
