@@ -246,7 +246,9 @@ function ReactionChip({
               : plainChipClass)
           }
         >
-          <EmojiKey emoji={emoji} communityId={communityId} />
+          <span className="flex p-0.5">
+            <EmojiKey emoji={emoji} communityId={communityId} />
+          </span>
           <span
             key={grown}
             className={"tabular-nums" + (grown > 0 ? " motion-pop inline-block" : "")}
