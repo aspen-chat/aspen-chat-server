@@ -21,14 +21,22 @@ Build them from the repository root, with Docker's BuildKit (`docker buildx`, th
 of current Docker):
 
 ```
-docker build -f deploy/docker/Dockerfile --target api   -t aspen-api .
+docker build -f deploy/docker/Dockerfile --target api -t aspen-api . \
+  --build-arg ASPEN_COMMIT=$(git rev-parse --short=12 HEAD)
 docker build -f deploy/docker/Dockerfile --target voice -t aspen-voice .
 ```
 
+`ASPEN_COMMIT` is the commit About Aspen names; add `--build-arg ASPEN_MODIFIED=true` when the
+checkout has changes of its own.
+
 | Image | Holds | Starts |
 | --- | --- | --- |
-| `api` | `aspen-chat-server`, `aspen-migrate`, the web client, `ffmpeg` and `ffprobe` | `aspen-chat-server --no-https --port 8080`, for a load balancer or reverse proxy that terminates TLS |
-| `voice` | `voice_server` | `voice_server` |
+| `api` | `aspen-chat-server`, `aspen-migrate`, the web client, `curl` | `aspen-chat-server --no-https --port 8080`, for a load balancer or reverse proxy that terminates TLS |
+| `voice` | `voice_server`, `curl` | `voice_server` |
+
+Neither holds `ffmpeg`, so the `api` image offers videos for download without a poster. To take
+posters, build an image on it that installs `ffmpeg`, and set `[media.previews] ffmpeg` and
+`ffprobe` to it ([`[media.previews]`](../docs/operators/configuration/previews.md#mediapreviews)).
 
 - Both run as the user `aspen` (10001) in `/etc/aspen`, and read their configuration there:
   mount `aspen.toml` or `voice_server.toml` into it, or have the container write it before it
@@ -36,8 +44,7 @@ docker build -f deploy/docker/Dockerfile --target voice -t aspen-voice .
 - The `api` image sets `ASPEN_WEB_CLIENT__DIR` to the web client it holds, so `aspen.toml` needs
   no `[web_client]`.
 - Every other setting can also be given in the container's environment
-  ([Environment variables](../docs/operators/installing/3-configuring.md#environment-variables)),
-  except those that are lists.
+  ([How settings are read](../docs/operators/configuration/index.md#how-settings-are-read)).
 - The operator commands run in the `api` image: `docker run … aspen-api aspen-chat-server admin
   grant <username>`, with the same configuration.
 - An image is built for the architecture of the machine that builds it.

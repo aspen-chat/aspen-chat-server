@@ -68,6 +68,26 @@ const app = dirname(here);
 const client = dirname(dirname(app));
 const checkout = dirname(client);
 
+/** The commit built from, and whether the checkout had changes of its own. */
+function sourceCommit(): { commit: string | null; modified: boolean } {
+  try {
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", checkout, ...args], { encoding: "utf8" }).trim();
+    return {
+      commit: git("rev-parse", "--short=12", "HEAD"),
+      modified: git("status", "--porcelain", "--untracked-files=no") !== "",
+    };
+  } catch {
+    // Not a git checkout, as in an image build, which is handed what git would say
+    // (`deploy/docker/Dockerfile`); without either, the version alone says what was built.
+    const given = process.env.ASPEN_BUILD_COMMIT;
+    return {
+      commit: given === undefined || given === "" ? null : given,
+      modified: process.env.ASPEN_BUILD_MODIFIED === "true",
+    };
+  }
+}
+
 function buildInfo(): BuildInfo {
   const version = (
     JSON.parse(readFileSync(join(app, "package.json"), "utf8")) as { version: string }
@@ -75,16 +95,7 @@ function buildInfo(): BuildInfo {
   const repository = (
     JSON.parse(readFileSync(join(client, "package.json"), "utf8")) as { repository: string }
   ).repository;
-  let commit: string | null = null;
-  let modified = false;
-  try {
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-C", checkout, ...args], { encoding: "utf8" }).trim();
-    commit = git("rev-parse", "--short=12", "HEAD");
-    modified = git("status", "--porcelain", "--untracked-files=no") !== "";
-  } catch {
-    // Not a git checkout: the version alone says what was built.
-  }
+  const { commit, modified } = sourceCommit();
   return {
     version,
     commit,

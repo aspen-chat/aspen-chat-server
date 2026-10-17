@@ -16,7 +16,9 @@ The originals stay what the gallery shows and what is saved.
 - A server makes previews only with `[jobs] run` on as well (see [Jobs](jobs.md#jobs)).
 - Pictures are made in the server itself.
 - Videos' posters are taken by running `ffmpeg` and `ffprobe`. They need not be installed: a
-  server without them makes previews of pictures only, and says so when it starts.
+  server without them makes previews of pictures only, and says so when it starts. The images
+  Aspen publishes hold neither, and set both to empty (see
+  [The images](../../../deploy/README.md#the-images)).
 - Each video is copied whole to a scratch file under `TMPDIR`. Point `TMPDIR` at a disk with room
   for `max_video_bytes` times `concurrency`, not a RAM-backed `/tmp`.
 

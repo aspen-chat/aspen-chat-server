@@ -26,7 +26,7 @@ It then lists the versions of everything this copy of Aspen is made of:
 
 | Row | What it shows | Source |
 | --- | --- | --- |
-| Aspen app | The app's version and the commit it was built from, with "with changes" when the checkout had uncommitted changes. Outside a git checkout only the version shows. | `virtual:build-info` |
+| Aspen app | The app's version and the commit it was built from, with "with changes" when the checkout had uncommitted changes. Outside a git checkout the commit is the one the build is handed, as an image build is (`ASPEN_BUILD_COMMIT`), or none, and only the version shows. | `virtual:build-info` |
 | Desktop app | Electron's and Chromium's versions | The preload bridge, `window.aspenDesktop.versions` |
 | Phone app | The platform, and the app's version and build | `@capacitor/app`'s `getInfo` |
 | Server | The software the server says it runs | `software` in `GET /auth/methods` |
@@ -128,5 +128,6 @@ CI's client and Android jobs install the pinned Rust toolchain for this.
 `virtual:build-info` (`BuildInfo`) comes from the same plugin. It holds:
 
 - the app's version, from its `package.json`
-- the commit, from `git rev-parse`
-- whether `git status` shows changes to tracked files
+- the commit, from `git rev-parse`, or outside a git checkout from `ASPEN_BUILD_COMMIT`
+- whether `git status` shows changes to tracked files, or outside one whether
+  `ASPEN_BUILD_MODIFIED` is `true`
