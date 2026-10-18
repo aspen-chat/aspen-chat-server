@@ -75,7 +75,7 @@ Holders of Manage registration invites make one with `community` on `POST /admin
 
 ### The public lookup
 
-`GET /registration-invites/{code}` is unauthenticated and limited per address against guessing.
+`GET /registration-invites/{code}` is unauthenticated and limited against guessing per device, with a ceiling per address. An unknown invite counts toward the address's `ip_failures`, shared with registering, where an unusable invite counts too.
 
 - It shows a usable invite to someone about to register.
 - It includes the community invite and, sideloaded, the community.

@@ -238,10 +238,10 @@ def finish(opt: argparse.Namespace) -> None:
     moving, target = state(opt), fleet(opt)
     if "voice_servers" not in moving:
         raise Failed("nothing has been copied yet: run `copy` first")
-    url = f"https://{target['domain']}/api/v1/deployment"
+    url = f"https://{target['domain']}/api/v1/health/ready"
     try:
         with urllib.request.urlopen(url, timeout=15) as response:
-            serving = response.status == 200
+            serving = response.status == 204
     except (urllib.error.URLError, TimeoutError):
         serving = False
     if not serving and not opt.force:

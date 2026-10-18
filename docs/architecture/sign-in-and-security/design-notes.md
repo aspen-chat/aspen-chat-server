@@ -71,3 +71,21 @@ See [Device links](device-links.md).
 - **Giving a sign-in takes a recent verification.** Without it a stolen session could mint a sign-in of its own on another device, outliving the stolen one.
 - **Starts are limited globally as well as per address.** Each start keeps state in Valkey until it expires.
 - **Nothing is announced; both sides poll.** A link lives for a minute and has no event.
+
+## Device credentials
+
+See [Device credentials](device-credentials.md).
+
+- **People behind one address are told apart by something they hold, not by where they are.** A carrier-grade NAT puts thousands of people behind one IPv4 address, and an event's network everyone in the room. Counted by address alone, they would share one person's limits. Counted by device, each has their own, and the address keeps only a ceiling high enough for a crowd.
+- **A credential costs a puzzle, once.** A credential that cost nothing would let one machine be as many devices as it asked for. The puzzle makes every device one machine claims cost it the same work a person pays once per deployment. It is not meant to stop a determined attacker, whose hardware solves it far faster than a phone, but to make each device cost something.
+- **SHA-256 rather than a memory-hard puzzle.** It needs no dependency on either side, and the server checks a solution with two hashes, so made-up solutions cost it nothing. A memory-hard puzzle would narrow what a GPU gains, but every check of a solution would then cost the server as much as one try costs the client.
+- **Challenges and credentials are stateless.** Every API server checks them with the shared key and asks no one, so presenting a credential adds no lookup to a request. Only a challenge's use is remembered, until it expires, so that one solution earns one credential.
+- **Ninety days, renewed past half its life.** A device in use never solves the puzzle again, and one hoarded or copied ages out.
+- **Signed-in requests count by user alone.** A session already says who is asking, and it is something an address's people each hold. Counting their requests against their address too would hold everyone behind a NAT to one budget as soon as many were signed in.
+- **Session and bot tokens are signed, so a made-up one is refused without the database.** Looking up a token takes the database, and signed-in requests are not counted by their address before their token is read. A limit on an address's rejected tokens, checked before each lookup, would hold back everyone signed in behind that address while one machine there sent made-up tokens. A token's signature tells a made-up one apart with no lookup, so nothing needs that limit. Only bot tokens from before signing keep it, since only a lookup tells them from made-up ones, and a bot cannot refresh to a signed one as an app does.
+- **A signed token the database rejected is remembered.** Otherwise one machine could present its own ended session over and over, and each time cost a lookup.
+- **Failures are counted, not just attempts.** A crowd mostly knows its passwords and its invites, and a machine guessing does not. Counting what proves wrong lets an address's attempts be generous while its wrong guesses are few.
+- **Token refresh and the passkey page are exempt.** A phone's push handler refreshes its session without the app running, and cannot solve the puzzle. A refresh token is a secret only its holder knows, so a valid one is counted only by the address's ceiling, and unknown ones as failures. The passkey page is a page the system browser opens, not an Aspen client. Its calls each name a ceremony only its starter knows.
+- **The client earns a credential when asked, not ahead of time.** Then a server that asks for none, or a stub in a test, costs it nothing, and the first refusal costs one round trip more.
+- **A credential survives signing out.** It names the device, not the person, and a person signing out and in again would otherwise pay the puzzle each time.
+

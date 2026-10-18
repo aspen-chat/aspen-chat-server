@@ -6,7 +6,8 @@
   "license": "MPL-2.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./device": "./src/device.ts"
   },
   "scripts": {
     "codegen": "tsx scripts/codegen.ts",

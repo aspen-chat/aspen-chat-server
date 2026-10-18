@@ -35,6 +35,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import device_credential
+
 REPO = Path(__file__).resolve().parent.parent
 BOX_TOOL = REPO / "deploy" / "box" / "aspen-box"
 NETWORK = "check-box"
@@ -142,11 +144,22 @@ def expect(what: str, got, want) -> None:
     say(f"  ok: {what}")
 
 
+def device(box: Box) -> str:
+    """A device credential for the box's deployment, earned through its network."""
+    def post(method: str, path: str, body: dict) -> tuple[int, str]:
+        answer = box.curl("-X", method, "-H", "content-type: application/json", "-d", json.dumps(body), "-w",
+                          "\n%{http_code}", f"https://{DOMAIN}/api/v1{path}")  # fmt: skip
+        text, _, status = answer.rpartition("\n")
+        return int(status or 0), text
+    return device_credential.earn(post)
+
+
 def sign_in(box: Box, name: str) -> str:
+    credential = f"{device_credential.HEADER}: {device(box)}"
     body = json.dumps({"name": name, "password": "a box of one's own 2026"})
-    expect(f"registering {name}", box.status(f"https://{DOMAIN}/api/v1/users", "-X", "POST", "-H", "content-type: application/json", "-d", body), 201)
+    expect(f"registering {name}", box.status(f"https://{DOMAIN}/api/v1/users", "-X", "POST", "-H", "content-type: application/json", "-H", credential, "-d", body), 201)
     login = json.dumps({"username": name, "password": "a box of one's own 2026"})
-    answer = box.curl("-X", "POST", "-H", "content-type: application/json", "-d", login, f"https://{DOMAIN}/api/v1/auth/login")
+    answer = box.curl("-X", "POST", "-H", "content-type: application/json", "-H", credential, "-d", login, f"https://{DOMAIN}/api/v1/auth/login")
     return json.loads(answer)["sessionToken"]
 
 

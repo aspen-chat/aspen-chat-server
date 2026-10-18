@@ -53,9 +53,11 @@ Starting a reset ends the one before. `email:reset-live:{user}` names the live o
 
 ## Rate limits
 
-- Each step is limited per address in the `sign_in` group.
+- Every step is limited per device in the `sign_in` group (see [Device credentials](../sign-in-and-security/device-credentials.md)).
+- The second and third steps are limited per address in the `sign_in` group too. The first step has a per-address limit of its own, well under everyone's starts together, so one address cannot spend them all.
 - The first step is also limited by everyone's starts together, so a crowd of addresses cannot fill Valkey with resets.
 - The second and third steps are limited per reset.
+- A wrong code, or a reset that is unknown or expired, counts toward the address's `ip_failures` in the `sign_in` group.
 
 ## What a reset reveals
 

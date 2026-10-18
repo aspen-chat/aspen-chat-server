@@ -320,10 +320,10 @@ async fn issue(
     verified_at: DateTime<Utc>,
 ) -> crate::Result<Session> {
     use aspen_schema::{refresh_token, session};
-    let session_token = make_token();
-    let refresh_token = make_token();
     let now = Utc::now();
     let session_token_expires = now + SESSION_TOKEN_LIFETIME;
+    let session_token = crate::signed_token::session_token(&state.token_key, session_token_expires);
+    let refresh_token = make_token();
     crate::user_ban::check_not_banned(conn, user_id).await?;
     conn.transaction(|conn| {
         let (refresh_token, session_token) =
@@ -438,6 +438,7 @@ pub async fn finish_ticket(
 /// deleted, or is banned from the deployment, gets none: its refresh token answers as invalid,
 /// so the app signs out, and signing in again tells of the ban.
 pub async fn try_token_refresh(
+    state: &GlobalServerContext,
     mut conn: impl AsMut<AsyncPgConnection>,
     refresh_token_value: &str,
 ) -> Result<TokenRefreshOutcome, crate::Error> {
@@ -463,8 +464,8 @@ pub async fn try_token_refresh(
         Err(crate::Error::DeploymentBanned { .. }) => return Ok(TokenRefreshOutcome::InvalidToken),
         Err(e) => return Err(e),
     }
-    let new_token = make_token();
     let session_token_expires = Utc::now() + SESSION_TOKEN_LIFETIME;
+    let new_token = crate::signed_token::session_token(&state.token_key, session_token_expires);
     diesel::insert_into(session::table)
         .values((
             session::dsl::token.eq(token_digest(&new_token)),

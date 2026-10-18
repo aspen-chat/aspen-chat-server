@@ -4,6 +4,7 @@ use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::extract::{Created, Json, NoContent, Path, Query};
 use crate::message_enum::User;
 use crate::message_enum::request::{UserCreateRequest, UserUpdateRequest};
+use crate::rate_limit::Failures;
 use crate::t;
 use crate::{API_PREFIX, TAG_USERS};
 use aspen_app as app;
@@ -11,6 +12,7 @@ use aspen_app::UserId;
 use aspen_app::context::GlobalServerContext;
 use aspen_app::login::ChangePasswordOutcome;
 pub use aspen_wire::user::{CustomStatus, UserOnlineStatus, UserStatusRecord};
+use axum::Extension;
 use axum::extract::State;
 use diesel::result::DatabaseErrorKind;
 use serde::{Deserialize, Serialize};
@@ -79,17 +81,21 @@ impl ToSchema for UserRef {}
 )]
 pub async fn create_user(
     State(state): State<GlobalServerContext>,
+    failures: Option<Extension<Failures>>,
     Json(request): Json<UserCreateRequest>,
 ) -> ApiResult<Created<User>> {
-    let new_user_id = app::user::create_user(state, &request)
-        .await
-        .map_err(|e| match e {
-            app::Error::Diesel(diesel::result::Error::DatabaseError(
-                DatabaseErrorKind::UniqueViolation,
-                _,
-            )) => ApiError::new(ProblemCode::UsernameTaken),
-            other => other.into(),
-        })?;
+    let created = app::user::create_user(state.clone(), &request).await;
+    crate::rate_limit::note_failed(&state, &failures, &created, |e| {
+        matches!(e, app::Error::RegistrationInviteInvalid)
+    })
+    .await;
+    let new_user_id = created.map_err(|e| match e {
+        app::Error::Diesel(diesel::result::Error::DatabaseError(
+            DatabaseErrorKind::UniqueViolation,
+            _,
+        )) => ApiError::new(ProblemCode::UsernameTaken),
+        other => other.into(),
+    })?;
     Ok(Created::new(
         format!("{API_PREFIX}/users/{}", new_user_id.0),
         User {

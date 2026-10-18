@@ -470,6 +470,46 @@ describe("AspenClient", () => {
     expect(store.load()?.sessionToken).toBe("session-2");
   });
 
+  it("tries a refresh once more after a short Retry-After, spread over as long again", async () => {
+    const store = new MemorySessionStore();
+    store.save(liveSession());
+    const slept: number[] = [];
+    const limited = () =>
+      new Response(JSON.stringify({ code: "rateLimited", title: "rateLimited", status: 429 }), {
+        status: 429,
+        headers: { "content-type": "application/problem+json", "retry-after": "2" },
+      });
+    const { fetch, calls } = scriptedFetch([
+      () => problem(401, "unauthorized"),
+      limited,
+      () => jsonResponse(200, { sessionToken: "session-2", sessionTokenExpires: farFuture() }),
+      () => jsonResponse(200, { id: uuid, name: "me", icon: null, onlineStatus: "online" }),
+    ]);
+    const client = new AspenClient({
+      baseUrl,
+      sessionStore: store,
+      fetch,
+      sleep: (ms) => {
+        slept.push(ms);
+        return Promise.resolve();
+      },
+    });
+    const { response } = await client.api.GET("/api/v1/users/{user}", {
+      params: { path: { user: "@me" } },
+    });
+    expect(response.status).toBe(200);
+    expect(calls.map((c) => c.url.endsWith("/auth/token-refresh"))).toEqual([
+      false,
+      true,
+      true,
+      false,
+    ]);
+    expect(slept).toHaveLength(1);
+    expect(slept[0]).toBeGreaterThanOrEqual(2000);
+    expect(slept[0]).toBeLessThan(4000);
+    expect(store.load()?.sessionToken).toBe("session-2");
+  });
+
   it("clears the session when the refresh token is rejected", async () => {
     const store = new MemorySessionStore();
     store.save(liveSession());

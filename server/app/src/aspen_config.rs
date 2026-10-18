@@ -125,6 +125,18 @@ pub struct RateLimitConfig {
     /// invite). The username limit of `POST /auth/login` is always counted so.
     #[serde(default)]
     pub fail_closed: Vec<String>,
+    /// Endpoints (`*` matching any run of characters) a request without a session may call
+    /// without a device credential (`app::device_credential`): those called by what is not an
+    /// Aspen client, such as browsers opening a page and other deployments' servers.
+    #[serde(default)]
+    pub device_exempt: Vec<String>,
+    /// How many leading zero bits a device credential's puzzle asks for, at most
+    /// `device_credential::MAX_PUZZLE_BITS`: each more doubles the work, about a second on a
+    /// mid-range phone at 20.
+    pub device_puzzle_bits: u8,
+    /// How many times a person's limits a bot's own are (`user`, `user_per_<param>`), its
+    /// sustained rate and its burst both: a bot serves a whole community, as no person does.
+    pub bot_multiplier: u32,
 }
 
 /// The `[rate_limits]` of `aspen.toml`, laid over the built-in limits. Each limit given
@@ -142,6 +154,11 @@ pub struct RateLimitOverrides {
     /// Replaces the built-in list whole.
     #[serde(default, deserialize_with = "aspen_config_values::optional_list")]
     pub fail_closed: Option<Vec<String>>,
+    /// Replaces the built-in list whole.
+    #[serde(default, deserialize_with = "aspen_config_values::optional_list")]
+    pub device_exempt: Option<Vec<String>>,
+    pub device_puzzle_bits: Option<u8>,
+    pub bot_multiplier: Option<u32>,
     #[serde(default, deserialize_with = "aspen_config_values::table")]
     pub default: RuleTable,
     #[serde(default, deserialize_with = "aspen_config_values::table")]
@@ -177,6 +194,15 @@ impl RateLimitConfig {
         }
         if let Some(fail_closed) = overrides.fail_closed {
             self.fail_closed = fail_closed;
+        }
+        if let Some(exempt) = overrides.device_exempt {
+            self.device_exempt = exempt;
+        }
+        if let Some(bits) = overrides.device_puzzle_bits {
+            self.device_puzzle_bits = bits;
+        }
+        if let Some(multiplier) = overrides.bot_multiplier {
+            self.bot_multiplier = multiplier;
         }
         self.default.extend(overrides.default);
         for (name, group) in overrides.groups {

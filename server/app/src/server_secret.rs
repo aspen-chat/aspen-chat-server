@@ -13,6 +13,11 @@ use rand::RngExt;
 const CODES: &str = "codes";
 /// The name of the secret that is [`JoinTokenKey`], an Ed25519 key's PKCS#8 document.
 const JOIN_TOKENS: &str = "joinTokens";
+/// The name of the secret device credentials and their challenges are signed with
+/// (`app::device_credential`).
+pub const DEVICES: &str = "devices";
+/// The name of the secret session and bot tokens are signed with (`app::signed_token`).
+pub const TOKENS: &str = "tokens";
 
 /// Makes the secret named `name` with `make` when the deployment has none, and reads it. Servers
 /// starting together make one: the name is the key of its row.
@@ -138,6 +143,41 @@ impl CodeKey {
     /// typed it.
     pub fn digest(&self, code: &str) -> String {
         BASE64_URL_SAFE_NO_PAD.encode(aws_lc_rs::hmac::sign(&self.0, code.trim().as_bytes()))
+    }
+}
+
+/// A key that what only the API servers make and check is signed with: device credentials
+/// (`DEVICES`), session and bot tokens (`TOKENS`). No one else holds it, so it is an HMAC key.
+#[derive(Clone)]
+pub struct HmacKey(aws_lc_rs::hmac::Key);
+
+impl std::fmt::Debug for HmacKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HmacKey(..)")
+    }
+}
+
+impl HmacKey {
+    /// Makes the deployment's secret named `name` when it has none, and reads it.
+    pub async fn load(conn: &mut AsyncPgConnection, name: &str) -> crate::Result<Self> {
+        let secret = load_or_make(conn, name, || {
+            Ok(CHACHA_RNG
+                .with(|rng| rng.borrow_mut().random::<[u8; 32]>())
+                .to_vec())
+        })
+        .await?;
+        Ok(Self::from_secret(&secret))
+    }
+
+    pub fn from_secret(secret: &[u8]) -> Self {
+        Self(aws_lc_rs::hmac::Key::new(
+            aws_lc_rs::hmac::HMAC_SHA256,
+            secret,
+        ))
+    }
+
+    pub fn key(&self) -> &aws_lc_rs::hmac::Key {
+        &self.0
     }
 }
 

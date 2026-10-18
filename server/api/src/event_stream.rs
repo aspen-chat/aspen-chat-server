@@ -549,7 +549,7 @@ async fn identify(
     if caller.verification_required(&state.settings()) {
         return Err(EventStreamErrorCode::EmailVerificationRequired.into());
     }
-    match crate::rate_limit::limit_event_stream(state, ip, user.id).await {
+    match crate::rate_limit::limit_event_stream(state, ip, user.id, user.bot).await {
         Decision::Allowed => {}
         Decision::Limited { retry_after } => {
             return Err(Rejection {
