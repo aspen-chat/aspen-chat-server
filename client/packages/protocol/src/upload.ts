@@ -5,6 +5,7 @@
 import type { components } from "./generated/openapi";
 import { type AspenClient, problemOf } from "./http";
 import { ApiProblemError, transportProblem } from "./problem";
+import { requireSecure } from "./urls";
 import type { RecordStore } from "./store";
 
 type Attachment = components["schemas"]["Attachment"];
@@ -50,9 +51,9 @@ export async function uploadAttachment(
   const contentType = init.data.contentType ?? mimeType;
   const put =
     onProgress !== undefined && !target.customUpload && typeof XMLHttpRequest !== "undefined"
-      ? await putWithProgress(init.data.uploadUrl, file, contentType, onProgress)
+      ? await putWithProgress(requireSecure(init.data.uploadUrl), file, contentType, onProgress)
       : await target
-          .uploadFetch(init.data.uploadUrl, {
+          .uploadFetch(requireSecure(init.data.uploadUrl), {
             method: "PUT",
             headers: { "content-type": contentType },
             body: file,
@@ -115,7 +116,7 @@ export async function uploadIcon(
   if (init.data === undefined) {
     throw new ApiProblemError(problemOf(init.error, init.response));
   }
-  const put = await target.uploadFetch(init.data.uploadUrl, {
+  const put = await target.uploadFetch(requireSecure(init.data.uploadUrl), {
     method: "PUT",
     headers: { "content-type": init.data.contentType ?? mimeType },
     body: bytes,

@@ -130,7 +130,8 @@ test("a picture described before sending carries its description to readers", as
   const picture = page.getByRole("img", { name: "A grey cat asleep on a keyboard." });
   await expect(picture).toBeVisible();
   await settleAnimations(page);
-  await page.getByRole("button", { name: "Open image" }).last().click();
+  // The button that opens it is named by it, as the picture is.
+  await page.getByRole("button", { name: "A grey cat asleep on a keyboard." }).click();
   const gallery = page.getByRole("dialog", { name: "Images" });
   await expect(gallery.getByText("A grey cat asleep on a keyboard.")).toBeVisible();
 });

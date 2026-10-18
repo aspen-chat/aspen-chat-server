@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AspenClient,
   CameraError,
+  InsecureAddressError,
   MemorySessionStore,
   READY_TIMEOUT_MS,
   REJOIN_DELAY_MAX_MS,
@@ -15,7 +16,7 @@ import {
 } from "../src";
 import type { ClientMessage } from "../src/generated/voiceSignal";
 
-const baseUrl = "http://api.example.org";
+const baseUrl = "https://api.example.org";
 const channel = "0190f0a0-0000-7000-8000-000000000020";
 const otherChannel = "0190f0a0-0000-7000-8000-000000000021";
 const me = "0190f0a0-0000-7000-8000-000000000001";
@@ -24,13 +25,18 @@ const servers = {
   near: {
     id: "0190f0a0-0000-7000-8000-00000000a001",
     name: "near",
-    url: "http://near.example.org",
+    url: "https://near.example.org",
   },
-  far: { id: "0190f0a0-0000-7000-8000-00000000a002", name: "far", url: "http://far.example.org" },
+  far: { id: "0190f0a0-0000-7000-8000-00000000a002", name: "far", url: "https://far.example.org" },
   dead: {
     id: "0190f0a0-0000-7000-8000-00000000a003",
     name: "dead",
-    url: "http://dead.example.org",
+    url: "https://dead.example.org",
+  },
+  plain: {
+    id: "0190f0a0-0000-7000-8000-00000000a004",
+    name: "plain",
+    url: "http://plain.example.org",
   },
 };
 
@@ -627,6 +633,24 @@ describe("VoiceCall", () => {
     expect(call.state.error).toContain("signature");
   });
 
+  it("never tries or blames a server not reached over HTTPS, and fails when no other is", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, calls } = makeCall({
+      candidates: ["plain", "near"],
+      latency: { plain: 1, near: 2 },
+    });
+    await call.join(channel);
+    expect(call.state.status).toBe("connected");
+    expect(FakeSocket.instances.map((s) => new URL(s.url).host)).toEqual(["near.example.org"]);
+    expect(calls.filter((c) => c.includes("plain.example.org") || c.includes("/failures"))).toEqual(
+      [],
+    );
+    call.leave();
+    const { call: alone } = makeCall({ candidates: ["plain"], latency: { plain: 1 } });
+    await expect(alone.join(channel)).rejects.toThrow(InsecureAddressError);
+    expect(FakeSocket.instances).toEqual([]);
+  });
+
   it("plays consumers the server announces and stops them when told", async () => {
     FakeSocket.behaviour = new Map();
     const { call, played, transports } = makeCall({
@@ -1207,7 +1231,7 @@ describe("VoiceCall", () => {
     expect(signallingUrl({ ...servers.near, url: "https://voice.example.org/" })).toBe(
       "wss://voice.example.org/ws",
     );
-    expect(signallingUrl(servers.near)).toBe("ws://near.example.org/ws");
+    expect(signallingUrl(servers.near)).toBe("wss://near.example.org/ws");
     vi.restoreAllMocks();
   });
 });

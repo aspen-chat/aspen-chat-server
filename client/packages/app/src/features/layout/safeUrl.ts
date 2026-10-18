@@ -9,6 +9,8 @@
  * them. Each function takes an absolute address only, never resolving one against the page.
  */
 
+import { securelyReached } from "@aspen/protocol";
+
 /** The address parsed, when it is absolute and has one of `schemes`. */
 function withScheme(url: string | null | undefined, schemes: readonly string[]): URL | null {
   if (url == null) {
@@ -44,36 +46,12 @@ export function messageLinkUrl(url: string | null | undefined): string | undefin
 
 /**
  * A file a deployment serves (a picture, a video, an attachment to download, an icon): `https:`,
- * or `http:` where a development deployment uses it, at a loopback host or while the page itself
- * is served over plain HTTP; `undefined` for anything else.
+ * or `http:` at this machine's own addresses in a development build (`securelyReached`);
+ * `undefined` for anything else.
  */
 export function mediaUrl(url: string | null | undefined): string | undefined {
-  return mediaUrlOnPage(url, window.location.protocol);
-}
-
-/** `mediaUrl` on a page served with `pageProtocol`. */
-export function mediaUrlOnPage(
-  url: string | null | undefined,
-  pageProtocol: string,
-): string | undefined {
   const parsed = withScheme(url, ["https:", "http:"]);
-  if (parsed === null) {
-    return undefined;
-  }
-  if (parsed.protocol === "https:" || pageProtocol === "http:" || isLoopback(parsed.hostname)) {
-    return parsed.href;
-  }
-  return undefined;
-}
-
-/** Whether a URL's hostname names this machine: `localhost`, a name under it, or a loopback address. */
-function isLoopback(hostname: string): boolean {
-  return (
-    hostname === "localhost" ||
-    hostname.endsWith(".localhost") ||
-    /^127\.\d+\.\d+\.\d+$/.test(hostname) ||
-    hostname === "[::1]"
-  );
+  return parsed !== null && securelyReached(parsed) ? parsed.href : undefined;
 }
 
 /**

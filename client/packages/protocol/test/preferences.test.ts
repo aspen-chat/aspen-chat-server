@@ -64,7 +64,7 @@ function accountClient(initial: Record<string, unknown>) {
     userId: "0190f0a0-0000-7000-8000-000000000001",
   });
   return {
-    client: new AspenClient({ baseUrl: "http://api.example.org", sessionStore: store, fetch }),
+    client: new AspenClient({ baseUrl: "https://api.example.org", sessionStore: store, fetch }),
     calls,
   };
 }

@@ -79,18 +79,7 @@ final class NotificationService: UNNotificationServiceExtension {
             }
             self.handler = nil
             if let shown {
-                content.title = shown.title
-                content.subtitle = shown.place ?? ""
-                content.body = shown.body
-                content.threadIdentifier = channel
-                content.categoryIdentifier = "message"
-                content.userInfo = [
-                    "origin": account.origin,
-                    "channel": shown.channel,
-                    "message": shown.message ?? NSNull(),
-                    "community": shown.community ?? NSNull(),
-                    "parentChannel": shown.parentChannel ?? NSNull(),
-                ]
+                shown.fill(content, origin: account.origin, thread: channel)
             } else {
                 log.error("what a push points to could not be fetched; the placeholder stays")
             }
@@ -120,6 +109,26 @@ struct ShownMessage {
     let message: String?
     let community: String?
     let parentChannel: String?
+}
+
+extension ShownMessage {
+    /// Writes it into `content`: who, where, and what, grouped by `thread` (the channel the
+    /// pointer names), with where a tap opens it, at `origin`, as the app reads a tap
+    /// (`NotificationTarget` in `api/pushBridge.ts`).
+    func fill(_ content: UNMutableNotificationContent, origin: String, thread: String) {
+        content.title = title
+        content.subtitle = place ?? ""
+        content.body = body
+        content.threadIdentifier = thread
+        content.categoryIdentifier = "message"
+        content.userInfo = [
+            "origin": origin,
+            "channel": channel,
+            "message": message ?? NSNull(),
+            "community": community ?? NSNull(),
+            "parentChannel": parentChannel ?? NSNull(),
+        ]
+    }
 }
 
 /// Reads what a pointer names, as the app would (`GET /messages/{id}` with the authors,

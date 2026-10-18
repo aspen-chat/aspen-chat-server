@@ -116,6 +116,7 @@ Federation, letting a user of one deployment use others, is built in five phases
    ```
    It stands in for a relay and a phone at `push.localhost`, checking each push's signature and decrypting it (Python's `cryptography`).
    `scripts/bench_push.py [--members 10000]` measures the fan-out instead: it seeds a community of that many people with the benchmark seeder, gives each a phone at the same stand-in, has the owner post `@everyone`, reports when the first, half, and last pushes arrived, and purges the run. Run alpha from a release build (`up --alpha-bin target/release`) for figures worth comparing.
+   `scripts/push_relay_stand_in.py` stands in for the relay itself, for an app on a simulator or emulator, which registers with it and is pushed to through it: the iOS UI tests' wrapper runs against it (`client/docs/architecture/ios-app.md`).
 
 8. Check built servers against the services in `docker-compose.yaml`:
    ```

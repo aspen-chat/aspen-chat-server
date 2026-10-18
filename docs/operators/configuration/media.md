@@ -98,6 +98,8 @@ own machine.
 - It is at an origin of its own.
 - It sends `X-Content-Type-Options: nosniff`.
 - The server itself never needs to reach it.
+- It is `https`, as is `public_endpoint`. Clients load and upload over `https` alone, except a
+  development build of the client at `localhost`.
 
 [The storage's read path](../installing/storage-read-path.md) says how to set it up, and how to
 check it.

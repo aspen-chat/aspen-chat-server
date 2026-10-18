@@ -4,13 +4,16 @@
 // the network. Prints what the notification would show, or why it would not. The simulator
 // never launches a service extension for `xcrun simctl push` (the simulator bridge adds the
 // notification as a request directly, never through the path that runs extensions), so this is
-// how the extension's path is checked short of a device.
+// how the extension's path is checked short of a device. Given a third path, it writes there
+// the payload of the notification the extension would show, for `xcrun simctl push` to deliver
+// as such (`ui_tests.py`).
 
 import Foundation
+import UserNotifications
 
 let arguments = CommandLine.arguments
-guard arguments.count == 3 else {
-    print("usage: check_notification <state.json> <payload.json>")
+guard arguments.count == 3 || arguments.count == 4 else {
+    print("usage: check_notification <state.json> <payload.json> [shown.json]")
     exit(2)
 }
 let state = try JSONDecoder().decode(PushState.self, from: Data(contentsOf: URL(fileURLWithPath: arguments[1])))
@@ -60,3 +63,21 @@ print("title: \(shown.title)")
 print("subtitle: \(shown.place ?? "")")
 print("body: \(shown.body)")
 print("opens: channel \(shown.channel), message \(shown.message ?? "none"), community \(shown.community ?? "none"), parent channel \(shown.parentChannel ?? "none")")
+if arguments.count == 4 {
+    let content = UNMutableNotificationContent()
+    shown.fill(content, origin: account.origin, thread: pointer["channel"] as? String ?? shown.channel)
+    var payload: [String: Any] = [
+        "aps": [
+            "alert": ["title": content.title, "subtitle": content.subtitle, "body": content.body],
+            "sound": "default",
+            "thread-id": content.threadIdentifier,
+            "category": content.categoryIdentifier,
+        ],
+    ]
+    for case let (key as String, value) in content.userInfo {
+        payload[key] = value
+    }
+    try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        .write(to: URL(fileURLWithPath: arguments[3]))
+    print("shown payload written to \(arguments[3])")
+}

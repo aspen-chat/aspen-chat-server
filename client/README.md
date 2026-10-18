@@ -84,20 +84,21 @@ pnpm --filter @aspen/app build:shell
 
 `pnpm --filter @aspen/mobile open:android` opens the project in Android Studio instead.
 
-**Reaching a development server.** The app asks for a deployment on first launch. A debug build
-may use plain HTTP only to `localhost` and `127.0.0.1`
-(`packages/mobile/android/app/src/debug/res/xml/network_security_config.xml`); every other
-address needs HTTPS, so a dev server's LAN address is refused. Forward the dev server's port over
-USB and enter `http://localhost:5173`:
+**Reaching a development server.** The app asks for a deployment on first launch, and reaches
+one over HTTPS alone, except from a development build at `localhost`
+(`client/docs/architecture/message-rendering/address-safety.md`, Transport). Build the shell as a
+development build, `VITE_ALLOW_LOOPBACK_HTTP=1 pnpm --filter @aspen/app build:shell`; the debug
+build's network security config
+(`packages/mobile/android/app/src/debug/res/xml/network_security_config.xml`) allows plain HTTP
+to `localhost` and `127.0.0.1` alone. Forward the dev server's port over USB and enter
+`http://localhost:5173`:
 
 ```sh
 adb reverse tcp:5173 tcp:5173                 # again after each reconnect
 ```
 
-The page is served from `https://localhost`, so anything else it loads over plain HTTP at
-another address is mixed content and blocked too: attachments, icons, and uploads fail unless
-`[media.s3]`'s `public_endpoint` and `public_base_url` name `localhost` with their ports
-forwarded the same way, or the deployment serves them over HTTPS. A call's media is UDP, which
+Attachments, icons, and uploads come from `[media.s3]`'s `public_endpoint` and `public_base_url`,
+which must then name `localhost` too, with their ports forwarded the same way, or be HTTPS. A call's media is UDP, which
 `adb reverse` does not carry, so the phone must reach the voice server over the network.
 
 **Debugging.** `chrome://inspect` in desktop Chrome opens DevTools on the app's web view;

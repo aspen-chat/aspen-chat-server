@@ -813,6 +813,7 @@
   "changeServer": "Change",
   "continue": "Continue",
   "invalidServerUrl": "Enter a deployment URL such as chat.example.org.",
+  "insecureServerUrl": "Aspen connects to a deployment over HTTPS only. Enter its https:// address, or ask its administrators to serve it over HTTPS.",
   "loading": "Loading…",
   "retry": "Retry",
   "notFoundHeading": "There is nothing here.",
@@ -1357,7 +1358,6 @@
   "describeFailed": "The description could not be saved: {reason}",
   "tooManyAttachments": "A message may carry at most {max, plural, one {# attachment} other {# attachments}}. Send the rest in another message.",
   "imageAlt": "Image: {name}",
-  "openImage": "Open image",
   "viewAllImages": "View all {count, plural, one {# image} other {# images}}",
   "moreImages": "+{count, number}",
   "gallery": {

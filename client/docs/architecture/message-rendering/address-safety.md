@@ -9,7 +9,7 @@ on writes some of them.**
 | Check | Allows | Used for |
 | --- | --- | --- |
 | `webPageUrl` | `http:`, `https:` | Pages to open: a link preview's, a plugin card's or annotation's. |
-| `mediaUrl` | `https:`; `http:` at a loopback host, or while the page is itself served over plain HTTP (as a development deployment is) | Files a deployment serves: attachments, previews, icons. |
+| `mediaUrl` | `https:`; `http:` at a loopback host in a development build (`securelyReached`, see [Transport](#transport)) | Files a deployment serves: attachments, previews, icons. |
 | `mailtoUrl` | A `mailto:` link of the address alone, everything but its `@` encoded | A person's shown email address. It cannot add recipients, a subject, or a body. |
 
 - An attachment at any other address is unavailable.
@@ -40,3 +40,30 @@ The phone apps do the same with a Capacitor plugin that Capacitor asks about eac
 
 - An address outside the app leaves it only when it is `http:`, `https:`, or `mailto:`.
 - Any other is dropped.
+
+## Transport
+
+**The client connects to nothing, and loads nothing, over plain HTTP.** A web page it hands the
+system to open may be `http:`, but what the app reaches itself is `https:` or `wss:` alone
+(`securelyReached`, in `@aspen/protocol`'s `urls.ts`):
+
+| What | Where it is checked |
+| --- | --- |
+| The deployment, entered or remembered | `normalizeServerUrl` (`ServerForm` says why it refuses one); `defaultServerUrl` treats a remembered plain address as none |
+| Every request to it, and its event stream | `AspenClient`'s constructor; `eventStreamUrl` |
+| A voice server | Its candidates over plain HTTP are left out of a join, untried and unblamed; with none left, the join fails |
+| Uploads to storage | `uploadAttachment`, `uploadIcon` |
+| Pictures, videos, icons | `mediaUrl` |
+| The push relay | `RelayClient`'s constructor |
+| The desktop app's passkey page | `securePage` in `passkeyHandoff.ts` |
+
+The shells' Content Security Policy (`shellPolicy` in `vite.config.ts`) allows the same. iOS has no
+transport security exception, and Android's release build allows no cleartext.
+
+A development build may reach this machine's own addresses (`localhost`, a name under it, a
+loopback address) over plain HTTP, since its dev server and tests run there: the dev server's
+build, and a shell built with `VITE_ALLOW_LOOPBACK_HTTP=1`, which `main.tsx` passes to
+`allowLoopbackPlainText`. Android's debug build allows cleartext to `localhost` alone. A release
+build sets neither. The desktop app's passkey hand-off returns to a listener on
+`http://127.0.0.1`, which RFC 8252 prescribes for a native app's loopback redirect; nothing is
+fetched from it.

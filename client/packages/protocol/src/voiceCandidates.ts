@@ -1,6 +1,7 @@
 /** Ranking a join offer's voice server candidates, and the signalling URL of each. */
 
 import type { components } from "./generated/openapi";
+import { requireSecure } from "./urls";
 
 type VoiceServerCandidate = components["schemas"]["VoiceServerCandidate"];
 
@@ -15,10 +16,13 @@ export function rankCandidates(ranked: readonly RankedCandidate[]): RankedCandid
   return [...ranked].sort((a, b) => a.latencyMs - b.latencyMs);
 }
 
-/** The signalling URL of a candidate: its `/ws` over the WebSocket scheme matching its own. */
+/**
+ * The signalling URL of a candidate: its `/ws` over the WebSocket scheme matching its own, when
+ * the client may connect to it (`requireSecure`).
+ */
 export function signallingUrl(candidate: VoiceServerCandidate): string {
   const url = new URL(candidate.url);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = `${url.pathname.replace(/\/$/, "")}/ws`;
-  return url.toString();
+  return requireSecure(url.toString());
 }

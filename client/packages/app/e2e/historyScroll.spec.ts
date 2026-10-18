@@ -787,7 +787,7 @@ for (const { name, ios } of SCROLLERS) {
     await page.waitForTimeout(1000);
     const list = page.locator("[data-message-list]");
     const view = await list.boundingBox();
-    const pictures = list.getByRole("button", { name: "Open image" });
+    const pictures = list.getByRole("button", { name: /^Image: / });
     // A picture whose middle is in view; the content moves with the finger, so a drag from
     // there stays on it.
     let picture: { x: number; y: number } | null = null;

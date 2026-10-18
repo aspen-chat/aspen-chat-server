@@ -1,3 +1,4 @@
+import { allowLoopbackPlainText } from "@aspen/protocol";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
@@ -16,6 +17,7 @@ import {
 } from "./theme/palettes";
 import { followSystemTextSize } from "./theme/systemTextSize";
 import { followTitleBar } from "./theme/titleBar";
+import { followVisibleArea } from "./theme/visibleArea";
 import { followZoom } from "./theme/zoom";
 // Aspen's own typefaces.
 import "./faces.css";
@@ -23,6 +25,9 @@ import "./faces.css";
 import "./generated/fontStacks.css";
 import "./styles.css";
 
+// Plain HTTP reaches this machine's own addresses in a development build alone, whose dev server
+// and tests run there; everything else is HTTPS.
+allowLoopbackPlainText(import.meta.env.DEV || import.meta.env.VITE_ALLOW_LOOPBACK_HTTP === "1");
 applyPalette(storedPalette());
 applyThemeMode(storedThemeMode());
 applyContrastMode(storedContrastMode());
@@ -30,6 +35,7 @@ void applyStoredFonts();
 followZoom();
 followSystemTextSize();
 followTitleBar();
+followVisibleArea();
 // The Noto faces themselves, whose rules are too long to hold up the first paint for; text in
 // their scripts shows in the system's fonts until they load.
 void import("./generated/fontFaces.css");
