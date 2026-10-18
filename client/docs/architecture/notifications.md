@@ -23,8 +23,9 @@ Each user's notification settings decide which arriving messages tell of themsel
 `RecordStore.notificationLevel` resolves a channel's level from, in order:
 
 1. the channel's own setting
-2. its community's
-3. the default
+2. its category's
+3. its community's
+4. the default
 
 `notifies(message)` decides whether a message tells of itself:
 
@@ -76,5 +77,6 @@ The files are WAV (16-bit PCM, mono, 48 kHz), which every browser and web view t
 | Setting | Where |
 | --- | --- |
 | A channel's level | The channel's menu, "Notify me about" |
+| A category's level | The category's heading menu, "Notify me about" (`categoryNotificationLevel`) |
 | A community's level | Community settings (`CommunityNotifications`) |
 | The two device preferences | Settings (`NotificationsSection`) |

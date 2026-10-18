@@ -7,7 +7,7 @@ import {
   ProhibitIcon,
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
-import { useRef, useState, type ReactNode, type RefObject } from "react";
+import { useRef, type ReactNode, type RefObject } from "react";
 import { Button } from "react-aria-components";
 import {
   useBlocked,
@@ -22,6 +22,7 @@ import { Avatar } from "@/features/communities/Avatar";
 import { ProfilePopover } from "@/features/users/ProfileCard";
 import { useNameIn } from "@/features/users/nameIn";
 import { ParticipantMenu, ParticipantMenuButton } from "@/features/voice/ParticipantMenu";
+import { useContextMenu } from "@/features/layout/contextMenuState";
 import { visibleParticipants } from "@/features/voice/voiceList";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -85,7 +86,8 @@ function ParticipantRow({
   const blocked = useBlocked(userId);
   const name = useNameIn(user, useChannel(channelId)?.community) ?? m.unknownUser;
   const row = useRef<HTMLLIElement>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const menu = useContextMenu();
+  const menuButton = useRef<HTMLButtonElement>(null);
   const avatar = (
     <span
       className={
@@ -106,9 +108,8 @@ function ParticipantRow({
       data-voice-user={userId}
       data-speaking={speaking ? "true" : undefined}
       onContextMenu={(event) => {
-        if (!self) {
-          event.preventDefault();
-          setMenuOpen(true);
+        if (user !== undefined) {
+          menu.onContextMenu(event);
         }
       }}
       className="group/participant flex items-center gap-1.5 rounded-md px-2 py-0.5 text-sm text-ink-muted"
@@ -148,25 +149,23 @@ function ParticipantRow({
         )
       )}
       {!self && (
-        <>
-          <ParticipantMenuButton
-            name={name}
-            onPress={() => {
-              setMenuOpen((open) => !open);
-            }}
-            className="tap-target ms-auto opacity-0 group-hover/participant:opacity-100 pointer-coarse:opacity-100 focus-visible:opacity-100 data-[pressed]:opacity-100"
-          />
-          <ParticipantMenu
-            channelId={channelId}
-            userId={userId}
-            name={name}
-            muted={muted}
-            sharing={sharingScreen}
-            anchorRef={row}
-            isOpen={menuOpen}
-            onOpenChange={setMenuOpen}
-          />
-        </>
+        <ParticipantMenuButton
+          ref={menuButton}
+          name={name}
+          onPress={menu.toggleFromButton}
+          className="tap-target ms-auto opacity-0 group-hover/participant:opacity-100 pointer-coarse:opacity-100 focus-visible:opacity-100 data-[pressed]:opacity-100"
+        />
+      )}
+      {menu.opened && user !== undefined && (
+        <ParticipantMenu
+          channelId={channelId}
+          user={user}
+          name={name}
+          muted={muted}
+          sharing={sharingScreen}
+          menu={menu}
+          button={menuButton}
+        />
       )}
     </li>
   );
@@ -213,7 +212,8 @@ export function Identity({
     return button;
   }
   return (
-    <ProfilePopover user={user} placement="end" anchorRef={anchorRef}>
+    // The row's or tile's menu holds the person's, so the card's own is not offered too.
+    <ProfilePopover user={user} placement="end" anchorRef={anchorRef} contextMenu={false}>
       {button}
     </ProfilePopover>
   );

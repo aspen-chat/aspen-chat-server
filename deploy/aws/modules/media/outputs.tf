@@ -31,6 +31,11 @@ output "public_prefixes" {
   value       = local.public_prefixes
 }
 
+output "cors_origins" {
+  description = "The origins the read path lets read what it serves."
+  value       = aws_cloudfront_response_headers_policy.media.cors_config[0].access_control_allow_origins[0].items
+}
+
 output "bucket_arn" {
   value = aws_s3_bucket.media.arn
 }

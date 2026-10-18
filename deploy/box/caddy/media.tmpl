@@ -1,5 +1,6 @@
 # The bundled storage, at an origin of its own. Downloads are the four prefixes clients read
-# and nothing else (docs/operators/installing/storage-read-path.md); everything under the
+# and nothing else (docs/operators/installing/storage-read-path.md), which any origin may read,
+# as the apps do to save or copy a picture; everything under the
 # bucket's own name is the S3 API, which answers only what the server signed: uploads, and
 # the files of deleted messages for those reviewing reports.
 ${media_domain} {
@@ -27,6 +28,7 @@ ${media_domain} {
 	}
 	handle @public {
 		header X-Content-Type-Options nosniff
+		header Access-Control-Allow-Origin *
 		reverse_proxy 127.0.0.1:3902 {
 			# Garage's web endpoint serves the bucket the request's host names.
 			header_up Host ${bucket}

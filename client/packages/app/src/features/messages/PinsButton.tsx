@@ -10,6 +10,7 @@ import {
   listedActionClass,
 } from "@/features/messages/ListedMessage";
 import { useMessages } from "@/i18n/context";
+import { IconAction } from "@/features/layout/IconAction";
 import { format } from "@/i18n/messages";
 
 /** The channel header's pin control and the list of the channel's pins it opens, newest first. */
@@ -118,17 +119,14 @@ function PinnedMessage({
       onJump={onJump}
       actions={
         mayPin && (
-          <Tooltip text={m.pins.unpin}>
-            <Button
-              aria-label={m.pins.unpin}
-              onPress={() => {
-                void sync.setPinned(messageId, false).catch(() => undefined);
-              }}
-              className={listedActionClass}
-            >
-              <PushPinSlashIcon size={16} aria-hidden="true" />
-            </Button>
-          </Tooltip>
+          <IconAction
+            label={m.pins.unpin}
+            onPress={() => {
+              void sync.setPinned(messageId, false).catch(() => undefined);
+            }}
+            className={listedActionClass}
+            icon={<PushPinSlashIcon size={16} aria-hidden="true" />}
+          />
         )
       }
     />

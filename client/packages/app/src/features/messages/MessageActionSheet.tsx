@@ -14,11 +14,16 @@ import { EmojiKey } from "@/features/messages/Reactions";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
-/** A quick reaction's button, and the Add a reaction button beside them: round, finger sized. */
+/**
+ * A quick reaction's button, and the Add a reaction button beside them: round, finger sized in
+ * a touch screen's sheet, smaller in a context menu (`compact`).
+ */
 const quickClass =
-  "flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-transparent " +
+  "flex shrink-0 items-center justify-center rounded-full border border-transparent " +
   "bg-surface-hover text-ink-muted outline-none pressed:opacity-80 " +
   "focus-visible:ring-2 focus-visible:ring-accent/50";
+const fingerSize = "h-12 w-12";
+const compactSize = "h-8 w-8 text-xs [&_svg]:h-4.5 [&_svg]:w-4.5";
 
 /**
  * A touch screen's actions on a message, opened by a long press on it (`MessageItem`): a sheet
@@ -78,19 +83,23 @@ export function MessageActionSheet({
 /**
  * The emoji the reader reacts with most here, topped up with the defaults (`quickReactions`),
  * each a toggle of their reaction, then the Add a reaction button. Until the reader's most used
- * are read, the room they will take.
+ * are read, the room they will take. `compact`, they are drawn for a pointer, as in a message's
+ * context menu, rather than for a finger.
  */
-function QuickReactions({
+export function QuickReactions({
   messageId,
   communityId,
+  compact = false,
   onDone,
   onMore,
 }: {
   messageId: string;
   communityId: string | null;
+  compact?: boolean;
   onDone: () => void;
   onMore: () => void;
 }) {
+  const size = compact ? compactSize : fingerSize;
   const m = useMessages();
   const frequent = useFrequentEmoji(communityId);
   const custom = useCustomEmoji(communityId ?? "");
@@ -104,11 +113,14 @@ function QuickReactions({
       role="group"
       aria-label={m.quickReactions}
       aria-busy={chosen === undefined}
-      className="flex items-center justify-between gap-2 px-4 pt-1 pb-2"
+      className={
+        "flex items-center justify-between " +
+        (compact ? "gap-0.5 px-1 pt-0.5 pb-1.5" : "gap-2 px-4 pt-1 pb-2")
+      }
     >
       {chosen === undefined
         ? Array.from({ length: QUICK_REACTIONS }, (_, i) => (
-            <Skeleton key={i} className="h-12 w-12 shrink-0 rounded-full" />
+            <Skeleton key={i} className={size + " shrink-0 rounded-full"} />
           ))
         : chosen.map((emoji) => (
             <QuickReaction
@@ -116,13 +128,14 @@ function QuickReactions({
               messageId={messageId}
               communityId={communityId}
               emoji={emoji}
+              className={quickClass + " " + size}
               onDone={onDone}
             />
           ))}
       <IconAction
         label={m.addReaction}
         onPress={onMore}
-        className={quickClass}
+        className={quickClass + " " + size}
         icon={<SmileyIcon size={ACTION_ICON} aria-hidden="true" />}
       />
     </div>
@@ -137,11 +150,13 @@ function QuickReaction({
   messageId,
   communityId,
   emoji,
+  className,
   onDone,
 }: {
   messageId: string;
   communityId: string | null;
   emoji: string;
+  className: string;
   onDone: () => void;
 }) {
   const m = useMessages();
@@ -161,7 +176,7 @@ function QuickReaction({
           toast(e instanceof ApiProblemError ? e.message : String(e));
         });
       }}
-      className={quickClass + " selected:border-ink-faint"}
+      className={className + " selected:border-ink-faint"}
     >
       <EmojiKey emoji={emoji} communityId={communityId} />
     </ToggleButton>

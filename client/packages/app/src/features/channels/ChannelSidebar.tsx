@@ -25,6 +25,7 @@ import {
   useCan,
   useDeploymentCan,
   useCategories,
+  useCategoryMute,
   useMe,
   useMemberRoles,
   usePluginKind,
@@ -37,6 +38,7 @@ import {
   useUnread,
 } from "@/api/hooks";
 import { DeleteChannelDialog, RenameChannelDialog } from "@/features/channels/ChannelDialogs";
+import { CategoryMenu } from "@/features/channels/CategoryMenu";
 import { ChannelMenu, ChannelMenuButton } from "@/features/channels/ChannelMenu";
 import { MuteBell } from "@/features/channels/MuteBell";
 import { AddDialog } from "@/features/channels/AddDialog";
@@ -49,6 +51,7 @@ import { headerIconButtonClass } from "@/features/layout/headerButton";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { SidebarFooter } from "@/features/layout/SidebarFooter";
 import { SidebarHeader } from "@/features/layout/SidebarHeader";
+import { claimContextMenu, useContextMenu } from "@/features/layout/contextMenuState";
 import { VoiceParticipants } from "@/features/voice/VoiceParticipants";
 import { MentionBadge } from "@/features/mentions/MentionBadge";
 import { mentionsText } from "@/features/mentions/mentions";
@@ -56,7 +59,6 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useDomain, channelLink } from "@/features/messages/links";
 import { CopyIdButton } from "@/features/layout/CopyId";
-import { OnceOpen } from "@/features/layout/OnceOpen";
 
 /**
  * The drag type channel rows carry, so a channel can be dropped into any channel group but
@@ -78,14 +80,44 @@ export function ChannelSidebar({ community }: { community: Community }) {
   const moderating = held === undefined && (access?.moderator ?? false);
   const manageInvites = useCan(community.id, "manageInvites");
   const { topLevel, byCategory } = groupChannels(channels, categories);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   return (
     // A landmark named by its heading, holding the channels and the user's own controls.
     <section
       aria-labelledby={headingId}
       className="relative flex h-full flex-col border-e border-line bg-surface-raised"
     >
-      <SidebarHeader headingId={headingId} title={community.name}>
-        <CommunitySettingsDialog community={community} triggerClassName={headerIconButtonClass} />
+      <SidebarHeader
+        headingId={headingId}
+        title={
+          // Its name opens its settings, by a click or a right click, as the wrench does.
+          <span
+            className="contents"
+            onContextMenu={(event) => {
+              if (claimContextMenu(event)) {
+                setSettingsOpen(true);
+              }
+            }}
+          >
+            <Button
+              aria-description={m.communitySettings.open}
+              onPress={() => {
+                setSettingsOpen(true);
+              }}
+              className="inline-flex max-w-full items-center gap-1 rounded outline-none hover:text-ink-muted focus-visible:ring-2 focus-visible:ring-accent/50"
+            >
+              <span className="truncate">{community.name}</span>
+              <CaretDownIcon size={14} aria-hidden="true" className="shrink-0 text-ink-faint" />
+            </Button>
+          </span>
+        }
+      >
+        <CommunitySettingsDialog
+          community={community}
+          triggerClassName={headerIconButtonClass}
+          isOpen={settingsOpen}
+          onOpenChange={setSettingsOpen}
+        />
         {(createInvites || manageInvites) && <InviteDialog community={community} />}
         <CopyIdButton id={community.id} thing="community" className="p-1.5" />
       </SidebarHeader>
@@ -122,7 +154,8 @@ export function ChannelSidebar({ community }: { community: Community }) {
 /**
  * A category's heading and channels. The heading folds the category away and back, for the
  * caller on all their devices; folded, it still shows the channel being viewed, unread ones,
- * and voice channels with someone in the call.
+ * and voice channels with someone in the call. Right-clicking the heading offers its menu
+ * (`CategoryMenu`).
  */
 function CategorySection({
   category,
@@ -141,9 +174,16 @@ function CategorySection({
   const visible = collapsed
     ? channels.filter((c) => c.id === current || shown.has(c.id))
     : channels;
+  const menu = useContextMenu();
+  const mute = useCategoryMute(category.id);
   return (
     <section className="group mt-3">
-      <div className="flex items-center gap-1 px-2 pb-1">
+      <div
+        onContextMenu={(event) => {
+          menu.onContextMenu(event);
+        }}
+        className="flex items-center gap-1 px-2 pb-1"
+      >
         <h2 className="min-w-0 flex-1">
           <Button
             aria-expanded={!collapsed}
@@ -161,9 +201,18 @@ function CategorySection({
             <span className="truncate">{category.name}</span>
           </Button>
         </h2>
+        {mute !== undefined && (
+          <MuteBell
+            mute={{ until: mute.until ?? null, category: null }}
+            className="text-ink-faint"
+          />
+        )}
         <CategoryAccessButton category={category} />
         <AddToCategoryDialog category={category} />
         <CopyIdButton id={category.id} thing="category" className="p-0.5" />
+        {menu.opened && (
+          <CategoryMenu menu={menu} category={category} channelIds={channels.map((c) => c.id)} />
+        )}
       </div>
       <ChannelGroup
         communityId={category.community}
@@ -402,11 +451,10 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
   // A moderator of the server may rename and delete any channel, and nothing else here.
   const moderator = useDeploymentCan("moderateCommunities");
   const kind = usePluginKind(channel);
-  const label = useRef<HTMLSpanElement>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const menu = useContextMenu();
+  const menuButton = useRef<HTMLButtonElement>(null);
   const [dialog, setDialog] = useState<"access" | "rename" | "delete" | null>(null);
   const marked = unread && !muted && !current;
-  const hasMenu = channel.ty === "text" || channel.ty === "plugin" || manage || moderator;
   const close = (open: boolean) => {
     if (!open) {
       setDialog(null);
@@ -426,12 +474,8 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
       : stateName;
   return (
     <span
-      ref={label}
       onContextMenu={(event) => {
-        if (hasMenu) {
-          event.preventDefault();
-          setMenuOpen(true);
-        }
+        menu.onContextMenu(event);
       }}
       className={
         "flex min-w-0 flex-1 items-center gap-1.5" +
@@ -458,44 +502,39 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
       )}
       <MentionBadge count={tags} className="ms-auto" />
       {mute !== undefined && <MuteBell mute={mute} className={tags > 0 ? "" : "ms-auto"} />}
-      {hasMenu && (
-        <>
-          <ChannelMenuButton
-            name={channel.name}
-            isOpen={menuOpen}
-            onPress={() => {
-              setMenuOpen((open) => !open);
-            }}
-            className={muted || tags > 0 ? "" : "ms-auto"}
-          />
-          <OnceOpen isOpen={menuOpen}>
-            <ChannelMenu
-              channelId={channel.id}
-              name={channel.name}
-              anchorRef={label}
-              isOpen={menuOpen}
-              onOpenChange={setMenuOpen}
-              mutable={channel.ty === "text" || channel.ty === "plugin"}
-              {...(manage
-                ? {
-                    onAccess: () => {
-                      setDialog("access");
-                    },
-                  }
-                : {})}
-              {...(manage || moderator
-                ? {
-                    onRename: () => {
-                      setDialog("rename");
-                    },
-                    onDelete: () => {
-                      setDialog("delete");
-                    },
-                  }
-                : {})}
-            />
-          </OnceOpen>
-        </>
+      <ChannelMenuButton
+        ref={menuButton}
+        name={channel.name}
+        isOpen={menu.isOpen}
+        onPress={menu.toggleFromButton}
+        className={muted || tags > 0 ? "" : "ms-auto"}
+      />
+      {menu.opened && (
+        <ChannelMenu
+          channelId={channel.id}
+          name={channel.name}
+          menu={menu}
+          button={menuButton}
+          mutable={channel.ty === "text" || channel.ty === "plugin"}
+          voice={channel.ty === "voice"}
+          {...(manage
+            ? {
+                onAccess: () => {
+                  setDialog("access");
+                },
+              }
+            : {})}
+          {...(manage || moderator
+            ? {
+                onRename: () => {
+                  setDialog("rename");
+                },
+                onDelete: () => {
+                  setDialog("delete");
+                },
+              }
+            : {})}
+        />
       )}
       {manage && channel.community != null && (
         <AccessDialog

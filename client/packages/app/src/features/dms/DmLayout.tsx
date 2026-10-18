@@ -24,6 +24,7 @@ import { channelLink, useDomain } from "@/features/messages/links";
 import { MentionBadge } from "@/features/mentions/MentionBadge";
 import { mentionsText } from "@/features/mentions/mentions";
 import { ChannelMenu, ChannelMenuButton } from "@/features/channels/ChannelMenu";
+import { useContextMenu } from "@/features/layout/contextMenuState";
 import { MuteBell } from "@/features/channels/MuteBell";
 import { Avatar } from "@/features/communities/Avatar";
 import { MAX_DM_PEOPLE } from "@/features/dms/DmHeader";
@@ -40,7 +41,6 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useOnePane } from "@/features/layout/useMediaQuery";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
-import { OnceOpen } from "@/features/layout/OnceOpen";
 import { useDocumentTitle } from "@/features/layout/documentTitle";
 
 /**
@@ -226,7 +226,8 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
   const muted = mute !== undefined;
   const calling = useChannelVoice(dm.id).participants.length > 0;
   const row = useRef<HTMLDivElement>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const menu = useContextMenu();
+  const menuButton = useRef<HTMLButtonElement>(null);
   const stateName = muted
     ? format(m.mutedLabel, { name: title })
     : unread
@@ -290,13 +291,13 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
     <div
       ref={row}
       onContextMenu={(event) => {
-        event.preventDefault();
-        setMenuOpen(true);
+        menu.onContextMenu(event);
       }}
       className="group relative"
     >
       {current && dm.ty === "dm" && first !== undefined ? (
-        <ProfilePopover user={first} placement="end" anchorRef={row}>
+        // The row's menu holds the person's, so the card's own is not offered too.
+        <ProfilePopover user={first} placement="end" anchorRef={row} contextMenu={false}>
           <Button
             aria-current="page"
             aria-label={format(m.profile.show, { name: accessibleName ?? title })}
@@ -324,22 +325,21 @@ function DmRow({ dm, domain, current }: { dm: Channel; domain: string | null; cu
       >
         {mute !== undefined && <MuteBell mute={mute} />}
         <ChannelMenuButton
+          ref={menuButton}
           name={title}
-          isOpen={menuOpen}
-          onPress={() => {
-            setMenuOpen((open) => !open);
-          }}
+          isOpen={menu.isOpen}
+          onPress={menu.toggleFromButton}
         />
       </span>
-      <OnceOpen isOpen={menuOpen}>
+      {menu.opened && (
         <ChannelMenu
           channelId={dm.id}
           name={title}
-          anchorRef={row}
-          isOpen={menuOpen}
-          onOpenChange={setMenuOpen}
+          menu={menu}
+          button={menuButton}
+          user={dm.ty === "dm" ? first : undefined}
         />
-      </OnceOpen>
+      )}
     </div>
   );
 }

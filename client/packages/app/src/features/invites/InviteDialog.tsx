@@ -66,17 +66,41 @@ export function InviteDialog({ community }: { community: Community }) {
           <UserPlusIcon size={18} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ModalOverlay className={overlayClass} isDismissable>
-        <Modal className={modalClass}>
-          <Dialog className={dialogClass}>
-            <DialogHeading>
-              {format(m.inviteDialogHeading, { community: community.name })}
-            </DialogHeading>
-            <InviteManager communityId={community.id} />
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
+      <InviteModal community={community} />
     </DialogTrigger>
+  );
+}
+
+/**
+ * The community's invites (`InviteManager`) in a modal, opened by the trigger it is in, or by
+ * `isOpen` (from the community's menu on the rail).
+ */
+export function InviteModal({
+  community,
+  isOpen,
+  onOpenChange,
+}: {
+  community: Community;
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const m = useMessages();
+  return (
+    <ModalOverlay
+      className={overlayClass}
+      isDismissable
+      {...(isOpen === undefined ? {} : { isOpen })}
+      {...(onOpenChange === undefined ? {} : { onOpenChange })}
+    >
+      <Modal className={modalClass}>
+        <Dialog className={dialogClass}>
+          <DialogHeading>
+            {format(m.inviteDialogHeading, { community: community.name })}
+          </DialogHeading>
+          <InviteManager communityId={community.id} />
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
   );
 }
 

@@ -1,21 +1,30 @@
-import { MAX_USER_VOLUME, streamMuted, streamVolume, userMuted, userVolume } from "@aspen/protocol";
-import { DotsThreeVerticalIcon } from "@phosphor-icons/react";
-import type { RefObject } from "react";
 import {
-  Button,
-  Dialog,
-  Label,
-  Menu,
-  MenuItem,
-  Popover,
-  Slider,
-  SliderOutput,
-} from "react-aria-components";
+  MAX_USER_VOLUME,
+  streamMuted,
+  streamVolume,
+  userMuted,
+  userVolume,
+  type User,
+} from "@aspen/protocol";
+import {
+  DotsThreeVerticalIcon,
+  MicrophoneSlashIcon,
+  MonitorIcon,
+  PhoneDisconnectIcon,
+  SpeakerHighIcon,
+  SpeakerSlashIcon,
+} from "@phosphor-icons/react";
+import type { RefObject } from "react";
+import { Button, Label, Slider, SliderOutput, type PressEvent } from "react-aria-components";
+import type { ContextMenuState } from "@/features/layout/contextMenuState";
+import { MenuAction } from "@/features/layout/menu";
 import { SliderRail } from "@/features/layout/SliderRail";
+import { UserMenu } from "@/features/users/UserMenu";
 import {
   useBlocked,
   useChannel,
   useChannelCan,
+  useMe,
   usePreference,
   useSync,
   useVoiceMuted,
@@ -24,37 +33,62 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
 const STEP = 5;
-const itemClass =
-  "cursor-default rounded px-2 py-1 text-sm outline-none focus:bg-surface-hover data-[danger]:text-danger";
 
 /**
- * Everything one can do to another person in a call, opened by right-clicking them or by the
- * dots button beside them: how loud they are to this user alone, silencing them for this user
- * alone (their volume is kept for when they are unmuted), the same for the sound of a screen
- * they share, set apart from their voice, and moderation (server mute or unmute, removal),
- * offered only with Manage calls.
+ * Everything one can do to someone in a call, opened by right-clicking them (`menu`) or by the
+ * dots button beside them (`button`): their menu (`UserMenu`), and above it, for someone else,
+ * how loud they are to this user alone, then silencing them for this user alone (their volume
+ * is kept for when they are unmuted), the same for the sound of a screen they share, set apart
+ * from their voice, and moderation (server mute or unmute, removal), offered only with Manage
+ * calls.
  */
 export function ParticipantMenu({
   channelId,
-  userId,
+  user,
   name,
   muted,
   sharing = false,
-  anchorRef,
-  isOpen,
-  onOpenChange,
+  menu,
+  button,
 }: {
   channelId: string;
-  userId: string;
+  user: User;
   name: string;
   /** Server-muted, as the participant record says. */
   muted: boolean;
   /** Sharing a screen, whose sound then has a volume of its own. */
   sharing?: boolean;
-  anchorRef: RefObject<HTMLElement | null>;
-  isOpen: boolean;
-  onOpenChange: (open: boolean) => void;
+  menu: ContextMenuState;
+  button: RefObject<HTMLElement | null>;
 }) {
+  const m = useMessages();
+  const self = useMe()?.id === user.id;
+  const community = useChannel(channelId)?.community ?? null;
+  return (
+    <UserMenu
+      menu={menu}
+      label={format(m.voice.participantActions, { name })}
+      user={user}
+      communityId={community}
+      button={button}
+      placement="end"
+      {...(self
+        ? {}
+        : {
+            header: <CallVolumes userId={user.id} sharing={sharing} />,
+            children: (
+              <CallItems channelId={channelId} userId={user.id} muted={muted} sharing={sharing} />
+            ),
+          })}
+    />
+  );
+}
+
+/**
+ * How loud someone else is to this user alone, and the sound of the screen they share apart
+ * from their voice; or, while they are blocked, that they are silenced.
+ */
+function CallVolumes({ userId, sharing }: { userId: string; sharing: boolean }) {
   const m = useMessages();
   const sync = useSync();
   const gain = usePreference(userVolume(userId));
@@ -62,83 +96,100 @@ export function ParticipantMenu({
   const streamGain = usePreference(streamVolume(userId));
   const streamMutedForMe = usePreference(streamMuted(userId));
   const blocked = useBlocked(userId);
+  return (
+    <div className="flex flex-col gap-2 border-b border-line px-1 pt-1 pb-2">
+      <VolumeSlider
+        label={sharing ? m.voice.voiceVolume : m.voice.volume}
+        gain={gain}
+        isDisabled={mutedForMe || blocked}
+        onChange={(value) => {
+          void sync.setUserVolume(userId, value).catch(() => undefined);
+        }}
+      />
+      {sharing && !blocked && (
+        <VolumeSlider
+          label={m.voice.streamVolume}
+          gain={streamGain}
+          isDisabled={streamMutedForMe}
+          onChange={(value) => {
+            void sync.setStreamVolume(userId, value).catch(() => undefined);
+          }}
+        />
+      )}
+      {blocked && <p className="px-1 text-xs text-ink-muted">{m.blocking.blockedInCall}</p>}
+    </div>
+  );
+}
+
+/** A call's own items of someone else's menu, inside it. */
+function CallItems({
+  channelId,
+  userId,
+  muted,
+  sharing,
+}: {
+  channelId: string;
+  userId: string;
+  muted: boolean;
+  sharing: boolean;
+}) {
+  const m = useMessages();
+  const sync = useSync();
+  const mutedForMe = usePreference(userMuted(userId));
+  const streamMutedForMe = usePreference(streamMuted(userId));
+  const blocked = useBlocked(userId);
   const moderate = useChannelCan(channelId, "manageCalls");
   // The community's mute, which outlasts the call; the participant's record until it is read.
   const serverMuted =
     useVoiceMuted(useChannel(channelId)?.community ?? null, userId, moderate) ?? muted;
-  const label = format(m.voice.participantActions, { name });
   return (
-    <Popover
-      triggerRef={anchorRef}
-      isOpen={isOpen}
-      onOpenChange={onOpenChange}
-      placement="end"
-      className="w-64 rounded-md border border-line bg-surface-raised p-2 shadow-lg"
-    >
-      <Dialog aria-label={label} className="flex flex-col gap-2 outline-none">
-        <VolumeSlider
-          label={sharing ? m.voice.voiceVolume : m.voice.volume}
-          gain={gain}
-          isDisabled={mutedForMe || blocked}
-          onChange={(value) => {
-            void sync.setUserVolume(userId, value).catch(() => undefined);
+    <>
+      {!blocked && (
+        <MenuAction
+          label={mutedForMe ? m.voice.unmuteForMe : m.voice.muteForMe}
+          icon={
+            mutedForMe ? (
+              <SpeakerHighIcon aria-hidden="true" />
+            ) : (
+              <SpeakerSlashIcon aria-hidden="true" />
+            )
+          }
+          onAction={() => {
+            void sync.setUserMuted(userId, !mutedForMe).catch(() => undefined);
           }}
         />
-        {sharing && !blocked && (
-          <VolumeSlider
-            label={m.voice.streamVolume}
-            gain={streamGain}
-            isDisabled={streamMutedForMe}
-            onChange={(value) => {
-              void sync.setStreamVolume(userId, value).catch(() => undefined);
+      )}
+      {!blocked && sharing && (
+        <MenuAction
+          label={streamMutedForMe ? m.voice.unmuteStreamForMe : m.voice.muteStreamForMe}
+          icon={<MonitorIcon aria-hidden="true" />}
+          onAction={() => {
+            void sync.setStreamMuted(userId, !streamMutedForMe).catch(() => undefined);
+          }}
+        />
+      )}
+      {moderate && (
+        <>
+          <MenuAction
+            label={serverMuted ? m.voice.serverUnmute : m.voice.serverMute}
+            icon={<MicrophoneSlashIcon aria-hidden="true" />}
+            onAction={() => {
+              void sync
+                .muteVoiceParticipant(channelId, userId, !serverMuted)
+                .catch(() => undefined);
             }}
           />
-        )}
-        {blocked && <p className="px-1 text-xs text-ink-muted">{m.blocking.blockedInCall}</p>}
-        {(!blocked || moderate) && (
-          <Menu
-            aria-label={label}
-            className="border-t border-line pt-1 outline-none"
-            onAction={(key) => {
-              if (key === "muteForMe") {
-                void sync.setUserMuted(userId, !mutedForMe).catch(() => undefined);
-              } else if (key === "muteStreamForMe") {
-                void sync.setStreamMuted(userId, !streamMutedForMe).catch(() => undefined);
-              } else if (key === "serverMute") {
-                onOpenChange(false);
-                void sync
-                  .muteVoiceParticipant(channelId, userId, !serverMuted)
-                  .catch(() => undefined);
-              } else if (key === "kick") {
-                onOpenChange(false);
-                void sync.kickVoiceParticipant(channelId, userId).catch(() => undefined);
-              }
+          <MenuAction
+            label={m.voice.removeFromCall}
+            icon={<PhoneDisconnectIcon aria-hidden="true" />}
+            danger
+            onAction={() => {
+              void sync.kickVoiceParticipant(channelId, userId).catch(() => undefined);
             }}
-          >
-            {!blocked && (
-              <MenuItem id="muteForMe" className={itemClass}>
-                {mutedForMe ? m.voice.unmuteForMe : m.voice.muteForMe}
-              </MenuItem>
-            )}
-            {!blocked && sharing && (
-              <MenuItem id="muteStreamForMe" className={itemClass}>
-                {streamMutedForMe ? m.voice.unmuteStreamForMe : m.voice.muteStreamForMe}
-              </MenuItem>
-            )}
-            {moderate && (
-              <>
-                <MenuItem id="serverMute" className={itemClass}>
-                  {serverMuted ? m.voice.serverUnmute : m.voice.serverMute}
-                </MenuItem>
-                <MenuItem id="kick" className={itemClass} data-danger="true">
-                  {m.voice.removeFromCall}
-                </MenuItem>
-              </>
-            )}
-          </Menu>
-        )}
-      </Dialog>
-    </Popover>
+          />
+        </>
+      )}
+    </>
   );
 }
 
@@ -183,17 +234,23 @@ function VolumeSlider({
 export function ParticipantMenuButton({
   name,
   onPress,
+  ref,
   className,
 }: {
   name: string;
-  onPress: () => void;
+  /** Pressed, from the keyboard (`byKeyboard`) or not. */
+  onPress: (byKeyboard: boolean) => void;
+  ref?: RefObject<HTMLButtonElement | null>;
   className?: string;
 }) {
   const m = useMessages();
   return (
     <Button
+      ref={ref}
       aria-label={format(m.voice.participantActions, { name })}
-      onPress={onPress}
+      onPress={(event: PressEvent) => {
+        onPress(event.pointerType === "keyboard");
+      }}
       className={
         "rounded-md p-0.5 text-ink-faint outline-none hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 " +
         (className ?? "")

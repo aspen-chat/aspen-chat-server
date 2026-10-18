@@ -10,7 +10,8 @@
 | Marking read | `MessageList`, `AspenSync.markRead` |
 | Marking unread | `AspenSync.markUnread`, `markUnread`, `MarkUnreadButton`, `ChannelMenu`, `unreadHeld` |
 | Thread positions | `threadRead` (topic `read:<threadId>`) |
-| Mutes | `replaceMutes`, `useMute`, `MuteBell`, `useMuteEnd`, `nextMuteEnd`, `expireMutes` |
+| Mutes | `replaceMutes`, `useMute`, `useOwnMute`, `useCategoryMute`, `MuteBell`, `useMuteEnd`, `nextMuteEnd`, `expireMutes` |
+| Mute and Notifications submenus | `ChannelMuteSubmenu`, `CategoryMuteSubmenu`, `NotificationsSubmenu` (`src/features/channels/muteMenus.tsx`) |
 | The channel menu | `ChannelMenu`, `ChannelMenuButton` (`src/features/channels`) |
 
 ## Unread
@@ -110,19 +111,26 @@ topic `read:<threadId>`):
 
 ### Store state
 
-- Mutes come from the `mutes` sideload of the community and DM lists, replaced whole at each
-  bootstrap by `replaceMutes`.
-- `channelMuteChanged` events keep them current.
+- Mutes come from the `mutes` sideload of the community and DM lists: each channel's own setting
+  (`channelMutes`, a mute or kept unmuted) and each category's mute (`categoryMutes`), replaced
+  whole at each bootstrap by `replaceMutes`.
+- `channelMuteChanged` and `categoryMuteChanged` events keep them current.
 - `AspenSync` ends timed mutes by the device's clock (`nextMuteEnd`, `expireMutes`), since the
   server announces no end it did not make.
+- `RecordStore.mute` says the mute in force on a channel (topic `mute:<channelId>`), as the server
+  decides it (`docs/architecture/muting.md`): its own setting in force, else its category's mute,
+  naming that category. A category's mute, and a channel arriving in or moving to another
+  category, touch the topic of each channel it holds. `ownMute` is the channel's own setting,
+  which the Mute submenu reads.
 
 ### A muted channel or DM
 
-A muted channel or DM (`useMute`):
+A muted channel or DM (`useMute`), by its own mute or its category's:
 
 - is drawn in `text-ink-faint`;
 - shows a muted bell (`MuteBell`): a focusable image whose tooltip says until when, in the words
-  of the Mute submenu (`useMuteEnd`). In the DM list the bell sits beside the options button
+  of the Mute submenu (`useMuteEnd`), and that it is the category's when it is. A muted
+  category's heading shows one too. In the DM list the bell sits beside the options button
   rather than in the row's link, which may hold nothing focusable;
 - is never marked unread;
 - does not count toward `unreadPlaces`.
@@ -136,14 +144,28 @@ still shows inside it.
 
 | Submenu | Offers |
 | --- | --- |
-| Mute | One of the offered lengths; or, while muted, until when and Unmute |
+| Mute | See below; it reads until when in its own place while the channel is muted |
 | Notifications | Names the level in force |
+
+Mute and Notifications are offered on a text channel, a DM, and a channel of a plugin's kind
+(whose plugin's notices its mute and level govern). The menu holds more besides; see
+[context-menus.md](context-menus.md).
+
+The Mute submenu (`ChannelMuteSubmenu`) offers, by the channel's state:
+
+| State | Offers |
+| --- | --- |
+| Not muted | The lengths of mute |
+| Muted by its own mute | Unmute: removing its own mute, or, while its category is muted too, keeping it unmuted, since removing it would leave it muted with the category |
+| Muted with its category | Keep unmuted |
+| Kept unmuted inside a muted category | The lengths of mute, and Follow its category, which removes its own setting |
+
+A category's heading menu has a Mute submenu of its own (`CategoryMuteSubmenu`): the lengths, or
+until when and Unmute.
 
 It opens:
 
-- on a right click on the row of a text channel, a DM, or a channel of a plugin's kind (whose
-  plugin's notices its mute and level govern);
+- on a right click on the channel's or DM's row, at the pointer;
 - from the row's `ChannelMenuButton`, which keyboards and touch screens use, since a long press on
-  a row starts dragging it.
-
-It opens beside the row, and below it on a one-pane screen, where there is no room beside it.
+  a row starts dragging it. It opens beside the button, and below it on a one-pane screen, where
+  there is no room beside it.

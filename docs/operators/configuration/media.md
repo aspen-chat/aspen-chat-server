@@ -92,6 +92,8 @@ own machine.
 `public_base_url` is an anonymous read path on the bucket, such as a website endpoint or a CDN.
 
 - It allows reading objects and nothing else: no listing, no writes.
+- It lets any origin read them (`Access-Control-Allow-Origin: *`), as the apps do to save or
+  copy a picture.
 - **Never a SeaweedFS filer.**
 - It is at an origin of its own.
 - It sends `X-Content-Type-Options: nosniff`.

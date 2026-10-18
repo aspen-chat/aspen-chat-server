@@ -233,6 +233,7 @@ export function MessageActions({
         <IconAction
           label={m.deleteMessage}
           labelled
+          danger
           className={dangerClass}
           onPress={() => {
             open("delete");
@@ -305,14 +306,13 @@ function CopyButton({
       label={label}
       labelled={labelled}
       onPress={() => {
-        if (button.current !== null) {
-          void copyText(text, button.current).then((ok) => {
-            if (ok) {
-              toast(copied);
-              onDone?.();
-            }
-          });
-        }
+        // A menu's item has no element of its own; the menu has closed by now.
+        void copyText(text, button.current ?? document.body).then((ok) => {
+          if (ok) {
+            toast(copied);
+            onDone?.();
+          }
+        });
       }}
       className={className}
       icon={icon}

@@ -257,6 +257,9 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
     <Button
       onPress={onOpen}
       aria-label={m.openImage}
+      data-media-url={picture.src}
+      data-media-name={picture.name}
+      data-media-picture
       className="inline-block max-w-full rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <img
@@ -332,6 +335,8 @@ function InlineVideo({ attachment }: { attachment: Attachment }) {
         setPlaying(true);
       }}
       aria-label={format(m.playVideo, { title: label })}
+      data-media-url={attachment.downloadUrl}
+      data-media-name={attachment.fileName}
       className="group relative inline-flex max-w-full items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <img
@@ -357,6 +362,8 @@ function FileChip({ attachment }: { attachment: Attachment }) {
   return (
     <a
       href={attachment.downloadUrl}
+      data-media-url={attachment.downloadUrl}
+      data-media-name={attachment.fileName}
       {...(attachment.description == null ? {} : { "aria-description": attachment.description })}
       target="_blank"
       rel="noreferrer noopener"

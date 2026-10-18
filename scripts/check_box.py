@@ -191,6 +191,8 @@ def check_main(images: dict) -> Box:
     for path, method in (("/", "GET"), ("/?list-type=2", "GET"), ("/evidence/x", "GET"), ("/attachments/a/b", "GET"), ("/attachments/w", "PUT")):
         expect(f"the read path refuses {method} {path}", box.status(media + path, "-X", method, resolve=resolve) in (403, 404, 405), True)
     expect("the S3 API refuses an unsigned read", box.status(f"{media}/aspen-media/evidence/x", resolve=resolve), 403)
+    allowed = box.curl("-D", "-", "-o", "/dev/null", "-H", f"Origin: https://{DOMAIN}", f"{media}/attachments/x", resolve=resolve)
+    expect("the read path lets any origin read", "access-control-allow-origin: *" in allowed.lower(), True)
     token = sign_in(box, "boxer")
     page = box.curl(f"https://{DOMAIN}/")
     build = page.split('name="aspen-web-client-build" content="', 1)[1].split('"', 1)[0]

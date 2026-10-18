@@ -4,8 +4,8 @@ Everyone's apps fetch `public_base_url` (in `[media.s3]`) without credentials.
 
 ## What it must allow
 
-It must allow exactly one thing: reading an object by its name (S3's `GetObject`), and only
-under the four prefixes clients read:
+It must allow exactly one thing: reading an object by its name (S3's `GetObject`), from any
+origin, and only under the four prefixes clients read:
 
 - `attachments/`
 - `attachment-previews/`
@@ -53,6 +53,16 @@ media.chat.example.org {
 - Serve `public_base_url` from an origin of its own (`https://media.chat.example.org`), never
   under `public_url`'s.
 - Have it (or the CDN before it) send `X-Content-Type-Options: nosniff`.
+- Have it send `Access-Control-Allow-Origin: *`, on every answer under the four prefixes. The
+  apps read a picture or file themselves to save it or copy it, and without the header the
+  browser keeps it from them. The objects are public already, and read without credentials, so
+  letting any origin read them gives away nothing more.
+
+| Storage | How to send `Access-Control-Allow-Origin` |
+| --- | --- |
+| A reverse proxy (Caddy, nginx), whatever is behind it | Add the header where it serves the four prefixes: `header Access-Control-Allow-Origin *` in Caddy's `handle @public` above, `add_header Access-Control-Allow-Origin * always;` in nginx. |
+| AWS CloudFront | A response headers policy with CORS: origins `*`, methods `GET` and `HEAD`, credentials off, and "origin override" on. |
+| AWS S3 website endpoint, MinIO | A CORS rule on the bucket allowing `GET` and `HEAD` from `*`. |
 
 ## Checking it
 
@@ -71,6 +81,7 @@ curl -s -o /dev/null -w '%{http_code}\n' "$S3?list-type=2"             # 403
 curl -s -o /dev/null -w '%{http_code}\n' -X PUT --data x "$BASE/write-check"  # 403 or 405
 curl -s -o /dev/null -w '%{http_code}\n' -X PUT --data x "$S3/write-check"    # 403
 curl -s -o /dev/null -w '%{http_code}\n' -X DELETE "$OBJECT"           # 403 or 405
+curl -sI -H "Origin: https://chat.example.org" "$OBJECT" | grep -i access-control-allow-origin  # *
 ```
 
 Then check that the read path keeps `evidence/` to itself, with the AWS command line and the
@@ -87,6 +98,10 @@ aws --endpoint-url "$ENDPOINT" s3 rm s3://aspen-media/evidence/read-check
 | A listing | Anyone can see the bucket's contents. |
 | A write | Anyone can put files at your media address. |
 | `evidence/` | Anyone holding an old link can read what was deleted. |
+
+| No `Access-Control-Allow-Origin` | Means |
+| --- | --- |
+| On a picture or file | Saving or copying a picture from its menu fails, saying the storage does not let the app read files. Showing it is unaffected. |
 
 ---
 

@@ -1,7 +1,8 @@
-//! Categories a user has collapsed in their channel list, for themself alone. Each change is
-//! published to the user's own subject as `categoryCollapseChanged`, so their other devices
-//! fold or unfold the same category.
+//! Categories a user has collapsed in their channel list, for themself alone, one at a time or a
+//! community's all at once. Each change is published to the user's own subject as
+//! `categoryCollapseChanged`, so their other devices fold or unfold the same categories.
 
+use crate::community::MAX_CHANNELS_AND_CATEGORIES;
 use crate::context::GlobalServerContext;
 use crate::visibility::Visibility;
 use crate::{CategoryId, CommunityId, EventScope, UserId, publish_event};
@@ -66,7 +67,7 @@ async fn set(
                     conn.as_mut(),
                     EventScope::User(user),
                     &ServerEvent::CategoryCollapseChanged {
-                        category: category_id,
+                        categories: vec![category_id],
                         collapsed,
                     },
                 )
@@ -75,6 +76,80 @@ async fn set(
             // Whether it was collapsed before: collapsing changed nothing if it was, and
             // expanding changed something only if it was.
             Ok::<_, crate::Error>((changed > 0) != collapsed)
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Collapses or expands every category of `community` the user may learn of, and returns them.
+/// A community holds at most `MAX_CHANNELS_AND_CATEGORIES`, so this is one bounded statement and
+/// one event, naming those that changed.
+pub async fn set_all(
+    state: &GlobalServerContext,
+    user: UserId,
+    community: CommunityId,
+    collapsed: bool,
+) -> crate::Result<Vec<CategoryId>> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            crate::permissions::require_member(conn.as_mut(), user, community).await?;
+            let visible = Visibility::load_on(conn.as_mut(), user, &[community]).await?;
+            let viewed: Vec<CategoryId> = category::table
+                .select(category::id)
+                .filter(category::community.eq(community))
+                .filter(category::deleted_at.is_null())
+                .limit(MAX_CHANNELS_AND_CATEGORIES)
+                .load::<CategoryId>(conn.as_mut())
+                .await?
+                .into_iter()
+                .filter(|category| visible.can_view_category(community, *category))
+                .collect();
+            if viewed.is_empty() {
+                return Ok(viewed);
+            }
+            let changed: Vec<CategoryId> = if collapsed {
+                let rows: Vec<_> = viewed
+                    .iter()
+                    .map(|category| {
+                        (
+                            category_collapse::user.eq(user),
+                            category_collapse::category.eq(*category),
+                        )
+                    })
+                    .collect();
+                diesel::insert_into(category_collapse::table)
+                    .values(rows)
+                    .on_conflict_do_nothing()
+                    .returning(category_collapse::category)
+                    .get_results(conn.as_mut())
+                    .await?
+            } else {
+                diesel::delete(
+                    category_collapse::table.filter(
+                        category_collapse::user
+                            .eq(user)
+                            .and(category_collapse::category.eq_any(&viewed)),
+                    ),
+                )
+                .returning(category_collapse::category)
+                .get_results(conn.as_mut())
+                .await?
+            };
+            if !changed.is_empty() {
+                publish_event(
+                    state,
+                    conn.as_mut(),
+                    EventScope::User(user),
+                    &ServerEvent::CategoryCollapseChanged {
+                        categories: changed,
+                        collapsed,
+                    },
+                )
+                .await?;
+            }
+            Ok::<_, crate::Error>(viewed)
         }
         .scope_boxed()
     })

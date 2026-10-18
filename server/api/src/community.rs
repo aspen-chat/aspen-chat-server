@@ -36,7 +36,8 @@ pub enum CommunityInclude {
     Voice,
     /// How far the caller has read each of the communities' channels, as `included.readStates`.
     ReadStates,
-    /// The caller's mutes of the communities' channels, as `included.channelMutes`.
+    /// The caller's mutes of the communities' channels, as `included.channelMutes`, and of their
+    /// categories, as `included.categoryMutes`.
     Mutes,
     /// The communities' own emoji, as `included.customEmoji`.
     Emoji,
@@ -168,9 +169,10 @@ pub async fn sideload_communities(
         async {
             match visible {
                 Some(visible) if include.contains(CommunityInclude::Mutes) => {
-                    app::channel_mute::read_community_mutes(state, visible)
-                        .await
-                        .map(Some)
+                    let channels = app::channel_mute::read_community_mutes(state, visible).await?;
+                    let categories =
+                        app::category_mute::read_category_mutes(state, visible).await?;
+                    Ok::<_, app::Error>(Some((channels, categories)))
                 }
                 _ => Ok(None),
             }
@@ -245,10 +247,17 @@ pub async fn sideload_communities(
                 .map(crate::notification_setting::NotificationSetting::from)
                 .collect()
         }),
-        channel_mutes: mutes.map(|mutes| {
+        channel_mutes: mutes.as_ref().map(|(mutes, _)| {
+            mutes
+                .iter()
+                .cloned()
+                .map(crate::channel_mute::ChannelMute::from)
+                .collect()
+        }),
+        category_mutes: mutes.map(|(_, mutes)| {
             mutes
                 .into_iter()
-                .map(crate::channel_mute::ChannelMute::from)
+                .map(crate::category_mute::CategoryMute::from)
                 .collect()
         }),
         category_collapses: collapses.map(|collapses| {

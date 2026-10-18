@@ -20,11 +20,16 @@ Who is in each channel's call is store state:
 
 - Clicking a person shows their `ProfilePopover` beside the row (anchored to the row, not the name).
   Clicking them again, or anywhere else, closes it.
-- Right-clicking a person, or the dots beside them, opens `ParticipantMenu`. It holds:
+- Right-clicking a person, or the dots beside them, opens `ParticipantMenu`: their menu
+  (`UserMenu`, see [context menus](../context-menus.md)), with the call's own controls above
+  their other items. Those are:
   - how loud they are to this user alone;
   - "mute for me";
   - while they share a screen, the same two for its sound apart from their voice;
   - the moderation actions (see [muting and moderation](muting-and-moderation.md)).
+- The user's own row has no dots; right-clicking it opens their own menu alone.
+- Their name's profile card offers no menu of its own there (`contextMenu={false}`), since the
+  row's holds it.
 
 ## Per-person volume and muting
 

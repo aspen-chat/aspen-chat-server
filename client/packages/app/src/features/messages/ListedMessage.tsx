@@ -1,9 +1,18 @@
 import type { Message } from "@aspen/protocol";
-import { Link, type LinkComponentProps } from "@tanstack/react-router";
+import { ArrowBendDownRightIcon, CopyIcon, LinkIcon } from "@phosphor-icons/react";
+import { Link, useNavigate, type LinkComponentProps } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { Menu } from "react-aria-components";
+import { useAspenClient } from "@/api/context";
 import { useBlocked } from "@/api/hooks";
+import { ActionsAsMenuItems } from "@/features/layout/actionsAsMenuItems";
+import { copyText } from "@/features/layout/clipboard";
+import { ContextMenu } from "@/features/layout/ContextMenu";
+import { useContextMenu, type ContextMenuState } from "@/features/layout/contextMenuState";
+import { MenuAction, menuClass } from "@/features/layout/menu";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
-import type { ChannelHome } from "@/features/messages/links";
+import { toast } from "@/features/layout/toast";
+import { messageUrl, type ChannelHome } from "@/features/messages/links";
 import { MessageBody } from "@/features/messages/MessageBody";
 import { PersonAvatar, PersonName } from "@/features/users/PersonName";
 import { useMessages } from "@/i18n/context";
@@ -25,7 +34,8 @@ export const listedActionClass =
  * the way to it, `mark` before the name, and `children` below the message. A message by someone
  * the reader blocked is not quoted; going to it opens it. `undefined` while it is on its way.
  * Its text is the size of the list it stands in, which sets one: `text-sm`, or `message-text`
- * to follow the reader's message text size.
+ * to follow the reader's message text size. Right-clicking it offers the same by name
+ * (`ListedMessageMenu`).
  */
 export function ListedMessage({
   message,
@@ -49,8 +59,26 @@ export function ListedMessage({
   const m = useMessages();
   const blocked = useBlocked(message?.author);
   const time = useDateFormat(TIME);
+  const menu = useContextMenu();
   return (
-    <li className="flex gap-2 rounded-md px-2 py-1.5 hover:bg-surface-hover">
+    <li
+      onContextMenu={(event) => {
+        if (message !== undefined) {
+          menu.onContextMenu(event);
+        }
+      }}
+      className="flex gap-2 rounded-md px-2 py-1.5 hover:bg-surface-hover"
+    >
+      {menu.opened && message !== undefined && (
+        <ListedMessageMenu
+          menu={menu}
+          message={message}
+          home={home}
+          link={link}
+          {...(onJump === undefined ? {} : { onJump })}
+          actions={actions}
+        />
+      )}
       <PersonAvatar id={message?.author} size="sm" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex items-baseline gap-2">
@@ -97,6 +125,80 @@ export function ListedMessage({
         {children}
       </div>
     </li>
+  );
+}
+
+/**
+ * A listed message's menu: going to it, its row's `actions` by name (each an `IconAction`), and
+ * copying its text and the link to it.
+ */
+function ListedMessageMenu({
+  menu,
+  message,
+  home,
+  link,
+  onJump,
+  actions,
+}: {
+  menu: ContextMenuState;
+  message: Message;
+  home: ChannelHome;
+  link: LinkComponentProps | undefined;
+  onJump?: () => void;
+  actions: ReactNode;
+}) {
+  const m = useMessages();
+  const navigate = useNavigate();
+  const client = useAspenClient();
+  const copy = (text: string, copied: string) => {
+    void copyText(text, document.body).then((ok) => {
+      if (ok) {
+        toast(copied);
+      }
+    });
+  };
+  return (
+    <ContextMenu menu={menu} label={m.messageActionsLabel}>
+      <Menu
+        aria-label={m.messageActionsLabel}
+        autoFocus={menu.byKeyboard ? "first" : false}
+        onAction={() => {
+          menu.onOpenChange(false);
+        }}
+        className={menuClass}
+      >
+        {link !== undefined && (
+          <MenuAction
+            label={m.pins.jump}
+            icon={<ArrowBendDownRightIcon aria-hidden="true" className="rtl:-scale-x-100" />}
+            onAction={() => {
+              onJump?.();
+              void navigate(link);
+            }}
+          />
+        )}
+        <ActionsAsMenuItems value>{actions}</ActionsAsMenuItems>
+        {message.content !== "" && (
+          <MenuAction
+            label={m.copyMessageText}
+            icon={<CopyIcon aria-hidden="true" />}
+            onAction={() => {
+              copy(message.content, m.copiedMessageText);
+            }}
+          />
+        )}
+        <MenuAction
+          label={m.reports.copyLink}
+          icon={<LinkIcon aria-hidden="true" />}
+          onAction={() => {
+            copy(
+              messageUrl(client.baseUrl, home.community, message.channelId, message.id),
+              m.reports.copiedLink,
+            );
+          }}
+        />
+      </Menu>
+    </ContextMenu>
   );
 }
 

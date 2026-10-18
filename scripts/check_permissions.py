@@ -251,6 +251,16 @@ def hidden_categories(world: World, check: Checks) -> None:
           stack.status("GET", f"/categories/{hidden}", token=member) == 404
           and stack.status("GET", f"/categories/{hidden}/channels", token=member) == 404
           and stack.status("PUT", f"/categories/{hidden}/collapses/@me", token=member) == 404)
+    check("nor mute it, or choose what it tells of",
+          stack.status("PUT", f"/categories/{hidden}/mutes/@me", {}, token=member) == 404
+          and stack.status("PUT", f"/categories/{hidden}/notification-settings/@me", {"level": "all"},
+                           token=member) == 404)
+    folded = stack.api("PUT", f"/communities/{world.community}/category-collapses/@me", token=member)
+    check("folding every category leaves it out", hidden not in folded["categories"], folded)
+    check("and tells their devices nothing of it",
+          all(hidden not in e.get("categories", []) for e in of(world.stream.gather(0.8), "categoryCollapseChanged")))
+    stack.api("DELETE", f"/communities/{world.community}/category-collapses/@me", token=member)
+    world.stream.gather(0.5)
     inside = world.channel("let-in", category=hidden,
                            overrides=[{"role": world.everyone, "allow": ["viewChannel"], "deny": []}])
     world.stream.gather(0.8)
@@ -260,6 +270,14 @@ def hidden_categories(world: World, check: Checks) -> None:
     got = world.stream.gather(1.0)
     check("showing it reaches the member, about a category they did not have",
           len(of(got, "categoryOverride", category=hidden)) == 1 and listed(hidden))
+    stack.api("PUT", f"/categories/{hidden}/mutes/@me", {}, token=member)
+    world.as_owner("PUT", f"/categories/{hidden}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.8)
+    read = stack.api("GET", f"/communities/{world.community}?include=mutes", token=member)
+    check("a mute of it made while shown is not read back once it is hidden again",
+          all(m["category"] != hidden for m in read.get("included", {}).get("categoryMutes", [])), read)
+    world.as_owner("DELETE", f"/categories/{hidden}/overrides/{world.everyone}")
+    world.stream.gather(0.8)
     world.as_owner("PUT", f"/categories/{hidden}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
     world.stream.gather(0.8)
     world.as_owner("DELETE", f"/categories/{hidden}")

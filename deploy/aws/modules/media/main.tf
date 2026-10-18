@@ -76,12 +76,31 @@ resource "aws_cloudfront_origin_access_control" "media" {
   signing_protocol                  = "sigv4"
 }
 
+# Any origin may read what the read path serves, as the apps do to save or copy a picture; it
+# is public already, and read without credentials.
 resource "aws_cloudfront_response_headers_policy" "media" {
   name = "${var.name}-media"
 
   security_headers_config {
     content_type_options {
       override = true
+    }
+  }
+
+  cors_config {
+    access_control_allow_credentials = false
+    origin_override                  = true
+
+    access_control_allow_headers {
+      items = ["*"]
+    }
+
+    access_control_allow_methods {
+      items = ["GET", "HEAD"]
+    }
+
+    access_control_allow_origins {
+      items = ["*"]
     }
   }
 }

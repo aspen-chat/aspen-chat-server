@@ -41,6 +41,16 @@ export type PollVote = components["schemas"]["PollVote"];
 export type ReadState = components["schemas"]["ReadState"];
 /** A channel the caller has muted; `until` is `null` for a mute that lasts until lifted. */
 export type ChannelMute = components["schemas"]["ChannelMute"];
+export type CategoryMute = components["schemas"]["CategoryMute"];
+
+/**
+ * A mute in force on a channel, by its own setting or its category's (`category`, which the
+ * channel's own setting does not override): until when, `null` until it is lifted.
+ */
+export interface MuteInForce {
+  readonly until: string | null;
+  readonly category: string | null;
+}
 /**
  * What the caller chose to show of their presence in place of what their connections say;
  * `until` is `null` for one that lasts until they change it.

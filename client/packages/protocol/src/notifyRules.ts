@@ -5,7 +5,7 @@
 
 import { isDm } from "./channels";
 import type { Channel, Message } from "./generated/events";
-import type { ChannelMute, Mentions, NotificationLevel, ReadState } from "./storeTypes";
+import type { Mentions, NotificationLevel, ReadState } from "./storeTypes";
 
 /** Stands for the DMs among `RecordStore.unreadPlaces`, beside community ids. */
 export const UNREAD_DMS = "dms";
@@ -43,11 +43,12 @@ export function placeMentions(
 export function levelOf(
   place: Channel | undefined,
   own: NotificationLevel | null,
+  category: NotificationLevel | undefined,
   community: NotificationLevel | undefined,
 ): { level: NotificationLevel; own: NotificationLevel | null; inherited: NotificationLevel } {
   const fallback: NotificationLevel =
     place?.ty === "dm" || place?.ty === "groupDm" ? "all" : "tags";
-  const inherited = community ?? fallback;
+  const inherited = category ?? community ?? fallback;
   return { level: own ?? inherited, own, inherited };
 }
 
@@ -98,14 +99,14 @@ export interface UnreadChannel {
 export function unreadChannels(
   readStates: ReadonlyMap<string, ReadState>,
   channels: ReadonlyMap<string, Channel>,
-  mutes: ReadonlyMap<string, ChannelMute>,
+  muted: (channelId: string) => boolean,
 ): UnreadChannel[] {
   const unread: UnreadChannel[] = [];
   for (const state of readStates.values()) {
     const channel = channels.get(state.channel);
     if (
       channel !== undefined &&
-      !mutes.has(state.channel) &&
+      !muted(state.channel) &&
       state.lastMessage != null &&
       state.lastMessage > state.lastRead
     ) {
@@ -127,14 +128,14 @@ export function unreadChannels(
 export function unreadPlaces(
   readStates: ReadonlyMap<string, ReadState>,
   channels: ReadonlyMap<string, Channel>,
-  mutes: ReadonlyMap<string, ChannelMute>,
+  muted: (channelId: string) => boolean,
 ): Set<string> {
   const places = new Set<string>();
   for (const state of readStates.values()) {
     const channel = channels.get(state.channel);
     if (
       channel !== undefined &&
-      !mutes.has(state.channel) &&
+      !muted(state.channel) &&
       isUnread(readStates.get(state.channel))
     ) {
       places.add(channel.community ?? UNREAD_DMS);

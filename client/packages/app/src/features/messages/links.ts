@@ -168,7 +168,7 @@ export function newThreadLink(home: ChannelHome, channelId: string, starterId: s
 /**
  * The link to share for a message of the deployment at `baseUrl`, which the server reads as a
  * link to it and every client opens: its route on the deployment's own address, whatever shell
- * copies it.
+ * copies it. `channelUrl` and `communityUrl` are the same for a channel or DM and a community.
  */
 export function messageUrl(
   baseUrl: string,
@@ -176,9 +176,19 @@ export function messageUrl(
   channelId: string,
   messageId: string,
 ): string {
-  const path =
-    community === null
-      ? `/dms/${channelId}/messages/${messageId}`
-      : `/communities/${community}/channels/${channelId}/messages/${messageId}`;
-  return new URL(path, baseUrl).toString();
+  return new URL(`${channelPath(community, channelId)}/messages/${messageId}`, baseUrl).toString();
+}
+
+export function channelUrl(baseUrl: string, community: string | null, channelId: string): string {
+  return new URL(channelPath(community, channelId), baseUrl).toString();
+}
+
+export function communityUrl(baseUrl: string, community: string): string {
+  return new URL(`/communities/${community}`, baseUrl).toString();
+}
+
+function channelPath(community: string | null, channelId: string): string {
+  return community === null
+    ? `/dms/${channelId}`
+    : `/communities/${community}/channels/${channelId}`;
 }

@@ -35,7 +35,7 @@ It leaves out what never makes a channel unread (`app::read_state`):
 - the account's own messages;
 - messages of anyone it blocked;
 - messages at or before its read position;
-- channels and DMs it has muted.
+- channels and DMs it has muted, and channels of categories it has muted (`app::channel_mute::muted_sql!`).
 
 Its lower bounds (the digest before, the moment it joined, its read position) are one message id (`aspen_uuid_floor`). So each place is read through the index `message (channel, id)` from there on, never through its history.
 

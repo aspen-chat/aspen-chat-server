@@ -24,6 +24,7 @@ pub mod bot;
 pub mod bot_command;
 pub mod category;
 pub mod category_collapse;
+pub mod category_mute;
 pub mod channel;
 pub mod channel_mute;
 pub mod community;
@@ -469,6 +470,14 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
             notification_setting::set_channel_notifications,
             notification_setting::reset_channel_notifications
         ))
+        .routes(routes!(
+            notification_setting::set_category_notifications,
+            notification_setting::reset_category_notifications
+        ))
+        .routes(routes!(
+            category_mute::mute_category,
+            category_mute::unmute_category
+        ))
         .routes(routes!(block::list_blocks))
         .routes(routes!(bot::list_bots, bot::create_bot))
         .routes(routes!(bot::rotate_bot_token))
@@ -488,6 +497,10 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(
             category_collapse::collapse_category,
             category_collapse::expand_category
+        ))
+        .routes(routes!(
+            category_collapse::collapse_all_categories,
+            category_collapse::expand_all_categories
         ))
         .routes(routes!(voice::join_voice))
         .routes(routes!(voice::get_channel_voice))

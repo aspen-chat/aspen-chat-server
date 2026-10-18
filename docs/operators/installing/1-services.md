@@ -55,7 +55,7 @@ The storage needs:
 - The S3 API, reachable by clients. They upload to presigned URLs, so it must allow your
   deployment's origin and the apps' by CORS.
 - An anonymous read path for downloads: a website endpoint, or a CDN in front of the bucket. It
-  allows anonymous reads of objects and nothing else.
+  allows anonymous reads of objects and nothing else, from any origin by CORS.
 
 See [`[media.s3]`](../configuration/media.md#medias3), and
 [The storage's read path](storage-read-path.md).

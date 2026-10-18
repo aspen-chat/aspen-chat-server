@@ -43,6 +43,7 @@ import { secondaryButtonClass } from "@/features/invites/dialog";
 import { displayNameOf } from "@/features/users/profile";
 import { measurePicture } from "@/features/media/measurePicture";
 import { noteDraft, readDraft, writeDraft } from "@/features/messages/drafts";
+import { useMentionTarget } from "@/features/mentions/composerMentions";
 import { mediaUrl } from "@/features/layout/safeUrl";
 import { MESSAGE_MAX_CHARS, messageLength } from "@/features/messages/messageLength";
 import { MessageLengthNote } from "@/features/messages/MessageLengthNote";
@@ -166,6 +167,12 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     initialPicks: saved?.picks ?? [],
   });
   const emoji = useEmojiCompletion({ channelId, draft, setDraft, off: commands.active });
+  const box = useRef<HTMLTextAreaElement>(null);
+  // A user's Mention, from their menu, puts their tag here and the reader's focus with it.
+  useMentionTarget(channelId, mayPost && !starting, (tag) => {
+    tagging.insert(tag, box.current);
+    box.current?.focus();
+  });
 
   // The draft is noted as it changes, kept a moment after, and kept at once when the box goes
   // (another channel, a notification opened) or the page is hidden or left.
@@ -596,6 +603,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
           {emoji.list}
           {commands.list}
           <TextArea
+            ref={box}
             {...tagging.boxProps}
             {...(emoji.open
               ? {

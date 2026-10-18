@@ -1,16 +1,16 @@
-//! What each user wants to be told of, for themself alone: for a whole community, or one of its
-//! text channels, or a DM, every message (`all`), only messages that tag them (`tags`), or
-//! nothing. A channel's own setting outranks its community's, and without either a DM tells of
-//! every message and a community channel of tags ([`default_level`]); a thread follows its
-//! parent. Phones are woken by these (`app::push`), and the apps notify by them. Every change is
+//! What each user wants to be told of, for themself alone: for a whole community, one of its
+//! categories, or one of its text channels, or a DM, every message (`all`), only messages that
+//! tag them (`tags`), or nothing. A channel's own setting outranks its category's, which
+//! outranks its community's, and without any a DM tells of every message and a community
+//! channel of tags ([`level_of`], [`default_level`]); a thread follows its parent. Phones are woken by these (`app::push`), and the apps notify by them. Every change is
 //! published to the user's own subject as `notificationSettingChanged`, so their other devices
 //! follow.
 
 use crate::channel::ChannelType;
 use crate::context::GlobalServerContext;
 use crate::t;
-use crate::{ChannelId, CommunityId, EventScope, UserId, publish_event};
-use aspen_schema::{community_user, notification_setting};
+use crate::{CategoryId, ChannelId, CommunityId, EventScope, UserId, publish_event};
+use aspen_schema::{category, community_user, notification_setting};
 use aspen_wire::message_enum::server_event::ServerEvent;
 pub use aspen_wire::notification_setting::NotificationLevel;
 use diesel::prelude::*;
@@ -22,16 +22,31 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationTarget {
     Community(CommunityId),
+    Category(CategoryId),
     Channel(ChannelId),
 }
 
-/// A user's setting for a community or a channel.
+/// A user's setting for a community, a category, or a channel.
 #[derive(Debug, Clone, PartialEq, Eq, Queryable, Selectable)]
 #[diesel(table_name = notification_setting)]
 pub struct NotificationSetting {
     pub community: Option<CommunityId>,
+    pub category: Option<CategoryId>,
     pub channel: Option<ChannelId>,
     pub level: NotificationLevel,
+}
+
+/// A channel's level for the user: its own setting, else its category's, else its community's,
+/// else the default for its kind.
+pub fn level_of(
+    own: Option<NotificationLevel>,
+    category: Option<NotificationLevel>,
+    community: Option<NotificationLevel>,
+    ty: ChannelType,
+) -> NotificationLevel {
+    own.or(category)
+        .or(community)
+        .unwrap_or_else(|| default_level(ty))
 }
 
 /// The level of a channel neither the user nor its community has a setting for: every message
@@ -53,7 +68,7 @@ pub async fn set(
 ) -> crate::Result<bool> {
     let mut conn = state.connection_pool.get().await?;
     check_target(state, conn.as_mut(), user, target).await?;
-    let (community, channel_id) = columns(target);
+    let (community, category_id, channel_id) = columns(target);
     conn.transaction(|conn| {
         async move {
             let removed = delete_row(conn, user, target).await?;
@@ -62,6 +77,7 @@ pub async fn set(
                     notification_setting::id.eq(Uuid::now_v7()),
                     notification_setting::user.eq(user),
                     notification_setting::community.eq(community),
+                    notification_setting::category.eq(category_id),
                     notification_setting::channel.eq(channel_id),
                     notification_setting::level.eq(level),
                 ))
@@ -73,6 +89,7 @@ pub async fn set(
                 EventScope::User(user),
                 &ServerEvent::NotificationSettingChanged {
                     community,
+                    category: category_id,
                     channel: channel_id,
                     level: Some(level),
                 },
@@ -92,7 +109,7 @@ pub async fn reset(
     target: NotificationTarget,
 ) -> crate::Result<()> {
     let mut conn = state.connection_pool.get().await?;
-    let (community, channel_id) = columns(target);
+    let (community, category_id, channel_id) = columns(target);
     conn.transaction(|conn| {
         async move {
             if delete_row(conn, user, target).await? > 0 {
@@ -102,6 +119,7 @@ pub async fn reset(
                     EventScope::User(user),
                     &ServerEvent::NotificationSettingChanged {
                         community,
+                        category: category_id,
                         channel: channel_id,
                         level: None,
                     },
@@ -115,10 +133,13 @@ pub async fn reset(
     .await
 }
 
-fn columns(target: NotificationTarget) -> (Option<CommunityId>, Option<ChannelId>) {
+fn columns(
+    target: NotificationTarget,
+) -> (Option<CommunityId>, Option<CategoryId>, Option<ChannelId>) {
     match target {
-        NotificationTarget::Community(community) => (Some(community), None),
-        NotificationTarget::Channel(channel) => (None, Some(channel)),
+        NotificationTarget::Community(community) => (Some(community), None, None),
+        NotificationTarget::Category(category) => (None, Some(category), None),
+        NotificationTarget::Channel(channel) => (None, None, Some(channel)),
     }
 }
 
@@ -134,6 +155,11 @@ async fn delete_row(
                 .execute(conn)
                 .await
         }
+        NotificationTarget::Category(category_id) => {
+            diesel::delete(mine.filter(notification_setting::category.eq(category_id)))
+                .execute(conn)
+                .await
+        }
         NotificationTarget::Channel(channel_id) => {
             diesel::delete(mine.filter(notification_setting::channel.eq(channel_id)))
                 .execute(conn)
@@ -142,8 +168,8 @@ async fn delete_row(
     }
 }
 
-/// A setting may be made for a community the user belongs to, or a text channel or DM they may
-/// read; a community the user is not in, or a channel they may not read, is not found.
+/// A setting may be made for a community the user belongs to, a category they may learn of, or a
+/// text channel or DM they may read; any other is not found.
 async fn check_target(
     state: &GlobalServerContext,
     conn: &mut diesel_async::AsyncPgConnection,
@@ -164,6 +190,9 @@ async fn check_target(
             if !member {
                 return Err(diesel::result::Error::NotFound.into());
             }
+        }
+        NotificationTarget::Category(category_id) => {
+            crate::category::viewed_category(conn, user, category_id).await?;
         }
         NotificationTarget::Channel(channel_id) => {
             let ty = crate::permissions::channel_access(state, conn, user, channel_id)
@@ -186,7 +215,13 @@ pub async fn read_channel_settings(
     user: UserId,
     channels: &[ChannelId],
 ) -> crate::Result<Vec<NotificationSetting>> {
-    read_settings(state, user, channels, &[]).await
+    let mut conn = state.connection_pool.get().await?;
+    Ok(notification_setting::table
+        .select(NotificationSetting::as_select())
+        .filter(notification_setting::user.eq(user))
+        .filter(notification_setting::channel.eq_any(channels.to_vec()))
+        .load(conn.as_mut())
+        .await?)
 }
 
 /// The user's settings for every DM and group DM they are in, however many there are: rows they
@@ -212,38 +247,71 @@ pub async fn read_dm_settings(
         .await?)
 }
 
-/// The settings of `visible`'s user for its communities and for the channels they may view in
-/// them.
+/// The settings of `visible`'s user for its communities, for the categories of them they may
+/// learn of, and for the channels they may view in them. Each kind is found through the user's
+/// own `(user, community)`, `(user, category)`, or `(user, channel)` index.
 pub async fn read_community_settings(
     state: &GlobalServerContext,
     visible: &crate::visibility::Visibility,
 ) -> crate::Result<Vec<NotificationSetting>> {
-    read_settings(
-        state,
-        visible.user(),
-        &visible.visible_channels(),
-        visible.communities(),
-    )
-    .await
-}
-
-/// The user's settings for the listed communities and the listed channels, in one query, each
-/// arm found through the user's own `(user, community)` or `(user, channel)` index.
-async fn read_settings(
-    state: &GlobalServerContext,
-    user: UserId,
-    channels: &[ChannelId],
-    communities: &[CommunityId],
-) -> crate::Result<Vec<NotificationSetting>> {
+    let user = visible.user();
+    let communities = visible.communities().to_vec();
     let mut conn = state.connection_pool.get().await?;
-    Ok(notification_setting::table
+    let mut settings: Vec<NotificationSetting> = notification_setting::table
         .select(NotificationSetting::as_select())
         .filter(notification_setting::user.eq(user))
-        .filter(
-            notification_setting::community
-                .eq_any(communities.to_vec())
-                .or(notification_setting::channel.eq_any(channels.to_vec())),
-        )
+        .filter(notification_setting::community.eq_any(&communities))
         .load(conn.as_mut())
-        .await?)
+        .await?;
+    let in_categories: Vec<(NotificationSetting, CommunityId)> = notification_setting::table
+        .inner_join(category::table)
+        .select((NotificationSetting::as_select(), category::community))
+        .filter(notification_setting::user.eq(user))
+        .filter(category::community.eq_any(&communities))
+        .filter(category::deleted_at.is_null())
+        .load(conn.as_mut())
+        .await?;
+    settings.extend(
+        in_categories
+            .into_iter()
+            .filter(|(setting, community)| {
+                setting
+                    .category
+                    .is_some_and(|c| visible.can_view_category(*community, c))
+            })
+            .map(|(setting, _)| setting),
+    );
+    settings.extend(
+        notification_setting::table
+            .select(NotificationSetting::as_select())
+            .filter(notification_setting::user.eq(user))
+            .filter(notification_setting::channel.eq_any(visible.visible_channels()))
+            .load(conn.as_mut())
+            .await?,
+    );
+    Ok(settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_channel_takes_its_own_level_then_its_categorys_then_its_communitys() {
+        use NotificationLevel::{All, Nothing, Tags};
+        assert_eq!(
+            level_of(Some(Nothing), Some(All), Some(Tags), ChannelType::Text),
+            Nothing
+        );
+        assert_eq!(
+            level_of(None, Some(All), Some(Nothing), ChannelType::Text),
+            All
+        );
+        assert_eq!(
+            level_of(None, None, Some(Nothing), ChannelType::Text),
+            Nothing
+        );
+        assert_eq!(level_of(None, None, None, ChannelType::Text), Tags);
+        assert_eq!(level_of(None, None, None, ChannelType::Dm), All);
+    }
 }

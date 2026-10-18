@@ -14,7 +14,7 @@ The activity feed is every message that tells a user of itself, from everywhere 
 
 A message tells its reader by the same rule as their notifications (see [Notifications](notifications.md) and [Push](push.md)).
 
-By the reader's level in a DM, a community, or a channel:
+By the reader's level in a DM, a community, a category, or a channel:
 
 | Level | Messages that tell them |
 | --- | --- |
@@ -26,7 +26,7 @@ A thread counts as its parent for the level. Besides these, every reply in a thr
 
 A message is never in the feed when it is:
 
-- in a channel they muted (a thread's parent included);
+- in a channel they muted, or whose category they muted without keeping the channel unmuted (a thread's parent included);
 - by them, or by anyone they blocked;
 - from before they joined (the community, or the DM a thread's parent is);
 - a message that only records something: an echo, a poll's result, a call, or a command.

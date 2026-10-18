@@ -58,18 +58,52 @@ const tabClass =
   "selected:bg-accent-soft selected:text-accent-strong focus-visible:ring-2 focus-visible:ring-accent/50";
 
 /**
- * The community's settings, from the wrench in its sidebar: its name, its owner (who alone may
- * hand it on or delete it) and the way out of it, for holders of Manage channels or Manage
- * categories the arrangement of its channels and categories, its roles, its members, its
- * emoji, and, for holders of Manage plugins, the deployment's plugins. Every member can open
- * it; each part offers only what they may do.
+ * The wrench in a community's sidebar, which opens its settings (`CommunitySettingsModal`), as
+ * its name above the channels does too (`isOpen`, `onOpenChange`).
  */
 export function CommunitySettingsDialog({
   community,
   triggerClassName,
+  isOpen,
+  onOpenChange,
 }: {
   community: Community;
   triggerClassName: string;
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const m = useMessages();
+  return (
+    <DialogTrigger
+      {...(isOpen === undefined ? {} : { isOpen })}
+      {...(onOpenChange === undefined ? {} : { onOpenChange })}
+    >
+      <Tooltip text={m.communitySettings.open}>
+        <Button aria-label={m.communitySettings.open} className={triggerClassName}>
+          <WrenchIcon size={18} aria-hidden="true" />
+        </Button>
+      </Tooltip>
+      <CommunitySettingsModal community={community} />
+    </DialogTrigger>
+  );
+}
+
+/**
+ * The community's settings: its name, its owner (who alone may hand it on or delete it) and the
+ * way out of it, for holders of Manage channels or Manage categories the arrangement of its
+ * channels and categories, its roles, its members, its emoji, and, for holders of Manage
+ * plugins, the deployment's plugins. Every member can open it; each part offers only what they
+ * may do. Opened by the trigger it is in, or by `isOpen` (from the community's menu on the
+ * rail).
+ */
+export function CommunitySettingsModal({
+  community,
+  isOpen,
+  onOpenChange,
+}: {
+  community: Community;
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const m = useMessages();
   const access = useAccess(community.id);
@@ -79,74 +113,72 @@ export function CommunitySettingsDialog({
     (access?.has("manageChannels") ?? false) || (access?.has("manageCategories") ?? false);
   const pluginTab = access?.has("managePlugins") === true;
   return (
-    <DialogTrigger>
-      <Tooltip text={m.communitySettings.open}>
-        <Button aria-label={m.communitySettings.open} className={triggerClassName}>
-          <WrenchIcon size={18} aria-hidden="true" />
-        </Button>
-      </Tooltip>
-      <ModalOverlay className={overlayClass} isDismissable>
-        <Modal className={widePlanesModalClass}>
-          <Dialog className={dialogClass}>
-            <DialogHeading>
-              {format(m.communitySettings.heading, { community: community.name })}
-            </DialogHeading>
-            <Tabs className="flex flex-col gap-4">
-              <TabList aria-label={m.communitySettings.open} className="flex flex-wrap gap-1">
-                <Tab id="overview" className={tabClass}>
-                  {m.communitySettings.overviewTab}
-                </Tab>
-                {layoutTab && (
-                  <Tab id="layout" className={tabClass}>
-                    {m.channelLayout.tab}
-                  </Tab>
-                )}
-                {roleTab && (
-                  <Tab id="roles" className={tabClass}>
-                    {m.communitySettings.rolesTab}
-                  </Tab>
-                )}
-                <Tab id="members" className={tabClass}>
-                  {m.communitySettings.membersTab}
-                </Tab>
-                <Tab id="emoji" className={tabClass}>
-                  {m.communitySettings.emojiTab}
-                </Tab>
-                {pluginTab && (
-                  <Tab id="plugins" className={tabClass}>
-                    {m.plugins.tab}
-                  </Tab>
-                )}
-              </TabList>
-              <TabPanel id="overview" className="outline-none">
-                <Overview community={community} />
-              </TabPanel>
+    <ModalOverlay
+      className={overlayClass}
+      isDismissable
+      {...(isOpen === undefined ? {} : { isOpen })}
+      {...(onOpenChange === undefined ? {} : { onOpenChange })}
+    >
+      <Modal className={widePlanesModalClass}>
+        <Dialog className={dialogClass}>
+          <DialogHeading>
+            {format(m.communitySettings.heading, { community: community.name })}
+          </DialogHeading>
+          <Tabs className="flex flex-col gap-4">
+            <TabList aria-label={m.communitySettings.open} className="flex flex-wrap gap-1">
+              <Tab id="overview" className={tabClass}>
+                {m.communitySettings.overviewTab}
+              </Tab>
               {layoutTab && (
-                <TabPanel id="layout" className="outline-none">
-                  <LayoutPanel communityId={community.id} />
-                </TabPanel>
+                <Tab id="layout" className={tabClass}>
+                  {m.channelLayout.tab}
+                </Tab>
               )}
               {roleTab && (
-                <TabPanel id="roles" className="outline-none">
-                  <RolesPanel communityId={community.id} />
-                </TabPanel>
+                <Tab id="roles" className={tabClass}>
+                  {m.communitySettings.rolesTab}
+                </Tab>
               )}
-              <TabPanel id="members" className="outline-none">
-                <MembersPanel communityId={community.id} />
-              </TabPanel>
-              <TabPanel id="emoji" className="outline-none">
-                <EmojiPanel communityId={community.id} />
-              </TabPanel>
+              <Tab id="members" className={tabClass}>
+                {m.communitySettings.membersTab}
+              </Tab>
+              <Tab id="emoji" className={tabClass}>
+                {m.communitySettings.emojiTab}
+              </Tab>
               {pluginTab && (
-                <TabPanel id="plugins" className="outline-none">
-                  <PluginsPanel communityId={community.id} />
-                </TabPanel>
+                <Tab id="plugins" className={tabClass}>
+                  {m.plugins.tab}
+                </Tab>
               )}
-            </Tabs>
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
-    </DialogTrigger>
+            </TabList>
+            <TabPanel id="overview" className="outline-none">
+              <Overview community={community} />
+            </TabPanel>
+            {layoutTab && (
+              <TabPanel id="layout" className="outline-none">
+                <LayoutPanel communityId={community.id} />
+              </TabPanel>
+            )}
+            {roleTab && (
+              <TabPanel id="roles" className="outline-none">
+                <RolesPanel communityId={community.id} />
+              </TabPanel>
+            )}
+            <TabPanel id="members" className="outline-none">
+              <MembersPanel communityId={community.id} />
+            </TabPanel>
+            <TabPanel id="emoji" className="outline-none">
+              <EmojiPanel communityId={community.id} />
+            </TabPanel>
+            {pluginTab && (
+              <TabPanel id="plugins" className="outline-none">
+                <PluginsPanel communityId={community.id} />
+              </TabPanel>
+            )}
+          </Tabs>
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
   );
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { messageUrl } from "@/features/messages/links";
+import { channelUrl, communityUrl, messageUrl } from "@/features/messages/links";
 import { parseSelfLink } from "@/features/messages/selfLinks";
 
 const c = "01a0da3e-2ad1-71c3-9f7a-c8e1c917695f";
@@ -16,6 +16,24 @@ describe("message links", () => {
     expect(parseSelfLink(messageUrl("http://localhost:8000/", null, ch, msg), hosts)).toEqual({
       domain: null,
       route: { kind: "message", community: null, channel: ch, message: msg },
+    });
+  });
+});
+
+describe("channel and community links", () => {
+  it("are read back as they are made", () => {
+    const hosts = { home: ["chat.example"], foreign: [] };
+    expect(parseSelfLink(channelUrl("https://chat.example", c, ch), hosts)).toEqual({
+      domain: null,
+      route: { kind: "channel", community: c, channel: ch },
+    });
+    expect(parseSelfLink(channelUrl("https://chat.example", null, ch), hosts)).toEqual({
+      domain: null,
+      route: { kind: "channel", community: null, channel: ch },
+    });
+    expect(parseSelfLink(communityUrl("https://chat.example", c), hosts)).toEqual({
+      domain: null,
+      route: { kind: "community", community: c },
     });
   });
 });

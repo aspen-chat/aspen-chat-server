@@ -1171,7 +1171,12 @@
     },
     "mutedUntil": "Muted until {time}",
     "mutedForGood": "Muted until you unmute it",
-    "unmute": "Unmute"
+    "unmute": "Unmute",
+    "byCategory": "{end}, with its category",
+    "withCategory": "Muted with its category",
+    "keepUnmuted": "Keep unmuted",
+    "keptUnmuted": "Kept unmuted",
+    "followCategory": "Follow its category"
   },
   "channelsLabel": "Channels",
   "noCommunitiesHeading": "No communities yet",
@@ -2329,5 +2334,45 @@
   "newRelease": {
     "ready": "A new version of Aspen is ready.",
     "reload": "Reload"
+  },
+  "contextMenu": {
+    "link": "Link",
+    "attachment": "Attachment",
+    "openLink": "Open link",
+    "openOriginal": "Open original",
+    "copyLinkAddress": "Copy link address",
+    "copyFileAddress": "Copy file address",
+    "copiedAddress": "Copied the address",
+    "joinMuted": "Join muted",
+    "markRead": "Mark as read",
+    "leaveHeading": "Leave {community}?",
+    "expandCategory": "Expand category",
+    "collapseCategory": "Collapse category",
+    "addChannel": "Add a channel",
+    "renameCategory": "Rename category",
+    "deleteCategory": "Delete category",
+    "collapseAll": "Collapse all categories",
+    "expandAll": "Expand all categories",
+    "savePicture": "Save picture",
+    "saveFile": "Save file",
+    "copyPicture": "Copy picture",
+    "copiedPicture": "Copied the picture",
+    "unreadableFile": "This server's file storage doesn't let the app read files, so this one can't be saved or copied. Its administrators need to let it, as Aspen's operator guide says.",
+    "fileFailed": "The file couldn't be read: {problem}"
+  },
+  "userMenu": {
+    "label": "Actions for {name}",
+    "reach": "Reach them",
+    "personal": "Between you",
+    "moderation": "Moderation",
+    "profile": "Profile",
+    "call": "Call",
+    "mention": "Mention",
+    "copyUsername": "Copy username",
+    "copiedUsername": "Copied the username",
+    "changeNickname": "Change nickname",
+    "remove": "Remove from community",
+    "removeHeading": "Remove {name}?",
+    "ban": "Ban from community"
   }
 }

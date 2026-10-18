@@ -64,6 +64,18 @@ def local_address(family: int) -> str | None:
         return None
 
 
+def header_of(url: str, name: str, origin: str) -> str | None:
+    """The response header `name` of a GET of `url` sent from `origin`, whatever its status."""
+    request = urllib.request.Request(url, headers={"Origin": origin})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.headers.get(name)
+    except urllib.error.HTTPError as error:
+        return error.headers.get(name)
+    except (OSError, ValueError):
+        return None
+
+
 def status_of(url: str, method: str = "GET") -> int | None:
     request = urllib.request.Request(url, method=method, data=b"x" if method == "PUT" else None)
     try:
@@ -324,6 +336,14 @@ def check_read_path(box: dict, report: Report) -> None:
             report.fail(f"The read path {what}", (consequence + " " if consequence else "") + "See docs/operators/installing/storage-read-path.md.")
             return
     report.ok("The read path refuses listing, writes, and what it must not serve")
+    allowed = header_of(base + "/attachments/aspen-box-cors-check", "Access-Control-Allow-Origin", f"https://{box['domain']}")
+    if allowed not in ("*", f"https://{box['domain']}"):
+        report.fail(
+            "The read path does not let the apps read files",
+            "Saving or copying a picture will fail. It must send Access-Control-Allow-Origin; see docs/operators/installing/storage-read-path.md.",
+        )
+    else:
+        report.ok("The read path lets the apps read files")
 
 
 def doctor(store: Box, opt: argparse.Namespace) -> None:

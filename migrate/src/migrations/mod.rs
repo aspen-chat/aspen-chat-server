@@ -118,3 +118,4 @@ pub mod m20261009_094225_presence_override;
 pub mod m20261011_053939_mention_recent;
 pub mod m20261012_043722_stream_sizes;
 pub mod m20261012_162005_database_latency;
+pub mod m20261017_052909_category_mutes_and_notifications;

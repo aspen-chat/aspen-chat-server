@@ -6,10 +6,10 @@ import { SourceScope } from "@/api/deployments";
 import { useEverywhere, type Source } from "@/api/everywhere";
 import { useMessageOnDemand, useSync } from "@/api/hooks";
 import { PersonalPage } from "@/features/activity/PersonalPage";
-import { Tooltip } from "@/features/layout/Tooltip";
 import { ListedMessage, listedActionClass } from "@/features/messages/ListedMessage";
 import { useMessagePlace } from "@/features/messages/place";
 import { useMessages } from "@/i18n/context";
+import { IconAction } from "@/features/layout/IconAction";
 import { format } from "@/i18n/messages";
 import { useDocumentTitle } from "@/features/layout/documentTitle";
 
@@ -156,17 +156,14 @@ function SavedItem({
       link={link}
       where={domain === null ? where : `${where} · ${format(m.search.onDomain, { domain })}`}
       actions={
-        <Tooltip text={m.saved.remove}>
-          <Button
-            aria-label={m.saved.remove}
-            onPress={() => {
-              void sync.setSaved(save.message, false).catch(() => undefined);
-            }}
-            className={listedActionClass}
-          >
-            <XIcon size={16} aria-hidden="true" />
-          </Button>
-        </Tooltip>
+        <IconAction
+          label={m.saved.remove}
+          onPress={() => {
+            void sync.setSaved(save.message, false).catch(() => undefined);
+          }}
+          className={listedActionClass}
+          icon={<XIcon size={16} aria-hidden="true" />}
+        />
       }
     />
   );

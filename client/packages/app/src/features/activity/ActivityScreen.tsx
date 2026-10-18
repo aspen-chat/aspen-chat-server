@@ -5,14 +5,20 @@ import {
   type Message,
   type Topic,
 } from "@aspen/protocol";
-import { CheckIcon } from "@phosphor-icons/react";
-import { Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Tab, TabList, TabPanel, Tabs } from "react-aria-components";
+import {
+  ArrowBendDownRightIcon,
+  BellRingingIcon,
+  BellSlashIcon,
+  CheckIcon,
+} from "@phosphor-icons/react";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Button, Menu, Tab, TabList, TabPanel, Tabs } from "react-aria-components";
 import { SourceScope } from "@/api/deployments";
 import { useEverywhere, useSources, type Source } from "@/api/everywhere";
 import {
   useChannelRemoved,
+  useFollowing,
   useLastRead,
   useMessageOnDemand,
   useMessageWindow,
@@ -32,9 +38,12 @@ import {
 import { PersonalPage } from "@/features/activity/PersonalPage";
 import { foldThreads } from "@/features/activity/threads";
 import { unreadEntries, type UnreadPlace } from "@/features/activity/unread";
+import { ActionsAsMenuItems } from "@/features/layout/actionsAsMenuItems";
+import { ContextMenu } from "@/features/layout/ContextMenu";
+import { useContextMenu, type ContextMenuState } from "@/features/layout/contextMenuState";
+import { MenuAction, menuClass } from "@/features/layout/menu";
 import { LoadingLabel } from "@/features/layout/Skeleton";
 import { toast } from "@/features/layout/toast";
-import { Tooltip } from "@/features/layout/Tooltip";
 import { Composer } from "@/features/messages/Composer";
 import { channelLink, threadLink, type ChannelHome } from "@/features/messages/links";
 import {
@@ -45,6 +54,7 @@ import {
 import { useChannelPlace, useMessagePlace } from "@/features/messages/place";
 import { mergeResults, type SourceResults } from "@/features/search/merge";
 import { useMessages } from "@/i18n/context";
+import { IconAction } from "@/features/layout/IconAction";
 import { format, type Messages } from "@/i18n/messages";
 import { useDocumentTitle } from "@/features/layout/documentTitle";
 
@@ -536,17 +546,14 @@ function MarkReadButton({ channelId, messageId }: { channelId: string; messageId
   const m = useMessages();
   const sync = useSync();
   return (
-    <Tooltip text={m.activity.markRead}>
-      <Button
-        aria-label={m.activity.markRead}
-        onPress={() => {
-          sync.markRead(channelId, messageId);
-        }}
-        className={listedActionClass}
-      >
-        <CheckIcon size={16} aria-hidden="true" />
-      </Button>
-    </Tooltip>
+    <IconAction
+      label={m.activity.markRead}
+      onPress={() => {
+        sync.markRead(channelId, messageId);
+      }}
+      className={listedActionClass}
+      icon={<CheckIcon size={16} aria-hidden="true" />}
+    />
   );
 }
 
@@ -597,7 +604,10 @@ function useLatestWindow(channelId: string) {
   return { window: current ? window : null, failed };
 }
 
-/** The head of a channel's or thread's entry: whether it is unread, where it is, and its actions. */
+/**
+ * The head of a channel's or thread's entry: whether it is unread, where it is, and its actions,
+ * which right-clicking it offers by name too (`EntryMenu`).
+ */
 function EntryHead({
   unread,
   place,
@@ -605,6 +615,7 @@ function EntryHead({
   link,
   channelId,
   newest,
+  thread = false,
 }: {
   unread: boolean;
   place: string;
@@ -612,10 +623,28 @@ function EntryHead({
   link: ReturnType<typeof channelLink> | ReturnType<typeof threadLink> | undefined;
   channelId: string;
   newest: string;
+  /** Whether it is a thread's, which can be followed. */
+  thread?: boolean;
 }) {
   const m = useMessages();
+  const menu = useContextMenu();
   return (
-    <div className="flex items-baseline gap-2 px-2">
+    <div
+      onContextMenu={(event) => {
+        menu.onContextMenu(event);
+      }}
+      className="flex items-baseline gap-2 px-2"
+    >
+      {menu.opened && (
+        <EntryMenu
+          menu={menu}
+          label={place}
+          link={link}
+          channelId={channelId}
+          thread={thread}
+          markRead={unread && <MarkReadButton channelId={channelId} messageId={newest} />}
+        />
+      )}
       {unread && <UnreadMark />}
       <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-muted">{place}</span>
       {count !== undefined && <span className="shrink-0 text-xs text-ink-muted">{count}</span>}
@@ -626,6 +655,69 @@ function EntryHead({
       )}
       {unread && <MarkReadButton channelId={channelId} messageId={newest} />}
     </div>
+  );
+}
+
+/**
+ * An entry's menu: going to it, marking it read while it is unread (`markRead`), and following
+ * or no longer following it, for a thread.
+ */
+function EntryMenu({
+  menu,
+  label,
+  link,
+  channelId,
+  thread,
+  markRead,
+}: {
+  menu: ContextMenuState;
+  label: string;
+  link: ReturnType<typeof channelLink> | ReturnType<typeof threadLink> | undefined;
+  channelId: string;
+  thread: boolean;
+  markRead: ReactNode;
+}) {
+  const m = useMessages();
+  const sync = useSync();
+  const navigate = useNavigate();
+  const following = useFollowing(channelId);
+  return (
+    <ContextMenu menu={menu} label={label}>
+      <Menu
+        aria-label={label}
+        autoFocus={menu.byKeyboard ? "first" : false}
+        onAction={() => {
+          menu.onOpenChange(false);
+        }}
+        className={menuClass}
+      >
+        {link !== undefined && (
+          <MenuAction
+            label={m.pins.jump}
+            icon={<ArrowBendDownRightIcon aria-hidden="true" className="rtl:-scale-x-100" />}
+            onAction={() => {
+              void navigate(link);
+            }}
+          />
+        )}
+        <ActionsAsMenuItems value>{markRead}</ActionsAsMenuItems>
+        {thread && (
+          <MenuAction
+            label={following ? m.threads.unfollow : m.threads.follow}
+            icon={
+              following ? (
+                <BellSlashIcon aria-hidden="true" />
+              ) : (
+                <BellRingingIcon aria-hidden="true" />
+              )
+            }
+            onAction={() => {
+              void sync.setFollowing(channelId, !following).catch(() => undefined);
+            }}
+          />
+        )}
+      </Menu>
+    </ContextMenu>
   );
 }
 
@@ -735,6 +827,7 @@ function ThreadItem({
         }
         channelId={threadId}
         newest={newest}
+        thread
       />
       {replies === null ? (
         <EntryMessagesSkeleton label={m.activity.loadingReplies} />

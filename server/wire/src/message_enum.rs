@@ -188,11 +188,12 @@ enum MessageEnumSource {
     // open now. See `app::report`.
     #[message_gen(custom_event)]
     ReportsChanged { case: ReportCaseId, open: i64 },
-    // The user collapsed or expanded a category in their channel list, on one of their
-    // devices; the others follow. See `app::category_collapse`.
+    // The user collapsed or expanded categories in their channel list, on one of their
+    // devices; the others follow. One category, or each of a community's that changed when they
+    // collapsed or expanded them all. See `app::category_collapse`.
     #[message_gen(custom_event)]
     CategoryCollapseChanged {
-        category: CategoryId,
+        categories: Vec<CategoryId>,
         collapsed: bool,
     },
     // A bot published a new list of the commands it answers; clients that complete commands
@@ -226,11 +227,22 @@ enum MessageEnumSource {
         by_name: String,
         by_display_name: Option<String>,
     },
-    // The user muted or unmuted a channel, on one of their devices; the others follow. A mute
-    // with no `until` lasts until it is lifted. See `app::channel_mute`.
+    // The user muted a channel, kept it unmuted while its category is muted, or removed their
+    // setting for it, on one of their devices; the others follow. `muted` is `true` for a mute,
+    // which with no `until` lasts until it is lifted, `false` for a channel kept unmuted, and
+    // `null` when the channel has no setting of its own and follows its category. See
+    // `app::channel_mute`.
     #[message_gen(custom_event)]
     ChannelMuteChanged {
         channel: ChannelId,
+        muted: Option<bool>,
+        until: Option<chrono::DateTime<Utc>>,
+    },
+    // The user muted or unmuted a category, on one of their devices; the others follow. A mute
+    // with no `until` lasts until it is lifted. See `app::category_mute`.
+    #[message_gen(custom_event)]
+    CategoryMuteChanged {
+        category: CategoryId,
         muted: bool,
         until: Option<chrono::DateTime<Utc>>,
     },
@@ -242,12 +254,13 @@ enum MessageEnumSource {
         presence_override: Option<PresenceOverride>,
         until: Option<chrono::DateTime<Utc>>,
     },
-    // The user changed what they want to be told of a community or a channel, on one of their
-    // devices; the others follow. One of `community` and `channel` is set; `level` is `null`
-    // when the setting was removed. See `app::notification_setting`.
+    // The user changed what they want to be told of a community, a category, or a channel, on
+    // one of their devices; the others follow. One of `community`, `category`, and `channel` is
+    // set; `level` is `null` when the setting was removed. See `app::notification_setting`.
     #[message_gen(custom_event)]
     NotificationSettingChanged {
         community: Option<CommunityId>,
+        category: Option<CategoryId>,
         channel: Option<ChannelId>,
         level: Option<crate::notification_setting::NotificationLevel>,
     },

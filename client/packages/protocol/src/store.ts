@@ -38,6 +38,8 @@ import type {
   BotCommands,
   FrequentEmojiEntry,
   ChannelMute,
+  CategoryMute,
+  MuteInForce,
   ChosenPresence,
   ChannelVoice,
   EmojiReactions,
@@ -252,12 +254,15 @@ export class RecordStore {
    * marking read as they show them, until opened again or posted in.
    */
   readonly #unreadHolds = new Set<string>();
+  /** The caller's own setting of each channel: a mute, or kept unmuted in a muted category. */
   readonly #mutes = new Map<string, ChannelMute>();
+  readonly #categoryMutes = new Map<string, CategoryMute>();
   /** What the caller chose to show of their presence, while it lasts. */
   #chosenPresence: ChosenPresence | null = null;
   /** The caller's notification settings: per channel, and per community. */
   readonly #channelLevels = new Map<string, NotificationLevel>();
   readonly #communityLevels = new Map<string, NotificationLevel>();
+  readonly #categoryLevels = new Map<string, NotificationLevel>();
   readonly #collapsed = new Set<string>();
   /** The users the caller has blocked. */
   readonly #blocked = new Set<string>();
@@ -1039,9 +1044,9 @@ export class RecordStore {
 
   /**
    * Topic `notifications`: how much of a channel the caller wants to be told of (a thread
-   * follows its parent): their setting for the channel, else for its community, else every
-   * message of a DM and tags elsewhere. `own` is the channel's own setting, if it has one, and
-   * `inherited` what the level would be without it.
+   * follows its parent): their setting for the channel, else for its category, else for its
+   * community, else every message of a DM and tags elsewhere. `own` is the channel's own
+   * setting, if it has one, and `inherited` what the level would be without it.
    */
   notificationLevel(channelId: string): {
     level: NotificationLevel;
@@ -1052,14 +1057,31 @@ export class RecordStore {
     const place =
       channel?.parentChannel != null ? this.#channels.get(channel.parentChannel) : channel;
     const own = this.#channelLevels.get(place?.id ?? channelId) ?? null;
+    const category =
+      place?.parentCategory == null ? undefined : this.#categoryLevels.get(place.parentCategory);
     const community =
       place?.community == null ? undefined : this.#communityLevels.get(place.community);
-    return levelOf(place, own, community);
+    return levelOf(place, own, category, community);
   }
 
   /** Topic `notifications`: the caller's setting for a community, if they made one. */
   communityNotificationLevel(communityId: string): NotificationLevel | null {
     return this.#communityLevels.get(communityId) ?? null;
+  }
+
+  /**
+   * Topic `notifications`: the caller's setting for a category (`own`), if they made one, and
+   * what its channels without one of their own take without it (`inherited`): the community's,
+   * else tags.
+   */
+  categoryNotificationLevel(
+    categoryId: string,
+    communityId: string,
+  ): { own: NotificationLevel | null; inherited: NotificationLevel } {
+    return {
+      own: this.#categoryLevels.get(categoryId) ?? null,
+      inherited: this.#communityLevels.get(communityId) ?? "tags",
+    };
   }
 
   /**
@@ -1077,7 +1099,7 @@ export class RecordStore {
     const channel = this.#channels.get(message.channelId);
     const place = channel?.parentChannel ?? message.channelId;
     // A mute that ran out is gone already: `AspenSync` ends it by the clock.
-    if (this.#mutes.has(place)) {
+    if (this.#muted(place)) {
       return false;
     }
     const read = this.#threadReads.get(message.channelId) ?? this.#readStates.get(place)?.lastRead;
@@ -1109,7 +1131,7 @@ export class RecordStore {
     }
     const channel = this.#channels.get(message.channelId);
     const place = channel?.parentChannel ?? message.channelId;
-    if (this.#mutes.has(place)) {
+    if (this.#muted(place)) {
       return false;
     }
     switch (view) {
@@ -1148,9 +1170,40 @@ export class RecordStore {
     return until == null ? null : Date.parse(until);
   }
 
-  /** Topic `mute:<channelId>`: the caller's mute of the channel while it lasts, if any. */
-  mute(channelId: string): ChannelMute | undefined {
+  /**
+   * Topic `mute:<channelId>`: the mute in force on the channel, by its own setting or else its
+   * category's, while it lasts, if any. A thread has none of its own; ask of its parent.
+   */
+  mute(channelId: string): MuteInForce | undefined {
+    return this.#memoized(`mute:${channelId}`, () => {
+      const own = this.#mutes.get(channelId);
+      if (own !== undefined) {
+        return own.muted ? { until: own.until ?? null, category: null } : undefined;
+      }
+      const category = this.#channels.get(channelId)?.parentCategory;
+      const byCategory = category == null ? undefined : this.#categoryMutes.get(category);
+      return byCategory === undefined || category == null
+        ? undefined
+        : { until: byCategory.until ?? null, category };
+    });
+  }
+
+  /**
+   * Topic `mute:<channelId>`: the caller's own setting for the channel, a mute or kept unmuted
+   * while its category is muted, if they made one.
+   */
+  ownMute(channelId: string): ChannelMute | undefined {
     return this.#mutes.get(channelId);
+  }
+
+  /** Topic `categoryMute:<categoryId>`: the caller's mute of the category while it lasts, if any. */
+  categoryMute(categoryId: string): CategoryMute | undefined {
+    return this.#categoryMutes.get(categoryId);
+  }
+
+  /** Whether `place` (a channel, not a thread) is muted for the caller, as `mute` says. */
+  #muted(place: string): boolean {
+    return this.mute(place) !== undefined;
   }
 
   /** Topic `saved`: the caller's saved messages, newest save first. */
@@ -1488,7 +1541,7 @@ export class RecordStore {
    */
   shownWhenCollapsed(channelId: string): boolean {
     return (
-      (this.unread(channelId) && !this.#mutes.has(channelId)) ||
+      (this.unread(channelId) && !this.#muted(channelId)) ||
       this.channelVoice(channelId).participants.length > 0
     );
   }
@@ -1496,7 +1549,7 @@ export class RecordStore {
   /** When the first timed mute ends, as milliseconds since the epoch; `null` with none. */
   nextMuteEnd(): number | null {
     let next: number | null = null;
-    for (const mute of this.#mutes.values()) {
+    for (const mute of [...this.#mutes.values(), ...this.#categoryMutes.values()]) {
       if (mute.until != null) {
         const end = Date.parse(mute.until);
         next = next === null ? end : Math.min(next, end);
@@ -1511,7 +1564,7 @@ export class RecordStore {
    */
   unreadPlaces(): ReadonlySet<string> {
     return this.#memoized("unread", () =>
-      unreadPlaces(this.#readStates, this.#channels, this.#mutes),
+      unreadPlaces(this.#readStates, this.#channels, (id) => this.#muted(id)),
     );
   }
 
@@ -1520,7 +1573,7 @@ export class RecordStore {
    * message first. Threads are not among them: their positions are kept apart.
    */
   unreadChannels(): readonly UnreadChannel[] {
-    return unreadChannels(this.#readStates, this.#channels, this.#mutes);
+    return unreadChannels(this.#readStates, this.#channels, (id) => this.#muted(id));
   }
 
   /** The tracked channels whose newest message by someone else is `messageId`. */
@@ -1895,12 +1948,11 @@ export class RecordStore {
       for (const mute of included.channelMutes ?? []) {
         this.#putMute(mute);
       }
+      for (const mute of included.categoryMutes ?? []) {
+        this.#putCategoryMute(mute);
+      }
       for (const setting of included.notificationSettings ?? []) {
-        this.#putNotificationSetting(
-          setting.community ?? null,
-          setting.channel ?? null,
-          setting.level,
-        );
+        this.#putNotificationSetting(setting, setting.level);
       }
       for (const { category } of included.categoryCollapses ?? []) {
         this.#setCollapsed(category, true);
@@ -2160,12 +2212,9 @@ export class RecordStore {
     this.#batch(() => {
       this.#channelLevels.clear();
       this.#communityLevels.clear();
+      this.#categoryLevels.clear();
       for (const setting of settings) {
-        this.#putNotificationSetting(
-          setting.community ?? null,
-          setting.channel ?? null,
-          setting.level,
-        );
+        this.#putNotificationSetting(setting, setting.level);
       }
       this.#touch("notifications");
     });
@@ -2203,16 +2252,23 @@ export class RecordStore {
   }
 
   /**
-   * Replaces every mute held with `mutes`, the complete list a bootstrap read, so a mute lifted
-   * while the stream was away does not linger.
+   * Replaces every mute held, the channels' own settings with `mutes` and the categories' with
+   * `categoryMutes`, the complete lists a bootstrap read, so a mute lifted while the stream was
+   * away does not linger.
    */
-  replaceMutes(mutes: readonly ChannelMute[]): void {
+  replaceMutes(mutes: readonly ChannelMute[], categoryMutes: readonly CategoryMute[]): void {
     this.#batch(() => {
       for (const channelId of Array.from(this.#mutes.keys())) {
         this.#removeMute(channelId);
       }
+      for (const categoryId of Array.from(this.#categoryMutes.keys())) {
+        this.#removeCategoryMute(categoryId);
+      }
       for (const mute of mutes) {
         this.#putMute(mute);
+      }
+      for (const mute of categoryMutes) {
+        this.#putCategoryMute(mute);
       }
     });
   }
@@ -2265,6 +2321,11 @@ export class RecordStore {
       for (const mute of Array.from(this.#mutes.values())) {
         if (mute.until != null && Date.parse(mute.until) <= now) {
           this.#removeMute(mute.channel);
+        }
+      }
+      for (const mute of Array.from(this.#categoryMutes.values())) {
+        if (mute.until != null && Date.parse(mute.until) <= now) {
+          this.#removeCategoryMute(mute.category);
         }
       }
     });
@@ -2446,6 +2507,7 @@ export class RecordStore {
       this.#readStates.clear();
       this.#unreadHolds.clear();
       this.#mutes.clear();
+      this.#categoryMutes.clear();
       this.#chosenPresence = null;
       this.#collapsed.clear();
       this.#blocked.clear();
@@ -2786,14 +2848,12 @@ export class RecordStore {
           this.#setBlocked(event.user, event.blocked);
           break;
         case "categoryCollapseChanged":
-          this.#setCollapsed(event.category, event.collapsed);
+          for (const category of event.categories) {
+            this.#setCollapsed(category, event.collapsed);
+          }
           break;
         case "notificationSettingChanged":
-          this.#putNotificationSetting(
-            event.community ?? null,
-            event.channel ?? null,
-            event.level ?? null,
-          );
+          this.#putNotificationSetting(event, event.level ?? null);
           break;
         case "presenceOverrideChanged":
           this.#putChosenPresence(
@@ -2803,10 +2863,21 @@ export class RecordStore {
           );
           break;
         case "channelMuteChanged":
-          if (event.muted) {
-            this.#putMute({ channel: event.channel, until: event.until ?? null });
-          } else {
+          if (event.muted == null) {
             this.#removeMute(event.channel);
+          } else {
+            this.#putMute({
+              channel: event.channel,
+              until: event.until ?? null,
+              muted: event.muted,
+            });
+          }
+          break;
+        case "categoryMuteChanged":
+          if (event.muted) {
+            this.#putCategoryMute({ category: event.category, until: event.until ?? null });
+          } else {
+            this.#removeCategoryMute(event.category);
           }
           break;
         case "savedMessageChanged":
@@ -3484,6 +3555,13 @@ export class RecordStore {
     this.#removedChannels.delete(channel.id);
     this.#touch(`channel:${channel.id}`);
     this.#touch(`channelAccess:${channel.id}`);
+    // A channel arriving in a category, or moved to another, takes that category's mute and
+    // level.
+    if (previous?.parentCategory !== channel.parentCategory) {
+      this.#touch(`mute:${channel.id}`);
+      this.#touch("notifications");
+      this.#touch("unread");
+    }
     // Where an unread channel counts depends on the channel, which may arrive after its state.
     if (this.#readStates.has(channel.id)) {
       this.#touch("unread");
@@ -3515,13 +3593,21 @@ export class RecordStore {
     this.#touch(`collapse:${categoryId}`);
   }
 
+  /** Holds the caller's `level` (`null` for none) for what `target` names, one of the three. */
   #putNotificationSetting(
-    community: string | null,
-    channel: string | null,
+    target: {
+      readonly community?: string | null;
+      readonly category?: string | null;
+      readonly channel?: string | null;
+    },
     level: NotificationLevel | null,
   ): void {
-    const levels = channel === null ? this.#communityLevels : this.#channelLevels;
-    const id = channel ?? community;
+    const [levels, id] =
+      target.channel != null
+        ? [this.#channelLevels, target.channel]
+        : target.category != null
+          ? [this.#categoryLevels, target.category]
+          : [this.#communityLevels, target.community ?? null];
     if (id === null) {
       return;
     }
@@ -3544,6 +3630,28 @@ export class RecordStore {
       this.#touch(`mute:${channelId}`);
       this.#touch("unread");
     }
+  }
+
+  #putCategoryMute(mute: CategoryMute): void {
+    this.#categoryMutes.set(mute.category, mute);
+    this.#touchCategoryMute(mute.category);
+  }
+
+  #removeCategoryMute(categoryId: string): void {
+    if (this.#categoryMutes.delete(categoryId)) {
+      this.#touchCategoryMute(categoryId);
+    }
+  }
+
+  /** Tells whatever shows a category's mute, or the mute of a channel in it, that it changed. */
+  #touchCategoryMute(categoryId: string): void {
+    this.#touch(`categoryMute:${categoryId}`);
+    for (const channel of this.#channels.values()) {
+      if (channel.parentCategory === categoryId) {
+        this.#touch(`mute:${channel.id}`);
+      }
+    }
+    this.#touch("unread");
   }
 
   #setBlocked(userId: string, blocked: boolean): boolean {

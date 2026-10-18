@@ -11,7 +11,9 @@ import type {
   Category,
   CategoryOverride,
   Channel,
+  CategoryMute,
   ChannelMute,
+  MuteInForce,
   ChannelOverride,
   ChosenPresence,
   ChannelVoice,
@@ -437,6 +439,11 @@ export function useCollapsed(categoryId: string): boolean {
   return useTopic(`collapse:${categoryId}`, (s) => s.collapsed(categoryId));
 }
 
+/** Whether any of `channelIds` is unread, as a category's menu offers marking them read. */
+export function useAnyUnread(channelIds: readonly string[]): boolean {
+  return useTopic("unread", (store) => channelIds.some((id) => store.unread(id)));
+}
+
 /**
  * The channels among `channelIds` that stay in view under a collapsed category: the unread and
  * unmuted ones, and voice channels with someone in the call. Subscribes to `unread`, which
@@ -517,9 +524,38 @@ export function useSilenced(userIds: readonly string[]): ReadonlySet<string> {
   return useMemo(() => new Set(key === "" ? [] : key.split(",")), [key]);
 }
 
-/** The caller's mute of a channel while it lasts, if any. */
-export function useMute(channelId: string): ChannelMute | undefined {
+/** The mute in force on a channel, its own or its category's, while it lasts, if any. */
+export function useMute(channelId: string): MuteInForce | undefined {
   return useTopic(`mute:${channelId}`, (s) => s.mute(channelId));
+}
+
+/** The caller's own setting for a channel, a mute or kept unmuted, if they made one. */
+export function useOwnMute(channelId: string): ChannelMute | undefined {
+  return useTopic(`mute:${channelId}`, (s) => s.ownMute(channelId));
+}
+
+/** The caller's mute of a category while it lasts, if any. */
+export function useCategoryMute(categoryId: string): CategoryMute | undefined {
+  return useTopic(`categoryMute:${categoryId}`, (s) => s.categoryMute(categoryId));
+}
+
+/**
+ * The caller's setting for a category (`own`), and what its channels without one of their own
+ * take without it (`inherited`).
+ */
+export function useCategoryNotificationLevel(
+  categoryId: string,
+  communityId: string,
+): { own: NotificationLevel | null; inherited: NotificationLevel } {
+  const own = useTopic(
+    "notifications",
+    (s) => s.categoryNotificationLevel(categoryId, communityId).own,
+  );
+  const inherited = useTopic(
+    "notifications",
+    (s) => s.categoryNotificationLevel(categoryId, communityId).inherited,
+  );
+  return { own, inherited };
 }
 
 /**

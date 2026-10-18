@@ -32,6 +32,7 @@ import { Avatar } from "@/features/communities/Avatar";
 import { displayNameOf } from "@/features/users/profile";
 import { useNameIn } from "@/features/users/nameIn";
 import { ParticipantMenu, ParticipantMenuButton } from "@/features/voice/ParticipantMenu";
+import { useContextMenu } from "@/features/layout/contextMenuState";
 import { CallBar } from "@/features/voice/CallBar";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { Identity } from "@/features/voice/VoiceParticipants";
@@ -326,7 +327,8 @@ function ParticipantTile({
   const blocked = useBlocked(userId);
   const name = useNameIn(user, useChannel(channelId)?.community) ?? m.unknownUser;
   const tile = useRef<HTMLLIElement>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const menu = useContextMenu();
+  const menuButton = useRef<HTMLButtonElement>(null);
   const avatar =
     camera === null ? <TileAvatar speaking={speaking} name={name} iconId={user?.icon} /> : null;
   return (
@@ -335,9 +337,8 @@ function ParticipantTile({
       data-voice-tile={userId}
       data-speaking={speaking ? "true" : undefined}
       onContextMenu={(event) => {
-        if (!self) {
-          event.preventDefault();
-          setMenuOpen(true);
+        if (user !== undefined) {
+          menu.onContextMenu(event);
         }
       }}
       className={
@@ -347,25 +348,23 @@ function ParticipantTile({
       }
     >
       {!self && (
-        <>
-          <ParticipantMenuButton
-            name={name}
-            onPress={() => {
-              setMenuOpen((open) => !open);
-            }}
-            className="absolute top-1 end-1"
-          />
-          <ParticipantMenu
-            channelId={channelId}
-            userId={userId}
-            name={name}
-            muted={muted}
-            sharing={sharingScreen}
-            anchorRef={tile}
-            isOpen={menuOpen}
-            onOpenChange={setMenuOpen}
-          />
-        </>
+        <ParticipantMenuButton
+          ref={menuButton}
+          name={name}
+          onPress={menu.toggleFromButton}
+          className="absolute top-1 end-1"
+        />
+      )}
+      {menu.opened && user !== undefined && (
+        <ParticipantMenu
+          channelId={channelId}
+          user={user}
+          name={name}
+          muted={muted}
+          sharing={sharingScreen}
+          menu={menu}
+          button={menuButton}
+        />
       )}
       {camera !== null && (
         <CameraVideo track={camera} speaking={speaking} name={name} mirrored={self} />

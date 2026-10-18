@@ -62,14 +62,13 @@ export function CopyIdButton({
       label={label}
       labelled={labelled}
       onPress={() => {
-        if (button.current !== null) {
-          void copyText(id, button.current).then((ok) => {
-            setCopied(ok);
-            if (ok) {
-              onCopied?.();
-            }
-          });
-        }
+        // A menu's item has no element of its own; the menu has closed by now.
+        void copyText(id, button.current ?? document.body).then((ok) => {
+          setCopied(ok);
+          if (ok) {
+            onCopied?.();
+          }
+        });
       }}
       className={
         labelled

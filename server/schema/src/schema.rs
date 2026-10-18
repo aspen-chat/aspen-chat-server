@@ -98,6 +98,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    category_mute (user, category) {
+        user -> Uuid,
+        category -> Uuid,
+        until -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     category_override (category, role) {
         category -> Uuid,
         role -> Uuid,
@@ -132,6 +140,7 @@ diesel::table! {
         user -> Uuid,
         channel -> Uuid,
         until -> Nullable<Timestamptz>,
+        muted -> Bool,
     }
 }
 
@@ -531,6 +540,7 @@ diesel::table! {
         community -> Nullable<Uuid>,
         channel -> Nullable<Uuid>,
         level -> Text,
+        category -> Nullable<Uuid>,
     }
 }
 
@@ -1000,6 +1010,8 @@ diesel::joinable!(bot_token -> user (bot));
 diesel::joinable!(category -> community (community));
 diesel::joinable!(category_collapse -> category (category));
 diesel::joinable!(category_collapse -> user (user));
+diesel::joinable!(category_mute -> category (category));
+diesel::joinable!(category_mute -> user (user));
 diesel::joinable!(category_override -> category (category));
 diesel::joinable!(category_override -> community_role (role));
 diesel::joinable!(channel -> category (parent_category));
@@ -1048,6 +1060,7 @@ diesel::joinable!(message_link_preview -> message (message_id));
 diesel::joinable!(moderation_log -> channel (channel));
 diesel::joinable!(moderation_log -> community (community));
 diesel::joinable!(moderation_log -> user (actor));
+diesel::joinable!(notification_setting -> category (category));
 diesel::joinable!(notification_setting -> channel (channel));
 diesel::joinable!(notification_setting -> community (community));
 diesel::joinable!(notification_setting -> user (user));
@@ -1119,6 +1132,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     bot_transfer,
     category,
     category_collapse,
+    category_mute,
     category_override,
     channel,
     channel_mute,

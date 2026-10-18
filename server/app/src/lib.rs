@@ -28,6 +28,7 @@ pub mod bot;
 pub mod bot_command;
 pub mod category;
 pub mod category_collapse;
+pub mod category_mute;
 pub mod channel;
 pub mod channel_mute;
 pub mod channel_presence;

@@ -34,7 +34,9 @@ import {
   FolderTile,
   RenameFolderDialog,
 } from "@/features/communities/RailFolder";
+import { CommunityMenu } from "@/features/communities/CommunityMenu";
 import { FOLDER_TINT, folderName } from "@/features/communities/folders";
+import { useContextMenu } from "@/features/layout/contextMenuState";
 import { MentionBadge } from "@/features/mentions/MentionBadge";
 import { mentionsText } from "@/features/mentions/mentions";
 import { useMessages } from "@/i18n/context";
@@ -471,6 +473,7 @@ function CommunityRow({
   const m = useMessages();
   const { entry, band } = row;
   const { community } = entry;
+  const menu = useContextMenu();
   const name =
     entry.domain === null
       ? community.name
@@ -487,10 +490,23 @@ function CommunityRow({
       }
     >
       <div
+        onContextMenu={(event) => {
+          menu.onContextMenu(event);
+        }}
         className={
           "relative isolate rounded-full " + tileStateClass + (current ? " " + currentRing : "")
         }
       >
+        {menu.opened && (
+          <SourceScope source={entry.source}>
+            <CommunityMenu
+              menu={menu}
+              community={community}
+              unread={entry.unread}
+              current={current}
+            />
+          </SourceScope>
+        )}
         {entry.unread && <UnreadDot />}
         <RailBadge count={entry.tags} />
         {entry.domain !== null && <ForeignMark />}
