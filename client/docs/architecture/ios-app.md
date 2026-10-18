@@ -82,6 +82,6 @@ Both answer with the text written.
 | `testCatchesUpAfterTheBackground` | Shows what was written while the app was suspended, once it is back, without a reload |
 | `testOpensAnInviteLink` | Opens an `aspen://app/invite/…` link from outside the app on its invite |
 | `testReactsFromALongPress` | Opens a message's actions with a held finger, reacts from the sheet, and takes the reaction back |
-| `testSendsAPictureFromThePhotoLibrary` | Attaches a picture through the system's photo picker, describes it, and sends it |
+| `testSendsAPictureFromThePhotoLibrary` | Attaches a picture through the system's photo picker, describes it with the description dialog's Save above the keyboard, and sends it |
 
 Only a device shows the extension launched for a push, and its replacement of the placeholder.

@@ -17,6 +17,7 @@ import {
 } from "./theme/palettes";
 import { followSystemTextSize } from "./theme/systemTextSize";
 import { followTitleBar } from "./theme/titleBar";
+import { followVisibleArea } from "./theme/visibleArea";
 import { followZoom } from "./theme/zoom";
 // Aspen's own typefaces.
 import "./faces.css";
@@ -34,6 +35,7 @@ void applyStoredFonts();
 followZoom();
 followSystemTextSize();
 followTitleBar();
+followVisibleArea();
 // The Noto faces themselves, whose rules are too long to hold up the first paint for; text in
 // their scripts shows in the system's fonts until they load.
 void import("./generated/fontFaces.css");

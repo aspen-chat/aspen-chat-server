@@ -375,9 +375,20 @@ final class AppUITests: XCTestCase {
         }
         let description = "A gradient \(UUID().uuidString.prefix(6))"
         type(description, into: field)
-        // The keyboard covers the dialog's Save, as it would a person's finger, until put away.
-        app.toolbars.buttons["Done"].firstMatch.tap()
-        web.buttons["Save"].firstMatch.tap()
+        // The dialog stays above the keyboard and the bar over it (`theme/visibleArea.ts`), so
+        // Save is tapped with the keyboard still up.
+        let save = web.buttons["Save"].firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 5), "no Save: \(app.debugDescription)")
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.exists, "no keyboard came up")
+        let bar = app.toolbars.firstMatch
+        let keyboardTop = bar.exists ? min(bar.frame.minY, keyboard.frame.minY) : keyboard.frame.minY
+        // The dialog moves once the keyboard has settled, a moment after the keyboard is first seen.
+        let clear = NSPredicate { _, _ in save.frame.maxY <= keyboardTop + 1 }
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [expectation(for: clear, evaluatedWith: nil)], timeout: 5), .completed,
+            "Save \(save.frame) is under the keyboard, which starts at \(keyboardTop)")
+        save.tap()
         // The message box is hidden from assistive technology until the dialog has closed.
         let send = web.buttons["Send"].firstMatch
         XCTAssertTrue(send.waitForExistence(timeout: 10), "no Send once described: \(app.debugDescription)")

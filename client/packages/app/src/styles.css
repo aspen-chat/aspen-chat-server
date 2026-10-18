@@ -454,6 +454,13 @@ body,
   -webkit-app-region: no-drag;
 }
 
+/* The part of the page that can be seen, which a keyboard drawn over it shortens
+   (`theme/visibleArea.ts`). */
+:root {
+  --visible-top: 0px;
+  --visible-bottom: 0px;
+}
+
 /* A modal's overlay covers the whole screen outside `#root`, so it keeps its content clear of the
    notch and the home indicator itself, with at least 1rem all round. */
 @utility overlay-inset {

@@ -44,6 +44,8 @@ The box grows with what is written, up to its row's width and no further:
 
 When the message list shrinks, as when a phone's keyboard opens, it keeps its bottom edge where it was. It stays pinned to the newest message, or moves down by what it lost, so what is being answered stays in view. The web app asks for this with `interactive-widget=resizes-content` in its viewport.
 
+WebKit on iOS ignores that setting: its keyboard is drawn over the page, which keeps its height, and WebKit scrolls only the focused field into view. Modals therefore follow the part of the page left visible (`theme/visibleArea.ts`, which sets `--visible-top` and `--visible-bottom`): their overlay ends where the keyboard begins, so a dialog's buttons stay above it.
+
 ### Jump to latest
 
 "Jump to latest" answers at once:
