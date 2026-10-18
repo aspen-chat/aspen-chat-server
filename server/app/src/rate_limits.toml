@@ -81,7 +81,10 @@ user = { requests = 1200, per_seconds = 60, burst = 300, bucket = "api" }
 # Everything from one address, signed in or not; many people may share one address.
 ip = { requests = 3000, per_seconds = 60, burst = 600, bucket = "api" }
 
-# What a stranger can call to get in: tight per address.
+# What a stranger can call to get in, per address. Generous: everyone at a large event, or
+# behind one carrier-grade NAT, may sign in at once from the same address. Guessing at one
+# account is held by the per-username limits of `POST /auth/login` and by `app::two_factor`'s
+# count of wrong codes, neither of which an address can widen.
 [rate_limits.groups.sign_in]
 endpoints = [
   "GET /auth/passkey",
@@ -98,7 +101,7 @@ endpoints = [
   "POST /auth/password-resets/{reset}/codes",
   "POST /auth/password-resets/{reset}/completion",
 ]
-limits = { ip = { requests = 30, per_seconds = 60, burst = 10, bucket = "sign_in" } }
+limits = { ip = { requests = 3000, per_seconds = 60, burst = 1000, bucket = "sign_in" } }
 
 # Asked every couple of seconds while a sign-in code shows (`app::device_link`), for a minute
 # at most; counted per code, so a device making codes one after another is held by the
