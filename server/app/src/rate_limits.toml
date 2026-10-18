@@ -190,10 +190,12 @@ endpoints = [
 ]
 limits = { user = { requests = 20, per_seconds = 600, burst = 10, bucket = "security" } }
 
-# Starting and finishing uploads to object storage.
+# Starting and finishing uploads to object storage: two requests a file, so a burst of 100 lets
+# one message carry its most attachments (`message::MAX_ATTACHMENTS`, 50) at once. The bytes
+# are bounded by the deployment's upload quota.
 [rate_limits.groups.uploads]
 endpoints = ["POST /attachments", "POST /attachments/{attachment}/confirm", "POST /icons", "POST /icons/{icon}/confirm"]
-limits = { user = { requests = 60, per_seconds = 600, burst = 20, bucket = "uploads" } }
+limits = { user = { requests = 300, per_seconds = 600, burst = 100, bucket = "uploads" } }
 
 # The Administration Dashboard, kept to a pace a person clicking through it never reaches.
 [rate_limits.groups.admin]
@@ -252,7 +254,9 @@ endpoints = [
 ]
 limits = { user = { requests = 120, per_seconds = 60, burst = 30, bucket = "admin" } }
 
-# Shaping communities, their channels and invites, calls, and the voice server registry.
+# Shaping communities, their channels and invites, calls, and the voice server registry, and
+# moderating them: a moderator clearing a raid by hand may remove or ban a hundred accounts at
+# once, and five a second after.
 [rate_limits.groups.manage]
 endpoints = [
   "PATCH /communities/{community}",
@@ -300,7 +304,7 @@ endpoints = [
   "PATCH /communities/{community}/plugins/{plugin}",
   "DELETE /communities/{community}/plugins/{plugin}",
 ]
-limits = { user = { requests = 60, per_seconds = 60, burst = 20, bucket = "manage" } }
+limits = { user = { requests = 300, per_seconds = 60, burst = 100, bucket = "manage" } }
 
 # Plugins' own routes (`app::plugin::route`): each runs a plugin, which may call other hosts, so
 # each user's requests to one plugin are counted apart, and every user's together.
@@ -323,8 +327,10 @@ user = { requests = 60, per_seconds = 60, burst = 20, bucket = "plugin_routes" }
 ip = { requests = 600, per_seconds = 60, burst = 200 }
 
 # Private URLs that reach a plugin as their owner, such as a calendar app's feed, which polls.
+# Calendar services fetch every subscriber's feed from their own servers, so an address's limit
+# is high, and each URL's own (`per_secret`) is what holds one feed.
 [rate_limits.endpoints."GET /plugins/{plugin}/capabilities/{secret}"]
-ip = { requests = 60, per_seconds = 60, burst = 20 }
+ip = { requests = 600, per_seconds = 60, burst = 200 }
 per_secret = { requests = 30, per_seconds = 60, burst = 10 }
 
 [rate_limits.endpoints."POST /auth/login"]
@@ -388,12 +394,14 @@ user = { requests = 10, per_seconds = 600, burst = 3 }
 [rate_limits.endpoints."POST /admin/newsletter/posts/{post}/sending"]
 user = { requests = 5, per_seconds = 3600, burst = 3 }
 
-# The page unsubscribe links in mail open, and the one-click unsubscribe mail programs post.
+# The page unsubscribe links in mail open, and the one-click unsubscribe mail programs post. Mail
+# providers post one-click unsubscribes from their own servers, for all their users at once,
+# after a newsletter, so an address's limit is high; each link names its own subscriber.
 [rate_limits.endpoints."GET /email/unsubscribe"]
-ip = { requests = 30, per_seconds = 60, burst = 10, bucket = "unsubscribe" }
+ip = { requests = 600, per_seconds = 60, burst = 200, bucket = "unsubscribe" }
 
 [rate_limits.endpoints."POST /email/unsubscribe"]
-ip = { requests = 30, per_seconds = 60, burst = 10, bucket = "unsubscribe" }
+ip = { requests = 600, per_seconds = 60, burst = 200, bucket = "unsubscribe" }
 
 # Each app refreshes its session every few hours, and phones' push handlers refresh theirs, so it
 # presents no device credential (`device_exempt`). A refresh token is a secret only its holder
