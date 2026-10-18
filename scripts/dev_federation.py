@@ -27,6 +27,7 @@ Needs Python 3.10, `openssl`, and `docker compose` with the database and Seaweed
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import signal
@@ -130,8 +131,17 @@ def make_certificates() -> None:
         issue_certificate(deployment.host)
 
 
+def is_address(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
 def issue_certificate(host: str) -> tuple[Path, Path]:
-    """A certificate for `host` from the development authority, made once: its PEM and key."""
+    """A certificate for `host`, a name or an IP address, from the development authority, made
+    once: its PEM and key."""
     cert = WORK / f"{host}.pem"
     key = WORK / f"{host}.key"
     if cert.exists():
@@ -140,7 +150,7 @@ def issue_certificate(host: str) -> tuple[Path, Path]:
     request = WORK / f"{host}.csr"
     extensions = WORK / f"{host}.ext"
     extensions.write_text(
-        f"subjectAltName=DNS:{host}\n"
+        f"subjectAltName={'IP' if is_address(host) else 'DNS'}:{host}\n"
         "extendedKeyUsage=serverAuth\n"
         "basicConstraints=critical,CA:FALSE\n"
         "keyUsage=critical,digitalSignature\n"
