@@ -8,6 +8,7 @@ import {
   RENEWAL_HEADER,
   solvePuzzle,
 } from "./device";
+import { serverDelayMs } from "./events";
 import { acceptLanguage } from "./languages";
 import type { components, paths } from "./generated/openapi";
 import {
@@ -583,6 +584,8 @@ export class AspenClient {
   /**
    * Exchanges the refresh token for a new session token. Returns `false` (and clears the
    * session) when the refresh token itself is rejected, which means the user must log in again.
+   * Refused for going too fast, it tries once more after the server's `Retry-After`, spread
+   * (`serverDelayMs`), when that is at most `RATE_LIMIT_RETRY_MAX_MS`.
    */
   refreshSession(): Promise<boolean> {
     this.#refreshing ??= this.#refreshSessionUncached().finally(() => {
@@ -615,11 +618,18 @@ export class AspenClient {
       return false;
     }
     // Bypass the authenticated wrapper: this request must not itself trigger a refresh.
-    const response = await this.#fetch(`${this.baseUrl}${API_PREFIX}/auth/token-refresh`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ refreshToken: session.refreshToken }),
-    });
+    const send = () =>
+      this.#fetch(`${this.baseUrl}${API_PREFIX}/auth/token-refresh`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ refreshToken: session.refreshToken }),
+      });
+    let response = await send();
+    const waitMs = response.status === 429 ? retryAfterOf(response) : null;
+    if (waitMs !== null && waitMs <= RATE_LIMIT_RETRY_MAX_MS) {
+      await this.#sleep(serverDelayMs(waitMs));
+      response = await send();
+    }
     if (response.status === 401) {
       this.#setSession(null);
       return false;
