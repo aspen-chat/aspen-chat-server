@@ -254,9 +254,10 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
     );
   }
   return (
+    // Named by the picture's own text alternative, its description where it has one: a label on
+    // the button would hide it, since a button's content is presentational to assistive technology.
     <Button
       onPress={onOpen}
-      aria-label={m.openImage}
       className="inline-block max-w-full rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <img

@@ -1353,7 +1353,6 @@
   "describeFailed": "The description could not be saved: {reason}",
   "tooManyAttachments": "A message may carry at most {max, plural, one {# attachment} other {# attachments}}. Send the rest in another message.",
   "imageAlt": "Image: {name}",
-  "openImage": "Open image",
   "viewAllImages": "View all {count, plural, one {# image} other {# images}}",
   "moreImages": "+{count, number}",
   "gallery": {
