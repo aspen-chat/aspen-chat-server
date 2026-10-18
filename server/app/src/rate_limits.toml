@@ -296,15 +296,20 @@ user = { requests = 5, per_seconds = 3600, burst = 3 }
 
 # Starting a reset, a passkey ceremony, or a device link each keeps a little state in Valkey
 # until it expires (half an hour, five minutes, a minute), so everyone's starts together are
-# limited too, generously, to bound what a crowd of addresses can store there.
+# limited too, generously, to bound what a crowd of addresses can store there. One address's
+# starts are counted apart from the `sign_in` group, well under those global limits, so one
+# machine cannot spend everyone's.
 [rate_limits.endpoints."POST /auth/password-resets"]
 global = { requests = 600, per_seconds = 60, burst = 300 }
+ip = { requests = 60, per_seconds = 60, burst = 30 }
 
 [rate_limits.endpoints."POST /auth/passkey-ceremonies"]
 global = { requests = 3000, per_seconds = 60, burst = 1000 }
+ip = { requests = 300, per_seconds = 60, burst = 100 }
 
 [rate_limits.endpoints."POST /auth/device-links"]
 global = { requests = 3000, per_seconds = 60, burst = 1000 }
+ip = { requests = 300, per_seconds = 60, burst = 100 }
 
 # Each mails the reset code again, to an address its asker answered with; the account's mail
 # is also limited where it is queued (`app::email::reset`).

@@ -60,7 +60,7 @@ Giving one, by starting an offer or scanning a request, is a security change. It
 
 ## Rate limits
 
-Starting a link, like starting a passkey ceremony, is limited per address. It is also limited, generously, by everyone's starts together (`rate_limits.toml`), since each keeps state in Valkey until it expires.
+Starting a link, like starting a passkey ceremony, is limited per address. It is also limited, generously, by everyone's starts together (`rate_limits.toml`), since each keeps state in Valkey until it expires. The per-address limit is well under that one, so one address cannot spend everyone's starts.
 
 ## When access is given or taken away
 

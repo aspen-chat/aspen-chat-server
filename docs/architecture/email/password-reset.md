@@ -53,7 +53,7 @@ Starting a reset ends the one before. `email:reset-live:{user}` names the live o
 
 ## Rate limits
 
-- Each step is limited per address in the `sign_in` group.
+- The second and third steps are limited per address in the `sign_in` group. The first step has a per-address limit of its own, well under everyone's starts together, so one address cannot spend them all.
 - The first step is also limited by everyone's starts together, so a crowd of addresses cannot fill Valkey with resets.
 - The second and third steps are limited per reset.
 
