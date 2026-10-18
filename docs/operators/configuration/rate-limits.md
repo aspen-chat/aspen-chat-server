@@ -14,6 +14,7 @@ over them: a limit you give replaces the built-in one whole.
 | `max_suspension_seconds` | `86400` | The longest this server honours a suspension of the limits (`aspen-chat-server limits suspend`), counted from when it began. |
 | `fail_closed` | sign-in, password reset, registration, and invite endpoints | Endpoints refused with `serverBusy` while Valkey cannot be reached to count their limits. See [When Valkey is down](#when-valkey-is-down). |
 | `device_exempt` | health checks, the passkey page, token refresh, federation, unsubscribe, the web client's pages, plugins' assets and capability URLs | Endpoints a request without a session may call without a device credential. A list given here replaces the built-in one whole. See [Who a request counts as](#who-a-request-counts-as). |
+| `bot_multiplier` | `10` | How many times a person's own limits a bot's are, at once and over time. Raise it for a busy bridge or logging bot. |
 | `device_puzzle_bits` | `20` | How hard earning a device credential is: about a second or two on a mid-range phone at 20. Each more doubles it; at most 32. |
 
 ## Who a request counts as

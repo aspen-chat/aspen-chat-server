@@ -316,6 +316,8 @@ pub struct Identity<'a> {
     pub ip: Option<IpAddr>,
     pub device: Option<crate::device_credential::DeviceId>,
     pub user: Option<UserId>,
+    /// `user` is a bot, whose own limits are `bot_multiplier` times a person's.
+    pub bot: bool,
     pub username: Option<&'a str>,
     pub params: Vec<(&'a str, &'a str)>,
 }
@@ -345,6 +347,8 @@ pub struct RateLimiter {
     fail_closed: HashSet<String>,
     /// The routes a request without a valid session must present a device credential to.
     requires_device: HashSet<String>,
+    /// How many times a person's limits a bot's own are (`[rate_limits] bot_multiplier`).
+    bot_multiplier: u64,
     /// Unix milliseconds of the last "Valkey unreachable" log line, so an outage logs twice a
     /// minute rather than on every request.
     last_failure_log: AtomicU64,
@@ -389,6 +393,9 @@ impl RateLimiter {
     /// Compiles the configuration against the server's routes. The error names what is wrong.
     pub fn compile(config: &RateLimitConfig, routes: &[Route]) -> Result<Self, String> {
         let addresses = ClientAddresses::new(&config.trusted_proxies, config.ipv6_prefix)?;
+        if config.bot_multiplier == 0 {
+            return Err("rate_limits.bot_multiplier must be at least 1".into());
+        }
         let by_key: HashMap<&str, &Route> = routes.iter().map(|r| (r.key.as_str(), r)).collect();
         for key in config.endpoints.keys() {
             if !by_key.contains_key(key.as_str()) {
@@ -506,6 +513,7 @@ impl RateLimiter {
             unknown,
             fail_closed,
             requires_device,
+            bot_multiplier: u64::from(config.bot_multiplier),
             last_failure_log: AtomicU64::new(0),
         })
     }
@@ -572,11 +580,8 @@ impl RateLimiter {
         let started = std::time::Instant::now();
         // Sent concurrently, which the client pipelines on its connection: one round trip.
         let waits = futures_util::future::join_all(keyed.iter().map(|(rule, key)| {
-            valkey.eval::<i64, _, _, _>(
-                script,
-                key.clone(),
-                vec![rule.emission_ms, rule.tolerance_ms],
-            )
+            let (emission_ms, tolerance_ms) = self.rate_for(rule, identity);
+            valkey.eval::<i64, _, _, _>(script, key.clone(), vec![emission_ms, tolerance_ms])
         }))
         .await;
         let mut longest = 0;
@@ -606,6 +611,21 @@ impl RateLimiter {
         } else {
             Decision::Allowed
         }
+    }
+
+    /// A rule's emission interval and burst tolerance for this request: a bot's own limits are
+    /// `bot_multiplier` times as many requests, at once and over time. With `e` the interval and
+    /// `b` the burst, the tolerance is `(b - 1) e`; multiplied, `(m b - 1) e / m`, which is the
+    /// tolerance plus `e` less the new interval.
+    fn rate_for(&self, rule: &Rule, identity: &Identity<'_>) -> (u64, u64) {
+        if !(identity.bot && rule.dimension.needs_user()) || self.bot_multiplier == 1 {
+            return (rule.emission_ms, rule.tolerance_ms);
+        }
+        let emission_ms = rule.emission_ms.div_ceil(self.bot_multiplier).max(1);
+        (
+            emission_ms,
+            rule.tolerance_ms + rule.emission_ms - emission_ms,
+        )
     }
 
     /// The Valkey key of a rule's bucket for this request, or `None` when the request lacks
@@ -834,6 +854,7 @@ mod tests {
             fail_closed: Default::default(),
             device_exempt: vec!["GET /health".into()],
             device_puzzle_bits: 20,
+            bot_multiplier: 10,
         }
     }
 
@@ -1145,6 +1166,33 @@ mod tests {
     }
 
     #[test]
+    fn a_bot_s_own_limits_are_multiplied() {
+        let limiter = RateLimiter::compile(&config(), &routes()).unwrap();
+        // 100 a minute with the default burst of 100: 600 ms apart, 99 of them of credit.
+        let rule: &Rule = rules_of(&limiter, "GET /channels/{channel}", &Dimension::User)[0];
+        let person = Identity {
+            user: Some(UserId(uuid::Uuid::nil())),
+            ..Identity::default()
+        };
+        let bot = Identity {
+            bot: true,
+            ..Identity::default()
+        };
+        assert_eq!(limiter.rate_for(rule, &person), (600, 600 * 99));
+        // 1000 a minute, 1000 at once: 60 ms apart, 999 of them of credit.
+        assert_eq!(limiter.rate_for(rule, &bot), (60, 60 * 999));
+        // Its address's and everyone's limits are not its own.
+        let global = Rule {
+            dimension: Dimension::Ip,
+            ..rule.clone()
+        };
+        assert_eq!(limiter.rate_for(&global, &bot), (600, 600 * 99));
+        let mut none = config();
+        none.bot_multiplier = 0;
+        assert!(RateLimiter::compile(&none, &routes()).is_err());
+    }
+
+    #[test]
     fn a_fail_closed_pattern_must_match_an_endpoint() {
         let mut config = config();
         config.fail_closed = vec!["POST /nowhere".into()];
@@ -1165,6 +1213,7 @@ mod tests {
             ip: Some("2001:db8:1:2:3:4:5:6".parse().unwrap()),
             device: None,
             user: Some(user),
+            bot: false,
             username: None,
             params: vec![("channel", "c1")],
         };

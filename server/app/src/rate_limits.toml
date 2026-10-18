@@ -108,6 +108,9 @@ device_exempt = [
 # The zero bits a device credential's puzzle asks for: about a million hashes, a second or two
 # on a mid-range phone and a fraction of one on a computer. Each more doubles it.
 device_puzzle_bits = 20
+# How many times a person's own limits (`user`, `user_per_<param>`) a bot's are, at once and
+# over time: a bot serves a whole community, a bridge, or a moderation queue, as no person does.
+bot_multiplier = 10
 
 # Applies to every endpoint, beneath any group or endpoint setting.
 [rate_limits.default]

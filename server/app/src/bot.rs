@@ -1,10 +1,11 @@
 //! Bots: users that sign in only with a token, made by a person, who owns and manages them.
 //!
 //! A bot is an ordinary row of `user` with `bot` set, so everything a person may do through
-//! the API a bot may do too, under the same permissions and limits. It has no password, no
-//! second factor, and no sessions: its one token (`bot_token`, kept only as a SHA-256 digest)
-//! is sent as the bearer token of every request and of the event stream, and stands until its
-//! owner issues another. Its owner (`user.bot_owner`) renames it, issues its token, offers it to
+//! the API a bot may do too, under the same permissions and limits, its own per-user limits
+//! `[rate_limits] bot_multiplier` times a person's. It has no password, no second factor, and
+//! no sessions: its one token (`bot_token`, kept only as a SHA-256 digest) is sent as the
+//! bearer token of every request and of the event stream, and stands until its owner issues
+//! another. Its owner (`user.bot_owner`) renames it, issues its token, offers it to
 //! someone else, and deletes it. Issuing a token and offering the bot take a recently verified
 //! sign-in; an offer (`bot_transfer`) hands the bot over only when its recipient accepts it,
 //! which gives the bot a new token that only the recipient is shown. An owner who deletes their account leaves their bots working and ownerless,

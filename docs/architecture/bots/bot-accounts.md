@@ -12,7 +12,7 @@ A bot is a user with `bot` set. It signs in only with its token:
 - **Tokens made before bot tokens were signed** (`aspenbot_` and 256 random bits) still work. Only a lookup tells one from a made-up one, so these are what an address's `ip_rejected_tokens` limit counts, looked at before each lookup. Resetting a bot's token gives it a signed one.
 - It is sent as the bearer token of every request, and as the `sessionToken` of the event stream's `identify`.
 
-So everything a person may do through the API a bot may do too, under the same permissions and limits.
+So everything a person may do through the API a bot may do too, under the same permissions and limits, but for its own: a bot's per-user limits are `[rate_limits] bot_multiplier` (10) times a person's, its sustained rate and its burst both (`RateLimiter::rate_for`), since a bot serves a whole community. Its address's and everyone's limits are no larger.
 
 A bot has no password, second factors, or sessions:
 

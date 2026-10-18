@@ -749,7 +749,7 @@ impl FromRequestParts<GlobalServerContext> for EnrollingSessionUser {
                         return Err(ApiError::new(ProblemCode::Internal));
                     }
                 };
-                crate::rate_limit::limit_session(state, parts, found.0.id).await?;
+                crate::rate_limit::limit_session(state, parts, found.0.id, found.0.bot).await?;
                 found
             }
         };

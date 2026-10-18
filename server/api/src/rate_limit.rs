@@ -447,6 +447,7 @@ async fn admit(
         match aspen_app::user::user_for_token(state, &token).await {
             Ok(Some(found)) => {
                 identity.user = Some(found.0.id);
+                identity.bot = found.0.bot;
                 parts.extensions.insert(ResolvedSession(Some(found)));
             }
             Ok(None) => {
@@ -505,6 +506,7 @@ pub async fn limit_session(
     state: &GlobalServerContext,
     parts: &mut Parts,
     user: UserId,
+    bot: bool,
 ) -> ApiResult<()> {
     let Some(matched) = parts.extensions.get::<MatchedPath>().cloned() else {
         return Ok(());
@@ -515,6 +517,7 @@ pub async fn limit_session(
     let identity = Identity {
         ip,
         user: Some(user),
+        bot,
         params: raw.as_ref().map(params).unwrap_or_default(),
         ..Identity::default()
     };
@@ -532,10 +535,12 @@ pub async fn limit_event_stream(
     state: &GlobalServerContext,
     ip: Option<IpAddr>,
     user: UserId,
+    bot: bool,
 ) -> Decision {
     let identity = Identity {
         ip,
         user: Some(user),
+        bot,
         ..Identity::default()
     };
     let route = aspen_app::rate_limit::route_key(EVENT_STREAM_ROUTE.0, EVENT_STREAM_ROUTE.1);
@@ -686,6 +691,7 @@ mod tests {
             trusted_proxies: vec!["10.0.0.0/8".into()],
             ipv6_prefix: 64,
             max_suspension_seconds: 3600,
+            bot_multiplier: 1,
             ..Default::default()
         };
         let limiter = RateLimiter::compile(&config, &[]).unwrap();
