@@ -45,8 +45,9 @@ add, change, disable, and remove them in the Administration Dashboard. From the 
 ### `url` and `capacity`
 
 - `url` is where clients reach the voice server, such as `https://voice-1.chat.example.org`.
-- It is an `http` or `https` address.
-- It must be `https` wherever `public_url` is, here and in the dashboard.
+- It is an `https` address, here and in the dashboard. Clients reach a voice server over `https`
+  alone, so they never try one at an `http` address, except a development build of the client at
+  `localhost`.
 - `capacity` is the most people it carries at once. `voice_server estimate-capacity` suggests
   one.
 

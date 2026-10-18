@@ -26,25 +26,30 @@ const serverPaths = ["/api", "/auth/passkey", "/.well-known/aspen", "/email/unsu
  * the app's own files alone; nothing is loaded from the app's own origin but its scripts,
  * styles, and fonts (and, on a phone, whose origin is the app's bundle, its pictures), so a
  * `file:` address (another machine's share, on Windows) can never be a picture, a video, or a
- * request; pictures and videos come from deployments over `https:`, or `http:` on this machine
- * for a development one, and requests go to any deployment, over `http:` too, since the person
- * picks the server; frames are video players and plugin views, wherever their deployment is.
+ * request; pictures, videos, requests, and frames (video players and plugin views) go to
+ * deployments over `https:` and `wss:` alone, as the app connects nowhere else
+ * (`securelyReached`), and to plain `http:` and `ws:` on this machine only in a development
+ * build (the dev server's, or one made with `VITE_ALLOW_LOOPBACK_HTTP=1`), which may reach a
+ * deployment there.
  *
  * Capacitor's bridge script on Android is injected ahead of the policy, where an old web view
  * cannot inject it otherwise, and a policy in the page governs only what follows it.
  */
-function shellPolicy(shell: "desktop" | "mobile"): string {
+function shellPolicy(shell: "desktop" | "mobile", development: boolean): string {
   const own = shell === "mobile" ? "'self' " : "";
-  const loopback = "http://localhost:* http://127.0.0.1:* http://*.localhost:*";
+  const loopback = development ? " http://localhost:* http://127.0.0.1:* http://*.localhost:*" : "";
+  const loopbackSockets = development
+    ? " ws://localhost:* ws://127.0.0.1:* ws://*.localhost:*"
+    : "";
   return [
     "default-src 'none'",
     "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",
-    `img-src ${own}data: blob: https: ${loopback}`,
-    `media-src ${own}data: blob: https: ${loopback}`,
-    "connect-src https: wss: http: ws:",
-    `frame-src https: ${loopback}`,
+    `img-src ${own}data: blob: https:${loopback}`,
+    `media-src ${own}data: blob: https:${loopback}`,
+    `connect-src https: wss:${loopback}${loopbackSockets}`,
+    `frame-src https:${loopback}`,
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'none'",
@@ -56,7 +61,7 @@ function shellPolicy(shell: "desktop" | "mobile"): string {
  * Puts the shell's policy (`shellPolicy`) first in the page's head. The desktop app's page also
  * loses its icons, which a window does not show and the policy would refuse to load from a file.
  */
-function writtenPolicy(shell: "desktop" | "mobile"): Plugin {
+function writtenPolicy(shell: "desktop" | "mobile", development: boolean): Plugin {
   return {
     name: "aspen-shell-policy",
     transformIndexHtml: (html) => ({
@@ -67,7 +72,10 @@ function writtenPolicy(shell: "desktop" | "mobile"): Plugin {
       tags: [
         {
           tag: "meta",
-          attrs: { "http-equiv": "Content-Security-Policy", content: shellPolicy(shell) },
+          attrs: {
+            "http-equiv": "Content-Security-Policy",
+            content: shellPolicy(shell, development),
+          },
           injectTo: "head-prepend",
         },
       ],
@@ -111,7 +119,9 @@ export default defineConfig(({ mode, command }) => {
       webClientBuild(command),
       react(),
       tailwindcss(),
-      ...(mode === "desktop" || mode === "mobile" ? [writtenPolicy(mode)] : []),
+      ...(mode === "desktop" || mode === "mobile"
+        ? [writtenPolicy(mode, command === "serve" || env["VITE_ALLOW_LOOPBACK_HTTP"] === "1")]
+        : []),
     ],
     resolve: {
       alias: {

@@ -813,6 +813,7 @@
   "changeServer": "Change",
   "continue": "Continue",
   "invalidServerUrl": "Enter a deployment URL such as chat.example.org.",
+  "insecureServerUrl": "Aspen connects to a deployment over HTTPS only. Enter its https:// address, or ask its administrators to serve it over HTTPS.",
   "loading": "Loading…",
   "retry": "Retry",
   "notFoundHeading": "There is nothing here.",

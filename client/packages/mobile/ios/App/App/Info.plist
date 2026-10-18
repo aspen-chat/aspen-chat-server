@@ -85,13 +85,6 @@
 	<string>Aspen uses the camera when you turn it on in a call, take a picture to send, or scan a QR code to sign in or join a community.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Aspen connects to servers on your local network when you sign in to one there.</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<!-- Servers on the local network may be plain HTTP, as a deployment for a household often
-		     is; everything else must be HTTPS. -->
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
 	<!-- The relay of whoever publishes this build (spec/push.md), a build setting so that a
 	     publisher's project, or an xcodebuild command line, names it; empty, the build has no
 	     push. -->

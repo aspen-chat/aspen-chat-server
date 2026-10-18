@@ -1,3 +1,4 @@
+import { allowLoopbackPlainText } from "@aspen/protocol";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
@@ -23,6 +24,9 @@ import "./faces.css";
 import "./generated/fontStacks.css";
 import "./styles.css";
 
+// Plain HTTP reaches this machine's own addresses in a development build alone, whose dev server
+// and tests run there; everything else is HTTPS.
+allowLoopbackPlainText(import.meta.env.DEV || import.meta.env.VITE_ALLOW_LOOPBACK_HTTP === "1");
 applyPalette(storedPalette());
 applyThemeMode(storedThemeMode());
 applyContrastMode(storedContrastMode());

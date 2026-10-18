@@ -1168,7 +1168,7 @@ describe("AspenSync", () => {
       id: id(900),
       fileName: "note.txt",
       mimeType: "text/plain",
-      downloadUrl: "http://files.test/attachments/900",
+      downloadUrl: "https://files.test/attachments/900",
     };
     const uploads: { url: string; method: string; type: string | null; body: string }[] = [];
     const reservations: unknown[] = [];
@@ -1181,7 +1181,7 @@ describe("AspenSync", () => {
           return json(
             {
               id: record.id,
-              uploadUrl: "http://store.test/put/900?sig=1",
+              uploadUrl: "https://store.test/put/900?sig=1",
               expiresAt: "2026-09-25T13:00:00Z",
               // A page is uploaded as a file to save; a deployment that predates the field
               // leaves it out for everything else.
@@ -1212,7 +1212,7 @@ describe("AspenSync", () => {
     const file = new File(["hello"], "note.txt", { type: "text/plain" });
     expect(await sync.uploadAttachment(file)).toEqual(record);
     expect(uploads).toEqual([
-      { url: "http://store.test/put/900?sig=1", method: "PUT", type: "text/plain", body: "hello" },
+      { url: "https://store.test/put/900?sig=1", method: "PUT", type: "text/plain", body: "hello" },
     ]);
     expect(sync.store.attachment(record.id)).toEqual(record);
     // A picture's size goes with its reservation; a file that is no picture has none.
@@ -1234,7 +1234,7 @@ describe("AspenSync", () => {
       id: id(901),
       fileName: "pic.png",
       mimeType: "image/png",
-      downloadUrl: "http://files.test/attachments/901",
+      downloadUrl: "https://files.test/attachments/901",
     };
     let reads = 0;
     const { sync } = makeSync({
@@ -1752,7 +1752,7 @@ describe("AspenSync", () => {
   });
 
   it("uploads an icon in two phases and patches a community with it", async () => {
-    const icon = { id: id(7000), mimeType: "image/png", downloadUrl: "http://store/icons/x" };
+    const icon = { id: id(7000), mimeType: "image/png", downloadUrl: "https://store/icons/x" };
     let putBody: Blob | null = null;
     const uploadFetch = (_input: RequestInfo | URL, init?: RequestInit) => {
       putBody = init?.body as Blob;
@@ -1763,7 +1763,7 @@ describe("AspenSync", () => {
         ...bootstrapResponses(),
         "/api/v1/icons": () =>
           json(
-            { id: icon.id, uploadUrl: "http://store/put", expiresAt: "2030-01-01T00:00:00Z" },
+            { id: icon.id, uploadUrl: "https://store/put", expiresAt: "2030-01-01T00:00:00Z" },
             201,
           ),
         [`/api/v1/icons/${icon.id}/confirm`]: () => json(icon),

@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, shell } from "electron";
+import { BrowserWindow, app, ipcMain, shell } from "electron";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 
@@ -102,13 +102,30 @@ async function open(id: string, url: string): Promise<HandoffReturn> {
     throw new Error("unknown passkey handoff");
   }
   const page = new URL(url);
-  // Only the server's own page is ever opened, never something the page could smuggle in.
-  if (!["http:", "https:"].includes(page.protocol) || page.pathname !== "/auth/passkey") {
-    throw new Error("refusing to open a handoff page that is not /auth/passkey");
+  // Only the server's own page is ever opened, never something the page could smuggle in, and
+  // over HTTPS, as the renderer reaches the server (`securelyReached` in `@aspen/protocol`).
+  if (!securePage(page) || page.pathname !== "/auth/passkey") {
+    throw new Error("refusing to open a handoff page that is not /auth/passkey over HTTPS");
   }
   entry.pageOrigin = page.origin;
   await shell.openExternal(page.toString());
   return entry.returned;
+}
+
+/**
+ * Whether the page is served over HTTPS, or over plain HTTP at this machine's own addresses in
+ * an unpackaged build, whose development server and deployment run there.
+ */
+function securePage(page: URL): boolean {
+  if (page.protocol === "https:") {
+    return true;
+  }
+  const loopback =
+    page.hostname === "localhost" ||
+    page.hostname.endsWith(".localhost") ||
+    /^127\.\d+\.\d+\.\d+$/.test(page.hostname) ||
+    page.hostname === "[::1]";
+  return page.protocol === "http:" && loopback && !app.isPackaged;
 }
 
 function dispose(id: string): void {

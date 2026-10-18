@@ -233,7 +233,16 @@ export type {
   VoiceSession,
   VoiceSessionEndReason,
 } from "./generated/events";
-export { API_PREFIX, eventStreamUrl, normalizeServerUrl } from "./urls";
+export {
+  API_PREFIX,
+  InsecureAddressError,
+  allowLoopbackPlainText,
+  eventStreamUrl,
+  isLoopbackHost,
+  normalizeServerUrl,
+  requireSecure,
+  securelyReached,
+} from "./urls";
 export { acceptLanguage, setPreferredLanguages } from "./languages";
 export { identityOf } from "./identity";
 export {

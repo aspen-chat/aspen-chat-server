@@ -29,6 +29,7 @@ import {
   type TransferMode,
 } from "./transfers";
 import { Signal } from "./signalSocket";
+import { InsecureAddressError, securelyReached } from "./urls";
 import { type RankedCandidate, rankCandidates, signallingUrl } from "./voiceCandidates";
 import type {
   ExternalAudio,
@@ -978,7 +979,13 @@ export class VoiceCall {
       this.#microphone = microphone;
       this.#holdMicrophone();
     }
-    const ranked = await this.#rank(offer.candidates);
+    // A server not reached over HTTPS is never tried, nor reported as failing: it is not at fault.
+    const reachable = offer.candidates.filter((candidate) => securelyReached(candidate.url));
+    const refused = offer.candidates.find((candidate) => !securelyReached(candidate.url));
+    if (reachable.length === 0 && refused !== undefined) {
+      throw new InsecureAddressError(refused.url);
+    }
+    const ranked = await this.#rank(reachable);
     let lastError: Error | null = null;
     for (const { candidate } of ranked) {
       if (generation !== this.#generation) {

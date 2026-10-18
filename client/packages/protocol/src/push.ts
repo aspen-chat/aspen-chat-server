@@ -8,6 +8,7 @@
  */
 
 import type { AspenClient } from "./http";
+import { requireSecure } from "./urls";
 
 /** Which push service the phone is reached through, and as which app. */
 export interface PushDevice {
@@ -210,8 +211,9 @@ export class RelayClient {
   readonly #url: string;
   readonly #fetch: typeof globalThis.fetch;
 
+  /** Throws `InsecureAddressError` for a relay not reached over HTTPS (`requireSecure`). */
   constructor(url: string, fetch?: typeof globalThis.fetch) {
-    this.#url = url.replace(/\/$/, "");
+    this.#url = requireSecure(url).replace(/\/$/, "");
     this.#fetch = fetch ?? ((input, init) => globalThis.fetch(input, init));
   }
 

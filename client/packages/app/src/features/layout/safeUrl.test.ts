@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mailtoUrl, mediaUrlOnPage, messageLinkUrl, webPageUrl } from "@/features/layout/safeUrl";
+import { allowLoopbackPlainText } from "@aspen/protocol";
+import { mailtoUrl, mediaUrl, messageLinkUrl, webPageUrl } from "@/features/layout/safeUrl";
 
 const UNSAFE = [
   "javascript:alert(1)",
@@ -34,27 +35,30 @@ describe("safe URLs", () => {
     for (const url of UNSAFE) {
       expect(webPageUrl(url), url).toBeUndefined();
       expect(messageLinkUrl(url), url).toBeUndefined();
-      expect(mediaUrlOnPage(url, "https:"), url).toBeUndefined();
-      expect(mediaUrlOnPage(url, "http:"), url).toBeUndefined();
+      expect(mediaUrl(url), url).toBeUndefined();
     }
   });
 
-  it("load media over https, and over http only in development", () => {
-    expect(mediaUrlOnPage("https://media.example.org/a.webp", "https:")).toBe(
-      "https://media.example.org/a.webp",
-    );
-    expect(mediaUrlOnPage("http://media.example.org/a.webp", "https:")).toBeUndefined();
-    expect(mediaUrlOnPage("http://media.example.org/a.webp", "file:")).toBeUndefined();
-    expect(mediaUrlOnPage("http://media.example.org/a.webp", "http:")).toBe(
-      "http://media.example.org/a.webp",
-    );
-    for (const url of [
+  it("load media over https, and over http only from this machine in a development build", () => {
+    expect(mediaUrl("https://media.example.org/a.webp")).toBe("https://media.example.org/a.webp");
+    const loopback = [
       "http://localhost:9000/a",
       "http://alpha.localhost/a",
       "http://127.0.0.1:9000/a",
       "http://[::1]:9000/a",
-    ]) {
-      expect(mediaUrlOnPage(url, "https:"), url).toBe(url);
+    ];
+    for (const url of ["http://media.example.org/a.webp", "http://192.168.1.20/a", ...loopback]) {
+      expect(mediaUrl(url), url).toBeUndefined();
+    }
+    allowLoopbackPlainText(true);
+    try {
+      for (const url of loopback) {
+        expect(mediaUrl(url), url).toBe(url);
+      }
+      expect(mediaUrl("http://media.example.org/a.webp")).toBeUndefined();
+      expect(mediaUrl("wss://media.example.org/a")).toBeUndefined();
+    } finally {
+      allowLoopbackPlainText(false);
     }
   });
 

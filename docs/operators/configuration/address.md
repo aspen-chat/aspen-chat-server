@@ -18,6 +18,8 @@ Everything that names the deployment follows from it:
 - Passkeys belong to its host.
 - Over `https`, its host, with `:port` when not 443, is the deployment's
   [federation](../federation/index.md) domain.
+- The web client and the desktop and mobile apps reach it over `https` alone. A plain `http`
+  address serves only development, at `localhost`, from a development build of the client.
 
 ### Changing it
 

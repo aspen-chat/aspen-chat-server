@@ -22,6 +22,9 @@ Pictures load from `[media.s3] public_base_url`. It must serve the bucket's obje
 credentials, and only them. [The storage's read path](../installing/storage-read-path.md) gives
 the checks, which also show whether it lists or takes writes, as it must not.
 
+Pictures show "Attachment unavailable" when `public_base_url` is plain `http`: clients load
+over `https` alone. Serve it over `https`.
+
 ## Videos show as downloads, without a poster
 
 No server that makes previews can run `ffmpeg` and `ffprobe`. Each says so in its log as it

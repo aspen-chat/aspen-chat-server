@@ -12,7 +12,7 @@ import {
 } from "./passkeys";
 import { ApiProblemError, isProblem, transportProblem, type Problem } from "./problem";
 import { type Session, type SessionStore, sessionTokenExpiresSoon } from "./session";
-import { API_PREFIX } from "./urls";
+import { API_PREFIX, requireSecure } from "./urls";
 
 export type Paths = paths;
 export type Schemas = components["schemas"];
@@ -110,8 +110,9 @@ export class AspenClient {
   /** In-flight refresh, shared so concurrent 401s trigger one refresh instead of a stampede. */
   #refreshing: Promise<boolean> | null = null;
 
+  /** Throws `InsecureAddressError` for a deployment not reached over HTTPS (`requireSecure`). */
   constructor(options: AspenClientOptions) {
-    this.baseUrl = options.baseUrl;
+    this.baseUrl = requireSecure(options.baseUrl);
     this.#store = options.sessionStore;
     const fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
     this.#fetch = (input, init) => {

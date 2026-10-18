@@ -20,6 +20,12 @@ interface ImportMetaEnv {
    * (`features/messages/scrollDiagnostics.ts`), for finding where a view jumps on a device.
    */
   readonly VITE_SCROLL_DEBUG?: string;
+  /**
+   * `1` makes a development build of the desktop or mobile shell, which may reach this machine's
+   * own addresses over plain HTTP, as the dev server's build always may (`allowLoopbackPlainText`).
+   * A release build never sets it.
+   */
+  readonly VITE_ALLOW_LOOPBACK_HTTP?: string;
 }
 
 /** Where an external sender delivers SRTP, as the voice server describes it. */

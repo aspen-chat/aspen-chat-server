@@ -1,4 +1,4 @@
-import { normalizeServerUrl } from "@aspen/protocol";
+import { InsecureAddressError, normalizeServerUrl } from "@aspen/protocol";
 import { useState, type SyntheticEvent } from "react";
 import { Button, Form, Input, Label, TextField } from "react-aria-components";
 import { formString } from "@/forms";
@@ -54,8 +54,8 @@ export function ServerForm({
     event.preventDefault();
     try {
       onSubmit(normalizeServerUrl(formString(new FormData(event.currentTarget), "server")));
-    } catch {
-      setError(m.invalidServerUrl);
+    } catch (error) {
+      setError(error instanceof InsecureAddressError ? m.insecureServerUrl : m.invalidServerUrl);
     }
   }
 

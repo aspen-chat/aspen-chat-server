@@ -1,3 +1,4 @@
+import { securelyReached } from "@aspen/protocol";
 import { Capacitor } from "@capacitor/core";
 
 const SERVER_URL_KEY = "aspen.serverUrl";
@@ -27,12 +28,15 @@ export function detectShell(): Shell {
  * The server origin the app should use. The web client is served by the deployment it signs in
  * to, at the deployment's one origin, so it uses the page's own origin and never asks. Electron
  * and Capacitor have no server of their own and bake none in: they use the one the user entered,
- * and until there is one, `null`, which asks (`ServerForm`).
+ * and until there is one, `null`, which asks (`ServerForm`). An origin the app may not reach
+ * (`securelyReached`), such as one remembered over plain HTTP, is none.
  */
 export function defaultServerUrl(shell: Shell = detectShell()): string | null {
-  if (shell === "web") {
-    return window.location.protocol.startsWith("http") ? window.location.origin : null;
-  }
+  const origin = shell === "web" ? window.location.origin : rememberedServerUrl();
+  return origin !== null && securelyReached(origin) ? origin : null;
+}
+
+function rememberedServerUrl(): string | null {
   try {
     return window.localStorage.getItem(SERVER_URL_KEY);
   } catch {
