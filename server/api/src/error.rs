@@ -67,6 +67,13 @@ pub enum ProblemCode {
     /// Too many requests to this endpoint recently. `Retry-After` says how many seconds to
     /// wait.
     RateLimited,
+    /// A request without a session must present a device credential (the `Aspen-Device`
+    /// header), and this one presented none, or one that is not this deployment's or has
+    /// expired. Earn one at `POST /auth/device-credentials` and send the request again.
+    DeviceCredentialRequired,
+    /// The device credential's challenge is not this deployment's, has expired, is already
+    /// used, or the nonce does not solve it. `detail` says which; ask for another challenge.
+    DeviceChallengeInvalid,
     /// The upload would take the caller past the deployment's daily upload quota. `detail`
     /// names the quota and when there will be room, which `Retry-After` gives in seconds,
     /// absent when the file alone is larger than the quota.
@@ -144,7 +151,8 @@ impl ProblemCode {
             ProblemCode::BadRequest | ProblemCode::Validation => StatusCode::BAD_REQUEST,
             ProblemCode::Unauthorized
             | ProblemCode::InvalidCredentials
-            | ProblemCode::InvalidToken => StatusCode::UNAUTHORIZED,
+            | ProblemCode::InvalidToken
+            | ProblemCode::DeviceCredentialRequired => StatusCode::UNAUTHORIZED,
             ProblemCode::Forbidden
             | ProblemCode::OldPasswordIncorrect
             | ProblemCode::VerificationFailed
@@ -160,7 +168,9 @@ impl ProblemCode {
             ProblemCode::TooManyAttempts
             | ProblemCode::RateLimited
             | ProblemCode::UploadQuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
-            ProblemCode::PasskeyRejected => StatusCode::BAD_REQUEST,
+            ProblemCode::PasskeyRejected | ProblemCode::DeviceChallengeInvalid => {
+                StatusCode::BAD_REQUEST
+            }
             ProblemCode::PasskeysUnavailable => StatusCode::NOT_FOUND,
             ProblemCode::PasswordResetUnavailable | ProblemCode::PasswordResetExpired => {
                 StatusCode::NOT_FOUND
@@ -209,6 +219,8 @@ impl ProblemCode {
             ProblemCode::PasswordResetExpired => t!("problemPasswordResetExpired"),
             ProblemCode::TooManyAttempts => t!("problemTooManyAttempts"),
             ProblemCode::RateLimited => t!("problemRateLimited"),
+            ProblemCode::DeviceCredentialRequired => t!("problemDeviceCredentialRequired"),
+            ProblemCode::DeviceChallengeInvalid => t!("problemDeviceChallengeInvalid"),
             ProblemCode::UploadQuotaExceeded => t!("problemUploadQuotaExceeded"),
             ProblemCode::LastSecondFactor => t!("problemLastSecondFactor"),
             ProblemCode::PasskeyRejected => t!("problemPasskeyRejected"),

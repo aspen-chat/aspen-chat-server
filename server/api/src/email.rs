@@ -7,6 +7,7 @@ use crate::admin::AdminUser;
 use crate::auth::EnrollingSessionUser;
 use crate::error::{ApiError, ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path};
+use crate::rate_limit::Failures;
 use crate::t;
 use crate::user::{UserRef, not_your_account};
 use crate::{API_PREFIX, TAG_ADMIN, TAG_AUTH, TAG_USERS};
@@ -15,6 +16,7 @@ use aspen_app::context::GlobalServerContext;
 use aspen_app::email::newsletter::{self, NewsletterPost, NewsletterPostId};
 use aspen_app::email::outbox::List;
 use aspen_app::{UserId, email};
+use axum::Extension;
 use axum::extract::{Query as AxumQuery, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS,
@@ -358,10 +360,16 @@ pub async fn start_password_reset(
 )]
 pub async fn send_password_reset_code(
     State(state): State<GlobalServerContext>,
+    failures: Option<Extension<Failures>>,
     Path(reset): Path<String>,
     Json(request): Json<PasswordResetCodeRequest>,
 ) -> ApiResult<NoContent> {
-    email::reset::send_code(&state, &reset, &request.address).await?;
+    let sent = email::reset::send_code(&state, &reset, &request.address).await;
+    crate::rate_limit::note_failed(&state, &failures, &sent, |e| {
+        matches!(e, app::Error::PasswordResetExpired)
+    })
+    .await;
+    sent?;
     Ok(NoContent)
 }
 
@@ -386,10 +394,20 @@ pub async fn send_password_reset_code(
 )]
 pub async fn complete_password_reset(
     State(state): State<GlobalServerContext>,
+    failures: Option<Extension<Failures>>,
     Path(reset): Path<String>,
     Json(request): Json<PasswordResetCompletionRequest>,
 ) -> ApiResult<NoContent> {
-    email::reset::complete(&state, &reset, &request.code, &request.new_password).await?;
+    let completed =
+        email::reset::complete(&state, &reset, &request.code, &request.new_password).await;
+    crate::rate_limit::note_failed(&state, &failures, &completed, |e| {
+        matches!(
+            e,
+            app::Error::VerificationFailed | app::Error::PasswordResetExpired
+        )
+    })
+    .await;
+    completed?;
     Ok(NoContent)
 }
 

@@ -8,7 +8,7 @@
 
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::extract::{Created, Json, NoContent, Path};
-use crate::rate_limit::ClientIp;
+use crate::rate_limit::{ClientIp, Failures, ResolvedSession};
 use crate::{API_PREFIX, TAG_AUTH};
 use aspen_app as app;
 use aspen_app::UserId;
@@ -107,6 +107,7 @@ pub enum LoginResult {
 pub async fn login(
     State(state): State<GlobalServerContext>,
     client: Option<Extension<ClientIp>>,
+    failures: Option<Extension<Failures>>,
     Json(request): Json<LoginRequest>,
 ) -> ApiResult<Json<LoginResult>> {
     let ip = client.and_then(|Extension(ClientIp(ip))| ip);
@@ -133,6 +134,7 @@ pub async fn login(
         }
         LoginOutcome::InvalidCredentials => {
             crate::rate_limit::note_wrong_password(&state, &request.username, ip).await;
+            crate::rate_limit::note_failure(&state, &failures).await;
             Err(ApiError::new(ProblemCode::InvalidCredentials))
         }
     }
@@ -182,14 +184,18 @@ pub struct SecondFactorRequest {
 )]
 pub async fn login_second_factor(
     State(state): State<GlobalServerContext>,
+    failures: Option<Extension<Failures>>,
     Json(request): Json<SecondFactorRequest>,
 ) -> ApiResult<Json<LoginResponse>> {
     let factor = request.method.with_code(request.code);
-    match app::login::complete_second_factor(&state, &request.ticket, &factor).await? {
-        SecondFactorOutcome::SignedIn(session) => Ok(Json(session.into())),
-        SecondFactorOutcome::InvalidTicket => Err(ApiError::new(ProblemCode::InvalidToken)),
-        SecondFactorOutcome::Rejected => Err(ApiError::new(ProblemCode::VerificationFailed)),
-    }
+    let refused = match app::login::complete_second_factor(&state, &request.ticket, &factor).await?
+    {
+        SecondFactorOutcome::SignedIn(session) => return Ok(Json(session.into())),
+        SecondFactorOutcome::InvalidTicket => ProblemCode::InvalidToken,
+        SecondFactorOutcome::Rejected => ProblemCode::VerificationFailed,
+    };
+    crate::rate_limit::note_failure(&state, &failures).await;
+    Err(ApiError::new(refused))
 }
 
 /// What a client needs to know before signing in.
@@ -676,6 +682,7 @@ pub struct TokenRefreshResponse {
 )]
 pub async fn token_refresh(
     State(state): State<GlobalServerContext>,
+    failures: Option<Extension<Failures>>,
     Json(request): Json<TokenRefreshRequest>,
 ) -> ApiResult<Json<TokenRefreshResponse>> {
     let conn = state
@@ -683,7 +690,7 @@ pub async fn token_refresh(
         .get()
         .await
         .map_err(app::Error::from)?;
-    match app::login::try_token_refresh(conn, &request.refresh_token).await? {
+    match app::login::try_token_refresh(&state, conn, &request.refresh_token).await? {
         TokenRefreshOutcome::Ok {
             session_token,
             session_token_expires,
@@ -691,7 +698,10 @@ pub async fn token_refresh(
             session_token,
             session_token_expires,
         })),
-        TokenRefreshOutcome::InvalidToken => Err(ApiError::new(ProblemCode::InvalidToken)),
+        TokenRefreshOutcome::InvalidToken => {
+            crate::rate_limit::note_failure(&state, &failures).await;
+            Err(ApiError::new(ProblemCode::InvalidToken))
+        }
     }
 }
 
@@ -719,21 +729,30 @@ impl FromRequestParts<GlobalServerContext> for EnrollingSessionUser {
         parts: &mut Parts,
         state: &GlobalServerContext,
     ) -> Result<Self, Self::Rejection> {
-        let token = parts
-            .headers
-            .get(AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .and_then(bearer_token)
-            .ok_or_else(|| ApiError::new(ProblemCode::Unauthorized))?;
-        let (user, caller) = match app::user::user_for_token(state, token).await {
-            Ok(Some(found)) => found,
-            Ok(None) => return Err(ApiError::new(ProblemCode::Unauthorized)),
-            Err(e) => {
-                error!("error during authentication: {e}");
-                return Err(ApiError::new(ProblemCode::Internal));
+        // `limit_requests` resolved the session and checked its user's limits already, on
+        // every route it covers.
+        let (user, caller) = match parts.extensions.get::<ResolvedSession>() {
+            Some(ResolvedSession(Some(found))) => found.clone(),
+            Some(ResolvedSession(None)) => return Err(ApiError::new(ProblemCode::Unauthorized)),
+            None => {
+                let token = parts
+                    .headers
+                    .get(AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(bearer_token)
+                    .ok_or_else(|| ApiError::new(ProblemCode::Unauthorized))?;
+                let found = match app::user::user_for_token(state, token).await {
+                    Ok(Some(found)) => found,
+                    Ok(None) => return Err(ApiError::new(ProblemCode::Unauthorized)),
+                    Err(e) => {
+                        error!("error during authentication: {e}");
+                        return Err(ApiError::new(ProblemCode::Internal));
+                    }
+                };
+                crate::rate_limit::limit_session(state, parts, found.0.id).await?;
+                found
             }
         };
-        crate::rate_limit::limit_session(state, parts, user.id).await?;
         crate::rate_limit::Connection::signed_in(parts, user.id);
         app::user_status::mark_user_online(state, &user);
         Ok(EnrollingSessionUser(SessionUser { user, caller }))
@@ -782,7 +801,7 @@ impl FromRequestParts<GlobalServerContext> for SessionUser {
 
 /// Extracts the credential from an `Authorization` header value using the `Bearer` scheme
 /// (RFC 6750). The scheme name is case-insensitive; the token is returned verbatim.
-fn bearer_token(header: &str) -> Option<&str> {
+pub(crate) fn bearer_token(header: &str) -> Option<&str> {
     let (scheme, token) = header.split_once(' ')?;
     if !scheme.eq_ignore_ascii_case("bearer") {
         return None;

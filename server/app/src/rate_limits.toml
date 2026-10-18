@@ -13,17 +13,26 @@
 # Requests counted in the same `bucket` share one budget; without a bucket each endpoint counts
 # on its own.
 #
-# Dimensions say whose requests count together:
-#   global            everyone's
-#   ip                one client address (an IPv6 address's /ipv6_prefix network)
-#   user              one signed-in user (authenticated endpoints only)
-#   username          one username given to `POST /auth/login`, from one network (an IPv4
-#                     /24, an IPv6 /48 or the coarser ipv6_prefix)
-#   username_failures one username's wrong passwords at `POST /auth/login`, from anywhere:
-#                     looked at before the password is checked, counted after a wrong one
-#   per_<param>       everyone's, per value of the path parameter, e.g. per_channel
-#   user_per_<param>  one user's, per value of the path parameter, e.g. user_per_channel
-#   ip_per_<param>    one address's, per value of the path parameter
+# Dimensions say whose requests count together. A request with a valid session counts as its
+# user and never as its address or device; one without, as its address and its device:
+#   global             everyone's
+#   ip                 one client address's requests without a valid session (an IPv6
+#                      address's /ipv6_prefix network)
+#   device             one device credential's (`app::device_credential`), on endpoints that
+#                      ask for one: every one callable without a session but `device_exempt`
+#   user               one signed-in user (authenticated endpoints only)
+#   username           one username given to `POST /auth/login`, from one network (an IPv4
+#                      /24, an IPv6 /48 or the coarser ipv6_prefix)
+#   username_failures  one username's wrong passwords at `POST /auth/login`, from anywhere:
+#                      looked at before the password is checked, counted after a wrong one
+#   ip_failures        one address's requests that proved wrong (a wrong password or code, an
+#                      unknown invite or refresh token): looked at before the request is
+#                      handled, counted when its handler says it failed
+#   ip_rejected_tokens one address's bot tokens from before tokens were signed that no bot
+#                      holds: looked at before one is looked up, counted when it is rejected
+#   per_<param>        everyone's, per value of the path parameter, e.g. per_channel
+#   user_per_<param>   one user's, per value of the path parameter, e.g. user_per_channel
+#   ip_per_<param>     one address's, per value of the path parameter
 # A path parameter's value is counted as its endpoint reads it: an id in any spelling the API
 # accepts (with or without hyphens, braces, `urn:uuid:`, any case) is one value. Valkey holds
 # each value, and each username, only as its SHA-256.
@@ -71,35 +80,81 @@ fail_closed = [
   "GET /invite/{code}",
   "PUT /communities/{community}/members/@me",
   "POST /communities/{community}/invites",
+  "POST /auth/device-credentials",
 ]
+# Endpoints a request without a session may call without a device credential
+# (`app::device_credential`): what browsers open as pages, what other deployments' servers and
+# mail programs call, what a calendar app or a plugin's frame fetches, and token refresh, which
+# phones' push handlers make and which counts its wrong tokens instead. Every other endpoint
+# someone may call without signing in asks for one. Where a credential is earned never does.
+device_exempt = [
+  "GET /health",
+  "GET /health/ready",
+  "GET /auth/passkey",
+  "GET /auth/passkey-ceremonies/{ceremony}",
+  "POST /auth/passkey-ceremonies/{ceremony}/credential",
+  "POST /auth/token-refresh",
+  "GET /.well-known/aspen",
+  "GET /federation/icons/{icon}",
+  "POST /federation/notices",
+  "POST /federation/standing",
+  "GET /email/unsubscribe",
+  "POST /email/unsubscribe",
+  "GET /invite/{code}",
+  "GET /{*path}",
+  "GET /plugins/{plugin}/assets/{*path}",
+  "GET /plugins/{plugin}/capabilities/{secret}",
+]
+# The zero bits a device credential's puzzle asks for: about a million hashes, a second or two
+# on a mid-range phone and a fraction of one on a computer. Each more doubles it.
+device_puzzle_bits = 20
 
 # Applies to every endpoint, beneath any group or endpoint setting.
 [rate_limits.default]
 # Everything one user does, across the whole API. Generous: the client fetches in bursts when
 # it starts and when it meets unknown users.
 user = { requests = 1200, per_seconds = 60, burst = 300, bucket = "api" }
-# Everything from one address, signed in or not; many people may share one address.
-ip = { requests = 3000, per_seconds = 60, burst = 600, bucket = "api" }
+# Everything one device does before it signs in, across the whole API.
+device = { requests = 600, per_seconds = 60, burst = 200, bucket = "api" }
+# Everything from one address that no valid session signs, across the whole API: a ceiling over
+# its devices, which many people at one address (a carrier-grade NAT, an event's network) have
+# many of. Signed-in requests count toward their users instead.
+ip = { requests = 6000, per_seconds = 60, burst = 2000, bucket = "api" }
+# Bot tokens from before tokens were signed that one address presented and no bot holds:
+# looked at before each is looked up, so made-up ones cannot keep the database busy. A made-up
+# session token, or a made-up bot token of the signed kind, is refused by its signature with no
+# lookup and counts toward nothing (`app::signed_token`).
+ip_rejected_tokens = { requests = 600, per_seconds = 600, burst = 300 }
 
-# What a stranger can call to get in, per address. Generous: everyone at a large event, or
-# behind one carrier-grade NAT, may sign in at once from the same address. Guessing at one
-# account is held by the per-username limits of `POST /auth/login` and by `app::two_factor`'s
-# count of wrong codes, neither of which an address can widen.
+# What a stranger can call to get in. Per device, what one person needs; per address, a ceiling
+# that everyone at a large event, or behind one carrier-grade NAT, can sign in under at once;
+# and per address, how many of them may prove wrong (`ip_failures`: wrong passwords and codes),
+# which a crowd that mostly knows its passwords rarely reaches and a machine guessing soon does.
+# Guessing at one account is held besides by the per-username limits of `POST /auth/login` and
+# by `app::two_factor`'s count of wrong codes, neither of which an address can widen.
 [rate_limits.groups.sign_in]
 endpoints = [
-  "GET /auth/passkey",
   "POST /auth/login",
   "POST /auth/login/second-factor",
   "POST /auth/federated-sign-in",
   "POST /auth/passkey-ceremonies",
-  "GET /auth/passkey-ceremonies/{ceremony}",
-  "POST /auth/passkey-ceremonies/{ceremony}/credential",
   "POST /auth/passkey-ceremonies/{ceremony}/claim",
   "POST /auth/device-links",
   "POST /auth/device-links/{link}/scan",
   "POST /auth/password-resets",
   "POST /auth/password-resets/{reset}/codes",
   "POST /auth/password-resets/{reset}/completion",
+]
+limits = { device = { requests = 30, per_seconds = 60, burst = 10, bucket = "sign_in" }, ip = { requests = 3000, per_seconds = 60, burst = 1000, bucket = "sign_in" }, ip_failures = { requests = 200, per_seconds = 600, burst = 100, bucket = "sign_in_failures" } }
+
+# The passkey page and the two calls its own script makes, which present no device credential
+# (`device_exempt`): it is a page the system browser opens, not an Aspen client. Each call names
+# a ceremony only its starter knows.
+[rate_limits.groups.passkey_page]
+endpoints = [
+  "GET /auth/passkey",
+  "GET /auth/passkey-ceremonies/{ceremony}",
+  "POST /auth/passkey-ceremonies/{ceremony}/credential",
 ]
 limits = { ip = { requests = 3000, per_seconds = 60, burst = 1000, bucket = "sign_in" } }
 
@@ -280,11 +335,15 @@ username = { requests = 10, per_seconds = 600, burst = 5 }
 username_failures = { requests = 30, per_seconds = 600, burst = 20 }
 
 [rate_limits.endpoints."POST /users"]
+# Accounts made from one device: a person makes one, perhaps a second.
+device = { requests = 5, per_seconds = 3600, burst = 3 }
 # Accounts made from one address: everyone at a large event, or behind one carrier-grade NAT,
-# may register at once from the same address, so this holds back only a script on one machine.
-# What bounds a crowd of addresses is the global limit, and a deployment's registration invites
-# and verified email addresses.
+# may register at once from the same address, so this holds back only a machine claiming to be
+# that many devices. What bounds a crowd of addresses is the global limit, and a deployment's
+# registration invites and verified email addresses.
 ip = { requests = 1000, per_seconds = 3600 }
+# Registration invites given that were unknown, used up, or expired.
+ip_failures = { requests = 100, per_seconds = 600, burst = 50, bucket = "invite_failures" }
 # Every account made, from everyone together: enough for a launch's rush (600 at once, then
 # twenty a second, 72000 an hour), while a crowd of addresses cannot make accounts without end.
 # A deployment expecting more raises it in aspen.toml.
@@ -333,11 +392,29 @@ ip = { requests = 30, per_seconds = 60, burst = 10, bucket = "unsubscribe" }
 [rate_limits.endpoints."POST /email/unsubscribe"]
 ip = { requests = 30, per_seconds = 60, burst = 10, bucket = "unsubscribe" }
 
+# Each app refreshes its session every few hours, and phones' push handlers refresh theirs, so it
+# presents no device credential (`device_exempt`). A refresh token is a secret only its holder
+# knows: a valid one is limited only by the address's ceiling, and unknown or expired ones count
+# as the address's failures.
 [rate_limits.endpoints."POST /auth/token-refresh"]
-ip = { requests = 60, per_seconds = 60, burst = 20 }
+ip = { requests = 3000, per_seconds = 60, burst = 1000 }
+ip_failures = { requests = 300, per_seconds = 600, burst = 100 }
 
+# Every app reads it each time it connects to a deployment.
 [rate_limits.endpoints."GET /auth/methods"]
-ip = { requests = 60, per_seconds = 60, burst = 20 }
+device = { requests = 60, per_seconds = 60, burst = 20 }
+ip = { requests = 3000, per_seconds = 60, burst = 1000 }
+
+# Asking for a device credential's puzzle and redeeming its solution: at most once per device
+# and deployment in `device_credential::LIFETIME`, so an address's limits are those of a large
+# event's crowd arriving together. Each redemption is remembered in Valkey until its challenge
+# expires, so everyone's together are limited too.
+[rate_limits.endpoints."POST /auth/device-challenges"]
+ip = { requests = 2000, per_seconds = 3600, burst = 1000 }
+
+[rate_limits.endpoints."POST /auth/device-credentials"]
+ip = { requests = 1000, per_seconds = 3600 }
+global = { requests = 6000, per_seconds = 60, burst = 3000 }
 
 # Load balancers, proxies, and deployment tools ask these from one address, many times a
 # minute, and a limit reached would read as the server being down. Neither costs more for
@@ -351,7 +428,8 @@ ip = false
 
 [rate_limits.endpoints."GET /deployment"]
 # The sign-in screen reads it each time it opens.
-ip = { requests = 60, per_seconds = 60, burst = 20 }
+device = { requests = 60, per_seconds = 60, burst = 20 }
+ip = { requests = 3000, per_seconds = 60, burst = 1000 }
 
 [rate_limits.endpoints."GET /.well-known/aspen"]
 # Other deployments read it when they meet this one and now and then after; each API server of
@@ -551,7 +629,6 @@ user = { requests = 10, per_seconds = 3600, burst = 3 }
 
 [rate_limits.endpoints."PUT /communities/{community}/members/@me"]
 user = { requests = 20, per_seconds = 3600, burst = 5 }
-ip = { requests = 60, per_seconds = 3600, burst = 20 }
 
 # A nickname is announced to the whole community; reordering one's list is cheap but rides the
 # same endpoint, so the limit is per community and roomy.
@@ -590,8 +667,12 @@ user = { requests = 30, per_seconds = 60, burst = 10, bucket = "inviteLookup" }
 ip = { requests = 60, per_seconds = 60, burst = 30 }
 
 [rate_limits.endpoints."GET /registration-invites/{code}"]
-# Guessing registration invite codes, which anyone may try.
-ip = { requests = 30, per_seconds = 60, burst = 10 }
+# Guessing registration invite codes, which anyone may try: each device a few a minute, and
+# each address a few dozen unknown ones (`ip_failures`), shared with registering. A crowd
+# opening the one invite their event shares rarely gets one wrong.
+device = { requests = 30, per_seconds = 60, burst = 10 }
+ip = { requests = 3000, per_seconds = 60, burst = 1000 }
+ip_failures = { requests = 100, per_seconds = 600, burst = 50, bucket = "invite_failures" }
 
 [rate_limits.endpoints."POST /users/@me/dms"]
 user = { requests = 30, per_seconds = 600, burst = 10 }

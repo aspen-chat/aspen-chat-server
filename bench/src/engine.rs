@@ -55,6 +55,7 @@ pub fn run(
         rate_factor: AtomicU64::new(assignment.rate_factor.to_bits()),
         storms,
         stop: users_stop,
+        devices: tokio::sync::OnceCell::new(),
     });
     let handle = tokio::spawn(async move {
         let start = Instant::now() + clock.until(assignment.start_ns);

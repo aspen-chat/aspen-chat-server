@@ -1,6 +1,6 @@
 # Sign-in and security
 
-How people sign in (by password, second factor, passkey, or another device's QR code), how their sessions are kept and ended, and which changes to their security need a recent verification.
+How people sign in (by password, second factor, passkey, or another device's QR code), how their sessions are kept and ended, which changes to their security need a recent verification, and what a request without a session is counted by.
 
 ## Pages
 
@@ -11,6 +11,7 @@ How people sign in (by password, second factor, passkey, or another device's QR 
 - [Reverification and security settings](reverification.md): `verified_at`, `POST /auth/reauthenticate`, and the security settings endpoints.
 - [Passkeys](passkeys.md): WebAuthn ceremonies and the hand-off to the system browser for the desktop and mobile apps.
 - [Device links](device-links.md): signing in one device from another by a QR code.
+- [Device credentials](device-credentials.md): the puzzle a client solves to be counted as a device of its own before signing in, and who a request counts as.
 
 Why things are the way they are: [design notes](design-notes.md).
 
@@ -23,4 +24,5 @@ Why things are the way they are: [design notes](design-notes.md).
 | Second factors, attempt limits | `app::two_factor` |
 | Passkeys | `app::passkey`, `api::passkey_page` |
 | Device links | `app::device_link` |
+| Device credentials | `app::device_credential`, `aspen_limits::puzzle`, `api::rate_limit::limit_requests` |
 | Email addresses and password reset | see [Email](../email/index.md) |

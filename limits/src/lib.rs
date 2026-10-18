@@ -1,7 +1,8 @@
 //! Rate limiting pieces the API server and the voice servers share: how a limit is written in
 //! their configuration files, the GCRA arithmetic it becomes, where a client's address comes
-//! from behind trusted reverse proxies, and an in-process limiter for a server whose clients'
-//! state lives in that one process.
+//! from behind trusted reverse proxies, an in-process limiter for a server whose clients'
+//! state lives in that one process, and the puzzle a device credential is earned with
+//! (`puzzle`).
 //!
 //! Every limit is GCRA (the generic cell rate algorithm), a token bucket kept as one timestamp:
 //! the theoretical arrival time `tat`, the moment the bucket would be empty again. A request at
@@ -9,6 +10,7 @@
 //! `emission` is the spacing of requests at the sustained rate and `tolerance` the credit that
 //! lets `burst` of them come back to back.
 
+pub mod puzzle;
 pub mod suspension;
 
 use ipnet::IpNet;

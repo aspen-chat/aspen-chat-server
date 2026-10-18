@@ -104,9 +104,46 @@ pub struct World {
     pub storms: broadcast::Sender<f64>,
     /// Set when the users are to stop.
     pub stop: watch::Receiver<bool>,
+    /// A device credential for each source address, or one without them (`device`), earned
+    /// when a user first needs one: `None` where earning it failed.
+    pub devices: tokio::sync::OnceCell<Vec<Option<String>>>,
 }
 
 impl World {
+    /// The device credential user `index` presents before signing in. None for a run that
+    /// suspends the limits, whose suspension lets its users go without one.
+    pub async fn device(&self, index: u32) -> Option<&str> {
+        if self.profile.limits.suspend {
+            return None;
+        }
+        let devices = self
+            .devices
+            .get_or_init(|| async {
+                let sources = &self.profile.target.source_addresses;
+                let sources: Vec<Option<std::net::IpAddr>> = if sources.is_empty() {
+                    vec![None]
+                } else {
+                    sources.iter().copied().map(Some).collect()
+                };
+                let earned = futures_util::future::join_all(
+                    sources
+                        .iter()
+                        .map(|source| crate::device::earn(&self.api, *source)),
+                )
+                .await;
+                earned
+                    .into_iter()
+                    .map(|earned| {
+                        earned
+                            .inspect_err(|e| tracing::warn!("no device credential: {e}"))
+                            .ok()
+                    })
+                    .collect()
+            })
+            .await;
+        devices[index as usize % devices.len()].as_deref()
+    }
+
     pub fn rate_factor(&self) -> f64 {
         f64::from_bits(self.rate_factor.load(Ordering::Relaxed))
     }
@@ -444,6 +481,8 @@ impl User {
         let token = self.token();
         if !token.is_empty() {
             builder = builder.bearer_auth(token);
+        } else if let Some(device) = self.world.device(self.index).await {
+            builder = builder.header("aspen-device", device);
         }
         if let Some(body) = body {
             builder = builder.json(&body);

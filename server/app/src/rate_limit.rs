@@ -1,18 +1,27 @@
 //! Rate limits.
 //!
 //! Every endpoint has a set of rules, each a limit counted along one dimension: everyone's
-//! requests together (`global`), one client address's (`ip`), one user's (`user`), one
-//! username's at sign-in from one network (`username`), one username's wrong passwords from
-//! anywhere (`username_failures`), or any of the first three per value of a path parameter
-//! (`per_channel`, `user_per_channel`, `ip_per_channel`, ...). A request passes only if every
-//! rule of its endpoint allows it. An endpoint's rules are the configured defaults, which apply
-//! to every endpoint, plus those of the groups that list it, with the endpoint's own settings
-//! replacing its groups' dimension by dimension; setting a dimension to `false` on a group or
-//! endpoint removes it there, defaults included. `aspen_config::RateLimitConfig` describes the
-//! configuration and `rate_limits.toml` holds the built-in values. The rules are
-//! compiled and checked against the real routes at startup, so a typo in an endpoint name, a
-//! parameter the path lacks, or a per-user limit on an endpoint nobody signs in to is a
-//! configuration error rather than a limit that silently never applies.
+//! requests together (`global`), one client address's (`ip`), one device's (`device`), one
+//! user's (`user`), one username's at sign-in from one network (`username`), one username's
+//! wrong passwords from anywhere (`username_failures`), one address's failures, such as wrong
+//! passwords and codes (`ip_failures`), one address's bot tokens from before tokens were signed
+//! that no bot holds (`ip_rejected_tokens`), or any of `global`, `user`, and `ip` per value of a
+//! path parameter (`per_channel`, `user_per_channel`, `ip_per_channel`, ...). A request passes
+//! only if every rule of its endpoint allows it. An endpoint's rules are the configured
+//! defaults, which apply to every endpoint, plus those of the groups that list it, with the
+//! endpoint's own settings replacing its groups' dimension by dimension; setting a dimension to
+//! `false` on a group or endpoint removes it there, defaults included.
+//! `aspen_config::RateLimitConfig` describes the configuration and `rate_limits.toml` holds the
+//! built-in values. The rules are compiled and checked against the real routes at startup, so a
+//! typo in an endpoint name, a parameter the path lacks, or a per-user limit on an endpoint
+//! nobody signs in to is a configuration error rather than a limit that silently never applies.
+//!
+//! A request is counted as who it says it is. One with a valid session counts toward its user's
+//! limits and none of its address's, so the many people behind one address (a carrier-grade
+//! NAT, an office, an event's network) are each held to their own. One without counts toward
+//! its address's and its device's (`app::device_credential`), which it must present on every
+//! endpoint that does not exempt it (`[rate_limits] device_exempt`), so that a crowd at one
+//! address is many devices while one machine is one, or pays a puzzle for each device more.
 //!
 //! Each rule counts in a bucket, a Valkey key shared by every API server, with GCRA (the
 //! generic cell rate algorithm): the key holds the time at which the bucket will be empty
@@ -27,16 +36,21 @@
 //! (`Decision::Unavailable`) so an outage does not open them to unlimited guessing.
 //!
 //! An operator may suspend the limits for a while (`aspen_limits::suspension`): for requests
-//! from given networks, the limits that count by address are skipped, or with `scope = all`
-//! every limit is. The suspension ends by itself.
+//! from given networks, the limits that count by address or device are skipped, or with
+//! `scope = all` every limit is. The suspension ends by itself.
 //!
-//! Rules are checked at three points of a request, depending on what they need to know:
-//! `Stage::Request` (global, address, and path parameter rules) before the handler runs,
-//! `Stage::Session` (user rules) once the session token has been resolved, and
-//! `Stage::Username` inside the sign-in handler, which alone knows the username. The sign-in
-//! handler also looks at `Stage::UsernameFailures` before checking the password ([`RateLimiter::peek`],
-//! which counts nothing) and counts it only once a password proves wrong, so a person's own
-//! right passwords never spend it.
+//! Rules are checked at several points of a request, depending on what they need to know:
+//! `Stage::Request` (global and path parameter rules) before anything else, then
+//! `Stage::RejectedTokens` looked at ([`RateLimiter::peek`], which counts nothing) before a
+//! presented bot token of the unsigned kind is looked up and counted when it is rejected (other
+//! made-up tokens are refused by their signature, `app::signed_token`), then `Stage::Session`
+//! (user rules) for a valid session or `Stage::Anonymous` (address and device rules) for
+//! anything else, with `Stage::Failures` looked at too and counted by the handler when the
+//! request proves wrong. `Stage::Username` is checked inside the sign-in handler, which alone
+//! knows the username; it also looks at `Stage::UsernameFailures` before checking the password
+//! and counts it only once a password proves wrong. Failures are counted only once they happen,
+//! so the people behind one address, who mostly get their passwords right, can make many
+//! attempts while a machine guessing wrong is soon held.
 
 use crate::UserId;
 use crate::aspen_config::{Limit, LimitSetting, RateLimitConfig};
@@ -52,6 +66,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The one endpoint whose handler supplies a username.
 pub const SIGN_IN_ROUTE: &str = "POST /auth/login";
+
+/// The endpoints a device credential is earned at (`app::device_credential`), which cannot ask
+/// for one, whatever `device_exempt` lists.
+pub const DEVICE_ROUTES: [&str; 2] = [
+    "POST /auth/device-challenges",
+    "POST /auth/device-credentials",
+];
 
 /// Checks and updates one GCRA bucket. `KEYS[1]` is the bucket; `ARGV[1]` the emission interval
 /// (milliseconds per request) and `ARGV[2]` the burst tolerance (milliseconds of credit beyond
@@ -170,9 +191,12 @@ pub fn route_key(method: &str, template: &str) -> String {
 pub enum Dimension {
     Global,
     Ip,
+    Device,
     User,
     Username,
     UsernameFailures,
+    IpFailures,
+    IpRejectedTokens,
     Per(String),
     UserPer(String),
     IpPer(String),
@@ -183,9 +207,12 @@ impl Dimension {
         Some(match name {
             "global" => Dimension::Global,
             "ip" => Dimension::Ip,
+            "device" => Dimension::Device,
             "user" => Dimension::User,
             "username" => Dimension::Username,
             "username_failures" => Dimension::UsernameFailures,
+            "ip_failures" => Dimension::IpFailures,
+            "ip_rejected_tokens" => Dimension::IpRejectedTokens,
             _ => {
                 if let Some(param) = name.strip_prefix("user_per_") {
                     Dimension::UserPer(param.to_string())
@@ -203,9 +230,12 @@ impl Dimension {
         match self {
             Dimension::Global => "global".into(),
             Dimension::Ip => "ip".into(),
+            Dimension::Device => "device".into(),
             Dimension::User => "user".into(),
             Dimension::Username => "username".into(),
             Dimension::UsernameFailures => "username_failures".into(),
+            Dimension::IpFailures => "ip_failures".into(),
+            Dimension::IpRejectedTokens => "ip_rejected_tokens".into(),
             Dimension::Per(param) => format!("per_{param}"),
             Dimension::UserPer(param) => format!("user_per_{param}"),
             Dimension::IpPer(param) => format!("ip_per_{param}"),
@@ -214,13 +244,27 @@ impl Dimension {
 
     fn stage(&self) -> Stage {
         match self {
-            Dimension::Global | Dimension::Ip | Dimension::Per(_) | Dimension::IpPer(_) => {
-                Stage::Request
-            }
+            Dimension::Global | Dimension::Per(_) => Stage::Request,
+            Dimension::Ip | Dimension::IpPer(_) | Dimension::Device => Stage::Anonymous,
             Dimension::User | Dimension::UserPer(_) => Stage::Session,
             Dimension::Username => Stage::Username,
             Dimension::UsernameFailures => Stage::UsernameFailures,
+            Dimension::IpFailures => Stage::Failures,
+            Dimension::IpRejectedTokens => Stage::RejectedTokens,
         }
+    }
+
+    /// Whether it counts by the client's address or device, which a suspension of the address
+    /// limits skips.
+    fn by_address(&self) -> bool {
+        matches!(
+            self,
+            Dimension::Ip
+                | Dimension::IpPer(_)
+                | Dimension::Device
+                | Dimension::IpFailures
+                | Dimension::IpRejectedTokens
+        )
     }
 
     fn param(&self) -> Option<&str> {
@@ -240,7 +284,17 @@ impl Dimension {
 /// When during a request a rule can be checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
+    /// Everyone's, and per path parameter: before anything else.
     Request,
+    /// Bot tokens of the unsigned kind rejected from the client's address: looked at before a
+    /// presented one is looked up, counted when it proves invalid.
+    RejectedTokens,
+    /// The address's and the device's, for a request without a valid session.
+    Anonymous,
+    /// What the endpoint's handler reports as wrong (`ip_failures`): looked at with
+    /// `Anonymous`, counted by the handler.
+    Failures,
+    /// The user's, for a request with a valid session.
     Session,
     Username,
     /// Wrong passwords given for a username: looked at before the password is checked, counted
@@ -260,6 +314,7 @@ struct Rule {
 #[derive(Default)]
 pub struct Identity<'a> {
     pub ip: Option<IpAddr>,
+    pub device: Option<crate::device_credential::DeviceId>,
     pub user: Option<UserId>,
     pub username: Option<&'a str>,
     pub params: Vec<(&'a str, &'a str)>,
@@ -288,6 +343,8 @@ pub struct RateLimiter {
     unknown: Vec<Rule>,
     /// The routes refused while the limits cannot be counted.
     fail_closed: HashSet<String>,
+    /// The routes a request without a valid session must present a device credential to.
+    requires_device: HashSet<String>,
     /// Unix milliseconds of the last "Valkey unreachable" log line, so an outage logs twice a
     /// minute rather than on every request.
     last_failure_log: AtomicU64,
@@ -315,6 +372,20 @@ impl RateLimiter {
         self.fail_closed.contains(route)
     }
 
+    /// Whether a request to `route` without a valid session must present a device credential:
+    /// every route someone may call without signing in, but those `device_exempt` lists and the
+    /// ones a credential is earned at.
+    pub fn requires_device(&self, route: &str) -> bool {
+        self.requires_device.contains(route)
+    }
+
+    /// Whether a suspension of the limits in force lets a request from `ip` go without a device
+    /// credential: one of its networks, or of every limit, as a benchmark's users need, many
+    /// from one address, which would otherwise each pay the puzzle.
+    pub fn waives_device(&self, ip: Option<IpAddr>) -> bool {
+        self.suspension.exemption(ip) != Exemption::None
+    }
+
     /// Compiles the configuration against the server's routes. The error names what is wrong.
     pub fn compile(config: &RateLimitConfig, routes: &[Route]) -> Result<Self, String> {
         let addresses = ClientAddresses::new(&config.trusted_proxies, config.ipv6_prefix)?;
@@ -336,6 +407,21 @@ impl RateLimiter {
             }
             fail_closed.extend(matched.into_iter().map(|r| r.key.clone()));
         }
+        let mut exempt: HashSet<&str> = DEVICE_ROUTES.into_iter().collect();
+        for pattern in &config.device_exempt {
+            let matched: Vec<&Route> = routes.iter().filter(|r| glob(pattern, &r.key)).collect();
+            if matched.is_empty() {
+                return Err(format!(
+                    "rate_limits.device_exempt: {pattern:?} matches no endpoint"
+                ));
+            }
+            exempt.extend(matched.into_iter().map(|r| r.key.as_str()));
+        }
+        let requires_device: HashSet<String> = routes
+            .iter()
+            .filter(|r| r.access != Access::Authenticated && !exempt.contains(r.key.as_str()))
+            .map(|r| r.key.clone())
+            .collect();
         let mut groups = Vec::new();
         for (name, group) in &config.groups {
             let members: Vec<&str> = routes
@@ -361,7 +447,8 @@ impl RateLimiter {
                     route.key
                 )
             };
-            let defaults = defaults_for(config, route)?;
+            let device = requires_device.contains(&route.key);
+            let defaults = defaults_for(config, route, device)?;
             // An endpoint's own setting replaces its group's, dimension by dimension; `false`
             // (a `None` here) also removes the default of that dimension.
             let mut merged: HashMap<Dimension, Option<Limit>> = HashMap::new();
@@ -373,7 +460,7 @@ impl RateLimiter {
                 for (dimension, setting) in *limits {
                     let source = format!("groups.{name}");
                     let parsed = parse_dimension(dimension, &source)?;
-                    check_applicable(&parsed, route, &origin(dimension, &source))?;
+                    check_applicable(&parsed, route, device, &origin(dimension, &source))?;
                     if let Some(other) = from_groups.insert(parsed.clone(), name) {
                         return Err(format!(
                             "{} and rate_limits.groups.{other} both set {dimension:?} for {:?}; set it on the endpoint instead",
@@ -388,7 +475,7 @@ impl RateLimiter {
                 let source = format!("endpoints.{:?}", route.key);
                 for (dimension, setting) in table {
                     let parsed = parse_dimension(dimension, &source)?;
-                    check_applicable(&parsed, route, &origin(dimension, &source))?;
+                    check_applicable(&parsed, route, device, &origin(dimension, &source))?;
                     merged.insert(parsed, limit_of(setting, &source, dimension)?);
                 }
             }
@@ -405,7 +492,7 @@ impl RateLimiter {
             rules.insert(route.key.clone(), compiled);
         }
         let unknown_route = Route::new(OTHER_METHOD, "/*", Access::Anonymous);
-        let unknown = defaults_for(config, &unknown_route)?
+        let unknown = defaults_for(config, &unknown_route, false)?
             .into_iter()
             .map(|(dimension, limit)| {
                 compile_rule(dimension, &limit, &format!("default:{}", unknown_route.key))
@@ -418,6 +505,7 @@ impl RateLimiter {
             rules,
             unknown,
             fail_closed,
+            requires_device,
             last_failure_log: AtomicU64::new(0),
         })
     }
@@ -475,10 +563,7 @@ impl RateLimiter {
         let keyed: Vec<(&Rule, String)> = rules
             .iter()
             .filter(|rule| rule.dimension.stage() == stage)
-            .filter(|rule| {
-                exemption != Exemption::AddressLimits
-                    || !matches!(rule.dimension, Dimension::Ip | Dimension::IpPer(_))
-            })
+            .filter(|rule| exemption != Exemption::AddressLimits || !rule.dimension.by_address())
             .filter_map(|rule| Some((rule, self.key(rule, identity)?)))
             .collect();
         if keyed.is_empty() {
@@ -500,7 +585,7 @@ impl RateLimiter {
                 Ok(wait) => longest = longest.max(wait),
                 Err(e) => {
                     let refused = matches!(stage, Stage::Username | Stage::UsernameFailures)
-                        || self.fail_closed.contains(route);
+                        || (stage != Stage::RejectedTokens && self.fail_closed.contains(route));
                     self.log_failure(&e);
                     return if refused {
                         Decision::Unavailable
@@ -537,7 +622,8 @@ impl RateLimiter {
         let user = || identity.user.map(|user| user.0.to_string());
         let value = match &rule.dimension {
             Dimension::Global => "all".to_string(),
-            Dimension::Ip => ip()?,
+            Dimension::Ip | Dimension::IpFailures | Dimension::IpRejectedTokens => ip()?,
+            Dimension::Device => identity.device?.to_string(),
             Dimension::User => user()?,
             // One account answers to its name in any case, so every case of it shares a bucket;
             // each network counts apart, so guesses from one cannot lock the name out from
@@ -601,7 +687,7 @@ fn key_part(value: &str) -> String {
 fn parse_dimension(name: &str, source: &str) -> Result<Dimension, String> {
     Dimension::parse(name).ok_or_else(|| {
         format!(
-            "rate_limits.{source}: {name:?} is not a dimension (global, ip, user, username, username_failures, per_<param>, user_per_<param>, ip_per_<param>)"
+            "rate_limits.{source}: {name:?} is not a dimension (global, ip, device, user, username, username_failures, ip_failures, ip_rejected_tokens, per_<param>, user_per_<param>, ip_per_<param>)"
         )
     })
 }
@@ -617,16 +703,18 @@ fn limit_of(
 }
 
 /// The default limits that apply to `route`, which is wherever they can: a user limit where
-/// users sign in, a per-parameter limit where the path has the parameter.
+/// users sign in, a device limit where callers present a device credential (`device`), a
+/// per-parameter limit where the path has the parameter.
 fn defaults_for(
     config: &RateLimitConfig,
     route: &Route,
+    device: bool,
 ) -> Result<HashMap<Dimension, Limit>, String> {
     let mut defaults = HashMap::new();
     for (dimension, setting) in &config.default {
         let parsed = parse_dimension(dimension, "default")?;
         if let Some(limit) = limit_of(setting, "default", dimension)?
-            && applies(&parsed, route)
+            && applies(&parsed, route, device)
         {
             defaults.insert(parsed, limit);
         }
@@ -634,9 +722,11 @@ fn defaults_for(
     Ok(defaults)
 }
 
-/// Whether a dimension can count requests to `route` at all.
-fn applies(dimension: &Dimension, route: &Route) -> bool {
+/// Whether a dimension can count requests to `route` at all, where `device` says whether its
+/// callers present a device credential.
+fn applies(dimension: &Dimension, route: &Route, device: bool) -> bool {
     (!dimension.needs_user() || route.access != Access::Anonymous)
+        && (*dimension != Dimension::Device || device)
         && dimension
             .param()
             .is_none_or(|param| route.params.iter().any(|p| p == param))
@@ -645,12 +735,21 @@ fn applies(dimension: &Dimension, route: &Route) -> bool {
 }
 
 /// As `applies`, but an explicit setting that can never apply is an error.
-fn check_applicable(dimension: &Dimension, route: &Route, origin: &str) -> Result<(), String> {
-    if applies(dimension, route) {
+fn check_applicable(
+    dimension: &Dimension,
+    route: &Route,
+    device: bool,
+    origin: &str,
+) -> Result<(), String> {
+    if applies(dimension, route, device) {
         return Ok(());
     }
     Err(if dimension.needs_user() {
         format!("{origin}, but nobody signs in to call it")
+    } else if *dimension == Dimension::Device {
+        format!(
+            "{origin}, but its callers present no device credential (everyone signs in, or rate_limits.device_exempt lists it)"
+        )
     } else if let Some(param) = dimension.param() {
         format!("{origin}, but its path has no {{{param}}}")
     } else {
@@ -704,6 +803,9 @@ mod tests {
             ),
             Route::new("GET", "/channels/{channel}", Access::Authenticated),
             Route::new("POST", "/auth/passkey-ceremonies", Access::Optional),
+            Route::new("GET", "/health", Access::Anonymous),
+            Route::new("POST", "/auth/device-challenges", Access::Anonymous),
+            Route::new("POST", "/auth/device-credentials", Access::Anonymous),
         ]
     }
 
@@ -730,6 +832,8 @@ mod tests {
             groups: Default::default(),
             endpoints: Default::default(),
             fail_closed: Default::default(),
+            device_exempt: vec!["GET /health".into()],
+            device_puzzle_bits: 20,
         }
     }
 
@@ -973,6 +1077,74 @@ mod tests {
     }
 
     #[test]
+    fn only_routes_callable_without_a_session_ask_for_a_device() {
+        let mut config = config();
+        config.default.insert("device".into(), limit(50, 60.0));
+        let limiter = RateLimiter::compile(&config, &routes()).unwrap();
+        assert!(limiter.requires_device("POST /users"));
+        assert!(limiter.requires_device("POST /auth/passkey-ceremonies"));
+        assert!(!limiter.requires_device("GET /channels/{channel}"));
+        // Exempted by the configuration, and where a credential is earned whatever it says.
+        assert!(!limiter.requires_device("GET /health"));
+        for route in DEVICE_ROUTES {
+            assert!(!limiter.requires_device(route));
+        }
+        // The default device limit counts only where a credential is presented.
+        assert_eq!(dimensions(&limiter, "POST /users"), ["device", "ip"]);
+        assert_eq!(dimensions(&limiter, "GET /health"), ["ip"]);
+        assert!(!dimensions(&limiter, "GET /channels/{channel}").contains(&"device".into()));
+        let mut on_exempt = config.clone();
+        on_exempt.endpoints.insert(
+            "GET /health".into(),
+            RuleTable::from([("device".into(), limit(1, 1.0))]),
+        );
+        assert!(
+            RateLimiter::compile(&on_exempt, &routes())
+                .unwrap_err()
+                .contains("no device credential")
+        );
+        let mut unmatched = config;
+        unmatched.device_exempt.push("GET /nowhere".into());
+        assert!(
+            RateLimiter::compile(&unmatched, &routes())
+                .unwrap_err()
+                .contains("device_exempt")
+        );
+    }
+
+    #[test]
+    fn devices_and_an_address_s_failures_have_keys_of_their_own() {
+        let limiter = RateLimiter::compile(&config(), &routes()).unwrap();
+        let rule = |dimension: Dimension| Rule {
+            dimension,
+            bucket: "b".into(),
+            emission_ms: 1,
+            tolerance_ms: 0,
+        };
+        let device = crate::device_credential::DeviceId::from_bytes([3; 16]);
+        let identity = Identity {
+            ip: Some("192.0.2.77".parse().unwrap()),
+            device: Some(device),
+            ..Identity::default()
+        };
+        assert_eq!(
+            limiter.key(&rule(Dimension::Device), &identity).unwrap(),
+            format!("rl:b:device:{}", "03".repeat(16))
+        );
+        assert_eq!(
+            limiter
+                .key(&rule(Dimension::IpFailures), &identity)
+                .unwrap(),
+            "rl:b:ip_failures:192.0.2.77"
+        );
+        assert!(
+            limiter
+                .key(&rule(Dimension::Device), &Identity::default())
+                .is_none()
+        );
+    }
+
+    #[test]
     fn a_fail_closed_pattern_must_match_an_endpoint() {
         let mut config = config();
         config.fail_closed = vec!["POST /nowhere".into()];
@@ -991,6 +1163,7 @@ mod tests {
         let user = UserId(uuid::Uuid::nil());
         let identity = Identity {
             ip: Some("2001:db8:1:2:3:4:5:6".parse().unwrap()),
+            device: None,
             user: Some(user),
             username: None,
             params: vec![("channel", "c1")],

@@ -77,7 +77,7 @@ with `resume` and `status`.
 
 | Scope | Effect |
 | --- | --- |
-| `networks` | Exempts those networks from the limits that count by address (the API listener's `[connections]` address and network caps and the voice server's pending socket cap included), keeping every other limit |
+| `networks` | Exempts those networks from the limits that count by address or device (`ip`, `ip_per_<param>`, `device`, `ip_failures`, `ip_rejected_tokens`, the API listener's `[connections]` address and network caps, and the voice server's pending socket cap), keeping every other limit |
 | `all` | Lifts them all |
 
 - The suspension is one record in the NATS KV bucket `aspen_rate_limits` (`aspen_limits::suspension`), watched by every API and voice server.
@@ -85,6 +85,7 @@ with `resume` and `status`.
 - Servers log a warning every minute while one is in force.
 - It is a command run with the deployment's credentials, never an HTTP endpoint.
 - A profile with `[limits] suspend = true` suspends for its run and resumes afterwards if the record is still its own.
+- A suspension also lets requests from its networks (or, with `all`, from anywhere) go without the device credential a request without a session otherwise presents (`RateLimiter::waives_device`), so a run's users, many from one address, solve no puzzle. A run that does not suspend earns one credential for each source address of its profile (`bench/src/device.rs`), and its users from that address share it.
 
 ## Metrics
 

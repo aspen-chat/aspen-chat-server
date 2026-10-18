@@ -13,6 +13,34 @@ over them: a limit you give replaces the built-in one whole.
 | `ipv6_prefix` | `64` | IPv6 clients are counted by their network of this many bits. |
 | `max_suspension_seconds` | `86400` | The longest this server honours a suspension of the limits (`aspen-chat-server limits suspend`), counted from when it began. |
 | `fail_closed` | sign-in, password reset, registration, and invite endpoints | Endpoints refused with `serverBusy` while Valkey cannot be reached to count their limits. See [When Valkey is down](#when-valkey-is-down). |
+| `device_exempt` | health checks, the passkey page, token refresh, federation, unsubscribe, the web client's pages, plugins' assets and capability URLs | Endpoints a request without a session may call without a device credential. A list given here replaces the built-in one whole. See [Who a request counts as](#who-a-request-counts-as). |
+| `device_puzzle_bits` | `20` | How hard earning a device credential is: about a second or two on a mid-range phone at 20. Each more doubles it; at most 32. |
+
+## Who a request counts as
+
+- **Signed in:** a request with a valid session counts toward its user's limits only. People
+  signed in behind one address (an office, a school, a carrier-grade NAT) never share a budget.
+- **Not signed in:** a request without one counts toward its address's limits (`ip`) and its
+  device's (`device`). Every endpoint callable without signing in, except those `device_exempt`
+  lists, asks for a device credential, which an Aspen app earns by solving a small puzzle once
+  per deployment. So a crowd at one address is many devices, each with a device's limits, while
+  the address keeps a ceiling high enough for a large event.
+- **Failures:** sign-in, token refresh, password resets, and registration invites also count what
+  proves wrong from one address (`ip_failures`): wrong passwords and codes, unknown refresh tokens
+  and invites. A crowd mostly gets these right, so the address's attempts can be generous while a
+  machine guessing is soon held.
+- **Made-up tokens:** session and bot tokens are signed, so a made-up one is refused without
+  reading the database and counts toward nothing. Bot tokens made before tokens were signed can
+  only be checked by a lookup, so each address may present a limited number of those that no bot
+  holds (`ip_rejected_tokens`). Resetting a bot's token gives it a signed one.
+
+A tool that calls the API without a session must present a device credential as the
+`Aspen-Device` header. It earns one with `POST /api/v1/auth/device-challenges` and
+`POST /api/v1/auth/device-credentials`. Without one it is refused with `401`
+`deviceCredentialRequired`. Load balancers and health checks should ask `GET /api/v1/health`
+or `/health/ready`, which ask for none. While a suspension of the limits
+(`aspen-chat-server limits suspend`) covers a network, as for a load test, requests from it may
+go without one.
 
 ### Trusted proxies
 
@@ -44,20 +72,21 @@ password by email.
 
 ## Registration
 
-Registration (`POST /users`) is limited per address and for everyone together. One address may
-make 1000 accounts an hour, all of them at once, so everyone at a large event or behind one
-carrier-grade NAT can register together. Everyone together may make 600 accounts at once, then
-twenty a second (72000 an hour). That passes a launch's rush. A deployment expecting more at once
-raises it:
+Registration (`POST /users`) is limited per device, per address, and for everyone together. One
+device may make five accounts an hour. One address may make 1000 an hour, all of them at once, so
+everyone at a large event or behind one carrier-grade NAT can register together. Everyone together
+may make 600 accounts at once, then twenty a second (72000 an hour). That passes a launch's rush.
+A deployment expecting more at once raises it:
 
 ```toml
 [rate_limits.endpoints."POST /users"]
 global = { requests = 6000, per_seconds = 60, burst = 3000 }
 ```
 
-The address limit stops only a script on one machine. Anyone with many addresses is held back by
-the global limit alone, unless the deployment requires a registration invite or a verified email
-address (see [Deployment settings](deployment-settings.md)).
+The device and address limits hold back one machine, which must solve a puzzle for each device it
+claims to be. Anyone with many addresses is held back by the global limit, unless the deployment
+requires a registration invite or a verified email address (see
+[Deployment settings](deployment-settings.md)).
 
 ## Limits for one endpoint
 

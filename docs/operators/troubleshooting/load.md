@@ -8,12 +8,43 @@
 
 1. Check `[rate_limits] trusted_proxies` first. Behind a proxy that is not listed, everyone
    counts as the proxy.
-2. To lift the per-address limits for a network for a while, the listener's
-   `[connections] max_per_ip` and `max_per_network` among them:
+2. Signed-in people count only toward their own limits, and people not yet signed in each
+   toward their device's, so a shared address rarely holds anyone back. A tool that makes many
+   accounts or sign-ins from one device is held to one device's limits.
+3. To lift the per-address and per-device limits for a network for a while, the listener's
+   `[connections] max_per_ip` and `max_per_network` among them, and let it go without device
+   credentials:
 
    ```
    aspen-chat-server limits suspend --scope networks --network <cidr> --reason …
    ```
+
+## `deviceCredentialRequired`
+
+**Means:** a request without a session presented no device credential (the `Aspen-Device`
+header), or one that is not this deployment's or has expired. Aspen's apps earn one on their own
+and send the request again, so people do not see this.
+
+**What to do:**
+
+- **A tool or script calling the API:** have it earn a credential
+  (`POST /api/v1/auth/device-challenges`, solve the puzzle, then
+  `POST /api/v1/auth/device-credentials`) and send it on every request it makes without a session.
+  `scripts/device_credential.py` does this.
+- **A health check or load balancer:** point it at `GET /api/v1/health` or `/health/ready`, which
+  ask for none.
+- **An endpoint called by something that cannot solve the puzzle** (another kind of server, say):
+  add it to `[rate_limits] device_exempt`. That list replaces the built-in one, so copy the
+  built-in entries from `rate_limits.toml` too.
+
+## `deviceChallengeInvalid`
+
+**Means:** a solution to a device credential's puzzle was refused: its challenge expired (five
+minutes), was already used, is not this deployment's, or the nonce does not solve it. `detail`
+says which.
+
+**What to do:** nothing for Aspen's apps, which ask again. If people's apps keep failing on slow
+devices, lower `[rate_limits] device_puzzle_bits`.
 
 ## `uploadQuotaExceeded`
 

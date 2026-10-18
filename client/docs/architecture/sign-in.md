@@ -10,6 +10,19 @@
 | Passkeys | `runPasskeyCeremony`, `PasskeyTransport` (`packages/protocol/src/passkeys.ts`), `src/features/auth/passkeyTransport.ts`, `packages/desktop/src/main/passkeyHandoff.ts` |
 | Signing in from another device | `OtherDeviceSignIn`, `DeviceLinkCode`, `DeviceLinkScreen`, `thisDeviceName` |
 | Email | `src/features/email`: `useEmailPolicy`, `PasswordReset`, `VerificationScreen`, `EmailDialog`, `EmailPanel` |
+| Device credentials | `AspenClient` and `device.ts` (`packages/protocol/src`), `src/api/devices.ts`, `src/api/devicePuzzle.worker.ts` |
+
+## Device credentials
+
+Every request made before signing in presents the deployment's device credential (`Aspen-Device`), which is what the server counts it by: many people on one network are then each counted on their own.
+
+- `AspenClient` earns one when a server answers `deviceCredentialRequired`, then sends the request again. Requests refused together share one earning.
+- Earning one means solving a puzzle of about a million SHA-256 hashes, a second or two on a phone. `solveInWorker` runs it in a worker so the screen does not freeze, and on the page's thread, a slice at a time, where workers cannot run.
+- The first request a new install makes waits for it: the welcome's read of `GET /deployment`, or `GET /auth/methods`.
+- It is kept per deployment in `localStorage` (`aspen.device.<host>`), outlives signing out, and is replaced when a server answers with a fresh one (`Aspen-Device-Credential`).
+- Signed-in requests carry the session instead.
+
+How the server makes and checks them: `docs/architecture/sign-in-and-security/device-credentials.md` at the repository's root.
 
 ## The signed-out screens
 

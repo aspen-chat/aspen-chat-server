@@ -2,20 +2,29 @@
 //! address it comes from, and the `429` answer.
 
 use crate::API_PREFIX;
+use crate::auth::bearer_token;
+use crate::device_credential::{DEVICE_HEADER, RENEWAL_HEADER};
 use crate::error::{ApiError, ApiResult, ProblemCode};
 use crate::t;
 use aspen_app::UserId;
 use aspen_app::context::GlobalServerContext;
+use aspen_app::device_credential::Credential;
 use aspen_app::rate_limit::{Access, Decision, Identity, RateLimiter, Route, SIGN_IN_ROUTE, Stage};
+use aspen_app::two_factor::Caller;
+use aspen_app::user::UserPg;
+use axum::Extension;
 use axum::extract::{FromRequestParts, MatchedPath, RawPathParams, Request, State};
+use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, Method};
+use axum::http::{HeaderMap, HeaderValue, Method};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use utoipa::openapi::path::Operation;
-use utoipa::openapi::{ContentBuilder, OpenApi, Ref, RefOr, ResponseBuilder};
+use utoipa::openapi::path::{ParameterBuilder, ParameterIn};
+use utoipa::openapi::schema::{ObjectBuilder, Type};
+use utoipa::openapi::{ContentBuilder, OpenApi, Ref, RefOr, Required, ResponseBuilder};
 
 /// The TCP peer of the connection a request arrived on, put on every request by the
 /// connection loop in `main.rs`.
@@ -157,16 +166,26 @@ fn access(operation: &Operation) -> Access {
     }
 }
 
-/// Every operation can be refused for going too fast; the document says so on each.
+/// Every operation can be refused for going too fast; the document says so on each, and on
+/// each that a request without a session must present a device credential to, that it takes
+/// `Aspen-Device` and may answer `deviceCredentialRequired`.
 pub fn document_rate_limits(openapi: &mut OpenApi) {
-    let fail_closed = aspen_app::aspen_config::RateLimitConfig::built_in()
-        .map(|config| config.fail_closed)
-        .unwrap_or_default();
+    let built_in = aspen_app::aspen_config::RateLimitConfig::built_in().unwrap_or_default();
+    let fail_closed = built_in.fail_closed;
+    let exempt = built_in.device_exempt;
     for (path, item) in openapi.paths.paths.iter_mut() {
         let template = path.strip_prefix(API_PREFIX).unwrap_or(path).to_string();
         for (method, operation) in operations_mut(item) {
-            let responses = &mut operation.responses.responses;
             let key = aspen_app::rate_limit::route_key(method, &template);
+            let asks_for_device = access(operation) != Access::Authenticated
+                && !aspen_app::rate_limit::DEVICE_ROUTES.contains(&key.as_str())
+                && !exempt
+                    .iter()
+                    .any(|pattern| aspen_app::rate_limit::glob(pattern, &key));
+            if asks_for_device {
+                document_device(operation);
+            }
+            let responses = &mut operation.responses.responses;
             if fail_closed
                 .iter()
                 .any(|pattern| aspen_app::rate_limit::glob(pattern, &key))
@@ -198,7 +217,49 @@ pub fn document_rate_limits(openapi: &mut OpenApi) {
     }
 }
 
-/// The route key of a request (`"POST /channels/{channel}/messages"`).
+/// Declares the `Aspen-Device` header on an operation that asks for a device credential, and
+/// the `401` it answers without one.
+fn document_device(operation: &mut Operation) {
+    let header = ParameterBuilder::new()
+        .name(DEVICE_HEADER.as_str())
+        .parameter_in(ParameterIn::Header)
+        .required(Required::False)
+        .description(Some(
+            "The device credential from `POST /auth/device-credentials`, required when no session is presented",
+        ))
+        .schema(Some(ObjectBuilder::new().schema_type(Type::String)))
+        .build();
+    operation
+        .parameters
+        .get_or_insert_with(Vec::new)
+        .push(header);
+    const REQUIRED: &str =
+        "`deviceCredentialRequired`: earn a device credential and send it as `Aspen-Device`";
+    let responses = &mut operation.responses.responses;
+    match responses.get_mut("401") {
+        Some(RefOr::T(existing)) if existing.description.is_empty() => {
+            existing.description = REQUIRED.to_string();
+        }
+        Some(RefOr::T(existing)) => {
+            existing.description =
+                format!("{} or `deviceCredentialRequired`", existing.description);
+        }
+        Some(RefOr::Ref(_)) => {}
+        None => {
+            let required = ResponseBuilder::new()
+                .description(REQUIRED)
+                .content(
+                    "application/json",
+                    ContentBuilder::new()
+                        .schema(Some(Ref::from_schema_name("Problem")))
+                        .build(),
+                )
+                .build();
+            responses.insert("401".into(), RefOr::T(required));
+        }
+    }
+}
+
 /// Adds `serverBusy` to the `503` of an operation refused while its limits cannot be counted.
 fn document_unavailable(
     responses: &mut std::collections::BTreeMap<String, RefOr<utoipa::openapi::Response>>,
@@ -262,8 +323,61 @@ fn refuse(decision: Decision) -> ApiResult<()> {
 /// How long a client refused while the limits cannot be counted waits before trying again.
 const RATE_LIMITS_UNAVAILABLE_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Middleware on every API route: resolves the client address, then checks the rules that
-/// need no session.
+/// The session a request presented, as `limit_requests` resolved it, so the session extractors
+/// (`api::auth`) need not look it up again: `None` when its token is unknown or expired.
+#[derive(Clone)]
+pub struct ResolvedSession(pub Option<(UserPg, Caller)>);
+
+/// Counts a request's failure toward its address's `ip_failures` limits, put on every request
+/// that has no valid session by `limit_requests` for the handlers that can tell one: a wrong
+/// password or code, an unknown invite or refresh token.
+#[derive(Clone)]
+pub struct Failures {
+    route: String,
+    ip: Option<IpAddr>,
+}
+
+impl Failures {
+    /// Counts one failure. Answers nothing: the request is answered as wrong, and the next one
+    /// from the address is refused once its failures are spent.
+    pub async fn note(&self, state: &GlobalServerContext) {
+        let identity = Identity {
+            ip: self.ip,
+            ..Identity::default()
+        };
+        let _ = state
+            .rate_limiter
+            .check(&state.valkey, &self.route, Stage::Failures, &identity)
+            .await;
+    }
+}
+
+/// Counts a failure of the request `failures` came with, when it came without a valid session
+/// (the only requests `limit_requests` gives one).
+pub async fn note_failure(state: &GlobalServerContext, failures: &Option<Extension<Failures>>) {
+    if let Some(Extension(failures)) = failures {
+        failures.note(state).await;
+    }
+}
+
+/// Counts a failure when `result` is an error `wrong` says is one.
+pub async fn note_failed<T, E>(
+    state: &GlobalServerContext,
+    failures: &Option<Extension<Failures>>,
+    result: &Result<T, E>,
+    wrong: impl FnOnce(&E) -> bool,
+) {
+    if let Err(e) = result
+        && wrong(e)
+    {
+        note_failure(state, failures).await;
+    }
+}
+
+/// Middleware on every API route: resolves the client address and any session the request
+/// presents, then checks the rules for who the request is. A valid session counts toward its
+/// user's limits; anything else toward its address's and its device's, and must present a
+/// device credential where the route asks for one (`RateLimiter::requires_device`).
 pub async fn limit_requests(
     State(state): State<GlobalServerContext>,
     request: Request,
@@ -273,28 +387,120 @@ pub async fn limit_requests(
     let peer = parts.extensions.get::<PeerAddr>().map(|peer| peer.0.ip());
     let ip = client_ip(&state.rate_limiter, peer, &parts.headers);
     parts.extensions.insert(ClientIp(ip));
-    if let Some(matched) = parts.extensions.get::<MatchedPath>().cloned() {
-        let route = route_of(&parts.method, &matched);
-        let raw = RawPathParams::from_request_parts(&mut parts, &state)
-            .await
-            .ok();
-        let identity = Identity {
-            ip,
-            params: raw.as_ref().map(params).unwrap_or_default(),
-            ..Identity::default()
-        };
-        let decision = state
-            .rate_limiter
-            .check(&state.valkey, &route, Stage::Request, &identity)
-            .await;
-        if let Err(refused) = refuse(decision) {
-            return refused.into_response();
-        }
+    let Some(matched) = parts.extensions.get::<MatchedPath>().cloned() else {
+        return next.run(Request::from_parts(parts, body)).await;
+    };
+    let route = route_of(&parts.method, &matched);
+    let renewal = match admit(&state, &mut parts, &route, ip).await {
+        Ok(renewal) => renewal,
+        Err(refused) => return refused.into_response(),
+    };
+    let mut response = next.run(Request::from_parts(parts, body)).await;
+    if let Some(renewal) = renewal
+        && let Ok(value) = HeaderValue::from_str(&renewal.token)
+    {
+        response.headers_mut().insert(RENEWAL_HEADER, value);
     }
-    next.run(Request::from_parts(parts, body)).await
+    response
 }
 
-/// Checks the rules that count by user, once the session has said who the caller is.
+/// Checks a request's limits in the order `app::rate_limit` describes, leaving what it learned
+/// on `parts` for the handler: the resolved session, or a way to count failures. Answers with a
+/// renewed device credential when the one presented is due for it.
+async fn admit(
+    state: &GlobalServerContext,
+    parts: &mut Parts,
+    route: &str,
+    ip: Option<IpAddr>,
+) -> ApiResult<Option<Credential>> {
+    let limiter = &state.rate_limiter;
+    let raw = RawPathParams::from_request_parts(parts, state).await.ok();
+    let mut identity = Identity {
+        ip,
+        params: raw.as_ref().map(params).unwrap_or_default(),
+        ..Identity::default()
+    };
+    refuse(
+        limiter
+            .check(&state.valkey, route, Stage::Request, &identity)
+            .await,
+    )?;
+    let token = parts
+        .headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(bearer_token)
+        .map(str::to_owned);
+    if let Some(token) = token {
+        // A made-up session or bot token is refused by its signature without a lookup
+        // (`app::signed_token`), but a bot token from before tokens were signed can only be
+        // told from one by looking it up, so those are what an address's rejected tokens count:
+        // looked at before the lookup, so a stream of them cannot keep the database busy.
+        let unsigned = aspen_app::bot::is_unsigned_bot_token(state, &token);
+        if unsigned {
+            refuse(
+                limiter
+                    .peek(&state.valkey, route, Stage::RejectedTokens, &identity)
+                    .await,
+            )?;
+        }
+        match aspen_app::user::user_for_token(state, &token).await {
+            Ok(Some(found)) => {
+                identity.user = Some(found.0.id);
+                parts.extensions.insert(ResolvedSession(Some(found)));
+            }
+            Ok(None) => {
+                if unsigned {
+                    let _ = limiter
+                        .check(&state.valkey, route, Stage::RejectedTokens, &identity)
+                        .await;
+                }
+                parts.extensions.insert(ResolvedSession(None));
+            }
+            Err(e) => {
+                tracing::error!("error during authentication: {e}");
+                return Err(ApiError::new(ProblemCode::Internal));
+            }
+        }
+    }
+    if identity.user.is_some() {
+        refuse(
+            limiter
+                .check(&state.valkey, route, Stage::Session, &identity)
+                .await,
+        )?;
+        return Ok(None);
+    }
+    let presented = parts
+        .headers
+        .get(DEVICE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|token| {
+            aspen_app::device_credential::verify(&state.device_key, token, chrono::Utc::now())
+        });
+    if presented.is_none() && limiter.requires_device(route) && !limiter.waives_device(ip) {
+        return Err(ApiError::new(ProblemCode::DeviceCredentialRequired));
+    }
+    identity.device = presented.as_ref().map(|presented| presented.device);
+    refuse(
+        limiter
+            .check(&state.valkey, route, Stage::Anonymous, &identity)
+            .await,
+    )?;
+    refuse(
+        limiter
+            .peek(&state.valkey, route, Stage::Failures, &identity)
+            .await,
+    )?;
+    parts.extensions.insert(Failures {
+        route: route.to_string(),
+        ip,
+    });
+    Ok(presented.and_then(|presented| presented.renewal))
+}
+
+/// Checks the rules that count by user, once the session has said who the caller is, for a
+/// request `limit_requests` did not see.
 pub async fn limit_session(
     state: &GlobalServerContext,
     parts: &mut Parts,
@@ -310,7 +516,7 @@ pub async fn limit_session(
         ip,
         user: Some(user),
         params: raw.as_ref().map(params).unwrap_or_default(),
-        username: None,
+        ..Identity::default()
     };
     refuse(
         state
@@ -355,13 +561,16 @@ pub async fn within_limits(
         ..Identity::default()
     };
     let route = aspen_app::rate_limit::route_key(method, template);
-    matches!(
-        state
+    for stage in [Stage::Request, Stage::Anonymous] {
+        let decision = state
             .rate_limiter
-            .check(&state.valkey, &route, Stage::Request, &identity)
-            .await,
-        Decision::Allowed
-    )
+            .check(&state.valkey, &route, stage, &identity)
+            .await;
+        if decision != Decision::Allowed {
+            return false;
+        }
+    }
+    true
 }
 
 /// Checks the rules that count by the username given to `POST /auth/login`, before its

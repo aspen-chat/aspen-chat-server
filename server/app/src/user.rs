@@ -791,13 +791,22 @@ pub async fn sign_in_times(
 }
 
 /// Resolves a session token, or a bot's token, to its user and the sign-in it belongs to.
-/// `None` means the token is unknown, expired, or belongs to a deleted or banned user.
+/// `None` means the token is unknown, expired, or belongs to a deleted or banned user. One this
+/// deployment did not sign, or that has expired, is refused without a lookup, as is one a lookup
+/// has rejected before (`signed_token`).
 pub async fn user_for_token(
     state: &GlobalServerContext,
     token: &str,
 ) -> crate::Result<Option<(UserPg, crate::two_factor::Caller)>> {
     if crate::bot::is_bot_token(token) {
         return crate::bot::user_for_token(state, token).await;
+    }
+    if !crate::signed_token::session_token_checks_out(&state.token_key, token, Utc::now()) {
+        return Ok(None);
+    }
+    let digest = crate::login::token_digest(token);
+    if state.rejected_tokens.contains(&digest) {
+        return Ok(None);
     }
     let mut conn = state.connection_pool.get().await?;
     let now = Utc::now().naive_utc();
@@ -813,7 +822,7 @@ pub async fn user_for_token(
         ))
         .filter(
             session::dsl::token
-                .eq(crate::login::token_digest(token))
+                .eq(&digest)
                 .and(session::dsl::expires.ge(now))
                 .and(refresh_token::dsl::expires.ge(now))
                 .and(schema::user::deleted_at.is_null())
@@ -829,11 +838,14 @@ pub async fn user_for_token(
         )>(conn.as_mut())
         .await
         .optional()?;
+    if found.is_none() {
+        state.rejected_tokens.insert(digest.clone());
+    }
     Ok(found.map(
         |(user, refresh_digest, verified_at, method, has_second_factor, email_unverified)| {
             let caller = crate::two_factor::Caller {
                 user: user.id,
-                session_digest: crate::login::token_digest(token),
+                session_digest: digest,
                 refresh_digest,
                 verified_at,
                 has_second_factor,

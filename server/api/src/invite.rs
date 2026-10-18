@@ -4,9 +4,11 @@ use crate::extract::double_option;
 use crate::extract::{Created, Json, NoContent, Path, Query};
 use crate::include::{IncludeSet, Included, Sideloaded};
 use crate::message_enum;
+use crate::rate_limit::Failures;
 use crate::{API_PREFIX, TAG_INVITES};
 use aspen_app::context::GlobalServerContext;
 use aspen_app::{self as app, CommunityId};
+use axum::Extension;
 use axum::extract::State;
 use chrono::{DateTime, Utc};
 use diesel::result::DatabaseErrorKind;
@@ -286,10 +288,16 @@ pub struct RegistrationInviteReadQuery {
 )]
 pub async fn get_registration_invite(
     State(state): State<GlobalServerContext>,
+    failures: Option<Extension<Failures>>,
     Path(code): Path<String>,
     Query(query): Query<RegistrationInviteReadQuery>,
 ) -> ApiResult<Json<RegistrationInviteRead>> {
-    let invite = app::registration_invite::read_usable(&state, &code).await?;
+    let invite = app::registration_invite::read_usable(&state, &code).await;
+    crate::rate_limit::note_failed(&state, &failures, &invite, |e| {
+        matches!(e, app::Error::Diesel(diesel::result::Error::NotFound))
+    })
+    .await;
+    let invite = invite?;
     let community = {
         let mut conn = state
             .connection_pool

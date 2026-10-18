@@ -1,4 +1,13 @@
 import createClient, { type Client } from "openapi-fetch";
+import {
+  decodeChallenge,
+  DEVICE_HEADER,
+  type DeviceCredentialStore,
+  MemoryDeviceCredentialStore,
+  type PuzzleSolver,
+  RENEWAL_HEADER,
+  solvePuzzle,
+} from "./device";
 import { acceptLanguage } from "./languages";
 import type { components, paths } from "./generated/openapi";
 import {
@@ -35,6 +44,13 @@ export interface AspenClientOptions {
   onSessionChange?: (session: Session | null) => void;
   /** Waits the given milliseconds; tests replace it. */
   sleep?: (ms: number) => Promise<void>;
+  /** Where this server's device credential is kept (`device.ts`). Defaults to memory. */
+  deviceStore?: DeviceCredentialStore;
+  /**
+   * Solves the puzzle a device credential is earned with. Defaults to `solvePuzzle`, on the
+   * calling thread; a page passes one that runs in a worker.
+   */
+  solvePuzzle?: PuzzleSolver;
 }
 
 /**
@@ -109,6 +125,10 @@ export class AspenClient {
   #session: Session | null;
   /** In-flight refresh, shared so concurrent 401s trigger one refresh instead of a stampede. */
   #refreshing: Promise<boolean> | null = null;
+  readonly #deviceStore: DeviceCredentialStore;
+  readonly #solvePuzzle: PuzzleSolver;
+  /** Earning a device credential, shared so concurrent refusals solve one puzzle. */
+  #earning: Promise<boolean> | null = null;
 
   constructor(options: AspenClientOptions) {
     this.baseUrl = options.baseUrl;
@@ -133,6 +153,8 @@ export class AspenClient {
     this.#sleep =
       options.sleep ?? ((ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms)));
     this.#session = this.#store.load();
+    this.#deviceStore = options.deviceStore ?? new MemoryDeviceCredentialStore();
+    this.#solvePuzzle = options.solvePuzzle ?? solvePuzzle;
     this.api = createClient<paths>({
       baseUrl: this.baseUrl,
       fetch: (request) => this.#authenticatedFetch(request),
@@ -709,7 +731,7 @@ export class AspenClient {
       session = this.session;
     }
     if (session === null) {
-      return this.#fetch(request);
+      return this.#anonymousFetch(request);
     }
     // Keep an unread copy so the request can be replayed after a refresh.
     const retry = request.clone();
@@ -726,6 +748,66 @@ export class AspenClient {
       return response;
     }
     return this.#fetch(withBearer(retry, fresh.sessionToken));
+  }
+
+  /**
+   * A request without a session, which presents this server's device credential. Refused for
+   * lacking one, it earns one and is sent once more.
+   */
+  async #anonymousFetch(request: Request): Promise<Response> {
+    const retry = request.clone();
+    const response = await this.#fetchAsDevice(request);
+    if (response.status !== 401 || !(await isProblemCode(response, "deviceCredentialRequired"))) {
+      return response;
+    }
+    this.#earning ??= this.#earnDevice().finally(() => {
+      this.#earning = null;
+    });
+    if (!(await this.#earning)) {
+      return response;
+    }
+    return this.#fetchAsDevice(retry);
+  }
+
+  async #fetchAsDevice(request: Request): Promise<Response> {
+    const credential = this.#deviceStore.load();
+    const response = await this.#fetch(
+      credential === null ? request : withHeader(request, DEVICE_HEADER, credential),
+    );
+    const renewed = response.headers.get(RENEWAL_HEADER);
+    if (renewed !== null && renewed !== "") {
+      this.#deviceStore.save(renewed);
+    }
+    return response;
+  }
+
+  /**
+   * Earns a device credential: asks for a challenge, solves it, and redeems the solution. A
+   * challenge that expired while a slow device solved it is asked for once more. `false` when
+   * the server gave none.
+   */
+  async #earnDevice(): Promise<boolean> {
+    const raw = (request: Request) => this.#fetch(request);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const asked = await this.api.POST("/api/v1/auth/device-challenges", { fetch: raw });
+      if (asked.data === undefined) {
+        return false;
+      }
+      const { challenge, difficulty } = asked.data;
+      const nonce = await this.#solvePuzzle(decodeChallenge(challenge), difficulty);
+      const earned = await this.api.POST("/api/v1/auth/device-credentials", {
+        body: { challenge, nonce },
+        fetch: raw,
+      });
+      if (earned.data !== undefined) {
+        this.#deviceStore.save(earned.data.credential);
+        return true;
+      }
+      if (problemOf(earned.error, earned.response).code !== "deviceChallengeInvalid") {
+        return false;
+      }
+    }
+    return false;
   }
 
   /**
@@ -797,9 +879,23 @@ export class AspenClient {
 }
 
 function withBearer(request: Request, token: string): Request {
+  return withHeader(request, "authorization", `Bearer ${token}`);
+}
+
+function withHeader(request: Request, name: string, value: string): Request {
   const headers = new Headers(request.headers);
-  headers.set("authorization", `Bearer ${token}`);
+  headers.set(name, value);
   return new Request(request, { headers });
+}
+
+/** Whether `response` is a Problem with `code`, read from a copy so the body stays unread. */
+async function isProblemCode(response: Response, code: string): Promise<boolean> {
+  try {
+    const body: unknown = await response.clone().json();
+    return isProblem(body) && body.code === code;
+  } catch {
+    return false;
+  }
 }
 
 /**

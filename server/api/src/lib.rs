@@ -30,6 +30,7 @@ pub mod community;
 pub mod custom_emoji;
 pub mod deployment;
 pub mod deployment_settings;
+pub mod device_credential;
 pub mod device_link;
 pub mod dm;
 pub mod email;
@@ -185,8 +186,12 @@ fn cors_layer() -> CorsLayer {
             Method::PATCH,
             Method::DELETE,
         ])
-        .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-        .expose_headers([LOCATION, RETRY_AFTER])
+        .allow_headers([
+            AUTHORIZATION,
+            CONTENT_TYPE,
+            device_credential::DEVICE_HEADER,
+        ])
+        .expose_headers([LOCATION, RETRY_AFTER, device_credential::RENEWAL_HEADER])
         .max_age(Duration::from_secs(60 * 60))
 }
 
@@ -221,6 +226,8 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(device_link::claim_device_link))
         .routes(routes!(auth::logout))
         .routes(routes!(auth::token_refresh))
+        .routes(routes!(device_credential::challenge))
+        .routes(routes!(device_credential::redeem))
         .routes(routes!(user::create_user))
         .routes(routes!(
             user::get_user,

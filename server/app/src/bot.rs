@@ -20,13 +20,10 @@ use crate::{CommunityId, EventScope, UserId, publish_event};
 use aspen_schema::{bot_token, bot_transfer, community_user, user};
 use aspen_wire::message_enum;
 use aspen_wire::message_enum::server_event::{ServerEvent, UserEvent};
-use base64::Engine;
-use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use rand::RngExt;
 use sha2::{Digest, Sha256};
 
 /// How every bot token begins, so the server can tell one from a session token without a
@@ -38,9 +35,20 @@ pub fn is_bot_token(token: &str) -> bool {
     token.starts_with(TOKEN_PREFIX)
 }
 
-fn new_token() -> String {
-    let bytes = crate::CHACHA_RNG.with(|rng| rng.borrow_mut().random::<[u8; 32]>());
-    format!("{TOKEN_PREFIX}{}", BASE64_URL_SAFE_NO_PAD.encode(bytes))
+/// Whether `token` is a bot token made before bot tokens were signed, which only a lookup can
+/// tell from a made-up one (`signed_token::BotToken::Unsigned`).
+pub fn is_unsigned_bot_token(state: &GlobalServerContext, token: &str) -> bool {
+    token.strip_prefix(TOKEN_PREFIX).is_some_and(|rest| {
+        crate::signed_token::check_bot_token(&state.token_key, rest)
+            == crate::signed_token::BotToken::Unsigned
+    })
+}
+
+fn new_token(state: &GlobalServerContext) -> String {
+    format!(
+        "{TOKEN_PREFIX}{}",
+        crate::signed_token::bot_token(&state.token_key)
+    )
 }
 
 fn digest(token: &str) -> Vec<u8> {
@@ -49,18 +57,32 @@ fn digest(token: &str) -> Vec<u8> {
 
 /// The bot a token signs in, with a caller that has no session behind it: nothing to sign out
 /// of, and no verification to give. `None` for a token no live bot holds, and while the bot is
-/// banned from the deployment, which keeps its tokens for when the ban is lifted.
+/// banned from the deployment, which keeps its tokens for when the ban is lifted. One this
+/// deployment did not sign is refused without a lookup, unless it was made before bot tokens
+/// were signed; one no bot holds is remembered (`signed_token::Rejected`), but not one refused
+/// for its bot's ban, which a bot cannot refresh its way past.
 pub async fn user_for_token(
     state: &GlobalServerContext,
     token: &str,
 ) -> crate::Result<Option<(UserPg, crate::two_factor::Caller)>> {
+    let rest = token.strip_prefix(TOKEN_PREFIX).unwrap_or(token);
+    if crate::signed_token::check_bot_token(&state.token_key, rest)
+        == crate::signed_token::BotToken::Refused
+    {
+        return Ok(None);
+    }
+    let digest = digest(token);
+    let remembered = format!("bot:{}", data_encoding::HEXLOWER.encode(&digest));
+    if state.rejected_tokens.contains(&remembered) {
+        return Ok(None);
+    }
     let mut conn = state.connection_pool.get().await?;
     let found: Option<UserPg> = user::table
         .inner_join(bot_token::table.on(bot_token::bot.eq(user::id)))
         .select(UserPg::as_select())
         .filter(
             bot_token::digest
-                .eq(digest(token))
+                .eq(&digest)
                 .and(user::bot)
                 .and(user::deleted_at.is_null())
                 .and(diesel::dsl::not(crate::user_ban::shut_out())),
@@ -68,6 +90,16 @@ pub async fn user_for_token(
         .first(conn.as_mut())
         .await
         .optional()?;
+    if found.is_none() {
+        let held: bool = diesel::select(diesel::dsl::exists(
+            bot_token::table.filter(bot_token::digest.eq(&digest)),
+        ))
+        .get_result(conn.as_mut())
+        .await?;
+        if !held {
+            state.rejected_tokens.insert(remembered);
+        }
+    }
     Ok(found.map(|bot| {
         let caller = crate::two_factor::Caller {
             user: bot.id,
@@ -183,7 +215,7 @@ pub async fn create(
     if foreign {
         return Err(crate::Error::Forbidden(t!("foreignMakeNoBots")));
     }
-    let token = new_token();
+    let token = new_token(state);
     let token_digest = digest(&token);
     let bot = conn
         .transaction(|conn| {
@@ -281,7 +313,7 @@ pub async fn rotate_token(
     caller.ensure_recently_verified(&state.config.auth)?;
     let mut conn = state.connection_pool.get().await?;
     owned_bot(conn.as_mut(), caller.user, bot).await?;
-    let token = new_token();
+    let token = new_token(state);
     let digested = digest(&token);
     conn.transaction(|conn| {
         async move { replace_token(state, conn.as_mut(), bot, &digested).await }.scope_boxed()
@@ -503,7 +535,7 @@ pub async fn accept_transfer(
     caller: UserId,
     bot: UserId,
 ) -> crate::Result<(User, String)> {
-    let token = new_token();
+    let token = new_token(state);
     let digested = digest(&token);
     let mut conn = state.connection_pool.get().await?;
     let row = conn

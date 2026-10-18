@@ -125,8 +125,13 @@ nats_token = "…"
 ```
 
 With `scope = "networks"` only requests and connections from those networks skip the limits that
-count by address; every per-user and global limit stays, so the run still measures a deployment
-with its limits on.
+count by address or device; every per-user and global limit stays, so the run still measures a
+deployment with its limits on.
+
+A suspension also lets those networks go without the device credential that requests made before
+signing in otherwise present, so a suspended run's users solve no puzzle. A run that does not
+suspend earns one credential for each of `[target] source_addresses`, or one without them, and the
+users from an address share it: one device per address, as the deployment's limits count them.
 
 The same suspension is available by hand:
 

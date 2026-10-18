@@ -1,0 +1,55 @@
+{
+  "description": "Device puzzle cases both the server (app::device_credential::work) and the client's solver pass. zeroBits is the number of leading zero bits of SHA-256(SHA-256(challenge) || nonce), where challenge is the base64url-decoded bytes (no padding) and nonce is eight big-endian bytes. Nonces stay below 2^53 so they survive JSON numbers.",
+  "vectors": [
+    {
+      "challenge": "GtAKZ5iPX3btz-XRbFGC0MDkj11gYmsSNWQze-PCEGEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGQ",
+      "nonce": 0,
+      "zeroBits": 0
+    },
+    {
+      "challenge": "GtAKZ5iPX3btz-XRbFGC0MDkj11gYmsSNWQze-PCEGEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGQ",
+      "nonce": 20,
+      "zeroBits": 11
+    },
+    {
+      "challenge": "GtAKZ5iPX3btz-XRbFGC0MDkj11gYmsSNWQze-PCEGEAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGQ",
+      "nonce": 2483,
+      "zeroBits": 12
+    },
+    {
+      "challenge": "I_krlTC6u6yAj3wGJCa7GD_y2fMiwBAiAQF8JgzpEhkHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fIA",
+      "nonce": 1,
+      "zeroBits": 0
+    },
+    {
+      "challenge": "I_krlTC6u6yAj3wGJCa7GD_y2fMiwBAiAQF8JgzpEhkHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fIA",
+      "nonce": 4,
+      "zeroBits": 4
+    },
+    {
+      "challenge": "I_krlTC6u6yAj3wGJCa7GD_y2fMiwBAiAQF8JgzpEhkHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fIA",
+      "nonce": 1989,
+      "zeroBits": 12
+    },
+    {
+      "challenge": "EqH6uxXYyIppwjorOoXb7Rqs33sBoYPREkvmH5ji8ToODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJw",
+      "nonce": 1,
+      "zeroBits": 0
+    },
+    {
+      "challenge": "EqH6uxXYyIppwjorOoXb7Rqs33sBoYPREkvmH5ji8ToODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJw",
+      "nonce": 12,
+      "zeroBits": 4
+    },
+    {
+      "challenge": "EqH6uxXYyIppwjorOoXb7Rqs33sBoYPREkvmH5ji8ToODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJw",
+      "nonce": 5085,
+      "zeroBits": 12
+    },
+    {
+      "challenge": "sAvwcT0UyZKBxpXlTi-bKOBuc0tKPie_oNc_emvz45w",
+      "nonce": 1099511628018,
+      "zeroBits": 8
+    }
+  ]
+}

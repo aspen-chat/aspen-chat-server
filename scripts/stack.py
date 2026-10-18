@@ -31,6 +31,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+import device_credential
 from web_client import stand_in
 
 REPO = Path(__file__).resolve().parent.parent
@@ -204,6 +205,7 @@ class Stack:
         self.processes: list[tuple[subprocess.Popen, Path]] = []
         self.voice_id = ""
         self.nats = f"aspen-{name}-{os.getpid()}-nats"
+        self.devices = device_credential.Devices()
 
     def __enter__(self) -> "Stack":
         try:
@@ -307,7 +309,7 @@ class Stack:
             [str(self.bins / "aspen-chat-server"), "--no-https", "--port", str(self.ports.api), "--listen-addr", "127.0.0.1"],
             "api.log",
         )
-        wait_for("the chat server", lambda: http_status(f"{self.base}/api/v1/auth/methods") == 200, 60)
+        wait_for("the chat server", lambda: http_status(f"{self.base}/api/v1/health") == 204, 60)
         self.voice_id = given.group(1)
         if psql(f"SELECT id FROM voice_server WHERE name = '{self.name}'", self.database) != self.voice_id:
             raise Failed(f"`voice-servers add` printed {self.voice_id}, not the id it registered")
@@ -329,12 +331,16 @@ class Stack:
         return f"http://127.0.0.1:{self.ports.api}"
 
     def request(self, method: str, path: str, body: dict | None = None, token: str | None = None,
-                language: str | None = None) -> tuple[int, str]:
-        """`path` under `/api/v1`, or a whole URL."""
+                language: str | None = None, device: bool = True) -> tuple[int, str]:
+        """`path` under `/api/v1`, or a whole URL. Without `token`, it presents the stack's device
+        credential unless `device` is off."""
         url = path if path.startswith("http") else f"{self.base}/api/v1{path}"
         headers = {"content-type": "application/json"}
         if token:
             headers["authorization"] = f"Bearer {token}"
+        elif device:
+            headers[device_credential.HEADER] = self.devices.credential(
+                self.base, lambda method, path, body: self.request(method, path, body, device=False))
         if language:
             headers["accept-language"] = language
         data = json.dumps(body).encode() if body is not None else None

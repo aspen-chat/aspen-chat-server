@@ -30,6 +30,7 @@ There are two, both in `api::rate_limit::limit_sign_in`.
 - While `username_failures` is spent, password sign-in for the name is refused.
 - Passkeys, device links, and a reset by email still reach the account then.
 - An unknown name counts like a known one.
+- A wrong password also counts toward the address's `ip_failures`, as a wrong second-factor code does (see [Device credentials](device-credentials.md#who-a-request-counts-as)).
 
 See [design notes](design-notes.md#per-username-rate-limits) for why the limits are split this way.
 

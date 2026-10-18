@@ -35,10 +35,12 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+import device_credential
 from web_client import built_or_stand_in
 
 REPO = Path(__file__).resolve().parent.parent
@@ -217,10 +219,21 @@ def tls_context() -> ssl.SSLContext:
     return ssl.create_default_context(cafile=str(CA))
 
 
-def request(method: str, url: str, body: dict | None = None, token: str | None = None) -> tuple[int, str]:
+DEVICES = device_credential.Devices()
+
+
+def request(method: str, url: str, body: dict | None = None, token: str | None = None,
+            device: bool = True) -> tuple[int, str]:
+    """Without `token`, presents a device credential of the deployment `url` names unless `device`
+    is off."""
     headers = {"content-type": "application/json"}
     if token:
         headers["authorization"] = f"Bearer {token}"
+    elif device:
+        parts = urllib.parse.urlsplit(url)
+        origin = f"{parts.scheme}://{parts.netloc}"
+        headers[device_credential.HEADER] = DEVICES.credential(
+            origin, lambda method, path, body: request(method, f"{origin}/api/v1{path}", body, device=False))
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, method=method, data=data, headers=headers)
     try:
@@ -236,7 +249,7 @@ def wait_for_server(deployment: Deployment, seconds: float = 60) -> None:
         if running_pid(deployment) is None:
             raise Failed(f"{deployment.name} exited; see {deployment.dir / 'server.log'}")
         try:
-            if request("GET", f"https://{deployment.domain}/api/v1/auth/methods")[0] == 200:
+            if request("GET", f"https://{deployment.domain}/api/v1/health", device=False)[0] == 204:
                 return
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             pass

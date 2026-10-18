@@ -41,6 +41,18 @@ export {
   type PasskeyPurpose,
   type PasskeyTransport,
 } from "./passkeys";
+export {
+  DEVICE_HEADER,
+  MemoryDeviceCredentialStore,
+  RENEWAL_HEADER,
+  WebStorageDeviceCredentialStore,
+  decodeChallenge,
+  puzzleWork,
+  solvePuzzle,
+  solvePuzzleRange,
+  type DeviceCredentialStore,
+  type PuzzleSolver,
+} from "./device";
 export { plainFileName } from "./fileNames";
 export {
   ApiProblemError,

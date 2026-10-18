@@ -14,6 +14,7 @@
 mod agent;
 mod clock;
 mod coordinator;
+mod device;
 mod engine;
 mod html;
 mod picture;
