@@ -44,14 +44,20 @@ password by email.
 
 ## Registration
 
-Registration (`POST /users`) is limited per address and for everyone together: 600 accounts at
-once, then twenty a second (72000 an hour). That passes a launch's rush. A deployment expecting
-more at once raises it:
+Registration (`POST /users`) is limited per address and for everyone together. One address may
+make 1000 accounts an hour, all of them at once, so everyone at a large event or behind one
+carrier-grade NAT can register together. Everyone together may make 600 accounts at once, then
+twenty a second (72000 an hour). That passes a launch's rush. A deployment expecting more at once
+raises it:
 
 ```toml
 [rate_limits.endpoints."POST /users"]
 global = { requests = 6000, per_seconds = 60, burst = 3000 }
 ```
+
+The address limit stops only a script on one machine. Anyone with many addresses is held back by
+the global limit alone, unless the deployment requires a registration invite or a verified email
+address (see [Deployment settings](deployment-settings.md)).
 
 ## Limits for one endpoint
 

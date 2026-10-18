@@ -277,7 +277,11 @@ username = { requests = 10, per_seconds = 600, burst = 5 }
 username_failures = { requests = 30, per_seconds = 600, burst = 20 }
 
 [rate_limits.endpoints."POST /users"]
-ip = { requests = 5, per_seconds = 3600, burst = 3 }
+# Accounts made from one address: everyone at a large event, or behind one carrier-grade NAT,
+# may register at once from the same address, so this holds back only a script on one machine.
+# What bounds a crowd of addresses is the global limit, and a deployment's registration invites
+# and verified email addresses.
+ip = { requests = 1000, per_seconds = 3600 }
 # Every account made, from everyone together: enough for a launch's rush (600 at once, then
 # twenty a second, 72000 an hour), while a crowd of addresses cannot make accounts without end.
 # A deployment expecting more raises it in aspen.toml.
