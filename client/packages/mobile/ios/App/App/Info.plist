@@ -86,7 +86,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Aspen connects to servers on your local network when you sign in to one there.</string>
 	<!-- Export compliance, answered here so App Store Connect does not ask for each build: the
-	     app's encryption (TLS, WebRTC's DTLS-SRTP, and Web Push's decryption) is exempt. -->
+	     app's encryption is exempt because its source code is open and publicly available. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<!-- The relay of whoever publishes this build (spec/push.md), a build setting so that a

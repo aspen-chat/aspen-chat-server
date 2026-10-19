@@ -57,4 +57,4 @@ What it does:
 
 The build number is `<run number>.<attempt>`, so each upload of a version is greater than the last. The extension's `Info.plist` carries the app's version and build number: App Store Connect refuses an app whose extension's differ.
 
-The app's `Info.plist` answers App Store Connect's export compliance question (`ITSAppUsesNonExemptEncryption`, false), so builds go to TestFlight without being asked. The app's encryption is TLS, WebRTC's DTLS-SRTP, and decrypting Web Push messages (`push.md`), all standard algorithms in Apple's own implementations; a change to that, such as encryption of our own, means reviewing the answer.
+The app's `Info.plist` answers App Store Connect's export compliance question (`ITSAppUsesNonExemptEncryption`, false), so builds go to TestFlight without being asked. The app's encryption is exempt because Aspen's source code, its encryption included, is open source and publicly available. That holds for any encryption Aspen adds later, as long as its source stays public.
