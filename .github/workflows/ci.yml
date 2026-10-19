@@ -3,9 +3,9 @@
 # (`scripts/check_permissions.py`); the servers write the schemas the client is generated from;
 # the client typechecks, lints, and passes its tests, its browser tests split across three
 # runners; the desktop app is packaged for Windows, macOS, and as a Flatpak, and the Android and
-# iOS apps are built, `main`'s builds for Windows, macOS, and the App Store signed; two
-# deployments federate and wake a stand-in phone over real TLS; the box runs from
-# images built here, and both AWS configurations pass their plan tests; and the servers are
+# iOS apps are built, the Android APK kept, `main`'s builds for Windows, macOS, and the App
+# Store signed; two deployments federate and wake a stand-in phone over real TLS; the box runs
+# from images built here, and both AWS configurations pass their plan tests; and the servers are
 # built for 64-bit ARM two ways, natively and with the cross-compile script, and each build is
 # started against real services on an ARM machine.
 #
@@ -557,7 +557,7 @@ jobs:
           path: client/packages/desktop/release/flatpak/*.flatpak
 
   android:
-    name: Android — build, unit, and device tests
+    name: Android — build, unit, and device tests, and the APK
     needs: schemas
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -598,6 +598,15 @@ jobs:
       - name: Build and unit test
         working-directory: client/packages/mobile/android
         run: ./gradlew --console=plain :app:testDebugUnitTest :app:assembleDebug
+        env:
+          ASPEN_BUILD_NUMBER: ${{ github.run_number }}
+          ASPEN_BUILD_COMMIT: ${{ github.sha }}
+      # Kept before the device tests run, so a failing emulator still leaves the APK to install.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-apk-debug
+          path: client/packages/mobile/android/app/build/outputs/apk/debug/*.apk
+          retention-days: 14
       # The push handler's test posts and cancels real notifications, so it runs on an emulator,
       # which the runner accelerates with KVM once its device node is opened to the runner's user.
       - name: Enable KVM

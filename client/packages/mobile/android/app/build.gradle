@@ -1,4 +1,12 @@
+import groovy.json.JsonSlurper
+
 apply plugin: 'com.android.application'
+
+// versionName is the mobile package's version, with the commit as build metadata when CI names
+// one; versionCode is CI's run number, so each artifact installs over the one before it.
+def packageVersion = new JsonSlurper().parse(rootProject.file('../package.json')).version
+def buildCommit = System.getenv('ASPEN_BUILD_COMMIT')
+def buildNumber = System.getenv('ASPEN_BUILD_NUMBER')
 
 android {
     namespace = "com.aspen_chat.client"
@@ -7,8 +15,8 @@ android {
         applicationId "com.aspen_chat.client"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode buildNumber ? buildNumber.toInteger() : 1
+        versionName buildCommit ? "${packageVersion}+${buildCommit.take(12)}" : packageVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
