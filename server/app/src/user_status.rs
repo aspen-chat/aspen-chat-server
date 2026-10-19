@@ -339,19 +339,18 @@ pub async fn presence_visible_pairs(
 
 /// The presence of each of `users` as `viewer` may learn it (`presence_visible`), in the order
 /// given: `offline` for anyone whose presence is not theirs to learn, and for anyone invisible
-/// but the viewer themself.
+/// but the viewer themself. It reads on the caller's `conn`: a caller holding one that waited for
+/// a second could wait for good once every connection is held that way.
 pub async fn statuses_for(
     state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
     viewer: UserId,
     users: Vec<UserId>,
 ) -> crate::Result<Vec<(UserId, UserOnlineStatus)>> {
     if users.is_empty() {
         return Ok(Vec::new());
     }
-    let visible = {
-        let mut conn = state.connection_pool.get().await?;
-        presence_visible(conn.as_mut(), viewer, &users).await?
-    };
+    let visible = presence_visible(conn, viewer, &users).await?;
     let asked: Vec<UserId> = users
         .iter()
         .copied()
@@ -373,6 +372,16 @@ pub async fn statuses_for(
             (user, status)
         })
         .collect())
+}
+
+/// [`statuses_for`] on a connection of its own, for a caller that holds none.
+pub async fn read_statuses(
+    state: &GlobalServerContext,
+    viewer: UserId,
+    users: Vec<UserId>,
+) -> crate::Result<Vec<(UserId, UserOnlineStatus)>> {
+    let mut conn = state.connection_pool.get().await?;
+    statuses_for(state, conn.as_mut(), viewer, users).await
 }
 
 /// The presence of each of `users` as they themself are told it, whoever asks, read
