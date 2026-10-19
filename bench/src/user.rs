@@ -17,6 +17,11 @@
 //! presence, sends activity, and, when it has a channel open (`Behaviour::viewing_share`), names
 //! it in a `viewing` frame, types before each message it writes there, and reports how far it
 //! has read as messages arrive.
+//!
+//! A message the deployment holds while its channel's mana is spent (`202`, `waiting: "mana"`)
+//! is posted later, and its delivery counts from when it was sent, so the wait is in it. A
+//! sending refused with `channelBusy` is the deployment holding a flood back as it should, and
+//! counts as `channel_busy` rather than as an error.
 
 use crate::clock::Clock;
 use crate::profile::{Behaviour, Profile};
@@ -102,6 +107,10 @@ pub struct World {
     pub rate_factor: AtomicU64,
     /// Reconnect storms: the share of users who drop their stream.
     pub storms: broadcast::Sender<f64>,
+    /// Raids, which a share of a community's members join (`EventKind::Raid`).
+    pub raids: broadcast::Sender<Raid>,
+    /// The channel a raid is flooding, and until when messages there count as `delivery:raided`.
+    pub raided: Mutex<Option<(Uuid, Instant)>>,
     /// Set when the users are to stop.
     pub stop: watch::Receiver<bool>,
     /// A device credential for each source address, or one without them (`device`), earned
@@ -234,6 +243,26 @@ const DM: char = 'd';
 const THREAD: char = 't';
 const IMAGE: char = 'i';
 const EVERYONE: char = 'e';
+/// A raider's, and anyone else's in the channel a raid floods.
+const RAID: char = 'r';
+const RAIDED: char = 'b';
+
+/// How long after a raid ends messages in its channel still count as `delivery:raided`: what
+/// it left waiting for the channel's mana is posted or dropped within the two minutes a held
+/// message waits (`app::mana::queue::MAX_WAIT`), and what others sent behind it within two
+/// minutes more.
+pub const RAID_AFTERMATH: Duration = Duration::from_secs(240);
+
+/// A raid as each user hears of it.
+#[derive(Clone, Copy, Debug)]
+pub struct Raid {
+    pub community: usize,
+    pub channel: Uuid,
+    pub share: f64,
+    pub until: Instant,
+    pub messages_per_second: f64,
+    pub glyphs: u32,
+}
 
 /// The delivery measurement a kind of message counts toward.
 fn delivery_metric(kind: char) -> &'static str {
@@ -242,6 +271,8 @@ fn delivery_metric(kind: char) -> &'static str {
         THREAD => "delivery:thread",
         IMAGE => "delivery:image",
         EVERYONE => "delivery:everyone",
+        RAID => "delivery:raid",
+        RAIDED => "delivery:raided",
         _ => "delivery",
     }
 }
@@ -290,6 +321,8 @@ struct State {
     report_due: AtomicBool,
     /// Whether the user has chosen a presence override.
     presence_override: AtomicBool,
+    /// Whether the user has joined a raid, which makes them a raider for the rest of the run.
+    raiding: AtomicBool,
 }
 
 pub struct User {
@@ -309,6 +342,12 @@ fn source_address(world: &World, index: u32) -> Option<std::net::IpAddr> {
 
 /// Why a request failed, for the counters.
 struct Failed;
+
+/// Why a request failed: refused with `channelBusy`, or anything else.
+enum Refused {
+    Busy,
+    Other,
+}
 
 impl User {
     pub fn new(world: Arc<World>, index: u32, behaviour: Behaviour) -> Self {
@@ -346,6 +385,7 @@ impl User {
                 unreported: Mutex::new(None),
                 report_due: AtomicBool::new(false),
                 presence_override: AtomicBool::new(false),
+                raiding: AtomicBool::new(false),
             }),
             rng: Mutex::new(StdRng::seed_from_u64(seed)),
         };
@@ -475,6 +515,20 @@ impl User {
         body: Option<Value>,
         due: Instant,
     ) -> Result<Value, Failed> {
+        self.send(route, method, path, body, due)
+            .await
+            .map_err(|_| Failed)
+    }
+
+    /// `request`, saying whether a failure was `channelBusy`.
+    async fn send(
+        &self,
+        route: &str,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<Value>,
+        due: Instant,
+    ) -> Result<Value, Refused> {
         let mut builder = self
             .http
             .request(method, format!("{}{API_PREFIX}{path}", self.world.api));
@@ -498,7 +552,7 @@ impl User {
                 if status.is_success() {
                     let bytes = response.bytes().await.map_err(|_| {
                         recorder.count("errors", 1);
-                        Failed
+                        Refused::Other
                     })?;
                     Ok(if bytes.is_empty() {
                         Value::Null
@@ -507,16 +561,21 @@ impl User {
                     })
                 } else {
                     if status.as_u16() == 429 {
+                        let body = response.bytes().await.unwrap_or_default();
+                        if body.windows(13).any(|w| w == b"\"channelBusy\"") {
+                            recorder.count("channel_busy", 1);
+                            return Err(Refused::Busy);
+                        }
                         recorder.count("rate_limited", 1);
                     }
                     recorder.count("errors", 1);
-                    Err(Failed)
+                    Err(Refused::Other)
                 }
             }
             Err(_) => {
                 recorder.count(format!("status:{route}:transport"), 1);
                 recorder.count("errors", 1);
-                Err(Failed)
+                Err(Refused::Other)
             }
         }
     }
@@ -562,6 +621,7 @@ impl User {
         }
         let mut presence = tokio::time::interval(PRESENCE_INTERVAL);
         let mut storms = this.world.storms.subscribe();
+        let mut raids = this.world.raids.subscribe();
         loop {
             let next = schedule
                 .iter()
@@ -589,6 +649,14 @@ impl User {
                 _ = presence.tick() => {
                     let user = Arc::clone(&this);
                     tokio::spawn(async move { user.poll_presence().await });
+                }
+                raid = raids.recv() => {
+                    if let Ok(raid) = raid
+                        && this.world.memberships[this.index as usize].contains(&raid.community)
+                        && this.random() < raid.share
+                    {
+                        tokio::spawn(Arc::clone(&this).raid(raid));
+                    }
                 }
                 storm = storms.recv() => {
                     if let Ok(fraction) = storm
@@ -753,6 +821,43 @@ impl User {
         .await;
     }
 
+    /// Floods `raid`'s channel until it ends, as an account joined to raid it does: no typing,
+    /// no channel open, messages as fast as `messages_per_second` draws them, sent whether or
+    /// not the last was answered.
+    async fn raid(self: Arc<Self>, raid: Raid) {
+        self.world.recorder.count("raiders", 1);
+        self.state.raiding.store(true, Ordering::Relaxed);
+        let mut stop = self.world.stop.clone();
+        let mut due = Instant::now();
+        loop {
+            due += self.exponential(raid.messages_per_second);
+            if due >= raid.until {
+                return;
+            }
+            tokio::select! {
+                () = tokio::time::sleep_until(due) => {}
+                _ = stop.changed() => return,
+            }
+            let user = Arc::clone(&self);
+            tokio::spawn(async move {
+                let content: String = user
+                    .words(raid.glyphs as usize)
+                    .chars()
+                    .take(raid.glyphs as usize)
+                    .collect();
+                user.post(
+                    "POST /channels/{channel}/messages",
+                    &format!("/channels/{}/messages", raid.channel),
+                    RAID,
+                    &content,
+                    Vec::new(),
+                    due,
+                )
+                .await;
+            });
+        }
+    }
+
     /// After the server drops the stream: tries again with backoff, as the reference client
     /// does, until it is back or the run ends. `None` when the run ended first.
     async fn resume_after_loss(
@@ -848,16 +953,31 @@ impl User {
     ) -> Option<Value> {
         let sent = self.world.clock.now_ns();
         let content = format!("{content} {}", marker(kind, self.index, sent));
-        let message = self
-            .request(
+        let answer = self
+            .send(
                 route,
                 reqwest::Method::POST,
                 path,
                 Some(json!({ "content": content, "attachments": attachments, "mayHold": true })),
                 due,
             )
-            .await
-            .ok()?;
+            .await;
+        // What a raid did to its raiders' messages and to everyone else's.
+        let raid = match kind {
+            RAID => Some("raid"),
+            RAIDED => Some("raided"),
+            _ => None,
+        };
+        if let Some(raid) = raid {
+            let outcome = match &answer {
+                Ok(held) if held["waiting"] == "mana" => "held",
+                Ok(_) => "posted",
+                Err(Refused::Busy) => "refused",
+                Err(Refused::Other) => "failed",
+            };
+            self.world.recorder.count(format!("{raid}:{outcome}"), 1);
+        }
+        let message = answer.ok()?;
         self.world.recorder.count("messages_sent", 1);
         if let Some(id) = message["id"].as_str().and_then(|s| s.parse().ok()) {
             remember(&self.state.own, id);
@@ -868,6 +988,15 @@ impl User {
     /// Writes a message where the user has it open, as a person does: the channel becomes the
     /// one they view, for a user who views one.
     async fn post_message(&self, channel: Uuid, kind: char, content: &str, due: Instant) {
+        let raided = *self.world.raided.lock().expect("raided lock");
+        let kind = match raided {
+            Some((raided, until))
+                if kind == CHANNEL && raided == channel && Instant::now() < until =>
+            {
+                RAIDED
+            }
+            _ => kind,
+        };
         self.open_channel(channel);
         let due = self.type_in(channel, due).await;
         self.post(
@@ -1576,14 +1705,44 @@ impl User {
     fn on_frame(self: &Arc<Self>, text: &str) {
         let recorder = &self.world.recorder;
         if text.starts_with("{\"type\":\"ephemeral\"") {
-            // Who is typing in the channel the user has open.
+            // Who is typing in the channel the user has open, and its mana while it is busy.
             recorder.count("ephemeral", 1);
+            if text.contains("\"type\":\"mana\"") {
+                recorder.count("mana_frames", 1);
+            }
             return;
         }
         if !text.starts_with("{\"type\":\"event\"") {
             return;
         }
         recorder.count("events", 1);
+        // The user's own messages held for their channel's mana and dropped after all; those
+        // posted are measured by their delivery.
+        if text.contains("\"serverEvent\":\"heldMessageFailed\"") {
+            let raided = self
+                .world
+                .raided
+                .lock()
+                .expect("raided lock")
+                .map(|(c, _)| c);
+            let channel = serde_json::from_str::<Value>(text).ok().and_then(|frame| {
+                frame["event"]["channel"]
+                    .as_str()
+                    .and_then(|s| s.parse::<Uuid>().ok())
+            });
+            recorder.count(
+                match (
+                    raided.is_some() && channel == raided,
+                    self.state.raiding.load(Ordering::Relaxed),
+                ) {
+                    (true, true) => "raid:dropped",
+                    (true, false) => "raided:dropped",
+                    (false, _) => "held_dropped",
+                },
+                1,
+            );
+            return;
+        }
         // The sequence comes right after the type; it is cheap to read without parsing.
         if let Some(sequence) = text
             .find("\"sequence\":")

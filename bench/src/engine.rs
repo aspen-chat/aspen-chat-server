@@ -5,7 +5,7 @@ use crate::clock::Clock;
 use crate::profile::Behaviour;
 use crate::profile::{EventKind, Profile};
 use crate::stats;
-use crate::user::{User, World, memberships, text_channels};
+use crate::user::{RAID_AFTERMATH, Raid, User, World, memberships, text_channels};
 use aspen_bench_protocol::coordination::{AgentSummary, Assignment, Phase, Snapshot};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,6 +41,7 @@ pub fn run(
     );
     let (users_stop_tx, users_stop) = watch::channel(false);
     let (storms, _) = broadcast::channel(16);
+    let (raids, _) = broadcast::channel(16);
     let world = Arc::new(World {
         memberships: memberships(&assignment.manifest),
         text_channels: text_channels(&assignment.manifest),
@@ -54,6 +55,8 @@ pub fn run(
         recorder: recorder.clone(),
         rate_factor: AtomicU64::new(assignment.rate_factor.to_bits()),
         storms,
+        raids,
+        raided: std::sync::Mutex::new(None),
         stop: users_stop,
         devices: tokio::sync::OnceCell::new(),
     });
@@ -114,6 +117,35 @@ pub fn run(
                         }
                     }
                     EventKind::Announcement { .. } => {}
+                    EventKind::Raid {
+                        community,
+                        share,
+                        seconds,
+                        messages_per_second,
+                        glyphs,
+                    } => {
+                        let community = community as usize;
+                        let Some(channel) = world
+                            .manifest
+                            .communities
+                            .get(community)
+                            .and_then(|c| c.text_channels.first().copied())
+                        else {
+                            continue;
+                        };
+                        recorder.count("raids", 1);
+                        let until = Instant::now() + Duration::from_secs_f64(seconds);
+                        *world.raided.lock().expect("raided lock") =
+                            Some((channel, until + RAID_AFTERMATH));
+                        let _ = world.raids.send(Raid {
+                            community,
+                            channel,
+                            share,
+                            until,
+                            messages_per_second,
+                            glyphs,
+                        });
+                    }
                     // Run by the coordinator.
                     EventKind::Command { .. } => {}
                 }

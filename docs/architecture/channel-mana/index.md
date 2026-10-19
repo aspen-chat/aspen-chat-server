@@ -185,4 +185,5 @@ Mana cannot be counted, so everything posts as if every pool were full: it fails
 ## Testing
 
 - **Unit tests:** glyph counting and costs, settings and their ceilings (`app::mana`); the app's recharge arithmetic, store, and held edits (`client/packages/protocol/test/mana.test.ts`, `sync.test.ts`).
+- **The `raid` benchmark scenario** (`aspen-bench`, see [Benchmarking](../benchmarking.md)) has a tenth of a 2,000-member community flood one channel, measuring how long everyone else's messages there wait and how many of either side's are held, refused, or dropped.
 - **`scripts/check_mana.py`** drives a stack through it: spending and waiting, Bypass, draining in order and fairly, the bar's frames, edits (waiting, made, and changing nothing), polls, echoes, the two-minute limit, cancelling, and the bounds.

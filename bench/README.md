@@ -50,6 +50,7 @@ as a starting point for your own.
 | `bootstrap-storm` | Everyone opens the client at once. |
 | `voice-evening` | Many concurrent calls with screen shares; media quality. |
 | `mention-storm` | `@everyone` and tags in a large community: delivery, activity feeds, unread tags. |
+| `raid` | A tenth of a community floods one channel: how channel mana holds it back, and what everyone else there waits. |
 | `search-heavy` | Searching deep history, within a community and everywhere. |
 | `threads-and-polls` | Communities that talk in threads and decide by poll. |
 | `soak` | Hours of steady load; does memory grow? |
@@ -90,8 +91,10 @@ A profile has these sections:
   for `typing_seconds` (four), telling the channel.
 - `[[events]]` — things that happen at a time into the run: `reconnect_storm` (a share of users drop
   at once), `spike` (rates multiply for a while), `announcement` (the owner of a community,
-  `community` by index, largest first, tags `@everyone` in its first channel), and `command` (a
-  shell command on the coordinator's machine, such as restarting a service).
+  `community` by index, largest first, tags `@everyone` in its first channel), `raid` (a `share`
+  of a community's members flood its first channel for `seconds`, each sending
+  `messages_per_second` messages of about `glyphs` glyphs, 40 by default, with no typing first),
+  and `command` (a shell command on the coordinator's machine, such as restarting a service).
 - `[slo]` — the service levels that make the verdict: message delivery p50 and p99, request p99
   (overall and per route, `route_p99_ms`), connect p99, recovery p99 after a drop, error rate,
   voice loss, voice jitter, `connected_share`, the least share of the users meant to be online
@@ -108,6 +111,15 @@ stream, with the clocks of the coordinator and its agents synchronised at the st
 is channel messages'; DMs, thread replies, pictures, and announcements each have their own,
 `delivery:dm`, `delivery:thread`, `delivery:image` (which includes the deployment making the
 picture's preview, which the message waits for), and `delivery:everyone`.
+
+A message the deployment holds while its channel's mana is spent is posted later, and its
+delivery counts from when it was sent, waiting included. In a raid, raiders' messages are
+`delivery:raid` and everyone else's in the raided channel, from the raid's start until four
+minutes after it ends, `delivery:raided`. The counters `raid:` and `raided:` followed by
+`posted`, `held`, `refused`, and `dropped` say what became of either side's messages there,
+charted in the report: posted at once, held for the channel's mana, refused with `channelBusy`,
+and dropped after waiting. A refusal with `channelBusy` is the deployment holding a flood back,
+so it counts as `channel_busy`, not as an error.
 
 ## Rate limits
 
