@@ -1,7 +1,8 @@
 # Building the helper
 
-The helper is built by `pnpm build:native` in `packages/desktop`. On Linux and macOS that can run
-while a shell is open.
+The helper is built by `pnpm build:native` in `packages/desktop` (`scripts/build-native.mjs`). On
+Linux and macOS that can run while a shell is open. On macOS it builds for Apple Silicon and Intel
+and joins them into one universal binary with `lipo`, adding both Rust targets with rustup first.
 
 ## What each platform needs
 

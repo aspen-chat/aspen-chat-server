@@ -50,8 +50,12 @@ mac:
   # A bundle identifier may hold a hyphen and no underscore; the iOS app's is the same.
   appId: com.aspen-chat.client
   icon: build/icon-mac.png
+  # A dmg for Apple Silicon and one for Intel, each carrying the universal capture helper
+  # (`scripts/build-native.mjs`); a universal app would make every download carry both.
   target:
-    - dmg
+    - target: dmg
+      arch: [arm64, x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
   category: public.app-category.social-networking
   # Signed under the hardened runtime, as notarization requires, with what calls and the
   # capture helper need allowed (`build/entitlements.mac.plist`), and the reasons macOS shows

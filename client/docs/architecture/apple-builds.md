@@ -12,16 +12,16 @@ CI builds the iOS app and the macOS desktop app on GitHub's macOS runners (`maco
 
 ## The jobs
 
-| Job                    | Runs on   | What it does                                                                                                                                                                 |
-| ---------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `desktop-macos`        | every run | The capture helper's clippy and tests on macOS. On a pull request, also an unsigned dmg, kept as an artifact                                                                 |
-| `desktop-macos-signed` | `main`    | A dmg signed and notarized, then checked: the identity, the hardened runtime and a timestamp on the app and the capture helper, the stapled ticket, and Gatekeeper's verdict |
-| `ios`                  | every run | The app and its UI tests built for the simulator, unsigned, and `check_webpush.sh`                                                                                           |
-| `ios-testflight`       | `main`    | An App Store build, sent to App Store Connect while `TESTFLIGHT_UPLOAD` is `true`; otherwise its `.ipa` is kept as an artifact                                               |
+| Job                    | Runs on   | What it does                                                                                                                                                                                                                           |
+| ---------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `desktop-macos`        | every run | The capture helper's clippy and tests on macOS. On a pull request, also unsigned dmgs, kept as an artifact                                                                                                                             |
+| `desktop-macos-signed` | `main`    | Dmgs signed and notarized, then checked for each app: its architecture, a universal capture helper, the identity, the hardened runtime and a timestamp on the app and the capture helper, the stapled ticket, and Gatekeeper's verdict |
+| `ios`                  | every run | The app and its UI tests built for the simulator, unsigned, and `check_webpush.sh`                                                                                                                                                     |
+| `ios-testflight`       | `main`    | An App Store build, sent to App Store Connect while `TESTFLIGHT_UPLOAD` is `true`; otherwise its `.ipa` is kept as an artifact                                                                                                         |
 
 The UI tests themselves are not run: they need a whole deployment (`ios-app.md`), and these runners have no Docker to run one in.
 
-The dmg is for Apple Silicon only, the runner's own architecture. An Intel or universal build would also need the capture helper built for `x86_64`.
+There are two dmgs, `Aspen-<version>-arm64.dmg` for Apple Silicon and `Aspen-<version>-x64.dmg` for Intel, both built on the Apple Silicon runner. **Why not one universal app:** every download would carry both architectures' Electron, about twice the size. The capture helper is small, so it is one universal binary that both apps carry (`scripts/build-native.mjs`).
 
 ## Secrets and variables
 
