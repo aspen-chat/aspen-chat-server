@@ -61,6 +61,7 @@ feature's file or folder before working on it, and keep it describing the code a
 same commit, as with comments.
 
 - [`about.md`](docs/architecture/about.md): About Aspen, opened from Settings (the deployment, every version, and the license), and the Open Source Attributions page and the build-time list of every package each part ships.
+- [`apple-builds.md`](docs/architecture/apple-builds.md): the iOS and macOS builds in CI, signing the dmg and notarizing it, the App Store build for TestFlight, and the secrets they need.
 - [`administration.md`](docs/architecture/administration.md): the dashboard's tabs, the permissions each needs, directories, moderation log, growth charts, registration invites, and foreign users' bans.
 - [`blocking.md`](docs/architecture/blocking.md): blocks as store state, collapsed runs of blocked messages, blocked DMs, and blocks in calls.
 - [`bots.md`](docs/architecture/bots.md): bot badges, developer mode and the ID wizard, the bots dialog, adding a bot, and slash commands in the message box.

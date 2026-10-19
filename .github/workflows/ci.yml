@@ -2,7 +2,9 @@
 # x86-64, and changes to access are checked to reach everything already open
 # (`scripts/check_permissions.py`); the servers write the schemas the client is generated from;
 # the client typechecks, lints, and passes its tests, its browser tests split across three
-# runners; two deployments federate and wake a stand-in phone over real TLS; the box runs from
+# runners; the desktop app is packaged for Windows, macOS, and as a Flatpak, and the Android and
+# iOS apps are built, `main`'s builds for Windows, macOS, and the App Store signed; two
+# deployments federate and wake a stand-in phone over real TLS; the box runs from
 # images built here, and both AWS configurations pass their plan tests; and the servers are
 # built for 64-bit ARM two ways, natively and with the cross-compile script, and each build is
 # started against real services on an ARM machine.
@@ -255,6 +257,236 @@ jobs:
         with:
           name: desktop-windows
           path: client/packages/desktop/release/*.exe
+
+  # The capture helper's macOS code (ScreenCaptureKit, CoreMedia), and on a pull request an
+  # unsigned dmg; `main` signs and notarizes one in `desktop-macos-signed`.
+  desktop-macos:
+    name: Desktop (macOS) — capture helper and dmg
+    needs: schemas
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: schemas
+          path: .
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: client/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      - name: Rust (the toolchain rust-toolchain.toml pins, with its targets)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client/packages/desktop/native/capture
+      - name: Capture helper — lints and tests
+        run: |
+          cargo clippy --locked --manifest-path packages/desktop/native/capture/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path packages/desktop/native/capture/Cargo.toml
+      - if: github.event_name == 'pull_request'
+        run: pnpm install --frozen-lockfile
+      - if: github.event_name == 'pull_request'
+        run: pnpm codegen
+      - if: github.event_name == 'pull_request'
+        run: pnpm --filter @aspen/desktop package
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-macos
+          path: client/packages/desktop/release/*.dmg
+
+  # Signed with the Developer ID Application identity and notarized, for `main` alone: the
+  # secrets are in the `apple-signing` environment, which only `main` may use, and whatever is
+  # signed carries the publisher's name.
+  desktop-macos-signed:
+    name: Desktop (macOS) — signed and notarized dmg
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: desktop-macos
+    environment: apple-signing
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: schemas
+          path: .
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: client/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      - name: Rust (the toolchain rust-toolchain.toml pins, with its targets)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client/packages/desktop/native/capture
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm codegen
+      - name: The notarization key
+        run: printf '%s' "$APPLE_API_KEY" > "$RUNNER_TEMP/notarization.p8"
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      - run: pnpm --filter @aspen/desktop package:signed
+        env:
+          CSC_LINK: ${{ secrets.MAC_CERT_P12 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY: ${{ runner.temp }}/notarization.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - name: Check the signature, the hardened runtime, and the notarization ticket
+        working-directory: client/packages/desktop/release
+        run: |
+          app=mac-arm64/Aspen.app
+          codesign --verify --deep --strict --verbose=2 "$app"
+          for file in "$app" "$app/Contents/Resources/aspen-capture"; do
+            details="$(codesign -dvv "$file" 2>&1)"
+            echo "$details" | grep -q '^Authority=Developer ID Application: Jacob Kiesel (L2GS25U79G)$' \
+              || { echo "$file is not signed with the Developer ID Application identity"; exit 1; }
+            echo "$details" | grep -q 'flags=.*runtime' || { echo "$file lacks the hardened runtime"; exit 1; }
+            echo "$details" | grep -q '^Timestamp=' || { echo "$file's signature has no timestamp"; exit 1; }
+          done
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-macos-signed
+          path: client/packages/desktop/release/*.dmg
+
+  # The app and its UI tests built for the simulator, unsigned, and the extension's Web Push
+  # decryption checked against RFC 8291's example. The UI tests themselves need a deployment
+  # (`client/docs/architecture/ios-app.md`), which these runners cannot hold.
+  ios:
+    name: iOS — simulator build and Web Push check
+    needs: schemas
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: client
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: schemas
+          path: .
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: client/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      # The Open Source Attributions list is made from `cargo metadata` when the app is built
+      # (`client/packages/app/attributions/plugin.ts`).
+      - name: Rust (the toolchain rust-toolchain.toml pins)
+        run: rustup toolchain install
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm codegen
+      - name: Build the web shell and copy it into the iOS project
+        run: |
+          pnpm --filter @aspen/app build:shell
+          cd packages/mobile && npx cap sync ios
+      - run: xcodebuild -version
+      - name: Build the app and its UI tests for the simulator
+        working-directory: client/packages/mobile/ios/App
+        run: |
+          xcodebuild -project App.xcodeproj -scheme App -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/derived" \
+            CODE_SIGNING_ALLOWED=NO build-for-testing
+      - run: packages/mobile/ios/scripts/check_webpush.sh
+
+  # An App Store build, signed by hand (`app_store.py`), for `main` alone, from the
+  # `apple-signing` environment's secrets. It is sent to App Store Connect as a TestFlight build
+  # only while the repository variable `TESTFLIGHT_UPLOAD` is `true`; otherwise the signed `.ipa`
+  # is exported and kept, which shows the signing still works.
+  ios-testflight:
+    name: iOS — App Store build for TestFlight
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: ios
+    environment: apple-signing
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: client
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: schemas
+          path: .
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: client/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      - name: Rust (the toolchain rust-toolchain.toml pins)
+        run: rustup toolchain install
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm codegen
+      - name: Build the web shell and copy it into the iOS project
+        run: |
+          pnpm --filter @aspen/app build:shell
+          cd packages/mobile && npx cap sync ios
+      - name: The certificate, the profiles, and the App Store Connect key
+        run: |
+          printf '%s' "$IOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/distribution.p12"
+          printf '%s' "$IOS_PROFILE_APP" | base64 --decode > "$RUNNER_TEMP/app.mobileprovision"
+          printf '%s' "$IOS_PROFILE_NOTIFICATIONS" | base64 --decode > "$RUNNER_TEMP/notifications.mobileprovision"
+          printf '%s' "$APPLE_API_KEY" > "$RUNNER_TEMP/app-store-connect.p8"
+        env:
+          IOS_CERT_P12: ${{ secrets.IOS_CERT_P12 }}
+          IOS_PROFILE_APP: ${{ secrets.IOS_PROFILE_APP }}
+          IOS_PROFILE_NOTIFICATIONS: ${{ secrets.IOS_PROFILE_NOTIFICATIONS }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      # The build number grows with every run and every attempt of one, as App Store Connect
+      # requires of the builds of one version.
+      - name: Archive, sign, and export${{ vars.TESTFLIGHT_UPLOAD == 'true' && ' and upload' || '' }}
+        run: |
+          packages/mobile/ios/scripts/app_store.py \
+            --certificate "$RUNNER_TEMP/distribution.p12" \
+            --profile "$RUNNER_TEMP/app.mobileprovision" \
+            --profile "$RUNNER_TEMP/notifications.mobileprovision" \
+            --build-number "${{ github.run_number }}.${{ github.run_attempt }}" \
+            --relay "$ASPEN_PUSH_RELAY" \
+            --api-key "$RUNNER_TEMP/app-store-connect.p8" \
+            --api-key-id "$APPLE_API_KEY_ID" --api-issuer "$APPLE_API_ISSUER" \
+            ${{ vars.TESTFLIGHT_UPLOAD == 'true' && '--upload' || '' }}
+        env:
+          ASPEN_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+          ASPEN_PUSH_RELAY: ${{ vars.ASPEN_PUSH_RELAY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - if: vars.TESTFLIGHT_UPLOAD != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-app-store
+          path: target/ios-app-store/*.ipa
 
   desktop-flatpak:
     name: Desktop (Linux) — Flatpak

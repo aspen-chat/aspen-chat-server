@@ -1,6 +1,6 @@
 # The iOS app's UI tests
 
-The iOS project (`packages/mobile/ios`) is kept, as Android's is. Its UI tests drive the app with real taps and finger drags in WebKit, against a real deployment. They check what the browser specs cannot reach: the iOS web view itself, the system's keyboard, photo picker, and notifications, links opened from outside the app, and the app being suspended and resumed.
+The iOS project (`packages/mobile/ios`) is kept, as Android's is. CI builds it, and signs it for the App Store, as `apple-builds.md` describes. Its UI tests drive the app with real taps and finger drags in WebKit, against a real deployment. They check what the browser specs cannot reach: the iOS web view itself, the system's keyboard, photo picker, and notifications, links opened from outside the app, and the app being suspended and resumed.
 
 ## Where it lives
 
