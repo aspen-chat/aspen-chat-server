@@ -54,6 +54,7 @@ export const CHANNEL_PERMISSIONS: readonly Permission[] = [
   "mentionEveryone",
   "transferFiles",
   "useCamera",
+  "bypassChannelMana",
 ];
 
 export const ALL_PERMISSIONS: readonly Permission[] = [
@@ -83,13 +84,20 @@ export const MODERATION: readonly Permission[] = [
 /** A set of permissions. */
 export type PermissionSet = ReadonlySet<Permission>;
 
-/** Tagging roles and everyone at once, which a new community leaves to its moderators. */
-const BROAD_TAGS: ReadonlySet<Permission> = new Set(["mentionRoles", "mentionEveryone"]);
+/**
+ * Tagging roles and everyone at once, and posting past a channel's mana, which a new community
+ * leaves to its moderators.
+ */
+const LEFT_TO_MODERATORS: ReadonlySet<Permission> = new Set([
+  "mentionRoles",
+  "mentionEveryone",
+  "bypassChannelMana",
+]);
 
 /** The templates a new community's roles start from, as the server writes them. */
 export const TEMPLATES = {
   member: [
-    ...CHANNEL_PERMISSIONS.filter((p) => !BROAD_TAGS.has(p)),
+    ...CHANNEL_PERMISSIONS.filter((p) => !LEFT_TO_MODERATORS.has(p)),
     "createInvites",
     "changeNickname",
   ],
@@ -224,9 +232,12 @@ export function resolveCommunity(
   );
 }
 
-/** Every channel permission, which each recipient of a DM holds, and pinning too. */
+/**
+ * Every channel permission but bypassing mana, which only a community's roles give, and
+ * pinning too: what each recipient of a DM holds, as the server's `IN_DM`.
+ */
 export const DM_PERMISSIONS: PermissionSet = new Set<Permission>([
-  ...CHANNEL_PERMISSIONS,
+  ...CHANNEL_PERMISSIONS.filter((p) => p !== "bypassChannelMana"),
   "pinMessages",
 ]);
 

@@ -51,6 +51,15 @@ pub struct SettingsArgs {
     /// How many GiB one person may upload in any 24 hours; 0 sets no limit.
     #[clap(long)]
     upload_quota_gib: Option<u32>,
+    /// The most mana any channel recharges a second, and the rate of channels that set none.
+    #[clap(long)]
+    mana_max_recharge: Option<u32>,
+    /// The most mana a channel holds where it sets none, and the most it may set.
+    #[clap(long)]
+    mana_max: Option<u32>,
+    /// What an attachment costs, in the mana a glyph costs.
+    #[clap(long)]
+    mana_attachment_cost: Option<u32>,
     /// How many days the files of deleted messages are kept for reviewing reports, past any
     /// report case about them; 0 keeps them for good.
     #[clap(long)]
@@ -143,6 +152,9 @@ impl From<SettingsArgs> for SettingsChange {
             everyone_mention_limit: args.everyone_mention_limit,
             custom_emoji_limit: args.custom_emoji_limit,
             upload_quota_gib: args.upload_quota_gib,
+            mana_max_recharge: args.mana_max_recharge,
+            mana_max: args.mana_max,
+            mana_attachment_cost: args.mana_attachment_cost,
             evidence_retention_days: args.evidence_retention_days,
             file_transfers: args.file_transfers,
             email_required: args.email_required,
@@ -175,6 +187,9 @@ impl From<&DeploymentSettings> for SettingsArgs {
             everyone_mention_limit: Some(settings.everyone_mention_limit),
             custom_emoji_limit: Some(settings.custom_emoji_limit),
             upload_quota_gib: Some(settings.upload_quota_gib),
+            mana_max_recharge: Some(settings.mana_max_recharge),
+            mana_max: Some(settings.mana_max),
+            mana_attachment_cost: Some(settings.mana_attachment_cost),
             evidence_retention_days: Some(settings.evidence_retention_days),
             file_transfers: Some(settings.file_transfers),
             email_required: Some(settings.email_required),

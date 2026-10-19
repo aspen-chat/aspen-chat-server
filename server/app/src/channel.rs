@@ -46,6 +46,9 @@ pub struct Channel {
     /// For a channel of a kind a plugin adds, the plugin and the kind
     /// (`org.example.forums:board`); `None` otherwise.
     pub plugin_type: Option<String>,
+    /// A community channel's own mana settings (`app::mana`); `None` follows the deployment's.
+    pub mana_recharge: Option<i32>,
+    pub mana_max: Option<i32>,
 }
 
 /// The channel's wire record. `recipients` are a DM's or group DM's people, empty for any other
@@ -64,6 +67,8 @@ pub fn record(c: &Channel, recipients: Vec<UserId>) -> message_enum::Channel {
         last_reply_at: c.last_reply_at,
         recipients,
         plugin_type: c.plugin_type.clone(),
+        mana_recharge: c.mana_recharge.and_then(|n| u32::try_from(n).ok()),
+        mana_max: c.mana_max.and_then(|n| u32::try_from(n).ok()),
     }
 }
 
@@ -125,6 +130,8 @@ pub async fn create_channel(
                 community,
                 parent_category: request.parent_category,
                 plugin_type: request.plugin_type,
+                mana_recharge: request.mana_recharge,
+                mana_max: request.mana_max,
             };
             insert_channel(state, conn.as_mut(), new, &overrides).await
         }
@@ -173,6 +180,9 @@ pub struct NewChannel {
     pub parent_category: Option<CategoryId>,
     /// For `ChannelType::Plugin`, the plugin's kind, which the caller has checked.
     pub plugin_type: Option<String>,
+    /// Its own mana settings, checked here against the deployment's.
+    pub mana_recharge: Option<u32>,
+    pub mana_max: Option<u32>,
 }
 
 /// Writes a new text or voice channel with its overrides and announces it, inside the caller's
@@ -190,7 +200,14 @@ pub async fn insert_channel(
         community,
         parent_category,
         plugin_type,
+        mana_recharge,
+        mana_max,
     } = new;
+    crate::mana::check_channel_settings(
+        crate::mana::PoolSettings::deployment(&state.settings()),
+        mana_recharge,
+        mana_max,
+    )?;
     // Threads, DMs, and group DMs have endpoints of their own, which set what they need; a
     // plugin's channel names its kind, and nothing else does.
     match (ty, &plugin_type) {
@@ -215,6 +232,8 @@ pub async fn insert_channel(
         last_reply_at: None,
         dm_key: None,
         plugin_type,
+        mana_recharge: mana_recharge.map(stored),
+        mana_max: mana_max.map(stored),
     };
     diesel::insert_into(channel::table)
         .values(&channel)
@@ -497,6 +516,14 @@ pub struct ChannelChangeset {
     pub community: Option<Option<CommunityId>>,
     pub name: Option<String>,
     pub sort_index: Option<i32>,
+    pub mana_recharge: Option<Option<i32>>,
+    pub mana_max: Option<Option<i32>>,
+}
+
+/// A mana setting as its column holds it; `check_channel_settings` keeps it within the
+/// deployment's, which are themselves within `INTEGER`.
+fn stored(value: u32) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
 }
 
 /// The community of the community channel `id` and what the caller may do across it, for
@@ -523,8 +550,8 @@ fn channel_name(name: &str) -> crate::Result<String> {
     crate::community::trimmed_name(name, |max| t!("channelNameLength", max = max))
 }
 
-/// Renames or moves a community channel the caller may view, which takes Manage channels; a
-/// deployment moderator may rename one. A channel stays in its community, and a category it moves into must be one
+/// Renames, moves, or sets the mana of a community channel the caller may view, which takes
+/// Manage channels; a deployment moderator may rename one. A channel stays in its community, and a category it moves into must be one
 /// of that community's.
 pub async fn update_channel(
     state: &GlobalServerContext,
@@ -533,6 +560,11 @@ pub async fn update_channel(
     mut command: ChannelUpdateRequest,
 ) -> crate::error::Result<Channel> {
     command.name = command.name.as_deref().map(channel_name).transpose()?;
+    crate::mana::check_channel_settings(
+        crate::mana::PoolSettings::deployment(&state.settings()),
+        command.mana_recharge.flatten(),
+        command.mana_max.flatten(),
+    )?;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
@@ -540,7 +572,9 @@ pub async fn update_channel(
             // A deployment moderator may rename a channel, and do nothing else to it here.
             let rename_only = command.parent_category.is_none()
                 && command.community.is_none()
-                && command.sort_index.is_none();
+                && command.sort_index.is_none()
+                && command.mana_recharge.is_none()
+                && command.mana_max.is_none();
             if !access.has(Permissions::MANAGE_CHANNELS) {
                 if !(access.moderator && rename_only) {
                     return Err(missing(Permissions::MANAGE_CHANNELS));
@@ -567,6 +601,8 @@ pub async fn update_channel(
                     community: command.community,
                     name: command.name.clone(),
                     sort_index: command.sort_index,
+                    mana_recharge: command.mana_recharge.map(|n| n.map(stored)),
+                    mana_max: command.mana_max.map(|n| n.map(stored)),
                 })
                 .filter(channel::id.eq(id).and(channel::deleted_at.is_null()))
                 .returning(Channel::as_select())
@@ -591,6 +627,8 @@ pub async fn update_channel(
                     reply_count: None,
                     last_reply_at: None,
                     recipients: None,
+                    mana_recharge: command.mana_recharge,
+                    mana_max: command.mana_max,
                 }),
             )
             .await?;

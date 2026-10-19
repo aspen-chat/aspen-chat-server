@@ -46,6 +46,8 @@ bitflags::bitflags! {
         const MENTION_EVERYONE = 1 << 44;
         const TRANSFER_FILES = 1 << 45;
         const USE_CAMERA = 1 << 46;
+        /// Post at once while the channel's mana is low, and never wait for it (`app::mana`).
+        const BYPASS_CHANNEL_MANA = 1 << 47;
     }
 }
 
@@ -58,12 +60,17 @@ impl Permissions {
     pub const CHANNEL: Self =
         Self::all().intersection(Self::from_bits_retain(i64::MAX & !((1 << 32) - 1)));
 
+    /// What a DM's recipients hold in it: every channel permission but Bypass channel mana,
+    /// which only a community's roles give.
+    pub const IN_DM: Self = Self::CHANNEL.difference(Self::BYPASS_CHANNEL_MANA);
+
     /// The everyone role of a new community: taking part, tagging one another, inviting
-    /// others, and choosing a nickname. Tagging roles and everyone at once is left to
-    /// moderators.
+    /// others, and choosing a nickname. Tagging roles and everyone at once, and posting past
+    /// the channel's mana, are left to moderators.
     pub const MEMBER_TEMPLATE: Self = Self::CHANNEL
         .difference(Self::MENTION_ROLES)
         .difference(Self::MENTION_EVERYONE)
+        .difference(Self::BYPASS_CHANNEL_MANA)
         .union(Self::CREATE_INVITES)
         .union(Self::CHANGE_NICKNAME);
     /// A new community's Moderator role.
@@ -78,7 +85,8 @@ impl Permissions {
         .union(Self::ADD_BOTS)
         .union(Self::MANAGE_CUSTOM_EMOJI)
         .union(Self::BAN_MEMBERS)
-        .union(Self::MANAGE_NICKNAMES);
+        .union(Self::MANAGE_NICKNAMES)
+        .union(Self::BYPASS_CHANNEL_MANA);
     /// A new community's Admin role: everything but what only the owner may do.
     pub const ADMIN_TEMPLATE: Self = Self::all();
 
@@ -137,6 +145,7 @@ pub enum Permission {
     MentionEveryone,
     TransferFiles,
     UseCamera,
+    BypassChannelMana,
 }
 
 impl Permission {
@@ -176,6 +185,7 @@ impl Permission {
             Permission::MentionEveryone => Permissions::MENTION_EVERYONE,
             Permission::TransferFiles => Permissions::TRANSFER_FILES,
             Permission::UseCamera => Permissions::USE_CAMERA,
+            Permission::BypassChannelMana => Permissions::BYPASS_CHANNEL_MANA,
         }
     }
 }

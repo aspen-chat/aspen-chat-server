@@ -47,6 +47,7 @@ Channel permissions can also be allowed or denied per channel and per category.
 | `mentionRoles` | Tag roles. |
 | `mentionEveryone` | Tag everyone. |
 | `transferFiles` | Transfer files in calls (see [File transfers](../file-transfers.md)). |
+| `bypassChannelMana` | Post at once while the channel's mana is low, never waiting in its queue; what is posted still spends it (see [Channel mana](../channel-mana/index.md)). |
 
 ## Bits
 
@@ -78,4 +79,4 @@ So someone who may no longer post can still withdraw what they said.
 
 - A thread takes its parent channel's permissions.
 - Posting in a thread takes `sendInThreads`. An echo also takes `sendMessages` in the parent.
-- Every recipient of a DM holds every channel permission there and no community permission, except that any recipient may pin.
+- Every recipient of a DM holds every channel permission there but `bypassChannelMana` (`Permissions::IN_DM`), and no community permission, except that any recipient may pin.

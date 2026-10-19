@@ -127,9 +127,11 @@ enum MessageEnumSource {
         message: Option<MessageId>,
         preview: AttachmentPreview,
     },
-    // A message its author sent while a preview of one of its attachments was being made, and
-    // which was held for it, was posted as `message` (`app::message::held`); the author's apps
-    // show the message in place of the one they showed waiting.
+    // A message its author sent while a preview of one of its attachments was being made, or
+    // while its channel was too busy (`app::mana`), and which was held for it, was posted as
+    // `message` (`app::message::held`); the author's apps show the message in place of the one
+    // they showed waiting. For an edit that waited, `message` is the message it changed; for an
+    // echo, the echo.
     #[message_gen(custom_event)]
     HeldMessagePosted {
         held: HeldMessageId,
@@ -143,6 +145,13 @@ enum MessageEnumSource {
         held: HeldMessageId,
         channel: ChannelId,
         detail: String,
+    },
+    // Its author cancelled a held message before it was posted
+    // (`DELETE /users/@me/held-messages/{held}`); their apps stop showing it.
+    #[message_gen(custom_event)]
+    HeldMessageCancelled {
+        held: HeldMessageId,
+        channel: ChannelId,
     },
     // Something announced about the community may not have happened: a request published
     // events about it inside a transaction that was then rolled back. Whoever holds the
@@ -451,6 +460,13 @@ enum MessageEnumSource {
         // which clients show by its view. See `app::plugin::channel_type`.
         #[message_gen(permanent)]
         plugin_type: Option<String>,
+        // A community channel's own mana settings (`app::mana`): how much it recharges a second
+        // and how much it holds, each at most the deployment's (`manaMaxRecharge`, `manaMax`),
+        // which `null` follows. A thread's are its parent's; a DM's are the deployment's.
+        #[message_gen(default)]
+        mana_recharge: Option<u32>,
+        #[message_gen(default)]
+        mana_max: Option<u32>,
     },
     Category {
         #[message_gen(id)]

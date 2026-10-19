@@ -698,8 +698,16 @@ async fn pump_events(
     let typist = Typist::spawn(state.clone(), user);
     // Dropped with the connection, which ends its watch.
     let mut presence = state.presence_feed.watch(user);
+    // Dropped with the connection, which ends its task.
+    let (viewer, mut mana_levels) = app::mana::live::Viewer::spawn(state.clone(), user);
     loop {
         tokio::select! {
+            Some(level) = mana_levels.recv() => {
+                if let Err(e) = send_presence(&mut socket, &level).await {
+                    log_send_error(&e);
+                    return;
+                }
+            },
             delivery = subscription.deliveries.recv() => {
                 // The feed let go of this connection: it fell a whole queue behind, or the feed
                 // missed events. Either way the client resumes from what it last processed.
@@ -821,6 +829,12 @@ async fn pump_events(
                             typist.stopped(channel_id);
                         }
                         Ok(ClientMessage::Viewing { channel_ids }) => {
+                            let cut: Vec<ChannelId> = channel_ids
+                                .iter()
+                                .copied()
+                                .take(app::event_feed::MAX_VIEWING)
+                                .collect();
+                            viewer.viewing(cut);
                             subscription.viewing(channel_ids);
                         }
                         Ok(ClientMessage::WatchPresence { user_ids }) => presence.set(user_ids),
@@ -842,7 +856,8 @@ async fn pump_events(
     }
 }
 
-/// Writes what the presence router told the connection of (`presence`, `presenceWatching`).
+/// Writes an ephemeral frame the connection was told of directly: the presence router's
+/// (`presence`, `presenceWatching`), and a channel's mana as the connection starts to view it.
 async fn send_presence(socket: &mut WebSocket, told: &EphemeralEvent) -> Result<(), axum::Error> {
     let event = serde_json::value::to_raw_value(told).map_err(axum::Error::new)?;
     send_json(socket, &ServerMessage::Ephemeral { event: &event }).await

@@ -1,6 +1,6 @@
 # The message box and drafts
 
-The message box (`Composer`) is where a user writes and sends messages. This page covers its layout, the typing line above it, the length limit, messages held for their previews, and drafts.
+The message box (`Composer`) is where a user writes and sends messages. This page covers its layout, the typing line above it, the length limit, messages held for their previews or for a busy channel, the mana bar, and drafts.
 
 ## Where it lives
 
@@ -10,6 +10,7 @@ The message box (`Composer`) is where a user writes and sends messages. This pag
 | Typing line | `TypingIndicator`, `TypingDots`, `typingSentence` |
 | Length counting | `messageLength.ts`, `MessageLengthNote` |
 | Held messages | `HeldMessages.tsx` |
+| Mana bar | `ManaBar.tsx`, `manaAt` (`@aspen/protocol`) |
 | Drafts | `src/features/messages/drafts.ts` |
 
 ## Layout
@@ -138,6 +139,18 @@ The server refuses text nesting quotes and lists more than 32 levels deep, with 
 - Held messages are read at bootstrap (`GET /users/@me/held-messages`).
 - A dropped held message stays, on this device, until it is sent again or let go.
 
+### Waiting for a busy channel
+
+A channel whose mana is spent (the server's `docs/architecture/channel-mana/`) holds what is sent to it the same way, said so as waiting for the channel (`waiting: "mana"`):
+
+- **What waits:** a message, a slash command, an edit that lengthens a message, a poll, or a reply's echo to its channel (`kind`). Each but a message is named in its row.
+- **Answers:** `sendMessage` keeps a `202` as for a preview; `editMessage`, `createPoll`, and `echoReply` return `Edited`, `PollMade`, and `Echoed`, which say whether it was made or held.
+- **Cancel:** a row waiting for the channel can be cancelled (`AspenSync.cancelHeld`); `heldMessageCancelled` removes it on every device.
+- **Dropped:** after two minutes, or when its author may no longer post there. A message, an edit, or an echo can be sent again (`canSendHeldAgain`); a poll or a command is written anew.
+- **Gone with its message:** an edit or echo waiting for a message that is deleted goes from the store with it.
+- **Busy:** a channel with too much waiting answers `channelBusy`, which the box shows as any refusal.
+- **Unchanged edits:** the editor closes without sending one (`MessageEditor`), so nothing waits for nothing.
+
 ### Where a held message waits
 
 A held message's place (`heldPlace`) is one of:
@@ -148,6 +161,15 @@ A held message's place (`heldPlace`) is one of:
 | `thread-of:<message>` | A dropped first reply whose thread went with it. `RecordStore` moves it there as the thread is removed |
 
 `AspenSync.sendHeldAgain` sends such a first reply with `replyInThread`, making the thread anew (see [Threads, DMs, and the system account](threads-and-dms.md#starting-a-thread)).
+
+## The mana bar
+
+`ManaBar` lies along the top of the typing line, over it rather than taking room, so the conversation never moves when it comes or goes.
+
+- **Shown** once the channel's mana is below 60% of its maximum (`MANA_SHOW_BELOW`), and kept until it is full again, so it does not flicker around the threshold.
+- **Levels:** the server tells them at most twice a second while the channel spends, as `mana` ephemeral frames for channels the connection views, and once as it starts viewing a busy one. The store keeps the latest of up to 32 channels (`RecordStore.noteMana`) and forgets them all when the connection is lost (`forgetMana`).
+- **Between levels** it fills as the channel recharges, at the server's 200 ms ticks (`manaAt`, `MANA_TICK_MS`), with no frames.
+- **Read out** as a meter, its value a percentage.
 
 ## Drafts
 

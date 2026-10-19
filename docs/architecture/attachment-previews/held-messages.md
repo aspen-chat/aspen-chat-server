@@ -2,6 +2,8 @@
 
 A message sent with an attachment whose preview is still being made can be held until the preview is ready (`app::message::held`). [Why](design-notes.md#held-messages)
 
+Held messages also hold what waits for a busy channel's mana: messages, slash commands, edits, polls, and echoes (`held_message.waiting` is `mana`; see [Channel mana](../channel-mana/index.md#waiting-messages)). This page is about waiting for previews; both kinds are listed, cancelled, and announced alike.
+
 ## Holding a message
 
 1. A client that shows its sender a message waiting sends `mayHold: true` on `POST /channels/{channel}/messages`.
@@ -25,9 +27,10 @@ Each held message is posted by a job of its own, saved with it: `releaseHeldMess
 
 Once nothing holds it, the job:
 
-1. Posts the message as it was sent (`app::message::post`), in its language, with the author's permissions as they are then and the channel's plugins deciding it then.
-2. Deletes the held row in the same transaction, so it is posted once however its job is run.
-3. Tells the author's apps which message it became, with `heldMessagePosted`.
+1. Asks the channel's mana, as posting does. When the channel is busy, the row becomes one waiting for mana (`mana::queue::wait_held`), and the job is done.
+2. Posts the message as it was sent (`app::message::post`), in its language, with the author's permissions as they are then and the channel's plugins deciding it then.
+3. Deletes the held row in the same transaction, so it is posted once however its job is run.
+4. Tells the author's apps which message it became, with `heldMessagePosted`.
 
 A preview finished after the hold ran out reaches the message's readers by `attachmentPreviewed`.
 
@@ -44,6 +47,14 @@ The row goes with its user or channel only when those rows themselves are remove
 ## Held first replies
 
 A held first reply makes its thread as it is held. Dropping it removes the thread when nothing else was ever posted or waits there (see [Threads](../threads-and-dms/threads.md#when-the-first-reply-is-dropped)).
+
+## Cancelling one
+
+`DELETE /users/@me/held-messages/{held}` cancels a held message of the caller's that has not been posted, whatever it waits for (`held::cancel`).
+
+- The row goes in one transaction with `heldMessageCancelled`, user-scoped, which tells the author's other apps.
+- A first reply that made its thread as it was held takes the thread with it, as a dropped one does.
+- It is not found when it was never the caller's, or has been posted.
 
 ## Listing
 

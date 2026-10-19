@@ -195,6 +195,8 @@ pub async fn create_community(
                     community: community.id,
                     parent_category: None,
                     plugin_type: None,
+                    mana_recharge: None,
+                    mana_max: None,
                 };
                 crate::channel::insert_channel(state, conn.as_mut(), new, &[]).await?;
             }

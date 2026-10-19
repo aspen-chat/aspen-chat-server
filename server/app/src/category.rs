@@ -329,6 +329,8 @@ pub async fn delete_category(
                                 reply_count: None,
                                 last_reply_at: None,
                                 recipients: None,
+                                mana_recharge: None,
+                                mana_max: None,
                             }),
                         )
                     })

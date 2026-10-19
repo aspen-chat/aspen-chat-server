@@ -100,6 +100,8 @@ fn new_dm(ty: ChannelType, dm_key: Option<String>) -> Channel {
         last_reply_at: None,
         dm_key,
         plugin_type: None,
+        mana_recharge: None,
+        mana_max: None,
     }
 }
 
@@ -481,6 +483,8 @@ async fn publish_recipients(
             reply_count: None,
             last_reply_at: None,
             recipients: Some(recipients),
+            mana_recharge: None,
+            mana_max: None,
         }),
     )
     .await

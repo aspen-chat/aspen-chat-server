@@ -463,7 +463,8 @@
         "mentionRoles",
         "mentionEveryone",
         "transferFiles",
-        "useCamera"
+        "useCamera",
+        "bypassChannelMana"
       ]
     },
     "PluginPermission": {

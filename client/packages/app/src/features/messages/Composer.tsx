@@ -33,6 +33,7 @@ import {
 import { describable, isImageType } from "@/features/messages/images";
 import { AttachmentDescriptionButton } from "@/features/messages/AttachmentDescription";
 import { HeldMessages } from "@/features/messages/HeldMessages";
+import { ManaBar } from "@/features/messages/ManaBar";
 import { TypingIndicator } from "@/features/messages/TypingIndicator";
 import { CreatePollDialog, CreatePollModal } from "@/features/messages/CreatePollDialog";
 import { MEDIUM_SCREEN, useMediaQuery, TOUCH_ONLY } from "@/features/layout/useMediaQuery";
@@ -97,7 +98,12 @@ const toolButtonClass =
 export function Composer(props: ComposerProps) {
   return (
     <>
-      {props.startsThreadOf === undefined && <TypingIndicator channelId={props.channelId} />}
+      {props.startsThreadOf === undefined && (
+        <div className="relative">
+          <ManaBar channelId={props.channelId} />
+          <TypingIndicator channelId={props.channelId} />
+        </div>
+      )}
       <MessageBox {...props} />
     </>
   );

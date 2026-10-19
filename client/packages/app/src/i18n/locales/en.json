@@ -1145,6 +1145,14 @@
     "customEmojiLimit": "Custom emoji per community",
     "uploadQuotaGib": "GiB each person may upload a day",
     "uploadQuotaGibHint": "Files and pictures together, over any 24 hours. Past it, uploads wait until there is room. 0 sets no limit.",
+    "manaHeading": "Channel mana",
+    "manaHint": "How fast a busy channel fills, however many people post in it. A channel spends one mana for each character posted, and more for each file, and earns it back over time; what it cannot pay for waits its turn, shared fairly among those waiting. A channel's settings may lower these, never raise them.",
+    "manaMaxRecharge": "Mana a channel earns back a second",
+    "manaMaxRechargeHint": "The most any channel recharges, and what one recharges unless its settings say less.",
+    "manaMax": "Mana a channel holds",
+    "manaMaxHint": "What a quiet channel can take at once, and the most a channel's settings may give it. Group DMs hold this much too.",
+    "manaAttachmentCost": "Mana a file costs",
+    "manaAttachmentCostHint": "In the mana one character costs.",
     "evidenceRetentionDays": "Days deleted messages' files are kept for reports",
     "evidenceRetentionDaysHint": "Kept out of everyone's reach for reviewing reports, and as long again after a report about them closes. 0 keeps them for good.",
     "streamsHeading": "NATS memory",
@@ -1368,9 +1376,21 @@
     "close": "Close gallery",
     "open": "Open image in a new tab"
   },
+  "mana": {
+    "label": "Channel busy",
+    "value": "{percent}% of the channel's room to post"
+  },
   "held": {
     "label": "Messages waiting to send",
     "waiting": "Sending once its preview is ready…",
+    "waitingForChannel": "Waiting while the channel is busy…",
+    "cancel": "Cancel",
+    "kind": {
+      "command": "Command",
+      "edit": "Edit",
+      "poll": "Poll",
+      "echo": "Showing your reply in the channel"
+    },
     "failed": "Not sent: {reason}",
     "files": "{count, plural, one {# file} other {# files}}",
     "sendAgain": "Send again",
@@ -1473,7 +1493,14 @@
     "delete": "Delete channel",
     "deleteHeading": "Delete #{channel}?",
     "deleteHint": "Every message in it goes too, for everyone. This can't be undone.",
-    "confirmDelete": "Delete channel"
+    "confirmDelete": "Delete channel",
+    "mana": "Channel mana",
+    "manaHeading": "Mana of #{channel}",
+    "manaHint": "How fast this channel fills, however many people post in it. Each character posted spends one mana, and each file more, and the channel earns it back over time. What it can't pay for waits its turn. Left empty, each follows this server's, which is also the most it may be.",
+    "manaRecharge": "Mana earned back a second",
+    "manaMax": "Mana it holds",
+    "manaDefault": "This server's: {value}",
+    "manaSave": "Save"
   },
   "channelLayout": {
     "tab": "Layout",
@@ -1984,6 +2011,10 @@
     "useCamera": {
       "name": "Use camera",
       "hint": "Turn on a camera in calls."
+    },
+    "bypassChannelMana": {
+      "name": "Bypass channel mana",
+      "hint": "Post at once when a busy channel's mana runs low, without waiting in its queue. What they post still spends it."
     },
     "mentionMembers": {
       "name": "Mention members",

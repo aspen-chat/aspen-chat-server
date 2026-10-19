@@ -695,7 +695,9 @@ mod tests {
             match received.try_recv().ok()? {
                 EphemeralEvent::Presence { statuses } => return Some(statuses),
                 EphemeralEvent::PresenceWatching => continue,
-                EphemeralEvent::Typing { .. } => panic!("typing from the presence router"),
+                EphemeralEvent::Typing { .. } | EphemeralEvent::Mana { .. } => {
+                    panic!("a relay from the presence router")
+                }
             }
         }
     }

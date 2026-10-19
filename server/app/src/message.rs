@@ -3,6 +3,7 @@ use crate::channel::Channel;
 use crate::channel::ChannelType;
 use crate::context::GlobalServerContext;
 use crate::link_preview::{delete_images_for_message, load_previews, spawn_preview_fetch};
+use crate::mana;
 use crate::mention::{self, Mentions};
 use crate::message_link::{self, MessageLinks};
 use crate::moderation_log::{ModerationAction, log_moderation};
@@ -39,6 +40,7 @@ use diesel::{
 use diesel_async::AsyncPgConnection;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, RunQueryDsl};
+use serde::{Deserialize, Serialize};
 
 #[derive(Selectable, Queryable, Insertable)]
 #[diesel(table_name=message)]
@@ -869,7 +871,8 @@ pub async fn update_message(
     caller: UserId,
     id: MessageId,
     command: MessageUpdateRequest,
-) -> Result<MessageWithRelations, crate::Error> {
+    waited: Option<HeldMessageId>,
+) -> Result<Edited, crate::Error> {
     let mut conn = state.connection_pool.get().await?;
     let (channel_id, kind, author): (ChannelId, MessageKind, UserId) = message::table
         .select((message::channel, message::kind, message::author))
@@ -887,19 +890,27 @@ pub async fn update_message(
     // An edit that only takes away does not: clearing the text (`content` given as empty),
     // removing attachments (`attachments` naming only some of those it has), or both, so
     // someone who may no longer post can still withdraw what they said.
-    let adds_files = match &command.attachments {
-        None => false,
-        Some(wanted) => {
-            let held: std::collections::HashSet<AttachmentId> = message_attachment::table
-                .select(message_attachment::attachment_id)
-                .filter(message_attachment::message_id.eq(id))
-                .load::<AttachmentId>(conn.as_mut())
-                .await?
-                .into_iter()
-                .collect();
-            wanted.iter().any(|attachment| !held.contains(attachment))
-        }
-    };
+    let (before_content, before_attachments): (String, std::collections::HashSet<AttachmentId>) = (
+        message::table
+            .select(message::content)
+            .filter(message::id.eq(id))
+            .first(conn.as_mut())
+            .await?,
+        message_attachment::table
+            .select(message_attachment::attachment_id)
+            .filter(message_attachment::message_id.eq(id))
+            .load::<AttachmentId>(conn.as_mut())
+            .await?
+            .into_iter()
+            .collect(),
+    );
+    let added_files = command.attachments.as_ref().map_or(0, |wanted| {
+        wanted
+            .iter()
+            .filter(|attachment| !before_attachments.contains(attachment))
+            .count()
+    });
+    let adds_files = added_files > 0;
     let adds_text = command
         .content
         .as_deref()
@@ -929,6 +940,60 @@ pub async fn update_message(
     // shown them; the saving transaction checks again.
     if let Some(new_attachments) = &command.attachments {
         ensure_attachments_ready(conn.as_mut(), caller, Some(id), new_attachments).await?;
+    }
+    // An edit that changes nothing is dropped, answered with the message as it stands; the apps
+    // do not send one.
+    let same_text = command
+        .content
+        .as_ref()
+        .is_none_or(|content| *content == before_content);
+    let same_files = command.attachments.as_ref().is_none_or(|wanted| {
+        wanted.len() == before_attachments.len()
+            && wanted
+                .iter()
+                .all(|attachment| before_attachments.contains(attachment))
+    });
+    if same_text && same_files {
+        if let Some(waited) = waited {
+            held::take(conn.as_mut(), waited).await?;
+        }
+        return Ok(Edited::Done(Box::new(
+            current(state, conn.as_mut(), id).await?,
+        )));
+    }
+    // Lengthening a message spends its channel's mana as posting does (`app::mana`), and waits
+    // its turn in a busy channel; one waited already has been paid for.
+    if waited.is_none() {
+        if let Some(content) = &command.content {
+            check_content(content)?;
+        }
+        let after = command.content.as_deref().unwrap_or(&before_content);
+        let cost = mana::edit_cost(&state.settings(), &before_content, after, added_files);
+        if mana::decide_for(state, conn.as_mut(), caller, channel_id, cost).await?
+            == mana::Decision::Wait
+        {
+            drop(conn);
+            let change = WaitingEdit {
+                content: command.content.clone(),
+                attachments: command.attachments.clone(),
+            };
+            let held = mana::queue::wait(
+                state,
+                mana::queue::Waiting {
+                    author: caller,
+                    channel: channel_id,
+                    kind: held::HeldKind::Edit,
+                    content: command.content.unwrap_or(before_content),
+                    attachments: command.attachments.unwrap_or_default(),
+                    echo_to_parent: false,
+                    target: Some(id),
+                    payload: Some(serde_json::to_value(change)?),
+                    cost,
+                },
+            )
+            .await?;
+            return Ok(Edited::Waiting(held));
+        }
     }
     // Plugins decide an edit as they decide a new message, whether it changes the text, the
     // attachments, or both, shown the text as it will stand; the edit records who rewrote it.
@@ -1008,6 +1073,11 @@ pub async fn update_message(
     let (message, attachments, previews_cleared) = conn
         .transaction(|conn| {
             async move {
+                if let Some(waited) = waited {
+                    held::take(conn.as_mut(), waited).await?;
+                    held::announce_edited(state, conn.as_mut(), caller, waited, channel_id, id)
+                        .await?;
+                }
                 // New text tags afresh, with the author's permissions as they are now.
                 let mentions = match &command.content {
                     Some(content) => Some(
@@ -1137,11 +1207,138 @@ pub async fn update_message(
         .remove(&id)
         .unwrap_or_default();
 
+    Ok(Edited::Done(Box::new(MessageWithRelations {
+        message,
+        attachments,
+        link_previews,
+    })))
+}
+
+/// Posts a slash command where `channel` is, or has it wait for the channel's mana when the
+/// channel is busy (`app::mana`). It is checked as posting checks it before it spends anything,
+/// and again as it is posted.
+pub async fn invoke_command(
+    state: &GlobalServerContext,
+    author: UserId,
+    channel: ChannelId,
+    invocation: Invocation,
+) -> crate::Result<held::Posted> {
+    let mut conn = state.connection_pool.get().await?;
+    check_posting(
+        state,
+        conn.as_mut(),
+        author,
+        channel,
+        &invocation.attachments,
+        false,
+    )
+    .await?;
+    let access = channel_access(state, conn.as_mut(), author, channel).await?;
+    let (command, arguments) =
+        bot_command::check(state, conn.as_mut(), author, &access, channel, &invocation).await?;
+    let text = bot_command::invocation_text(&command, &arguments);
+    let cost = mana::message_cost(&state.settings(), &text, invocation.attachments.len());
+    if mana::decide_for(state, conn.as_mut(), author, channel, cost).await? == mana::Decision::Wait
+    {
+        drop(conn);
+        let held = mana::queue::wait(
+            state,
+            mana::queue::Waiting {
+                author,
+                channel,
+                kind: held::HeldKind::Command,
+                content: text,
+                attachments: invocation.attachments.clone(),
+                echo_to_parent: false,
+                target: None,
+                payload: Some(serde_json::to_value(&invocation)?),
+                cost,
+            },
+        )
+        .await?;
+        return Ok(held::Posted::Held(held));
+    }
+    drop(conn);
+    let attachments = invocation.attachments.clone();
+    post(
+        state,
+        author,
+        To::Channel(channel),
+        String::new(),
+        attachments,
+        false,
+        Posting::Command(invocation),
+        None,
+    )
+    .await
+    .map(|message| held::Posted::Sent(Box::new(message)))
+}
+
+/// What became of an edit: made, or waiting for its channel's mana.
+pub enum Edited {
+    Done(Box<MessageWithRelations>),
+    Waiting(held::HeldMessage),
+}
+
+/// An edit waiting for its channel's mana, as it was asked for (`held_message.payload`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WaitingEdit {
+    content: Option<String>,
+    attachments: Option<Vec<AttachmentId>>,
+}
+
+impl From<WaitingEdit> for MessageUpdateRequest {
+    fn from(change: WaitingEdit) -> Self {
+        MessageUpdateRequest {
+            content: change.content,
+            attachments: change.attachments,
+        }
+    }
+}
+
+/// A message as it stands, with its attachments and link previews.
+async fn current(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    id: MessageId,
+) -> crate::Result<MessageWithRelations> {
+    let message = message::table
+        .select(Message::as_select())
+        .filter(message::id.eq(id).and(message::deleted_at.is_null()))
+        .first(conn)
+        .await?;
+    let attachments = message_attachment::table
+        .select(message_attachment::attachment_id)
+        .filter(message_attachment::message_id.eq(id))
+        .load(conn)
+        .await?;
+    let link_previews = load_previews(conn, state.media_store.as_ref(), &[id])
+        .await?
+        .remove(&id)
+        .unwrap_or_default();
     Ok(MessageWithRelations {
         message,
         attachments,
         link_previews,
     })
+}
+
+/// The channel a reply posted `to` would echo to: its thread's parent, or `None` outside a
+/// thread.
+pub(crate) async fn parent_of(
+    conn: &mut AsyncPgConnection,
+    to: To,
+) -> crate::Result<Option<ChannelId>> {
+    let (channel, unmade) = resolve(conn, to).await?;
+    if let Some(unmade) = unmade {
+        return Ok(Some(unmade.parent));
+    }
+    Ok(channel::table
+        .select(channel::parent_channel)
+        .filter(channel::id.eq(channel))
+        .first::<Option<ChannelId>>(conn)
+        .await?)
 }
 
 /// Deletes a message, which its author may do and anyone with Manage messages. A thread reply

@@ -940,7 +940,12 @@ describe("RecordStore mutes", () => {
       until: "2026-09-28T13:00:00Z",
     });
     expect(store.mute(dev.id)).toEqual({ until: "2026-09-28T13:00:00Z", category: null });
-    store.applyEvent({ serverEvent: "channelMuteChanged", channel: dev.id, muted: null, until: null });
+    store.applyEvent({
+      serverEvent: "channelMuteChanged",
+      channel: dev.id,
+      muted: null,
+      until: null,
+    });
     expect(store.mute(dev.id)?.category).toBe(work.id);
     store.expireMutes(Date.parse("2026-09-28T12:00:00Z"));
     expect(store.mute(dev.id)).toBeUndefined();
@@ -2234,6 +2239,8 @@ describe("RecordStore previews and held messages", () => {
     attachments: [photo.id],
     echoToParent: false,
     heldAt: "2026-10-05T12:00:00Z",
+    waiting: "preview" as const,
+    kind: "message" as const,
   };
 
   it("gives an attachment the preview made after it was read", () => {

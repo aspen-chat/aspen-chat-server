@@ -37,7 +37,11 @@ import {
   useMentions,
   useUnread,
 } from "@/api/hooks";
-import { DeleteChannelDialog, RenameChannelDialog } from "@/features/channels/ChannelDialogs";
+import {
+  ChannelManaDialog,
+  DeleteChannelDialog,
+  RenameChannelDialog,
+} from "@/features/channels/ChannelDialogs";
 import { CategoryMenu } from "@/features/channels/CategoryMenu";
 import { ChannelMenu, ChannelMenuButton } from "@/features/channels/ChannelMenu";
 import { MuteBell } from "@/features/channels/MuteBell";
@@ -453,7 +457,7 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
   const kind = usePluginKind(channel);
   const menu = useContextMenu();
   const menuButton = useRef<HTMLButtonElement>(null);
-  const [dialog, setDialog] = useState<"access" | "rename" | "delete" | null>(null);
+  const [dialog, setDialog] = useState<"access" | "mana" | "rename" | "delete" | null>(null);
   const marked = unread && !muted && !current;
   const close = (open: boolean) => {
     if (!open) {
@@ -524,6 +528,13 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
                 },
               }
             : {})}
+          {...(manage && channel.ty === "text"
+            ? {
+                onMana: () => {
+                  setDialog("mana");
+                },
+              }
+            : {})}
           {...(manage || moderator
             ? {
                 onRename: () => {
@@ -547,6 +558,9 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
           isOpen={dialog === "access"}
           onOpenChange={close}
         />
+      )}
+      {manage && channel.ty === "text" && (
+        <ChannelManaDialog channel={channel} isOpen={dialog === "mana"} onOpenChange={close} />
       )}
       {(manage || moderator) && (
         <>

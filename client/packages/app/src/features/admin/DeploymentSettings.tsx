@@ -33,7 +33,10 @@ type Count =
   | "everyoneMentionLimit"
   | "customEmojiLimit"
   | "uploadQuotaGib"
-  | "evidenceRetentionDays";
+  | "evidenceRetentionDays"
+  | "manaMaxRecharge"
+  | "manaMax"
+  | "manaAttachmentCost";
 type StreamSize = "eventStreamMib" | "voiceReportStreamMib";
 
 /** The least a stream may be set to hold, in MiB, as the server checks. */
@@ -44,8 +47,8 @@ const MIN_STREAM_MIB = 16;
  * takes an invite, whether every account needs a second factor, email (an address to register, a
  * verified one to use the server, and a newsletter, each offered only where the server can send
  * mail), bots, the limits on communities and on uploads, how long deleted messages' files are
- * kept for reports, files in calls, and how much of NATS's memory each stream takes. A change
- * reaches every server at once.
+ * kept for reports, files in calls, channels' mana, and how much of NATS's memory each stream
+ * takes. A change reaches every server at once.
  */
 export function DeploymentSettingsSection() {
   const m = useMessages();
@@ -100,13 +103,13 @@ function PoliciesForm({ initial }: { initial: DeploymentSettings }) {
   const noMail = !draft.emailAvailable;
   const emailToggle = (key: Toggle, label: string, hint: string) =>
     toggle(key, label, hint, noMail && !draft[key]);
-  const count = (key: Count, label: string, hint?: string) => (
+  const count = (key: Count, label: string, hint?: string, least = 0) => (
     <NumberField
       value={draft[key]}
       onChange={(value) => {
         set(key, Number.isNaN(value) ? saved[key] : value);
       }}
-      minValue={0}
+      minValue={least}
       maxValue={MAX_COUNT}
       formatOptions={{ maximumFractionDigits: 0 }}
       className={fieldClass}
@@ -198,6 +201,15 @@ function PoliciesForm({ initial }: { initial: DeploymentSettings }) {
           m.admin.evidenceRetentionDaysHint,
         )}
       </div>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-sm font-semibold text-ink-muted">{m.admin.manaHeading}</legend>
+        <p className={hintClass}>{m.admin.manaHint}</p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {count("manaMaxRecharge", m.admin.manaMaxRecharge, m.admin.manaMaxRechargeHint, 1)}
+          {count("manaMax", m.admin.manaMax, m.admin.manaMaxHint, 1)}
+          {count("manaAttachmentCost", m.admin.manaAttachmentCost, m.admin.manaAttachmentCostHint)}
+        </div>
+      </fieldset>
       {/* A deployment that predates the sizes gives none, and would refuse them. */}
       {saved.eventStreamMib !== undefined && saved.voiceReportStreamMib !== undefined && (
         <fieldset className="flex flex-col gap-2">

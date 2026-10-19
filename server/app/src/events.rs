@@ -192,7 +192,8 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::ReportsChanged { .. }
         | ServerEvent::PluginNotice { .. }
         | ServerEvent::HeldMessagePosted { .. }
-        | ServerEvent::HeldMessageFailed { .. } => ScopeKind::User,
+        | ServerEvent::HeldMessageFailed { .. }
+        | ServerEvent::HeldMessageCancelled { .. } => ScopeKind::User,
         ServerEvent::User(_)
         | ServerEvent::BotCommandsChanged { .. }
         | ServerEvent::UserAnnotation(_) => ScopeKind::UserEverywhere,
@@ -730,7 +731,8 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         | ServerEvent::PluginNotice { .. }
         | ServerEvent::AttachmentPreviewed { .. }
         | ServerEvent::HeldMessagePosted { .. }
-        | ServerEvent::HeldMessageFailed { .. } => Vec::new(),
+        | ServerEvent::HeldMessageFailed { .. }
+        | ServerEvent::HeldMessageCancelled { .. } => Vec::new(),
     }
 }
 

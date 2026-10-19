@@ -79,6 +79,8 @@ jobs:
           python3 scripts/check_permissions.py --bin target/debug --start-services
       - name: The NATS streams fit their settings and NATS's memory
         run: python3 scripts/check_nats_memory.py --bin target/debug
+      - name: Channel mana spends, queues, drains fairly, and tells viewers
+        run: python3 scripts/check_mana.py --bin target/debug
 
   # The API, event, and signalling schemas the client's code generator reads, written by the two
   # servers alone so the client, Android, and Windows jobs need not wait for the workspace's tests.

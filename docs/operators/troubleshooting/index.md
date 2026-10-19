@@ -55,6 +55,7 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | `deploymentBanned` | [People and their accounts](accounts.md) |
 | `alreadyReported` | [People and their accounts](accounts.md) |
 | `rateLimited` | [Load](load.md#ratelimited) |
+| `channelBusy` | [Load](load.md#channelbusy) |
 | `deviceCredentialRequired` | [Load](load.md#devicecredentialrequired) |
 | `deviceChallengeInvalid` | [Load](load.md#devicechallengeinvalid) |
 | `uploadQuotaExceeded` | [Load](load.md#uploadquotaexceeded) |

@@ -53,6 +53,7 @@ export {
   type DeviceCredentialStore,
   type PuzzleSolver,
 } from "./device";
+export { MANA_SHOW_BELOW, MANA_TICK_MS, manaAt, manaFullAt, type ChannelMana } from "./mana";
 export { plainFileName } from "./fileNames";
 export {
   ApiProblemError,
@@ -195,6 +196,10 @@ export {
   TYPING_EXPIRY_MS,
   TYPING_REFRESH_MS,
   AspenSync,
+  canSendHeldAgain,
+  type Echoed,
+  type Edited,
+  type PollMade,
   EVENT_REPLAY_WINDOW_MS,
   MESSAGE_AROUND_RADIUS,
   HISTORY_PAGE_SIZE,

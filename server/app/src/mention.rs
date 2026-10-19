@@ -92,7 +92,7 @@ fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-enum Found {
+pub(crate) enum Found {
     User(Uuid),
     Role(Uuid),
 }
@@ -102,7 +102,7 @@ const TAG_ID_LEN: usize = 36;
 
 /// The tag `<@id>` or `<@&id>` at the start of `text`, and its length in bytes. Only the bytes
 /// a tag can hold are read, so text with many `<@` and no tag is read once.
-fn tag_at(text: &str) -> Option<(Found, usize)> {
+pub(crate) fn tag_at(text: &str) -> Option<(Found, usize)> {
     let (role, body) = if let Some(body) = text.strip_prefix("<@&") {
         (true, body)
     } else {

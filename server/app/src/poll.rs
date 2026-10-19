@@ -25,7 +25,9 @@ use crate::plugin::intercept;
 use crate::plugin::manifest::InterceptHook;
 use crate::react::validate_emoji;
 use crate::t;
-use crate::{ChannelId, EventScope, MaybeLoaded, MessageId, PollId, UserId, publish_event};
+use crate::{
+    ChannelId, EventScope, HeldMessageId, MaybeLoaded, MessageId, PollId, UserId, publish_event,
+};
 use aspen_schema::{message, poll, poll_option, poll_vote};
 use aspen_wire::message_enum;
 use aspen_wire::message_enum::request::PollCreateRequest;
@@ -144,7 +146,8 @@ pub async fn create_poll(
     creator: UserId,
     channel: ChannelId,
     request: PollCreateRequest,
-) -> crate::Result<(message_enum::Poll, message_enum::Message)> {
+    waited: Option<HeldMessageId>,
+) -> crate::Result<CreatedPoll> {
     let (question, options) = validate(&request)?;
     let now = Utc::now();
     let row = Poll {
@@ -165,6 +168,32 @@ pub async fn create_poll(
     // A poll is posted as a message, so it takes sending here as well.
     access.require(access.send_permission())?;
     access.require(Permissions::CREATE_POLLS)?;
+    // It spends its channel's mana as a message does (`app::mana`), and waits its turn in a
+    // busy channel; one that waited has been paid for, and counts its duration from now.
+    if waited.is_none() {
+        let cost = crate::mana::glyphs(&shown_text(&row.question, &options));
+        if crate::mana::decide_for(state, conn.as_mut(), creator, channel, cost).await?
+            == crate::mana::Decision::Wait
+        {
+            drop(conn);
+            let held = crate::mana::queue::wait(
+                state,
+                crate::mana::queue::Waiting {
+                    author: creator,
+                    channel,
+                    kind: crate::message::held::HeldKind::Poll,
+                    content: row.question.clone(),
+                    attachments: Vec::new(),
+                    echo_to_parent: false,
+                    target: None,
+                    payload: Some(serde_json::to_value(&request)?),
+                    cost,
+                },
+            )
+            .await?;
+            return Ok(CreatedPoll::Waiting(held));
+        }
+    }
     // Plugins decide its question and answers as they decide a message, once the creator is
     // known to be allowed to post it, with the connection back in the pool while they run.
     let running =
@@ -189,6 +218,18 @@ pub async fn create_poll(
     }
     conn.transaction(|conn| {
         async move {
+            if let Some(waited) = waited {
+                crate::message::held::take_waited(conn.as_mut(), waited).await?;
+                crate::message::held::announce_edited(
+                    state,
+                    conn.as_mut(),
+                    creator,
+                    waited,
+                    channel,
+                    message_row.id,
+                )
+                .await?;
+            }
             crate::message::hold_channel(conn.as_mut(), channel).await?;
             diesel::insert_into(poll::table)
                 .values(&row)
@@ -255,11 +296,17 @@ pub async fn create_poll(
                 .not_before(row.closes_at),
             )
             .await?;
-            Ok((poll_record, message_record))
+            Ok(CreatedPoll::Posted(Box::new((poll_record, message_record))))
         }
         .scope_boxed()
     })
     .await
+}
+
+/// What became of a poll asked for: posted, with its message, or waiting for its channel's mana.
+pub enum CreatedPoll {
+    Posted(Box<(message_enum::Poll, message_enum::Message)>),
+    Waiting(crate::message::held::HeldMessage),
 }
 
 /// A poll's text as plugins decide it: its question, then each answer on a line of its own.

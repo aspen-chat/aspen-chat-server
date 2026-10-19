@@ -1148,7 +1148,10 @@ describe("AspenSync", () => {
     });
     const socket = await goLive(sync);
     await sync.loadLatest(general.id);
-    expect(await sync.editMessage(original.id, "edited")).toEqual(edited);
+    expect(await sync.editMessage(original.id, "edited")).toEqual({
+      kind: "edited",
+      message: edited,
+    });
     // The response is not written to the cache; the update event is what changes it.
     expect(sync.store.message(original.id)?.content).toBe(original.content);
     socket.frame({
@@ -1161,6 +1164,34 @@ describe("AspenSync", () => {
     await sync.deleteMessage(original.id);
     expect(sync.store.message(original.id)).toBeUndefined();
     expect(sync.store.messages(general.id)?.ids).toEqual([]);
+  });
+
+  it("keeps an edit a busy channel holds, and lets it go when cancelled", async () => {
+    const original = message(8);
+    const held = {
+      id: id(81),
+      channelId: general.id,
+      content: "a much longer edit",
+      attachments: [],
+      echoToParent: false,
+      heldAt: "2026-10-18T12:00:00Z",
+      waiting: "mana",
+      kind: "edit",
+      target: original.id,
+    };
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/messages/${original.id}`]: () => json(held, 202),
+      [`/api/v1/users/@me/held-messages/${held.id}`]: () => new Response(null, { status: 204 }),
+    });
+    await goLive(sync);
+    expect(await sync.editMessage(original.id, "a much longer edit")).toEqual({
+      kind: "held",
+      held,
+    });
+    expect(sync.store.heldMessage(held.id)?.message).toEqual(held);
+    await sync.cancelHeld(held.id);
+    expect(sync.store.heldMessage(held.id)).toBeUndefined();
   });
 
   it("uploads an attachment in two phases and caches the record", async () => {
@@ -1379,7 +1410,7 @@ describe("AspenSync", () => {
       allowWriteIns: true,
       durationSeconds: 3600,
     });
-    expect(created).toEqual(lunch);
+    expect(created).toEqual({ kind: "posted", poll: lunch });
     expect(sync.store.poll(lunch.id)).toEqual(lunch);
 
     await sync.vote(lunch.id, 1);

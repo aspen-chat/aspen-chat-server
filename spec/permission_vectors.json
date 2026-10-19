@@ -368,7 +368,8 @@
                 "mentionRoles",
                 "mentionEveryone",
                 "transferFiles",
-                "useCamera"
+                "useCamera",
+                "bypassChannelMana"
             ],
             "channel": [
                 "manageCommunity",
@@ -402,7 +403,8 @@
                 "mentionRoles",
                 "mentionEveryone",
                 "transferFiles",
-                "useCamera"
+                "useCamera",
+                "bypassChannelMana"
             ],
             "rank": 2147483647,
             "moderator": false
@@ -1234,6 +1236,181 @@
                 "mentionEveryone"
             ],
             "rank": 0,
+            "moderator": false
+        },
+        {
+            "name": "a moderator bypasses channel mana where no override takes it away",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone",
+                        "transferFiles"
+                    ],
+                    "everyone": true
+                },
+                {
+                    "id": "00000000-0000-0000-0000-000000000002",
+                    "position": 1,
+                    "permissions": [
+                        "manageMessages",
+                        "viewChannel",
+                        "sendMessages",
+                        "bypassChannelMana"
+                    ],
+                    "everyone": false
+                }
+            ],
+            "owner": false,
+            "holds": [
+                "00000000-0000-0000-0000-000000000002"
+            ],
+            "categoryOverrides": [],
+            "channelOverrides": [],
+            "community": [
+                "createInvites",
+                "manageMessages",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone",
+                "transferFiles",
+                "bypassChannelMana"
+            ],
+            "channel": [
+                "createInvites",
+                "manageMessages",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone",
+                "transferFiles",
+                "bypassChannelMana"
+            ],
+            "rank": 1,
+            "moderator": false
+        },
+        {
+            "name": "a channel can take bypassing its mana from a moderator",
+            "roles": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "position": 0,
+                    "permissions": [
+                        "createInvites",
+                        "viewChannel",
+                        "sendMessages",
+                        "attachFiles",
+                        "addReactions",
+                        "startThreads",
+                        "sendInThreads",
+                        "createPolls",
+                        "joinVoice",
+                        "speak",
+                        "shareScreen",
+                        "mentionMembers",
+                        "mentionRoles",
+                        "mentionEveryone",
+                        "transferFiles"
+                    ],
+                    "everyone": true
+                },
+                {
+                    "id": "00000000-0000-0000-0000-000000000002",
+                    "position": 1,
+                    "permissions": [
+                        "manageMessages",
+                        "viewChannel",
+                        "sendMessages",
+                        "bypassChannelMana"
+                    ],
+                    "everyone": false
+                }
+            ],
+            "owner": false,
+            "holds": [
+                "00000000-0000-0000-0000-000000000002"
+            ],
+            "categoryOverrides": [],
+            "channelOverrides": [
+                {
+                    "role": "00000000-0000-0000-0000-000000000002",
+                    "allow": [],
+                    "deny": [
+                        "bypassChannelMana"
+                    ]
+                }
+            ],
+            "community": [
+                "createInvites",
+                "manageMessages",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone",
+                "transferFiles",
+                "bypassChannelMana"
+            ],
+            "channel": [
+                "createInvites",
+                "manageMessages",
+                "viewChannel",
+                "sendMessages",
+                "attachFiles",
+                "addReactions",
+                "startThreads",
+                "sendInThreads",
+                "createPolls",
+                "joinVoice",
+                "speak",
+                "shareScreen",
+                "mentionMembers",
+                "mentionRoles",
+                "mentionEveryone",
+                "transferFiles"
+            ],
+            "rank": 1,
             "moderator": false
         }
     ]

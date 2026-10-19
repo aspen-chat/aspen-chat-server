@@ -145,8 +145,10 @@ pub fn message_enum_source(
                 || !secret_fields.is_empty())
         {
             let create_request_ident = format_ident!("{}CreateRequest", variant.ident);
+            // Serialize, so a request that must wait (a poll waiting for its channel's mana)
+            // is kept as it came.
             request_structs.push(quote! {
-                #[derive(::serde::Deserialize, ::utoipa::ToSchema)]
+                #[derive(::serde::Deserialize, ::serde::Serialize, ::utoipa::ToSchema, Clone)]
                 #[serde(rename_all = "camelCase")]
                 pub struct #create_request_ident {
                     #(#defaulted_other_fields,)*

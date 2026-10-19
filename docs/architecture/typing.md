@@ -8,7 +8,7 @@ Who is typing where is told as it happens and kept nowhere: no table, no JetStre
 | Per-connection task | `Typist` |
 | Permission check | `app::message::may_post` |
 | NATS subject | `aspen.typing` (core NATS) |
-| Routing | `event_feed::typing_events` |
+| Routing | `event_feed::relayed_events` |
 | Blocked readers left out | `typing::blocked_in` |
 | Channels a connection has open | `Subscription::viewing`, at most `event_feed::MAX_VIEWING` |
 | Client | `AspenSync`, `RecordStore.typers`, `useTypers`, `AspenSync.watchTyping` (see `client/docs/architecture/composer-and-drafts.md`) |
@@ -74,7 +74,7 @@ The message carries:
 
 ## Routing
 
-Every API server's event feed subscribes to the subject (`event_feed::typing_events`) and routes each word as it routes an event of the same scope (see [Event routing](event-routing/index.md)).
+Every API server's event feed subscribes to the subject and routes each word as it routes an event of the same scope (`event_feed::relayed_events`; see [Event routing](event-routing/index.md)). A channel's mana level, on `aspen.mana`, is a relay of the same shape routed the same way (see [Channel mana](channel-mana/index.md)).
 
 | Where | Delivered to |
 | --- | --- |

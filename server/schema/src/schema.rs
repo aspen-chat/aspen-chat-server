@@ -132,6 +132,8 @@ diesel::table! {
         last_reply_at -> Nullable<Timestamptz>,
         dm_key -> Nullable<Text>,
         plugin_type -> Nullable<Text>,
+        mana_recharge -> Nullable<Int4>,
+        mana_max -> Nullable<Int4>,
     }
 }
 
@@ -283,6 +285,9 @@ diesel::table! {
         evidence_retention_days -> Int4,
         event_stream_mib -> Nullable<Int4>,
         voice_report_stream_mib -> Nullable<Int4>,
+        mana_max_recharge -> Int4,
+        mana_max -> Int4,
+        mana_attachment_cost -> Int4,
     }
 }
 
@@ -380,6 +385,12 @@ diesel::table! {
         echo_to_parent -> Bool,
         locale -> Text,
         held_at -> Timestamptz,
+        waiting -> Text,
+        kind -> Text,
+        target -> Nullable<Uuid>,
+        payload -> Nullable<Jsonb>,
+        cost -> Int4,
+        credit -> Int8,
     }
 }
 
@@ -1043,6 +1054,7 @@ diesel::joinable!(file_offer -> channel (channel));
 diesel::joinable!(file_offer -> user (sender));
 diesel::joinable!(file_transfer -> file_offer (offer));
 diesel::joinable!(held_message -> channel (channel));
+diesel::joinable!(held_message -> message (target));
 diesel::joinable!(held_message -> user (author));
 diesel::joinable!(icon -> user (uploaded_by));
 diesel::joinable!(invite -> community (community));
