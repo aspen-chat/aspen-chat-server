@@ -2,35 +2,32 @@
 //! channel could not pay for when they were sent, kept as held messages
 //! (`app::message::held`, `waiting = 'mana'`) and posted as the channel recharges.
 //!
-//! An author's waiting rows in one pool are one item, which takes turns with the others; its
-//! messages post in the order sent. One job per busy pool drains it ([`drain_step`],
-//! `drainManaQueue`, keyed by the channel, so one runner holds it anywhere): it ticks at 5 Hz
-//! for [`STEP`] at a time and spends what the pool earns by deficit round-robin. A pointer goes
-//! round the items in the order each began waiting and is kept across ticks; each turn gives
-//! the item [`QUANTUM`] of credit; the item posts its oldest message whenever its credit and the
-//! pool both cover that message's cost; and a tick ends when the pool cannot pay the item at the
-//! pointer, the next carrying on from there. Every item gets the same credit a trip round, and
-//! whole messages are paid with whole mana, so shares never grow vanishingly small however long
-//! the queue. What has waited [`MAX_WAIT`] is dropped, and its author told.
+//! An author's waiting rows in one pool are one item; its messages post in the order sent.
+//! Items go by their authors' [`Priority`]: the higher ranked in the channel's community first,
+//! then the longer there in whole days, and among equals one drawn at random for each message.
+//! One job per busy pool drains it ([`drain_step`], `drainManaQueue`, keyed by the channel, so
+//! one runner holds it anywhere): it ticks at 5 Hz for [`STEP`] at a time, and posts the drawn
+//! author's oldest message whenever the pool can pay for it. What has waited [`MAX_WAIT`] is
+//! dropped, and its author told; a full queue makes room for a higher author by dropping the
+//! lowest one's ([`make_room`]).
 
-use super::{MILLI, Pool, TICK};
+use super::{Pool, TICK};
 use crate::context::GlobalServerContext;
 use crate::jobs::{self, Claimed, JobClass, JobKind, NewJob, Outcome};
 use crate::message::held::{self, COLUMNS, HeldKind, HeldMessage, HeldWaiting};
+use crate::permissions::OWNER_RANK;
 use crate::t;
 use crate::{AttachmentId, ChannelId, HeldMessageId, MessageId, UserId};
 use aspen_schema::held_message;
 use chrono::{TimeDelta, Utc};
 use diesel::prelude::*;
-use diesel::sql_types::{Array, BigInt, Bool, Uuid as PgUuid};
+use diesel::sql_types::{Array, BigInt, Bool, Integer, Uuid as PgUuid};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// The credit an item is given each turn, in thousandths of mana: about one ordinary message.
-pub const QUANTUM: i64 = 100 * MILLI;
 /// The most messages one author's item may hold.
 pub const MAX_ITEM_MESSAGES: i64 = 50;
 /// The most mana one author's item may cost in all; its first message may cost more, which a
@@ -95,8 +92,9 @@ struct Count {
 
 /// Puts `waiting` in its pool's queue, in its author's item, and sees that a drainer runs: the
 /// held row and the drainer's job are saved together. Refused with `channelBusy` when the item
-/// or the queue is full.
+/// is full, or the queue is and its author ranks no higher than anyone in it.
 pub async fn wait(state: &GlobalServerContext, waiting: Waiting) -> crate::Result<HeldMessage> {
+    make_room(state, waiting.channel, waiting.author).await?;
     let mut conn = state.connection_pool.get().await?;
     let locale = crate::locale::current().to_string();
     let held = conn
@@ -149,7 +147,6 @@ pub async fn wait(state: &GlobalServerContext, waiting: Waiting) -> crate::Resul
                     target: waiting.target,
                     payload: waiting.payload,
                     cost: i32::try_from(waiting.cost).unwrap_or(i32::MAX),
-                    credit: 0,
                 };
                 diesel::insert_into(held_message::table)
                     .values((
@@ -213,6 +210,162 @@ pub async fn wait_held(
     Ok(())
 }
 
+#[derive(QueryableByName)]
+struct Author {
+    #[diesel(sql_type = PgUuid)]
+    author: UserId,
+}
+
+#[derive(QueryableByName)]
+struct Evicted {
+    #[diesel(sql_type = PgUuid)]
+    id: HeldMessageId,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    locale: String,
+}
+
+/// When `channel`'s queue holds [`MAX_ITEMS`] authors and `author` is not among them, drops
+/// every waiting row of the lowest of them (one drawn at random among equals), telling them
+/// why, if `author` is higher; refuses with `channelBusy` if not. A raid of more accounts than
+/// the queue holds so cannot keep out those who rank above them. The check is made before the
+/// row is saved, apart from its transaction (dropping announces each row, on connections of
+/// its own); two newcomers at once may both find room, and the queue then holds a few more.
+async fn make_room(
+    state: &GlobalServerContext,
+    channel: ChannelId,
+    author: UserId,
+) -> crate::Result<()> {
+    let mut conn = state.connection_pool.get().await?;
+    let authors: Vec<UserId> = diesel::sql_query(
+        "SELECT DISTINCT author FROM held_message WHERE channel = $1 AND waiting = 'mana' \
+         LIMIT $2",
+    )
+    .bind::<PgUuid, _>(channel)
+    .bind::<BigInt, _>(MAX_ITEMS)
+    .load::<Author>(conn.as_mut())
+    .await?
+    .into_iter()
+    .map(|row| row.author)
+    .collect();
+    if (authors.len() as i64) < MAX_ITEMS || authors.contains(&author) {
+        return Ok(());
+    }
+    let mut asked = authors.clone();
+    asked.push(author);
+    let priorities = priorities_of(conn.as_mut(), channel, &asked).await?;
+    let priority = |of: &UserId| priorities.get(of).copied().unwrap_or_default();
+    let lowest = authors.iter().map(priority).min().unwrap_or_default();
+    if !priority(&author).may_displace(lowest) {
+        return Err(crate::Error::ChannelBusy(t!(
+            "channelBusyQueue",
+            items = MAX_ITEMS
+        )));
+    }
+    let candidates: Vec<UserId> = authors
+        .into_iter()
+        .filter(|candidate| priority(candidate) == lowest)
+        .collect();
+    let victim = candidates[rand::random_range(0..candidates.len())];
+    let rows: Vec<Evicted> = diesel::sql_query(
+        "SELECT id, locale FROM held_message WHERE channel = $1 AND author = $2 \
+         AND waiting = 'mana'",
+    )
+    .bind::<PgUuid, _>(channel)
+    .bind::<PgUuid, _>(victim)
+    .load(conn.as_mut())
+    .await?;
+    drop(conn);
+    for row in rows {
+        let reason = crate::locale::scope(crate::locale::negotiate(&row.locale), async {
+            t!("manaMadeRoom")
+        })
+        .await;
+        held::drop_held(state, row.id, victim, channel, reason).await?;
+    }
+    Ok(())
+}
+
+/// Where an author stands in a pool's queue, higher first: their rank in the channel's
+/// community as `CommunityAccess::role_rank` gives it (the owner above every role, otherwise
+/// their highest role's position, 0 with the everyone role alone; 0 in a group DM), then how
+/// many whole days they have belonged to the community or the group DM. Equals are drawn at
+/// random.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Priority {
+    rank: i32,
+    days: i64,
+}
+
+impl Priority {
+    /// Whether an author of this priority may have `lowest`'s waiting rows dropped to make room:
+    /// only above it, so never anyone of higher rank, nor an equal.
+    fn may_displace(self, lowest: Priority) -> bool {
+        self > lowest
+    }
+}
+
+#[derive(QueryableByName)]
+struct AuthorPriority {
+    #[diesel(sql_type = PgUuid)]
+    author: UserId,
+    #[diesel(sql_type = Integer)]
+    rank: i32,
+    #[diesel(sql_type = BigInt)]
+    days: i64,
+}
+
+/// The [`Priority`] of each of `authors` in `channel`'s pool, in one query: a thread's is in
+/// its parent's community or group DM. An author who no longer belongs there is lowest.
+async fn priorities_of(
+    conn: &mut AsyncPgConnection,
+    channel: ChannelId,
+    authors: &[UserId],
+) -> crate::Result<HashMap<UserId, Priority>> {
+    let rows: Vec<AuthorPriority> = diesel::sql_query(
+        r#"
+        WITH home AS (
+            SELECT COALESCE(c.community, parent.community) AS community,
+                   COALESCE(c.parent_channel, c.id) AS root
+            FROM channel c LEFT JOIN channel parent ON parent.id = c.parent_channel
+            WHERE c.id = $1
+        )
+        SELECT a.author,
+               CASE WHEN co.owner = a.author THEN $3
+                    ELSE COALESCE((
+                        SELECT max(r.position) FROM community_member_role mr
+                        JOIN community_role r ON r.id = mr.role AND r.deleted_at IS NULL
+                        WHERE mr.community = home.community AND mr."user" = a.author
+                    ), 0)
+               END AS rank,
+               COALESCE(floor(extract(epoch FROM now() - COALESCE(cu.joined_at, dr.joined_at))
+                              / 86400), 0)::bigint AS days
+        FROM unnest($2::uuid[]) AS a(author)
+        CROSS JOIN home
+        LEFT JOIN community co ON co.id = home.community
+        LEFT JOIN community_user cu ON cu.community = home.community AND cu."user" = a.author
+        LEFT JOIN dm_recipient dr
+               ON home.community IS NULL AND dr.channel = home.root AND dr."user" = a.author
+        "#,
+    )
+    .bind::<PgUuid, _>(channel)
+    .bind::<Array<PgUuid>, _>(authors)
+    .bind::<Integer, _>(OWNER_RANK)
+    .load(conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.author,
+                Priority {
+                    rank: row.rank,
+                    days: row.days,
+                },
+            )
+        })
+        .collect())
+}
+
 /// Saves the drainer of `channel`'s pool unless it has one. A drainer that finds the queue
 /// empty deletes its job only while nothing waits ([`finish_if_empty`]), so a row saved as it
 /// finishes has this make it a new one.
@@ -244,29 +397,27 @@ async fn finish_if_empty(
     Ok(deleted == 1)
 }
 
-/// Where the pointer stands: the author whose item has the turn, and whether that turn's
-/// quantum has been given. The drainer's checkpoint.
+/// The author whose oldest row has the next turn, drawn among the highest waiting, and kept until
+/// that row is paid for: drawn afresh each tick, cheap messages would be posted whenever the pool
+/// could pay for them and a costly one never. The drainer's checkpoint.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Turn {
-    at: Option<UserId>,
-    granted: bool,
+struct Drawn {
+    author: Option<UserId>,
 }
 
-/// Each item's oldest row, which holds its credit, in the order the items began waiting.
+/// Each author's oldest waiting row in `channel`.
 async fn items(
     conn: &mut AsyncPgConnection,
     channel: ChannelId,
 ) -> crate::Result<Vec<HeldMessage>> {
-    let mut heads: Vec<HeldMessage> = diesel::sql_query(format!(
+    Ok(diesel::sql_query(format!(
         "SELECT DISTINCT ON (author) {COLUMNS} FROM held_message \
          WHERE channel = $1 AND waiting = 'mana' ORDER BY author, held_at, id"
     ))
     .bind::<PgUuid, _>(channel)
     .load(conn)
-    .await?;
-    heads.sort_by_key(|head| (head.held_at, head.id));
-    Ok(heads)
+    .await?)
 }
 
 /// The oldest of `author`'s waiting rows in `channel`.
@@ -311,30 +462,9 @@ async fn expire(state: &GlobalServerContext, channel: ChannelId) -> crate::Resul
     Ok(())
 }
 
-/// Saves each item's credit on its oldest row, in one statement, as the step hands over.
-async fn save_credits(
-    conn: &mut AsyncPgConnection,
-    credits: &HashMap<HeldMessageId, i64>,
-) -> crate::Result<()> {
-    if credits.is_empty() {
-        return Ok(());
-    }
-    let (ids, amounts): (Vec<HeldMessageId>, Vec<i64>) =
-        credits.iter().map(|(id, credit)| (*id, *credit)).unzip();
-    diesel::sql_query(
-        "UPDATE held_message SET credit = given.credit \
-         FROM unnest($1::uuid[], $2::bigint[]) AS given(id, credit) \
-         WHERE held_message.id = given.id",
-    )
-    .bind::<Array<PgUuid>, _>(ids)
-    .bind::<Array<BigInt>, _>(amounts)
-    .execute(conn)
-    .await?;
-    Ok(())
-}
-
-/// One step of a pool's drainer: ticks for [`STEP`], then hands the job back with where its
-/// pointer stands; done when nothing waits.
+/// One step of a pool's drainer: ticks for [`STEP`], then hands the job back with whom it drew;
+/// done when nothing waits. Authors' priorities are read once a step as they first wait in it,
+/// so a role given or taken counts from the next step.
 pub async fn drain_step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outcome> {
     let Some(channel) = job
         .key
@@ -344,13 +474,11 @@ pub async fn drain_step(state: &GlobalServerContext, job: &Claimed) -> crate::Re
     else {
         return Ok(Outcome::Done);
     };
-    let mut turn: Turn = job.progress()?.unwrap_or_default();
+    let mut drawn: Drawn = job.progress()?.unwrap_or_default();
     let until = tokio::time::Instant::now() + STEP;
     let mut ticks = tokio::time::interval(TICK);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // Each item's credit since the step began, by its oldest row; an item not yet in it has
-    // what its row holds.
-    let mut credits: HashMap<HeldMessageId, i64> = HashMap::new();
+    let mut priorities: HashMap<UserId, Priority> = HashMap::new();
     loop {
         ticks.tick().await;
         expire(state, channel).await?;
@@ -358,11 +486,18 @@ pub async fn drain_step(state: &GlobalServerContext, job: &Claimed) -> crate::Re
             let mut conn = state.connection_pool.get().await?;
             let heads = items(conn.as_mut(), channel).await?;
             if heads.is_empty() {
-                save_credits(conn.as_mut(), &credits).await?;
                 if finish_if_empty(conn.as_mut(), job.id, channel).await? {
                     return Ok(Outcome::Done);
                 }
                 continue;
+            }
+            let unknown: Vec<UserId> = heads
+                .iter()
+                .map(|head| head.author)
+                .filter(|author| !priorities.contains_key(author))
+                .collect();
+            if !unknown.is_empty() {
+                priorities.extend(priorities_of(conn.as_mut(), channel, &unknown).await?);
             }
             // `None` when the channel can no longer have a pool: what waits there is posted
             // without paying, as it would be anywhere else.
@@ -372,78 +507,66 @@ pub async fn drain_step(state: &GlobalServerContext, job: &Claimed) -> crate::Re
             state,
             channel,
             pool.as_ref(),
-            &heads,
-            &mut turn,
-            &mut credits,
+            heads,
+            &priorities,
+            &mut drawn,
         )
         .await?;
         if tokio::time::Instant::now() >= until {
-            let mut conn = state.connection_pool.get().await?;
-            save_credits(conn.as_mut(), &credits).await?;
-            return Ok(Outcome::Progress(serde_json::to_value(&turn)?));
+            return Ok(Outcome::Progress(serde_json::to_value(&drawn)?));
         }
     }
 }
 
-/// One tick: spends what the pool holds on the items, by deficit round-robin from the pointer,
-/// for at most one trip round them.
+/// One tick: while the pool can pay, posts the oldest row of an author drawn among the highest
+/// waiting, drawing again after each.
 async fn tick(
     state: &GlobalServerContext,
     channel: ChannelId,
     pool: Option<&Pool>,
-    heads: &[HeldMessage],
-    turn: &mut Turn,
-    credits: &mut HashMap<HeldMessageId, i64>,
+    mut heads: Vec<HeldMessage>,
+    priorities: &HashMap<UserId, Priority>,
+    drawn: &mut Drawn,
 ) -> crate::Result<()> {
-    let start = turn
-        .at
-        .and_then(|at| heads.iter().position(|head| head.author == at))
-        .unwrap_or(0);
-    for offset in 0..heads.len() {
-        let head = &heads[(start + offset) % heads.len()];
-        let author = head.author;
-        if turn.at != Some(author) {
-            *turn = Turn {
-                at: Some(author),
-                granted: false,
-            };
-        }
-        let mut next = head.clone();
-        let mut credit = credits.remove(&next.id).unwrap_or(head.credit);
-        if !turn.granted {
-            credit = credit.saturating_add(QUANTUM);
-            turn.granted = true;
-        }
-        loop {
-            let cost = i64::from(next.cost.max(0)) * MILLI;
-            if credit < cost {
-                credits.insert(next.id, credit);
-                break;
+    let priority = |author: UserId| priorities.get(&author).copied().unwrap_or_default();
+    while let Some(top) = heads.iter().map(|head| priority(head.author)).max() {
+        let at = match drawn
+            .author
+            .and_then(|author| heads.iter().position(|head| head.author == author))
+            .filter(|at| priority(heads[*at].author) == top)
+        {
+            Some(at) => at,
+            None => {
+                let tier: Vec<usize> = (0..heads.len())
+                    .filter(|at| priority(heads[*at].author) == top)
+                    .collect();
+                let at = tier[rand::random_range(0..tier.len())];
+                drawn.author = Some(heads[at].author);
+                at
             }
-            let paid = match pool {
-                Some(pool) => {
-                    super::pay_waiting(state, pool, u32::try_from(next.cost.max(0)).unwrap_or(0))
-                        .await
-                }
-                None => true,
-            };
-            if !paid {
-                credits.insert(next.id, credit);
-                return Ok(());
+        };
+        let head = heads[at].clone();
+        let paid = match pool {
+            Some(pool) => {
+                super::pay_waiting(state, pool, u32::try_from(head.cost.max(0)).unwrap_or(0)).await
             }
-            credit -= cost;
-            held::post_waiting(state, next).await;
-            let mut conn = state.connection_pool.get().await?;
-            match oldest(conn.as_mut(), channel, author).await? {
-                Some(row) => next = row,
-                None => break,
+            None => true,
+        };
+        if !paid {
+            return Ok(());
+        }
+        let (author, posted) = (head.author, head.id);
+        held::post_waiting(state, head).await;
+        drawn.author = None;
+        let mut conn = state.connection_pool.get().await?;
+        match oldest(conn.as_mut(), channel, author).await? {
+            // Left to wait by a failure that may pass: tried again next tick, not spent on now.
+            Some(row) if row.id == posted => return Ok(()),
+            Some(row) => heads[at] = row,
+            None => {
+                heads.swap_remove(at);
             }
         }
-        // The turn passes to the next item, whose quantum is yet to be given.
-        turn.granted = false;
-        turn.at = heads
-            .get((start + offset + 1) % heads.len())
-            .map(|head| head.author);
     }
     Ok(())
 }
@@ -453,12 +576,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_turn_survives_its_checkpoint() {
-        let turn = Turn {
-            at: Some(UserId(uuid::Uuid::from_u128(7))),
-            granted: true,
+    fn a_draw_survives_its_checkpoint() {
+        let drawn = Drawn {
+            author: Some(UserId(uuid::Uuid::from_u128(7))),
         };
-        let saved = serde_json::to_value(&turn).unwrap();
-        assert_eq!(serde_json::from_value::<Turn>(saved).unwrap(), turn);
+        let saved = serde_json::to_value(&drawn).unwrap();
+        assert_eq!(serde_json::from_value::<Drawn>(saved).unwrap(), drawn);
+    }
+
+    #[test]
+    fn rank_comes_before_tenure() {
+        let moderator = Priority { rank: 3, days: 0 };
+        let veteran = Priority { rank: 0, days: 900 };
+        let newcomer = Priority { rank: 0, days: 0 };
+        assert!(moderator > veteran && veteran > newcomer);
+        assert!(
+            Priority {
+                rank: OWNER_RANK,
+                days: 0
+            } > moderator
+        );
+    }
+
+    #[test]
+    fn no_one_displaces_a_higher_rank_or_an_equal() {
+        let veteran = Priority { rank: 0, days: 900 };
+        let moderator = Priority { rank: 3, days: 0 };
+        assert!(!veteran.may_displace(moderator));
+        assert!(!veteran.may_displace(veteran));
+        assert!(moderator.may_displace(veteran));
+        assert!(veteran.may_displace(Priority { rank: 0, days: 2 }));
     }
 }

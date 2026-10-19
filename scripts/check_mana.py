@@ -9,8 +9,8 @@ checks that:
 - a message the pool can pay posts at once, and the next waits (`202`), behind anything waiting;
 - a holder of Bypass channel mana posts at once;
 - a viewer of the channel is told its level, maximum, and rate;
-- what waits is posted as mana recharges, in order, and one person's flood does not hold back
-  another's single message;
+- what waits is posted as mana recharges, a member of higher rank before anything of a lower
+  one's;
 - an edit that lengthens waits and is then made, and one changing nothing is answered at once;
 - a poll waits and is posted, and a thread reply posts while its echo waits in the parent;
 - what waits two minutes is dropped, its author told why;
@@ -121,19 +121,21 @@ def run(stack: Stack) -> None:
     got = until("the queue drains", lambda: {"b" * 50, "c" * 20} <= set(posted_texts()), 30)
     check("the drainer posts what waited as mana recharges", bool(got), posted_texts()[-4:])
     check("nothing is left waiting", not held(m1) and not held(m2), (held(m1), held(m2)))
-    texts = posted_texts()
-    if "b" * 50 in texts and "c" * 20 in texts:
-        check("in the order they began waiting", texts.index("b" * 50) < texts.index("c" * 20), texts[-3:])
 
-    # Fair shares: one floods, the other sends one; the one is not held behind the whole flood.
+    # Priority: one floods; another, given a role above everyone's, sends one after it, which
+    # posts before any of the flood.
+    regular = stack.api("POST", f"/communities/{community}/roles", {"name": "Regular", "permissions": []},
+                        owner["token"])["id"]
+    stack.api("PUT", f"/communities/{community}/members/{m2['id']}/roles/{regular}", token=owner["token"])
     post(m1, "x" * 100)  # empties the pool
     for i in range(6):
         post(m1, f"flood{i}" + "f" * 24)
-    post(m2, "fair" + "g" * 26)
-    got = until("the fair one posts", lambda: ("fair" + "g" * 26) in posted_texts(), 60)
+    post(m2, "ranked" + "g" * 24)
+    got = until("the ranked one posts", lambda: ("ranked" + "g" * 24) in posted_texts(), 60)
     texts = posted_texts()
-    floods_before = sum(1 for t in texts[: texts.index("fair" + "g" * 26)] if t.startswith("flood")) if got else -1
-    check("a lone message is not held behind another's whole flood", got and floods_before < 6, floods_before)
+    floods_before = sum(1 for t in texts[: texts.index("ranked" + "g" * 24)] if t.startswith("flood")) if got else -1
+    check("a member of higher rank posts before anything of a lower one's waiting", got and floods_before == 0,
+          floods_before)
     until("the flood drains", lambda: not held(m1), 60)
 
     # Edits: one lengthening waits while busy; one changing nothing is answered as it stands.

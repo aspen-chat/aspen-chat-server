@@ -1146,7 +1146,7 @@
     "uploadQuotaGib": "GiB each person may upload a day",
     "uploadQuotaGibHint": "Files and pictures together, over any 24 hours. Past it, uploads wait until there is room. 0 sets no limit.",
     "manaHeading": "Channel mana",
-    "manaHint": "How fast a busy channel fills, however many people post in it. A channel spends one mana for each character posted, and more for each file, and earns it back over time; what it cannot pay for waits its turn, shared fairly among those waiting. A channel's settings may lower these, never raise them.",
+    "manaHint": "How fast a busy channel fills, however many people post in it. A channel spends one mana for each character posted, and more for each file, and earns it back over time; what it cannot pay for waits its turn, the higher ranked first, then those who have been members longest. A channel's settings may lower these, never raise them.",
     "manaMaxRecharge": "Mana a channel earns back a second",
     "manaMaxRechargeHint": "The most any channel recharges, and what one recharges unless its settings say less.",
     "manaMax": "Mana a channel holds",

@@ -1,6 +1,6 @@
 # Channel mana
 
-Channel mana bounds how fast a whole channel fills, however many people post in it (`app::mana`). Each channel has a budget, which posting spends and which comes back over time. What the budget cannot pay for waits its turn in a queue shared fairly among the people waiting, rather than being refused. It is invisible until a channel is busy: people see a bar only while the budget is below 60%.
+Channel mana bounds how fast a whole channel fills, however many people post in it (`app::mana`). Each channel has a budget, which posting spends and which comes back over time. What the budget cannot pay for waits its turn rather than being refused, in a queue that serves members by rank, then by how long they have belonged, so a raid of new accounts waits behind the regulars. It is invisible until a channel is busy: people see a bar only while the budget is below 60%.
 
 Each person's own posting limits stay (`rate_limits.toml`), so one person is held by their own limits and a crowd by the channel's mana. [Why it is built this way](design-notes.md)
 
@@ -100,7 +100,6 @@ What waits is a held message ([Held messages](../attachment-previews/held-messag
 | `payload` | A command's invocation, an edit's change (`message::WaitingEdit`), or a poll as it was asked for |
 | `content` | A message's text, a command's as shown, an edit's new text, or a poll's question, for its author's apps |
 | `cost` | What it spends, in mana |
-| `credit` | What its author's item has been given towards it, in thousandths, held on the item's oldest row |
 
 - **Its author's apps** list it with the rest (`GET /users/@me/held-messages`), saying what it waits for (`waiting`) and what it is (`kind`).
 - **Posted:** `heldMessagePosted` names the message it became, or the message an edit changed.
@@ -110,31 +109,41 @@ What waits is a held message ([Held messages](../attachment-previews/held-messag
 
 ### Items and their bounds
 
-An author's waiting rows in one pool are one item, which takes turns with the others. Its rows post in the order sent.
+An author's waiting rows in one pool are one item. Its rows post in the order sent.
 
 | Bound | Value | Past it |
 | --- | --- | --- |
 | An item | 50 rows (`MAX_ITEM_MESSAGES`), or 2,000 mana in all (`MAX_ITEM_MANA`), its first row whatever it costs | `429` `channelBusy`, `Retry-After` 10 seconds (`BUSY_RETRY`) |
-| A pool's items | 1,000 (`MAX_ITEMS`) | The same |
+| A pool's items | 1,000 (`MAX_ITEMS`) | Room is made for an author above the lowest one waiting (below); anyone else, the same |
 | How long a row waits | 2 minutes (`MAX_WAIT`) | Dropped, its author told the channel was too busy |
+
+### Priority
+
+Items go by their authors' `Priority` (`queue::priorities_of`, one query for every author asked of), higher first:
+
+1. **Rank** in the channel's community, as everywhere else it is ranked (`CommunityAccess::role_rank`): the owner above every role, otherwise their highest role's position, 0 with the everyone role alone. A thread's is in its parent's community. Everyone in a group DM is 0.
+2. **Tenure**, in whole days since they joined the community (`community_user.joined_at`), or were added to the group DM (`dm_recipient.joined_at`).
+3. **Random** among those equal in both, drawn for each message.
+
+An author who no longer belongs there is lowest. Holders of Bypass channel mana never wait, so they are never in the queue.
+
+- **A full queue:** when 1,000 authors wait and someone else sends, `queue::make_room` reads the priorities of them all. If the sender is strictly above the lowest of them (one drawn at random among equals), every waiting row of that author is dropped, each told the channel made room for someone of higher rank or longer here (`manaMadeRoom`), and the sender waits. Otherwise the sender is refused with `channelBusy`. No one is ever dropped for someone of lower rank, or for an equal. It is checked before the row is saved, apart from its transaction, since dropping announces each row; two senders at once may both find room, and the queue holds a few more.
 
 ## Draining
 
 One job drains a pool while anything waits there: `drainManaQueue`, keyed by the channel, so one runner holds it anywhere in the fleet (`queue::drain_step`). It is saved with the first row to wait there.
 
-- **Ticking:** a step ticks at 5 Hz (`TICK`) for ten seconds, then hands the job back with its pointer as its progress (`Outcome::Progress`), so its lease renews and any runner may take it up. A drainer takes a place of the `interactive` class like any job, so many busy channels at once wait their turns for places.
-- **Each tick** first drops what has waited `MAX_WAIT`, a hundred at a time, telling each author. Then it reads each item's oldest row, sorts the items by when each began waiting, and spends by deficit round-robin from the pointer, for at most one trip round them:
-  - When the pointer reaches an item, the item is given `QUANTUM` (100 mana) of credit.
-  - The item posts its oldest row whenever its credit and the pool both cover that row's cost (`mana::pay_waiting`), taking the cost from both, and goes on while they do.
-  - When its credit runs short, the pointer moves to the next item, whose quantum is yet to be given.
-  - When the pool runs short, the tick ends, the pointer staying where it is with its quantum given.
-  - An item whose last row posted is done, and its credit goes with it.
-- **Fair over a trip:** every item gets the same credit a trip round, and whole rows are paid with whole mana, so shares never grow vanishingly small however long the queue. A row costing more than a quantum is paid over several turns.
-- **Credit** is kept in the step's memory and saved on each item's oldest row as the step hands over, so a runner taking the job up carries on from it.
+- **Ticking:** a step ticks at 5 Hz (`TICK`) for ten seconds, then hands the job back with the author it drew as its progress (`Outcome::Progress`), so its lease renews and any runner may take it up. A drainer takes a place of the `interactive` class like any job, so many busy channels at once wait their turns for places.
+- **Priorities** are read as each author is first seen waiting in a step, and kept for the step, so a role given or taken counts within ten seconds.
+- **Each tick** first drops what has waited `MAX_WAIT`, a hundred at a time, telling each author. Then it reads each item's oldest row and, while the pool can pay (`mana::pay_waiting`):
+  - draws an author among the highest waiting, unless the one drawn before is still among them;
+  - posts that author's oldest row, once the pool can pay for it, and draws again.
+- **The draw is kept until its row is paid for**, across ticks and steps: drawn afresh each tick, the cheap messages of equals would post whenever the pool could pay for them, and a costly one never would.
+- **Strict:** while anyone of higher priority waits, no one lower posts. A raid of new accounts waits behind every regular, and is mostly dropped at `MAX_WAIT`.
 - **Posting a row** is posting as its kind would be (`held::post_waiting`): a message or a command by `message::post`, an edit by `update_message`, a poll by `create_poll`, each taking the row in its own transaction; an echo by `echo_reply`, its row going after, since echoing twice makes one echo. Permissions, blocks, and plugins decide it then; one that can no longer be posted is dropped, its author told why, and one that fails for a reason that may pass is left to wait.
 - **Finishing:** a drainer that finds nothing waiting deletes its own job, in one statement, only while nothing waits (`finish_if_empty`), so a row saved at that moment sees the job gone and saves another (`ensure_drainer`).
 - **A channel that can no longer have a pool** (made something else, or gone) has what waits there posted without paying.
-- **Capacity, not fairness, bounds a long queue:** a thousand items of 100 mana each is 100,000 mana, over half an hour at 50 a second, so most are dropped at `MAX_WAIT`, evenly, since each waits as many trips.
+- **Capacity bounds a long queue:** a thousand items of 100 mana each is 100,000 mana, over half an hour at 50 a second, so most are dropped at `MAX_WAIT`, the lowest first.
 
 ## The bar
 
@@ -186,4 +195,4 @@ Mana cannot be counted, so everything posts as if every pool were full: it fails
 
 - **Unit tests:** glyph counting and costs, settings and their ceilings (`app::mana`); the app's recharge arithmetic, store, and held edits (`client/packages/protocol/test/mana.test.ts`, `sync.test.ts`).
 - **The `raid` benchmark scenario** (`aspen-bench`, see [Benchmarking](../benchmarking.md)) has a tenth of a 2,000-member community flood one channel, measuring how long everyone else's messages there wait and how many of either side's are held, refused, or dropped.
-- **`scripts/check_mana.py`** drives a stack through it: spending and waiting, Bypass, draining in order and fairly, the bar's frames, edits (waiting, made, and changing nothing), polls, echoes, the two-minute limit, cancelling, and the bounds.
+- **`scripts/check_mana.py`** drives a stack through it: spending and waiting, Bypass, draining a higher rank first, the bar's frames, edits (waiting, made, and changing nothing), polls, echoes, the two-minute limit, cancelling, and the bounds.

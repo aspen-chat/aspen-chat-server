@@ -85,15 +85,11 @@ pub struct HeldMessage {
     /// What it spends of its channel's mana when posted, in mana.
     #[diesel(sql_type = diesel::sql_types::Integer)]
     pub cost: i32,
-    /// What its author's item has been given towards it, in thousandths of mana; only the
-    /// item's oldest row holds any (`app::mana::queue`).
-    #[diesel(sql_type = diesel::sql_types::BigInt)]
-    pub credit: i64,
 }
 
 /// The columns a [`HeldMessage`] is read from.
 pub(crate) const COLUMNS: &str = "id, author, channel, content, attachments, echo_to_parent, \
-    locale, held_at, waiting, kind, target, payload, cost, credit";
+    locale, held_at, waiting, kind, target, payload, cost";
 
 /// What became of a message sent: posted, or held for its previews.
 pub enum Posted {
@@ -164,7 +160,6 @@ pub async fn post(
                             target: None,
                             payload: None,
                             cost: 0,
-                            credit: 0,
                         };
                         diesel::insert_into(held_message::table)
                             .values((

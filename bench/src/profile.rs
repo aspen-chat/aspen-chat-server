@@ -83,6 +83,11 @@ pub struct Population {
     pub votes_per_poll: Option<u32>,
     /// History messages in each text channel that tag a member; one in twenty when left out.
     pub tagged_per_channel: Option<u32>,
+    /// Over how many days each community's members joined, in the order they are listed, the
+    /// last of them now; 0, the default, all of them as the run is seeded. A raid's accounts
+    /// are a community's newest members.
+    #[serde(default)]
+    pub tenure_days: u32,
     /// Every seeded user's password; left out, the seeder draws one for the run.
     #[serde(default)]
     pub password: Option<String>,
@@ -238,8 +243,8 @@ pub enum EventKind {
         #[serde(default)]
         community: u32,
     },
-    /// A `share` of the members of the community at `community` (an index, as above) flood
-    /// its first channel for `seconds`, each posting `messages_per_second` messages of about
+    /// The newest `share` of the members of the community at `community` (an index, as above)
+    /// flood its first channel for `seconds`, each posting `messages_per_second` messages of about
     /// `glyphs` glyphs, as accounts joined to raid it would. The channel's mana holds them
     /// back: their messages' delivery, waits included, is `delivery:raid`, and everyone
     /// else's in that channel, from the raid's start until what it left waiting has posted
@@ -550,6 +555,7 @@ impl Profile {
                         .unwrap_or(u32::from(p.history_per_channel > 0)),
                     votes_per_poll: p.votes_per_poll.unwrap_or((size / 4).min(1000)),
                     tagged_per_channel: p.tagged_per_channel.unwrap_or(p.history_per_channel / 20),
+                    tenure_days: p.tenure_days,
                     members,
                 }
             })

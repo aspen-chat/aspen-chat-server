@@ -257,6 +257,7 @@ manaMaxAboveDeployment: "A channel may hold at most %{max} mana, this deployment
 problemChannelBusy: "This channel is too busy to take more right now."
 channelBusyItem: "You already have as much waiting to post here as the channel holds for one person (%{messages} messages or %{mana} mana). Wait for it to post, then send more."
 channelBusyQueue: "This channel already has %{items} people's messages waiting to post. Wait a little, then send it again."
+manaMadeRoom: "This channel was too busy to keep this waiting: it made room for someone of higher rank, or who has been here longer, so it was not posted. Send it again once the channel is quieter."
 manaWaitedTooLong: "This channel was too busy to post this within %{minutes} minutes, so it was not posted. Send it again once the channel is quieter."
 manaSettingZero: "A channel's mana must recharge and hold at least 1. Set the maximum recharge and the maximum mana to 1 or more."
 permissionManagePlugins: "Manage plugins"

@@ -19,12 +19,14 @@ Why channel mana works as it does. The how is in the [main page](index.md).
 - **Edits that lengthen wait.** Letting them skip the queue would let anyone post through edits. Edits that shorten or reword cost nothing and apply at once, so a typo can always be fixed and something said taken back.
 - **An echo waits apart from its reply.** The reply belongs to the thread, which can pay; holding it back for the parent's sake would hold the thread back too.
 
-## Fair sharing
+## Who goes first
 
-- **Round-robin by author, not first come first served.** With a single queue in arrival order, raiders need not get their spam through: they only need to drain the pool, and every regular's message waits behind theirs. Turns by author mean a raid mostly delays itself.
-- **An author's waiting rows are one item.** Someone who sends dozens of short lines takes no more turns than someone who wrote one long message.
-- **Deficit round-robin, not equal shares of each tick.** Split a tick's mana a thousand ways and each share is a hundredth of a mana, which whole messages can never be paid with. Giving each item a quantum a turn, with a pointer kept across ticks, pays whole messages with whole mana however long the queue; fairness then holds over a trip round rather than within a tick.
-- **A quantum of 100 mana:** about one ordinary message, so most turns post a message, and few are spent only visiting.
+- **Not first come, first served.** With a single queue in arrival order, raiders need not get their spam through: they only need to drain the pool, and every regular's message waits behind theirs.
+- **Not equal shares either.** Turns shared equally by author cannot tell a raid's accounts from regulars: with 145 raiders each person had a 146th of the channel, and in the `raid` benchmark everyone else's messages there waited a median of half a minute, two minutes at worst, and two in five were dropped.
+- **Rank, then tenure.** A raid is many new accounts holding no roles. Serving the higher ranked first, then those who have belonged longer, puts every regular ahead of it, and it delays only itself.
+- **Tenure in whole days, then random.** A raid's accounts join seconds apart; in exact join order the first of them would take everything the pool earns. Counted in days they are equals, and drawing among equals for each message shares the channel between them in expectation.
+- **No one displaces a higher rank or an equal.** A full queue drops the lowest author waiting only for someone strictly above them, so a raid larger than the queue cannot keep regulars out, and no one can push out someone of higher rank.
+- **An author's waiting rows are one item.** Someone who sends dozens of short lines is drawn as often as someone who wrote one long message.
 
 ## Moderators and bots
 

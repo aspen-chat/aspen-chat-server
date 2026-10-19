@@ -17,8 +17,7 @@ ALTER TABLE channel
 -- to its parent. `channel` is the pool it pays from; `target` the message an edit changes or an
 -- echo copies; `payload` a command's invocation, an edit's change, or a poll as it was asked
 -- for (an edit's new text is in `content` too, for its author's apps to show); `cost` what it
--- spends, in mana; `credit` what its author's item has been given towards it, in thousandths of
--- mana, kept on the item's oldest row (`app::mana::queue`).
+-- spends, in mana.
 ALTER TABLE held_message
     ADD COLUMN waiting TEXT NOT NULL DEFAULT 'preview' CHECK (waiting IN ('preview', 'mana')),
     ADD COLUMN kind TEXT NOT NULL DEFAULT 'message'
@@ -26,7 +25,6 @@ ALTER TABLE held_message
     ADD COLUMN target UUID REFERENCES message (id) ON DELETE CASCADE,
     ADD COLUMN payload JSONB,
     ADD COLUMN cost INTEGER NOT NULL DEFAULT 0 CHECK (cost >= 0),
-    ADD COLUMN credit BIGINT NOT NULL DEFAULT 0 CHECK (credit >= 0),
     ADD CONSTRAINT held_message_kind_target CHECK ((kind IN ('edit', 'echo')) = (target IS NOT NULL)),
     ADD CONSTRAINT held_message_kind_payload
         CHECK ((kind IN ('command', 'edit', 'poll')) = (payload IS NOT NULL)),

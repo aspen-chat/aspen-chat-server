@@ -241,8 +241,8 @@ A message whose channel is busy when it is released waits for the channel's mana
 
 Posts what waits for one channel's mana as the channel recharges, keyed by the channel (`mana::queue::drain_step`; see [Channel mana](../channel-mana/index.md#draining)). It is saved with the first row to wait there.
 
-- Each step ticks at 5 Hz for ten seconds, then hands the job back with its round-robin pointer as its progress, so its lease renews and any runner may take it up.
-- Each tick drops what has waited two minutes, then spends what the pool earned on the waiting items in turn.
+- Each step ticks at 5 Hz for ten seconds, then hands the job back with the author it drew as its progress, so its lease renews and any runner may take it up.
+- Each tick drops what has waited two minutes, then spends what the pool earned on the highest-priority authors waiting: the higher ranked, then the longer there, then drawn at random.
 - It deletes its own job only while nothing waits there, in one statement, so a row saved as it finishes saves a new job.
 
 ## Plugins

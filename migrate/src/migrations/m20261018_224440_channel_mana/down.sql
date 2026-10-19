@@ -9,7 +9,6 @@ ALTER TABLE held_message
     DROP CONSTRAINT held_message_waiting_kind,
     DROP CONSTRAINT held_message_kind_payload,
     DROP CONSTRAINT held_message_kind_target,
-    DROP COLUMN credit,
     DROP COLUMN cost,
     DROP COLUMN payload,
     DROP COLUMN target,

@@ -652,8 +652,7 @@ impl User {
                 }
                 raid = raids.recv() => {
                     if let Ok(raid) = raid
-                        && this.world.memberships[this.index as usize].contains(&raid.community)
-                        && this.random() < raid.share
+                        && this.raids_in(&raid)
                     {
                         tokio::spawn(Arc::clone(&this).raid(raid));
                     }
@@ -819,6 +818,17 @@ impl User {
             Instant::now(),
         )
         .await;
+    }
+
+    /// Whether the user is among `raid`'s accounts: the newest `share` of its community's members,
+    /// as a raid's accounts join just before it (`Population::tenure_days`).
+    fn raids_in(&self, raid: &Raid) -> bool {
+        let members = &self.world.manifest.communities[raid.community].members;
+        let newest = (raid.share * members.len() as f64).ceil() as usize;
+        members
+            .iter()
+            .position(|member| *member == self.index)
+            .is_some_and(|position| position + newest >= members.len())
     }
 
     /// Floods `raid`'s channel until it ends, as an account joined to raid it does: no typing,

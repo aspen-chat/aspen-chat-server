@@ -74,7 +74,9 @@ A profile has these sections:
   history, `threads_per_channel` messages start a thread of `replies_per_thread` replies (one in
   fifty, and eight, by default) and `tagged_per_channel` tag a member (one in twenty); each
   channel also holds `polls_per_channel` polls (one), about half still open, with
-  `votes_per_poll` votes each (a quarter of the community, at most a thousand). History is
+  `votes_per_poll` votes each (a quarter of the community, at most a thousand).
+  `tenure_days` spreads each community's joins over that many days, the last member joining as
+  the run is seeded (all of them then, by default). History is
   written in words drawn as real chat's are, a few common and many rare, in several scripts, so
   searches find much or little as real ones do.
 - `[load]` — the share of users online, the ramp over which they connect, and the steady phase's
@@ -91,7 +93,7 @@ A profile has these sections:
   for `typing_seconds` (four), telling the channel.
 - `[[events]]` — things that happen at a time into the run: `reconnect_storm` (a share of users drop
   at once), `spike` (rates multiply for a while), `announcement` (the owner of a community,
-  `community` by index, largest first, tags `@everyone` in its first channel), `raid` (a `share`
+  `community` by index, largest first, tags `@everyone` in its first channel), `raid` (the newest `share`
   of a community's members flood its first channel for `seconds`, each sending
   `messages_per_second` messages of about `glyphs` glyphs, 40 by default, with no typing first),
   and `command` (a shell command on the coordinator's machine, such as restarting a service).

@@ -2,7 +2,7 @@ name = "raid"
 description = """
 A raid: a tenth of a 2,000-member community floods its busiest channel for a minute, each raider
 sending a message a second, while everyone else goes on chatting. The channel's mana holds the
-flood back and shares what it lets through fairly by author, so this measures how long everyone
+flood back and serves those of higher rank and longer tenure first, so this measures how long everyone
 else's messages there wait (`delivery:raided`), how many of either side's are held, refused, or
 dropped, and that the rest of the deployment does not notice."""
 
@@ -18,6 +18,8 @@ smallest_community = 2000
 text_channels = 4
 voice_channels = 0
 history_per_channel = 200
+# Members joined over the past month, and the raiders are the newest, as a raid's accounts are.
+tenure_days = 30
 
 # Ordinary chat stays below what the busiest channel recharges (50 mana a second): about 0.3
 # messages a second there, each some 55 glyphs with its marker.

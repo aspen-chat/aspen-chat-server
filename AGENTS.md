@@ -140,7 +140,7 @@ Federation, letting a user of one deployment use others, is built in five phases
    ```
    scripts/check_mana.py --bin target/debug
    ```
-   It spends a channel's mana down, has messages, edits, polls, and echoes wait, and checks that they drain in turn by author, that a viewer is told the level, and that what waits two minutes is dropped (see Channel mana).
+   It spends a channel's mana down, has messages, edits, polls, and echoes wait, and checks that they drain higher ranks first, that a viewer is told the level, and that what waits two minutes is dropped (see Channel mana).
 
 9. Watch the API server's async tasks with [tokio-console](https://github.com/tokio-rs/console), which shows each task's busy and idle time, how often it is woken, and which have waited longest, for finding what a slow request or a stalled stream is waiting on:
    ```
@@ -267,7 +267,7 @@ How each feature works is written up in `docs/architecture/`: one file per featu
 - `docs/architecture/federation/index.md` — every phase of federation: identity and keys, gates and lists, the directory, signing in abroad, protocol versions, DMs across deployments, and standing
 - `docs/architecture/push.md` — waking phones through Web Push
 - `docs/architecture/attachment-previews/index.md` — previews of pictures and videos' posters, how they are made and queued, and messages held for them
-- `docs/architecture/channel-mana/index.md` — channel mana: the budget a busy channel spends as messages are posted, its pools, costs, and settings, the fair queue of what waits for it and its drainer, Bypass channel mana, and the bar viewers see
+- `docs/architecture/channel-mana/index.md` — channel mana: the budget a busy channel spends as messages are posted, its pools, costs, and settings, the queue of what waits for it, by rank and tenure, and its drainer, Bypass channel mana, and the bar viewers see
 - `docs/architecture/email/index.md` — email addresses and their verification, the shown address, password reset by email, the outbox, the daily digest, the newsletter, and unsubscribing
 - `docs/architecture/nats-memory.md` — how large the two in-memory NATS streams are, how that follows the settings and NATS's memory limit, and what the dashboard shows of it
 - `docs/architecture/event-routing/index.md` — event subjects, the event feed and its shards, visibility, `publish_event` scopes, and presence

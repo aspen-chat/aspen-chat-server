@@ -65,6 +65,10 @@ pub struct CommunityPlan {
     /// History messages in each text channel that tag a member.
     #[serde(default)]
     pub tagged_per_channel: u32,
+    /// Over how many days the members joined, the first in `members` earliest and the last now;
+    /// 0, all of them now.
+    #[serde(default)]
+    pub tenure_days: u32,
 }
 
 /// What was seeded.
@@ -179,6 +183,7 @@ mod tests {
                 polls_per_channel: 1,
                 votes_per_poll: 2,
                 tagged_per_channel: 1,
+                tenure_days: 0,
             }],
         }
     }
