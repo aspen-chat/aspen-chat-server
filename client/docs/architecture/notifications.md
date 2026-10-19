@@ -69,6 +69,7 @@ Every sound the app plays is a recording in `src/features/notifications/sounds/`
 - Moving to another call plays only the joining.
 - Who is in a call when it connects is taken as found, silently.
 - `playSound` (`sounds.ts`) plays a sound again only after its `REPEAT_GAP_MS`, so several people joining at once are heard once, and a network failure that drops a call and its deployment together is heard once.
+- `playSound` and `loopSound` play at most `MAX_PLAYING_PER_SOUND` (two) of one sound at once, each sound counted on its own; one asked for past that is not heard, rather than waiting its turn, so a burst of messages cannot queue a run of chimes. A sound gives its place back when it ends, fails, or the browser refuses it, and a loop when it is stopped.
 
 The files are WAV (16-bit PCM, mono, 48 kHz), which every browser and web view the apps run in plays; Ogg Opus would be smaller but Safari before 18.4 cannot play it. `sounds.ts` imports them as `data:` URLs (`import.meta.glob` with `?inline`), since the desktop app's page, loaded from a file, may play no media from its own origin. Each is a chunk of its own, loaded the first time it plays, so none is part of the page's first load. The ringtone and the dial tone loop whole, so each file's length is its cycle: the ringtone 2.4 seconds, the dial tone 1.2 seconds of tone in every 4. To replace a sound, overwrite its file under the same name.
 
