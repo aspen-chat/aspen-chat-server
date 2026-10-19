@@ -119,6 +119,7 @@ pub const TAG_PLUGINS: &str = "plugins";
         message::MessageHolding,
         dm::DmInclude,
         block::BlockInclude,
+        channel::ManaSenderInclude,
         poll::PollInclude,
         poll::PollOption,
         poll::PollVote,
@@ -320,6 +321,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         ))
         .routes(routes!(channel::list_channel_pins))
         .routes(routes!(channel::get_channel_presence))
+        .routes(routes!(channel::list_mana_senders))
         .routes(routes!(
             message::create_message,
             message::list_channel_messages

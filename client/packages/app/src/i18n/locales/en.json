@@ -1379,7 +1379,15 @@
   "mana": {
     "label": "Channel Mana",
     "depleted": "Channel Mana depleted, message priority queue in force",
-    "value": "{percent}% of the channel's room to post"
+    "value": "{percent}% of the channel's room to post",
+    "topSenders": "View top senders",
+    "topSendersHeading": "Top senders in #{channel}",
+    "topSendersHint": "Who spent the most of this channel's mana in the past hour, by the characters and files they posted.",
+    "topSendersLoading": "Loading…",
+    "topSendersNone": "Nobody has spent this channel's mana in the past hour.",
+    "spent": "{mana, number} mana",
+    "unknownSender": "Someone",
+    "ban": "Ban"
   },
   "held": {
     "label": "Messages waiting to send",

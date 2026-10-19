@@ -155,6 +155,16 @@ One job drains a pool while anything waits there: `drainManaQueue`, keyed by the
 - **In the app:** the store keeps the latest level of up to 32 channels (`RecordStore.mana`), and the bar draws the level between frames from `at` and `recharge`, rising steadily at 15 frames a second (`manaDrawnAt`). It shows once the level falls below 60% of `max` (`MANA_SHOW_BELOW`), or while anything is queued, and goes once the pool is full. It is labelled "Channel Mana", or, while anything is queued, "Channel Mana depleted, message priority queue in force". It lies along the top of the typing line, so the conversation never moves for it.
 - **A lost connection** forgets every level; viewing a channel anew is told it again.
 
+## Top senders
+
+Beside the bar's label, "View top senders" opens who spent most of the channel's mana in the past hour (`GET /channels/{channel}/mana/top-senders`, `mana::read_top_senders`).
+
+- **Counted as it is spent:** the pool's script adds each spend to its sender in whole mana, in a sorted set of that minute's (`mana:{channel}:sent:{minute}`), kept 61 minutes. Posting at once, with Bypass, and paying for a waiting row all count; what is refused or dropped spends nothing, so counts nothing. A thread counts its own, as its pool is its own.
+- **Read:** a second script sums the last 60 minutes' sets into `mana:{channel}:top`, kept five seconds, and answers its first 100 (`mana::TOP_SENDERS`), the most first, each with their mana. However many people have the list open, a channel's hour is summed at most every five seconds, and the sum's work grows with how many sent in the hour.
+- **Who sees it:** anyone who may read the channel (`channel_access`); `include=users` sideloads the senders, few of whom a channel's readers may know in a raid. Where the channel has no pool the list is empty, and while Valkey cannot be read it is empty too, as mana that cannot be counted is.
+- **In the app:** `TopSendersDialog` reads it again every five seconds while open. Each sender the caller may ban there (`useMemberModeration`: Ban members, over someone ranked below them, not the owner) has a Ban button, opening the ban dialog set to delete their messages from the past hour.
+- **Rate limit:** 30 a minute for each person (bursts of 10), 600 a minute for each channel.
+
 ## Settings
 
 | Setting | Where | Default | Who changes it |
@@ -181,13 +191,13 @@ Mana cannot be counted, so everything posts as if every pool were full: it fails
 
 ## When access is given or taken away
 
-1. **Who can observe it:** a pool's level, the connections viewing the channel that may read it (as typing, routed by the channel's governing permissions); a waiting row, only its author (user-scoped events, `GET /users/@me/held-messages`); a channel's settings, whoever reads the channel's record.
+1. **Who can observe it:** a pool's level, the connections viewing the channel that may read it (as typing, routed by the channel's governing permissions); who spent it, anyone who may read the channel, by REST alone; a waiting row, only its author (user-scoped events, `GET /users/@me/held-messages`); a channel's settings, whoever reads the channel's record.
 2. **What decides it:** reading the channel for the level, checked by the event feed's routing and, for the first frame, by `channel_access` (`live::for_viewer`); authorship for waiting rows; Manage channels for a channel's settings; Bypass channel mana, read by `channel_access` as each gate decides.
 3. **When the deciding permission is lost:**
    - Leaving, removal, or a ban from a community, leaving a group DM, a ban from the deployment, and deleting an account drop what the person has waiting there at once, by a `dropHeldBy` job saved in the same transaction ([Held messages](../attachment-previews/held-messages.md#when-posting-fails)). They then rank lowest and spend nothing meanwhile.
    - Any other loss of the right to post there (a role or override changed, a role taken or deleted, a move, a category deleted, the channel deleted) is found as the drainer reaches the row, before it pays: dropped unpaid, with `heldMessageFailed`. A row reached only later is checked by the posting itself too, or goes with its author, channel, or target.
    - Losing Bypass affects only what is sent after.
-   - The level stops reaching a connection as it loses the channel, as typing does.
+   - The level stops reaching a connection as it loses the channel, as typing does, and its top senders are refused (`404`) from then on; an open list stops refreshing at its next read.
 4. **When it is gained:** a connection that starts viewing a busy channel is told its level. A new holder of Bypass goes ahead with their next message.
 5. **Every path announces it:** spends publish the level; waiting rows are announced as posted, dropped, or cancelled; a channel's settings go out as `ChannelEvent::Update`, the deployment's through the settings' own announcement.
 6. **Inside the transaction:** a waiting row and its drainer's job are saved in one transaction; posting a waiting row takes it in the posting's transaction. Spending is in Valkey, outside every transaction.

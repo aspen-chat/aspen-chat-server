@@ -10,6 +10,8 @@ export type Attachment = components["schemas"]["Attachment"];
 export type Icon = components["schemas"]["Icon"];
 /** A message held by the server while a preview of one of its attachments is made. */
 export type HeldMessage = components["schemas"]["HeldMessage"];
+/** One of a channel's top senders of the past hour, and the mana they spent there. */
+export type ManaSender = components["schemas"]["ManaSender"];
 
 /**
  * A held message of the caller's as their app shows it until it is posted: waiting, or dropped

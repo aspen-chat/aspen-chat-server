@@ -8,7 +8,7 @@ checks that:
 
 - a message the pool can pay posts at once, and the next waits (`202`), behind anything waiting;
 - a holder of Bypass channel mana posts at once;
-- a viewer of the channel is told its level, maximum, and rate;
+- a viewer of the channel is told its level, maximum, and rate, and can read who spent it;
 - what waits is posted as mana recharges, a member of higher rank before anything of a lower
   one's;
 - an edit that lengthens waits and is then made, and one changing nothing is answered at once;
@@ -112,6 +112,14 @@ def run(stack: Stack) -> None:
     check("anyone else waits behind it", status == 202, status)
     status, _ = post(owner, "owner speaks")
     check("the owner, holding Bypass, posts at once", status == 201, status)
+    # Who spent: one 90-glyph message of the first member's, with its marker-free text, and the
+    # owner's; the second member's waits, so has spent nothing yet.
+    top = stack.api("GET", f"/channels/{channel}/mana/top-senders?include=users", token=m2["token"])
+    spent = {row["user"]: row["mana"] for row in top["data"]}
+    check("the top senders name who spent the channel's mana, and how much",
+          spent.get(m1["id"]) == 90 and spent.get(owner["id"]) == len("owner speaks") and m2["id"] not in spent, spent)
+    check("and sideload them", {u["id"] for u in top["included"].get("users", [])} >= {m1["id"], owner["id"]},
+          top["included"])
     stream.gather(1.0)
     mana_frames = [e for e in stream.ephemeral if e.get("type") == "mana"]
     check("a viewer is told the channel's mana", bool(mana_frames), stream.ephemeral[-3:])

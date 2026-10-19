@@ -42,7 +42,13 @@ import {
 import type { ActivityView } from "./notifyRules";
 import type { OverrideGrant } from "./permissions";
 import { REACTION_SUMMARY_USERS, RecordStore } from "./store";
-import type { HeldMessage, Included, Invocation, NotificationLevel } from "./storeTypes";
+import type {
+  HeldMessage,
+  Included,
+  Invocation,
+  ManaSender,
+  NotificationLevel,
+} from "./storeTypes";
 import { lazyBrowserMedia, pageStorage } from "./platform";
 import { type UploadTarget, describeAttachment, uploadAttachment, uploadIcon } from "./upload";
 import { eventStreamUrl } from "./urls";
@@ -3871,6 +3877,21 @@ export class AspenSync {
         this.#presenceChannels.delete(channelId);
       }
     };
+  }
+
+  /**
+   * Who spent most of `channelId`'s mana in the past hour, the most first, at most 100; the
+   * senders themselves go into the store, since a raid's are mostly unknown to its readers.
+   */
+  async topManaSenders(channelId: string): Promise<ManaSender[]> {
+    const result = await this.#client.api.GET("/api/v1/channels/{channel}/mana/top-senders", {
+      params: { path: { channel: channelId }, query: { include: ["users"] } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ users: result.data.included.users ?? [] });
+    return result.data.data;
   }
 
   async #loadChannelPresence(channelId: string): Promise<void> {

@@ -707,6 +707,12 @@ user = { requests = 30, per_seconds = 600, burst = 10 }
 # The client asks every thirty seconds per device, and again when a page comes into view.
 user = { requests = 30, per_seconds = 60, burst = 10 }
 
+[rate_limits.endpoints."GET /channels/{channel}/mana/top-senders"]
+# The client asks every five seconds while the list is open; a pool's sum is read at most that
+# often however many ask (`mana::top_senders`).
+user = { requests = 30, per_seconds = 60, burst = 10 }
+per_channel = { requests = 600, per_seconds = 60, burst = 200 }
+
 [rate_limits.endpoints."GET /channels/{channel}/presence"]
 # The client asks for the open channel with every presence poll, every thirty seconds per
 # device, and again when the channel changes.

@@ -215,7 +215,9 @@ pub struct Level {
 /// (into debt then), `bypass` always spends. Nothing goes below half the capacity in debt. A pool
 /// is a hash of `level` and `tick` (the tick it is as of, 200 ms each since 1970); one Valkey
 /// does not hold is full, and one that fills again is forgotten, so a quiet channel keeps no
-/// key. Answers whether it spent, the level, and the tick's time in milliseconds.
+/// key. What is spent is added to its sender, `ARGV[5]` (empty for none), in whole mana, in
+/// `KEYS[2]`, this minute's [`sent_key`], kept `ARGV[6]` milliseconds ([`top_senders`]).
+/// Answers whether it spent, the level, and the tick's time in milliseconds.
 const POOL: &str = r"
 local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
@@ -242,6 +244,10 @@ local spent = 0
 if mode == 'bypass' or (mode == 'pay' and (level >= cost or level == max)) then
   level = math.max(level - cost, floor)
   spent = 1
+  if cost > 0 and ARGV[5] ~= '' then
+    redis.call('ZINCRBY', KEYS[2], math.floor(cost / 1000), ARGV[5])
+    redis.call('PEXPIRE', KEYS[2], tonumber(ARGV[6]))
+  end
 end
 if level >= max then
   redis.call('DEL', KEYS[1])
@@ -274,23 +280,116 @@ fn key(channel: ChannelId) -> String {
     format!("mana:{}", channel.0)
 }
 
+/// How far back [`top_senders`] reads: the past hour, a minute at a time.
+pub const SENT_MINUTES: i64 = 60;
+/// How many senders [`top_senders`] answers.
+pub const TOP_SENDERS: usize = 100;
+/// How long one reading of a pool's top senders serves every viewer asking.
+const TOP_SENDERS_CACHED: Duration = Duration::from_secs(5);
+
+/// The set of what each sender spent from `channel`'s pool in `minute` (minutes since 1970).
+fn sent_key(channel: ChannelId, minute: i64) -> String {
+    format!("mana:{}:sent:{minute}", channel.0)
+}
+
+fn this_minute() -> i64 {
+    chrono::Utc::now().timestamp().div_euclid(60)
+}
+
+/// Sums a pool's last [`SENT_MINUTES`] of spending by sender into `KEYS[1]`, kept `ARGV[2]`
+/// milliseconds so viewers asking meanwhile share it, and answers its first `ARGV[1]`, the most
+/// first, each followed by their mana. The sum's work grows with how many sent in the hour,
+/// once each [`TOP_SENDERS_CACHED`] however many ask.
+const TOP: &str = r"
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  local minutes = {}
+  for i = 2, #KEYS do
+    minutes[#minutes + 1] = KEYS[i]
+  end
+  if redis.call('ZUNIONSTORE', KEYS[1], #minutes, unpack(minutes)) > 0 then
+    redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[2]))
+  end
+end
+return redis.call('ZREVRANGE', KEYS[1], 0, tonumber(ARGV[1]) - 1, 'WITHSCORES')
+";
+
+/// Who spent most of `channel`'s mana in the past hour, as [`top_senders`] says, for `viewer`,
+/// who must be able to read the channel (`channel_access`); none where it has no pool.
+pub async fn read_top_senders(
+    state: &GlobalServerContext,
+    viewer: crate::UserId,
+    channel: ChannelId,
+) -> crate::Result<Vec<(crate::UserId, u64)>> {
+    let pool = {
+        let mut conn = state.connection_pool.get().await?;
+        crate::permissions::channel_access(state, conn.as_mut(), viewer, channel).await?;
+        pool_of(state, conn.as_mut(), channel).await?
+    };
+    Ok(match pool {
+        Some(pool) => top_senders(state, &pool).await,
+        None => Vec::new(),
+    })
+}
+
+/// Who spent most of `pool`'s mana in the past hour, the most first, at most [`TOP_SENDERS`],
+/// each with what they spent in whole mana: posting at once, with Bypass, or paid for by the
+/// drainer, never what was refused or dropped. Read fresh at most each
+/// [`TOP_SENDERS_CACHED`]. Empty when Valkey cannot be read, as mana that cannot be counted is
+/// none.
+pub async fn top_senders(state: &GlobalServerContext, pool: &Pool) -> Vec<(crate::UserId, u64)> {
+    let minute = this_minute();
+    let mut keys = vec![format!("mana:{}:top", pool.channel.0)];
+    keys.extend((0..SENT_MINUTES).map(|ago| sent_key(pool.channel, minute - ago)));
+    let read: Result<Vec<String>, fred::error::Error> = state
+        .valkey
+        .eval(
+            TOP,
+            keys,
+            vec![
+                TOP_SENDERS.to_string(),
+                TOP_SENDERS_CACHED.as_millis().to_string(),
+            ],
+        )
+        .await;
+    match read {
+        Ok(read) => read
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter_map(|[user, mana]| {
+                let user = user.parse::<uuid::Uuid>().ok()?;
+                let mana = mana.parse::<f64>().ok()?;
+                Some((crate::UserId(user), mana.max(0.0) as u64))
+            })
+            .collect(),
+        Err(error) => {
+            unavailable(&error);
+            Vec::new()
+        }
+    }
+}
+
 async fn run(
     state: &GlobalServerContext,
     pool: &Pool,
     cost: u32,
     mode: Mode,
+    sender: Option<crate::UserId>,
 ) -> Result<(bool, Level), fred::error::Error> {
     let per_tick = i64::from(pool.settings.recharge) * MILLI * 200 / 1000;
     let (spent, level, at_ms): (i64, i64, i64) = state
         .valkey
         .eval(
             POOL,
-            key(pool.channel),
+            vec![key(pool.channel), sent_key(pool.channel, this_minute())],
             vec![
                 per_tick.to_string(),
                 (i64::from(pool.settings.max) * MILLI).to_string(),
                 (i64::from(cost) * MILLI).to_string(),
                 mode.name().to_string(),
+                sender.map_or(String::new(), |sender| sender.0.to_string()),
+                // A minute's set outlives the hour it is read in by a minute.
+                ((SENT_MINUTES + 1) * 60_000).to_string(),
             ],
         )
         .await?;
@@ -299,7 +398,7 @@ async fn run(
 
 /// The pool's level now, spending nothing; `None` when it cannot be counted.
 pub async fn level(state: &GlobalServerContext, pool: &Pool) -> Option<Level> {
-    match run(state, pool, 0, Mode::Peek).await {
+    match run(state, pool, 0, Mode::Peek, None).await {
         Ok((_, level)) => Some(level),
         Err(error) => {
             unavailable(&error);
@@ -323,6 +422,7 @@ pub async fn decide(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     pool: &Pool,
+    sender: crate::UserId,
     bypass: bool,
     cost: u32,
 ) -> crate::Result<Decision> {
@@ -330,13 +430,13 @@ pub async fn decide(
         return Ok(Decision::Go);
     }
     if bypass {
-        spend(state, pool, cost, Mode::Bypass).await;
+        spend(state, pool, cost, Mode::Bypass, sender).await;
         return Ok(Decision::Go);
     }
     if queue::waiting_in(conn, pool.channel).await? {
         return Ok(Decision::Wait);
     }
-    Ok(match spend(state, pool, cost, Mode::Pay).await {
+    Ok(match spend(state, pool, cost, Mode::Pay, sender).await {
         Some(false) => Decision::Wait,
         Some(true) | None => Decision::Go,
     })
@@ -359,18 +459,31 @@ pub async fn decide_for(
     let bypass = crate::permissions::channel_access(state, conn, author, channel)
         .await?
         .has(crate::permissions::Permissions::BYPASS_CHANNEL_MANA);
-    decide(state, conn, &pool, bypass, cost).await
+    decide(state, conn, &pool, author, bypass, cost).await
 }
 
 /// Pays for a waiting message as the pool's drainer posts it: whether the pool held the cost,
 /// or was full. Mana that cannot be counted pays.
-pub async fn pay_waiting(state: &GlobalServerContext, pool: &Pool, cost: u32) -> bool {
-    spend(state, pool, cost, Mode::Pay).await.unwrap_or(true)
+pub async fn pay_waiting(
+    state: &GlobalServerContext,
+    pool: &Pool,
+    sender: crate::UserId,
+    cost: u32,
+) -> bool {
+    spend(state, pool, cost, Mode::Pay, sender)
+        .await
+        .unwrap_or(true)
 }
 
 /// Spends, telling viewers of the new level; `None` when Valkey cannot count it.
-async fn spend(state: &GlobalServerContext, pool: &Pool, cost: u32, mode: Mode) -> Option<bool> {
-    match run(state, pool, cost, mode).await {
+async fn spend(
+    state: &GlobalServerContext,
+    pool: &Pool,
+    cost: u32,
+    mode: Mode,
+    sender: crate::UserId,
+) -> Option<bool> {
+    match run(state, pool, cost, mode, Some(sender)).await {
         Ok((spent, level)) => {
             if spent {
                 live::changed(state, pool, level).await;

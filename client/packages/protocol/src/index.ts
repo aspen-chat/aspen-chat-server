@@ -104,6 +104,7 @@ export type {
   Attachment,
   HeldEntry,
   HeldMessage,
+  ManaSender,
   ChannelMute,
   CategoryMute,
   MuteInForce,

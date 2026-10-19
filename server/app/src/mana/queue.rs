@@ -581,7 +581,13 @@ async fn tick(
         }
         let paid = match pool {
             Some(pool) => {
-                super::pay_waiting(state, pool, u32::try_from(head.cost.max(0)).unwrap_or(0)).await
+                super::pay_waiting(
+                    state,
+                    pool,
+                    author,
+                    u32::try_from(head.cost.max(0)).unwrap_or(0),
+                )
+                .await
             }
             None => true,
         };

@@ -10,7 +10,7 @@ The message box (`Composer`) is where a user writes and sends messages. This pag
 | Typing line | `TypingIndicator`, `TypingDots`, `typingSentence` |
 | Length counting | `messageLength.ts`, `MessageLengthNote` |
 | Held messages | `HeldMessages.tsx` |
-| Mana bar | `ManaBar.tsx`, `manaAt` (`@aspen/protocol`) |
+| Mana bar | `ManaBar.tsx`, `manaDrawnAt` (`@aspen/protocol`), `TopSendersDialog.tsx` |
 | Drafts | `src/features/messages/drafts.ts` |
 
 ## Layout
@@ -171,6 +171,7 @@ A held message's place (`heldPlace`) is one of:
 - **Levels:** the server tells them at most twice a second while the channel spends, as `mana` ephemeral frames for channels the connection views, and once as it starts viewing a busy one. The store keeps the latest of up to 32 channels (`RecordStore.noteMana`) and forgets them all when the connection is lost (`forgetMana`).
 - **Between levels** it fills steadily as the channel recharges, drawn 15 times a second (`manaDrawnAt`, `MANA_FRAME_MS`) with its width unrounded, with no frames from the server.
 - **Read out** as a meter, its value a percentage.
+- **View top senders**, an accent link beside the label, opens `TopSendersDialog`: who spent most of the channel's mana in the past hour (`AspenSync.topManaSenders`), up to 100, each with the mana they spent, read again every five seconds while open. Each sender the caller may ban (`useMemberModeration`) has a Ban button opening `BanDialog` set to delete their messages from the past hour (`initial`). The dialog stays open if the bar goes.
 
 ## Drafts
 

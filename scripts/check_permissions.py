@@ -1328,6 +1328,8 @@ def channel_mana(world: World, check: Checks) -> None:
     heard.extend(world.stream.gather(0.5))
     spend(hidden)
     check("a member who loses the channel is no longer told its mana", not levels(hidden, 1.5))
+    check("nor may read who spent it",
+          world.stack.status("GET", f"/channels/{hidden}/mana/top-senders", token=world.member["token"]) == 404)
     # Dropped before the pool could pay for it (about six seconds): the drainer checks first.
     gone = dropped(held, 3)
     read = world.as_owner("GET", f"/channels/{hidden}/messages?limit=10")

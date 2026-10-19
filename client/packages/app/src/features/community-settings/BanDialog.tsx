@@ -19,7 +19,7 @@ import { format } from "@/i18n/messages";
 /**
  * Bans a member: a reason they are shown when they try to come back, how long for, and, for a
  * banner who also holds Manage messages, whether their messages from the last hour or day go
- * with them. Done, it says so in a toast and closes.
+ * with them, which `initial` may choose ahead. Done, it says so in a toast and closes.
  */
 export function BanDialog({
   communityId,
@@ -27,19 +27,21 @@ export function BanDialog({
   name,
   isOpen,
   onOpenChange,
+  initial = NEW_BAN,
 }: {
   communityId: string;
   userId: string;
   name: string;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
+  initial?: BanChoice;
 }) {
   const m = useMessages();
   const sync = useSync();
   const community = useCommunity(communityId);
   const access = useAccess(communityId);
   const mayDelete = access?.has("manageMessages") ?? false;
-  const [choice, setChoice] = useState<BanChoice>(NEW_BAN);
+  const [choice, setChoice] = useState<BanChoice>(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
