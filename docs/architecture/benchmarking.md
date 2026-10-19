@@ -29,6 +29,7 @@ A run is plan, seed, run, purge.
 - Every user and community it made is recorded against the run in `benchmark_run`, `benchmark_user`, and `benchmark_community`.
 - Benchmark users are ordinary users named `bench-<run>-<n>` with one shared password.
 - The password is the plan's, or else one drawn at random for the run. `bench seed` prints it and the manifest carries it. The run's record in `benchmark_run` leaves it out.
+- Once it commits, it analyzes the database, so a run that starts at once is planned against statistics of what was seeded rather than of near-empty tables.
 
 ### 3. Run
 
