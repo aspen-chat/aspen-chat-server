@@ -25,6 +25,7 @@ import {
   useBlockedDmPeer,
   useChannel,
   useChannelAccess,
+  useHeldMessages,
   useMe,
   useSync,
   useSystemDmPeer,
@@ -149,6 +150,16 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   );
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A refusal shown here goes once the last of this place's held messages that failed is
+  // dismissed, sent again or let go, so it does not outlive them; adjusted as it renders.
+  const failures = useHeldMessages(draftKey).filter((entry) => entry.failure !== null).length;
+  const [failuresSeen, setFailuresSeen] = useState(failures);
+  if (failures !== failuresSeen) {
+    setFailuresSeen(failures);
+    if (failures === 0 && error !== null) {
+      setError(null);
+    }
+  }
   const fileInput = useRef<HTMLInputElement>(null);
   // Descriptions given while a file was still uploading, by its key, for the upload to give
   // the server once it is done.

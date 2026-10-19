@@ -68,9 +68,9 @@ pub async fn changed(state: &GlobalServerContext, pool: &Pool, level: Level) {
 }
 
 /// The level of `pool` for one viewer starting to view it, when it is below full.
-pub async fn now(state: &GlobalServerContext, pool: &Pool) -> Option<EphemeralEvent> {
+async fn now(state: &GlobalServerContext, pool: &Pool, queued: bool) -> Option<EphemeralEvent> {
     let level = super::level(state, pool).await?;
-    (level.level < i64::from(pool.settings.max) * MILLI).then(|| event(pool, level))
+    (level.level < i64::from(pool.settings.max) * MILLI).then(|| event(pool, level, queued))
 }
 
 /// The level of `channel`'s mana for a connection of `user`'s starting to view it: when it is
@@ -80,14 +80,18 @@ async fn for_viewer(
     user: crate::UserId,
     channel: ChannelId,
 ) -> Option<EphemeralEvent> {
-    let pool = {
+    let (pool, queued) = {
         let mut conn = state.connection_pool.get().await.ok()?;
         crate::permissions::channel_access(state, conn.as_mut(), user, channel)
             .await
             .ok()?;
-        super::pool_of(state, conn.as_mut(), channel).await.ok()??
+        let pool = super::pool_of(state, conn.as_mut(), channel).await.ok()??;
+        let queued = super::queue::waiting_in(conn.as_mut(), channel)
+            .await
+            .ok()?;
+        (pool, queued)
     };
-    now(state, &pool).await
+    now(state, &pool, queued).await
 }
 
 /// One event stream connection's task telling it the mana of the channels it starts to view,
@@ -130,13 +134,14 @@ impl Viewer {
     }
 }
 
-fn event(pool: &Pool, level: Level) -> EphemeralEvent {
+fn event(pool: &Pool, level: Level, queued: bool) -> EphemeralEvent {
     EphemeralEvent::Mana {
         channel_id: pool.channel,
         level: level.level,
         max: pool.settings.max,
         recharge: pool.settings.recharge,
         at: chrono::DateTime::from_timestamp_millis(level.at_ms).unwrap_or_default(),
+        queued,
     }
 }
 
@@ -144,32 +149,32 @@ fn event(pool: &Pool, level: Level) -> EphemeralEvent {
 /// hold one.
 fn tell(state: GlobalServerContext, pool: Pool, level: Level) {
     tokio::spawn(async move {
-        let audience = async {
+        let told = async {
             let mut conn = state.connection_pool.get().await?;
-            Ok::<_, crate::Error>(
-                match channel_home(&state, conn.as_mut(), pool.channel).await? {
-                    ChannelHome::Community {
-                        community,
-                        governing,
-                    } => Audience::Community {
-                        community,
-                        governing,
-                    },
-                    ChannelHome::Direct(dm) => Audience::Direct {
-                        recipients: dm_recipients(conn.as_mut(), dm).await?,
-                    },
+            let queued = super::queue::waiting_in(conn.as_mut(), pool.channel).await?;
+            let audience = match channel_home(&state, conn.as_mut(), pool.channel).await? {
+                ChannelHome::Community {
+                    community,
+                    governing,
+                } => Audience::Community {
+                    community,
+                    governing,
                 },
-            )
+                ChannelHome::Direct(dm) => Audience::Direct {
+                    recipients: dm_recipients(conn.as_mut(), dm).await?,
+                },
+            };
+            Ok::<_, crate::Error>((audience, queued))
         };
-        let audience = match audience.await {
-            Ok(audience) => audience,
+        let (audience, queued) = match told.await {
+            Ok(told) => told,
             Err(e) => {
                 warn!(error = %e, "could not find who views a channel to tell its mana");
                 return;
             }
         };
         let relay = Relay {
-            event: event(&pool, level),
+            event: event(&pool, level, queued),
             audience,
             unseen_by: Vec::new(),
         };

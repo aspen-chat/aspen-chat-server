@@ -148,7 +148,7 @@ A channel whose mana is spent (the server's `docs/architecture/channel-mana/`) h
 - **Cancel:** a row waiting for the channel can be cancelled (`AspenSync.cancelHeld`); `heldMessageCancelled` removes it on every device.
 - **Dropped:** after two minutes, or when its author may no longer post there. A message, an edit, or an echo can be sent again (`canSendHeldAgain`); a poll or a command is written anew.
 - **Gone with its message:** an edit or echo waiting for a message that is deleted goes from the store with it.
-- **Busy:** a channel with too much waiting answers `channelBusy`, which the box shows as any refusal.
+- **Busy:** a channel with too much waiting answers `channelBusy`, which the box shows as any refusal. A refusal shown in the box goes once the last of the place's failed held messages is dismissed, sent again or let go.
 - **Unchanged edits:** the editor closes without sending one (`MessageEditor`), so nothing waits for nothing.
 
 ### Where a held message waits
@@ -166,9 +166,10 @@ A held message's place (`heldPlace`) is one of:
 
 `ManaBar` lies along the top of the typing line, over it rather than taking room, so the conversation never moves when it comes or goes.
 
-- **Shown** once the channel's mana is below 60% of its maximum (`MANA_SHOW_BELOW`), and kept until it is full again, so it does not flicker around the threshold.
+- **Shown** once the channel's mana is below 60% of its maximum (`MANA_SHOW_BELOW`), or while anything waits for it (`queued`), and kept until it is full again, so it does not flicker around the threshold.
+- **Labelled** at the line's end, over whatever of the typing line reaches there: "Channel Mana", or, while anything waits for the channel's mana (the frame's `queued`), "Channel Mana depleted, message priority queue in force", in the danger colour. That includes a long message waiting for the channel to recharge enough for it.
 - **Levels:** the server tells them at most twice a second while the channel spends, as `mana` ephemeral frames for channels the connection views, and once as it starts viewing a busy one. The store keeps the latest of up to 32 channels (`RecordStore.noteMana`) and forgets them all when the connection is lost (`forgetMana`).
-- **Between levels** it fills as the channel recharges, at the server's 200 ms ticks (`manaAt`, `MANA_TICK_MS`), with no frames.
+- **Between levels** it fills steadily as the channel recharges, drawn 15 times a second (`manaDrawnAt`, `MANA_FRAME_MS`) with its width unrounded, with no frames from the server.
 - **Read out** as a meter, its value a percentage.
 
 ## Drafts

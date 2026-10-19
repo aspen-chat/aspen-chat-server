@@ -147,10 +147,11 @@ One job drains a pool while anything waits there: `drainManaQueue`, keyed by the
 
 ## The bar
 
-- **Telling viewers:** a spend publishes the pool's level as a relay on core NATS `aspen.mana` (`live::changed`), routed exactly as typing is (`event_feed::relayed_events`): to connections viewing the channel (`viewing`) that may read it, as an `ephemeral` frame, never replayed. The frame (`EphemeralEvent::Mana`) holds `channelId`, `level` (thousandths, below zero in debt), `max`, `recharge`, and `at`.
+- **Telling viewers:** a spend publishes the pool's level as a relay on core NATS `aspen.mana` (`live::changed`), routed exactly as typing is (`event_feed::relayed_events`): to connections viewing the channel (`viewing`) that may read it, as an `ephemeral` frame, never replayed. The frame (`EphemeralEvent::Mana`) holds `channelId`, `level` (thousandths, below zero in debt), `max`, `recharge`, `at`, and `queued`, whether anything waits there, so its priority queue is in force (read as the frame is told).
 - **Twice a second at most:** the first spend in each half second (`live::EVERY`) sets `mana:{channel}:told` and is told; a server whose spend fell inside the window tells the level as it is when the window ends, so the last spend of a burst always reaches viewers.
+- **Something begins waiting, or the queue empties:** the level is told then too (`queue::tell_level`), since nothing may have been spent, as when a long message waits for the pool to recharge enough to pay for it.
 - **Starting to view:** each event stream connection's task (`live::Viewer`) tells it the level of each channel it starts to view whose pool is below full and that it may read, so a bar already showing appears at once.
-- **In the app:** the store keeps the latest level of up to 32 channels (`RecordStore.mana`), and the bar works out the level between frames from `at` and `recharge` at the server's ticks (`manaAt`). It shows once the level falls below 60% of `max` (`MANA_SHOW_BELOW`), and goes once the pool is full. It lies along the top of the typing line, so the conversation never moves for it.
+- **In the app:** the store keeps the latest level of up to 32 channels (`RecordStore.mana`), and the bar draws the level between frames from `at` and `recharge`, rising steadily at 15 frames a second (`manaDrawnAt`). It shows once the level falls below 60% of `max` (`MANA_SHOW_BELOW`), or while anything is queued, and goes once the pool is full. It is labelled "Channel Mana", or, while anything is queued, "Channel Mana depleted, message priority queue in force". It lies along the top of the typing line, so the conversation never moves for it.
 - **A lost connection** forgets every level; viewing a channel anew is told it again.
 
 ## Settings

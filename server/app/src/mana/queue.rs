@@ -179,6 +179,7 @@ pub async fn wait(state: &GlobalServerContext, waiting: Waiting) -> crate::Resul
         .await?;
     drop(conn);
     jobs::wake(state).await;
+    tell_level(state, held.channel).await?;
     Ok(held)
 }
 
@@ -207,6 +208,23 @@ pub async fn wait_held(
     .await?;
     drop(conn);
     jobs::wake(state).await;
+    tell_level(state, channel).await
+}
+
+/// Tells viewers of `channel` its level and that its priority queue is in force or no longer,
+/// as something begins waiting there or the queue empties: then nothing may have been spent,
+/// as when a long message waits for the pool to recharge enough to pay for it, and spending is
+/// what tells them otherwise.
+async fn tell_level(state: &GlobalServerContext, channel: ChannelId) -> crate::Result<()> {
+    let pool = {
+        let mut conn = state.connection_pool.get().await?;
+        super::pool_of(state, conn.as_mut(), channel).await?
+    };
+    if let Some(pool) = pool
+        && let Some(level) = super::level(state, &pool).await
+    {
+        super::live::changed(state, &pool, level).await;
+    }
     Ok(())
 }
 
@@ -487,6 +505,8 @@ pub async fn drain_step(state: &GlobalServerContext, job: &Claimed) -> crate::Re
             let heads = items(conn.as_mut(), channel).await?;
             if heads.is_empty() {
                 if finish_if_empty(conn.as_mut(), job.id, channel).await? {
+                    drop(conn);
+                    tell_level(state, channel).await?;
                     return Ok(Outcome::Done);
                 }
                 continue;

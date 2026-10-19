@@ -8,6 +8,9 @@
 /** How often a pool earns back mana, as the server ticks. */
 export const MANA_TICK_MS = 200;
 
+/** How often the bar is drawn between levels: 15 frames a second, smoother than the ticks. */
+export const MANA_FRAME_MS = 1000 / 15;
+
 /** Below this share of its maximum the bar shows; it hides again once the pool is full. */
 export const MANA_SHOW_BELOW = 0.6;
 
@@ -19,6 +22,8 @@ export interface ChannelMana {
   recharge: number;
   /** When `level` was so, in milliseconds since 1970. */
   at: number;
+  /** Whether anything waits for the channel's mana: its priority queue is in force. */
+  queued: boolean;
 }
 
 /** The level of `mana` at `now`, in thousandths of mana, as the server's ticks would make it. */
@@ -26,6 +31,16 @@ export function manaAt(mana: ChannelMana, now: number): number {
   const ticks = Math.max(0, Math.floor((now - mana.at) / MANA_TICK_MS));
   const perTick = (mana.recharge * 1000 * MANA_TICK_MS) / 1000;
   return Math.min(mana.max * 1000, mana.level + ticks * perTick);
+}
+
+/**
+ * The level of `mana` at `now` for drawing, in thousandths of mana: rising steadily between
+ * ticks rather than a tick at a time, so the bar moves smoothly. It is never above what the
+ * server's ticks will have made it by the next tick.
+ */
+export function manaDrawnAt(mana: ChannelMana, now: number): number {
+  const elapsed = Math.max(0, now - mana.at);
+  return Math.min(mana.max * 1000, mana.level + mana.recharge * elapsed);
 }
 
 /** When `mana` will be full again, in milliseconds since 1970. */

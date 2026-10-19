@@ -53,7 +53,15 @@ export {
   type DeviceCredentialStore,
   type PuzzleSolver,
 } from "./device";
-export { MANA_SHOW_BELOW, MANA_TICK_MS, manaAt, manaFullAt, type ChannelMana } from "./mana";
+export {
+  MANA_FRAME_MS,
+  MANA_SHOW_BELOW,
+  MANA_TICK_MS,
+  manaAt,
+  manaDrawnAt,
+  manaFullAt,
+  type ChannelMana,
+} from "./mana";
 export { plainFileName } from "./fileNames";
 export {
   ApiProblemError,

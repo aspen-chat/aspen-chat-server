@@ -51,6 +51,10 @@ pub enum EphemeralEvent {
         max: u32,
         recharge: u32,
         at: chrono::DateTime<chrono::Utc>,
+        /// Whether anything waits for the channel's mana, so its priority queue is in force: as
+        /// the frame was told, and told again as the queue empties.
+        #[serde(default)]
+        queued: bool,
     },
 }
 

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { RecordStore, manaAt, manaFullAt, type ChannelMana } from "../src";
+import { RecordStore, manaAt, manaDrawnAt, manaFullAt, type ChannelMana } from "../src";
 
 const at = Date.parse("2026-10-18T12:00:00Z");
 // 100 mana at most, 10 a second: 2,000 thousandths a 200 ms tick; at -10 in debt.
-const busy: ChannelMana = { level: -10_000, max: 100, recharge: 10, at };
+const busy: ChannelMana = { level: -10_000, max: 100, recharge: 10, at, queued: true };
 
 function id(n: number): string {
   return `0190f0a0-0000-7000-8000-${n.toString(16).padStart(12, "0")}`;
@@ -18,6 +18,16 @@ describe("channel mana", () => {
     expect(manaAt(busy, at + 60_000)).toBe(100_000);
     // Before the time told, as a clock running behind reads it, nothing is earned back.
     expect(manaAt(busy, at - 1_000)).toBe(-10_000);
+  });
+
+  it("is drawn rising steadily, never ahead of the next tick", () => {
+    expect(manaDrawnAt(busy, at + 100)).toBe(-9_000);
+    for (const elapsed of [0, 67, 133, 199, 200, 4_321]) {
+      const drawn = manaDrawnAt(busy, at + elapsed);
+      expect(drawn).toBeGreaterThanOrEqual(manaAt(busy, at + elapsed));
+      expect(drawn).toBeLessThanOrEqual(manaAt(busy, at + elapsed + 200));
+    }
+    expect(manaDrawnAt(busy, at + 60_000)).toBe(100_000);
   });
 
   it("knows when it is full again", () => {

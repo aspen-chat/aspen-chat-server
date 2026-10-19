@@ -1377,7 +1377,8 @@
     "open": "Open image in a new tab"
   },
   "mana": {
-    "label": "Channel busy",
+    "label": "Channel Mana",
+    "depleted": "Channel Mana depleted, message priority queue in force",
     "value": "{percent}% of the channel's room to post"
   },
   "held": {

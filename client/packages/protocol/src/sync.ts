@@ -539,6 +539,7 @@ export class AspenSync {
             max: event.max,
             recharge: event.recharge,
             at: Date.parse(event.at),
+            queued: event.queued ?? false,
           });
           return;
         }

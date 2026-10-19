@@ -13,7 +13,8 @@ checks that:
   one's;
 - an edit that lengthens waits and is then made, and one changing nothing is answered at once;
 - a poll waits and is posted, and a thread reply posts while its echo waits in the parent;
-- what waits two minutes is dropped, its author told why;
+- what waits two minutes is dropped, its author told why, and a viewer hears the priority queue
+  come into force and end;
 - a waiting message can be cancelled;
 - past 50 waiting rows, sending is refused with `channelBusy`.
 
@@ -181,15 +182,22 @@ def run(stack: Stack) -> None:
     status, text = stack.request("POST", f"/channels/{slow}/messages", {"content": "y" * 99, "attachments": []},
                                  m2["token"])
     check("a message waits in a slow channel", status == 202, (status, text[:200]))
-    # A stream read throughout, so it answers the server's pings while the message waits.
+    # A stream read throughout, so it answers the server's pings while the message waits; it
+    # views the channel, so it hears the queue come into force and go.
     watching = stack.events(m2["token"])
+    watching.send({"type": "viewing", "channelIds": [slow]})
     got = until("it is dropped", lambda: (watching.gather(0.25), not held(m2))[1], 150)
-    watching.gather(1.0)
+    watching.gather(2.0)
     failures = [e for e in watching.events if e.get("serverEvent") == "heldMessageFailed"]
     check("after two minutes it is dropped", bool(got), held(m2))
     check("and its author told why", bool(failures), "none")
     if failures:
         check("in words", "busy" in failures[-1]["detail"], failures[-1])
+    levels = [e for e in watching.ephemeral if e.get("type") == "mana" and e.get("channelId") == slow]
+    check("a viewer is told the priority queue is in force while a message waits",
+          bool(levels) and levels[0].get("queued") is True, levels[:1])
+    check("and that it is no longer once the queue empties", bool(levels) and levels[-1].get("queued") is False,
+          levels[-1:])
 
     # Cancelling.
     post(owner, "z" * 150)
