@@ -391,10 +391,13 @@ jobs:
           }
           for pair in mac-arm64:arm64 mac:x86_64; do
             app="${pair%%:*}/Aspen.app"
-            lipo -verify_arch "$app/Contents/MacOS/Aspen" "${pair##*:}" \
+            # One architecture a call: Xcode 27's lipo takes no more.
+            lipo "$app/Contents/MacOS/Aspen" -verify_arch "${pair##*:}" \
               || { echo "$app is not built for ${pair##*:}"; exit 1; }
-            lipo -verify_arch "$app/Contents/Resources/aspen-capture" arm64 x86_64 \
-              || { echo "$app's capture helper is not universal"; exit 1; }
+            for arch in arm64 x86_64; do
+              lipo "$app/Contents/Resources/aspen-capture" -verify_arch "$arch" \
+                || { echo "$app's capture helper is not built for $arch"; exit 1; }
+            done
             codesign --verify --deep --strict --verbose=2 "$app"
             for file in "$app" "$app/Contents/Resources/aspen-capture"; do
               signed_by_us "$file"
