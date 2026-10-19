@@ -4,10 +4,10 @@
 # the client typechecks, lints, and passes its tests, its browser tests split across three
 # runners; the desktop app is packaged for Windows, macOS, and as a Flatpak, and the Android and
 # iOS apps are built, the Android APK kept, `main`'s builds for Windows, macOS, and the App
-# Store signed; two deployments federate and wake a stand-in phone over real TLS; the box runs
-# from images built here, and both AWS configurations pass their plan tests; and the servers are
-# built for 64-bit ARM two ways, natively and with the cross-compile script, and each build is
-# started against real services on an ARM machine.
+# Store signed, the dmgs sent for notarization; two deployments federate and wake a stand-in
+# phone over real TLS; the box runs from images built here, and both AWS configurations pass
+# their plan tests; and the servers are built for 64-bit ARM two ways, natively and with the
+# cross-compile script, and each build is started against real services on an ARM machine.
 #
 # The ARM binaries are built against Debian 12 (bookworm, glibc 2.36), so they run on
 # Raspberry Pi OS Bookworm and newer, and with jemalloc built for 64 KiB pages, which also
@@ -306,11 +306,12 @@ jobs:
           name: desktop-macos
           path: client/packages/desktop/release/*.dmg
 
-  # Signed with the Developer ID Application identity and notarized, for `main` alone: the
-  # secrets are in the `apple-signing` environment, which only `main` may use, and whatever is
-  # signed carries the publisher's name.
+  # Signed with the Developer ID Application identity, for `main` alone: the secrets are in the
+  # `apple-signing` environment, which only `main` may use, and whatever is signed carries the
+  # publisher's name. The dmgs are sent to Apple's notary service without waiting for its answer,
+  # which can take days; `notarized-dmg.yml` staples them once Apple accepts them.
   desktop-macos-signed:
-    name: Desktop (macOS) — signed and notarized dmg
+    name: Desktop (macOS) — signed dmg, sent for notarization
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: desktop-macos
     environment: apple-signing
@@ -340,20 +341,43 @@ jobs:
           workspaces: client/packages/desktop/native/capture
       - run: pnpm install --frozen-lockfile
       - run: pnpm codegen
-      - name: The notarization key
-        run: printf '%s' "$APPLE_API_KEY" > "$RUNNER_TEMP/notarization.p8"
-        env:
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      # Without the `APPLE_API_*` variables electron-builder signs the apps and skips notarizing
+      # them, with a warning.
       - run: pnpm --filter @aspen/desktop package:signed
         env:
           CSC_LINK: ${{ secrets.MAC_CERT_P12 }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
-          APPLE_API_KEY: ${{ runner.temp }}/notarization.p8
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      - name: Check each app's architecture, signature, hardened runtime, and notarization ticket
+      # The dmg is what is notarized and stapled, and a ticket is found by its signature, so the
+      # dmg is signed too: here, with a timestamp, which electron-builder's own signing of a dmg
+      # does not ask for.
+      - name: Sign the dmgs
         working-directory: client/packages/desktop/release
         run: |
+          keychain="$RUNNER_TEMP/dmg-signing.keychain-db"
+          password="$(openssl rand -hex 24)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$MAC_CERT_P12" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          for dmg in *.dmg; do
+            codesign --sign 'Developer ID Application: Jacob Kiesel (L2GS25U79G)' --timestamp --keychain "$keychain" "$dmg"
+          done
+          security delete-keychain "$keychain"
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+      - name: Check each app's architecture, signature, and hardened runtime, and each dmg's signature
+        working-directory: client/packages/desktop/release
+        run: |
+          signed_by_us() {
+            details="$(codesign -dvv "$1" 2>&1)"
+            echo "$details" | grep -q '^Authority=Developer ID Application: Jacob Kiesel (L2GS25U79G)$' \
+              || { echo "$1 is not signed with the Developer ID Application identity"; exit 1; }
+            echo "$details" | grep -q '^Timestamp=' || { echo "$1's signature has no timestamp"; exit 1; }
+          }
           for pair in mac-arm64:arm64 mac:x86_64; do
             app="${pair%%:*}/Aspen.app"
             lipo -verify_arch "$app/Contents/MacOS/Aspen" "${pair##*:}" \
@@ -362,19 +386,38 @@ jobs:
               || { echo "$app's capture helper is not universal"; exit 1; }
             codesign --verify --deep --strict --verbose=2 "$app"
             for file in "$app" "$app/Contents/Resources/aspen-capture"; do
-              details="$(codesign -dvv "$file" 2>&1)"
-              echo "$details" | grep -q '^Authority=Developer ID Application: Jacob Kiesel (L2GS25U79G)$' \
-                || { echo "$file is not signed with the Developer ID Application identity"; exit 1; }
-              echo "$details" | grep -q 'flags=.*runtime' || { echo "$file lacks the hardened runtime"; exit 1; }
-              echo "$details" | grep -q '^Timestamp=' || { echo "$file's signature has no timestamp"; exit 1; }
+              signed_by_us "$file"
+              codesign -dvv "$file" 2>&1 | grep -q 'flags=.*runtime' || { echo "$file lacks the hardened runtime"; exit 1; }
             done
-            xcrun stapler validate "$app"
-            spctl --assess --type execute --verbose=2 "$app"
           done
+          for dmg in *.dmg; do
+            codesign --verify --strict --verbose=2 "$dmg"
+            signed_by_us "$dmg"
+          done
+      - name: Send the dmgs to the notary service
+        working-directory: client/packages/desktop/release
+        run: |
+          printf '%s' "$APPLE_API_KEY" > "$RUNNER_TEMP/notarization.p8"
+          echo '[]' > submissions.json
+          for dmg in *.dmg; do
+            id="$(xcrun notarytool submit "$dmg" --key "$RUNNER_TEMP/notarization.p8" \
+              --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --output-format json | jq -r .id)"
+            echo "$dmg: submission $id"
+            jq --arg dmg "$dmg" --arg id "$id" '. + [{dmg: $dmg, id: $id}]' submissions.json > submissions.next
+            mv submissions.next submissions.json
+          done
+          rm "$RUNNER_TEMP/notarization.p8"
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      # `notarized-dmg.yml` finds this by its name.
       - uses: actions/upload-artifact@v7
         with:
-          name: desktop-macos-signed
-          path: client/packages/desktop/release/*.dmg
+          name: desktop-macos-unstapled
+          path: |
+            client/packages/desktop/release/*.dmg
+            client/packages/desktop/release/submissions.json
 
   # The app and its UI tests built for the simulator, unsigned, and the extension's Web Push
   # decryption checked against RFC 8291's example. The UI tests themselves need a deployment

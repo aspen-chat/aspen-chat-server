@@ -1,0 +1,127 @@
+# Staples Apple's notarization ticket to the newest dmgs `main` built, once Apple has accepted
+# them. CI's `desktop-macos-signed` signs the dmgs, sends them to the notary service without
+# waiting, and keeps them with their submissions as the artifact `desktop-macos-unstapled`. The
+# service answers in minutes for a team it knows and can take days for a new one, longer than a
+# job may wait, so this asks every half hour instead.
+#
+# Each CI run's dmgs end in one artifact of this workflow's: `desktop-macos-notarized-<run id>`,
+# the stapled dmgs, or `desktop-macos-notary-refused-<run id>`, the service's logs, with a failed
+# run. Either one ends the asking for that CI run. Only the newest CI run's dmgs are looked at;
+# an older run's still waiting are left once a newer one is built.
+
+name: Notarized dmg
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # To find and download another workflow's artifacts.
+  actions: read
+
+concurrency:
+  group: notarized-dmg
+  cancel-in-progress: false
+
+jobs:
+  pending:
+    name: Find dmgs waiting for notarization
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.find.outputs.run }}
+    steps:
+      - id: find
+        run: |
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=desktop-macos-unstapled&per_page=100" \
+            --jq '[.artifacts[] | select(.expired | not) | select(.workflow_run.head_branch == "main")]
+              | sort_by(.created_at) | last | .workflow_run.id // empty')"
+          if [ -z "$run" ]; then
+            echo "No dmgs from main are kept unstapled."
+            exit 0
+          fi
+          for outcome in desktop-macos-notarized desktop-macos-notary-refused; do
+            if [ "$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$outcome-$run" --jq .total_count)" != 0 ]; then
+              echo "CI run $run's dmgs are done: $outcome-$run."
+              exit 0
+            fi
+          done
+          echo "CI run $run's dmgs wait for notarization."
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  staple:
+    name: Staple the notarized dmgs
+    needs: pending
+    if: needs.pending.outputs.run != ''
+    environment: apple-signing
+    runs-on: macos-26
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: dmgs
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-macos-unstapled
+          path: dmgs
+          run-id: ${{ needs.pending.outputs.run }}
+          github-token: ${{ github.token }}
+      - id: notary
+        name: Ask the notary service about each submission
+        run: |
+          printf '%s' "$APPLE_API_KEY" > "$RUNNER_TEMP/notarization.p8"
+          auth=(--key "$RUNNER_TEMP/notarization.p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER")
+          verdict=accepted
+          mkdir ../logs
+          while read -r dmg id; do
+            status="$(xcrun notarytool info "$id" "${auth[@]}" --output-format json | jq -r .status)"
+            echo "$dmg ($id): $status" | tee -a ../logs/statuses.txt
+            case "$status" in
+              Accepted) ;;
+              "In Progress") if [ "$verdict" = accepted ]; then verdict=waiting; fi ;;
+              *)
+                verdict=refused
+                xcrun notarytool log "$id" "${auth[@]}" "../logs/$dmg.json" || true
+                ;;
+            esac
+          done < <(jq -r '.[] | "\(.dmg) \(.id)"' submissions.json)
+          rm "$RUNNER_TEMP/notarization.p8"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - if: steps.notary.outputs.verdict == 'waiting'
+        run: echo "::notice::CI run ${{ needs.pending.outputs.run }}'s dmgs are still with the notary service."
+      - if: steps.notary.outputs.verdict == 'refused'
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-macos-notary-refused-${{ needs.pending.outputs.run }}
+          path: logs
+      - if: steps.notary.outputs.verdict == 'refused'
+        run: |
+          echo "::error::The notary service refused CI run ${{ needs.pending.outputs.run }}'s dmgs; its logs are this run's artifact."
+          exit 1
+      # Then checks what a Mac checks on opening each: the dmg's ticket, and the app inside it,
+      # whose ticket Gatekeeper fetches from Apple, since only the dmg carries one.
+      - if: steps.notary.outputs.verdict == 'accepted'
+        name: Staple each dmg and check it
+        run: |
+          for dmg in *.dmg; do
+            xcrun stapler staple "$dmg"
+            xcrun stapler validate "$dmg"
+            spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+            mount="$(mktemp -d)"
+            hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$dmg" > /dev/null
+            spctl --assess --type execute --verbose=2 "$mount/Aspen.app"
+            hdiutil detach "$mount" > /dev/null
+          done
+      - if: steps.notary.outputs.verdict == 'accepted'
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-macos-notarized-${{ needs.pending.outputs.run }}
+          path: dmgs/*.dmg

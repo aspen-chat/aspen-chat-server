@@ -17,7 +17,7 @@ win:
     certificateProfileName: AspenChat
 mac:
   # The Developer ID Application identity is the `.p12` in `CSC_LINK` (its password
-  # `CSC_KEY_PASSWORD`), and notarization's App Store Connect API key the `.p8` file
-  # `APPLE_API_KEY` names, with `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`. Without the key
-  # electron-builder skips notarizing with only a warning, so CI checks that the app is stapled.
+  # `CSC_KEY_PASSWORD`). CI gives no notarization key (`APPLE_API_KEY` and the rest), so
+  # electron-builder skips notarizing, with a warning: CI signs each dmg and sends it to the
+  # notary service itself, and `.github/workflows/notarized-dmg.yml` staples it once accepted.
   forceCodeSigning: true
