@@ -566,6 +566,19 @@ async fn tick(
             }
         };
         let head = heads[at].clone();
+        let (author, posted) = (head.author, head.id);
+        // What its author can no longer post would be refused once paid for: it goes unpaid.
+        if held::drop_if_unpostable(state, &head).await? {
+            drawn.author = None;
+            let mut conn = state.connection_pool.get().await?;
+            match oldest(conn.as_mut(), channel, author).await? {
+                Some(row) => heads[at] = row,
+                None => {
+                    heads.swap_remove(at);
+                }
+            }
+            continue;
+        }
         let paid = match pool {
             Some(pool) => {
                 super::pay_waiting(state, pool, u32::try_from(head.cost.max(0)).unwrap_or(0)).await
@@ -575,7 +588,6 @@ async fn tick(
         if !paid {
             return Ok(());
         }
-        let (author, posted) = (head.author, head.id);
         held::post_waiting(state, head).await;
         drawn.author = None;
         let mut conn = state.connection_pool.get().await?;

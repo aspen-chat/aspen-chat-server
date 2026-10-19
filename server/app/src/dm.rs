@@ -451,6 +451,12 @@ pub async fn leave(
                 )
                 .execute(conn.as_mut())
                 .await?;
+            crate::message::held::drop_held_by(
+                conn.as_mut(),
+                caller,
+                crate::message::held::HeldScope::Dm { channel: dm_id },
+            )
+            .await?;
             let remaining = dm_recipients(conn.as_mut(), dm_id).await?;
             publish_recipients(state, conn.as_mut(), dm_id, remaining, Some(caller)).await
         }

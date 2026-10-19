@@ -647,6 +647,8 @@ pub async fn retire(
         }
     }
     crate::login::revoke_all_sessions(state, conn, id).await?;
+    crate::message::held::drop_held_by(conn, id, crate::message::held::HeldScope::Everywhere)
+        .await?;
     crate::two_factor::remove_all(conn, id).await?;
     crate::bot::orphan_bots_of(state, conn, id).await?;
     // Their address and the mail waiting for it go with them.

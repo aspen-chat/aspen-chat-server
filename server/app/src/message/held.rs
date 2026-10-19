@@ -41,6 +41,7 @@ use diesel::prelude::*;
 use diesel::sql_types::{Array, Bool, Nullable, Text, Timestamptz, Uuid as PgUuid};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::time::Duration;
 
@@ -697,6 +698,158 @@ async fn still_held(state: &GlobalServerContext, id: HeldMessageId) -> bool {
     .get_result(conn.as_mut())
     .await
     .unwrap_or(true)
+}
+
+/// Drops `row`, telling its author why, when they can no longer post it where it would go: as
+/// posting would refuse it (`may_post`; an edit, their access to the channel), checked before
+/// the drainer pays for it, so what will be refused spends nothing. Whether it was dropped.
+pub(crate) async fn drop_if_unpostable(
+    state: &GlobalServerContext,
+    row: &HeldMessage,
+) -> crate::Result<bool> {
+    let locale = crate::locale::negotiate(&row.locale);
+    let checked = crate::locale::scope(locale, async {
+        let mut conn = state.connection_pool.get().await?;
+        match row.kind {
+            HeldKind::Edit => {
+                crate::permissions::channel_access(state, conn.as_mut(), row.author, row.channel)
+                    .await
+                    .map(drop)
+            }
+            _ => super::may_post(state, conn.as_mut(), row.author, row.channel)
+                .await
+                .map(drop),
+        }
+    })
+    .await;
+    let Err(error) = checked else {
+        return Ok(false);
+    };
+    let Some(reason) = crate::locale::scope(locale, async { refusal(&error) }).await else {
+        return Err(error);
+    };
+    drop_held(state, row.id, row.author, row.channel, reason).await?;
+    Ok(true)
+}
+
+/// Where someone can no longer post, so what they have held there will never be
+/// (`JobKind::DropHeldBy`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum HeldScope {
+    /// A community's channels and their threads: they left, were removed, or were banned.
+    Community { community: crate::CommunityId },
+    /// A group DM and its threads: they left it.
+    Dm { channel: ChannelId },
+    /// Everywhere: their account was banned from the deployment, or deleted.
+    Everywhere,
+}
+
+impl HeldScope {
+    fn mode(self) -> (&'static str, uuid::Uuid) {
+        match self {
+            HeldScope::Community { community } => ("community", community.0),
+            HeldScope::Dm { channel } => ("dm", channel.0),
+            HeldScope::Everywhere => ("everywhere", uuid::Uuid::nil()),
+        }
+    }
+}
+
+/// What a `dropHeldBy` job drops: whose, and where.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HeldDrop {
+    author: UserId,
+    scope: HeldScope,
+}
+
+/// How many held messages one step of a `dropHeldBy` job drops.
+const DROP_BATCH: i64 = 100;
+
+#[derive(QueryableByName)]
+struct HeldIn {
+    #[diesel(sql_type = PgUuid)]
+    id: HeldMessageId,
+    #[diesel(sql_type = PgUuid)]
+    channel: ChannelId,
+    #[diesel(sql_type = Text)]
+    locale: String,
+}
+
+/// The first `limit` of what `author` has held in `scope`, oldest first, through
+/// `held_message_by_author`: a thread's are in its parent's community or group DM.
+async fn held_in(
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    scope: HeldScope,
+    limit: i64,
+) -> crate::Result<Vec<HeldIn>> {
+    let (mode, place) = scope.mode();
+    Ok(diesel::sql_query(
+        "SELECT h.id, h.channel, h.locale FROM held_message h \
+         JOIN channel c ON c.id = h.channel \
+         LEFT JOIN channel parent ON parent.id = c.parent_channel \
+         WHERE h.author = $1 AND ($3 = 'everywhere' \
+             OR ($3 = 'community' AND COALESCE(c.community, parent.community) = $2) \
+             OR ($3 = 'dm' AND COALESCE(c.parent_channel, c.id) = $2)) \
+         ORDER BY h.held_at, h.id LIMIT $4",
+    )
+    .bind::<PgUuid, _>(author)
+    .bind::<PgUuid, _>(place)
+    .bind::<Text, _>(mode)
+    .bind::<diesel::sql_types::BigInt, _>(limit)
+    .load(conn)
+    .await?)
+}
+
+/// Saves, in the caller's transaction, a job dropping everything `author` has held in `scope`,
+/// waiting for its previews or for its channel's mana, telling them why: they can no longer
+/// post there, so none of it ever will be, and what waits for mana would take up the queue
+/// until then. Saves nothing when they have nothing held there.
+pub async fn drop_held_by(
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    scope: HeldScope,
+) -> crate::Result<()> {
+    if held_in(conn, author, scope, 1).await?.is_empty() {
+        return Ok(());
+    }
+    jobs::enqueue(
+        conn,
+        NewJob::new(
+            JobKind::DropHeldBy,
+            JobClass::Normal,
+            &HeldDrop { author, scope },
+        )?,
+    )
+    .await?;
+    Ok(())
+}
+
+/// One step of a `dropHeldBy` job: drops a batch, each told to its author in the language it
+/// was sent in, and goes on while batches come back full.
+pub async fn drop_held_by_step(
+    state: &GlobalServerContext,
+    job: &Claimed,
+) -> crate::Result<Outcome> {
+    let HeldDrop { author, scope } = job.payload()?;
+    let rows = {
+        let mut conn = state.connection_pool.get().await?;
+        held_in(conn.as_mut(), author, scope, DROP_BATCH).await?
+    };
+    let full = rows.len() as i64 == DROP_BATCH;
+    for row in rows {
+        let reason = crate::locale::scope(crate::locale::negotiate(&row.locale), async {
+            t!("heldNoLongerPermitted")
+        })
+        .await;
+        drop_held(state, row.id, author, row.channel, reason).await?;
+    }
+    Ok(if full {
+        Outcome::Continue
+    } else {
+        Outcome::Done
+    })
 }
 
 /// Drops a held message that will not be posted and tells its author's apps why. When it was the

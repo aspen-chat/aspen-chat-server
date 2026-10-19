@@ -705,6 +705,12 @@ pub async fn end_membership(
                 )
                 .await?;
                 crate::role::delete_bot_role(state, conn, community, user).await?;
+                crate::message::held::drop_held_by(
+                    conn,
+                    user,
+                    crate::message::held::HeldScope::Community { community },
+                )
+                .await?;
             }
             Ok(())
         }

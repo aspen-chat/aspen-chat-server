@@ -40,7 +40,8 @@ A preview finished after the hold ran out reaches the message's readers by `atta
 | --- | --- |
 | Can no longer be posted (the author lost the right to post there, was removed, or the channel went) | Dropped. `heldMessageFailed` tells the author's apps why, in the language it was sent in. |
 | Fails for a reason that may pass | Tried again every thirty seconds, ten times (`held::MAX_ATTEMPTS`), and dropped as above on the last. |
-| Author's account or channel deleted | Dropped when it would be posted, since posting is checked then. |
+| Author left, was removed, or was banned from the community, left the group DM, or was banned from the deployment or deleted their account | Dropped at once, everything they held there (in a community, its channels and threads; on a deployment ban or deletion, everywhere): the change saves a `dropHeldBy` job in its transaction (`held::drop_held_by`), which drops it a hundred at a time, each told why (`heldNoLongerPermitted`). |
+| Channel deleted | Dropped when it would be posted, since posting is checked then. |
 
 The row goes with its user or channel only when those rows themselves are removed.
 

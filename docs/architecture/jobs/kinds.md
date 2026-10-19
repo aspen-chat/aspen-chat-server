@@ -245,6 +245,12 @@ Posts what waits for one channel's mana as the channel recharges, keyed by the c
 - Each tick drops what has waited two minutes, then spends what the pool earned on the highest-priority authors waiting: the higher ranked, then the longer there, then drawn at random.
 - It deletes its own job only while nothing waits there, in one statement, so a row saved as it finishes saves a new job.
 
+### `dropHeldBy`
+
+Drops everything someone has held where they can no longer post (`message::held::drop_held_by_step`; see [Held messages](../attachment-previews/held-messages.md#when-posting-fails)). Saved, in the change's transaction, by ending a community membership (`community::end_membership`: leaving, removal, a ban), leaving a group DM, a ban from the deployment (the person and their bots), and deleting an account, and only when they have something held there.
+
+- Each step drops a hundred, oldest first, each told to its author in the language it was sent in, and goes on while steps come back full.
+
 ## Plugins
 
 See [Plugins](../plugins/index.md).

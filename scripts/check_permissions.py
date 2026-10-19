@@ -1307,9 +1307,10 @@ def channel_mana(world: World, check: Checks) -> None:
                                            {"content": "waiting my turn", "attachments": []}, world.member["token"])
         return json.loads(text).get("id") if status == 202 else None
 
-    def dropped(held: str | None) -> bool:
+    def dropped(held: str | None, seconds: float = 20) -> bool:
         return held is not None and soon(
-            lambda: heard.extend(world.stream.gather(0.25)) or bool(of(heard, "heldMessageFailed", held=held)), 20)
+            lambda: heard.extend(world.stream.gather(0.25)) or bool(of(heard, "heldMessageFailed", held=held)),
+            seconds)
 
     view(busy, hidden)
     world.stream.gather(0.3)
@@ -1324,10 +1325,11 @@ def channel_mana(world: World, check: Checks) -> None:
     held = wait_in(hidden)
     check("what the member sends to a busy channel waits", held is not None)
     world.as_owner("PUT", f"/channels/{hidden}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
-    world.stream.gather(0.5)
+    heard.extend(world.stream.gather(0.5))
     spend(hidden)
     check("a member who loses the channel is no longer told its mana", not levels(hidden, 1.5))
-    gone = dropped(held)
+    # Dropped before the pool could pay for it (about six seconds): the drainer checks first.
+    gone = dropped(held, 3)
     read = world.as_owner("GET", f"/channels/{hidden}/messages?limit=10")
     posted = [m["content"] for m in (read["data"] if isinstance(read, dict) else read)]
     check("and what they had waiting there is dropped, not posted", gone and "waiting my turn" not in posted)
@@ -1335,7 +1337,8 @@ def channel_mana(world: World, check: Checks) -> None:
     spend(busy)
     held = wait_in(busy)
     world.as_owner("DELETE", f"/communities/{world.community}/members/{world.member['id']}")
-    check("a member removed while their message waits has it dropped", dropped(held))
+    # At once, by the job their removal saves, not when the drainer reaches it.
+    check("a member removed while their message waits has it dropped at once", dropped(held, 3))
     world.stream.gather(0.5)
     spend(busy)
     check("and is no longer told the channel's mana", not levels(busy, 1.5))
