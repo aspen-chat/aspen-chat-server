@@ -362,9 +362,20 @@ jobs:
           security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
           rm "$RUNNER_TEMP/developer-id.p12"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          # On the search list, as electron-builder puts its own: off it, codesign finds no valid
+          # identity in the keychain.
+          searched="$(security list-keychains -d user | tr -d '"')"
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "$keychain" $searched
+          security find-identity -v -p codesigning "$keychain"
+          identity="$(security find-identity -v -p codesigning "$keychain" \
+            | sed -n 's/.*) \([0-9A-F]\{40\}\) "Developer ID Application: Jacob Kiesel (L2GS25U79G)"$/\1/p')"
+          [ -n "$identity" ] || { echo "The .p12 holds no valid Developer ID Application identity"; exit 1; }
           for dmg in *.dmg; do
-            codesign --sign 'Developer ID Application: Jacob Kiesel (L2GS25U79G)' --timestamp --keychain "$keychain" "$dmg"
+            codesign --sign "$identity" --timestamp --keychain "$keychain" "$dmg"
           done
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s $searched
           security delete-keychain "$keychain"
         env:
           MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
