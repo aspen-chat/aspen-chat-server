@@ -7,3 +7,8 @@ allowBuilds:
   esbuild: true
   # Windows-only installer tooling pulled in by electron-builder; nothing to build elsewhere.
   electron-winstaller: false
+
+# Security releases taken before the release-age wait ends. 44.9.1 distrusts the
+# compromised eMudhra intermediates (https://emudhra.we-have-a-problem.com/).
+minimumReleaseAgeExclude:
+  - electron@44.9.1
