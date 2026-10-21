@@ -12,14 +12,24 @@
 # configuration: each reads `aspen.toml` or `voice_server.toml` from its working directory,
 # /etc/aspen, and `ASPEN_` variables from its environment.
 
+# The oldest ca-certificates either stage may hold: Debian 12's first that no longer trusts the
+# roots the compromised eMudhra intermediates chain to (https://emudhra.we-have-a-problem.com/,
+# https://bugs.debian.org/1151413). The build stage fetches toolchains and crates over TLS, and
+# the runtime stage's trust store is what OpenSSL checks PostgreSQL's certificate against. A
+# layer cached from before the package changed fails the build rather than ship.
+ARG MIN_CA_CERTIFICATES=20250419~deb12u2
+
 # Debian 12, as the ARM build in CI: its glibc and OpenSSL 3 are what the runtime stages have.
 # One stage builds the servers and the web client, because the web client's build needs both
 # toolchains: its attributions page lists the servers' crates, which it asks cargo for.
 FROM debian:bookworm AS build
+ARG MIN_CA_CERTIFICATES
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git build-essential \
         pkg-config libssl-dev libpq-dev python3 python3-pip python3-venv \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg --compare-versions "$(dpkg-query -Wf '${Version}' ca-certificates)" \
+        ge "$MIN_CA_CERTIFICATES"
 COPY --from=node:22-bookworm-slim /usr/local /usr/local
 ENV PATH=/root/.cargo/bin:$PATH
 WORKDIR /src
@@ -60,10 +70,13 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     && cp -r packages/app/dist /out/web
 
 FROM debian:bookworm-slim AS runtime
+ARG MIN_CA_CERTIFICATES
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libssl3 zlib1g libbrotli1 libzstd1 \
         curl \
     && rm -rf /var/lib/apt/lists/* \
+    && dpkg --compare-versions "$(dpkg-query -Wf '${Version}' ca-certificates)" \
+        ge "$MIN_CA_CERTIFICATES" \
     && useradd --system --uid 10001 --home-dir /etc/aspen --shell /usr/sbin/nologin aspen \
     && install -d -o aspen -g aspen -m 0700 /etc/aspen
 WORKDIR /etc/aspen
