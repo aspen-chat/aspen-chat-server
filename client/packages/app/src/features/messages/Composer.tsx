@@ -1,4 +1,4 @@
-import { ApiProblemError, type Attachment } from "@aspen/protocol";
+import { ApiProblemError, type Attachment, type Reply } from "@aspen/protocol";
 import {
   ChartBarIcon,
   FileIcon,
@@ -43,7 +43,8 @@ import { secondaryButtonClass } from "@/features/invites/dialog";
 import { displayNameOf } from "@/features/users/profile";
 import { measurePicture } from "@/features/media/measurePicture";
 import { noteDraft, readDraft, writeDraft } from "@/features/messages/drafts";
-import { useMentionTarget } from "@/features/mentions/composerMentions";
+import { useComposerTarget } from "@/features/messages/composerTargets";
+import { ReplyBar } from "@/features/messages/ReplyBar";
 import { mediaUrl } from "@/features/layout/safeUrl";
 import { MESSAGE_MAX_CHARS, messageLength } from "@/features/messages/messageLength";
 import { MessageLengthNote } from "@/features/messages/MessageLengthNote";
@@ -85,7 +86,9 @@ const toolButtonClass =
 
 /**
  * The message box. Enter sends, Shift+Enter breaks a line. Files chosen with the attach button
- * upload at once and are sent with the next message; a message may be files alone. In a thread,
+ * upload at once and are sent with the next message; a message may be files alone. A message's
+ * Reply makes the next message a reply to it (`replyIn`), shown in a bar over the box
+ * (`ReplyBar`) until it is sent, cancelled, or Escape is pressed in the box. In a thread,
  * `echoTarget` names the parent channel and a checkbox offers to show the reply there too; it
  * clears after each message. Only what the caller may do here is offered: without sending (or,
  * in a thread, sending in threads) the box gives way to a note saying so, in a DM with
@@ -129,6 +132,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   const [saved] = useState(() => (me === null ? null : readDraft(me.id, draftKey)));
   const [draft, setDraft] = useState(saved?.text ?? "");
   const [echo, setEcho] = useState(saved?.echo ?? false);
+  const [reply, setReply] = useState<Reply | null>(saved?.reply ?? null);
   const [pending, setPending] = useState<Pending[]>(() =>
     (saved?.attachments ?? []).map((attachment) => ({
       key: nextKey++,
@@ -148,6 +152,9 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   // the server once it is done.
   const describedEarly = useRef(new Map<number, string>());
   const channel = useChannel(channelId);
+  // A thread's people are named as in the community of the channel it is in.
+  const parentChannel = useChannel(channel?.parentChannel ?? "");
+  const community = (channel?.parentChannel != null ? parentChannel : channel)?.community ?? null;
   const permissions = useChannelAccess(channelId);
   const starting = startsThreadOf !== undefined;
   const mayPost =
@@ -168,10 +175,26 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   });
   const emoji = useEmojiCompletion({ channelId, draft, setDraft, off: commands.active });
   const box = useRef<HTMLTextAreaElement>(null);
-  // A user's Mention, from their menu, puts their tag here and the reader's focus with it.
-  useMentionTarget(channelId, mayPost && !starting, (tag) => {
-    tagging.insert(tag, box.current);
-    box.current?.focus();
+  // The reader's focus goes to the box after the render that starts the reply, by when a menu
+  // the Reply was chosen from has closed and given focus back where it was.
+  const [replyAsked, setReplyAsked] = useState(0);
+  useEffect(() => {
+    if (replyAsked > 0) {
+      box.current?.focus();
+    }
+  }, [replyAsked]);
+  // A user's Mention, from their menu, puts their tag here and the reader's focus with it, and
+  // a message's Reply makes what is written here a reply to it, tagging its author unless the
+  // reader turns that off.
+  useComposerTarget(channelId, mayPost && !starting, {
+    insert: (tag) => {
+      tagging.insert(tag, box.current);
+      box.current?.focus();
+    },
+    reply: (messageId) => {
+      setReply({ to: messageId, tag: true });
+      setReplyAsked((asked) => asked + 1);
+    },
   });
 
   // The draft is noted as it changes, kept a moment after, and kept at once when the box goes
@@ -187,6 +210,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
       picks: tagging.picks,
       attachments: pending.flatMap((p) => (p.state.kind === "ready" ? [p.state.attachment] : [])),
       echo,
+      ...(reply === null ? {} : { reply }),
     };
     noteDraft(me.id, draftKey, current);
     keep.current = () => {
@@ -198,7 +222,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     return () => {
       clearTimeout(timer);
     };
-  }, [draft, pending, echo, tagging.picks]);
+  }, [draft, pending, echo, reply, tagging.picks]);
   useEffect(() => {
     const flush = () => keep.current?.();
     window.addEventListener("pagehide", flush);
@@ -387,7 +411,10 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
         setError(prepared.reason);
         return;
       }
-      const options = { echoToParent: echoTarget !== undefined && echo };
+      const options = {
+        echoToParent: echoTarget !== undefined && echo,
+        ...(reply === null ? {} : { reply }),
+      };
       if (prepared.kind === "command") {
         // A command is checked against the channel it is invoked in, so a thread not made yet
         // is made for it first.
@@ -415,6 +442,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
       }
       setPending([]);
       setEcho(false);
+      setReply(null);
     } catch (e) {
       setError(e instanceof ApiProblemError ? e.message : String(e));
     } finally {
@@ -424,6 +452,11 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (commands.onKeyDown(event) || tagging.onKeyDown(event) || emoji.onKeyDown(event)) {
+      return;
+    }
+    if (event.key === "Escape" && reply !== null) {
+      event.preventDefault();
+      setReply(null);
       return;
     }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !touchOnly) {
@@ -452,6 +485,20 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
       className="flex flex-col gap-2 border-t border-line px-4 py-3"
     >
       <HeldMessages place={draftKey} />
+      {reply !== null && (
+        <ReplyBar
+          reply={reply}
+          community={community}
+          mayTag={permissions.has("mentionMembers")}
+          onTag={(tag) => {
+            setReply({ ...reply, tag });
+          }}
+          onCancel={() => {
+            setReply(null);
+            box.current?.focus();
+          }}
+        />
+      )}
       {error !== null && (
         <p role="alert" className="text-sm text-danger">
           {error}

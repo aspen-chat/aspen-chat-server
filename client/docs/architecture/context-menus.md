@@ -20,7 +20,7 @@ here are in [context-menus-design-notes.md](context-menus-design-notes.md).
 | A category | `CategoryMenu` (`src/features/channels`) |
 | A community on the rail | `CommunityMenu` (`src/features/communities`) |
 | A listed message (saved, activity, pins) | `ListedMessageMenu` in `ListedMessage`, `EntryMenu` in `ActivityScreen` |
-| Mention, from a person's menu | `useMentionTarget`, `mentionIn` (`src/features/mentions/composerMentions.ts`), `useTagging`'s `insert` |
+| Mention, from a person's menu, and a message's Reply | `useComposerTarget`, `mentionIn`, `replyIn` (`src/features/messages/composerTargets.ts`), `useTagging`'s `insert` |
 
 ## Opening one
 

@@ -30,6 +30,26 @@ pub struct Requested {
     pub everyone: bool,
 }
 
+impl Requested {
+    /// Asks to tag `user` too, first, as a reply asks for the author of what it answers
+    /// (`app::message::reply`), keeping to [`MAX_TAGS`] by leaving out the last role asked for,
+    /// or with none the last person.
+    pub fn with_user(mut self, user: UserId) -> Requested {
+        if self.users.contains(&user.0) {
+            return self;
+        }
+        if self.users.len() + self.roles.len() >= MAX_TAGS {
+            if self.roles.is_empty() {
+                self.users.pop();
+            } else {
+                self.roles.pop();
+            }
+        }
+        self.users.insert(0, user.0);
+        self
+    }
+}
+
 /// Finds the tags in `content` wherever it is text as a message renders it (`app::markdown`),
 /// never in code of any kind, each kept once in the order first written, at most [`MAX_TAGS`]
 /// people and roles together.
@@ -263,6 +283,23 @@ mod tests {
         assert_eq!(found.users, vec![id(A)]);
         assert_eq!(found.roles, vec![id(B)]);
         assert!(found.everyone);
+    }
+
+    #[test]
+    fn a_reply_tags_its_original_author_first_within_the_limit() {
+        let author = UserId(id(A));
+        let tagged = parse(&format!("<@{B}>")).with_user(author);
+        assert_eq!(tagged.users, vec![id(A), id(B)]);
+        assert_eq!(
+            parse(&format!("<@{A}>")).with_user(author).users,
+            vec![id(A)]
+        );
+        let many: String = (0..MAX_TAGS)
+            .map(|_| format!("<@&{}> ", Uuid::now_v7()))
+            .collect();
+        let full = parse(&many).with_user(author);
+        assert_eq!(full.users, vec![id(A)]);
+        assert_eq!(full.roles.len(), MAX_TAGS - 1);
     }
 
     #[test]

@@ -62,9 +62,9 @@ pub enum MessageInclude {
     /// The channels the messages were posted in, as `included.channels`: what a search's
     /// results need to say where each was said, threads among them.
     Channels,
-    /// What the caller finds at the messages the messages link to, as `included.linkedMessages`,
-    /// with those they may read as `included.messages`. Their authors and attachments come
-    /// with the messages' own when those are asked for.
+    /// What the caller finds at the messages the messages link to and reply to, as
+    /// `included.linkedMessages`, with those they may read as `included.messages`. Their authors
+    /// and attachments come with the messages' own when those are asked for.
     Linked,
     /// The messages the messages that are warnings are about, deleted or not, as
     /// `included.warnedMessages`; only the people of a warning's DM read it. Their authors and
@@ -127,7 +127,7 @@ pub(crate) async fn sideload_messages(
             if include.contains(MessageInclude::Linked) {
                 let links: Vec<MessageId> = messages
                     .iter()
-                    .flat_map(|m| m.linked_messages.iter().copied())
+                    .flat_map(|m| m.linked_messages.iter().copied().chain(m.reply_to))
                     .collect();
                 app::message_link::read_linked(state, caller, &links)
                     .await
@@ -527,6 +527,11 @@ pub struct HeldMessage {
     pub content: String,
     pub attachments: Vec<AttachmentId>,
     pub echo_to_parent: bool,
+    /// The message it replies to, which it is posted replying to.
+    pub reply_to: Option<MessageId>,
+    /// Whether it tags the author of `replyTo`; absent from a deployment that predates replies.
+    #[schema(required = false)]
+    pub tag_replied: bool,
     pub held_at: DateTime<Utc>,
 }
 
@@ -538,6 +543,8 @@ impl From<app::message::held::HeldMessage> for HeldMessage {
             content: held.content,
             attachments: held.attachments,
             echo_to_parent: held.echo_to_parent,
+            reply_to: held.reply_to,
+            tag_replied: held.tags_replied,
             held_at: held.held_at,
         }
     }
@@ -552,7 +559,7 @@ impl From<app::message::held::HeldMessage> for HeldMessage {
     responses(
         (status = CREATED, body = Message, headers(("Location" = String, description = "URL of the new message"))),
         (status = ACCEPTED, description = "Held, when `mayHold` was given, while a preview of one of its attachments is being made; it is posted later", body = HeldMessage),
-        (status = BAD_REQUEST, description = "`badRequest` or `validation` (the text is over `app::message::MAX_CONTENT_CHARS` characters, an attachment is not ready, or `echoToParent` outside a thread)", body = Problem),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (the text is over `app::message::MAX_CONTENT_CHARS` characters, an attachment is not ready, `echoToParent` outside a thread, or `replyTo` names a message deleted or not in this channel)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, description = "No such channel, or a DM the caller is not in", body = Problem),
@@ -582,7 +589,7 @@ pub async fn create_message(
     responses(
         (status = CREATED, body = Message, headers(("Location" = String, description = "URL of the new message"))),
         (status = ACCEPTED, description = "Held, when `mayHold` was given, while a preview of one of its attachments is being made; it is posted later, and the thread is made now", body = HeldMessage),
-        (status = BAD_REQUEST, description = "`badRequest` or `validation` (the text is over `app::message::MAX_CONTENT_CHARS` characters, an attachment is not ready, or the message is in a thread, is an echo, or is in a voice channel)", body = Problem),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (the text is over `app::message::MAX_CONTENT_CHARS` characters, an attachment is not ready, the message is in a thread, is an echo, or is in a voice channel, or `replyTo` names a message deleted or not in the thread, which holds none before its first reply)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, description = "No such message, or one in a DM the caller is not in", body = Problem),
@@ -618,6 +625,7 @@ async fn post(
         request.content,
         request.attachments.clone(),
         request.echo_to_parent.unwrap_or(false),
+        app::message::reply::Reply::requested(request.reply_to, request.tag_replied),
         request.may_hold.unwrap_or(false),
     )
     .await?;

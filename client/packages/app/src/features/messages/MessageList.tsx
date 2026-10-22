@@ -1,5 +1,13 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   useBlockedUsers,
   useChannel,
@@ -17,7 +25,8 @@ import { useHistoryPaging } from "@/features/messages/historyPaging";
 import { JumpToLatest } from "@/features/messages/JumpToLatest";
 import { MessageRows, MessageRowsContext, moveBetweenRows } from "@/features/messages/messageRows";
 import { KeepStillContext } from "@/features/messages/keepStill";
-import { channelLink, type ChannelHome } from "@/features/messages/links";
+import { JumpToMessageContext } from "@/features/messages/jumpToMessage";
+import { channelLink, messageLink, type ChannelHome } from "@/features/messages/links";
 import { OWNS_SCROLLING, useListPosition, useListScroller } from "@/features/messages/listScroller";
 import { MessageItem } from "@/features/messages/MessageItem";
 import { HistorySkeleton } from "@/features/messages/MessageSkeleton";
@@ -59,7 +68,9 @@ import { useMessages } from "@/i18n/context";
  * A linked message is scrolled to the middle of the view once, as soon as it is in the window,
  * even when a window around it had to be read first; staying at the bottom gives way to it.
  * The first scroll the user makes afterwards drops the message from the URL, so the link is
- * shareable but does not keep pulling the view back.
+ * shareable but does not keep pulling the view back. A message jumped to from within the list
+ * (`JumpToMessageContext`, as a reply's line jumps to what it answers) is brought into view and
+ * flashed the same way.
  *
  * In a channel that keeps a read position (any but a thread), the newest message on screen
  * counts as read while the page is visible and has focus. A channel opened with something
@@ -172,8 +183,38 @@ export function MessageList({
     window,
     held,
   });
+  // A message jumped to from within the list, as from a reply's line, flashed and held in view
+  // as a linked one is until the reader moves on.
+  const [jumped, setJumped] = useState<string | undefined>(undefined);
+  const highlight = highlightId ?? jumped;
+  const shownIds = useRef(ids);
+  useLayoutEffect(() => {
+    shownIds.current = ids;
+  });
+  // In the window already, it is shown where it is. Otherwise a channel's history opens around
+  // it by its route, as a link to it does, and a thread's, which has no route for a message,
+  // is read around it here. A message of another channel, as a thread's starter answers, is
+  // opened by its route.
+  const jumpTo = useCallback(
+    (target: string, messageId: string) => {
+      if (target === channelId && shownIds.current?.includes(messageId) === true) {
+        setJumped(messageId);
+      } else if (target !== channelId || parentId === null) {
+        void navigate(messageLink(home, target, messageId));
+      } else {
+        sync.loadAround(channelId, messageId).then(
+          () => {
+            setJumped(messageId);
+          },
+          () => undefined,
+        );
+      }
+    },
+    [channelId, parentId, home, navigate, sync],
+  );
   /** Drops a linked message from the URL, once the reader has moved on from it. */
   function dropLink() {
+    setJumped(undefined);
     if (highlightId !== undefined) {
       void navigate({ ...channelLink(home, channelId), replace: true });
     }
@@ -181,7 +222,7 @@ export function MessageList({
   useListPosition(scroller, {
     loaded: window !== undefined,
     atLatest,
-    highlightId,
+    highlightId: highlight,
     firstId: ids?.[0],
     lastId,
     events: {
@@ -270,82 +311,84 @@ export function MessageList({
           : "relative min-h-0 flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none]"
       }
     >
-      <KeepStillContext.Provider value={scroller.settle}>
-        <div
-          ref={content}
-          onKeyDown={(event) => {
-            const heading = moveBetweenRows(event.currentTarget, event);
-            if (heading !== null) {
-              scroller.focusMoved(heading);
+      <JumpToMessageContext.Provider value={jumpTo}>
+        <KeepStillContext.Provider value={scroller.settle}>
+          <div
+            ref={content}
+            onKeyDown={(event) => {
+              const heading = moveBetweenRows(event.currentTarget, event);
+              if (heading !== null) {
+                scroller.focusMoved(heading);
+              }
+            }}
+            className={
+              "message-text flex min-h-full flex-col gap-1 px-4 py-3" +
+              (fromTop ? "" : " justify-end")
             }
-          }}
-          className={
-            "message-text flex min-h-full flex-col gap-1 px-4 py-3" +
-            (fromTop ? "" : " justify-end")
-          }
-        >
-          <MessageRowsContext.Provider value={messageRows}>
-            {window.hasOlder ? (
-              <LoadingEdge loading={loadingOlder} />
-            ) : start !== undefined ? (
-              <div ref={startBox}>{start}</div>
-            ) : (
-              <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
-            )}
-            {empty !== undefined &&
-              !window.hasOlder &&
-              window.atLatest &&
-              window.ids.length === 0 &&
-              departing.length === 0 &&
-              empty}
-            <div ref={rows} className="flex flex-col gap-1">
-              {lineIndex === -1 && <NewMessagesLine />}
-              {leaving(null)}
-              {parts.map((part) => {
-                const item = (id: string, next?: string) => (
-                  <MessageItem
-                    id={id}
-                    home={home}
-                    channelId={channelId}
-                    parentId={parentId}
-                    highlighted={id === highlightId}
-                    grouped={continuing.has(id)}
-                    continued={next !== undefined && continuing.has(next)}
-                  />
-                );
-                if (part.kind === "message") {
-                  const next = ids?.[part.index + 1];
+          >
+            <MessageRowsContext.Provider value={messageRows}>
+              {window.hasOlder ? (
+                <LoadingEdge loading={loadingOlder} />
+              ) : start !== undefined ? (
+                <div ref={startBox}>{start}</div>
+              ) : (
+                <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
+              )}
+              {empty !== undefined &&
+                !window.hasOlder &&
+                window.atLatest &&
+                window.ids.length === 0 &&
+                departing.length === 0 &&
+                empty}
+              <div ref={rows} className="flex flex-col gap-1">
+                {lineIndex === -1 && <NewMessagesLine />}
+                {leaving(null)}
+                {parts.map((part) => {
+                  const item = (id: string, next?: string) => (
+                    <MessageItem
+                      id={id}
+                      home={home}
+                      channelId={channelId}
+                      parentId={parentId}
+                      highlighted={id === highlight}
+                      grouped={continuing.has(id)}
+                      continued={next !== undefined && continuing.has(next)}
+                    />
+                  );
+                  if (part.kind === "message") {
+                    const next = ids?.[part.index + 1];
+                    return (
+                      <Fragment key={part.id}>
+                        {item(part.id, next)}
+                        {leaving(part.id)}
+                        {part.index === lineIndex && <NewMessagesLine />}
+                      </Fragment>
+                    );
+                  }
+                  const lineOffset =
+                    lineIndex !== null &&
+                    lineIndex >= part.index &&
+                    lineIndex < part.index + part.ids.length
+                      ? lineIndex - part.index
+                      : null;
                   return (
-                    <Fragment key={part.id}>
-                      {item(part.id, next)}
-                      {leaving(part.id)}
-                      {part.index === lineIndex && <NewMessagesLine />}
+                    <Fragment key={part.ids[0]}>
+                      <BlockedRun
+                        ids={part.ids}
+                        lineOffset={lineOffset}
+                        highlightId={highlight}
+                        item={item}
+                      />
+                      {part.ids.flatMap((id) => leaving(id))}
                     </Fragment>
                   );
-                }
-                const lineOffset =
-                  lineIndex !== null &&
-                  lineIndex >= part.index &&
-                  lineIndex < part.index + part.ids.length
-                    ? lineIndex - part.index
-                    : null;
-                return (
-                  <Fragment key={part.ids[0]}>
-                    <BlockedRun
-                      ids={part.ids}
-                      lineOffset={lineOffset}
-                      highlightId={highlightId}
-                      item={item}
-                    />
-                    {part.ids.flatMap((id) => leaving(id))}
-                  </Fragment>
-                );
-              })}
-            </div>
-            {!window.atLatest && <LoadingEdge loading={loadingNewer} />}
-          </MessageRowsContext.Provider>
-        </div>
-      </KeepStillContext.Provider>
+                })}
+              </div>
+              {!window.atLatest && <LoadingEdge loading={loadingNewer} />}
+            </MessageRowsContext.Provider>
+          </div>
+        </KeepStillContext.Provider>
+      </JumpToMessageContext.Provider>
       {OWNS_SCROLLING && (
         <div
           ref={indicator}

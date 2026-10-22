@@ -41,6 +41,7 @@ export function MessageActionSheet({
   canReact,
   isOpen,
   onOpenChange,
+  onClosed,
   onMore,
   children,
 }: {
@@ -52,12 +53,20 @@ export function MessageActionSheet({
   canReact: boolean;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Called once the sheet has gone, for an action that puts focus elsewhere. */
+  onClosed: () => void;
   onMore: () => void;
   children: ReactNode;
 }) {
   const m = useMessages();
   return (
-    <Drawer edge="bottom" isOpen={isOpen} onOpenChange={onOpenChange} title={m.messageActionsLabel}>
+    <Drawer
+      edge="bottom"
+      isOpen={isOpen}
+      onOpenChange={onOpenChange}
+      onClosed={onClosed}
+      title={m.messageActionsLabel}
+    >
       <div className="min-h-0 overflow-y-auto overscroll-contain pb-2">
         {canReact && (
           <QuickReactions

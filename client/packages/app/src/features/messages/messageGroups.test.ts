@@ -92,7 +92,12 @@ describe("estimateHeight", () => {
     poll: false,
     reactions: false,
     thread: false,
+    reply: false,
   };
+
+  it("counts the line above a reply", () => {
+    expect(estimateHeight({ ...empty, content: "x", reply: true }, metrics)).toBe(8 + 24 + 22);
+  });
 
   it("wraps text at the column's width, line by line", () => {
     // Fifty narrow characters fit a line; a hundred and one take three.

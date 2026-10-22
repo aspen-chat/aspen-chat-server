@@ -755,6 +755,23 @@
     "dmBlocked": "You blocked {name}. Unblock them to message each other again.",
     "blockedInCall": "Blocked: silenced and hidden for you."
   },
+  "replies": {
+    "reply": "Reply",
+    "replyingTo": "Replying to",
+    "replyingToName": "Replying to {name}",
+    "tagAuthor": "Tag {name}",
+    "tagOn": "On",
+    "tagOff": "Off",
+    "cancel": "Cancel reply",
+    "targetDeleted": "The message you're replying to was deleted.",
+    "deleted": "Original message was deleted",
+    "unavailable": "The original message can't be shown",
+    "loading": "Loading the message this replies to",
+    "spoiler": "[spoiler]",
+    "attachment": "Attachment",
+    "poll": "Poll",
+    "openOriginal": "Open the original message"
+  },
   "threads": {
     "replyInThread": "Reply in thread",
     "heading": "Thread",

@@ -205,6 +205,7 @@ export {
   type SyncStatus,
   type BotTransfer,
   type MessageHolding,
+  type Reply,
   type Sent,
   type MessageSearch,
   type SearchPage,

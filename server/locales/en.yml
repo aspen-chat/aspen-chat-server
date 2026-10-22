@@ -120,6 +120,8 @@ threadFromEcho: "An echo cannot start a thread; open the thread of the reply it 
 threadInThread: "A message in a thread cannot start a thread of its own."
 threadNotHere: "Threads can only be started from messages in text channels and DMs."
 echoOutsideThread: "Only a reply in a thread can also be shown in the channel it came from."
+replyElsewhere: "You can only reply to a message in the same channel or thread. Open the place the message is in and reply there."
+replyTargetDeleted: "The message you're replying to was deleted. Remove the reply and send your message on its own."
 echoNotEditable: "An echo shows its reply's text; edit the reply instead."
 echoOthersMessage: "Only a reply's author can show it in the channel it came from."
 echoKind: "Only a written reply can be shown in the channel it came from; a poll shows itself in its thread."

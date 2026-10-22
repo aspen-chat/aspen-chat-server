@@ -3,7 +3,7 @@
  * and time, the rest under it with none of them. A message continues the group before it
  * when it is by the same author, on the same day, within `GROUP_SPAN_MS` of the group's first
  * message, nothing stands between them (`breakBefore`: the New Messages line, a run of blocked
- * messages), neither stands alone (notices, calls, closed polls, thread echoes, commands,
+ * messages, the line above a reply showing what it answers), neither stands alone (notices, calls, closed polls, thread echoes, commands,
  * warnings), and the group's estimated height with it stays within the most it may take.
  *
  * Heights are estimated from what the messages hold (`estimateHeight`), never measured, so a
@@ -122,6 +122,8 @@ export interface MessageContents {
   readonly poll: boolean;
   readonly reactions: boolean;
   readonly thread: boolean;
+  /** Whether it is a reply, with a line above it showing what it answers. */
+  readonly reply: boolean;
 }
 
 /** The tallest a picture is drawn inline (`max-h-80`). */
@@ -133,6 +135,8 @@ const CARD_PX = 110;
 const POLL_PX = 220;
 /** A row of reaction chips, or a thread's summary. */
 const STRIP_PX = 32;
+/** The line above a reply (`ReplyLine`). */
+const REPLY_PX = 22;
 /** The padding and gap around a message in a group. */
 const ROW_PX = 8;
 
@@ -162,6 +166,9 @@ export function estimateHeight(contents: MessageContents, metrics: TextMetrics):
   }
   if (contents.thread) {
     height += STRIP_PX;
+  }
+  if (contents.reply) {
+    height += REPLY_PX;
   }
   return height;
 }

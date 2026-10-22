@@ -380,6 +380,8 @@ diesel::table! {
         echo_to_parent -> Bool,
         locale -> Text,
         held_at -> Timestamptz,
+        reply_to -> Nullable<Uuid>,
+        tags_replied -> Bool,
     }
 }
 
@@ -461,6 +463,8 @@ diesel::table! {
         card -> Nullable<Jsonb>,
         echo -> Nullable<Uuid>,
         home_channel -> Uuid,
+        reply_to -> Nullable<Uuid>,
+        tags_replied -> Bool,
     }
 }
 
