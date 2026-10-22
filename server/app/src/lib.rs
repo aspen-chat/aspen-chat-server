@@ -37,6 +37,7 @@ pub mod context;
 pub mod custom_emoji;
 pub mod database_latency;
 pub mod deep_search;
+pub mod default_channel;
 pub mod deployment;
 pub mod deployment_role;
 pub mod deployment_settings;

@@ -912,7 +912,8 @@ pub async fn update_message(
     }
     // Only text its author wrote is theirs to edit. An echo shows its reply's content; a
     // command was sent as it stands, and its bot has already answered it; the other kinds
-    // record what Aspen keeps (a poll, a call, a warning) and have no text of their author's.
+    // record what Aspen keeps (a poll, a call, a warning, a join) and have no text of their
+    // author's.
     match kind {
         MessageKind::Standard => {}
         MessageKind::ThreadEcho => return Err(crate::Error::Validation(t!("echoNotEditable"))),
@@ -921,7 +922,8 @@ pub async fn update_message(
         | MessageKind::PollClosed
         | MessageKind::Call
         | MessageKind::MissedCall
-        | MessageKind::Warning => {
+        | MessageKind::Warning
+        | MessageKind::MemberJoined => {
             return Err(crate::Error::Validation(t!("messageNotEditable")));
         }
     }

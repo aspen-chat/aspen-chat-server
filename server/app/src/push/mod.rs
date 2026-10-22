@@ -730,9 +730,9 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> crate::R
     let Some(found) = found.filter(|found| found.deleted_at.is_none()) else {
         return Ok(());
     };
-    // An echo and a poll's result say nothing of their own, a call's record follows the ring
-    // that already told everyone of the call, and a command is for its bot, whose answer is
-    // what tells.
+    // An echo, a poll's result, and a join say nothing of their own, a call's record follows
+    // the ring that already told everyone of the call, and a command is for its bot, whose
+    // answer is what tells.
     if matches!(
         found.kind,
         MessageKind::ThreadEcho
@@ -740,6 +740,7 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> crate::R
             | MessageKind::Call
             | MessageKind::MissedCall
             | MessageKind::Command
+            | MessageKind::MemberJoined
     ) {
         return Ok(());
     }

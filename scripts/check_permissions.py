@@ -1837,7 +1837,8 @@ def ban_deletions(world: World, check: Checks) -> None:
     in_hidden, in_shown = said(hidden), said(shown)
     banned = stack.api("PUT", f"/communities/{world.community}/bans/{target['id']}",
                        {"deleteMessagesSeconds": 3600}, member["token"])
-    check("the ban says how many of their messages go", banned.get("deletedMessages") == 1, banned)
+    # Their message where the banner may view it, and the message announcing they joined.
+    check("the ban says how many of their messages go", banned.get("deletedMessages") == 2, banned)
     # The deletion is a job (`app::jobs`), done once the ban commits.
     check("the message where the banner may view is deleted, shortly after", eventually(
         lambda: stack.status("GET", f"/messages/{in_shown}", token=world.owner["token"]) == 404))
@@ -2752,6 +2753,58 @@ def plugin_removal(world: World, check: Checks) -> None:
         and psql(f"SELECT count(*) FROM plugin_storage WHERE plugin = '{CALENDAR_ID}'", stack.database) == "0"))
 
 
+def join_messages(world: World, check: Checks) -> None:
+    say("join messages in a community's default channel, which may be hidden, changed, or deleted")
+    stack, member = world.stack, world.member
+
+    def joins(channel: str) -> list[str]:
+        """Who the join messages in `channel` name, as its owner reads them."""
+        read = stack.api("GET", f"/channels/{channel}/messages", token=world.owner["token"])
+        return [m["author"] for m in read["data"] if m["kind"] == "memberJoined"]
+
+    def default() -> str | None:
+        return world.as_owner("GET", f"/communities/{world.community}")["data"].get("defaultChannel")
+
+    def newcomer(name: str) -> dict:
+        joining = world.account(name)
+        code = world.as_owner("POST", f"/communities/{world.community}/invites", {})["code"]
+        stack.api("PUT", f"/communities/{world.community}/members/@me", {"inviteCode": code}, joining["token"])
+        return joining
+
+    general = default()
+    check("a new community's first text channel is its default", general is not None)
+    check("where the member's joining was told, and its creator's was not",
+          joins(general) == [member["id"]], joins(general))
+    hidden = world.channel("door", overrides=[{"role": world.everyone, "allow": [], "deny": ["viewChannel"]}])
+    check("a member without Manage community cannot choose another",
+          stack.status("PATCH", f"/communities/{world.community}", {"defaultChannel": general}, member["token"]) == 403)
+    managers = world.role("Managers", ["manageCommunity"])
+    world.give(managers)
+    world.stream.gather(0.5)
+    check("one with it cannot choose a channel they cannot see",
+          stack.status("PATCH", f"/communities/{world.community}", {"defaultChannel": hidden}, member["token"]) == 404)
+    voice = world.channel("hall", ty="voice")
+    check("nor a voice channel",
+          stack.status("PATCH", f"/communities/{world.community}", {"defaultChannel": voice}, member["token"]) == 400)
+    check("nor none",
+          stack.status("PATCH", f"/communities/{world.community}", {"defaultChannel": None}, member["token"]) == 400)
+    world.as_owner("PATCH", f"/communities/{world.community}", {"defaultChannel": hidden})
+    check("the owner's choice of a hidden channel reaches the member as its id alone",
+          bool(of(world.stream.gather(1.0), "community", id=world.community, defaultChannel=hidden)))
+    first = newcomer("first")
+    got = world.stream.gather(1.0)
+    check("a join posted in a channel the member cannot see does not reach them",
+          not [e for e in of(got, "message") if e.get("kind") == "memberJoined"])
+    check("but is there for those who can", joins(hidden) == [first["id"]], joins(hidden))
+    world.as_owner("DELETE", f"/channels/{hidden}")
+    got = world.stream.gather(1.0)
+    check("deleting the default channel names the next one everyone can see, oldest first",
+          bool(of(got, "community", id=world.community, defaultChannel=general)) and default() == general)
+    stack.api("PATCH", f"/communities/{world.community}", {"suppressJoinMessages": True}, member["token"])
+    newcomer("second")
+    check("with join messages turned off, a join posts none", joins(general) == [member["id"]], joins(general))
+
+
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, calls, attachments,
@@ -2759,7 +2812,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
-             marking_unread]
+             marking_unread, join_messages]
 
 
 def main() -> None:

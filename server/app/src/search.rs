@@ -354,6 +354,7 @@ fn bound<'a>(
             MessageKind::PollClosed,
             MessageKind::Call,
             MessageKind::MissedCall,
+            MessageKind::MemberJoined,
         ])
         .bind::<Nullable<Text>, _>(text)
         .bind::<Nullable<PgUuid>, _>(sought.author)

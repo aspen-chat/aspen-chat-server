@@ -119,3 +119,4 @@ pub mod m20261011_053939_mention_recent;
 pub mod m20261012_043722_stream_sizes;
 pub mod m20261012_162005_database_latency;
 pub mod m20261017_052909_category_mutes_and_notifications;
+pub mod m20261022_232808_join_messages;

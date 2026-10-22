@@ -199,6 +199,13 @@ pub async fn seed(
                         _ => voice_channels.push(*channel_id),
                     }
                 }
+                // Its first text channel is its default, as a community's is when it is made.
+                if let Some(first) = <[Uuid]>::first(&text_channels) {
+                    diesel::update(community::table.filter(community::id.eq(id)))
+                        .set(community::default_channel.eq(first))
+                        .execute(conn)
+                        .await?;
+                }
                 let mut threads = Vec::new();
                 let mut open_polls = Vec::new();
                 for channel_id in &text_channels {

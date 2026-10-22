@@ -471,6 +471,16 @@ enum MessageEnumSource {
         // community from before owners were recorded, until the terminal names one.
         #[message_gen(server_authoritative = "mutable")]
         owner: Option<UserId>,
+        // The text channel new members are shown first and their join messages are posted in
+        // (`app::default_channel`). Only a holder of Manage community changes it, to a text
+        // channel of the community they may view; a new community starts with its first text
+        // channel, and when it is deleted the server picks another and announces it. `None`
+        // while the community has no text channel; a create request may not name one.
+        #[message_gen(default)]
+        default_channel: Option<ChannelId>,
+        // Whether to post no message when someone joins.
+        #[message_gen(default)]
+        suppress_join_messages: bool,
     },
     /// A community's own emoji: a named picture used in its messages as `<:id>` and as a
     /// reaction. Changed only by holders of Manage custom emoji; a rename is announced as its
@@ -801,6 +811,8 @@ mod tests {
             name: None,
             icon: Some(None),
             owner: None,
+            default_channel: None,
+            suppress_join_messages: None,
         });
         assert_eq!(
             serde_json::to_value(e).unwrap(),

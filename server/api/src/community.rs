@@ -363,10 +363,10 @@ pub async fn get_community(
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = message_enum::Community),
-        (status = BAD_REQUEST, body = Problem),
+        (status = BAD_REQUEST, description = "`validation`: a name blank or too long, or a default channel that is not one of the community's text channels", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing", body = Problem),
-        (status = NOT_FOUND, body = Problem),
+        (status = NOT_FOUND, description = "Not a member, or a default channel the caller may not view", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]

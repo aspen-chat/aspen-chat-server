@@ -771,6 +771,7 @@ pub async fn add_to_community(
                 let mut membership =
                     crate::community::add_member(state, conn.as_mut(), bot, community, &roles)
                         .await?;
+                crate::default_channel::announce_join(state, conn.as_mut(), bot, community).await?;
                 // The list position is the bot's own business.
                 membership.sort_index = None;
                 Ok((membership, true))

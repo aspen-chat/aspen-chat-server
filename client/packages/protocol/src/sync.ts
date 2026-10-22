@@ -129,7 +129,7 @@ const LISTED_INCLUDES = [
 ] as const;
 
 type Icon = components["schemas"]["Icon"];
-type CommunityUpdateRequest = components["schemas"]["CommunityUpdateRequest"];
+export type CommunityUpdateRequest = components["schemas"]["CommunityUpdateRequest"];
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"];
 type Role = components["schemas"]["Role"];
 type Permission = components["schemas"]["Permission"];

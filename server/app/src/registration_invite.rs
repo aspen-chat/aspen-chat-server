@@ -401,6 +401,7 @@ pub async fn join_invited(
         return Ok(None);
     }
     crate::community::add_member(state, conn, user, community, &[]).await?;
+    crate::default_channel::announce_join(state, conn, user, community).await?;
     Ok(Some(community))
 }
 

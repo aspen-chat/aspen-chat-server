@@ -8,7 +8,8 @@ import { primaryButtonClass } from "@/features/auth/styles";
 import { Avatar } from "@/features/communities/Avatar";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
-import { useDomain, communityLink, inviteLink } from "@/features/messages/links";
+import { landingChannel } from "@/features/channels/landing";
+import { useDomain, channelLink, communityLink, inviteLink } from "@/features/messages/links";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 type Lookup =
@@ -82,7 +83,17 @@ export function InviteScreen() {
     setJoinError(null);
     try {
       await sync.joinCommunity(communityId, code);
-      await navigate({ ...communityLink(domain, communityId), replace: true });
+      // Straight to the channel it opens at, where their join message is, on every screen.
+      const landing = landingChannel(
+        sync.store.community(communityId),
+        sync.store.channels(communityId),
+      );
+      await navigate({
+        ...(landing === undefined
+          ? communityLink(domain, communityId)
+          : channelLink({ domain, community: communityId }, landing.id)),
+        replace: true,
+      });
     } catch (e) {
       setJoinError(e instanceof ApiProblemError ? e.message : String(e));
     } finally {

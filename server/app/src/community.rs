@@ -34,6 +34,9 @@ pub struct Community {
     /// Who holds every permission and alone may delete or hand on the community; `None` until
     /// a deployment operator names one for a community made before owners existed.
     pub owner: Option<UserId>,
+    /// See `app::default_channel`.
+    pub default_channel: Option<ChannelId>,
+    pub suppress_join_messages: bool,
 }
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
@@ -156,13 +159,18 @@ fn community_name(name: &str) -> crate::Result<String> {
 }
 
 /// Makes a community owned by `user`, with the default roles (the creator holding Admin too, so
-/// they keep it should they hand the community on) and a first text and voice channel.
+/// they keep it should they hand the community on) and a first text and voice channel, the text
+/// channel its default. Its creator is not announced as joining it.
 pub async fn create_community(
     state: GlobalServerContext,
     user: UserId,
     command: &CommunityCreateRequest,
 ) -> Result<Community, crate::Error> {
     let name = community_name(&command.name)?;
+    // It has no channel yet to name; its first text channel becomes its default.
+    if command.default_channel.is_some() {
+        return Err(crate::Error::Validation(t!("defaultChannelNotText")));
+    }
     let mut conn = state.connection_pool.get().await?;
     let state = &state;
     conn.transaction(|conn| {
@@ -170,12 +178,14 @@ pub async fn create_community(
             if let Some(icon) = command.icon {
                 crate::icon::require_own(conn.as_mut(), user, icon, t!("iconMissing")).await?;
             }
-            let community = Community {
+            let mut community = Community {
                 id: CommunityId::new(),
                 icon: command.icon.map(MaybeLoaded::NotLoaded),
                 name,
                 deleted_at: None,
                 owner: Some(user),
+                default_channel: None,
+                suppress_join_messages: command.suppress_join_messages,
             };
             diesel::insert_into(community::table)
                 .values(community.clone())
@@ -196,7 +206,11 @@ pub async fn create_community(
                     parent_category: None,
                     plugin_type: None,
                 };
-                crate::channel::insert_channel(state, conn.as_mut(), new, &[]).await?;
+                let channel =
+                    crate::channel::insert_channel(state, conn.as_mut(), new, &[]).await?;
+                if ty == ChannelType::Text {
+                    community.default_channel = Some(channel.id);
+                }
             }
             Ok(community)
         }
@@ -211,6 +225,8 @@ pub async fn create_community(
 pub struct CommunityChangeset {
     pub name: Option<String>,
     pub icon: Option<Option<IconId>>,
+    pub default_channel: Option<Option<ChannelId>>,
+    pub suppress_join_messages: Option<bool>,
 }
 
 pub async fn update_community(
@@ -220,13 +236,21 @@ pub async fn update_community(
     mut command: CommunityUpdateRequest,
 ) -> crate::error::Result<Community> {
     command.name = command.name.as_deref().map(community_name).transpose()?;
+    // A community with a text channel always has a default; another may be chosen, but none
+    // may be cleared.
+    if command.default_channel == Some(None) {
+        return Err(crate::Error::Validation(t!("defaultChannelNotText")));
+    }
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
             let access = require_member(conn.as_mut(), caller, id).await?;
             // A deployment moderator may rename a community, and do nothing else to it here.
             if !access.has(Permissions::MANAGE_COMMUNITY) {
-                if !(access.moderator && command.icon.is_none()) {
+                let rename_only = command.icon.is_none()
+                    && command.default_channel.is_none()
+                    && command.suppress_join_messages.is_none();
+                if !(access.moderator && rename_only) {
                     return Err(missing(Permissions::MANAGE_COMMUNITY));
                 }
                 log_moderation(
@@ -251,10 +275,17 @@ pub async fn update_community(
                         .await?;
                 }
             }
+            // Only a channel the caller may view, so none is named that they cannot see.
+            if let Some(Some(channel)) = command.default_channel {
+                crate::permissions::channel_access(state, conn.as_mut(), caller, channel).await?;
+                crate::default_channel::check_candidate(conn.as_mut(), id, channel).await?;
+            }
             let Some(community) = diesel::update(community::table)
                 .set(CommunityChangeset {
                     name: command.name.clone(),
                     icon: command.icon,
+                    default_channel: command.default_channel,
+                    suppress_join_messages: command.suppress_join_messages,
                 })
                 .filter(community::id.eq(id).and(community::deleted_at.is_null()))
                 .returning(Community::as_select())
@@ -274,6 +305,8 @@ pub async fn update_community(
                     name: command.name,
                     icon: command.icon,
                     owner: None,
+                    default_channel: command.default_channel,
+                    suppress_join_messages: command.suppress_join_messages,
                 }),
             )
             .await?;
@@ -391,7 +424,9 @@ pub async fn join_community(
                     return Err(crate::Error::Validation(t!("inviteCodeCommunityMismatch")));
                 }
                 ensure_room_for_another(state, conn, user).await?;
-                add_member(state, conn, user, community, &[]).await
+                let membership = add_member(state, conn, user, community, &[]).await?;
+                crate::default_channel::announce_join(state, conn, user, community).await?;
+                Ok(membership)
             }
             .scope_boxed()
         })
@@ -1086,6 +1121,8 @@ impl From<Community> for aspen_wire::message_enum::Community {
             name: c.name,
             icon: c.icon.map(|i| *i.id()),
             owner: c.owner,
+            default_channel: c.default_channel,
+            suppress_join_messages: c.suppress_join_messages,
         }
     }
 }

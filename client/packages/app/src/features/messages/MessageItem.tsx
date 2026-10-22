@@ -40,6 +40,7 @@ import { MessageBody, SavedMark } from "@/features/messages/MessageBody";
 import { MessageAnnotations } from "@/features/plugins/Annotations";
 import { MessageEditor } from "@/features/messages/MessageEditor";
 import { CallNotice, MissedCallNotice } from "@/features/messages/CallNotice";
+import { JoinNotice } from "@/features/messages/JoinNotice";
 import { PollClosedNotice } from "@/features/messages/PollClosedNotice";
 import {
   ReactionChips,
@@ -286,6 +287,7 @@ export const MessageItem = memo(function MessageItem({
     message.kind !== "pollClosed" &&
     message.kind !== "call" &&
     message.kind !== "missedCall" &&
+    message.kind !== "memberJoined" &&
     (message.thread != null || permissions.has("startThreads"));
   // A thread not made yet opens empty, and its first reply makes it.
   const openThread = () => {
@@ -299,13 +301,14 @@ export const MessageItem = memo(function MessageItem({
   // manage messages here.
   const own = me !== null && me.id === message.author;
   const deletable = own || permissions.has("manageMessages");
-  // The system account's notices and a call's record are no one's to report.
+  // The system account's notices, a call's record, and a join are no one's to report.
   const reportable =
     me !== null &&
     !own &&
     author?.system !== true &&
     message.kind !== "call" &&
-    message.kind !== "missedCall";
+    message.kind !== "missedCall" &&
+    message.kind !== "memberJoined";
   // A poll message has no text of its own; its card is edited by voting, not by rewriting.
   // Rewriting puts new words in it, which takes what posting here takes; deleting it does not.
   const editable =
@@ -330,6 +333,13 @@ export const MessageItem = memo(function MessageItem({
         ) : (
           <MissedCallNotice caller={message.author} />
         )}
+      </NoticeRow>
+    );
+  }
+  if (message.kind === "memberJoined") {
+    return (
+      <NoticeRow id={id} arriving={arriving} highlighted={highlighted}>
+        <JoinNotice member={message.author} />
       </NoticeRow>
     );
   }

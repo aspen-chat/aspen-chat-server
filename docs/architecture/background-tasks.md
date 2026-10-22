@@ -67,6 +67,7 @@ Messages have a `kind`:
 | `thread_echo` | See [Threads and DMs](threads-and-dms/index.md) |
 | `call`, `missed_call` | See [Threads and DMs](threads-and-dms/index.md) |
 | `command` | Text its bot has already answered |
+| `member_joined` | Announces its author joining the community. See [Default channels and join messages](joining.md) |
 
 Only a `standard` message can be edited, and only by its author (`app::message::update_message`). The other kinds hold no text of their author's, or, for a command, text its bot has already answered.
 

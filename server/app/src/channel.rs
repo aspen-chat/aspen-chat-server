@@ -229,6 +229,9 @@ pub async fn insert_channel(
         departed: None,
     };
     crate::publish_event(state, conn, scope, &event).await?;
+    if ty == ChannelType::Text {
+        crate::default_channel::channel_created(state, conn, community, channel.id).await?;
+    }
     Ok(channel)
 }
 
@@ -650,6 +653,7 @@ pub async fn delete_channel(
                 &ServerEvent::Channel(ChannelEvent::Delete { id }),
             )
             .await?;
+            crate::default_channel::channel_deleted(state, conn.as_mut(), community, id).await?;
             Ok(())
         }
         .scope_boxed()

@@ -444,6 +444,7 @@ pub async fn read_activity(
             MessageKind::Call,
             MessageKind::MissedCall,
             MessageKind::Command,
+            MessageKind::MemberJoined,
         ])
         .load(conn.as_mut())
         .await?;

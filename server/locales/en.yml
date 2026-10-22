@@ -113,6 +113,7 @@ messageContentLength: "A message may be at most %{max} characters. Shorten it, o
 messageTooManyAttachments: "A message may carry at most %{max} attachments. Send the rest in another message."
 messageNestingTooDeep: "A message may nest quotes and lists at most %{max} levels deep. Flatten it and send it again."
 communityNameLength: "A community's name must be 1 to %{max} characters, not counting spaces around it."
+defaultChannelNotText: "A community's default channel must be one of its text channels. Choose one from the list."
 channelNameLength: "A channel's name must be 1 to %{max} characters, not counting spaces around it."
 categoryNameLength: "A category's name must be 1 to %{max} characters, not counting spaces around it."
 channelNeedsCommunity: "A text or voice channel must belong to a community."

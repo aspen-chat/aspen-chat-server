@@ -250,6 +250,7 @@ How each feature works is written up in `docs/architecture/`: one file per featu
 - `docs/architecture/saved-messages.md` — saving messages for oneself, the saved list, and what losing access does to a save
 - `docs/architecture/activity-feed.md` — the activity feed: every message that tells its reader, by the notification rule, and its filters
 - `docs/architecture/muting.md` — muting channels and DMs
+- `docs/architecture/joining.md` — a community's default channel, choosing the next when it is deleted, and the messages announcing who joins
 - `docs/architecture/collapsed-categories.md` — folded categories that follow a user between devices
 - `docs/architecture/search.md` — message search: the probe, the walk through history, deep rounds and their places, and its indexes
 - `docs/architecture/notifications.md` — notification levels and what the apps tell of

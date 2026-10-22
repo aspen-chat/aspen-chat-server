@@ -303,7 +303,17 @@ impl CommunityModel {
     /// Whether `user`, holding `roles` besides everyone's, may view `channel`, a channel of
     /// this community that is not a thread.
     pub fn can_view(&self, user: UserId, roles: &[RoleId], channel: ChannelId) -> bool {
-        let access = self.access_of(user, roles);
+        self.views(&self.access_of(user, roles), channel)
+    }
+
+    /// Whether everyone's role alone lets a member view `channel`, a channel of this community
+    /// that is not a thread: whether every member may.
+    pub fn everyone_views(&self, channel: ChannelId) -> bool {
+        // The nil id owns no community, so this is a member holding everyone's role alone.
+        self.views(&self.access_of(UserId(uuid::Uuid::nil()), &[]), channel)
+    }
+
+    fn views(&self, access: &CommunityAccess, channel: ChannelId) -> bool {
         let none = Vec::new();
         let category = self
             .categories

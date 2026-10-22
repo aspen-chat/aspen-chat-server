@@ -209,6 +209,7 @@ export {
   type MessageSearch,
   type SearchPage,
   type ActivityFilter,
+  type CommunityUpdateRequest,
   type ForeignDmNotice,
   type PluginEvent,
   type PluginNotice,

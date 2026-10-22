@@ -82,7 +82,7 @@ without the wrench).
 
 | Section | Holds |
 | --- | --- |
-| Overview | Name and icon, the caller's own nickname, ownership, delete or leave |
+| Overview | Name and icon, for holders of Manage community New members (the default channel, among the text channels they can see, and "Don't post a message when someone joins", each saved as it changes; see the server's `docs/architecture/joining.md`), the caller's own nickname, ownership, delete or leave |
 | Layout | For holders of Manage channels or Manage categories: `LayoutPanel`, the channels and categories as one list to arrange, rename, and delete, and New category (see [rail-and-channel-list.md](rail-and-channel-list.md)) |
 | Roles | Templates, and a grouped `PermissionChecklist` whose unheld permissions are disabled |
 | Members | Each member by their nickname, with their roles, Remove, Clear nickname (Manage nicknames; see [profiles-and-icons.md](profiles-and-icons.md)), and Ban for holders of Ban members, over those ranked below them (`useMemberModeration`, which a person's menu shares) |

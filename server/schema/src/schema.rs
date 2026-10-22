@@ -162,6 +162,8 @@ diesel::table! {
         owner -> Nullable<Uuid>,
         everyone_limited_at -> Nullable<Timestamptz>,
         member_count -> Int4,
+        default_channel -> Nullable<Uuid>,
+        suppress_join_messages -> Bool,
     }
 }
 
@@ -1015,7 +1017,6 @@ diesel::joinable!(category_mute -> user (user));
 diesel::joinable!(category_override -> category (category));
 diesel::joinable!(category_override -> community_role (role));
 diesel::joinable!(channel -> category (parent_category));
-diesel::joinable!(channel -> community (community));
 diesel::joinable!(channel_mute -> channel (channel));
 diesel::joinable!(channel_mute -> user (user));
 diesel::joinable!(channel_override -> channel (channel));

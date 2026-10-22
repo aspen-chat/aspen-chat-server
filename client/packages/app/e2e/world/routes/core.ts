@@ -10,6 +10,7 @@ import {
   dmRecord,
   farMember,
   freshId,
+  general,
   helper,
   iconRecord,
   inviteCode,
@@ -65,7 +66,7 @@ export function coreRoutes({
       () => ({
         // Bob owns the community; the signed-in user organises it, managing everything but
         // other people's messages.
-        data: [{ id: community, name: "Family", icon: null, owner: bob }],
+        data: [{ id: community, name: "Family", icon: null, owner: bob, defaultChannel: general }],
         included: {
           channels,
           roles,
@@ -550,7 +551,11 @@ export function coreRoutes({
           createdBy: me,
           expiresAt: null,
         },
-        included: { communities: [{ id: community, name: "Family", icon: null, owner: bob }] },
+        included: {
+          communities: [
+            { id: community, name: "Family", icon: null, owner: bob, defaultChannel: general },
+          ],
+        },
       }),
     ],
     [

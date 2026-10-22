@@ -54,14 +54,16 @@ export function levelOf(
 
 /** Whether a message's kind is one that may notify at all. */
 export function kindNotifies(message: Message): boolean {
-  // An echo and a poll's result say nothing of their own, a call's record follows the ring
-  // that already told of the call, and a command is for its bot, whose answer is what tells.
+  // An echo, a poll's result, and a join say nothing of their own, a call's record follows the
+  // ring that already told of the call, and a command is for its bot, whose answer is what
+  // tells.
   if (
     message.kind === "threadEcho" ||
     message.kind === "pollClosed" ||
     message.kind === "call" ||
     message.kind === "missedCall" ||
-    message.kind === "command"
+    message.kind === "command" ||
+    message.kind === "memberJoined"
   ) {
     return false;
   }

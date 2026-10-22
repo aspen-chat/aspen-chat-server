@@ -1341,6 +1341,7 @@
   "messagePlaceholder": "Message #{channel}",
   "send": "Send",
   "unknownUser": "Unknown user",
+  "memberJoined": "{name} joined the community.",
   "linkToMessage": "Link to this message",
   "attachmentUnavailable": "Attachment unavailable",
   "attachFile": "Attach a file",
@@ -2026,7 +2027,15 @@
     "delete": "Delete community",
     "deleting": "Deleting…",
     "leave": "Leave community",
-    "leaveConfirm": "Leave {community}? You'll need an invite to come back."
+    "leaveConfirm": "Leave {community}? You'll need an invite to come back.",
+    "joiningHeading": "New members",
+    "defaultChannelLabel": "Default channel",
+    "defaultChannelHint": "New members start here, and a message says when someone joins. If it is deleted, the next text channel everyone can see takes its place.",
+    "defaultChannelHidden": "A channel you can't see",
+    "noDefaultChannel": "None",
+    "noTextChannels": "This community has no text channel yet.",
+    "suppressJoinMessages": "Don't post a message when someone joins",
+    "suppressJoinMessagesHint": "New members still start in the default channel."
   },
   "roles": {
     "listLabel": "Roles, highest first",

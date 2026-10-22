@@ -4,6 +4,7 @@ import { CHANNEL_LIST, MEMBER_LIST } from "@/features/layout/paneSizes";
 import { useEffect, useRef, useState } from "react";
 import { useChannels, useCommunity, useDeploymentCan, useSync, useSyncStatus } from "@/api/hooks";
 import { ChannelSidebar } from "@/features/channels/ChannelSidebar";
+import { landingChannel } from "@/features/channels/landing";
 import { MemberGroups, MemberList } from "@/features/members/MemberList";
 import { Drawer } from "@/features/layout/Drawer";
 import { LARGE_SCREEN, MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
@@ -139,23 +140,24 @@ export function ChannelSidebarLayout() {
 }
 
 /**
- * The community's index: on wide screens, open its first text channel. On narrow ones the
- * index is where the channel list shows, and it is what a channel's back link leads to, so it
- * stays put.
+ * The community's index: on wide screens, open the channel it opens at (`landingChannel`). On
+ * narrow ones the index is where the channel list shows, and it is what a channel's back link
+ * leads to, so it stays put.
  */
 export function CommunityIndex() {
   const m = useMessages();
   // Rendered only under a community route, at home or on another deployment.
   const communityId = useParams({ strict: false }).communityId ?? "";
+  const community = useCommunity(communityId);
   const channels = useChannels(communityId);
   const wide = useMediaQuery(MEDIUM_SCREEN);
   const domain = useDomain();
   if (!wide) {
     return null;
   }
-  const first = channels.find((c) => c.ty === "text");
-  if (first !== undefined) {
-    return <Navigate {...channelLink({ domain, community: communityId }, first.id)} replace />;
+  const landing = landingChannel(community, channels);
+  if (landing !== undefined) {
+    return <Navigate {...channelLink({ domain, community: communityId }, landing.id)} replace />;
   }
   return (
     <main className="flex flex-1 items-center justify-center p-6 text-ink-muted">

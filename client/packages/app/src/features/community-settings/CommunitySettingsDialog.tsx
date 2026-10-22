@@ -1,5 +1,5 @@
-import type { Community, User } from "@aspen/protocol";
-import { WrenchIcon } from "@phosphor-icons/react";
+import type { Community, CommunityUpdateRequest, User } from "@aspen/protocol";
+import { CaretDownIcon, WrenchIcon } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import {
@@ -9,15 +9,29 @@ import {
   Form,
   Input,
   Label,
+  ListBox,
+  ListBoxItem,
   Modal,
   ModalOverlay,
+  Popover,
+  Select,
+  SelectValue,
   Tab,
   TabList,
   TabPanel,
   Tabs,
+  Text,
   TextField,
 } from "react-aria-components";
-import { useAccess, useMe, useMemberRoles, useNickname, useSync, useUser } from "@/api/hooks";
+import {
+  useAccess,
+  useChannels,
+  useMe,
+  useMemberRoles,
+  useNickname,
+  useSync,
+  useUser,
+} from "@/api/hooks";
 import {
   alertClass,
   fieldClass,
@@ -38,11 +52,15 @@ import {
   dangerButtonClass,
   dangerPlaneClass,
   dialogClass,
+  optionClass,
   overlayClass,
   planeClass,
   secondaryButtonClass,
+  selectButtonClass,
+  selectPopoverClass,
   widePlanesModalClass,
 } from "@/features/invites/dialog";
+import { ChoiceCheckbox } from "@/features/layout/choices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { CommunityNotifications } from "@/features/notifications/CommunityNotifications";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -196,6 +214,8 @@ function Overview({ community }: { community: Community }) {
     <div className="flex flex-col gap-4">
       {moderator && !member && <p className={hintClass}>{m.communitySettings.moderatorNote}</p>}
       {(manage || moderator) && <Rename community={community} icon={manage} />}
+      {/* A deployment that predates default channels leaves the field out. */}
+      {manage && community.defaultChannel !== undefined && <Joining community={community} />}
       {member && (
         <div className={planeClass}>
           <CommunityNotifications communityId={community.id} />
@@ -297,6 +317,78 @@ function Rename({ community, icon }: { community: Community; icon: boolean }) {
         {saving ? m.communitySettings.saving : m.communitySettings.save}
       </Button>
     </Form>
+  );
+}
+
+/**
+ * Where new members start and are announced (the community's default channel, one of the text
+ * channels the reader can see), and whether they are announced at all. Each change is saved as
+ * it is made.
+ */
+function Joining({ community }: { community: Community }) {
+  const m = useMessages();
+  const sync = useSync();
+  const textChannels = useChannels(community.id).filter((c) => c.ty === "text");
+  const [error, setError] = useState<string | null>(null);
+  const save = (patch: CommunityUpdateRequest) => {
+    setError(null);
+    sync.updateCommunity(community.id, patch).catch((e: unknown) => {
+      setError(problemText(e));
+    });
+  };
+  return (
+    <section className={planeClass}>
+      <h3 className="text-sm font-semibold text-ink-muted">{m.communitySettings.joiningHeading}</h3>
+      {textChannels.length === 0 ? (
+        <p className={hintClass}>{m.communitySettings.noTextChannels}</p>
+      ) : (
+        <Select
+          value={community.defaultChannel ?? null}
+          placeholder={
+            community.defaultChannel == null
+              ? m.communitySettings.noDefaultChannel
+              : m.communitySettings.defaultChannelHidden
+          }
+          onChange={(key) => {
+            if (key !== null && key !== community.defaultChannel) {
+              save({ defaultChannel: String(key) });
+            }
+          }}
+          className={fieldClass + " max-w-sm"}
+        >
+          <Label className={labelClass}>{m.communitySettings.defaultChannelLabel}</Label>
+          <Button className={selectButtonClass + " py-2"}>
+            <SelectValue />
+            <CaretDownIcon size={14} aria-hidden="true" className="text-ink-muted" />
+          </Button>
+          <Text slot="description" className={hintClass}>
+            {m.communitySettings.defaultChannelHint}
+          </Text>
+          <Popover className={selectPopoverClass}>
+            <ListBox>
+              {textChannels.map((c) => (
+                <ListBoxItem key={c.id} id={c.id} textValue={c.name} className={optionClass}>
+                  # {c.name}
+                </ListBoxItem>
+              ))}
+            </ListBox>
+          </Popover>
+        </Select>
+      )}
+      <ChoiceCheckbox
+        isSelected={community.suppressJoinMessages ?? false}
+        onChange={(suppressJoinMessages) => {
+          save({ suppressJoinMessages });
+        }}
+        label={m.communitySettings.suppressJoinMessages}
+        hint={m.communitySettings.suppressJoinMessagesHint}
+      />
+      {error !== null && (
+        <p role="alert" className={alertClass}>
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 

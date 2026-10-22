@@ -47,6 +47,9 @@ pub enum MessageKind {
     /// moderators by the system account in its DM with them: the reviewer's words as
     /// `content`, about what `warning` holds (see `app::report`).
     Warning,
+    /// The system message announcing that its `author` joined the community, posted in its
+    /// default channel (see `app::default_channel`). It has no content of its own.
+    MemberJoined,
 }
 
 impl ToSql<aspen_schema::sql_types::MessageKind, Pg> for MessageKind {
@@ -60,6 +63,7 @@ impl ToSql<aspen_schema::sql_types::MessageKind, Pg> for MessageKind {
             MessageKind::MissedCall => b"missed_call",
             MessageKind::Command => b"command",
             MessageKind::Warning => b"warning",
+            MessageKind::MemberJoined => b"member_joined",
         })?;
         Ok(IsNull::No)
     }
@@ -78,6 +82,7 @@ impl FromSql<aspen_schema::sql_types::MessageKind, Pg> for MessageKind {
             b"command" => Ok(MessageKind::Command),
             b"missed_call" => Ok(MessageKind::MissedCall),
             b"warning" => Ok(MessageKind::Warning),
+            b"member_joined" => Ok(MessageKind::MemberJoined),
             _ => Err(format!(
                 "Unrecognized enum variant: {:?}",
                 String::from_utf8_lossy(bytes.as_bytes())
