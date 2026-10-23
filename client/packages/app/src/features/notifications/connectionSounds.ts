@@ -13,8 +13,10 @@ export type ConnectionSoundSource = Pick<AspenSync, "status" | "subscribe">;
 
 /**
  * Plays `disconnected` once when a deployment's event stream drops from live and has not come
- * back within `DISCONNECTED_GRACE_MS`, until the function it answers is called. Coming back
- * (live, or resyncing what it missed) or being stopped (signing out) calls it off.
+ * back within `DISCONNECTED_GRACE_MS`, and `reconnected` when it is live again after that, until
+ * the function it answers is called. Coming back within the grace (live, or resyncing what it
+ * missed) or being stopped (signing out) calls it off, and a stream stopped after it was heard
+ * plays no `reconnected`.
  */
 export function watchConnectionSounds(
   sync: ConnectionSoundSource,
@@ -23,6 +25,7 @@ export function watchConnectionSounds(
 ): () => void {
   let status = sync.status;
   let pending: ReturnType<typeof setTimeout> | null = null;
+  let heard = false;
   const callOff = () => {
     if (pending !== null) {
       timers.clearTimeout(pending);
@@ -36,8 +39,15 @@ export function watchConnectionSounds(
       callOff();
       pending = timers.setTimeout(() => {
         pending = null;
+        heard = true;
         play("disconnected");
       }, DISCONNECTED_GRACE_MS);
+    } else if (status === "live" && heard) {
+      heard = false;
+      play("reconnected");
+    } else if (status === "stopped") {
+      callOff();
+      heard = false;
     } else if (status !== "reconnecting") {
       callOff();
     }

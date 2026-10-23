@@ -144,6 +144,7 @@ function collect(strict: boolean): Attributions {
     app: [
       ...attempt("npm packages of the app", () => npmPackages(app)),
       ...attempt("Noto Color Emoji", () => [notoColorEmoji()]),
+      soundEffectsPack(),
     ],
     desktop: [
       ...attempt("Electron", () => electron()),
@@ -444,6 +445,18 @@ function notoColorEmoji(): Found {
     license: "OFL-1.1",
     url: `https://github.com/${manifest.source.repository}`,
     dir,
+    depth: 0,
+  };
+}
+
+/** The app's sounds from the Aspen Sound Effects Pack, with its `NOTICE` and `LICENSE`. */
+function soundEffectsPack(): Found {
+  return {
+    name: "Aspen Sound Effects Pack",
+    version: null,
+    license: "CC-BY-SA-4.0",
+    url: "https://creativecommons.org/licenses/by-sa/4.0/",
+    dir: join(app, "src", "features", "notifications", "sounds", "aspen-sound-effects-pack"),
     depth: 0,
   };
 }

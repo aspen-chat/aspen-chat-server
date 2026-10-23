@@ -29,7 +29,8 @@ export interface AttributedPackage {
   readonly name: string;
   /**
    * `null` where it is whatever another release carries: Chromium's is Electron's, and the
-   * libraries the desktop app ships from OBS Studio are its release's (`bundledIn`).
+   * libraries the desktop app ships from OBS Studio are its release's (`bundledIn`); and where it
+   * has none, as the Aspen Sound Effects Pack.
    */
   readonly version: string | null;
   /** The release it ships as part of, whose version decides its own. */

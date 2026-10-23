@@ -60,24 +60,40 @@ Exceptions:
 Every sound the app plays is a recording in `src/features/notifications/sounds/`, played by
 `playSound`, or `loopSound` until stopped (`sounds.ts`):
 
-| File               | Plays when                                                                                                                                                                            | Through                                                          |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `chime.wav`        | A message or plugin notice tells of itself (`NotifyOnMessages`)                                                                                                                       | The notification sound's speaker                                 |
-| `ringtone.wav`     | Looped while a call rings the user (`IncomingCall`; see [DM calls and rings](voice/dm-calls-and-rings.md))                                                                            | The notification sound's speaker                                 |
-| `dial-tone.wav`    | Looped while the user's DM call rings someone (`DmCall`)                                                                                                                              | The voice chat's speaker                                         |
-| `call-joined.wav`  | The user's call connects, or connects again after a rejoin; someone else joins it                                                                                                     | The voice chat's speaker                                         |
-| `call-left.wav`    | The user leaves their call; someone else leaves it                                                                                                                                    | The voice chat's speaker                                         |
-| `disconnected.wav` | The user's call is lost under them (a lost server or socket, a failed rejoin, or an end the call bar explains), or a deployment's event stream stays down for `DISCONNECTED_GRACE_MS` | The call's speaker, or the notification sound's for a deployment |
+| File                    | Plays when                                                                                                                                                                            | Through                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `chime.wav`             | A message or plugin notice tells of itself (`NotifyOnMessages`)                                                                                                                       | The notification sound's speaker                                 |
+| `ringtone.wav`          | Looped while a call rings the user (`IncomingCall`; see [DM calls and rings](voice/dm-calls-and-rings.md))                                                                            | The notification sound's speaker                                 |
+| `dial-tone.wav`         | Looped while the user's DM call rings someone (`DmCall`)                                                                                                                              | The voice chat's speaker                                         |
+| `call-joined.wav`       | The user's call connects; someone else joins it                                                                                                                                       | The voice chat's speaker                                         |
+| `call-left.wav`         | The user leaves their call; someone else leaves it                                                                                                                                    | The voice chat's speaker                                         |
+| `disconnected.wav`      | The user's call is lost under them (a lost server or socket, a failed rejoin, or an end the call bar explains), or a deployment's event stream stays down for `DISCONNECTED_GRACE_MS` | The call's speaker, or the notification sound's for a deployment |
+| `reconnected.wav`       | A call lost under the user rejoins, or a deployment's event stream is live again, after `disconnected.wav` was played for it                                                          | The call's speaker, or the notification sound's for a deployment |
+| `stream-started.wav`    | The user, or someone else in their call, starts sharing a screen, window, or game                                                                                                     | The voice chat's speaker                                         |
+| `transfer-accepted.wav` | Any file transfer in the user's call begins, someone having accepted an offer: everyone in the call hears it, whoever its two sides are                                               | The voice chat's speaker                                         |
+| `transfer-complete.wav` | A file the user sent or received in a call has arrived whole                                                                                                                          | The voice chat's speaker                                         |
 
-`PlaySounds` decides when the last three play, for every deployment the user uses: `watchCallSounds`
-(`src/features/voice/callSounds.ts`) and `watchConnectionSounds` (`connectionSounds.ts`).
+Every file but `ringtone.wav` and `dial-tone.wav` is in `sounds/aspen-sound-effects-pack/`: the
+Aspen Sound Effects Pack, © 2026 by Kayla Wardle, unmodified and under CC BY-SA 4.0 rather than the
+app's license, with its `NOTICE` and `LICENSE` beside it, which the attributions page lists (see
+[About](about.md)). A sound added from the pack goes there too.
 
-- Someone else joining or leaving is not played while the user is deafened.
+`PlaySounds` decides when the call's and the connection's sounds play, for every deployment the user
+uses: `watchCallSounds` (`src/features/voice/callSounds.ts`) and `watchConnectionSounds`
+(`connectionSounds.ts`).
+
+- Someone else joining, leaving, or starting a share, and a transfer the user is not a side of
+  beginning, are not played while the user is deafened.
 - Moving to another call plays only the joining.
-- Who is in a call when it connects is taken as found, silently.
+- Who is in a call when it connects, what they share, and the transfers under way are taken as
+  found, silently.
+- A transfer begins when the voice server tells everyone in the call of its link
+  (`transferLinkChanged`), as the receiver accepts, before its bytes move.
+- `reconnected.wav` answers only a `disconnected.wav` that was heard, so a blip within the grace
+  makes no sound either way, and a call that rejoins plays it rather than `call-joined.wav`.
 - `playSound` (`sounds.ts`) plays a sound again only after its `REPEAT_GAP_MS`, so several people
-  joining at once are heard once, and a network failure that drops a call and its deployment
-  together is heard once.
+  joining at once, or several accepting one offer, are heard once, and a network failure that drops
+  a call and its deployment together is heard once, and so is their return.
 - `playSound` and `loopSound` play at most `MAX_PLAYING_PER_SOUND` (two) of one sound at once, each
   sound counted on its own; one asked for past that is not heard, rather than waiting its turn, so a
   burst of messages cannot queue a run of chimes. A sound gives its place back when it ends, fails,
@@ -90,7 +106,7 @@ request, which the desktop app's page could not make to its own files. Each is a
 loaded the first time it plays, so none is part of the page's first load, and decoded once. The
 ringtone and the dial tone loop whole, so each file's length is its cycle: the ringtone 2.4 seconds,
 the dial tone 1.2 seconds of tone in every 4. To replace a sound, overwrite its file under the same
-name.
+name, or move it and change its path in `SOUND_FILES`.
 
 ### Speakers
 

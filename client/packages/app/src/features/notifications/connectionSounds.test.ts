@@ -62,6 +62,27 @@ describe("watchConnectionSounds", () => {
     expect(connection.played).toEqual([]);
   });
 
+  it("plays reconnected when the stream is live again after disconnected was heard", () => {
+    const connection = watched();
+    connection.set("reconnecting");
+    vi.advanceTimersByTime(DISCONNECTED_GRACE_MS);
+    connection.set("resyncing");
+    connection.set("live");
+    connection.set("reconnecting");
+    connection.set("live");
+    expect(connection.played).toEqual(["disconnected", "reconnected"]);
+  });
+
+  it("plays no reconnected for a stream signed out of after disconnected was heard", () => {
+    const connection = watched();
+    connection.set("reconnecting");
+    vi.advanceTimersByTime(DISCONNECTED_GRACE_MS);
+    connection.set("stopped");
+    connection.set("bootstrapping");
+    connection.set("live");
+    expect(connection.played).toEqual(["disconnected"]);
+  });
+
   it("is silent once stopped", () => {
     const connection = watched();
     connection.set("reconnecting");
