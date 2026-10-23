@@ -132,7 +132,7 @@ same commit, as with comments.
   deployments.
 - [`sign-in.md`](docs/architecture/sign-in.md): the signed-out screens, the server each shell signs
   in to, passkey ceremonies and their hand-off to the system browser, and signing in from another
-  device by a QR code.
+  device by a QR code or a typed code.
 - [`tagging.md`](docs/architecture/tagging.md): rendering tags, completing them in the message box,
   and mention counts.
 - [`threads-and-dms.md`](docs/architecture/threads-and-dms.md): threads, following them, echoes, DMs

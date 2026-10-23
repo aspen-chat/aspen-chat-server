@@ -591,20 +591,21 @@ HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the s
   (the deployment's display name and icon, which the sign-in screen shows; see Administration), the
   passkey ceremony endpoints (starting a `signIn` ceremony, reading, completing, and claiming one),
   the device link endpoints a device that is not signed in uses (starting a `request`, scanning an
-  `offer`, claiming, and cancelling; see Sign-in and security), `GET /registration-invites/{code}`
-  (see Administration), `POST /auth/federated-sign-in` and `GET /federation/icons/{icon}` (see
-  Federation), the three steps of a password reset under `/auth/password-resets` (see Email),
-  earning a device credential (`POST /auth/device-challenges` and `/auth/device-credentials`; see
-  Sign-in and security), and the event stream. A request to any of these without a session presents
-  a device credential as `Aspen-Device` unless `[rate_limits] device_exempt` lists the endpoint, and
-  is otherwise refused with `401` `deviceCredentialRequired`;
-  `api::rate_limit::document_rate_limits` declares the header and that answer on each, so handlers
-  do not. Mark authenticated handlers with `security(("bearerAuth" = []))` so generated clients know
-  to send the header, and optionally authenticated ones with `security((), ("bearerAuth" = []))`. A
-  session whose account still owes the server a second factor (see Sign-in and security) is refused
-  by `SessionUser` with `twoFactorEnrollmentRequired`, and one whose email address the deployment
-  requires verified with `emailVerificationRequired` (see Email); the few handlers such a session
-  may reach take `EnrollingSessionUser` instead.
+  `offer` or typing its code at `POST /auth/device-link-entries`, claiming, and cancelling; see
+  Sign-in and security), `GET /registration-invites/{code}` (see Administration),
+  `POST /auth/federated-sign-in` and `GET /federation/icons/{icon}` (see Federation), the three
+  steps of a password reset under `/auth/password-resets` (see Email), earning a device credential
+  (`POST /auth/device-challenges` and `/auth/device-credentials`; see Sign-in and security), and the
+  event stream. A request to any of these without a session presents a device credential as
+  `Aspen-Device` unless `[rate_limits] device_exempt` lists the endpoint, and is otherwise refused
+  with `401` `deviceCredentialRequired`; `api::rate_limit::document_rate_limits` declares the header
+  and that answer on each, so handlers do not. Mark authenticated handlers with
+  `security(("bearerAuth" = []))` so generated clients know to send the header, and optionally
+  authenticated ones with `security((), ("bearerAuth" = []))`. A session whose account still owes
+  the server a second factor (see Sign-in and security) is refused by `SessionUser` with
+  `twoFactorEnrollmentRequired`, and one whose email address the deployment requires verified with
+  `emailVerificationRequired` (see Email); the few handlers such a session may reach take
+  `EnrollingSessionUser` instead.
 - **Documentation:** every handler carries a `#[utoipa::path]` with a `tag` (the `api::TAG_*`
   constants), explicit `params` for path and query inputs, and one `responses` entry per status code
   it can return, each error status with `body = Problem`. The generated client's typed error
@@ -614,21 +615,23 @@ HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the s
   username and client network: an IPv4 /24, an IPv6 /48), `username_failures` (sign-in only, a
   username's wrong passwords from anywhere, looked at before the password is checked and counted
   only after a wrong one), `ip_failures` (an address's requests whose handler says they proved
-  wrong: a wrong password or code, an unknown invite or refresh token), `ip_rejected_tokens` (an
-  address's bot tokens from before tokens were signed that no bot holds, looked at before one is
-  looked up; a made-up session or bot token of the signed kind is refused by its signature with no
-  lookup, `app::signed_token`), and `per_<param>`, `user_per_<param>`, `ip_per_<param>` for any path
-  parameter. A request with a valid session counts as its user and never as its address or device;
-  one without counts as its address and its device credential, which it must present
-  (`Aspen-Device`) on every endpoint someone may call without signing in but those `device_exempt`
-  lists, and earns by solving a puzzle (see Sign-in and security). Many people behind one address
-  are so each counted on their own, and the address keeps only a ceiling over them. It gets the
-  `default` limits wherever they apply, plus its groups' limits, with its own entry replacing its
-  groups' dimension by dimension; `false` removes a dimension there, the default's included. The
-  built-in limits are `server/app/src/rate_limits.toml`; `[rate_limits]` in `aspen.toml` is laid
-  over them in code, a limit given there replacing the built-in one whole. Besides the OpenAPI
-  operations, `GET /events` (the event stream), `GET /auth/passkey` (the passkey page, outside
-  `/api/v1`), `GET /.well-known/aspen` (the federation document, also outside it), `GET` and
+  wrong: a wrong password or code, an unknown invite or refresh token), `user_failures` and
+  `global_failures` (a signed-in user's, and everyone's, requests that proved wrong, counted as
+  `ip_failures` are), `ip_rejected_tokens` (an address's bot tokens from before tokens were signed
+  that no bot holds, looked at before one is looked up; a made-up session or bot token of the signed
+  kind is refused by its signature with no lookup, `app::signed_token`), and `per_<param>`,
+  `user_per_<param>`, `ip_per_<param>` for any path parameter. A request with a valid session counts
+  as its user and never as its address or device; one without counts as its address and its device
+  credential, which it must present (`Aspen-Device`) on every endpoint someone may call without
+  signing in but those `device_exempt` lists, and earns by solving a puzzle (see Sign-in and
+  security). Many people behind one address are so each counted on their own, and the address keeps
+  only a ceiling over them. It gets the `default` limits wherever they apply, plus its groups'
+  limits, with its own entry replacing its groups' dimension by dimension; `false` removes a
+  dimension there, the default's included. The built-in limits are
+  `server/app/src/rate_limits.toml`; `[rate_limits]` in `aspen.toml` is laid over them in code, a
+  limit given there replacing the built-in one whole. Besides the OpenAPI operations, `GET /events`
+  (the event stream), `GET /auth/passkey` (the passkey page, outside `/api/v1`),
+  `GET /.well-known/aspen` (the federation document, also outside it), `GET` and
   `POST /email/unsubscribe` (the page unsubscribe links open, also outside it), and
   `GET /invite/{code}` and `GET /{*path}` (the web client's pages, also outside it) can be named. A
   request with a method its path lacks counts toward the `default` limits that need no session or
