@@ -32,6 +32,22 @@ pub struct DeploymentProfile {
     /// from a deployment that predates it, which sends no mail.
     #[schema(required = false)]
     pub email: EmailPolicy,
+    /// Its channels' mana (`app::mana`), which a channel's settings may lower but not exceed.
+    /// Absent from a deployment that predates it, which has none.
+    #[schema(required = false)]
+    pub mana: ManaPolicy,
+}
+
+/// What a deployment's channels' mana may be (`app::mana`).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ManaPolicy {
+    /// The most any channel recharges a second, and what one that sets none recharges.
+    pub max_recharge: u32,
+    /// The most a channel holds where it sets none, and the most it may set.
+    pub max: u32,
+    /// What an attachment costs, in the mana a glyph costs.
+    pub attachment_cost: u32,
 }
 
 /// What a deployment does with email (`app::email`).
@@ -68,6 +84,11 @@ impl DeploymentProfile {
     fn new(state: &GlobalServerContext, read: WithIcon) -> Self {
         Self {
             email: EmailPolicy::new(state, &read.settings),
+            mana: ManaPolicy {
+                max_recharge: read.settings.mana_max_recharge,
+                max: read.settings.mana_max,
+                attachment_cost: read.settings.mana_attachment_cost,
+            },
             display_name: read.settings.display_name,
             icon: read.icon.map(|icon| icon_to_api(state, icon)),
             web_client_url: state.config.public_url.clone(),
@@ -164,6 +185,14 @@ pub struct DeploymentSettings {
     /// How many GiB one person may upload, attachments and pictures together, in any 24 hours;
     /// 0 sets no limit.
     pub upload_quota_gib: u32,
+    /// The most mana any channel recharges a second, and the rate of a channel that sets none
+    /// of its own.
+    pub mana_max_recharge: u32,
+    /// The most mana a channel holds where it sets none of its own, and the most it may set;
+    /// a group DM's.
+    pub mana_max: u32,
+    /// What an attachment costs, in the mana a glyph costs.
+    pub mana_attachment_cost: u32,
     /// How many days the files of deleted messages, and their link previews' pictures, are
     /// kept for reviewing reports, and as long after any report case about them closes; 0
     /// keeps them for good.
@@ -202,6 +231,9 @@ impl DeploymentSettings {
             everyone_mention_limit: settings.everyone_mention_limit,
             custom_emoji_limit: settings.custom_emoji_limit,
             upload_quota_gib: settings.upload_quota_gib,
+            mana_max_recharge: settings.mana_max_recharge,
+            mana_max: settings.mana_max,
+            mana_attachment_cost: settings.mana_attachment_cost,
             evidence_retention_days: settings.evidence_retention_days,
             file_transfers: settings.file_transfers,
             email_required: settings.email_required,
@@ -226,6 +258,11 @@ pub struct DeploymentSettingsUpdateRequest {
     pub everyone_mention_limit: Option<u32>,
     pub custom_emoji_limit: Option<u32>,
     pub upload_quota_gib: Option<u32>,
+    /// At least 1. Channels set above it recharge at it.
+    pub mana_max_recharge: Option<u32>,
+    /// At least 1. Channels set above it hold it.
+    pub mana_max: Option<u32>,
+    pub mana_attachment_cost: Option<u32>,
     pub evidence_retention_days: Option<u32>,
     pub file_transfers: Option<bool>,
     pub email_required: Option<bool>,
@@ -253,6 +290,9 @@ impl From<DeploymentSettingsUpdateRequest> for SettingsChange {
             everyone_mention_limit: request.everyone_mention_limit,
             custom_emoji_limit: request.custom_emoji_limit,
             upload_quota_gib: request.upload_quota_gib,
+            mana_max_recharge: request.mana_max_recharge,
+            mana_max: request.mana_max,
+            mana_attachment_cost: request.mana_attachment_cost,
             evidence_retention_days: request.evidence_retention_days,
             file_transfers: request.file_transfers,
             email_required: request.email_required,

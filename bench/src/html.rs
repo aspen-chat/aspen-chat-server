@@ -376,6 +376,71 @@ pub fn render(report: &Report) -> String {
             }),
         ],
     ));
+    let raided = report
+        .timeline
+        .iter()
+        .any(|p| p.counters.keys().any(|k| k.starts_with("raid")));
+    if raided {
+        let per_second = |name: &'static str| {
+            move |p: &Point| Some(p.counters.get(name).copied().unwrap_or(0) as f64 / interval)
+        };
+        body.push_str(&chart(
+            "Raided channel: raiders' messages",
+            "/s",
+            &[
+                from_timeline(
+                    &report.timeline,
+                    "posted at once",
+                    per_second("raid:posted"),
+                ),
+                from_timeline(&report.timeline, "held for mana", per_second("raid:held")),
+                from_timeline(
+                    &report.timeline,
+                    "refused as busy",
+                    per_second("raid:refused"),
+                ),
+                from_timeline(
+                    &report.timeline,
+                    "dropped after waiting",
+                    per_second("raid:dropped"),
+                ),
+            ],
+        ));
+        body.push_str(&chart(
+            "Raided channel: everyone else's messages",
+            "/s",
+            &[
+                from_timeline(
+                    &report.timeline,
+                    "posted at once",
+                    per_second("raided:posted"),
+                ),
+                from_timeline(&report.timeline, "held for mana", per_second("raided:held")),
+                from_timeline(
+                    &report.timeline,
+                    "refused as busy",
+                    per_second("raided:refused"),
+                ),
+                from_timeline(
+                    &report.timeline,
+                    "dropped after waiting",
+                    per_second("raided:dropped"),
+                ),
+            ],
+        ));
+        body.push_str(&chart(
+            "Raided channel: delivery p99",
+            " ms",
+            &[
+                from_timeline(&report.timeline, "raiders'", |p| {
+                    p.metrics.get("delivery:raid").map(|m| m.p99_ms)
+                }),
+                from_timeline(&report.timeline, "everyone else's", |p| {
+                    p.metrics.get("delivery:raided").map(|m| m.p99_ms)
+                }),
+            ],
+        ));
+    }
     body.push_str("</section>");
 
     if !report.server_samples.is_empty() {

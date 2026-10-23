@@ -12,11 +12,11 @@ listed as `roles` on their `userCommunity` record).
 
 A new community gets three roles, and its creator as owner, holding Admin too.
 
-| Role                       | Permissions                                                                                                                                                                                                         |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| everyone (member template) | Every channel permission but `mentionRoles` and `mentionEveryone`; `createInvites`; `changeNickname`.                                                                                                               |
-| Moderator                  | The member template, plus `mentionRoles`, `mentionEveryone`, `manageInvites`, `removeMembers`, `manageMessages`, `pinMessages`, `manageCalls`, `addBots`, `manageCustomEmoji`, `banMembers`, and `manageNicknames`. |
-| Admin                      | Every permission.                                                                                                                                                                                                   |
+| Role                       | Permissions                                                                                                                                                                                                                              |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| everyone (member template) | Every channel permission but `mentionRoles`, `mentionEveryone`, and `bypassChannelMana`; `createInvites`; `changeNickname`.                                                                                                              |
+| Moderator                  | The member template, plus `mentionRoles`, `mentionEveryone`, `manageInvites`, `removeMembers`, `manageMessages`, `pinMessages`, `manageCalls`, `addBots`, `manageCustomEmoji`, `banMembers`, `manageNicknames`, and `bypassChannelMana`. |
+| Admin                      | Every permission.                                                                                                                                                                                                                        |
 
 ## Positions
 

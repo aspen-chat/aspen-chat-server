@@ -9,6 +9,7 @@ import {
   Label,
   Modal,
   ModalOverlay,
+  NumberField,
   TextField,
 } from "react-aria-components";
 import { useSync } from "@/api/hooks";
@@ -31,6 +32,7 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useDomain, communityLink } from "@/features/messages/links";
 import { problemText } from "@/api/problemText";
+import { useDeploymentProfile } from "@/features/auth/deploymentProfile";
 
 /** Renames a channel, for those who may manage channels or moderate the server. */
 export function RenameChannelDialog({
@@ -160,6 +162,105 @@ export function DeleteChannelDialog({
           >
             {m.channelActions.confirmDelete}
           </Button>
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
+  );
+}
+
+/**
+ * A community text channel's own mana (the server's `app::mana`), for those who may manage
+ * channels: how much it earns back a second and how much it holds. Each left empty follows the
+ * deployment's, which is also the most it may be.
+ */
+export function ChannelManaDialog({
+  channel,
+  isOpen,
+  onOpenChange,
+}: {
+  channel: Channel;
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const m = useMessages();
+  const sync = useSync();
+  const deployment = useDeploymentProfile()?.mana;
+  const [recharge, setRecharge] = useState(channel.manaRecharge ?? NaN);
+  const [max, setMax] = useState(channel.manaMax ?? NaN);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const own = (value: number) => (Number.isNaN(value) ? null : value);
+  const field = (
+    value: number,
+    onChange: (value: number) => void,
+    label: string,
+    ceiling: number | undefined,
+  ) => (
+    <NumberField
+      value={value}
+      onChange={onChange}
+      minValue={1}
+      {...(ceiling === undefined ? {} : { maxValue: ceiling })}
+      formatOptions={{ maximumFractionDigits: 0 }}
+      className={fieldClass}
+    >
+      <Label className={labelClass}>{label}</Label>
+      <Input
+        placeholder={
+          ceiling === undefined ? "" : format(m.channelActions.manaDefault, { value: ceiling })
+        }
+        className={inputClass + " sm:max-w-40"}
+      />
+    </NumberField>
+  );
+  return (
+    <ModalOverlay
+      isOpen={isOpen}
+      onOpenChange={onOpenChange}
+      isDismissable
+      className={overlayClass}
+    >
+      <Modal className={modalClass}>
+        <Dialog className={dialogClass}>
+          <DialogHeading>
+            {format(m.channelActions.manaHeading, { channel: channel.name })}
+          </DialogHeading>
+          <p className={hintClass}>{m.channelActions.manaHint}</p>
+          <Form
+            onSubmit={(event) => {
+              event.preventDefault();
+              setSaving(true);
+              setError(null);
+              sync
+                .setChannelMana(channel.id, { manaRecharge: own(recharge), manaMax: own(max) })
+                .then(
+                  () => {
+                    setSaving(false);
+                    onOpenChange(false);
+                  },
+                  (e: unknown) => {
+                    setSaving(false);
+                    setError(problemText(e));
+                  },
+                );
+            }}
+            className="flex flex-col gap-3"
+          >
+            {field(recharge, setRecharge, m.channelActions.manaRecharge, deployment?.maxRecharge)}
+            {field(max, setMax, m.channelActions.manaMax, deployment?.max)}
+            {error !== null && (
+              <p role="alert" className={alertClass}>
+                {error}
+              </p>
+            )}
+            <Button
+              type="submit"
+              isDisabled={saving}
+              className={primaryButtonClass + " self-start"}
+            >
+              {m.channelActions.manaSave}
+            </Button>
+          </Form>
         </Dialog>
       </Modal>
     </ModalOverlay>

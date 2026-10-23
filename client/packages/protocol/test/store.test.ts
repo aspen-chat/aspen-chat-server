@@ -2239,6 +2239,8 @@ describe("RecordStore previews and held messages", () => {
     attachments: [photo.id],
     echoToParent: false,
     heldAt: "2026-10-05T12:00:00Z",
+    waiting: "preview" as const,
+    kind: "message" as const,
   };
 
   it("gives an attachment the preview made after it was read", () => {

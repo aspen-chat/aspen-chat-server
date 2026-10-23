@@ -52,6 +52,7 @@ The profile is a display name and an icon.
 | `everyone_mention_limit`                                              | [Roles and permissions](../roles-and-permissions/index.md) |
 | `custom_emoji_limit`                                                  | [Custom emoji](../custom-emoji.md)                         |
 | `upload_quota_gib`                                                    | [Attachment previews](../attachment-previews/index.md)     |
+| `mana_max_recharge`, `mana_max`, `mana_attachment_cost`               | [Channel mana](../channel-mana/index.md#settings)          |
 | `evidence_retention_days`                                             | [Reports](../reports/evidence.md#purging-evidence)         |
 | `file_transfers`                                                      | [File transfers](../file-transfers.md)                     |
 | `email_required`, `email_verification_required`, `newsletter_enabled` | [Email](../email/index.md)                                 |

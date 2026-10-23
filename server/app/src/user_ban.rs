@@ -248,6 +248,12 @@ async fn ban_one(
         .await?;
     let at = crate::login::database_clock(conn).await?;
     for account in std::iter::once(target).chain(bots) {
+        crate::message::held::drop_held_by(
+            conn,
+            account,
+            crate::message::held::HeldScope::Everywhere,
+        )
+        .await?;
         publish_event(
             state,
             conn,

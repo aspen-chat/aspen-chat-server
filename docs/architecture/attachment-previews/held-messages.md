@@ -3,6 +3,11 @@
 A message sent with an attachment whose preview is still being made can be held until the preview is
 ready (`app::message::held`). [Why](design-notes.md#held-messages)
 
+Held messages also hold what waits for a busy channel's mana: messages, slash commands, edits,
+polls, and echoes (`held_message.waiting` is `mana`; see
+[Channel mana](../channel-mana/index.md#waiting-messages)). This page is about waiting for previews;
+both kinds are listed, cancelled, and announced alike.
+
 ## Holding a message
 
 1. A client that shows its sender a message waiting sends `mayHold: true` on
@@ -34,20 +39,23 @@ keyed by the held message (`held::release_step`; see [Jobs](../jobs/index.md)).
 
 Once nothing holds it, the job:
 
-1. Posts the message as it was sent (`app::message::post`), in its language, with the author's
+1. Asks the channel's mana, as posting does. When the channel is busy, the row becomes one waiting
+   for mana (`mana::queue::wait_held`), and the job is done.
+2. Posts the message as it was sent (`app::message::post`), in its language, with the author's
    permissions as they are then and the channel's plugins deciding it then.
-2. Deletes the held row in the same transaction, so it is posted once however its job is run.
-3. Tells the author's apps which message it became, with `heldMessagePosted`.
+3. Deletes the held row in the same transaction, so it is posted once however its job is run.
+4. Tells the author's apps which message it became, with `heldMessagePosted`.
 
 A preview finished after the hold ran out reaches the message's readers by `attachmentPreviewed`.
 
 ## When posting fails
 
-| Case                                                                                                | What happens                                                                                          |
-| --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Can no longer be posted (the author lost the right to post there, was removed, or the channel went) | Dropped. `heldMessageFailed` tells the author's apps why, in the language it was sent in.             |
-| Fails for a reason that may pass                                                                    | Tried again every thirty seconds, ten times (`held::MAX_ATTEMPTS`), and dropped as above on the last. |
-| Author's account or channel deleted                                                                 | Dropped when it would be posted, since posting is checked then.                                       |
+| Case                                                                                                                                      | What happens                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Can no longer be posted (the author lost the right to post there, was removed, or the channel went)                                       | Dropped. `heldMessageFailed` tells the author's apps why, in the language it was sent in.                                                                                                                                                                                                        |
+| Fails for a reason that may pass                                                                                                          | Tried again every thirty seconds, ten times (`held::MAX_ATTEMPTS`), and dropped as above on the last.                                                                                                                                                                                            |
+| Author left, was removed, or was banned from the community, left the group DM, or was banned from the deployment or deleted their account | Dropped at once, everything they held there (in a community, its channels and threads; on a deployment ban or deletion, everywhere): the change saves a `dropHeldBy` job in its transaction (`held::drop_held_by`), which drops it a hundred at a time, each told why (`heldNoLongerPermitted`). |
+| Channel deleted                                                                                                                           | Dropped when it would be posted, since posting is checked then.                                                                                                                                                                                                                                  |
 
 The row goes with its user or channel only when those rows themselves are removed.
 
@@ -56,6 +64,16 @@ The row goes with its user or channel only when those rows themselves are remove
 A held first reply makes its thread as it is held. Dropping it removes the thread when nothing else
 was ever posted or waits there (see
 [Threads](../threads-and-dms/threads.md#when-the-first-reply-is-dropped)).
+
+## Cancelling one
+
+`DELETE /users/@me/held-messages/{held}` cancels a held message of the caller's that has not been
+posted, whatever it waits for (`held::cancel`).
+
+- The row goes in one transaction with `heldMessageCancelled`, user-scoped, which tells the author's
+  other apps.
+- A first reply that made its thread as it was held takes the thread with it, as a dropped one does.
+- It is not found when it was never the caller's, or has been posted.
 
 ## Listing
 

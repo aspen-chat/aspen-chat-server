@@ -53,6 +53,15 @@ export {
   type DeviceCredentialStore,
   type PuzzleSolver,
 } from "./device";
+export {
+  MANA_FRAME_MS,
+  MANA_SHOW_BELOW,
+  MANA_TICK_MS,
+  manaAt,
+  manaDrawnAt,
+  manaFullAt,
+  type ChannelMana,
+} from "./mana";
 export { plainFileName } from "./fileNames";
 export {
   ApiProblemError,
@@ -95,6 +104,7 @@ export type {
   Attachment,
   HeldEntry,
   HeldMessage,
+  ManaSender,
   ChannelMute,
   CategoryMute,
   MuteInForce,
@@ -195,6 +205,10 @@ export {
   TYPING_EXPIRY_MS,
   TYPING_REFRESH_MS,
   AspenSync,
+  canSendHeldAgain,
+  type Echoed,
+  type Edited,
+  type PollMade,
   EVENT_REPLAY_WINDOW_MS,
   MESSAGE_AROUND_RADIUS,
   HISTORY_PAGE_SIZE,

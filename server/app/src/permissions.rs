@@ -266,6 +266,7 @@ pub fn describe(permission: Permissions) -> std::borrow::Cow<'static, str> {
             Permission::MentionEveryone => "permissionMentionEveryone",
             Permission::TransferFiles => "permissionTransferFiles",
             Permission::UseCamera => "permissionUseCamera",
+            Permission::BypassChannelMana => "permissionBypassChannelMana",
         },
         None => "permissionOwner",
     };
@@ -704,7 +705,7 @@ async fn access_to_channel(
                 permissions: if blocked || from_system {
                     Permissions::VIEW_CHANNEL
                 } else {
-                    Permissions::CHANNEL
+                    Permissions::IN_DM
                 },
                 thread,
                 dm_moderator: false,
@@ -925,8 +926,8 @@ mod tests {
     #[test]
     fn the_templates_match_the_numbers_migrations_write() {
         assert_eq!(Permissions::MEMBER_TEMPLATE.bits(), 114_344_914_337_800);
-        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 140_733_193_453_464);
-        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 140_733_193_519_103);
+        assert_eq!(Permissions::MODERATOR_TEMPLATE.bits(), 281_470_681_808_792);
+        assert_eq!(Permissions::ADMIN_TEMPLATE.bits(), 281_470_681_874_431);
     }
 
     /// The cases in `spec/permission_vectors.json`, which the client's resolver also runs.

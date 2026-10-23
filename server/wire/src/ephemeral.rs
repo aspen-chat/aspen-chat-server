@@ -39,6 +39,23 @@ pub enum EphemeralEvent {
     /// arrives, so a change before it is in the read and one after it is told; a list the
     /// server was too busy to hear is never answered, and the client sends it again.
     PresenceWatching,
+    /// The level of a channel's mana (`app::mana`) while it is below full, told to those
+    /// viewing the channel (`viewing`) at most twice a second as it is spent, and once when they
+    /// start viewing one below full. Between frames it recharges at `recharge` a second from
+    /// `level` at `at`, up to `max`, so a client animates it itself. `level` is in thousandths
+    /// of mana, and below zero while the channel is in debt.
+    #[serde(rename_all = "camelCase")]
+    Mana {
+        channel_id: ChannelId,
+        level: i64,
+        max: u32,
+        recharge: u32,
+        at: chrono::DateTime<chrono::Utc>,
+        /// Whether anything waits for the channel's mana, so its priority queue is in force: as
+        /// the frame was told, and told again as the queue empties.
+        #[serde(default)]
+        queued: bool,
+    },
 }
 
 /// How long a server gathers changes to presence before telling its connections of them

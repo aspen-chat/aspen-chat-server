@@ -195,6 +195,8 @@ emptied name is saved as none.
 - bots
 - community limits
 - files in calls
+- channel mana: how fast a channel recharges and how much it holds at most, and what a file costs
+  (see the server's `docs/architecture/channel-mana/`)
 
 ## Federation
 

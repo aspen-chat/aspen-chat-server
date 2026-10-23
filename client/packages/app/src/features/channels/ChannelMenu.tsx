@@ -2,6 +2,7 @@ import type { User } from "@aspen/protocol";
 import {
   DotsThreeVerticalIcon,
   EnvelopeSimpleIcon,
+  GaugeIcon,
   LinkIcon,
   LockKeyIcon,
   MicrophoneSlashIcon,
@@ -44,7 +45,8 @@ import { format } from "@/i18n/messages";
  * submenus: Mute, to mute it for a while or until they unmute it, which reads until when while
  * it is muted and then offers unmuting; and Notifications, naming the level in force, to choose
  * what it tells them of. Copy link copies the link to share for it. With `onAccess` the user can
- * set who can use it, and with `onRename` and `onDelete` rename or delete it. A one-to-one DM
+ * set who can use it, with `onMana` set its mana, and with `onRename` and `onDelete` rename or
+ * delete it. A one-to-one DM
  * names the other person (`user`), and its menu is theirs (`UserMenu`) with these items first.
  */
 export function ChannelMenu({
@@ -56,6 +58,7 @@ export function ChannelMenu({
   voice = false,
   user,
   onAccess,
+  onMana,
   onRename,
   onDelete,
 }: {
@@ -70,6 +73,8 @@ export function ChannelMenu({
   user?: User | undefined;
   /** Opens the channel's access settings, for those who may manage channels. */
   onAccess?: () => void;
+  /** Opens a text channel's mana settings, for those who may manage channels. */
+  onMana?: () => void;
   /** Renaming and deleting it, for those who may manage channels or moderate the server. */
   onRename?: () => void;
   onDelete?: () => void;
@@ -89,6 +94,7 @@ export function ChannelMenu({
       mutable={mutable}
       voice={voice}
       {...(onAccess === undefined ? {} : { onAccess })}
+      {...(onMana === undefined ? {} : { onMana })}
       {...(onRename === undefined ? {} : { onRename })}
       {...(onDelete === undefined ? {} : { onDelete })}
     />
@@ -134,6 +140,7 @@ function ChannelItems({
   mutable,
   voice,
   onAccess,
+  onMana,
   onRename,
   onDelete,
 }: {
@@ -142,6 +149,7 @@ function ChannelItems({
   mutable: boolean;
   voice: boolean;
   onAccess?: () => void;
+  onMana?: () => void;
   onRename?: () => void;
   onDelete?: () => void;
 }) {
@@ -166,7 +174,11 @@ function ChannelItems({
     }
     void sync.voice.join(channelId).catch(() => undefined);
   };
-  const manages = onAccess !== undefined || onRename !== undefined || onDelete !== undefined;
+  const manages =
+    onAccess !== undefined ||
+    onMana !== undefined ||
+    onRename !== undefined ||
+    onDelete !== undefined;
   return (
     <>
       {voice &&
@@ -239,6 +251,13 @@ function ChannelItems({
           label={m.access.open}
           icon={<LockKeyIcon aria-hidden="true" />}
           onAction={onAccess}
+        />
+      )}
+      {onMana !== undefined && (
+        <MenuAction
+          label={m.channelActions.mana}
+          icon={<GaugeIcon aria-hidden="true" />}
+          onAction={onMana}
         />
       )}
       {onRename !== undefined && (

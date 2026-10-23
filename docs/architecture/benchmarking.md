@@ -52,6 +52,10 @@ A run is plan, seed, run, purge.
 - Actions are open-model Poisson, with latency measured from when each action was due.
 - Delivery is measured per kind of message: channel messages, DMs, thread replies, pictures (held
   for their previews), and `@everyone` announcements.
+- A `raid` event has a share of a community's members flood one channel, measuring how
+  [channel mana](channel-mana/index.md) holds it back: the raiders' messages and everyone else's
+  there are measured apart, waiting included, and counted as posted at once, held, refused with
+  `channelBusy`, or dropped. A `channelBusy` refusal is not an error.
 - A coordinator can spread users over agents on other machines (`aspen-bench agent`). Clocks are
   synchronised by Cristian's algorithm, so delivery latency is measured across machines.
 - Calls use real SRTP through `produceRtp` and `consumeRtp`, measuring loss, RFC 3550 jitter, and

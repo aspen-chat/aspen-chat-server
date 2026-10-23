@@ -572,6 +572,7 @@ dependencies = [
  "tracing",
  "unicode-normalization",
  "unicode-security",
+ "unicode-segmentation",
  "url",
  "utoipa",
  "uuid",

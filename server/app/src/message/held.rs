@@ -29,15 +29,19 @@ use super::Message;
 use crate::attachment::preview;
 use crate::context::GlobalServerContext;
 use crate::jobs::{self, Claimed, JobClass, JobKind, NewJob, Outcome};
+use crate::mana::queue::{self, Waiting};
+use crate::mana::{self, Decision};
 use crate::t;
 use crate::{AttachmentId, ChannelId, EventScope, HeldMessageId, MessageId, UserId};
 use aspen_schema::held_message;
+pub use aspen_wire::held::{HeldKind, HeldWaiting};
 use aspen_wire::message_enum::server_event::ServerEvent;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel::sql_types::{Array, Bool, Nullable, Text, Timestamptz, Uuid as PgUuid};
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::time::Duration;
 
@@ -48,7 +52,8 @@ const BEHIND_WAIT: Duration = Duration::from_secs(1);
 /// How many times posting one is tried before it is dropped.
 pub const MAX_ATTEMPTS: i32 = 10;
 
-/// A message waiting for its attachments' previews.
+/// A message waiting for its attachments' previews, or for its channel's mana, and the other
+/// things that wait for mana (`app::mana::queue`).
 #[derive(Debug, Clone, QueryableByName)]
 pub struct HeldMessage {
     #[diesel(sql_type = PgUuid)]
@@ -73,7 +78,24 @@ pub struct HeldMessage {
     pub locale: String,
     #[diesel(sql_type = Timestamptz)]
     pub held_at: DateTime<Utc>,
+    #[diesel(sql_type = Text)]
+    pub waiting: HeldWaiting,
+    #[diesel(sql_type = Text)]
+    pub kind: HeldKind,
+    /// The message an edit changes or an echo copies.
+    #[diesel(sql_type = Nullable<PgUuid>)]
+    pub target: Option<MessageId>,
+    /// A command's invocation, or a poll as it was asked for.
+    #[diesel(sql_type = Nullable<diesel::sql_types::Jsonb>)]
+    pub payload: Option<serde_json::Value>,
+    /// What it spends of its channel's mana when posted, in mana.
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub cost: i32,
 }
+
+/// The columns a [`HeldMessage`] is read from.
+pub(crate) const COLUMNS: &str = "id, author, channel, content, attachments, echo_to_parent, \
+    reply_to, tags_replied, locale, held_at, waiting, kind, target, payload, cost";
 
 /// What became of a message sent: posted, or held for its previews.
 pub enum Posted {
@@ -149,6 +171,11 @@ pub async fn post(
                             tags_replied: reply.is_some_and(|reply| reply.tag),
                             locale,
                             held_at,
+                            waiting: HeldWaiting::Preview,
+                            kind: HeldKind::Message,
+                            target: None,
+                            payload: None,
+                            cost: 0,
                         };
                         diesel::insert_into(held_message::table)
                             .values((
@@ -181,7 +208,48 @@ pub async fn post(
             return Ok(Posted::Held(held));
         }
     }
-    super::post(
+    // A busy channel's mana (`app::mana`): checked once the author is known to be allowed to
+    // post, so that only those who could post spend it. A reply that makes its thread goes
+    // ahead, since a new thread's pool is full.
+    let mut conn = state.connection_pool.get().await?;
+    let (channel, unmade) = super::resolve(conn.as_mut(), to).await?;
+    if unmade.is_none() {
+        super::check_posting(
+            state,
+            conn.as_mut(),
+            author,
+            channel,
+            &attachments,
+            echo_to_parent,
+        )
+        .await?;
+        let cost = mana::message_cost(&state.settings(), &content, attachments.len());
+        if mana::decide_for(state, conn.as_mut(), author, channel, cost).await? == Decision::Wait {
+            if let Some(reply) = reply {
+                super::reply::check(conn.as_mut(), channel, reply.to, false).await?;
+            }
+            drop(conn);
+            let held = queue::wait(
+                state,
+                Waiting {
+                    author,
+                    channel,
+                    kind: HeldKind::Message,
+                    content,
+                    attachments,
+                    echo_to_parent,
+                    reply,
+                    target: None,
+                    payload: None,
+                    cost,
+                },
+            )
+            .await?;
+            return Ok(Posted::Held(held));
+        }
+    }
+    drop(conn);
+    post_now(
         state,
         author,
         to,
@@ -194,6 +262,68 @@ pub async fn post(
     )
     .await
     .map(|message| Posted::Sent(Box::new(message)))
+}
+
+/// Posts a message now (`super::post`), with its echo to the thread's parent when the parent's
+/// pool can pay for it; when it cannot, the reply is posted alone and its echo waits in the
+/// parent's queue, as an item of its author's.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn post_now(
+    state: &GlobalServerContext,
+    author: UserId,
+    to: super::To,
+    content: String,
+    attachments: Vec<AttachmentId>,
+    echo_to_parent: bool,
+    reply: Option<super::reply::Reply>,
+    posting: super::Posting,
+    held: Option<HeldMessageId>,
+) -> crate::Result<Message> {
+    let mut echo = echo_to_parent;
+    let mut echo_waits = None;
+    if echo_to_parent {
+        let mut conn = state.connection_pool.get().await?;
+        if let Some(parent) = super::parent_of(conn.as_mut(), to).await? {
+            let cost = mana::message_cost(&state.settings(), &content, attachments.len());
+            if mana::decide_for(state, conn.as_mut(), author, parent, cost).await? == Decision::Wait
+            {
+                echo = false;
+                echo_waits = Some((parent, cost));
+            }
+        }
+    }
+    let message = super::post(
+        state,
+        author,
+        to,
+        content,
+        attachments,
+        echo,
+        reply,
+        posting,
+        held,
+    )
+    .await?;
+    if let Some((parent, cost)) = echo_waits {
+        let waiting = Waiting {
+            author,
+            channel: parent,
+            kind: HeldKind::Echo,
+            content: String::new(),
+            attachments: Vec::new(),
+            echo_to_parent: false,
+            reply: None,
+            target: Some(message.id),
+            payload: None,
+            cost,
+        };
+        // The reply stands either way; an echo the parent's queue cannot take is not made, and
+        // its author may echo the reply again later.
+        if let Err(e) = queue::wait(state, waiting).await {
+            tracing::debug!(error = %e, "a reply's echo could not wait for its channel's mana");
+        }
+    }
+    Ok(message)
 }
 
 #[derive(QueryableByName)]
@@ -240,18 +370,17 @@ pub async fn read_held(
     after: Option<HeldMessageId>,
     limit: i64,
 ) -> crate::Result<Vec<HeldMessage>> {
-    Ok(diesel::sql_query(
+    Ok(diesel::sql_query(format!(
         r#"
-        SELECT id, author, channel, content, attachments, echo_to_parent, reply_to, tags_replied,
-               locale, held_at
+        SELECT {COLUMNS}
         FROM held_message
         WHERE author = $1
           AND ($2::uuid IS NULL OR (held_at, id) > (
               SELECT held_at, id FROM held_message WHERE author = $1 AND id = $2))
         ORDER BY held_at, id
         LIMIT $3
-        "#,
-    )
+        "#
+    ))
     .bind::<PgUuid, _>(author)
     .bind::<diesel::sql_types::Nullable<PgUuid>, _>(after)
     .bind::<diesel::sql_types::BigInt, _>(limit.clamp(1, crate::LIST_PAGE))
@@ -272,6 +401,47 @@ pub(super) async fn take(conn: &mut AsyncPgConnection, id: HeldMessageId) -> cra
     Ok(())
 }
 
+/// Cancels a held message of `author`'s that has not been posted, whatever it waits for, and
+/// tells their apps. A first reply that made its thread as it was held takes the thread with
+/// it, as a dropped one does. Not found when it is not theirs, or already posted.
+pub async fn cancel(
+    state: &GlobalServerContext,
+    author: UserId,
+    id: HeldMessageId,
+) -> crate::Result<()> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction::<_, crate::Error, _>(|conn| {
+        async move {
+            let channel: ChannelId = diesel::delete(
+                held_message::table
+                    .filter(held_message::id.eq(id).and(held_message::author.eq(author))),
+            )
+            .returning(held_message::channel)
+            .get_result(conn)
+            .await?;
+            crate::publish_event(
+                state,
+                conn,
+                EventScope::User(author),
+                &ServerEvent::HeldMessageCancelled { held: id, channel },
+            )
+            .await?;
+            crate::thread::remove_if_unreplied(state, conn, channel).await?;
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// [`take`] for what waits outside `app::message` (a poll), in its posting's transaction.
+pub(crate) async fn take_waited(
+    conn: &mut AsyncPgConnection,
+    id: HeldMessageId,
+) -> crate::Result<()> {
+    take(conn, id).await
+}
+
 /// Tells the author's apps which message a held one became, in the posting's transaction.
 pub(super) async fn announce_released(
     state: &GlobalServerContext,
@@ -288,6 +458,29 @@ pub(super) async fn announce_released(
             held,
             channel: *message.channel.id(),
             message: message.id,
+        },
+    )
+    .await
+}
+
+/// Tells the author's apps that a waiting edit (or poll, or echo) was made: the message it
+/// changed or made, in the transaction that made it where there is one.
+pub(crate) async fn announce_edited(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    held: HeldMessageId,
+    channel: ChannelId,
+    message: MessageId,
+) -> crate::Result<()> {
+    crate::publish_event(
+        state,
+        conn,
+        EventScope::User(author),
+        &ServerEvent::HeldMessagePosted {
+            held,
+            channel,
+            message,
         },
     )
     .await
@@ -361,17 +554,12 @@ pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::
     };
     let held = {
         let mut conn = state.connection_pool.get().await?;
-        let held: Option<HeldMessage> = diesel::sql_query(
-            r#"
-            SELECT id, author, channel, content, attachments, echo_to_parent, reply_to, tags_replied,
-                   locale, held_at
-            FROM held_message WHERE id = $1
-            "#,
-        )
-        .bind::<PgUuid, _>(id)
-        .get_result(conn.as_mut())
-        .await
-        .optional()?;
+        let held: Option<HeldMessage> =
+            diesel::sql_query(format!("SELECT {COLUMNS} FROM held_message WHERE id = $1"))
+                .bind::<PgUuid, _>(id)
+                .get_result(conn.as_mut())
+                .await
+                .optional()?;
         // Posted, or gone with its author or channel.
         let Some(held) = held else {
             return Ok(Outcome::Done);
@@ -388,24 +576,45 @@ pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::
         }
         held
     };
+    if held.waiting == HeldWaiting::Mana {
+        // Released already: it waits for its channel's mana, whose drainer posts it.
+        return Ok(Outcome::Done);
+    }
+    // Released, it is posted as any message is, and so waits for its channel's mana when the
+    // channel is busy.
+    let cost = mana::message_cost(&state.settings(), &held.content, held.attachments.len());
+    let decided = {
+        let mut conn = state.connection_pool.get().await?;
+        mana::decide_for(state, conn.as_mut(), held.author, held.channel, cost).await
+    };
+    if let Ok(Decision::Wait) = decided {
+        queue::wait_held(state, held.id, held.channel, cost).await?;
+        return Ok(Outcome::Done);
+    }
     release(state, held, jobs::last_attempt(job)).await
 }
 
-/// Posts one held message, or drops it with the reason when it can no longer be posted, or this
-/// is its `last` attempt.
-async fn release(
-    state: &GlobalServerContext,
-    row: HeldMessage,
-    last: bool,
-) -> crate::Result<Outcome> {
-    let locale = crate::locale::negotiate(&row.locale);
-    let (id, author, channel) = (row.id, row.author, row.channel);
-    let (posted, noted) = crate::locale::scope(
-        locale,
-        crate::events::noting(super::post(
+/// Posts what waited for its channel's mana, once its drainer has paid for it, by what it is.
+/// One that can no longer be posted is dropped, its author told why; one that fails for a
+/// reason that may pass is left to wait, and is dropped if it waits too long.
+pub(crate) async fn post_waiting(state: &GlobalServerContext, row: HeldMessage) {
+    let id = row.id;
+    // Boxed: posting by any of the kinds is a large future, which would otherwise sit inside the
+    // drainer's on the stack of the thread running it.
+    if let Err(e) = Box::pin(release(state, row, false)).await {
+        tracing::warn!(held = %id.0, error = %e, "could not post what waited for a channel's mana");
+    }
+}
+
+/// Posts one held row by what it is, taking the row in the posting's transaction where the
+/// posting has one.
+async fn post_row(state: &GlobalServerContext, row: HeldMessage) -> crate::Result<()> {
+    let to = super::To::Channel(row.channel);
+    match row.kind {
+        HeldKind::Message => post_now(
             state,
             row.author,
-            super::To::Channel(row.channel),
+            to,
             row.content,
             row.attachments,
             row.echo_to_parent,
@@ -415,12 +624,76 @@ async fn release(
             }),
             super::Posting::Text,
             Some(row.id),
-        )),
-    )
-    .await;
+        )
+        .await
+        .map(drop),
+        HeldKind::Command => {
+            let invocation = serde_json::from_value(row.payload.unwrap_or_default())?;
+            super::post(
+                state,
+                row.author,
+                to,
+                String::new(),
+                row.attachments,
+                false,
+                None,
+                super::Posting::Command(invocation),
+                Some(row.id),
+            )
+            .await
+            .map(drop)
+        }
+        HeldKind::Edit => {
+            let change: super::WaitingEdit =
+                serde_json::from_value(row.payload.unwrap_or_default())?;
+            let Some(target) = row.target else {
+                return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
+            };
+            super::update_message(state, row.author, target, change.into(), Some(row.id))
+                .await
+                .map(drop)
+        }
+        HeldKind::Poll => {
+            let request = serde_json::from_value(row.payload.unwrap_or_default())?;
+            crate::poll::create_poll(state, row.author, row.channel, request, Some(row.id))
+                .await
+                .map(drop)
+        }
+        HeldKind::Echo => {
+            let Some(target) = row.target else {
+                return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
+            };
+            // Echoing a reply twice makes one echo, so its row goes after.
+            let (echo, _) = crate::thread::echo_reply(state, row.author, target).await?;
+            let mut conn = state.connection_pool.get().await?;
+            take(conn.as_mut(), row.id).await?;
+            announce_edited(
+                state,
+                conn.as_mut(),
+                row.author,
+                row.id,
+                row.channel,
+                echo.id,
+            )
+            .await
+        }
+    }
+}
+
+/// Posts one held row, or drops it with the reason when it can no longer be posted, or this
+/// is its `last` attempt.
+async fn release(
+    state: &GlobalServerContext,
+    row: HeldMessage,
+    last: bool,
+) -> crate::Result<Outcome> {
+    let locale = crate::locale::negotiate(&row.locale);
+    let (id, author, channel) = (row.id, row.author, row.channel);
+    let (posted, noted) =
+        crate::locale::scope(locale, crate::events::noting(post_row(state, row))).await;
     crate::events::settle(state, noted, posted.is_err()).await;
     let error = match posted {
-        Ok(_) => return Ok(Outcome::Done),
+        Ok(()) => return Ok(Outcome::Done),
         Err(error) => error,
     };
     // Not found may be its having been posted already, by a run of its job whose lease ran out.
@@ -467,11 +740,163 @@ async fn still_held(state: &GlobalServerContext, id: HeldMessageId) -> bool {
     .unwrap_or(true)
 }
 
+/// Drops `row`, telling its author why, when they can no longer post it where it would go: as
+/// posting would refuse it (`may_post`; an edit, their access to the channel), checked before
+/// the drainer pays for it, so what will be refused spends nothing. Whether it was dropped.
+pub(crate) async fn drop_if_unpostable(
+    state: &GlobalServerContext,
+    row: &HeldMessage,
+) -> crate::Result<bool> {
+    let locale = crate::locale::negotiate(&row.locale);
+    let checked = crate::locale::scope(locale, async {
+        let mut conn = state.connection_pool.get().await?;
+        match row.kind {
+            HeldKind::Edit => {
+                crate::permissions::channel_access(state, conn.as_mut(), row.author, row.channel)
+                    .await
+                    .map(drop)
+            }
+            _ => super::may_post(state, conn.as_mut(), row.author, row.channel)
+                .await
+                .map(drop),
+        }
+    })
+    .await;
+    let Err(error) = checked else {
+        return Ok(false);
+    };
+    let Some(reason) = crate::locale::scope(locale, async { refusal(&error) }).await else {
+        return Err(error);
+    };
+    drop_held(state, row.id, row.author, row.channel, reason).await?;
+    Ok(true)
+}
+
+/// Where someone can no longer post, so what they have held there will never be
+/// (`JobKind::DropHeldBy`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum HeldScope {
+    /// A community's channels and their threads: they left, were removed, or were banned.
+    Community { community: crate::CommunityId },
+    /// A group DM and its threads: they left it.
+    Dm { channel: ChannelId },
+    /// Everywhere: their account was banned from the deployment, or deleted.
+    Everywhere,
+}
+
+impl HeldScope {
+    fn mode(self) -> (&'static str, uuid::Uuid) {
+        match self {
+            HeldScope::Community { community } => ("community", community.0),
+            HeldScope::Dm { channel } => ("dm", channel.0),
+            HeldScope::Everywhere => ("everywhere", uuid::Uuid::nil()),
+        }
+    }
+}
+
+/// What a `dropHeldBy` job drops: whose, and where.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HeldDrop {
+    author: UserId,
+    scope: HeldScope,
+}
+
+/// How many held messages one step of a `dropHeldBy` job drops.
+const DROP_BATCH: i64 = 100;
+
+#[derive(QueryableByName)]
+struct HeldIn {
+    #[diesel(sql_type = PgUuid)]
+    id: HeldMessageId,
+    #[diesel(sql_type = PgUuid)]
+    channel: ChannelId,
+    #[diesel(sql_type = Text)]
+    locale: String,
+}
+
+/// The first `limit` of what `author` has held in `scope`, oldest first, through
+/// `held_message_by_author`: a thread's are in its parent's community or group DM.
+async fn held_in(
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    scope: HeldScope,
+    limit: i64,
+) -> crate::Result<Vec<HeldIn>> {
+    let (mode, place) = scope.mode();
+    Ok(diesel::sql_query(
+        "SELECT h.id, h.channel, h.locale FROM held_message h \
+         JOIN channel c ON c.id = h.channel \
+         LEFT JOIN channel parent ON parent.id = c.parent_channel \
+         WHERE h.author = $1 AND ($3 = 'everywhere' \
+             OR ($3 = 'community' AND COALESCE(c.community, parent.community) = $2) \
+             OR ($3 = 'dm' AND COALESCE(c.parent_channel, c.id) = $2)) \
+         ORDER BY h.held_at, h.id LIMIT $4",
+    )
+    .bind::<PgUuid, _>(author)
+    .bind::<PgUuid, _>(place)
+    .bind::<Text, _>(mode)
+    .bind::<diesel::sql_types::BigInt, _>(limit)
+    .load(conn)
+    .await?)
+}
+
+/// Saves, in the caller's transaction, a job dropping everything `author` has held in `scope`,
+/// waiting for its previews or for its channel's mana, telling them why: they can no longer
+/// post there, so none of it ever will be, and what waits for mana would take up the queue
+/// until then. Saves nothing when they have nothing held there.
+pub async fn drop_held_by(
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    scope: HeldScope,
+) -> crate::Result<()> {
+    if held_in(conn, author, scope, 1).await?.is_empty() {
+        return Ok(());
+    }
+    jobs::enqueue(
+        conn,
+        NewJob::new(
+            JobKind::DropHeldBy,
+            JobClass::Normal,
+            &HeldDrop { author, scope },
+        )?,
+    )
+    .await?;
+    Ok(())
+}
+
+/// One step of a `dropHeldBy` job: drops a batch, each told to its author in the language it
+/// was sent in, and goes on while batches come back full.
+pub async fn drop_held_by_step(
+    state: &GlobalServerContext,
+    job: &Claimed,
+) -> crate::Result<Outcome> {
+    let HeldDrop { author, scope } = job.payload()?;
+    let rows = {
+        let mut conn = state.connection_pool.get().await?;
+        held_in(conn.as_mut(), author, scope, DROP_BATCH).await?
+    };
+    let full = rows.len() as i64 == DROP_BATCH;
+    for row in rows {
+        let reason = crate::locale::scope(crate::locale::negotiate(&row.locale), async {
+            t!("heldNoLongerPermitted")
+        })
+        .await;
+        drop_held(state, row.id, author, row.channel, reason).await?;
+    }
+    Ok(if full {
+        Outcome::Continue
+    } else {
+        Outcome::Done
+    })
+}
+
 /// Drops a held message that will not be posted and tells its author's apps why. When it was the
 /// first reply of a thread, which it made as it was held (`post`), and nothing else was posted
 /// or waits there, the thread goes with it (`thread::remove_if_unreplied`), in the same
 /// transaction.
-async fn drop_held(
+pub(crate) async fn drop_held(
     state: &GlobalServerContext,
     id: HeldMessageId,
     author: UserId,

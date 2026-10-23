@@ -87,6 +87,7 @@ import type {
 } from "./generated/events";
 import type { components } from "./generated/openapi";
 import { identityOf } from "./identity";
+import { type ChannelMana, manaFullAt } from "./mana";
 
 type UserOnlineStatus = components["schemas"]["UserOnlineStatus"];
 
@@ -144,6 +145,8 @@ const EMPTY_OVERRIDES: readonly never[] = [];
 const NO_ANNOTATIONS: readonly never[] = [];
 const NO_PLUGINS: readonly PluginInfo[] = [];
 const NO_TYPERS: readonly string[] = [];
+/** The most channels whose mana the store keeps: those viewed lately while busy. */
+const MANA_KEPT = 32;
 const EMPTY_REACTIONS: Reactions = new Map();
 const EMPTY_VOTES: ReadonlySet<number> = new Set();
 
@@ -296,6 +299,13 @@ export class RecordStore {
    * began. Never read from the server: only the event stream's `ephemeral` frames tell of it.
    */
   readonly #typing = new Map<string, Map<string, number>>();
+  /**
+   * The mana of channels viewed while it was below full, as last told: never read from the
+   * server, only from the event stream's `ephemeral` frames. Kept for `MANA_KEPT` channels at
+   * most, the latest told; what is read from it is worked out from its time (`manaAt`), so one
+   * that has filled since reads as full.
+   */
+  readonly #mana = new Map<string, ChannelMana>();
   /** When messages that arrived while the app was open came, for drawing them arriving. */
   readonly #arrivals = new Map<string, number>();
   /** When messages deleted while the app was open went, for drawing them going. */
@@ -1461,6 +1471,40 @@ export class RecordStore {
         this.#touch(`typing:${channelId}`);
       }
       this.#typing.clear();
+    });
+  }
+
+  /**
+   * Topic `mana:<channelId>`: the channel's mana as last told, or `undefined` while it is full
+   * or was never told of.
+   */
+  mana(channelId: string): ChannelMana | undefined {
+    return this.#mana.get(channelId);
+  }
+
+  /** Notes a channel's mana as the server told it. */
+  noteMana(channelId: string, mana: ChannelMana): void {
+    this.#mana.delete(channelId);
+    if (manaFullAt(mana) > this.#now()) {
+      this.#mana.set(channelId, mana);
+      for (const oldest of this.#mana.keys()) {
+        if (this.#mana.size <= MANA_KEPT) {
+          break;
+        }
+        this.#mana.delete(oldest);
+        this.#touch(`mana:${oldest}`);
+      }
+    }
+    this.#touch(`mana:${channelId}`);
+  }
+
+  /** Forgets every channel's mana, once the connection that told of it is gone. */
+  forgetMana(): void {
+    this.#batch(() => {
+      for (const channelId of this.#mana.keys()) {
+        this.#touch(`mana:${channelId}`);
+      }
+      this.#mana.clear();
     });
   }
 
@@ -3022,6 +3066,10 @@ export class RecordStore {
           this.#settledHeld.add(event.held);
           this.forgetHeldMessage(event.held);
           break;
+        case "heldMessageCancelled":
+          this.#settledHeld.add(event.held);
+          this.forgetHeldMessage(event.held);
+          break;
         case "heldMessageFailed": {
           this.#settledHeld.add(event.held);
           const entry = this.#heldMessages.get(event.held);
@@ -4222,6 +4270,13 @@ export class RecordStore {
   }
 
   #removeMessage(id: string): void {
+    // An edit of it, or an echo of it, waiting for its channel's mana went with it.
+    for (const [heldId, entry] of this.#heldMessages) {
+      if (entry.message.target === id) {
+        this.#settledHeld.add(heldId);
+        this.forgetHeldMessage(heldId);
+      }
+    }
     // A link to it now finds it deleted.
     const link = this.#links.get(id);
     if (link?.state === "available") {

@@ -81,6 +81,13 @@ pub struct DeploymentSettings {
     pub custom_emoji_limit: u32,
     /// How many GiB one person may upload in any 24 hours (`app::upload_quota`); 0 sets no limit.
     pub upload_quota_gib: u32,
+    /// The most mana any channel recharges a second (`app::mana`), and the rate of those that
+    /// set none of their own.
+    pub mana_max_recharge: u32,
+    /// The most mana a channel holds where it sets none of its own, and the most it may set.
+    pub mana_max: u32,
+    /// What an attachment costs, in the mana a glyph costs.
+    pub mana_attachment_cost: u32,
     /// How many days the files of deleted messages are kept for reviewing reports, past any
     /// case about them (`app::attachment::evidence::purge_step`); 0 keeps them for good.
     pub evidence_retention_days: u32,
@@ -124,6 +131,9 @@ struct SettingsRow {
     everyone_mention_limit: i32,
     custom_emoji_limit: i32,
     upload_quota_gib: i32,
+    mana_max_recharge: i32,
+    mana_max: i32,
+    mana_attachment_cost: i32,
     evidence_retention_days: i32,
     file_transfers: bool,
     email_required: bool,
@@ -157,6 +167,9 @@ impl From<SettingsRow> for DeploymentSettings {
             everyone_mention_limit: count(row.everyone_mention_limit),
             custom_emoji_limit: count(row.custom_emoji_limit),
             upload_quota_gib: count(row.upload_quota_gib),
+            mana_max_recharge: count(row.mana_max_recharge),
+            mana_max: count(row.mana_max),
+            mana_attachment_cost: count(row.mana_attachment_cost),
             evidence_retention_days: count(row.evidence_retention_days),
             file_transfers: row.file_transfers,
             email_required: row.email_required,
@@ -202,6 +215,12 @@ pub struct SettingsChange {
     pub custom_emoji_limit: Option<u32>,
     #[diesel(skip_update)]
     pub upload_quota_gib: Option<u32>,
+    #[diesel(skip_update)]
+    pub mana_max_recharge: Option<u32>,
+    #[diesel(skip_update)]
+    pub mana_max: Option<u32>,
+    #[diesel(skip_update)]
+    pub mana_attachment_cost: Option<u32>,
     #[diesel(skip_update)]
     pub evidence_retention_days: Option<u32>,
     pub file_transfers: Option<bool>,
@@ -273,6 +292,9 @@ impl SettingsChange {
             everyone_mention_limit => next.everyone_mention_limit,
             custom_emoji_limit => next.custom_emoji_limit,
             upload_quota_gib => next.upload_quota_gib,
+            mana_max_recharge => next.mana_max_recharge,
+            mana_max => next.mana_max,
+            mana_attachment_cost => next.mana_attachment_cost,
             evidence_retention_days => next.evidence_retention_days,
             file_transfers => next.file_transfers,
             email_required => next.email_required,
@@ -509,6 +531,10 @@ pub async fn update(
                         deployment_settings::custom_emoji_limit
                             .eq(count(wanted.custom_emoji_limit)),
                         deployment_settings::upload_quota_gib.eq(count(wanted.upload_quota_gib)),
+                        deployment_settings::mana_max_recharge.eq(count(wanted.mana_max_recharge)),
+                        deployment_settings::mana_max.eq(count(wanted.mana_max)),
+                        deployment_settings::mana_attachment_cost
+                            .eq(count(wanted.mana_attachment_cost)),
                         deployment_settings::evidence_retention_days
                             .eq(count(wanted.evidence_retention_days)),
                         deployment_settings::event_stream_mib
@@ -554,6 +580,9 @@ fn validate(settings: &DeploymentSettings) -> crate::Result<()> {
         settings.everyone_mention_limit,
         settings.custom_emoji_limit,
         settings.upload_quota_gib,
+        settings.mana_max_recharge,
+        settings.mana_max,
+        settings.mana_attachment_cost,
         settings.evidence_retention_days,
     ]
     .into_iter()
@@ -574,6 +603,9 @@ fn validate(settings: &DeploymentSettings) -> crate::Result<()> {
             "streamSizeTooSmall",
             min = crate::nats_memory::MIN_STREAM_MIB
         )));
+    }
+    if settings.mana_max_recharge == 0 || settings.mana_max == 0 {
+        return Err(crate::Error::Validation(t!("manaSettingZero")));
     }
     let policy = &settings.federation;
     if policy.enabled() && settings.federation_domain.is_none() {

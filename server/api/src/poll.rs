@@ -68,7 +68,9 @@ pub struct PollReadQuery {
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = Poll, headers(("Location" = String, description = "URL of the new poll"))),
+        (status = ACCEPTED, description = "Waiting: the channel is busy, and the poll waits its turn for the channel's mana; its duration counts from when it is posted", body = crate::message::HeldMessage),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (question, options, or duration out of bounds)", body = Problem),
+        (status = TOO_MANY_REQUESTS, description = "`channelBusy`: the channel cannot take more waiting for its mana now; try again after `Retry-After`", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -82,10 +84,21 @@ pub async fn create_poll(
     SessionUser { user, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
     Json(request): Json<PollCreateRequest>,
-) -> ApiResult<Created<Poll>> {
-    let (poll, _) = app::poll::create_poll(&state, user.id, channel, request).await?;
-    let location = format!("{API_PREFIX}/polls/{}", poll.id.0);
-    Ok(Created::new(location, poll))
+) -> ApiResult<Response> {
+    Ok(
+        match app::poll::create_poll(&state, user.id, channel, request, None).await? {
+            app::poll::CreatedPoll::Posted(posted) => {
+                let (poll, _) = *posted;
+                let location = format!("{API_PREFIX}/polls/{}", poll.id.0);
+                Created::new(location, poll).into_response()
+            }
+            app::poll::CreatedPoll::Waiting(held) => (
+                StatusCode::ACCEPTED,
+                Json(crate::message::HeldMessage::from(held)),
+            )
+                .into_response(),
+        },
+    )
 }
 
 /// Reads a poll with its current tally. `include` sideloads the caller's own votes.

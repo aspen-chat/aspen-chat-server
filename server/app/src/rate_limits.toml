@@ -476,24 +476,24 @@ user_per_domain = { requests = 6, per_seconds = 60, burst = 5 }
 ip = { requests = 1200, per_seconds = 60, burst = 600 }
 user = { requests = 30, per_seconds = 60, burst = 20 }
 
+# One person's posting. A whole channel's flood, however many accounts take part, is bounded by
+# its mana (`app::mana`) rather than here, so these hold only one account.
 [rate_limits.endpoints."POST /channels/{channel}/messages"]
-user_per_channel = { requests = 5, per_seconds = 5, burst = 10 }
-user = { requests = 60, per_seconds = 60, burst = 20 }
-# A whole channel's flood, however many accounts take part.
-per_channel = { requests = 50, per_seconds = 10, burst = 50 }
+user_per_channel = { requests = 50, per_seconds = 5, burst = 100 }
+user = { requests = 600, per_seconds = 60, burst = 200 }
 
 [rate_limits.endpoints."POST /channels/{channel}/commands"]
 # A command is a message in the channel and an event for its bot, and checking it can read
 # several records.
-user_per_channel = { requests = 5, per_seconds = 5, burst = 10 }
-user = { requests = 60, per_seconds = 60, burst = 20 }
-per_channel = { requests = 50, per_seconds = 10, burst = 50 }
+user_per_channel = { requests = 50, per_seconds = 5, burst = 100 }
+user = { requests = 600, per_seconds = 60, burst = 200 }
 
 [rate_limits.endpoints."POST /channels/{channel}/polls"]
 user_per_channel = { requests = 3, per_seconds = 60, burst = 3 }
 
+# Lengthening a message spends its channel's mana as posting does.
 [rate_limits.endpoints."PATCH /messages/{message}"]
-user = { requests = 30, per_seconds = 60, burst = 10 }
+user = { requests = 300, per_seconds = 60, burst = 100 }
 
 [rate_limits.endpoints."PATCH /attachments/{attachment}"]
 user = { requests = 60, per_seconds = 60, burst = 20 }
@@ -517,10 +517,9 @@ user = { requests = 30, per_seconds = 60, burst = 10 }
 user = { requests = 20, per_seconds = 60, burst = 10 }
 
 # Posts a message, and makes a thread when it is the first reply. Clients post later replies to
-# the thread itself, so the limits are those of making threads, with a thread's flood besides.
+# the thread itself; a thread's flood is bounded by its mana.
 [rate_limits.endpoints."POST /messages/{message}/thread/messages"]
-user = { requests = 20, per_seconds = 60, burst = 10 }
-per_message = { requests = 50, per_seconds = 10, burst = 50 }
+user = { requests = 200, per_seconds = 60, burst = 100 }
 
 # An echo posts in the parent channel, and deleting it frees the reply to be echoed again.
 [rate_limits.endpoints."PUT /messages/{message}/echo"]
@@ -707,6 +706,12 @@ user = { requests = 30, per_seconds = 600, burst = 10 }
 [rate_limits.endpoints."GET /users/statuses"]
 # The client asks every thirty seconds per device, and again when a page comes into view.
 user = { requests = 30, per_seconds = 60, burst = 10 }
+
+[rate_limits.endpoints."GET /channels/{channel}/mana/top-senders"]
+# The client asks every five seconds while the list is open; a pool's sum is read at most that
+# often however many ask (`mana::top_senders`).
+user = { requests = 30, per_seconds = 60, burst = 10 }
+per_channel = { requests = 600, per_seconds = 60, burst = 200 }
 
 [rate_limits.endpoints."GET /channels/{channel}/presence"]
 # The client asks for the open channel with every presence poll, every thirty seconds per

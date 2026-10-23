@@ -10,6 +10,8 @@ use aspen_app::bot_command::{BotCommands, CommandList, Invocation};
 use aspen_app::context::GlobalServerContext;
 use aspen_app::{self as app, ChannelId, UserId};
 use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 
 /// Publishes the commands a bot answers, replacing any it published before. The bot itself
 /// may, or its owner. The whole list is checked first, and a refusal says what is wrong
@@ -102,6 +104,8 @@ pub async fn channel_commands(
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = Message, headers(("Location" = String, description = "The message showing the command"))),
+        (status = ACCEPTED, description = "Waiting: the channel is busy, and the command waits its turn for the channel's mana", body = crate::message::HeldMessage),
+        (status = TOO_MANY_REQUESTS, description = "`channelBusy`: the channel cannot take more waiting for its mana now; try again after `Retry-After`", body = Problem),
         (status = BAD_REQUEST, description = "`badRequest`: no such command, the wrong number of arguments, or one that is not what its parameter takes, which the detail names", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden` without Send messages (or Send in threads), or `blocked`", body = Problem),
@@ -116,20 +120,21 @@ pub async fn invoke_command(
     SessionUser { user, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
     Json(invocation): Json<Invocation>,
-) -> ApiResult<Created<Message>> {
+) -> ApiResult<Response> {
     let attachments = invocation.attachments.clone();
-    let message = app::message::create_message(
-        &state,
-        user.id,
-        channel,
-        String::new(),
-        attachments.clone(),
-        false,
-        app::message::Posting::Command(invocation),
-    )
-    .await?;
+    let message = match app::message::invoke_command(&state, user.id, channel, invocation).await? {
+        app::message::held::Posted::Sent(message) => *message,
+        app::message::held::Posted::Held(held) => {
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(crate::message::HeldMessage::from(held)),
+            )
+                .into_response());
+        }
+    };
     Ok(Created::new(
         format!("{API_PREFIX}/messages/{}", message.id.0),
         app::message::record(&message, attachments, Vec::new()),
-    ))
+    )
+    .into_response())
 }

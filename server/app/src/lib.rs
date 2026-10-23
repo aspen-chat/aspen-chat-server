@@ -59,6 +59,7 @@ pub mod jobs;
 pub mod link_preview;
 pub use aspen_locale as locale;
 pub mod login;
+pub mod mana;
 pub mod markdown;
 pub mod media_store;
 pub mod mention;

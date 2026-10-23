@@ -52,6 +52,7 @@ use crate::events::{
     CATEGORY_HEADER, CHANNEL_HEADER, CREATOR_HEADER, REQUIRES_HEADER, SubjectOwner, memberships,
     subject_owner,
 };
+use crate::mana::live::MANA_SUBJECT;
 use crate::permissions::{Permission, Permissions};
 use crate::typing::{Audience, Relay, TYPING_SUBJECT};
 use crate::visibility::{CommunityModel, ModelChange, member_roles};
@@ -1686,14 +1687,15 @@ fn apply_and_attach(model: &mut Arc<CommunityModel>, event: &FeedEvent) {
     let _ = event.access.set(model.clone());
 }
 
-/// The events a typing relay (`app::typing::Relay`) makes for this server's readers: one for
-/// the community, carrying its model as it stands, or one for each of a DM's people who read
-/// here. None for an audience nobody here reads, or a relay this server cannot read.
-fn typing_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
+/// The events a relay of what happens in a channel and is never kept (`app::typing::Relay`:
+/// someone typing, a channel's mana) makes for this server's readers: one for the community,
+/// carrying its model as it stands, or one for each of a DM's people who read here. None for an
+/// audience nobody here reads, or a relay this server cannot read.
+fn relayed_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
     let relay: Relay = match serde_json::from_slice(payload) {
         Ok(relay) => relay,
         Err(e) => {
-            warn!("a typing relay could not be read: {e}");
+            warn!("a relay could not be read: {e}");
             return Vec::new();
         }
     };
@@ -1702,7 +1704,8 @@ fn typing_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
     };
     let unseen_by = Arc::new(relay.unseen_by.into_iter().collect::<HashSet<_>>());
     let place = match relay.event {
-        crate::typing::EphemeralEvent::Typing { channel_id, .. } => channel_id,
+        crate::typing::EphemeralEvent::Typing { channel_id, .. }
+        | crate::typing::EphemeralEvent::Mana { channel_id, .. } => channel_id,
         // Presence is told by each server's own router (`app::presence_feed`), never relayed.
         crate::typing::EphemeralEvent::Presence { .. }
         | crate::typing::EphemeralEvent::PresenceWatching => return Vec::new(),
@@ -1741,14 +1744,18 @@ fn typing_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
     }
 }
 
-/// Subscribes to typing (`app::typing::TYPING_SUBJECT`), retried until NATS answers.
-async fn subscribe_typing(context: &jetstream::Context) -> async_nats::Subscriber {
+/// Subscribes to a subject of relays (`app::typing::TYPING_SUBJECT`,
+/// `app::mana::live::MANA_SUBJECT`), retried until NATS answers.
+async fn subscribe_relays(
+    context: &jetstream::Context,
+    subject: &'static str,
+) -> async_nats::Subscriber {
     let mut wait = Duration::from_millis(250);
     loop {
-        match context.client().subscribe(TYPING_SUBJECT).await {
+        match context.client().subscribe(subject).await {
             Ok(subscriber) => return subscriber,
             Err(e) => {
-                error!("could not subscribe to typing, retrying: {e}");
+                error!("could not subscribe to {subject}, retrying: {e}");
                 tokio::time::sleep(wait).await;
                 wait = (wait * 2).min(Duration::from_secs(5));
             }
@@ -1782,16 +1789,30 @@ async fn dispatch(
         info!("event feed ready");
     }
     let mut evict = tokio::time::interval(EVICT_INTERVAL);
-    let mut typing = subscribe_typing(&context).await;
+    let mut typing = subscribe_relays(&context, TYPING_SUBJECT).await;
+    let mut mana = subscribe_relays(&context, MANA_SUBJECT).await;
     loop {
         tokio::select! {
             message = typing.next() => {
                 let Some(message) = message else {
                     error!("the typing subscription ended, subscribing again");
-                    typing = subscribe_typing(&context).await;
+                    typing = subscribe_relays(&context, TYPING_SUBJECT).await;
                     continue;
                 };
-                for event in typing_events(&message.payload, &models) {
+                for event in relayed_events(&message.payload, &models) {
+                    let event = Arc::new(event);
+                    for to in &shards {
+                        tell(to, ShardCommand::Route(event.clone())).await;
+                    }
+                }
+            }
+            message = mana.next() => {
+                let Some(message) = message else {
+                    error!("the mana subscription ended, subscribing again");
+                    mana = subscribe_relays(&context, MANA_SUBJECT).await;
+                    continue;
+                };
+                for event in relayed_events(&message.payload, &models) {
                     let event = Arc::new(event);
                     for to in &shards {
                         tell(to, ShardCommand::Route(event.clone())).await;
@@ -2876,7 +2897,7 @@ mod tests {
         let mut models = Models::default();
         models.models.insert(community, model);
         let made = |channel| {
-            let mut events = typing_events(&serde_json::to_vec(&relay(channel)).unwrap(), &models);
+            let mut events = relayed_events(&serde_json::to_vec(&relay(channel)).unwrap(), &models);
             assert_eq!(events.len(), 1);
             Arc::new(events.remove(0))
         };
@@ -2905,9 +2926,9 @@ mod tests {
             ..relay(open)
         };
         let payload = serde_json::to_vec(&direct).unwrap();
-        assert!(typing_events(&payload, &models).is_empty());
+        assert!(relayed_events(&payload, &models).is_empty());
         models.register(9, member, HashSet::new());
-        let events = typing_events(&payload, &models);
+        let events = relayed_events(&payload, &models);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].owner, SubjectOwner::User(member));
     }

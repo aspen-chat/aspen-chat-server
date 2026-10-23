@@ -150,6 +150,11 @@ pub enum Error {
         detail: Cow<'static, str>,
         retry_after: Option<std::time::Duration>,
     },
+    /// A channel's mana queue cannot take what was sent (`app::mana::queue`): the sender's item,
+    /// or the queue, is full. The reason is localized for the sender, who tries again after
+    /// `mana::queue::BUSY_RETRY`.
+    #[error("the channel is too busy: {0}")]
+    ChannelBusy(Cow<'static, str>),
     /// Another deployment could not be reached, or did not answer as a deployment does; the
     /// reason is localized for the administrator who asked.
     #[error("another deployment could not be reached: {0}")]

@@ -83,6 +83,11 @@ pub struct Population {
     pub votes_per_poll: Option<u32>,
     /// History messages in each text channel that tag a member; one in twenty when left out.
     pub tagged_per_channel: Option<u32>,
+    /// Over how many days each community's members joined, in the order they are listed, the
+    /// last of them now; 0, the default, all of them as the run is seeded. A raid's accounts
+    /// are a community's newest members.
+    #[serde(default)]
+    pub tenure_days: u32,
     /// Every seeded user's password; left out, the seeder draws one for the run.
     #[serde(default)]
     pub password: Option<String>,
@@ -238,7 +243,30 @@ pub enum EventKind {
         #[serde(default)]
         community: u32,
     },
+    /// The newest `share` of the members of the community at `community` (an index, as above)
+    /// flood its first channel for `seconds`, each posting `messages_per_second` messages of about
+    /// `glyphs` glyphs, as accounts joined to raid it would. The channel's mana holds them
+    /// back: their messages' delivery, waits included, is `delivery:raid`, and everyone
+    /// else's in that channel, from the raid's start until what it left waiting has posted
+    /// or been dropped (`RAID_AFTERMATH` after it ends), `delivery:raided`.
+    Raid {
+        #[serde(default)]
+        community: u32,
+        share: f64,
+        seconds: f64,
+        messages_per_second: f64,
+        #[serde(default = "raid_glyphs")]
+        glyphs: u32,
+    },
 }
+
+fn raid_glyphs() -> u32 {
+    40
+}
+
+/// The most glyphs a raid's message may have, its marker aside: well within a message's
+/// length limit.
+pub const MAX_RAID_GLYPHS: u32 = 2000;
 
 /// What counts as keeping up. Every figure is over the steady phase.
 #[derive(Clone, Debug, Serialize, Deserialize, SmartDefault)]
@@ -441,6 +469,27 @@ impl Profile {
                         p.communities
                     ));
                 }
+                EventKind::Raid { community, .. } if community >= p.communities => {
+                    return Err(format!(
+                        "a raid names community {community}, but there are {}",
+                        p.communities
+                    ));
+                }
+                EventKind::Raid {
+                    share,
+                    seconds,
+                    messages_per_second,
+                    glyphs,
+                    ..
+                } if !(0.0..=1.0).contains(&share)
+                    || seconds <= 0.0
+                    || messages_per_second <= 0.0
+                    || !(1..=MAX_RAID_GLYPHS).contains(&glyphs) =>
+                {
+                    return Err(format!(
+                        "a raid's share is between 0 and 1, its seconds and messages_per_second are above 0, and its glyphs between 1 and {MAX_RAID_GLYPHS}"
+                    ));
+                }
                 _ => {}
             }
         }
@@ -506,6 +555,7 @@ impl Profile {
                         .unwrap_or(u32::from(p.history_per_channel > 0)),
                     votes_per_poll: p.votes_per_poll.unwrap_or((size / 4).min(1000)),
                     tagged_per_channel: p.tagged_per_channel.unwrap_or(p.history_per_channel / 20),
+                    tenure_days: p.tenure_days,
                     members,
                 }
             })
@@ -646,6 +696,10 @@ delivery_p99_ms = 250
             bad("[behaviours.a]\nshare = 1\n[[events]]\nat_seconds = 1\nkind = \"announcement\"\ncommunity = 3\n")
                 .contains("community 3")
         );
+        let raid = "[behaviours.a]\nshare = 1\n[[events]]\nat_seconds = 1\nkind = \"raid\"\nseconds = 10\nmessages_per_second = 1\n";
+        assert!(bad(&format!("{raid}share = 2\n")).contains("a raid's share"));
+        assert!(bad(&format!("{raid}share = 0.1\nglyphs = 0\n")).contains("glyphs"));
+        assert!(bad(&format!("{raid}share = 0.1\ncommunity = 1\n")).contains("a raid names"));
     }
 
     #[test]

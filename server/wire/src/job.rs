@@ -125,6 +125,10 @@ pub enum JobKind {
     MakeVideoPoster,
     /// Posting a message held for its previews once nothing holds it.
     ReleaseHeldMessage,
+    /// Posting what waits for a busy channel's mana, as it recharges (`app::mana::queue`).
+    DrainManaQueue,
+    /// Dropping what someone has held where they can no longer post (`app::message::held`).
+    DropHeldBy,
     /// Handing a plugin one of its timers once it falls due.
     FirePluginTimer,
     /// Sweeping ended community bans, old plugin notices, and old voice failure reports.

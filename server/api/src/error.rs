@@ -74,6 +74,9 @@ pub enum ProblemCode {
     /// The device credential's challenge is not this deployment's, has expired, is already
     /// used, or the nonce does not solve it. `detail` says which; ask for another challenge.
     DeviceChallengeInvalid,
+    /// The channel is too busy to take this now: what the sender already has waiting for its
+    /// mana, or its whole queue, is full. `detail` says which; `Retry-After` when to try again.
+    ChannelBusy,
     /// The upload would take the caller past the deployment's daily upload quota. `detail`
     /// names the quota and when there will be room, which `Retry-After` gives in seconds,
     /// absent when the file alone is larger than the quota.
@@ -167,7 +170,8 @@ impl ProblemCode {
             | ProblemCode::DeploymentBanned => StatusCode::FORBIDDEN,
             ProblemCode::TooManyAttempts
             | ProblemCode::RateLimited
-            | ProblemCode::UploadQuotaExceeded => StatusCode::TOO_MANY_REQUESTS,
+            | ProblemCode::UploadQuotaExceeded
+            | ProblemCode::ChannelBusy => StatusCode::TOO_MANY_REQUESTS,
             ProblemCode::PasskeyRejected | ProblemCode::DeviceChallengeInvalid => {
                 StatusCode::BAD_REQUEST
             }
@@ -221,6 +225,7 @@ impl ProblemCode {
             ProblemCode::RateLimited => t!("problemRateLimited"),
             ProblemCode::DeviceCredentialRequired => t!("problemDeviceCredentialRequired"),
             ProblemCode::DeviceChallengeInvalid => t!("problemDeviceChallengeInvalid"),
+            ProblemCode::ChannelBusy => t!("problemChannelBusy"),
             ProblemCode::UploadQuotaExceeded => t!("problemUploadQuotaExceeded"),
             ProblemCode::LastSecondFactor => t!("problemLastSecondFactor"),
             ProblemCode::PasskeyRejected => t!("problemPasskeyRejected"),
@@ -427,6 +432,9 @@ impl From<app::Error> for ApiError {
             app::Error::PluginUnavailable(detail) => {
                 Self::new(ProblemCode::PluginUnavailable).with_detail(detail)
             }
+            app::Error::ChannelBusy(detail) => Self::new(ProblemCode::ChannelBusy)
+                .with_detail(detail)
+                .with_retry_after(app::mana::queue::BUSY_RETRY),
             app::Error::UploadQuotaExceeded {
                 detail,
                 retry_after,

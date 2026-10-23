@@ -1,19 +1,20 @@
 # The message box and drafts
 
 The message box (`Composer`) is where a user writes and sends messages. This page covers its layout,
-replying to a message, the typing line above it, the length limit, messages held for their previews,
-and drafts.
+replying to a message, the typing line above it, the length limit, messages held for their previews
+or for a busy channel, the mana bar, and drafts.
 
 ## Where it lives
 
-| Part            | Code                                                                    |
-| --------------- | ----------------------------------------------------------------------- |
-| Message box     | `Composer`                                                              |
-| Typing line     | `TypingIndicator`, `TypingDots`, `typingSentence`                       |
-| Length counting | `messageLength.ts`, `MessageLengthNote`                                 |
-| Held messages   | `HeldMessages.tsx`                                                      |
-| Replying        | `ReplyBar`, `composerTargets.ts`; the line above a reply is `ReplyLine` |
-| Drafts          | `src/features/messages/drafts.ts`                                       |
+| Part            | Code                                                                     |
+| --------------- | ------------------------------------------------------------------------ |
+| Message box     | `Composer`                                                               |
+| Typing line     | `TypingIndicator`, `TypingDots`, `typingSentence`                        |
+| Length counting | `messageLength.ts`, `MessageLengthNote`                                  |
+| Held messages   | `HeldMessages.tsx`                                                       |
+| Mana bar        | `ManaBar.tsx`, `manaDrawnAt` (`@aspen/protocol`), `TopSendersDialog.tsx` |
+| Replying        | `ReplyBar`, `composerTargets.ts`; the line above a reply is `ReplyLine`  |
+| Drafts          | `src/features/messages/drafts.ts`                                        |
 
 ## Layout
 
@@ -193,6 +194,27 @@ preview made is held by the server for up to twenty seconds from the upload.
 - Held messages are read at bootstrap (`GET /users/@me/held-messages`).
 - A dropped held message stays, on this device, until it is sent again or let go.
 
+### Waiting for a busy channel
+
+A channel whose mana is spent (the server's `docs/architecture/channel-mana/`) holds what is sent to
+it the same way, said so as waiting for the channel (`waiting: "mana"`):
+
+- **What waits:** a message, a slash command, an edit that lengthens a message, a poll, or a reply's
+  echo to its channel (`kind`). Each but a message is named in its row.
+- **Answers:** `sendMessage` keeps a `202` as for a preview; `editMessage`, `createPoll`, and
+  `echoReply` return `Edited`, `PollMade`, and `Echoed`, which say whether it was made or held.
+- **Cancel:** a row waiting for the channel can be cancelled (`AspenSync.cancelHeld`);
+  `heldMessageCancelled` removes it on every device.
+- **Dropped:** after two minutes, or when its author may no longer post there. A message, an edit,
+  or an echo can be sent again (`canSendHeldAgain`); a poll or a command is written anew.
+- **Gone with its message:** an edit or echo waiting for a message that is deleted goes from the
+  store with it.
+- **Busy:** a channel with too much waiting answers `channelBusy`, which the box shows as any
+  refusal. A refusal shown in the box goes once the last of the place's failed held messages is
+  dismissed, sent again or let go.
+- **Unchanged edits:** the editor closes without sending one (`MessageEditor`), so nothing waits for
+  nothing.
+
 ### Where a held message waits
 
 A held message's place (`heldPlace`) is one of:
@@ -204,6 +226,31 @@ A held message's place (`heldPlace`) is one of:
 
 `AspenSync.sendHeldAgain` sends such a first reply with `replyInThread`, making the thread anew (see
 [Threads, DMs, and the system account](threads-and-dms.md#starting-a-thread)).
+
+## The mana bar
+
+`ManaBar` lies along the top of the typing line, over it rather than taking room, so the
+conversation never moves when it comes or goes.
+
+- **Shown** once the channel's mana is below 60% of its maximum (`MANA_SHOW_BELOW`), or while
+  anything waits for it (`queued`), and kept until it is full again, so it does not flicker around
+  the threshold.
+- **Labelled** at the line's end, over whatever of the typing line reaches there: "Channel Mana",
+  or, while anything waits for the channel's mana (the frame's `queued`), "Channel Mana depleted,
+  message priority queue in force", in the danger colour. That includes a long message waiting for
+  the channel to recharge enough for it.
+- **Levels:** the server tells them at most twice a second while the channel spends, as `mana`
+  ephemeral frames for channels the connection views, and once as it starts viewing a busy one. The
+  store keeps the latest of up to 32 channels (`RecordStore.noteMana`) and forgets them all when the
+  connection is lost (`forgetMana`).
+- **Between levels** it fills steadily as the channel recharges, drawn 15 times a second
+  (`manaDrawnAt`, `MANA_FRAME_MS`) with its width unrounded, with no frames from the server.
+- **Read out** as a meter, its value a percentage.
+- **View top senders**, an accent link beside the label, opens `TopSendersDialog`: who spent most of
+  the channel's mana in the past hour (`AspenSync.topManaSenders`), up to 100, each with the mana
+  they spent, read again every five seconds while open. Each sender the caller may ban
+  (`useMemberModeration`) has a Ban button opening `BanDialog` set to delete their messages from the
+  past hour (`initial`). The dialog stays open if the bar goes.
 
 ## Drafts
 

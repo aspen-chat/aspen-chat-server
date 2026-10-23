@@ -1,6 +1,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
-use crate::extract::{Created, Json, NoContent, Path};
+use crate::extract::{Created, Json, NoContent, Path, Query};
+use crate::include::{IncludeSet, Included, SideloadedList};
 use crate::message_enum::Pin;
 use crate::message_enum::request::{ChannelCreateRequest, ChannelUpdateRequest};
 use crate::{API_PREFIX, TAG_CHANNELS, message_enum};
@@ -8,6 +9,8 @@ use aspen_app as app;
 use aspen_app::ChannelId;
 use aspen_app::context::GlobalServerContext;
 use axum::extract::State;
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 
 /// A community channel's wire record; a DM's carries its recipients too (`app::channel::record`).
 pub fn channel_to_api(c: app::channel::Channel) -> message_enum::Channel {
@@ -181,4 +184,85 @@ pub async fn delete_channel(
 ) -> ApiResult<NoContent> {
     app::channel::delete_channel(&state, user.id, channel).await?;
     Ok(NoContent)
+}
+
+/// One of a channel's top senders of the past hour.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ManaSender {
+    pub user: aspen_app::UserId,
+    /// The mana they spent there in the past hour, in whole mana.
+    pub mana: u64,
+}
+
+/// Relationships a top senders read can sideload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ManaSenderInclude {
+    /// The senders, as `included.users`: those raiding a channel are mostly unknown to its
+    /// readers.
+    Users,
+}
+
+/// Body of a top senders read; a named alias for the same reason as
+/// `api::community::CommunityRead`.
+pub type ManaSenderList = SideloadedList<ManaSender>;
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ManaSenderQuery {
+    /// Related records to return alongside the senders, comma separated.
+    #[serde(default)]
+    #[param(value_type = Option<Vec<ManaSenderInclude>>, style = Form, explode = false)]
+    pub include: IncludeSet<ManaSenderInclude>,
+}
+
+/// Who spent most of the channel's mana in the past hour, the most first, at most 100, each
+/// with the mana they spent: posting, with Bypass channel mana, or waiting and then posted;
+/// never what was refused or dropped. A thread counts its own. Read afresh at most every five
+/// seconds. Empty where the channel has no mana (a one-to-one DM, a voice or plugin channel),
+/// or while the deployment cannot count it. `include=users` sideloads the senders.
+#[utoipa::path(
+    get,
+    path = "/channels/{channel}/mana/top-senders",
+    tag = TAG_CHANNELS,
+    params(("channel" = ChannelId, Path), ManaSenderQuery),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = ManaSenderList),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such channel, or the caller may not read it", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn list_mana_senders(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(channel): Path<ChannelId>,
+    Query(query): Query<ManaSenderQuery>,
+) -> ApiResult<Json<ManaSenderList>> {
+    let senders = app::mana::read_top_senders(&state, user.id, channel).await?;
+    let users = if query.include.contains(ManaSenderInclude::Users) {
+        let ids: Vec<aspen_app::UserId> = senders.iter().map(|(sender, _)| *sender).collect();
+        Some(
+            app::user::read_users(&state, user.id, &ids)
+                .await?
+                .into_iter()
+                .map(crate::message_enum::User::from)
+                .collect(),
+        )
+    } else {
+        None
+    };
+    Ok(Json(ManaSenderList::new(
+        senders
+            .into_iter()
+            .map(|(user, mana)| ManaSender { user, mana })
+            .collect(),
+        Included {
+            users,
+            ..Included::default()
+        },
+    )))
 }

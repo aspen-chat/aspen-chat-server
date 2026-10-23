@@ -28,6 +28,7 @@ described under [Claiming and classes](claiming.md#classes).
 | [`makePicturePreview`](#makepicturepreview) | interactive, or bulk for what the migration queued |                                                                | Makes one picture's preview.                                                                                          |
 | [`makeVideoPoster`](#makevideoposter)       | as `makePicturePreview`                            |                                                                | Takes one video's poster.                                                                                             |
 | [`releaseHeldMessage`](#releaseheldmessage) | interactive                                        |                                                                | Posts one held message.                                                                                               |
+| [`drainManaQueue`](#drainmanaqueue)         | interactive                                        |                                                                | Posts what waits for one busy channel's mana.                                                                         |
 | [`firePluginTimer`](#fireplugintimer)       | normal                                             |                                                                | Hands a plugin one of its timers.                                                                                     |
 | [`sweepExpired`](#sweepexpired)             | maintenance                                        | hourly                                                         | Deletes ended community bans, old plugin notices, old voice failure reports, and old steps of the database's latency. |
 | [`recountMembers`](#recountmembers)         | maintenance                                        | hourly                                                         | Recounts each community's members.                                                                                    |
@@ -262,6 +263,34 @@ Posts one held message, keyed by it, once:
 - no message its author sent before it is still held.
 
 A failure waits thirty seconds. The tenth failure drops the message and tells its author why.
+
+A message whose channel is busy when it is released waits for the channel's mana instead (see
+[Channel mana](../channel-mana/index.md)): its row becomes one waiting for mana, and the job is
+done.
+
+### `drainManaQueue`
+
+Posts what waits for one channel's mana as the channel recharges, keyed by the channel
+(`mana::queue::drain_step`; see [Channel mana](../channel-mana/index.md#draining)). It is saved with
+the first row to wait there.
+
+- Each step ticks at 5 Hz for ten seconds, then hands the job back with the author it drew as its
+  progress, so its lease renews and any runner may take it up.
+- Each tick drops what has waited two minutes, then spends what the pool earned on the
+  highest-priority authors waiting: the higher ranked, then the longer there, then drawn at random.
+- It deletes its own job only while nothing waits there, in one statement, so a row saved as it
+  finishes saves a new job.
+
+### `dropHeldBy`
+
+Drops everything someone has held where they can no longer post (`message::held::drop_held_by_step`;
+see [Held messages](../attachment-previews/held-messages.md#when-posting-fails)). Saved, in the
+change's transaction, by ending a community membership (`community::end_membership`: leaving,
+removal, a ban), leaving a group DM, a ban from the deployment (the person and their bots), and
+deleting an account, and only when they have something held there.
+
+- Each step drops a hundred, oldest first, each told to its author in the language it was sent in,
+  and goes on while steps come back full.
 
 ## Plugins
 

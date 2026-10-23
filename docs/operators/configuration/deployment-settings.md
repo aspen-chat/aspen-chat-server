@@ -49,6 +49,9 @@ An invite made in the dashboard may also name a community.
 | `everyone-mention-limit`  | `200`   | How many members a community gains before its everyone role loses Mention everyone. `0` never turns it off. See [below](#everyone-mention-limit).                                                                                                                          |
 | `custom-emoji-limit`      | `1000`  | The most custom emoji one community may hold. Each is a small picture (PNG, JPEG, WebP, or GIF, at most 256 KiB) in the object storage.                                                                                                                                    |
 | `upload-quota-gib`        | `25`    | How many GiB one person may upload, attachments and pictures together, in any 24 hours. `0` sets no limit. See [below](#upload-quota).                                                                                                                                     |
+| `mana-max-recharge`       | `50`    | The most mana any channel earns back a second, and what one earns back unless its own settings say less. At least `1`. See [below](#channel-mana).                                                                                                                         |
+| `mana-max`                | `20000` | The most mana a channel holds unless its own settings say less, and the most they may say; what a group DM holds. At least `1`.                                                                                                                                            |
+| `mana-attachment-cost`    | `30`    | What a file costs, in the mana one character costs.                                                                                                                                                                                                                        |
 | `evidence-retention-days` | `365`   | How many days files kept as evidence (those of deleted messages, and attachments taken off theirs) are kept for reviewing reports, unless a report about the message is open or was closed within as long. `0` keeps them for good. See [Backups](../backups.md#evidence). |
 | `file-transfers`          | `true`  | Whether people may offer files to one another in calls. See [below](#file-transfers).                                                                                                                                                                                      |
 
@@ -63,6 +66,19 @@ An invite made in the dashboard may also name a community.
 
 - Each upload counts with the size it was started for, whether or not it is then sent or deleted.
 - Past the limit, an upload is refused, with when there will be room.
+
+### Channel mana
+
+- **What it is:** each community text channel, each thread, and each group DM has a budget of mana,
+  which posting spends (one for each character, and `mana-attachment-cost` for each file) and which
+  comes back at the recharge rate. A busy channel fills no faster than that, however many people
+  post in it.
+- **When a channel is busy:** what it cannot pay for waits its turn, the higher ranked first, then
+  those who have belonged longest, and the people viewing the channel see a bar. Moderators and
+  admins (those holding Bypass channel mana) post at once.
+- **Per channel:** holders of Manage channels may lower a channel's recharge and maximum in its
+  settings, never raise them past these.
+- **Lowering these** takes effect at once in every channel set above them.
 
 ### File transfers
 

@@ -42,7 +42,13 @@ import {
 import type { ActivityView } from "./notifyRules";
 import type { OverrideGrant } from "./permissions";
 import { REACTION_SUMMARY_USERS, RecordStore } from "./store";
-import type { HeldMessage, Included, Invocation, NotificationLevel } from "./storeTypes";
+import type {
+  HeldMessage,
+  Included,
+  Invocation,
+  ManaSender,
+  NotificationLevel,
+} from "./storeTypes";
 import { lazyBrowserMedia, pageStorage } from "./platform";
 import { type UploadTarget, describeAttachment, uploadAttachment, uploadIcon } from "./upload";
 import { eventStreamUrl } from "./urls";
@@ -65,6 +71,17 @@ export type MessageHolding = components["schemas"]["MessageHolding"];
 
 /** What became of a message sent: posted, or held by the server for its previews. */
 export type Sent = { kind: "posted"; message: Message } | { kind: "held"; held: HeldMessage };
+/** What became of an edit: made, or held while its channel is too busy (`app::mana`). */
+export type Edited = { kind: "edited"; message: Message } | { kind: "held"; held: HeldMessage };
+/** What became of a poll: posted, or held while its channel is too busy. */
+export type PollMade = { kind: "posted"; poll: Poll } | { kind: "held"; held: HeldMessage };
+/** What became of an echo asked for: made, or held while the parent channel is too busy. */
+export type Echoed = { kind: "echoed"; echo: Message } | { kind: "held"; held: HeldMessage };
+
+/** Whether a dropped held message can be sent again (`AspenSync.sendHeldAgain`). */
+export function canSendHeldAgain(held: HeldMessage): boolean {
+  return held.kind === "message" || held.kind === "edit" || held.kind === "echo";
+}
 
 /** What a message sent as a reply answers: a message of its channel, and whether it tags its author. */
 export interface Reply {
@@ -528,6 +545,16 @@ export class AspenSync {
           this.#onWatching();
           return;
         }
+        if (event.type === "mana") {
+          this.store.noteMana(event.channelId, {
+            level: event.level,
+            max: event.max,
+            recharge: event.recharge,
+            at: Date.parse(event.at),
+            queued: event.queued ?? false,
+          });
+          return;
+        }
         if (kind !== "typing") {
           return;
         }
@@ -543,8 +570,9 @@ export class AspenSync {
       },
       onConnectionLost: () => {
         // Nobody will say when those shown typing stop, and the server let go of what this
-        // connection said.
+        // connection said; a channel's mana is told again once it is viewed anew.
         this.#forgetTyping();
+        this.store.forgetMana();
         if (this.#status === "live" || this.#status === "connecting") {
           this.#setStatus("reconnecting");
         }
@@ -1109,14 +1137,26 @@ export class AspenSync {
   /**
    * Sends a held message the server dropped once more, as it was written, and lets the dropped
    * one go once the server has it. A first reply whose thread went with it makes the thread
-   * anew.
+   * anew. An edit or an echo is asked for again; a poll or a command, whose request the app
+   * does not keep, cannot be (`canSendHeldAgain`).
    */
   async sendHeldAgain(heldId: string): Promise<Sent | undefined> {
     const entry = this.store.heldMessage(heldId);
     if (entry === undefined) {
       return undefined;
     }
-    const { channelId, content, attachments, echoToParent, replyTo, tagReplied } = entry.message;
+    const { channelId, content, attachments, echoToParent, replyTo, tagReplied, kind, target } =
+      entry.message;
+    if (kind === "edit" || kind === "echo") {
+      if (target !== undefined && target !== null) {
+        await (kind === "edit" ? this.editMessage(target, content) : this.echoReply(target));
+      }
+      this.store.forgetHeldMessage(heldId);
+      return undefined;
+    }
+    if (kind !== "message") {
+      return undefined;
+    }
     const sent =
       entry.startsThreadOf === null
         ? await this.sendMessage(channelId, content, attachments, {
@@ -1197,14 +1237,19 @@ export class AspenSync {
    * only its author may do. The echo is cached at once and the reply learns its echo, as the
    * events that follow would say.
    */
-  async echoReply(messageId: string): Promise<Message> {
+  async echoReply(messageId: string): Promise<Echoed> {
     const result = await this.#client.api.PUT("/api/v1/messages/{message}/echo", {
       params: { path: { message: messageId } },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    const echo = result.data;
+    if (result.response.status === 202) {
+      const held = result.data as HeldMessage;
+      this.store.putHeldMessage(held);
+      return { kind: "held", held };
+    }
+    const echo = result.data as Message;
     this.store.addMessage(echo);
     this.store.applyEvent({
       serverEvent: "message",
@@ -1212,7 +1257,7 @@ export class AspenSync {
       id: messageId,
       echo: echo.id,
     });
-    return echo;
+    return { kind: "echoed", echo };
   }
 
   /**
@@ -1605,9 +1650,10 @@ export class AspenSync {
    * Replaces a message's text. The cache is left to the update event, which the server
    * publishes before it answers: writing the response here could clobber a newer event that
    * arrived while the request was in flight, such as the link previews refetched for the new
-   * text.
+   * text. An edit that lengthens a message in a busy channel is held, and shown waiting until
+   * it is made (`heldMessagePosted`).
    */
-  async editMessage(messageId: string, content: string): Promise<Message> {
+  async editMessage(messageId: string, content: string): Promise<Edited> {
     const result = await this.#client.api.PATCH("/api/v1/messages/{message}", {
       params: { path: { message: messageId } },
       body: { content },
@@ -1615,7 +1661,27 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    return result.data;
+    if (result.response.status === 202) {
+      const held = result.data as HeldMessage;
+      this.store.putHeldMessage(held);
+      return { kind: "held", held };
+    }
+    return { kind: "edited", message: result.data as Message };
+  }
+
+  /**
+   * Cancels one of the caller's held messages that has not been posted, whatever it waits
+   * for. It is let go at once; `heldMessageCancelled` tells the caller's other apps.
+   */
+  async cancelHeld(heldId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/users/@me/held-messages/{held}", {
+      params: { path: { held: heldId } },
+    });
+    // Not found: it was posted, or dropped, meanwhile, which its own event tells.
+    if (result.error !== undefined && result.response.status !== 404) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.forgetHeldMessage(heldId);
   }
 
   /**
@@ -1693,9 +1759,9 @@ export class AspenSync {
 
   /**
    * Opens a poll in a channel. The poll is cached at once; the message that shows it arrives
-   * on the stream.
+   * on the stream. In a busy channel it is held, and shown waiting until it is posted.
    */
-  async createPoll(channelId: string, request: PollCreateRequest): Promise<Poll> {
+  async createPoll(channelId: string, request: PollCreateRequest): Promise<PollMade> {
     const result = await this.#client.api.POST("/api/v1/channels/{channel}/polls", {
       params: { path: { channel: channelId } },
       body: request,
@@ -1703,8 +1769,14 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.addPoll(result.data);
-    return result.data;
+    if (result.response.status === 202) {
+      const held = result.data as HeldMessage;
+      this.store.putHeldMessage(held);
+      return { kind: "held", held };
+    }
+    const poll = result.data as Poll;
+    this.store.addPoll(poll);
+    return { kind: "posted", poll };
   }
 
   /**
@@ -2094,6 +2166,26 @@ export class AspenSync {
     }
     if (!this.#readsEventsOf(this.store.channel(channelId)?.community ?? null)) {
       this.store.applyEvent({ serverEvent: "channel", type: "update", id: channelId, name });
+    }
+  }
+
+  /**
+   * Sets a community text channel's own mana: how much it recharges a second and how much it
+   * holds, each `null` to follow the deployment's, which are also their ceilings.
+   */
+  async setChannelMana(
+    channelId: string,
+    mana: { manaRecharge: number | null; manaMax: number | null },
+  ): Promise<void> {
+    const result = await this.#client.api.PATCH("/api/v1/channels/{channel}", {
+      params: { path: { channel: channelId } },
+      body: mana,
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    if (!this.#readsEventsOf(this.store.channel(channelId)?.community ?? null)) {
+      this.store.applyEvent({ serverEvent: "channel", type: "update", id: channelId, ...mana });
     }
   }
 
@@ -3337,7 +3429,8 @@ export class AspenSync {
 
   /**
    * Sends a bot a command in a channel. The server checks its arguments and posts it there as
-   * a message of kind `command`, which arrives like any other.
+   * a message of kind `command`, which arrives like any other; in a busy channel it is held,
+   * and shown waiting until it is posted.
    */
   async invokeCommand(channelId: string, invocation: Invocation): Promise<void> {
     const result = await this.#client.api.POST("/api/v1/channels/{channel}/commands", {
@@ -3346,6 +3439,9 @@ export class AspenSync {
     });
     if (result.error !== undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    if (result.response.status === 202) {
+      this.store.putHeldMessage(result.data as HeldMessage);
     }
   }
 
@@ -3798,6 +3894,21 @@ export class AspenSync {
     };
   }
 
+  /**
+   * Who spent most of `channelId`'s mana in the past hour, the most first, at most 100; the
+   * senders themselves go into the store, since a raid's are mostly unknown to its readers.
+   */
+  async topManaSenders(channelId: string): Promise<ManaSender[]> {
+    const result = await this.#client.api.GET("/api/v1/channels/{channel}/mana/top-senders", {
+      params: { path: { channel: channelId }, query: { include: ["users"] } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.ingest({ users: result.data.included.users ?? [] });
+    return result.data.data;
+  }
+
   async #loadChannelPresence(channelId: string): Promise<void> {
     const result = await this.#client.api.GET("/api/v1/channels/{channel}/presence", {
       params: { path: { channel: channelId } },
@@ -3944,8 +4055,9 @@ export class AspenSync {
   }
 
   /**
-   * Shows who is typing in a channel while the returned function is not yet called: the server
-   * sends typing only for channels the app says it shows (`viewing`), at most `MAX_VIEWING`.
+   * Shows who is typing in a channel, and its mana while it is busy, while the returned
+   * function is not yet called: the server sends both only for channels the app says it shows
+   * (`viewing`), at most `MAX_VIEWING`.
    */
   watchTyping(channelId: string): () => void {
     this.#viewing.set(channelId, (this.#viewing.get(channelId) ?? 0) + 1);

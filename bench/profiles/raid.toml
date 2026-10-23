@@ -1,0 +1,60 @@
+name = "raid"
+description = """
+A raid: a tenth of a 2,000-member community floods its busiest channel for a minute, each raider
+sending a message a second, while everyone else goes on chatting. The channel's mana holds the
+flood back and serves those of higher rank and longer tenure first, so this measures how long everyone
+else's messages there wait (`delivery:raided`), how many of either side's are held, refused, or
+dropped, and that the rest of the deployment does not notice."""
+
+[target]
+api = "http://localhost:8000"
+metrics = ["http://127.0.0.1:9464/metrics", "http://127.0.0.1:9465/metrics"]
+
+[population]
+users = 2000
+communities = 1
+largest_community = 2000
+smallest_community = 2000
+text_channels = 4
+voice_channels = 0
+history_per_channel = 200
+# Members joined over the past month, and the raiders are the newest, as a raid's accounts are.
+tenure_days = 30
+
+# Ordinary chat stays below what the busiest channel recharges (50 mana a second): about 0.3
+# messages a second there, each some 55 glyphs with its marker.
+[load]
+online = 0.8
+ramp_up_seconds = 60
+duration_seconds = 300
+
+[behaviours.member]
+share = 0.9
+messages_per_hour = 1.5
+reactions_per_hour = 4
+history_reads_per_hour = 6
+hot_channel_share = 0.5
+
+[behaviours.regular]
+share = 0.1
+messages_per_hour = 8
+reactions_per_hour = 10
+history_reads_per_hour = 10
+hot_channel_share = 0.5
+
+[[events]]
+at_seconds = 60
+kind = "raid"
+share = 0.1
+seconds = 60
+messages_per_second = 1
+glyphs = 40
+
+# Everyone else's messages in the raided channel wait their turn behind a couple of hundred
+# raiders, each given the same share; elsewhere nothing waits.
+[slo]
+delivery_p99_ms = 500
+request_p99_ms = 800
+connect_p99_ms = 5000
+error_rate = 0.002
+metric_p99_ms = { "delivery:raided" = 120000 }

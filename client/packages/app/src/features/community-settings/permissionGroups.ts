@@ -46,6 +46,7 @@ export const PERMISSION_GROUPS = [
       "mentionMembers",
       "mentionRoles",
       "mentionEveryone",
+      "bypassChannelMana",
     ],
   },
   {

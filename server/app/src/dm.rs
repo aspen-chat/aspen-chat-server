@@ -100,6 +100,8 @@ fn new_dm(ty: ChannelType, dm_key: Option<String>) -> Channel {
         last_reply_at: None,
         dm_key,
         plugin_type: None,
+        mana_recharge: None,
+        mana_max: None,
     }
 }
 
@@ -449,6 +451,12 @@ pub async fn leave(
                 )
                 .execute(conn.as_mut())
                 .await?;
+            crate::message::held::drop_held_by(
+                conn.as_mut(),
+                caller,
+                crate::message::held::HeldScope::Dm { channel: dm_id },
+            )
+            .await?;
             let remaining = dm_recipients(conn.as_mut(), dm_id).await?;
             publish_recipients(state, conn.as_mut(), dm_id, remaining, Some(caller)).await
         }
@@ -481,6 +489,8 @@ async fn publish_recipients(
             reply_count: None,
             last_reply_at: None,
             recipients: Some(recipients),
+            mana_recharge: None,
+            mana_max: None,
         }),
     )
     .await

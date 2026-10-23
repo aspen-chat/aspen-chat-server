@@ -172,6 +172,8 @@ pub(crate) async fn open_in(
         last_reply_at: None,
         dm_key: None,
         plugin_type: None,
+        mana_recharge: None,
+        mana_max: None,
     };
     diesel::insert_into(channel::table)
         .values(&thread)
@@ -459,6 +461,8 @@ async fn publish_summary(
             reply_count: Some(count),
             last_reply_at: Some(last),
             recipients: None,
+            mana_recharge: None,
+            mana_max: None,
         }),
     )
     .await
@@ -577,6 +581,90 @@ pub async fn echo_reply(
         .scope_boxed()
     })
     .await
+}
+
+/// What became of an echo asked for: made (or the reply's existing one, `false`), or waiting
+/// for the parent's mana.
+pub enum Echoed {
+    Done(Box<Message>, bool),
+    Waiting(crate::message::held::HeldMessage),
+}
+
+/// Echoes the caller's thread reply to the thread's parent (`echo_reply`), spending the
+/// parent's mana as posting there does (`app::mana`), or has the echo wait its turn when the
+/// parent is busy. It is checked as `echo_reply` checks it before it spends anything.
+pub async fn request_echo(
+    state: &GlobalServerContext,
+    caller: UserId,
+    reply: MessageId,
+) -> crate::Result<Echoed> {
+    let mut conn = state.connection_pool.get().await?;
+    let (thread_id, author, kind, existing, content): (
+        ChannelId,
+        UserId,
+        MessageKind,
+        Option<MessageId>,
+        String,
+    ) = message::table
+        .select((
+            message::channel,
+            message::author,
+            message::kind,
+            message::echo,
+            message::content,
+        ))
+        .filter(message::id.eq(reply).and(message::deleted_at.is_null()))
+        .first(conn.as_mut())
+        .await?;
+    let parent: Option<ChannelId> = channel::table
+        .select(channel::parent_channel)
+        .filter(channel::id.eq(thread_id))
+        .first(conn.as_mut())
+        .await?;
+    let ready = existing.is_none()
+        && author == caller
+        && matches!(kind, MessageKind::Standard | MessageKind::Command);
+    if let (Some(parent), true) = (parent, ready) {
+        channel_access(state, conn.as_mut(), caller, thread_id).await?;
+        channel_access(state, conn.as_mut(), caller, parent)
+            .await?
+            .require(Permissions::SEND_MESSAGES)?;
+        let attachments: i64 = aspen_schema::message_attachment::table
+            .filter(aspen_schema::message_attachment::message_id.eq(reply))
+            .count()
+            .get_result(conn.as_mut())
+            .await?;
+        let cost = crate::mana::message_cost(
+            &state.settings(),
+            &content,
+            usize::try_from(attachments).unwrap_or(0),
+        );
+        if crate::mana::decide_for(state, conn.as_mut(), caller, parent, cost).await?
+            == crate::mana::Decision::Wait
+        {
+            drop(conn);
+            let held = crate::mana::queue::wait(
+                state,
+                crate::mana::queue::Waiting {
+                    author: caller,
+                    channel: parent,
+                    kind: crate::message::held::HeldKind::Echo,
+                    content: String::new(),
+                    attachments: Vec::new(),
+                    echo_to_parent: false,
+                    reply: None,
+                    target: Some(reply),
+                    payload: None,
+                    cost,
+                },
+            )
+            .await?;
+            return Ok(Echoed::Waiting(held));
+        }
+    }
+    drop(conn);
+    let (echo, made) = echo_reply(state, caller, reply).await?;
+    Ok(Echoed::Done(Box::new(echo), made))
 }
 
 /// Clears a reply's echo when the echo alone is deleted, inside the caller's transaction, and

@@ -19,6 +19,7 @@ use crate::{API_PREFIX, TAG_MESSAGES};
 use aspen_app as app;
 use aspen_app::channel::{MAX_MESSAGES_QUERIED, MessageWindow};
 use aspen_app::context::GlobalServerContext;
+use aspen_app::message::held::{HeldKind, HeldWaiting};
 use aspen_app::{AttachmentId, ChannelId, CommunityId, HeldMessageId, MessageId, PollId, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -516,14 +517,19 @@ pub async fn search_messages(
     }))
 }
 
-/// A message held while a preview of one of its attachments is being made, as its author's
-/// apps show it waiting (`app::message::held`). `heldMessagePosted` names the message it
-/// becomes; `heldMessageFailed` says why it was dropped instead.
+/// Something its author sent that is held, as their apps show it waiting
+/// (`app::message::held`): a message while a preview of one of its attachments is being made,
+/// or, its channel being busy, a message, command, edit, poll, or echo waiting its turn for the
+/// channel's mana (`app::mana`). `heldMessagePosted` names the message it becomes (an edit's,
+/// the message it changed); `heldMessageFailed` says why it was dropped instead; and
+/// `heldMessageCancelled` that its author cancelled it.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HeldMessage {
     pub id: HeldMessageId,
+    /// Where it is posted; for an echo, the thread's parent.
     pub channel_id: ChannelId,
+    /// Its text: a message's, a command's as shown, an edit's new text, or a poll's question.
     pub content: String,
     pub attachments: Vec<AttachmentId>,
     pub echo_to_parent: bool,
@@ -533,6 +539,10 @@ pub struct HeldMessage {
     #[schema(required = false)]
     pub tag_replied: bool,
     pub held_at: DateTime<Utc>,
+    pub waiting: HeldWaiting,
+    pub kind: HeldKind,
+    /// The message an edit changes, or a thread reply an echo copies.
+    pub target: Option<MessageId>,
 }
 
 impl From<app::message::held::HeldMessage> for HeldMessage {
@@ -546,6 +556,9 @@ impl From<app::message::held::HeldMessage> for HeldMessage {
             reply_to: held.reply_to,
             tag_replied: held.tags_replied,
             held_at: held.held_at,
+            waiting: held.waiting,
+            kind: held.kind,
+            target: held.target,
         }
     }
 }
@@ -558,8 +571,9 @@ impl From<app::message::held::HeldMessage> for HeldMessage {
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = Message, headers(("Location" = String, description = "URL of the new message"))),
-        (status = ACCEPTED, description = "Held, when `mayHold` was given, while a preview of one of its attachments is being made; it is posted later", body = HeldMessage),
+        (status = ACCEPTED, description = "Held: when `mayHold` was given, while a preview of one of its attachments is being made, or, the channel being busy, waiting its turn for the channel's mana (`waiting`); it is posted later", body = HeldMessage),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (the text is over `app::message::MAX_CONTENT_CHARS` characters, an attachment is not ready, `echoToParent` outside a thread, or `replyTo` names a message deleted or not in this channel)", body = Problem),
+        (status = TOO_MANY_REQUESTS, description = "`channelBusy`: the channel cannot take more waiting for its mana now (`detail` says why); try again after `Retry-After`", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, description = "No such channel, or a DM the caller is not in", body = Problem),
@@ -588,7 +602,8 @@ pub async fn create_message(
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = Message, headers(("Location" = String, description = "URL of the new message"))),
-        (status = ACCEPTED, description = "Held, when `mayHold` was given, while a preview of one of its attachments is being made; it is posted later, and the thread is made now", body = HeldMessage),
+        (status = ACCEPTED, description = "Held: when `mayHold` was given, while a preview of one of its attachments is being made, the thread being made now; or, the thread being busy, waiting its turn for its mana (`waiting`); it is posted later", body = HeldMessage),
+        (status = TOO_MANY_REQUESTS, description = "`channelBusy`: the thread cannot take more waiting for its mana now (`detail` says why); try again after `Retry-After`", body = Problem),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (the text is over `app::message::MAX_CONTENT_CHARS` characters, an attachment is not ready, the message is in a thread, is an echo, or is in a voice channel, or `replyTo` names a message deleted or not in the thread, which holds none before its first reply)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
@@ -802,11 +817,13 @@ pub async fn get_message(
     params(("message" = MessageId, Path)),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Message),
+        (status = OK, description = "Edited; or, when the edit changes nothing, the message as it stands", body = Message),
+        (status = ACCEPTED, description = "Waiting: the channel is busy, and an edit that lengthens the message waits its turn for the channel's mana", body = HeldMessage),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, body = Problem),
+        (status = TOO_MANY_REQUESTS, description = "`channelBusy`: the channel cannot take more waiting for its mana now; try again after `Retry-After`", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -815,9 +832,39 @@ pub async fn update_message(
     SessionUser { user, .. }: SessionUser,
     Path(message): Path<MessageId>,
     Json(request): Json<MessageUpdateRequest>,
-) -> ApiResult<Json<Message>> {
-    let m = app::message::update_message(&state, user.id, message, request).await?;
-    Ok(Json(Message::from(m)))
+) -> ApiResult<Response> {
+    Ok(
+        match app::message::update_message(&state, user.id, message, request, None).await? {
+            app::message::Edited::Done(m) => Json(Message::from(*m)).into_response(),
+            app::message::Edited::Waiting(held) => {
+                (StatusCode::ACCEPTED, Json(HeldMessage::from(held))).into_response()
+            }
+        },
+    )
+}
+
+/// Cancels one of the caller's held messages that has not been posted, whatever it waits for.
+/// Their apps learn of it by `heldMessageCancelled`.
+#[utoipa::path(
+    delete,
+    path = "/users/@me/held-messages/{held}",
+    tag = TAG_MESSAGES,
+    params(("held" = HeldMessageId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = NO_CONTENT),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such held message of the caller's: never one, or posted already", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn cancel_held_message(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(held): Path<HeldMessageId>,
+) -> ApiResult<NoContent> {
+    app::message::held::cancel(&state, user.id, held).await?;
+    Ok(NoContent)
 }
 
 #[utoipa::path(
@@ -889,6 +936,8 @@ pub async fn open_thread(
     responses(
         (status = CREATED, description = "The echo, just made", body = Message),
         (status = OK, description = "The echo the reply already has", body = Message),
+        (status = ACCEPTED, description = "Waiting: the parent channel is busy, and the echo waits its turn for its mana", body = HeldMessage),
+        (status = TOO_MANY_REQUESTS, description = "`channelBusy`: the parent channel cannot take more waiting for its mana now; try again after `Retry-After`", body = Problem),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (the message is not in a thread, or is a poll or one of its results)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: the caller did not write the reply, or may not send messages in the parent channel; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
@@ -900,8 +949,13 @@ pub async fn echo_reply(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(message): Path<MessageId>,
-) -> ApiResult<(StatusCode, Json<Message>)> {
-    let (echo, created) = app::thread::echo_reply(&state, user.id, message).await?;
+) -> ApiResult<Response> {
+    let (echo, created) = match app::thread::request_echo(&state, user.id, message).await? {
+        app::thread::Echoed::Done(echo, created) => (*echo, created),
+        app::thread::Echoed::Waiting(held) => {
+            return Ok((StatusCode::ACCEPTED, Json(HeldMessage::from(held))).into_response());
+        }
+    };
     let status = if created {
         StatusCode::CREATED
     } else {
@@ -910,7 +964,8 @@ pub async fn echo_reply(
     Ok((
         status,
         Json(app::message::record(&echo, Vec::new(), Vec::new())),
-    ))
+    )
+        .into_response())
 }
 
 /// Pins a message in its channel, after every pin already there: `201` when it was not pinned,

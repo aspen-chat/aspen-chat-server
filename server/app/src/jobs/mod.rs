@@ -469,6 +469,8 @@ async fn step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outco
             crate::attachment::preview::make_step(state, job).await
         }
         JobKind::ReleaseHeldMessage => crate::message::held::release_step(state, job).await,
+        JobKind::DrainManaQueue => crate::mana::queue::drain_step(state, job).await,
+        JobKind::DropHeldBy => crate::message::held::drop_held_by_step(state, job).await,
         JobKind::FirePluginTimer => crate::plugin::timer::fire_step(state, job).await,
         JobKind::SweepExpired => upkeep::sweep_expired(state, job).await,
         JobKind::RecountMembers => upkeep::recount_members(state, job).await,

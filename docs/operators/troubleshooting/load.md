@@ -46,6 +46,17 @@ which.
 **What to do:** nothing for Aspen's apps, which ask again. If people's apps keep failing on slow
 devices, lower `[rate_limits] device_puzzle_bits`.
 
+## `channelBusy`
+
+**Means:** a channel is too busy to take more now (see
+[Channel mana](../configuration/deployment-settings.md#channel-mana)). Either the sender already has
+as much waiting there as one person may (50 messages, or 2,000 mana), or 1,000 people's messages are
+already waiting. `detail` says which; `Retry-After` when to try again.
+
+**What to do:** usually nothing; it is a flood being held back. If a channel is busy all the time in
+ordinary use, raise `mana-max-recharge` (and the channel's own recharge, if it set one), or give the
+people who post most there a role with Bypass channel mana.
+
 ## `uploadQuotaExceeded`
 
 **Means:** someone has uploaded the deployment setting `upload-quota-gib` (25 GiB by default) within

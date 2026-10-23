@@ -21,9 +21,9 @@ in one answers a message of that thread.
     so the refusal tells nothing of channels the author may not read.
   - A deleted one is refused with `replyTargetDeleted`.
   - The first reply of a thread not made yet replies to nothing, since the thread holds nothing.
-- A message held for its previews ([Attachment previews](attachment-previews/index.md)) was checked
-  when sent, and is posted replying to what it answered even if that was deleted meanwhile, then
-  tagging no one for it.
+- A message held for its previews ([Attachment previews](attachment-previews/index.md)) or for its
+  channel's mana ([Channel mana](channel-mana/index.md)) was checked when sent, and is posted
+  replying to what it answered even if that was deleted meanwhile, then tagging no one for it.
 - `replyTo` is permanent: an edit never changes it, and it stays named once the original is deleted
   (deletion is soft).
 - Commands, warnings, cards, and the system account's notices are posted through `create_message`

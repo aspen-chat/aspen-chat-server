@@ -12,6 +12,7 @@ import type {
   CategoryOverride,
   Channel,
   CategoryMute,
+  ChannelMana,
   ChannelMute,
   MuteInForce,
   ChannelOverride,
@@ -487,6 +488,16 @@ export function useBlocked(userId: string | undefined): boolean {
  * Who else is typing in a channel, in the order they began, leaving out the caller and anyone
  * they block. While it is used the server sends typing for the channel (`AspenSync.watchTyping`).
  */
+/**
+ * A channel's mana as the server last told it (`ChannelMana`), or `undefined` while it is full.
+ * The channel is watched while this is used, as typing is.
+ */
+export function useChannelMana(channelId: string): ChannelMana | undefined {
+  const sync = useSync();
+  useEffect(() => sync.watchTyping(channelId), [sync, channelId]);
+  return useTopic(`mana:${channelId}`, (s) => s.mana(channelId));
+}
+
 export function useTypers(channelId: string): readonly string[] {
   const sync = useSync();
   useEffect(() => sync.watchTyping(channelId), [sync, channelId]);

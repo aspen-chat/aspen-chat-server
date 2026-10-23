@@ -364,7 +364,7 @@ pub const MAX_ARGUMENT_CHARS: usize = 2000;
 
 /// A command someone invokes: which bot, which of its commands, what they gave it, in order,
 /// and the files its `attachmentId` arguments name.
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Invocation {
     pub bot: UserId,

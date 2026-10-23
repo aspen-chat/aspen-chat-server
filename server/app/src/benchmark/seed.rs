@@ -151,17 +151,24 @@ pub async fn seed(
                         ))
                         .execute(conn)
                         .await?;
-                    for chunk in planned.members.chunks(BATCH) {
+                    let tenure = Duration::days(i64::from(planned.tenure_days));
+                    let joiners = planned.members.len().max(1) as f64;
+                    for (chunk_index, chunk) in planned.members.chunks(BATCH).enumerate() {
                         let rows: Vec<_> = chunk
                             .iter()
-                            .map(|member| {
+                            .enumerate()
+                            .map(|(offset, member)| {
                                 let slot = &mut next_sort_index[*member as usize];
                                 let sort_index = *slot;
                                 *slot += 1;
+                                let position = (chunk_index * BATCH + offset) as f64;
                                 (
                                     community_user::user.eq(users[*member as usize].id),
                                     community_user::community.eq(id),
                                     community_user::sort_index.eq(sort_index),
+                                    community_user::joined_at
+                                        .eq(now
+                                            - share_of(tenure, 1.0 - (position + 1.0) / joiners)),
                                 )
                             })
                             .collect();

@@ -232,16 +232,18 @@ or what an operator must open, route, or back up updates it in the same commit.
    follows changes through the NATS key-value bucket `aspen_settings`). They are the display name
    and icon (which also name the system account and what authenticators call the deployment),
    `registration_invite_required`, `require_two_factor`, `bots_enabled` and `bots_max_per_user`,
-   `everyone_mention_limit`, `custom_emoji_limit`, `upload_quota_gib`, `evidence_retention_days`,
-   `file_transfers`, `email_required`, `email_verification_required`, `newsletter_enabled`,
-   `event_stream_mib` and `voice_report_stream_mib` (how much of NATS's memory each in-memory stream
-   reserves, automatic when unset; see NATS memory), and the federation gates (`emigration` and
-   `immigration` for users and for bots, each `closed`, `open`, `allowList`, or `blockList`, a
-   shared list, and whether a first arrival from elsewhere needs a registration invite). Holders of
-   Manage deployment settings change them in the dashboard, holders of Manage federation the gates,
-   and `aspen-chat-server settings show|set` any of them; see Administration. A setting belongs in
-   `aspen.toml` when a server needs it to start or it is bound to the deployment's machines and
-   domain, and in the deployment settings when it is a policy administrators choose.
+   `everyone_mention_limit`, `custom_emoji_limit`, `upload_quota_gib`, `mana_max_recharge`,
+   `mana_max`, and `mana_attachment_cost` (how fast a busy channel fills; see Channel mana),
+   `evidence_retention_days`, `file_transfers`, `email_required`, `email_verification_required`,
+   `newsletter_enabled`, `event_stream_mib` and `voice_report_stream_mib` (how much of NATS's memory
+   each in-memory stream reserves, automatic when unset; see NATS memory), and the federation gates
+   (`emigration` and `immigration` for users and for bots, each `closed`, `open`, `allowList`, or
+   `blockList`, a shared list, and whether a first arrival from elsewhere needs a registration
+   invite). Holders of Manage deployment settings change them in the dashboard, holders of Manage
+   federation the gates, and `aspen-chat-server settings show|set` any of them; see Administration.
+   A setting belongs in `aspen.toml` when a server needs it to start or it is bound to the
+   deployment's machines and domain, and in the deployment settings when it is a policy
+   administrators choose.
 
 4. Regenerate API schema files:
 
@@ -342,6 +344,16 @@ or what an operator must open, route, or back up updates it in the same commit.
    dashboard and the terminal, asks for one NATS has no room for, and restarts NATS with another
    limit and no streams.
 
+   Check channel mana end to end:
+
+   ```
+   scripts/check_mana.py --bin target/debug
+   ```
+
+   It spends a channel's mana down, has messages, edits, polls, and echoes wait, and checks that
+   they drain higher ranks first, that a viewer is told the level, and that what waits two minutes
+   is dropped (see Channel mana).
+
 9. Watch the API server's async tasks with [tokio-console](https://github.com/tokio-rs/console),
    which shows each task's busy and idle time, how often it is woken, and which have waited longest,
    for finding what a slow request or a stalled stream is waiting on:
@@ -429,11 +441,11 @@ sent to Apple's notary service without waiting, and an App Store build for TestF
 debug build; both AWS configurations' `tofu test`, and `scripts/check_box.py` against images built
 in the job; an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included);
 the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both
-ARM builds, which are kept as artifacts; `scripts/check_permissions.py` and
-`scripts/check_nats_memory.py` run in the x86-64 job against its debug build, the first building and
-installing the example plugins. Every job runs the toolchain `rust-toolchain.toml` pins, which lists
-the `wasm32-wasip2` target the example plugins need, so rustup installs both wherever the repository
-is built. Clippy warnings fail the build.
+ARM builds, which are kept as artifacts; `scripts/check_permissions.py`,
+`scripts/check_nats_memory.py`, and `scripts/check_mana.py` run in the x86-64 job against its debug
+build, the first building and installing the example plugins. Every job runs the toolchain
+`rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the example plugins need, so
+rustup installs both wherever the repository is built. Clippy warnings fail the build.
 
 The version of every action a workflow uses (`uses: actions/checkout@v7`), and of anything else a
 workflow pins (a runner image, a Node.js or Java release), is looked up when it is written or
@@ -779,6 +791,9 @@ file or one of those says "see Bots" or "described under Voice", it means the fi
 - `docs/architecture/push.md` — waking phones through Web Push
 - `docs/architecture/attachment-previews/index.md` — previews of pictures and videos' posters, how
   they are made and queued, and messages held for them
+- `docs/architecture/channel-mana/index.md` — channel mana: the budget a busy channel spends as
+  messages are posted, its pools, costs, and settings, the queue of what waits for it, by rank and
+  tenure, and its drainer, Bypass channel mana, and the bar viewers see
 - `docs/architecture/email/index.md` — email addresses and their verification, the shown address,
   password reset by email, the outbox, the daily digest, the newsletter, and unsubscribing
 - `docs/architecture/nats-memory.md` — how large the two in-memory NATS streams are, how that

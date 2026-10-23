@@ -205,6 +205,8 @@ pub async fn create_community(
                     community: community.id,
                     parent_category: None,
                     plugin_type: None,
+                    mana_recharge: None,
+                    mana_max: None,
                 };
                 let channel =
                     crate::channel::insert_channel(state, conn.as_mut(), new, &[]).await?;
@@ -738,6 +740,12 @@ pub async fn end_membership(
                 )
                 .await?;
                 crate::role::delete_bot_role(state, conn, community, user).await?;
+                crate::message::held::drop_held_by(
+                    conn,
+                    user,
+                    crate::message::held::HeldScope::Community { community },
+                )
+                .await?;
             }
             Ok(())
         }

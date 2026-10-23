@@ -148,7 +148,8 @@ button (`ChannelMenuButton`). Each channel's row has one, voice channels include
 - Mark unread, Mute (which also keeps a channel unmuted inside a muted category), and Notifications,
   as [unread-and-muting.md](unread-and-muting.md) says.
 - Copy link, the channel's link to share (`channelUrl`).
-- Who can use this, Rename channel, and Delete channel, for those who may.
+- Who can use this, Channel mana (a text channel's; `ChannelManaDialog`, with Manage channels),
+  Rename channel, and Delete channel, for those who may.
 
 A one-to-one DM's menu is the other person's (`UserMenu`), with these items first, named for the DM.
 
