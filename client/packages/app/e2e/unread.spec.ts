@@ -107,7 +107,8 @@ test("marking a message unread keeps the channel unread while it stays open", as
       .tap();
   } else {
     await message.hover();
-    await message.getByRole("button", { name: "Mark unread" }).click();
+    await message.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: "Mark unread" }).click();
   }
   await expect.poll(() => reports).toContainEqual({ unreadFrom: messageId(204) });
   await expect(page.getByText("Marked unread")).toBeVisible();
@@ -142,7 +143,8 @@ test("marking unread above the caller's own newest message keeps the line until 
       .tap();
   } else {
     await marked.hover();
-    await marked.getByRole("button", { name: "Mark unread" }).click();
+    await marked.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: "Mark unread" }).click();
   }
   await expect(page.getByText("Marked unread")).toBeVisible();
   const line = page.getByRole("separator", { name: "New Messages" });

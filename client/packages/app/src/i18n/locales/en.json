@@ -752,6 +752,9 @@
     "blockedUsers": "Blocked users",
     "blockedUsersHint": "Their messages are collapsed and their reactions hidden for you alone.",
     "noneBlocked": "You haven't blocked anyone.",
+    "showBlocked": "{count, plural, one {See # blocked user} other {See # blocked users}}",
+    "search": "Find a blocked user",
+    "noneMatch": "Nobody you've blocked has that name.",
     "dmBlocked": "You blocked {name}. Unblock them to message each other again.",
     "blockedInCall": "Blocked: silenced and hidden for you."
   },
@@ -1289,6 +1292,7 @@
   "deleting": "Deleting…",
   "messageActionsLabel": "Message actions",
   "showMessageActions": "Show message actions",
+  "moreMessageActions": "More actions",
   "longPressForActions": "Press and hold for the message's actions",
   "copyMessageText": "Copy text",
   "copiedMessageText": "Copied text",

@@ -22,6 +22,7 @@ import {
   Tabs,
   Text,
   TextField,
+  type Key,
 } from "react-aria-components";
 import {
   useAccess,
@@ -49,6 +50,7 @@ import { MembersPanel } from "@/features/community-settings/MembersPanel";
 import { RolesPanel } from "@/features/community-settings/RolesPanel";
 import { PluginsPanel } from "@/features/plugins/PluginsPanel";
 import {
+  columnPlanesModalClass,
   dangerButtonClass,
   dangerPlaneClass,
   dialogClass,
@@ -112,7 +114,8 @@ export function CommunitySettingsDialog({
  * channels and categories, its roles, its members, its emoji, and, for holders of Manage
  * plugins, the deployment's plugins. Every member can open it; each part offers only what they
  * may do. Opened by the trigger it is in, or by `isOpen` (from the community's menu on the
- * rail).
+ * rail). It is as wide as Settings while the Roles tab is open, whose permissions stand in up to
+ * four columns (`PermissionChecklist`), and narrower for the rest, which read best as a column.
  */
 export function CommunitySettingsModal({
   community,
@@ -123,13 +126,6 @@ export function CommunitySettingsModal({
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
-  const m = useMessages();
-  const access = useAccess(community.id);
-  const manageRoles = access?.has("manageRoles") ?? false;
-  const roleTab = manageRoles || (access?.has("assignRoles") ?? false);
-  const layoutTab =
-    (access?.has("manageChannels") ?? false) || (access?.has("manageCategories") ?? false);
-  const pluginTab = access?.has("managePlugins") === true;
   return (
     <ModalOverlay
       className={overlayClass}
@@ -137,66 +133,81 @@ export function CommunitySettingsModal({
       {...(isOpen === undefined ? {} : { isOpen })}
       {...(onOpenChange === undefined ? {} : { onOpenChange })}
     >
-      <Modal className={widePlanesModalClass}>
-        <Dialog className={dialogClass}>
-          <DialogHeading>
-            {format(m.communitySettings.heading, { community: community.name })}
-          </DialogHeading>
-          <Tabs className="flex flex-col gap-4">
-            <TabList aria-label={m.communitySettings.open} className="flex flex-wrap gap-1">
-              <Tab id="overview" className={tabClass}>
-                {m.communitySettings.overviewTab}
-              </Tab>
-              {layoutTab && (
-                <Tab id="layout" className={tabClass}>
-                  {m.channelLayout.tab}
-                </Tab>
-              )}
-              {roleTab && (
-                <Tab id="roles" className={tabClass}>
-                  {m.communitySettings.rolesTab}
-                </Tab>
-              )}
-              <Tab id="members" className={tabClass}>
-                {m.communitySettings.membersTab}
-              </Tab>
-              <Tab id="emoji" className={tabClass}>
-                {m.communitySettings.emojiTab}
-              </Tab>
-              {pluginTab && (
-                <Tab id="plugins" className={tabClass}>
-                  {m.plugins.tab}
-                </Tab>
-              )}
-            </TabList>
-            <TabPanel id="overview" className="outline-none">
-              <Overview community={community} />
-            </TabPanel>
+      <CommunitySettingsFrame community={community} />
+    </ModalOverlay>
+  );
+}
+
+/** The settings' modal, drawn while it is open, so each opening starts on the first tab. */
+function CommunitySettingsFrame({ community }: { community: Community }) {
+  const m = useMessages();
+  const access = useAccess(community.id);
+  const manageRoles = access?.has("manageRoles") ?? false;
+  const roleTab = manageRoles || (access?.has("assignRoles") ?? false);
+  const layoutTab =
+    (access?.has("manageChannels") ?? false) || (access?.has("manageCategories") ?? false);
+  const pluginTab = access?.has("managePlugins") === true;
+  const [tab, setTab] = useState<Key>("overview");
+  return (
+    <Modal className={tab === "roles" ? columnPlanesModalClass : widePlanesModalClass}>
+      <Dialog className={dialogClass}>
+        <DialogHeading>
+          {format(m.communitySettings.heading, { community: community.name })}
+        </DialogHeading>
+        <Tabs selectedKey={tab} onSelectionChange={setTab} className="flex flex-col gap-4">
+          <TabList aria-label={m.communitySettings.open} className="flex flex-wrap gap-1">
+            <Tab id="overview" className={tabClass}>
+              {m.communitySettings.overviewTab}
+            </Tab>
             {layoutTab && (
-              <TabPanel id="layout" className="outline-none">
-                <LayoutPanel communityId={community.id} />
-              </TabPanel>
+              <Tab id="layout" className={tabClass}>
+                {m.channelLayout.tab}
+              </Tab>
             )}
             {roleTab && (
-              <TabPanel id="roles" className="outline-none">
-                <RolesPanel communityId={community.id} />
-              </TabPanel>
+              <Tab id="roles" className={tabClass}>
+                {m.communitySettings.rolesTab}
+              </Tab>
             )}
-            <TabPanel id="members" className="outline-none">
-              <MembersPanel communityId={community.id} />
-            </TabPanel>
-            <TabPanel id="emoji" className="outline-none">
-              <EmojiPanel communityId={community.id} />
-            </TabPanel>
+            <Tab id="members" className={tabClass}>
+              {m.communitySettings.membersTab}
+            </Tab>
+            <Tab id="emoji" className={tabClass}>
+              {m.communitySettings.emojiTab}
+            </Tab>
             {pluginTab && (
-              <TabPanel id="plugins" className="outline-none">
-                <PluginsPanel communityId={community.id} />
-              </TabPanel>
+              <Tab id="plugins" className={tabClass}>
+                {m.plugins.tab}
+              </Tab>
             )}
-          </Tabs>
-        </Dialog>
-      </Modal>
-    </ModalOverlay>
+          </TabList>
+          <TabPanel id="overview" className="outline-none">
+            <Overview community={community} />
+          </TabPanel>
+          {layoutTab && (
+            <TabPanel id="layout" className="outline-none">
+              <LayoutPanel communityId={community.id} />
+            </TabPanel>
+          )}
+          {roleTab && (
+            <TabPanel id="roles" className="outline-none">
+              <RolesPanel communityId={community.id} />
+            </TabPanel>
+          )}
+          <TabPanel id="members" className="outline-none">
+            <MembersPanel communityId={community.id} />
+          </TabPanel>
+          <TabPanel id="emoji" className="outline-none">
+            <EmojiPanel communityId={community.id} />
+          </TabPanel>
+          {pluginTab && (
+            <TabPanel id="plugins" className="outline-none">
+              <PluginsPanel communityId={community.id} />
+            </TabPanel>
+          )}
+        </Tabs>
+      </Dialog>
+    </Modal>
   );
 }
 

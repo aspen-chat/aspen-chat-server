@@ -1,5 +1,5 @@
 import type { Mentions } from "@aspen/protocol";
-import { type ReactNode, isValidElement, memo, useContext } from "react";
+import { type ReactNode, createContext, isValidElement, memo, useContext } from "react";
 import { Link } from "@tanstack/react-router";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { parseInvite, type InviteRef } from "@/features/invites/inviteCode";
@@ -15,6 +15,7 @@ import { ErrorBoundary } from "@/features/layout/ErrorBoundary";
 import { opensTooDeeply, tableRow } from "@/features/messages/markdownLimits";
 import { MESSAGE_REMARK_PLUGINS } from "@/features/messages/remarkPipeline";
 import { MentionContext } from "@/features/messages/mentionContext";
+import { remarkAfterText } from "@/features/messages/remarkAfterText";
 import { Spoiler } from "@/features/messages/Spoiler";
 import { messageLinkUrl } from "@/features/layout/safeUrl";
 
@@ -93,13 +94,18 @@ function InviteMessageLink({ invite, children }: { invite: InviteRef; children: 
  */
 const components: Components = {
   a: ({ href, children }) => <MessageLink href={href}>{children}</MessageLink>,
-  // `remarkSpoilers` marks its spans with `data-spoiler` and `remarkMentions` with
-  // `data-mention`; every other span is left as it is.
+  // `remarkSpoilers` marks its spans with `data-spoiler`, `remarkMentions` with
+  // `data-mention`, and `remarkAfterText` with `data-after-text`; every other span is left as
+  // it is.
   span: ({ children, ...props }) => {
     if ("data-spoiler" in props) {
       return <Spoiler>{children}</Spoiler>;
     }
     const attributes = props as Record<string, unknown>;
+    const after = attributes["data-after-text"];
+    if (after === "inline" || after === "block") {
+      return <AfterText place={after} />;
+    }
     const emoji = attributes["data-emoji"];
     if (typeof emoji === "string") {
       return <CustomEmojiInMessage id={emoji} />;
@@ -165,23 +171,42 @@ function fencedCode(children: ReactNode): { text: string; language: string | nul
  *
  * A body nesting too deeply to render safely is shown as its plain text (`opensTooDeeply`
  * before parsing, `remarkLimits` after), and one that fails to render for any other reason
- * falls back to its plain text too, rather than taking the message list down with it. It is
- * drawn again only when what it is given changes, since parsing is most of its cost.
+ * falls back to its plain text too, rather than taking the message list down with it.
+ *
+ * `after` follows the text (`remarkAfterText`): at the end of its last line where that is
+ * text, and under its last block where that is code or a table. The text is parsed again only
+ * when it, its tags, or `links` change, since parsing is most of its cost; `after` reaches its
+ * place without that.
  */
-export const Markdown = memo(function Markdown({
-  content,
-  mentions = NO_MENTIONS,
-  communityId = null,
-  links = true,
-}: {
+export function Markdown({ after = null, ...text }: MarkdownTextProps & { after?: ReactNode }) {
+  return (
+    <AfterTextContext.Provider value={after}>
+      <MarkdownText {...text} />
+    </AfterTextContext.Provider>
+  );
+}
+
+interface MarkdownTextProps {
   content: string;
   mentions?: Mentions;
   /** The community the message is in, where its tagged roles are found; `null` in a DM. */
   communityId?: string | null;
   /** Whether addresses become links; the system account's notices quote names others chose. */
   links?: boolean;
-}) {
-  const plain = <p>{content}</p>;
+}
+
+const MarkdownText = memo(function MarkdownText({
+  content,
+  mentions = NO_MENTIONS,
+  communityId = null,
+  links = true,
+}: MarkdownTextProps) {
+  const plain = (
+    <p>
+      {content}
+      <AfterText place="inline" />
+    </p>
+  );
   if (opensTooDeeply(content)) {
     return <div className="message-body">{plain}</div>;
   }
@@ -190,7 +215,7 @@ export const Markdown = memo(function Markdown({
       <ErrorBoundary fallback={plain} resetKey={content}>
         <MentionContext.Provider value={{ mentions, communityId }}>
           <ReactMarkdown
-            remarkPlugins={MESSAGE_REMARK_PLUGINS}
+            remarkPlugins={REMARK_PLUGINS}
             remarkRehypeOptions={REMARK_REHYPE_OPTIONS}
             components={links ? components : linklessComponents}
             skipHtml
@@ -202,6 +227,37 @@ export const Markdown = memo(function Markdown({
     </div>
   );
 });
+
+/** What follows the text, for `AfterText` to place. */
+const AfterTextContext = createContext<ReactNode>(null);
+
+/**
+ * What follows the text (`Markdown`'s `after`), where `remarkAfterText` placed it. Each mark
+ * keeps a little room before it; a mark that is hidden (a grouped message's time while the
+ * pointer is elsewhere) has no box, so neither takes any room nor makes the text a line longer.
+ */
+function AfterText({ place }: { place: "inline" | "block" }) {
+  const after = useContext(AfterTextContext);
+  if (after === null) {
+    return null;
+  }
+  return (
+    <span
+      className={
+        "message-after flex-wrap items-baseline font-normal " +
+        (place === "inline" ? "inline-flex *:ms-1" : "flex gap-x-1 *:mt-1")
+      }
+    >
+      {after}
+    </span>
+  );
+}
+
+/**
+ * A message's pipeline, then the marks that follow its text (`remarkAfterText`), which only
+ * rendering places.
+ */
+const REMARK_PLUGINS = [...MESSAGE_REMARK_PLUGINS, remarkAfterText];
 
 /** Table rows keep the cells written (`tableRow`). */
 const REMARK_REHYPE_OPTIONS = { handlers: { tableRow } };

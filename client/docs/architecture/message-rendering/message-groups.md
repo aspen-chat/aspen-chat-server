@@ -48,8 +48,10 @@ So a group is the same however its pictures load.
 
 ### Where the time sits
 
-- After text, it follows the edited mark, level with the text's top: on its first line's baseline,
-  or at the top edge of a code block or table the text opens with (`.message-text-row`).
+- After text, it follows the edited mark at the end of the text's last line, in a paragraph,
+  heading, list item, or quote, wrapping under it as a word would where the line has no room
+  (`remarkAfterText`, `Markdown`'s `after`). Text that ends with a code block or table has it under
+  that block.
 - Beside a picture, poll, or card (`Trailed`), it sits level with the block's top where the line has
   room, and under the block where it has not.
 - Where it would reach under the hover actions, `MessageItem` measures them on hover and starts it

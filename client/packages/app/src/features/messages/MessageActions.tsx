@@ -16,14 +16,12 @@ import { copyText } from "@/features/layout/clipboard";
 import { CopyIdButton } from "@/features/layout/CopyId";
 import { IconAction } from "@/features/layout/IconAction";
 import { toast } from "@/features/layout/toast";
-import { DeleteMessageDialog } from "@/features/messages/DeleteMessageDialog";
 import { ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactions";
 import { PinButton } from "@/features/messages/PinButton";
 import { SaveButton } from "@/features/messages/SaveButton";
 import { ACTION_ICON } from "@/features/messages/actionIcon";
 import { hasComposer, replyIn } from "@/features/messages/composerTargets";
 import { markUnread } from "@/features/messages/markUnread";
-import { ReportMessageButton } from "@/features/reports/ReportDialog";
 import { EchoReplyButton } from "@/features/threads/EchoReplyButton";
 import { useMessages } from "@/i18n/context";
 
@@ -47,14 +45,17 @@ export type MessageSheet = "react" | "reactions" | "delete" | "report";
 
 /**
  * What can be done to a message: react, reply to it, save it, mark it unread, pin, see who
- * reacted, reply in a thread, also send a thread reply to its channel, edit, delete, copy its
- * text, copy a link to it, report it, and copy its id. A computer shows them as a row of icon buttons at the
- * message's corner while the pointer is over it or focus is in it, and the picker and the
- * dialogs open from their buttons. A touch screen shows them as a list of icons and names, in a sheet under a
- * long press (`MessageActionSheet`), which every action closes: the ones that open something
- * hand that to `open`, since what opens from inside the sheet would go with it. The list
- * leaves out reacting, which the sheet offers above it, and ends with deleting, the one that
- * cannot be undone, away from the rest. Each is offered only where the permissions allow it;
+ * reacted, reply in a thread, also send a thread reply to its channel, edit, copy its text, copy
+ * a link to it, report it, copy its id, and delete it. Given `open`, they are a list of icons and
+ * names, which every action closes: a touch screen's sheet under a long press
+ * (`MessageActionSheet`) and a computer's menu (`MessageContextMenu`); the ones that open
+ * something hand that to `open`, since what opens from inside the list would go with it. The
+ * list leaves out reacting, which the sheet and the menu offer above it, and ends with deleting,
+ * the one that cannot be undone, away from the rest. Without it, they are the row of icon
+ * buttons at the message's corner on a computer, while the pointer is over it or focus is in it,
+ * with the reaction picker and the reactions dialog opening from their buttons; the row keeps to
+ * what is done often, so that it fits a narrow pane, and leaves marking unread, copying, reporting,
+ * and deleting to the menu, which its last button opens (`MessageItem`). Each is offered only where the permissions allow it;
  * Reply where its channel's message box is open for the reader to write in (`replyIn`), which is
  * asked as the actions are built, since a row is drawn before the box beside it is.
  */
@@ -118,7 +119,6 @@ export function MessageActions({
   // In a touch screen's sheet: a list of icons and names.
   const labelled = open !== undefined;
   const action = { labelled, className: labelled ? listActionClass : actionClass };
-  const dangerClass = labelled ? listDangerClass : actionClass + " text-danger";
   return (
     <>
       {open === undefined && permissions.has("addReactions") && (
@@ -158,7 +158,7 @@ export function MessageActions({
         {...action}
         {...(onDone === undefined ? {} : { onPressed: onDone })}
       />
-      {markableUnread && (
+      {labelled && markableUnread && (
         <MarkUnreadButton
           messageId={messageId}
           channelId={channelId}
@@ -222,10 +222,7 @@ export function MessageActions({
           icon={<PencilSimpleIcon size={ACTION_ICON} aria-hidden="true" />}
         />
       )}
-      {deletable && open === undefined && (
-        <DeleteMessageDialog messageId={messageId} triggerClassName={dangerClass} />
-      )}
-      {text !== null && text !== "" && (
+      {labelled && text !== null && text !== "" && (
         <CopyButton
           text={text}
           label={m.copyMessageText}
@@ -235,40 +232,41 @@ export function MessageActions({
           {...(onDone === undefined ? {} : { onDone })}
         />
       )}
-      <CopyButton
-        text={link}
-        label={m.reports.copyLink}
-        copied={m.reports.copiedLink}
-        icon={<LinkIcon size={ACTION_ICON} aria-hidden="true" />}
-        {...action}
-        {...(onDone === undefined ? {} : { onDone })}
-      />
-      {reportable &&
-        (open === undefined ? (
-          <ReportMessageButton messageId={messageId} triggerClassName={actionClass} />
-        ) : (
-          <IconAction
-            label={m.reports.reportMessage}
-            {...action}
-            onPress={() => {
-              open("report");
-            }}
-            icon={<FlagIcon size={ACTION_ICON} aria-hidden="true" />}
-          />
-        ))}
-      <CopyIdButton
-        id={messageId}
-        thing="message"
-        {...action}
-        iconSize={ACTION_ICON}
-        {...(onDone === undefined ? {} : { onCopied: onDone })}
-      />
-      {deletable && open !== undefined && (
+      {labelled && (
+        <CopyButton
+          text={link}
+          label={m.reports.copyLink}
+          copied={m.reports.copiedLink}
+          icon={<LinkIcon size={ACTION_ICON} aria-hidden="true" />}
+          {...action}
+          {...(onDone === undefined ? {} : { onDone })}
+        />
+      )}
+      {labelled && reportable && (
+        <IconAction
+          label={m.reports.reportMessage}
+          {...action}
+          onPress={() => {
+            open("report");
+          }}
+          icon={<FlagIcon size={ACTION_ICON} aria-hidden="true" />}
+        />
+      )}
+      {labelled && (
+        <CopyIdButton
+          id={messageId}
+          thing="message"
+          {...action}
+          iconSize={ACTION_ICON}
+          {...(onDone === undefined ? {} : { onCopied: onDone })}
+        />
+      )}
+      {labelled && deletable && (
         <IconAction
           label={m.deleteMessage}
           labelled
           danger
-          className={dangerClass}
+          className={listDangerClass}
           onPress={() => {
             open("delete");
           }}

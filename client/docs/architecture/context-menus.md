@@ -96,12 +96,16 @@ edited.
      is copied as a PNG. A storage that does not is named as the reason (`UnreadableFile`);
    - a link in its text that opens elsewhere (`a[target=_blank]`): Open link, which follows the link
      itself, and Copy link address.
-3. Every action the row of buttons over the message offers (`MessageActions`), by name.
+3. Every action the message has (`MessageActions`), by name: those the row of buttons over it
+   offers, and Mark unread, Copy text, Copy link, Report message, Copy message ID, and Delete
+   message, which the row leaves to the menu so that it fits a thread's pane.
 
-The actions are the same components as the row of buttons and the touch screen's sheet. `IconAction`
-draws each as an icon button, a row of a list (`labelled`), or, inside `ActionsAsMenuItems`, a
-menu's item. What an action opens goes through `MessageItem`'s `open` (`MessageSheet`), as the
-sheet's do, and the reaction picker is placed at the menu's point.
+The row ends with More actions (⋯), which opens this menu beside it (`ContextMenu`'s `button`), from
+the keyboard with its first item focused. The actions are the same components as the row of buttons
+and the touch screen's sheet, which lists them all. `IconAction` draws each as an icon button, a row
+of a list (`labelled`), or, inside `ActionsAsMenuItems`, a menu's item. What an action opens goes
+through `MessageItem`'s `open` (`MessageSheet`), as the sheet's do, and the reaction picker is
+placed at the menu's point.
 
 ## A person
 
