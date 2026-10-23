@@ -14,8 +14,8 @@ A DM or group DM holds a call too.
 
 ## Incoming rings
 
-A call that rings the user (`RecordStore.myRings`, on any deployment they use) shows
-`IncomingCall`: a modal over the whole app naming who is calling and from where.
+A call that rings the user (`RecordStore.myRings`, on any deployment they use) shows `IncomingCall`:
+a modal over the whole app naming who is calling and from where.
 
 | Control            | Effect                                       |
 | ------------------ | -------------------------------------------- |
@@ -24,11 +24,11 @@ A call that rings the user (`RecordStore.myRings`, on any deployment they use) s
 
 While it shows:
 
-- The ringtone (`ringtone.wav`, looped by `loopSound`; see [sounds](../notifications.md#sounds)) plays
-  through the notification sound's speaker.
-- When the app is not focused and the user turned system notifications on, the system notifies,
-  once per ring (`ringNotifications.ts`). **Why:** a desktop may refuse a notification posted again
-  in quick succession, which an effect run twice would do.
+- The ringtone (`ringtone.wav`, looped by `loopSound`; see [sounds](../notifications.md#sounds))
+  plays through the notification sound's speaker.
+- When the app is not focused and the user turned system notifications on, the system notifies, once
+  per ring (`ringNotifications.ts`). **Why:** a desktop may refuse a notification posted again in
+  quick succession, which an effect run twice would do.
 - A muted DM rings silently.
 - Nothing rings in do not disturb (`IncomingCalls`, by the home's answer; see
   [Presence](../presence.md#do-not-disturb)): the servers ring no one in it, and a ring from a

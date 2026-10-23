@@ -39,7 +39,8 @@ See [links to a deployment](self-links.md).
 
 See [attachments](attachments.md).
 
-- **Confirming moves the bytes from the upload URL's staging key.** The URL can change nothing after.
+- **Confirming moves the bytes from the upload URL's staging key.** The URL can change nothing
+  after.
 - **Names are shown without format and control characters.** They could make a name read as another.
 - **Pictures load only from a deployment's storage.** Loading the address a message links to would
   tell whoever serves it the address of everyone reading.
@@ -73,6 +74,6 @@ See [message groups](message-groups.md).
 
 - **A group's height is estimated, never measured.** A group is then the same however its pictures
   load.
-- **A message keeps its grouping while it stays in the window.** Read afresh, a page of older history
-  arriving above the view would move group boundaries all the way down into it.
+- **A message keeps its grouping while it stays in the window.** Read afresh, a page of older
+  history arriving above the view would move group boundaries all the way down into it.
 - **Each grouped message is its own row.** It highlights, takes focus, and opens its actions alone.

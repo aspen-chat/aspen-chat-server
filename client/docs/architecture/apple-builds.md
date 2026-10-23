@@ -1,6 +1,9 @@
 # Apple builds in CI
 
-CI builds the iOS app and the macOS desktop app on GitHub's macOS runners (`macos-26`, Apple Silicon). A pull request's builds are unsigned. A push to `main` also signs both: the desktop app's dmgs with the Developer ID Application identity, sent to Apple to be notarized and stapled once Apple accepts them, and the iOS app for the App Store, which can be sent to TestFlight.
+CI builds the iOS app and the macOS desktop app on GitHub's macOS runners (`macos-26`, Apple
+Silicon). A pull request's builds are unsigned. A push to `main` also signs both: the desktop app's
+dmgs with the Developer ID Application identity, sent to Apple to be notarized and stapled once
+Apple accepts them, and the iOS app for the App Store, which can be sent to TestFlight.
 
 ## Where it lives
 
@@ -20,29 +23,44 @@ CI builds the iOS app and the macOS desktop app on GitHub's macOS runners (`maco
 | `ios`                  | every run | The app and its UI tests built for the simulator, unsigned, and `check_webpush.sh`                                                                                                                                                                                                                                                       |
 | `ios-testflight`       | `main`    | An App Store build, sent to App Store Connect while `TESTFLIGHT_UPLOAD` is `true`; otherwise its `.ipa` is kept as an artifact                                                                                                                                                                                                           |
 
-The UI tests themselves are not run: they need a whole deployment (`ios-app.md`), and these runners have no Docker to run one in.
+The UI tests themselves are not run: they need a whole deployment (`ios-app.md`), and these runners
+have no Docker to run one in.
 
-There are two dmgs, `Aspen-<version>-arm64.dmg` for Apple Silicon and `Aspen-<version>-x64.dmg` for Intel, both built on the Apple Silicon runner. **Why not one universal app:** every download would carry both architectures' Electron, about twice the size. The capture helper is small, so it is one universal binary that both apps carry (`scripts/build-native.mjs`).
+There are two dmgs, `Aspen-<version>-arm64.dmg` for Apple Silicon and `Aspen-<version>-x64.dmg` for
+Intel, both built on the Apple Silicon runner. **Why not one universal app:** every download would
+carry both architectures' Electron, about twice the size. The capture helper is small, so it is one
+universal binary that both apps carry (`scripts/build-native.mjs`).
 
 ## Notarization
 
-The dmgs are notarized without CI waiting. **Why:** Apple's notary service usually answers within minutes, but it holds a new team's first submissions for hours or days, and a job cannot wait that long.
+The dmgs are notarized without CI waiting. **Why:** Apple's notary service usually answers within
+minutes, but it holds a new team's first submissions for hours or days, and a job cannot wait that
+long.
 
-`desktop-macos-signed` signs each dmg itself, with a timestamp (electron-builder's own signing of a dmg asks for none), because the service finds a dmg's ticket by its signature. It sends each one with `notarytool submit` and keeps the dmgs with `submissions.json`, their submission ids.
+`desktop-macos-signed` signs each dmg itself, with a timestamp (electron-builder's own signing of a
+dmg asks for none), because the service finds a dmg's ticket by its signature. It sends each one
+with `notarytool submit` and keeps the dmgs with `submissions.json`, their submission ids.
 
-`notarized-dmg.yml` runs every half hour, and can be started by hand. It looks only at the newest `desktop-macos-unstapled` from `main`, and asks the service about each submission:
+`notarized-dmg.yml` runs every half hour, and can be started by hand. It looks only at the newest
+`desktop-macos-unstapled` from `main`, and asks the service about each submission:
 
-- **Accepted:** it staples each dmg, checks the ticket and what Gatekeeper says of the dmg and of the app inside it, and keeps the dmgs as `desktop-macos-notarized-<CI run id>`.
+- **Accepted:** it staples each dmg, checks the ticket and what Gatekeeper says of the dmg and of
+  the app inside it, and keeps the dmgs as `desktop-macos-notarized-<CI run id>`.
 - **Still in progress:** it does nothing until its next run.
 - **Refused:** it keeps the service's logs as `desktop-macos-notary-refused-<CI run id>` and fails.
 
-Either artifact ends the asking for that CI run. A newer push to `main` leaves the older run's dmgs unstapled.
+Either artifact ends the asking for that CI run. A newer push to `main` leaves the older run's dmgs
+unstapled.
 
-Only the dmg carries a ticket, not the app inside it. Once the app is copied out, Gatekeeper fetches its ticket from Apple the first time it opens, which needs the Mac to be online. Stapling the app as well would take a second round with the notary service, the app's before the dmg's.
+Only the dmg carries a ticket, not the app inside it. Once the app is copied out, Gatekeeper fetches
+its ticket from Apple the first time it opens, which needs the Mac to be online. Stapling the app as
+well would take a second round with the notary service, the app's before the dmg's.
 
 ## Secrets and variables
 
-The signing jobs take their secrets from the GitHub Environment `apple-signing`, which only `main` may use. **Why:** a pull request's code is not reviewed when it runs, and whatever is signed carries the publisher's name.
+The signing jobs take their secrets from the GitHub Environment `apple-signing`, which only `main`
+may use. **Why:** a pull request's code is not reviewed when it runs, and whatever is signed carries
+the publisher's name.
 
 | Secret                                         | What it holds                                                                                                                                                         |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -59,19 +77,33 @@ Two repository variables, which are not secret:
 | `TESTFLIGHT_UPLOAD` | `true` sends each `main` build to App Store Connect. Anything else exports the signed `.ipa` and keeps it |
 | `ASPEN_PUSH_RELAY`  | The relay the iOS build names (`spec/push.md`). Unset, the build has no push                              |
 
-When a certificate is renewed, its profiles must be made again with the new one, and all three secrets replaced. `app_store.py` names the profile that has expired or lacks the identity's certificate.
+When a certificate is renewed, its profiles must be made again with the new one, and all three
+secrets replaced. `app_store.py` names the profile that has expired or lacks the identity's
+certificate.
 
 ## The iOS App Store build
 
-`app_store.py` signs by hand. **Why not Xcode's automatic signing:** with an API key in CI, automatic signing makes a new development certificate on every run, and an account may hold only a few.
+`app_store.py` signs by hand. **Why not Xcode's automatic signing:** with an API key in CI,
+automatic signing makes a new development certificate on every run, and an account may hold only a
+few.
 
 What it does:
 
-1. It reads each profile, checks that it is an App Store profile of team `L2GS25U79G`, for one of the two bundles, and not expired, and installs it.
-2. It imports the `.p12` into a keychain of its own, deleted at the end. Without `--certificate` it uses the identities already in the keychains, for archiving from a Mac where they are.
-3. It archives the `App` scheme. A generated xcconfig gives each target the profile of its own bundle id (`ASPEN_PROFILE_<bundle id as an identifier>`). A setting on the command line would give every target the same profile, Swift packages included, which take none.
+1. It reads each profile, checks that it is an App Store profile of team `L2GS25U79G`, for one of
+   the two bundles, and not expired, and installs it.
+2. It imports the `.p12` into a keychain of its own, deleted at the end. Without `--certificate` it
+   uses the identities already in the keychains, for archiving from a Mac where they are.
+3. It archives the `App` scheme. A generated xcconfig gives each target the profile of its own
+   bundle id (`ASPEN_PROFILE_<bundle id as an identifier>`). A setting on the command line would
+   give every target the same profile, Swift packages included, which take none.
 4. It exports for `app-store-connect`, uploading with the API key when given `--upload`.
 
-The build number is `<run number>.<attempt>`, so each upload of a version is greater than the last. The extension's `Info.plist` carries the app's version and build number: App Store Connect refuses an app whose extension's differ.
+The build number is `<run number>.<attempt>`, so each upload of a version is greater than the last.
+The extension's `Info.plist` carries the app's version and build number: App Store Connect refuses
+an app whose extension's differ.
 
-The app's `Info.plist` answers App Store Connect's export compliance question (`ITSAppUsesNonExemptEncryption`, false), so builds go to TestFlight without being asked. The app's encryption is exempt because Aspen's source code, its encryption included, is open source and publicly available. That holds for any encryption Aspen adds later, as long as its source stays public.
+The app's `Info.plist` answers App Store Connect's export compliance question
+(`ITSAppUsesNonExemptEncryption`, false), so builds go to TestFlight without being asked. The app's
+encryption is exempt because Aspen's source code, its encryption included, is open source and
+publicly available. That holds for any encryption Aspen adds later, as long as its source stays
+public.

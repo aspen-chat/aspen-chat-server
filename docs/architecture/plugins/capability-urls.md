@@ -8,7 +8,8 @@ Code: `capability`, table `plugin_capability`.
 
 - It is the same each time.
 - One person holds at most 100 names of one plugin's (`capability::MAX_PER_USER`).
-- It is kept in `plugin_capability`, keyed by its secret. The secret is kept so the plugin can show it again.
+- It is kept in `plugin_capability`, keyed by its secret. The secret is kept so the plugin can show
+  it again.
 
 ## Following one
 
@@ -28,6 +29,7 @@ Every URL of a person's ends (`capability::revoke_all`) when they:
 - change or reset their password;
 - sign out everywhere else.
 
-The plugin hands out a fresh one when next asked. **Why:** see the [design notes](design-notes.md#capability-urls).
+The plugin hands out a fresh one when next asked. **Why:** see the
+[design notes](design-notes.md#capability-urls).
 
 The host's route paths are reserved; see [Routes](routes.md#the-hosts-paths).

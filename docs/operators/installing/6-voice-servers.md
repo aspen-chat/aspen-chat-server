@@ -13,10 +13,10 @@ Each voice server is its own machine (or container) with its own `voice_server.t
    This measures the CPU, reads the machine's memory, network, and port range, and prints a
    capacity.
 
-   It reads the network card's speed, which is not the internet connection's. On a machine at
-   home, or anywhere the connection is slower than the card, run a speed test on the machine,
-   and give its upload as `[rtc] upload_mbps` in `voice_server.toml` (or `--link-mbps`) before
-   measuring. Each participant takes about 3 Mbit/s of upload when everyone sends video.
+   It reads the network card's speed, which is not the internet connection's. On a machine at home,
+   or anywhere the connection is slower than the card, run a speed test on the machine, and give its
+   upload as `[rtc] upload_mbps` in `voice_server.toml` (or `--link-mbps`) before measuring. Each
+   participant takes about 3 Mbit/s of upload when everyone sends video.
 
 2. Where an API server runs, register it:
 
@@ -24,8 +24,8 @@ Each voice server is its own machine (or container) with its own `voice_server.t
    aspen-chat-server voice-servers add voice-1 --url https://voice-1.chat.example.org --capacity 120
    ```
 
-   It may be run again with the same arguments, so a deployment script can run it every time.
-   The dashboard registers servers too.
+   It may be run again with the same arguments, so a deployment script can run it every time. The
+   dashboard registers servers too.
 
 3. Note the id it prints. It prints the id, the line to put in `voice_server.toml`, and the entry
    for the voice server's NATS user ([below](#give-it-a-nats-user)), like this:
@@ -47,11 +47,11 @@ Each voice server is its own machine (or container) with its own `voice_server.t
 
 ### The id
 
-- The id is how the deployment tells its voice servers apart. The voice server reports as that
-  id, join tokens name it, and its NATS user (below) may publish only on subjects naming it.
-- `voice-servers list` shows every server's id again. So does the dashboard's Server fleet tab,
-  with the **ID wizard** on in the app's settings, or whenever a voice server reports under an id
-  that is not registered.
+- The id is how the deployment tells its voice servers apart. The voice server reports as that id,
+  join tokens name it, and its NATS user (below) may publish only on subjects naming it.
+- `voice-servers list` shows every server's id again. So does the dashboard's Server fleet tab, with
+  the **ID wizard** on in the app's settings, or whenever a voice server reports under an id that is
+  not registered.
 - The id never changes for as long as the server stays registered, so it is written once.
 - **A server removed and registered again gets a new id.** Its `voice_server.toml` and NATS user
   must be given it.
@@ -84,9 +84,9 @@ max_port = 40999
 
 ## Give it a NATS user
 
-Give each voice server a NATS user of its own that may do no more than a voice server does.
-**Do not give it the token the API servers use:** whoever holds that token can read and write
-every event of the deployment, and a voice server runs on a machine people send media to.
+Give each voice server a NATS user of its own that may do no more than a voice server does. **Do not
+give it the token the API servers use:** whoever holds that token can read and write every event of
+the deployment, and a voice server runs on a machine people send media to.
 
 NATS then signs everyone in as a user, so the API servers need one too. In `aspen.toml`, replace
 `nats_auth_token` with:
@@ -97,10 +97,10 @@ user = "aspen"
 password = "…"
 ```
 
-Start NATS with a configuration naming both. `voice-servers add` printed the entry for that
-voice server's user, with every permission it needs and no more: put it in `users`, with a
-password of your own in place of `PASSWORD`. For a server registered before, `voice-servers add`
-again with the same name and address prints it again.
+Start NATS with a configuration naming both. `voice-servers add` printed the entry for that voice
+server's user, with every permission it needs and no more: put it in `users`, with a password of
+your own in place of `PASSWORD`. For a server registered before, `voice-servers add` again with the
+same name and address prints it again.
 
 ```
 jetstream {}
@@ -114,20 +114,20 @@ authorization {
 
 These permissions let the voice server:
 
-| Permission | Lets it |
-| --- | --- |
-| `aspen.voice.report.{lane}.{id}`, `aspen.voice.speaking.{lane}.{id}` | Publish its own reports. |
-| `aspen.voice.command.{id}` | Receive its own commands. |
-| `KV_aspen_rate_limits` subjects | Follow a suspension of rate limits (the key-value bucket `aspen_rate_limits`). |
-| `aspen.voice.token-key` | Ask the API servers for the public half of the key they sign join tokens with. |
-| `_INBOX_voice.{id}` | Receive the replies to its own requests. It asks for them under this prefix, not NATS's shared `_INBOX`. |
+| Permission                                                           | Lets it                                                                                                  |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `aspen.voice.report.{lane}.{id}`, `aspen.voice.speaking.{lane}.{id}` | Publish its own reports.                                                                                 |
+| `aspen.voice.command.{id}`                                           | Receive its own commands.                                                                                |
+| `KV_aspen_rate_limits` subjects                                      | Follow a suspension of rate limits (the key-value bucket `aspen_rate_limits`).                           |
+| `aspen.voice.token-key`                                              | Ask the API servers for the public half of the key they sign join tokens with.                           |
+| `_INBOX_voice.{id}`                                                  | Receive the replies to its own requests. It asks for them under this prefix, not NATS's shared `_INBOX`. |
 
 A voice server still given `nats_auth_token` works, and warns at startup.
 
 ### The join token key
 
-- The first API server to start makes the key and keeps it in the database. No secret needs
-  copying to a voice server.
+- The first API server to start makes the key and keeps it in the database. No secret needs copying
+  to a voice server.
 - A voice server can check the tokens that let people into calls, but never make one.
 - A voice server that cannot reach an API server at startup keeps asking every few seconds, and
   turns joins away until one answers.
@@ -141,32 +141,32 @@ The API servers apply a report only when:
 
 So a voice server taken over can misreport its own calls and no one else's.
 
-It can still cause some trouble beyond its own calls. NATS lets a request name any subject for
-its reply, so it can have NATS publish its own answers on the API servers' subjects:
+It can still cause some trouble beyond its own calls. NATS lets a request name any subject for its
+reply, so it can have NATS publish its own answers on the API servers' subjects:
 
 - making every API server reload its plugins or redo background passes;
 - replacing a suspension of rate limits with a value that is not read.
 
-It cannot make anything it says believed that way. The API servers refuse to answer anywhere but
-the asking server's own inbox, and log `refused to answer a request for the join token key` when
-one tries. **That log line means that voice server is compromised.** Firewalling NATS from
-everything but the deployment's own machines remains the main defence (see
+It cannot make anything it says believed that way. The API servers refuse to answer anywhere but the
+asking server's own inbox, and log `refused to answer a request for the join token key` when one
+tries. **That log line means that voice server is compromised.** Firewalling NATS from everything
+but the deployment's own machines remains the main defence (see
 [Network exposure](network-exposure.md)).
 
 ## Open its ports
 
 Clients reach a voice server in three ways, and all must be open to them:
 
-| Traffic | Protocol and port | Notes |
-| --- | --- | --- |
-| Signalling and the latency check | HTTPS: `GET /health` and the WebSocket `GET /ws` | Through a TLS proxy (below). |
-| Media | UDP (and TCP where UDP is blocked), `[rtc] min_port` to `max_port` | Clients send media to `announced_address`, over IPv4 or IPv6. |
-| File transfers | UDP `[transfer] port` (3478) | STUN, and the TURN relay. |
+| Traffic                          | Protocol and port                                                  | Notes                                                         |
+| -------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------- |
+| Signalling and the latency check | HTTPS: `GET /health` and the WebSocket `GET /ws`                   | Through a TLS proxy (below).                                  |
+| Media                            | UDP (and TCP where UDP is blocked), `[rtc] min_port` to `max_port` | Clients send media to `announced_address`, over IPv4 or IPv6. |
+| File transfers                   | UDP `[transfer] port` (3478)                                       | STUN, and the TURN relay.                                     |
 
 ### Signalling
 
-The voice server speaks plain HTTP on `listen_addr`. Put a TLS proxy in front of it at the `url`
-you registered:
+The voice server speaks plain HTTP on `listen_addr`. Put a TLS proxy in front of it at the `url` you
+registered:
 
 - pass WebSocket upgrades through,
 - set `X-Forwarded-For`,
@@ -179,34 +179,34 @@ The server warns at startup when it listens on loopback with no trusted proxies.
 `announced_address` is the address clients send media to: one for IPv4, one for IPv6.
 
 - Behind NAT, set the IPv4 one to the server's public address.
-- Set the IPv6 one to the server's stable public IPv6 address. Left out, the server announces
-  the address it reaches the internet from, which for IPv6 is often a temporary one.
+- Set the IPv6 one to the server's stable public IPv6 address. Left out, the server announces the
+  address it reaches the internet from, which for IPv6 is often a temporary one.
 - Leave both out only when the machine has a public address on an interface.
 - **Never set it to a loopback address.**
-- A machine without IPv6 needs nothing: the server says `no media over IPv6` in its log and
-  serves IPv4. Give `announced_address` only the IPv4 address there.
+- A machine without IPv6 needs nothing: the server says `no media over IPv6` in its log and serves
+  IPv4. Give `announced_address` only the IPv4 address there.
 - Open the media and file transfer ports over both families. See
   [IPv4 and IPv6](../configuration/voice-server.md#ipv4-and-ipv6).
 
 ### File transfers
 
-The transfer port carries STUN, so two people's devices can connect directly, and the TURN relay
-for transfers that go through the server. The relay carries no more than `[transfer] relay_mbps`
-(50) in all. Set `relay_mbps = 0` not to relay transfers at all.
+The transfer port carries STUN, so two people's devices can connect directly, and the TURN relay for
+transfers that go through the server. The relay carries no more than `[transfer] relay_mbps` (50) in
+all. Set `relay_mbps = 0` not to relay transfers at all.
 
 ## Check that it is registered
 
-When a voice server starts, it asks the API servers for the key join tokens are signed with,
-naming its id. They answer whether that id is registered.
+When a voice server starts, it asks the API servers for the key join tokens are signed with, naming
+its id. They answer whether that id is registered.
 
-- If it is not, the voice server logs `this voice server's id is not registered with the
-  deployment` with the id, and stops with an error. Fix its `id` and start it again.
+- If it is not, the voice server logs `this voice server's id is not registered with the deployment`
+  with the id, and stops with an error. Fix its `id` and start it again.
 - When no API server is up yet, it keeps asking, and the check happens once one answers.
 
 The API servers watch for the same mistake from their side. A voice server whose id is not
-registered sends load reports that match no server, so they are dropped, and the server it was
-meant to be shows as **Silent** in the dashboard. While such reports keep arriving (from a voice
-server already running when it was removed, say):
+registered sends load reports that match no server, so they are dropped, and the server it was meant
+to be shows as **Silent** in the dashboard. While such reports keep arriving (from a voice server
+already running when it was removed, say):
 
 - each API server logs `a voice server whose id is not registered is reporting` with the id;
 - the Server fleet tab lists it under **Voice servers that are not registered**, beside every
@@ -215,8 +215,8 @@ server already running when it was removed, say):
 ## When a voice server stops being offered
 
 - A voice server that stops reporting for a minute is no longer offered to people joining calls.
-- One that people fail to reach is suspended for `failure_window_seconds` after
-  `failure_threshold` of them try in that time, unless it is the last one taking calls.
+- One that people fail to reach is suspended for `failure_window_seconds` after `failure_threshold`
+  of them try in that time, unless it is the last one taking calls.
 
 ---
 

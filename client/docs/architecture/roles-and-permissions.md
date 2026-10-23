@@ -11,11 +11,11 @@
 
 ## Resolving permissions
 
-Roles and permissions resolve on the client with `packages/protocol/src/permissions.ts`, by the
-same rules as the server's `app::permissions`.
+Roles and permissions resolve on the client with `packages/protocol/src/permissions.ts`, by the same
+rules as the server's `app::permissions`.
 
-**Both resolvers run the cases in `spec/permission_vectors.json`. A change to either resolver
-must change the vectors and the other resolver with it.**
+**Both resolvers run the cases in `spec/permission_vectors.json`. A change to either resolver must
+change the vectors and the other resolver with it.**
 
 ## Store state
 
@@ -62,8 +62,8 @@ Controls the caller may not use are not shown:
 | The caller loses Manage invites                                    | The store lets go of every invite but the caller's own. Without it the server sends only the caller's own                                                             |
 
 - Categories follow the same rule as channels, by their own overrides alone.
-- A category the store does not hold counts in `channelAccess` as denying View channel. A
-  channel's own overrides may grant it again.
+- A category the store does not hold counts in `channelAccess` as denying View channel. A channel's
+  own overrides may grant it again.
 
 ## Voice
 
@@ -77,8 +77,8 @@ Without Speak the call joins to listen, opening no microphone.
 ### `CommunitySettingsDialog`
 
 Opened from the wrench in the sidebar's header, by pressing or right-clicking the community's name
-above its channels, and from its menu on the rail (`CommunitySettingsModal`, the same modal
-without the wrench).
+above its channels, and from its menu on the rail (`CommunitySettingsModal`, the same modal without
+the wrench).
 
 | Section  | Holds                                                                                                                                                                                                                                                                                                   |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -93,8 +93,8 @@ without the wrench).
 
 - a reason;
 - how long for;
-- for a banner who also holds Manage messages, whether the member's messages from the last hour
-  or day go too.
+- for a banner who also holds Manage messages, whether the member's messages from the last hour or
+  day go too.
 
 `BannedList`, beneath the members, shows the standing bans with Lift ban.
 
@@ -122,8 +122,7 @@ Wherever a member is chosen (the Members tab, handing over ownership, Check acce
 `useMemberSearch`:
 
 1. shows the member sample until something is typed;
-2. then, for those the server lets search every member, searches with
-   `AspenSync.searchMembers`.
+2. then, for those the server lets search every member, searches with `AspenSync.searchMembers`.
 
 - The server's search matches nicknames too.
 - The rule for who may search is mirrored on the client, so the field is not offered to anyone
@@ -134,8 +133,8 @@ Wherever a member is chosen (the Members tab, handing over ownership, Check acce
 
 ## Pins
 
-Pins are store state per channel: topic `pins:<channelId>`, `usePins`. They are read once on
-first use and kept by `pin` events.
+Pins are store state per channel: topic `pins:<channelId>`, `usePins`. They are read once on first
+use and kept by `pin` events.
 
 `PinsButton` shows them in the channel and DM headers:
 
@@ -184,9 +183,8 @@ preference `NAME_COLORS` (Settings, Appearance) is off.
 
 A role tag takes its role's colour. `RoleSwatch` puts a dot of it beside a role's name.
 
-Message reads ask for `memberships`, the authors' roles where the messages were posted.
-`AspenSync` notes them without adding anyone to the member sample, so an author outside it is
-coloured too.
+Message reads ask for `memberships`, the authors' roles where the messages were posted. `AspenSync`
+notes them without adding anyone to the member sample, so an author outside it is coloured too.
 
 ### Editing a colour
 
@@ -202,8 +200,8 @@ The role editors offer `HuePicker`:
 A community role may be shown apart (`hoist`). The member list puts online holders under their
 highest such role, highest first, above Online and Offline (`shownApartRole`).
 
-The server puts connected holders first in the member sample. So `AspenSync` reads the sample
-again (`loadMemberSample`, after a random pause of at most `MEMBER_RESAMPLE_SPREAD_MS`) when:
+The server puts connected holders first in the member sample. So `AspenSync` reads the sample again
+(`loadMemberSample`, after a random pause of at most `MEMBER_RESAMPLE_SPREAD_MS`) when:
 
 - a role comes to be shown apart, or stops being;
 - a role shown apart moves or is deleted;

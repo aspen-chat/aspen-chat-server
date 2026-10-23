@@ -26,8 +26,8 @@ After every change, the list moves the position by what the still row has moved.
 ## Catching up before the list's own moves
 
 Every move of the list's own (a finger's or a fling's frame) first takes in whatever moved the still
-row in the content since it was noted (`catchUp`). **Why:** those moves run before the frame's resize
-observers are told, and would otherwise note the row where the change put it.
+row in the content since it was noted (`catchUp`). **Why:** those moves run before the frame's
+resize observers are told, and would otherwise note the row where the change put it.
 
 ## Pictures' room
 
@@ -39,9 +39,9 @@ observers are told, and would otherwise note the row where the change put it.
 
 - The list's own scrolls never pin or unpin it from the bottom.
 - A script's scrolls (such as find-in-page's) do, as the reader's do.
-- They are judged against the content's height measured afresh. **Why:** the browser also scrolls the
-  box when what lies beneath it shrinks, and the bottom it was at moves up (the message box losing
-  its files as a message is sent).
+- They are judged against the content's height measured afresh. **Why:** the browser also scrolls
+  the box when what lies beneath it shrinks, and the bottom it was at moves up (the message box
+  losing its files as a message is sent).
 
 ## Scroll anchoring
 

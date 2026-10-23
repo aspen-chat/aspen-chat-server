@@ -1,7 +1,8 @@
 # Windows game capture
 
 The capture pipeline on this page is Windows's. On macOS and Linux the picture is the browser's own
-screen share, and the helper captures only the sound (see [application audio](application-audio.md)).
+screen share, and the helper captures only the sound (see
+[application audio](application-audio.md)).
 
 The helper captures one source through libobs, encodes it as H.264 constrained baseline, and sends
 it as SRTP straight to the voice server's plain RTP transport, answering the server's RTCP itself.
@@ -12,8 +13,8 @@ it as SRTP straight to the voice server's plain RTP transport, answering the ser
 
 - A game capture is made with the fastest hook rate. A hook that ran but captured nothing is tried
   again every 0.4 s.
-- If the hook delivers no frame within `HOOK_TIMEOUT` (three seconds), the capture is replaced in the
-  scene by a window capture of the same window. That happens when:
+- If the hook delivers no frame within `HOOK_TIMEOUT` (three seconds), the capture is replaced in
+  the scene by a window capture of the same window. That happens when:
   - the game never presented;
   - an anti-cheat refused the hook (after which the source never tries again);
   - the window is not a game.

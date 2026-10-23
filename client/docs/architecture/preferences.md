@@ -1,7 +1,7 @@
 # Preferences
 
-Preferences are `PreferenceStore`, reached as `AspenSync.preferences` and read in components
-with `usePreference(definition)`. The design notes are in
+Preferences are `PreferenceStore`, reached as `AspenSync.preferences` and read in components with
+`usePreference(definition)`. The design notes are in
 [preferences-design-notes.md](preferences-design-notes.md).
 
 ## Where it lives
@@ -51,20 +51,17 @@ The palette (light or dark) and the fonts ([fonts.md](fonts.md)) are kept per in
 
 ### Audio devices
 
-- A `NamedDevice` keeps both id and label, since browsers salt device ids per site and the ids
-  can change.
+- A `NamedDevice` keeps both id and label, since browsers salt device ids per site and the ids can
+  change.
 - `resolveDevice` finds the device by id, then by label.
-- `notificationOutputDevice` resolves `NOTIFICATION_OUTPUT` for whatever plays notification
-  sounds.
+- `notificationOutputDevice` resolves `NOTIFICATION_OUTPUT` for whatever plays notification sounds.
 - `AspenSync` feeds the audio choices to `VoiceCall.setAudioDevices`. That swaps the microphone
   producer's track mid-call and re-routes playback with `setSinkId` where the browser has it.
-- `useAudioDevices` asks for the microphone once, so devices are named, and follows
-  `devicechange`.
+- `useAudioDevices` asks for the microphone once, so devices are named, and follows `devicechange`.
 
 ### Name colours
 
-`NAME_COLORS` is device-scoped for a reader to whom coloured text on one screen is harder to
-read.
+`NAME_COLORS` is device-scoped for a reader to whom coloured text on one screen is harder to read.
 
 ### Typing notices
 
@@ -75,13 +72,12 @@ read.
 
 ### Zoom
 
-Zoom is the desktop app's (`src/theme/zoom.ts`). The shell keeps it and applies it before the
-page loads, so nothing jumps at launch.
+Zoom is the desktop app's (`src/theme/zoom.ts`). The shell keeps it and applies it before the page
+loads, so nothing jumps at launch.
 
 - The window zooms as a browser does (`packages/desktop/src/main/zoom.ts`). The factor is in the
   profile's `zoom.json`.
-- The main process takes these keys before the page or the menu sees them, and sends the page
-  steps:
+- The main process takes these keys before the page or the menu sees them, and sends the page steps:
   - Ctrl + and Ctrl − (⌘ on macOS);
   - Ctrl 0;
   - Ctrl with the wheel.
@@ -118,8 +114,8 @@ CSS zoom (`zoom` on the root, which iOS's `WKWebView.pageZoom` also is) is not u
 
 Text grows, as the platforms' own text sizes grow it. Spacing and icons keep their size.
 
-A phone's channel list and the like may shrink beside the rail (`min-w-0` on `ResizablePane`).
-A large text size then truncates their lines rather than pushing their controls off the screen.
+A phone's channel list and the like may shrink beside the rail (`min-w-0` on `ResizablePane`). A
+large text size then truncates their lines rather than pushing their controls off the screen.
 
 ### Contrast
 
@@ -132,14 +128,14 @@ Contrast is kept per install with the palette and theme (`applyContrastMode` in
 | Standard | Standard contrast                       |
 | More     | Sets `data-contrast="more"` on the root |
 
-- `data-contrast="more"` has a block in `styles.css`. It mixes each palette's muted and faint
-  inks, comment colour, and lines from its own ink and ground, so it holds in every palette.
+- `data-contrast="more"` has a block in `styles.css`. It mixes each palette's muted and faint inks,
+  comment colour, and lines from its own ink and ground, so it holds in every palette.
 - The axe audit checks the default palette at more contrast in both schemes.
 
 ### Message text size
 
-`MESSAGE_TEXT_SIZE` is one of `MESSAGE_TEXT_SIZES`: 14, 16, 18, 20, or 24 pixels. It sizes
-messages and the message box.
+`MESSAGE_TEXT_SIZE` is one of `MESSAGE_TEXT_SIZES`: 14, 16, 18, 20, or 24 pixels. It sizes messages
+and the message box.
 
 - `useFollowMessageTextSize` writes it on `<html>` as `--message-text-scale`.
 - `.message-text` (`styles.css`) is on the message list's content and the composer's field. It
@@ -161,7 +157,6 @@ messages and the message box.
 
 ### Step slider
 
-The three are set with `StepSlider` (`src/features/layout/StepSlider.tsx`). It is a slider over
-a few unevenly spaced values. It sets its input's value text to the value's description, since
-React Aria words a slider's value only through a number format, which would read out the
-position.
+The three are set with `StepSlider` (`src/features/layout/StepSlider.tsx`). It is a slider over a
+few unevenly spaced values. It sets its input's value text to the value's description, since React
+Aria words a slider's value only through a number format, which would read out the position.

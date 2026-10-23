@@ -5,8 +5,7 @@
 People see "No voice server can take a call right now". No voice server is enabled, has room, and
 reported within `[voice] offer_silence_seconds`.
 
-The dashboard's Server fleet tab shows each voice server's last report. Check that the voice
-server:
+The dashboard's Server fleet tab shows each voice server's last report. Check that the voice server:
 
 1. is running;
 2. reaches NATS, with the token, or as its own user with the permissions
@@ -24,15 +23,15 @@ An API server logs one of these for a report about another voice server's calls:
 
 Or it stops at startup saying `this voice server's id is not registered`.
 
-**Means:** its `id` in `voice_server.toml` (or `ASPEN_VOICE_SERVER_ID`) is not the id the
-deployment registered it under. It was:
+**Means:** its `id` in `voice_server.toml` (or `ASPEN_VOICE_SERVER_ID`) is not the id the deployment
+registered it under. It was:
 
 - copied from another deployment,
 - kept from before the database was recreated, or
 - kept after the server was removed and registered again, which gives it a new id.
 
-Its reports name an id no registered server has, so they are dropped. The Server fleet tab lists
-the id it reports as under **Voice servers that are not registered**, and the API servers log
+Its reports name an id no registered server has, so they are dropped. The Server fleet tab lists the
+id it reports as under **Voice servers that are not registered**, and the API servers log
 `a voice server whose id is not registered is reporting`.
 
 **What to do:**
@@ -50,22 +49,22 @@ running unregistered was removed while it ran, or its API servers are older than
 Signalling works but media does not flow. Either:
 
 - the media ports (`[rtc] min_port` to `max_port`, UDP and TCP) are closed, or
-- `[rtc] announced_address` is not the address clients can reach. Behind NAT it must be the
-  public one.
+- `[rtc] announced_address` is not the address clients can reach. Behind NAT it must be the public
+  one.
 
-When only some people are affected, or calls take seconds to connect, check each family apart:
-the startup log has one `media listening` line for each family the server announces.
+When only some people are affected, or calls take seconds to connect, check each family apart: the
+startup log has one `media listening` line for each family the server announces.
 
-- The media ports are open over IPv4 but not IPv6 (or the other way). A client with both tries
-  both and uses the one that answers; one with only the closed family hears nothing.
+- The media ports are open over IPv4 but not IPv6 (or the other way). A client with both tries both
+  and uses the one that answers; one with only the closed family hears nothing.
 - The announced IPv6 address is a temporary one that has since changed. Set the stable one in
   `[rtc] announced_address`.
 - To take a family out of calls while you fix it, name the other alone: `ip = "0.0.0.0"`.
 
 ## A voice server's snapshot repaired the record of a call
 
-The log warns that a voice server's snapshot repaired the record of a call, or that a voice
-server no longer holds a call recorded on it.
+The log warns that a voice server's snapshot repaired the record of a call, or that a voice server
+no longer holds a call recorded on it.
 
 **Means:** some of that voice server's reports never reached an API server. Either NATS was
 unreachable or restarted, or a report kept failing (an `ERROR` line says which).
@@ -76,8 +75,8 @@ unreachable or restarted, or a report kept failing (an `ERROR` line says which).
 
 ## A voice server was suspended
 
-The log says `voice server suspended after failures from distinct users`, and the dashboard shows
-it suspended.
+The log says `voice server suspended after failures from distinct users`, and the dashboard shows it
+suspended.
 
 **Means:** `failure_threshold` of this deployment's people failed to start a call on it within
 `failure_window_seconds`. Each of them:
@@ -91,8 +90,8 @@ A report from anyone else, a bot, or someone from another deployment does not co
 
 - It takes calls again on its own after `failure_window_seconds`.
 - Fix the cause meanwhile, usually its TLS proxy or its ports.
-- Enabling it in the dashboard, or `voice-servers set <name> --enabled true`, ends the suspension
-  at once.
+- Enabling it in the dashboard, or `voice-servers set <name> --enabled true`, ends the suspension at
+  once.
 
-The last server taking calls is never suspended. The log says `voice server left taking calls
-despite failures` instead.
+The last server taking calls is never suspended. The log says
+`voice server left taking calls despite failures` instead.

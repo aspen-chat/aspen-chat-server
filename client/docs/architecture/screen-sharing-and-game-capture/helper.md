@@ -1,8 +1,8 @@
 # The capture helper
 
-The helper `packages/desktop/native/capture` is a Rust crate with its own Cargo workspace.
-It is a separate executable, not a Node addon (see [design notes](design-notes.md#the-helper)). Its
-request protocol is documented at the top of its `main.rs`.
+The helper `packages/desktop/native/capture` is a Rust crate with its own Cargo workspace. It is a
+separate executable, not a Node addon (see [design notes](design-notes.md#the-helper)). Its request
+protocol is documented at the top of its `main.rs`.
 
 ## What it does on each platform
 
@@ -25,7 +25,8 @@ browser, so it is encoded once.
   pattern plays only the very clip offered. So the renderer cannot have libobs open a source of any
   other kind;
 - on Windows, starts the helper with the bundled libobs's libraries on the `PATH` and names its
-  modules and data in every request (`bundledLibobs`; see [building](building-the-helper.md#windows)).
+  modules and data in every request (`bundledLibobs`; see
+  [building](building-the-helper.md#windows)).
 
 The preload exposes it as `window.aspenDesktop.gameCapture`.
 

@@ -5,8 +5,8 @@
 `GET /plugins` is read:
 
 - with the bootstrap (`AspenSync`);
-- again (`loadPlugins`, one read shared by every ask) whenever an event names a plugin the store does
-  not know: an annotation's, or one in a message's `alteredBy`.
+- again (`loadPlugins`, one read shared by every ask) whenever an event names a plugin the store
+  does not know: an annotation's, or one in a message's `alteredBy`.
 
 A deployment that does not answer runs none.
 
@@ -22,13 +22,13 @@ A deployment that does not answer runs none.
 
 ### A plugin's text
 
-`pluginText` and `pluginKey` (`packages/protocol/src/plugins.ts`) render a plugin's text, filling its
-`%{name}` placeholders.
+`pluginText` and `pluginKey` (`packages/protocol/src/plugins.ts`) render a plugin's text, filling
+its `%{name}` placeholders.
 
 ## A plugin's account
 
-A user whose record names a `plugin` is that plugin's principal: a bot, marked as one. Its card names
-its plugin (`PluginAccount`) rather than an owner.
+A user whose record names a `plugin` is that plugin's principal: a bot, marked as one. Its card
+names its plugin (`PluginAccount`) rather than an owner.
 
 ## DMs
 

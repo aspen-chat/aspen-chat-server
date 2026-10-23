@@ -19,8 +19,8 @@
     "build": "pnpm codegen && pnpm -r --filter './packages/*' build",
     "typecheck": "pnpm codegen && pnpm -r --filter './packages/*' typecheck",
     "lint": "eslint .",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format": "node scripts/prettier.mjs --write",
+    "format:check": "node scripts/prettier.mjs --check",
     "test": "pnpm -r --filter './packages/*' test",
     "e2e": "pnpm --filter @aspen/app e2e",
     "e2e:docker": "scripts/e2e-docker.sh"

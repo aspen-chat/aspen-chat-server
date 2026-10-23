@@ -4,8 +4,8 @@ See also [Plugins](../plugins.md) for installing and running them.
 
 ## `pluginRefused`
 
-**Means:** a plugin refused a message before it was saved. The detail is the plugin's reason, in
-the reader's language.
+**Means:** a plugin refused a message before it was saved. The detail is the plugin's reason, in the
+reader's language.
 
 **What to do:** nothing, unless the plugin is wrong. Its community settings (or yours,
 `plugins show <id>`) decide what it refuses.

@@ -11,12 +11,15 @@
 ## Encoding
 
 - Lossy WebP at quality 85 (`aspen_previews::picture::QUALITY`).
-- libwebp's sharp YUV conversion, so fine detail in saturated colour (red text on white) is not smeared.
-- A preview with transparency keeps it. One whose alpha channel covers all of itself, as many screenshots' does, drops it.
+- libwebp's sharp YUV conversion, so fine detail in saturated colour (red text on white) is not
+  smeared.
+- A preview with transparency keeps it. One whose alpha channel covers all of itself, as many
+  screenshots' does, drops it.
 
 ## When a preview is kept
 
-A preview is kept only when it is at least `MIN_SAVING_PERCENT`, ten percent, smaller than its original (`preview::worth_keeping`).
+A preview is kept only when it is at least `MIN_SAVING_PERCENT`, ten percent, smaller than its
+original (`preview::worth_keeping`).
 
 - An original already small and web-ready is shown as it is.
 - A poster is always far smaller than its video.

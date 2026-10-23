@@ -2,8 +2,8 @@
 
 Aspen is a free and open source chat platform for communities. It offers text chat, voice calls,
 camera video, and screen and game sharing. Each deployment runs on its own, and users of one
-deployment can join communities on others through federation. A deployment can run on a single
-spare machine, and its servers can be added to as it grows.
+deployment can join communities on others through federation. A deployment can run on a single spare
+machine, and its servers can be added to as it grows.
 
 This repository holds the API server, the voice server, and one client app. The app runs in the
 browser, on Windows, macOS, and Linux, and on Android and iOS. Aspen is licensed under the

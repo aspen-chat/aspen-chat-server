@@ -19,10 +19,10 @@ It needs the services from `docker-compose.yaml`. It:
 
 Both servers export Prometheus metrics on loopback:
 
-| Server | Address |
-| --- | --- |
+| Server              | Address          |
+| ------------------- | ---------------- |
 | `aspen-chat-server` | `127.0.0.1:9464` |
-| `voice_server` | `127.0.0.1:9465` |
+| `voice_server`      | `127.0.0.1:9465` |
 
 Scrape them from the same machine, and keep them off public interfaces.
 

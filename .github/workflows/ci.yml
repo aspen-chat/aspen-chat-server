@@ -1,13 +1,14 @@
 # Every push and pull request: the Rust workspace is formatted, lint-free, and tested on
 # x86-64, and changes to access are checked to reach everything already open
 # (`scripts/check_permissions.py`); the servers write the schemas the client is generated from;
-# the client typechecks, lints, and passes its tests, its browser tests split across three
-# runners; the desktop app is packaged for Windows, macOS, and as a Flatpak, and the Android and
-# iOS apps are built, the Android APK kept, `main`'s builds for Windows, macOS, and the App
-# Store signed, the dmgs sent for notarization; two deployments federate and wake a stand-in
-# phone over real TLS; the box runs from images built here, and both AWS configurations pass
-# their plan tests; and the servers are built for 64-bit ARM two ways, natively and with the
-# cross-compile script, and each build is started against real services on an ARM machine.
+# the client is formatted, typechecks, lints, and passes its tests, its browser tests split
+# across three runners; the desktop app is packaged for Windows, macOS, and as a Flatpak, and
+# the Android and iOS apps are built, the Android APK kept, `main`'s builds for Windows, macOS,
+# and the App Store signed, the dmgs sent for notarization; two deployments federate and wake
+# a stand-in phone over real TLS; the box runs from images built here, and both AWS
+# configurations pass their plan tests; and the servers are built for 64-bit ARM two ways,
+# natively and with the cross-compile script, and each build is started against real services
+# on an ARM machine.
 #
 # The ARM binaries are built against Debian 12 (bookworm, glibc 2.36), so they run on
 # Raspberry Pi OS Bookworm and newer, and with jemalloc built for 64 KiB pages, which also
@@ -111,7 +112,7 @@ jobs:
             voice_signal_schema.json
 
   client:
-    name: Client — typecheck, lint, test
+    name: Client — format, typecheck, lint, test
     needs: schemas
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -140,6 +141,7 @@ jobs:
       - name: Rust (the toolchain rust-toolchain.toml pins)
         run: rustup toolchain install
       - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test

@@ -59,12 +59,12 @@ Special cases:
 
 `ThreadPanel` holds:
 
-- the starter, heading the replies in one `MessageList` (its `start`, shown once the window
-  reaches the thread's beginning), so the two scroll together however long the starter is;
-- a thread shorter than the panel standing at its top (`fromTop`, its skeleton too), rather than
-  at its bottom by the composer as a channel's history does;
-- "No replies in this thread." under the starter while the thread holds none, as when every reply
-  is deleted (the list's `empty`);
+- the starter, heading the replies in one `MessageList` (its `start`, shown once the window reaches
+  the thread's beginning), so the two scroll together however long the starter is;
+- a thread shorter than the panel standing at its top (`fromTop`, its skeleton too), rather than at
+  its bottom by the composer as a channel's history does;
+- "No replies in this thread." under the starter while the thread holds none, as when every reply is
+  deleted (the list's `empty`);
 - a `Composer` whose `echoTarget` offers to also show the reply in the parent channel
   (`echoToParent`).
 
@@ -104,8 +104,7 @@ while:
 
 - Messages in a thread cannot start threads.
 - `RecordStore.channels` leaves threads out of their community's list, though they record its id.
-- A thread's own link, like any channel link that names one, redirects to it open beside its
-  parent.
+- A thread's own link, like any channel link that names one, redirects to it open beside its parent.
 
 ## DMs and group DMs
 
@@ -122,10 +121,9 @@ DMs and group DMs are channels of type `dm` and `groupDm`, with no community and
 
 The list comes a page at a time (`DM_PAGE`, 100):
 
-1. Bootstrap reads the first page (`setDms`), with every DM's mutes and notification settings
-   whole.
-2. As the end of the DM list (`OlderDms`) comes into view, it reads the next page of each
-   deployment with more (`AspenSync.loadMoreDms`, `appendDms`).
+1. Bootstrap reads the first page (`setDms`), with every DM's mutes and notification settings whole.
+2. As the end of the DM list (`OlderDms`) comes into view, it reads the next page of each deployment
+   with more (`AspenSync.loadMoreDms`, `appendDms`).
 
 ### Leaving
 
@@ -141,10 +139,10 @@ The list comes a page at a time (`DM_PAGE`, 100):
 - "New message" opens `PeoplePicker`. It lists `RecordStore.people()`: everyone in the caller's
   communities' member lists, since a DM needs a shared community.
 - A profile card's Message button opens the one-to-one DM (`AspenSync.openDm`).
-- `DmHeader` titles a DM with the other people's names, each a button that opens that person's
-  card. For a group it offers `addDmRecipient` and `leaveDm`.
-- The list row of the one-to-one DM already open is a button to the other person's card, beside
-  the row, rather than a link to where the reader already is.
+- `DmHeader` titles a DM with the other people's names, each a button that opens that person's card.
+  For a group it offers `addDmRecipient` and `leaveDm`.
+- The list row of the one-to-one DM already open is a button to the other person's card, beside the
+  row, rather than a link to where the reader already is.
 - Either way an unwanted conversation is a press away from a block.
 - `ChannelScreen` serves DMs and community channels alike.
 
@@ -154,7 +152,6 @@ The system account (`User.system`) is the deployment's own, and sends notices.
 
 - `SystemBadge` marks it, beside `BotBadge`.
 - Its card offers no way to message, call, or block it.
-- Its DM is read-only. `RecordStore.channelAccess` gives only View channel there, as in a blocked
-  DM (`systemDmPeer`, topic `channelAccess:<channelId>`, touched when the account's record
-  arrives).
+- Its DM is read-only. `RecordStore.channelAccess` gives only View channel there, as in a blocked DM
+  (`systemDmPeer`, topic `channelAccess:<channelId>`, touched when the account's record arrives).
 - The Composer shows a note in place of the box.

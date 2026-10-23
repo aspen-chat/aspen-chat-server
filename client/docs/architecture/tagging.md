@@ -24,8 +24,8 @@ Tags are `<@user>`, `<@&role>`, and `@everyone`.
 `useTagging` offers people, roles, and everyone as `@` is typed.
 
 - Each is offered only with its permission in the channel.
-- People come from the member sample. For those the server lets search a large community, they
-  also come from `useMemberSearch`.
+- People come from the member sample. For those the server lets search a large community, they also
+  come from `useMemberSearch`.
 - It works from the keyboard: arrows, Enter or Tab, Escape.
 - It uses `aria-activedescendant` and a polite status. React Aria's ComboBox cannot complete at a
   `TextArea`'s caret.
@@ -54,5 +54,5 @@ Each read state's `mentions` is the reader's unread tags.
 
 ## Testing
 
-`e2e/tagging.spec.ts` shows a screen reader user tagging from the keyboard alone. It checks the
-box and its suggestions with axe (`@axe-core/playwright`).
+`e2e/tagging.spec.ts` shows a screen reader user tagging from the keyboard alone. It checks the box
+and its suggestions with axe (`@axe-core/playwright`).

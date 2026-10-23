@@ -24,10 +24,10 @@ kept hundreds of times over. Most of what a row could keep is for controls nobod
   it closes. Those are modal, so neither place can be taken while one is open.
 - **A row not engaged keeps one button where its actions go** (`ActionsStandIn`), named "Show
   message actions". Focus reaching it engages the row, and focus goes on to the first of the
-  actions, or the last when it came from after them, in the same task; so Tab and Shift+Tab meet
-  the actions in the order they always had. Assistive technology reading through a channel finds
-  that one button in each message rather than every action of every message; activating it brings
-  the actions.
+  actions, or the last when it came from after them, in the same task; so Tab and Shift+Tab meet the
+  actions in the order they always had. Assistive technology reading through a channel finds that
+  one button in each message rather than every action of every message; activating it brings the
+  actions.
 - **The stand-in is a plain `button`.** It is never seen or pressed by a pointer, and one stands in
   every row, so it holds no state.
 - A touch screen builds a message's sheet from its first long press (`pressed`), as before.
@@ -54,6 +54,6 @@ Wrap an overlay in `OnceOpen` wherever a list gives each of its rows one.
 
 ## Measuring
 
-Counting fibers and hooks under `article[data-message-id]` (each fiber's `memoizedState` chain),
-by component, says where a row's weight is; a heap snapshot says what it comes to. A row of plain
-text is about 14 elements and 200 hooks, and a window of 300 of them about 40 MB of heap.
+Counting fibers and hooks under `article[data-message-id]` (each fiber's `memoizedState` chain), by
+component, says where a row's weight is; a heap snapshot says what it comes to. A row of plain text
+is about 14 elements and 200 hooks, and a window of 300 of them about 40 MB of heap.

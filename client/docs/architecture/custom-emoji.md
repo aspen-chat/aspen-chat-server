@@ -1,6 +1,7 @@
 # Custom emoji
 
-Custom emoji are a community's own. Each is a name and a picture that is an icon. They appear in message text and in reactions.
+Custom emoji are a community's own. Each is a name and a picture that is an icon. They appear in
+message text and in reactions.
 
 ## Where it lives
 
@@ -47,7 +48,8 @@ Unicode names come from the picker's own data in the reader's language (`emojiDa
 - the catalogue the reader chose, or
 - for `automatic`, the first of the browser's languages the picker has
 
-One file is loaded, on first use. The picker takes the same file through `emojiData`, with its custom section renamed to the app's words.
+One file is loaded, on first use. The picker takes the same file through `emojiData`, with its
+custom section renamed to the app's words.
 
 ## In reactions
 
@@ -59,7 +61,8 @@ A reaction's key may be the same `<:id>` reference. So these take the community:
 
 A DM has no community, so it passes `null`.
 
-When an emoji's deletion event comes, the store drops the reactions made with it. **Why:** the server's cascade announces them no further.
+When an emoji's deletion event comes, the store drops the reactions made with it. **Why:** the
+server's cascade announces them no further.
 
 ## Managing them
 

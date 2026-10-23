@@ -32,8 +32,8 @@ Every other setting has a default. [Configuration](../configuration/index.md) li
 
 ### Choosing `public_url`
 
-`public_url` is the one address people use for everything: the API, the web client, and every
-link the deployment hands out. Its host is also:
+`public_url` is the one address people use for everything: the API, the web client, and every link
+the deployment hands out. Its host is also:
 
 - your deployment's [federation](../federation/index.md) domain,
 - the domain passkeys belong to.
@@ -43,8 +43,8 @@ another host refuses to start. A new host would make every passkey useless.
 
 ### Email
 
-To send mail (email verification, password reset by email, the daily digest, and a newsletter),
-add an SMTP server:
+To send mail (email verification, password reset by email, the daily digest, and a newsletter), add
+an SMTP server:
 
 ```toml
 [email]
@@ -56,9 +56,10 @@ Without it, the deployment works without email.
 
 ### Environment variables
 
-Each setting can also be given in the environment, which overrides the file. Write `ASPEN_` and
-the key, with `__` between nested keys: `ASPEN_DATABASE_URL`, `ASPEN_VOICE__TOKEN_SECRET`. Lists
-and tables can be given too: see [How settings are read](../configuration/index.md#how-settings-are-read).
+Each setting can also be given in the environment, which overrides the file. Write `ASPEN_` and the
+key, with `__` between nested keys: `ASPEN_DATABASE_URL`, `ASPEN_VOICE__TOKEN_SECRET`. Lists and
+tables can be given too: see
+[How settings are read](../configuration/index.md#how-settings-are-read).
 
 ## Create the tables
 
@@ -69,9 +70,9 @@ aspen-migrate up
 It reads the database from `--database-url`, then `DATABASE_URL`, then `database_url` in
 `aspen.toml`.
 
-Run it again after every upgrade, before starting the new servers. It applies only what has not
-been applied. Runs started at once against one database take turns: each waits for the one
-before it to finish, then finds its migrations applied.
+Run it again after every upgrade, before starting the new servers. It applies only what has not been
+applied. Runs started at once against one database take turns: each waits for the one before it to
+finish, then finds its migrations applied.
 
 ---
 

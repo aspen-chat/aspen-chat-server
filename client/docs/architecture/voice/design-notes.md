@@ -13,9 +13,9 @@ See [joining and leaving](joining.md).
   server's failure and the next candidate is tried.
 - **A refused request is not reported as the server's failure.** A refusal (such as going too fast)
   is the user's to wait out, unlike a timeout, so no other server is tried.
-- **The microphone producer uses `stopTracks: false`.** The call, not the transport, decides when the
-  track stops, so the microphone stays open across a move between calls or a rejoin and the move is
-  quick.
+- **The microphone producer uses `stopTracks: false`.** The call, not the transport, decides when
+  the track stops, so the microphone stays open across a move between calls or a rejoin and the move
+  is quick.
 - **The mediasoup `Device` is kept by its router capabilities.** Every call on a voice server shares
   them, so loading the `Device` once rather than for every call saves time on each join.
 
@@ -48,9 +48,9 @@ See [participants and volume](participants-and-volume.md).
 
 See [muting and moderation](muting-and-moderation.md).
 
-- **Muting is local and immediate; unmuting is asked for.** The voice server never refuses a mute
-  or deafen, so they show at once. Unmuting shows only once a `participantState` frame says the
-  server did it.
+- **Muting is local and immediate; unmuting is asked for.** The voice server never refuses a mute or
+  deafen, so they show at once. Unmuting shows only once a `participantState` frame says the server
+  did it.
 - **A `participantState` frame never shows the user less silenced than they have since asked.** An
   answer to an earlier request must not reopen a microphone they just muted.
 
@@ -61,8 +61,8 @@ See [the call screen](call-screen.md).
 - **The Leave Call button only leaves.** Nobody can end a call for everyone.
 - **The mobile apps always fill the window for full screen.** Capacitor's WebView dismisses any
   element that asks for the whole screen.
-- **The narrow-screen call bar shows from the moment Join is pressed.** Joining and a failure to join
-  are then visible there.
+- **The narrow-screen call bar shows from the moment Join is pressed.** Joining and a failure to
+  join are then visible there.
 
 ## Rings
 

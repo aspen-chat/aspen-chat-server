@@ -24,8 +24,8 @@ Every QR code the app shows is drawn by `QrCode` from `qrDrawing`:
 `scripts/export_icons.py` draws the line mark from the canopy's own circles and trunk, as black
 strokes with no fill or bark.
 
-The modules under the middle patch (about a quarter of the width) are left light rather than
-painted over. Error correction restores them.
+The modules under the middle patch (about a quarter of the width) are left light rather than painted
+over. Error correction restores them.
 
 **`qrDrawing.test.ts` decodes codes of the lengths the app makes with the patch empty.** A change
 that breaks scanning fails there.
@@ -65,8 +65,8 @@ copied.
 | It cannot be read, in a browser                   | The web client serving the page                                                                               |
 | It cannot be read, in the desktop and mobile apps | `aspen://app/…`, which only an installed app opens                                                            |
 
-`useShareUrl` is `null` until the deployment has said, so no link or code shows an address that
-is about to change.
+`useShareUrl` is `null` until the deployment has said, so no link or code shows an address that is
+about to change.
 
 ## Scanning
 
@@ -97,19 +97,19 @@ It answers a code that is not Aspen's, or not the kind wanted there, without clo
 
 ## App links
 
-In the desktop and mobile apps, `useOpenAppLinks` opens the `aspen://app/…` links the system
-hands over, at launch or while running, the same way a scan does.
+In the desktop and mobile apps, `useOpenAppLinks` opens the `aspen://app/…` links the system hands
+over, at launch or while running, the same way a scan does.
 
 On the desktop:
 
 - The installers register the scheme (`protocols` in `electron-builder.yml`).
-- A packaged app claims it again at run time. A development build does not, which would make a
-  bare Electron the system's handler.
+- A packaged app claims it again at run time. A development build does not, which would make a bare
+  Electron the system's handler.
 - One instance runs at a time. A link opened while it runs comes as:
   - the second launch's command line, on Windows and Linux;
   - `open-url`, on macOS.
-- The main process (`packages/desktop/src/main/appLinks.ts`) passes only `aspen://app/…` links
-  to the page. It holds them until the page asks (`appLinks` on the preload bridge).
+- The main process (`packages/desktop/src/main/appLinks.ts`) passes only `aspen://app/…` links to
+  the page. It holds them until the page asks (`appLinks` on the preload bridge).
 
 A link arriving while signed out opens on its own screen. A registration link opens on the
 create-account form with its code.

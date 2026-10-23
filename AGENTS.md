@@ -1,14 +1,24 @@
-Aspen is a free and open source federated community chat solution implemented to the highest code quality standards. Aspen takes a lot of inspiration from the Discord chat platform, but aims
-to reach an even higher degree of quality and user delight. Aspen clients will be made for iOS, Android, Windows, Mac, and Linux.
+Aspen is a free and open source federated community chat solution implemented to the highest code
+quality standards. Aspen takes a lot of inspiration from the Discord chat platform, but aims to
+reach an even higher degree of quality and user delight. Aspen clients will be made for iOS,
+Android, Windows, Mac, and Linux.
 
-Aspen seeks to support community text chat, voice calls, and video feeds from cameras, screen sharing, and videogame capture via libobs.
+Aspen seeks to support community text chat, voice calls, and video feeds from cameras, screen
+sharing, and videogame capture via libobs.
 
-Aspen rigidly adheres to DRY, and is split into three layers in implementation. This repo contains the server-side implementation in `server/` and the cross-platform client in `client/` (see `client/AGENTS.md`).
-Once complete, Aspen will have rigorous test suites, hardware benchmarking programs, and infrastructure as code to aid with deploying its many docker containers.
+Aspen rigidly adheres to DRY, and is split into three layers in implementation. This repo contains
+the server-side implementation in `server/` and the cross-platform client in `client/` (see
+`client/AGENTS.md`). Once complete, Aspen will have rigorous test suites, hardware benchmarking
+programs, and infrastructure as code to aid with deploying its many docker containers.
 
-Aspen aims to be horizontally scalable, providing a user experience suitable for millions of users, and also to be just as suitable for communities containing less than a dozen users.
+Aspen aims to be horizontally scalable, providing a user experience suitable for millions of users,
+and also to be just as suitable for communities containing less than a dozen users.
 
-Federation, letting a user of one deployment use others, is built in five phases, all in place: each deployment's identity, key, policy, and directory of other deployments; signing in abroad; a client holding sessions on several deployments; DMs across deployments; and revocation, deletion notices, and moderating foreign users. See `docs/architecture/federation/index.md`. Extend it only with explicit direction.
+Federation, letting a user of one deployment use others, is built in five phases, all in place: each
+deployment's identity, key, policy, and directory of other deployments; signing in abroad; a client
+holding sessions on several deployments; DMs across deployments; and revocation, deletion notices,
+and moderating foreign users. See `docs/architecture/federation/index.md`. Extend it only with
+explicit direction.
 
 ## Tech Stack
 
@@ -23,264 +33,788 @@ Federation, letting a user of one deployment use others, is built in five phases
 - **Serialization:** Serde + `serde_json`
 - **OpenAPI generation:** utoipa
 - **JSON Schema generation:** schemars
-- **TLS:** rustls (with self-signed cert generation via `rcgen` for development); PostgreSQL over TLS through OpenSSL (`postgres-openssl`, as libpq does), every other service over rustls
-- **Signatures and keys:** `aws-lc-rs`, the crypto rustls uses too (Ed25519 federation keys and compact JWS with EdDSA, join-token keys, Web Push's ECDH, HKDF, AES-GCM, and VAPID signatures)
-- **Email:** `lettre` over SMTP, written from `askama` templates (`server/templates/email/`), with `chrono-tz` for each digest's time zone; see Email
-- **Attachment previews:** `image` (decoders written in Rust), `fast_image_resize`, `moxcms` (colour profiles), and `webp` (libwebp, built from source) for pictures, and the operator's `ffmpeg` and `ffprobe`, run as processes of their own, for videos' posters; see Attachment previews
-- **Voice media:** mediasoup, from the fork `[patch.crates-io]` names, whose `system-openssl` feature builds its worker against the system OpenSSL rather than the 3.0.10 its Meson build compiles in
-- **File transfers:** WebRTC data channels between clients, with STUN and a TURN relay in the voice server (`turn`, from webrtc-rs)
-- **Plugins:** `wasmtime` running WebAssembly components (`spec/plugin.wit`), with `wasmtime-wasi` giving a component's standard library empty system interfaces; see Plugins
+- **TLS:** rustls (with self-signed cert generation via `rcgen` for development); PostgreSQL over
+  TLS through OpenSSL (`postgres-openssl`, as libpq does), every other service over rustls
+- **Signatures and keys:** `aws-lc-rs`, the crypto rustls uses too (Ed25519 federation keys and
+  compact JWS with EdDSA, join-token keys, Web Push's ECDH, HKDF, AES-GCM, and VAPID signatures)
+- **Email:** `lettre` over SMTP, written from `askama` templates (`server/templates/email/`), with
+  `chrono-tz` for each digest's time zone; see Email
+- **Attachment previews:** `image` (decoders written in Rust), `fast_image_resize`, `moxcms` (colour
+  profiles), and `webp` (libwebp, built from source) for pictures, and the operator's `ffmpeg` and
+  `ffprobe`, run as processes of their own, for videos' posters; see Attachment previews
+- **Voice media:** mediasoup, from the fork `[patch.crates-io]` names, whose `system-openssl`
+  feature builds its worker against the system OpenSSL rather than the 3.0.10 its Meson build
+  compiles in
+- **File transfers:** WebRTC data channels between clients, with STUN and a TURN relay in the voice
+  server (`turn`, from webrtc-rs)
+- **Plugins:** `wasmtime` running WebAssembly components (`spec/plugin.wit`), with `wasmtime-wasi`
+  giving a component's standard library empty system interfaces; see Plugins
 - **Metrics:** `metrics` with the Prometheus exporter (`aspen_metrics`)
-- **Allocator:** jemalloc (`tikv-jemallocator`) in both servers, replacing `malloc` for the whole process so C and C++ libraries (mediasoup's worker) use it too, with its background thread on (`malloc_conf` in each `main.rs`) so freed memory returns to the system when a server goes idle; its statistics are exported as `aspen_memory_*`
+- **Allocator:** jemalloc (`tikv-jemallocator`) in both servers, replacing `malloc` for the whole
+  process so C and C++ libraries (mediasoup's worker) use it too, with its background thread on
+  (`malloc_conf` in each `main.rs`) so freed memory returns to the system when a server goes idle;
+  its statistics are exported as `aspen_memory_*`
 
 ## Building and Running
 
-`docs/operators/` is the guide for people who run a deployment: installing, every setting, federation, backups, and troubleshooting by problem code. It says how, not why: the reasons go in `docs/architecture/operations/`. It describes the code as it stands, like every comment: a change to a setting (`aspen_config.rs`, `voice_server/src/config.rs`), an operator command, a `ProblemCode`, or what an operator must open, route, or back up updates it in the same commit.
+`docs/operators/` is the guide for people who run a deployment: installing, every setting,
+federation, backups, and troubleshooting by problem code. It says how, not why: the reasons go in
+`docs/architecture/operations/`. It describes the code as it stands, like every comment: a change to
+a setting (`aspen_config.rs`, `voice_server/src/config.rs`), an operator command, a `ProblemCode`,
+or what an operator must open, route, or back up updates it in the same commit.
 
 1. Start infrastructure services:
+
    ```
    docker-compose up -d
    ```
+
    This starts PostgreSQL (port 5432) and NATS with JetStream (port 4222).
 
 2. Run database migrations:
+
    ```
    cargo run -p aspen-migrate -- up
    ```
-   The connection string is resolved from `--database-url`, then `DATABASE_URL`, then `database_url` in `aspen.toml` (same file the server reads).
-   After any schema-changing migration, regenerate `server/schema/src/schema.rs`:
+
+   The connection string is resolved from `--database-url`, then `DATABASE_URL`, then `database_url`
+   in `aspen.toml` (same file the server reads). After any schema-changing migration, regenerate
+   `server/schema/src/schema.rs`:
+
    ```
    cd server/schema && diesel print-schema > src/schema.rs
    ```
-   If you are upgrading a database that was previously managed by Diesel's migration runner, run `cargo run -p aspen-migrate -- import-diesel` once to copy `__diesel_schema_migrations` history into `__aspen_migrations` (mapping each Diesel `version` to the registry ID with the matching `YYYYMMDDHHMMSS` prefix, preserving `run_on`) and drop the Diesel bookkeeping table. The command refuses to run if `__aspen_migrations` is already populated or if any Diesel row can't be mapped to a registry entry.
+
+   If you are upgrading a database that was previously managed by Diesel's migration runner, run
+   `cargo run -p aspen-migrate -- import-diesel` once to copy `__diesel_schema_migrations` history
+   into `__aspen_migrations` (mapping each Diesel `version` to the registry ID with the matching
+   `YYYYMMDDHHMMSS` prefix, preserving `run_on`) and drop the Diesel bookkeeping table. The command
+   refuses to run if `__aspen_migrations` is already populated or if any Diesel row can't be mapped
+   to a registry entry.
 
 3. Build the web client and run the server:
+
    ```
    (cd client && pnpm install && pnpm build)
    cargo run
    ```
-   A deployment is one origin: each API server serves the web client too (`api::web_client`), and refuses to start without a built one. The server reads configuration from `aspen.toml` and from environment variables with the `ASPEN_` prefix, which override the file (`__` separates nested keys: `ASPEN_VOICE__IDLE_SESSION_SECONDS`). Every setting can be given there: a setting that is a list or a table deserializes with `aspen_config_values::list` or `table` (`config_values/`, shared with the voice server), which also read text, a list as values separated by commas or a JSON array, a table as a JSON object; a new list or table setting takes one of them. Key config values:
-   - `public_url` — the deployment's one address (`https://chat.example.org`, an origin alone), its API and web client together; required. Every link to the deployment is built on it (`GET /deployment` gives it to clients as `webClientUrl`), and what else names the deployment follows from it: passkeys belong to its host (offered over `https`, or at `localhost` and names under it), and over `https` its host, with `:port` when not 443, is the federation domain, which never changes, since other deployments pin the key they find there: the first server to start with it pins it in the database, and a server started with another refuses to start. An `http` address takes no part in federation. In development it is the Vite dev server's, `http://localhost:5173`, which proxies the server's own paths to it
-   - `[web_client] dir` — the built web client (`client/packages/app/dist` by default), which this server serves at `public_url`, answering every path the API does not own with its `index.html` and Open Graph tags (see The web client)
-   - `database_url` — PostgreSQL connection string, a URL or libpq's `key=value` pairs, taking libpq's `sslmode` (`disable`, `prefer` by default, `require`, `verify-ca`, `verify-full`), `sslrootcert` (a file or `system`), `sslcert`, and `sslkey` (`aspen_database`)
-   - `database_pool_size` — the most database connections the server holds (two per logical CPU by default); every write holds one until its event is acknowledged
-   - `database_pool_wait_seconds` — how long a request or task waits for a database connection before it is refused with `serverBusy` (ten by default). Do not hold one connection while waiting for another (give it back first, as `app::message` does around plugins): when every connection is held that way the pool has none to give, and every waiter is refused
-   - `nats_url` — NATS server address
-   - `nats_auth_token` — NATS authentication token, or `[nats_user]` `user` and `password` when NATS has users, as it does once each voice server signs in as a user of its own allowed only its own subjects (see Voice)
-   - `[nats] monitor_url` — the NATS server's monitoring port (`http://nats:8222`), where the server says how much memory its streams may reserve; with it the two in-memory streams are sized to what NATS has and the dashboard shows the limit (see NATS memory)
-   - `[nats.tls]`, `[valkey.tls]`, `[media.s3.tls]`, `[email.tls]` — each service's TLS files (`aspen_tls::TlsFiles`): `ca_file`, authorities trusted besides the system's, and `cert_file` and `key_file`, a client certificate (not for S3). Each is refused where its address would not use TLS; `[nats.tls]` makes TLS required. Both servers warn at startup when NATS on another machine is reached without TLS, and the API server refuses a Valkey password in a `redis://` address to another machine
-   - `[voice]` — the failure threshold and window, the join token lifetime, the candidate cap, the two silence limits, and the idle call limit. The voice servers themselves are rows of `voice_server`, registered from the dashboard or with `aspen-chat-server voice-servers add` (see Voice)
-   - `[media.s3]` — the object storage for attachments, icons, and preview images: `endpoint` (the S3 API as this server reaches it), `public_endpoint` (the same API as clients reach it, which the presigned upload URLs they are handed name; left out, they name `endpoint`, which only suits clients on this machine), `public_base_url` (where clients download objects), `bucket`, `region`, the credentials (`access_key` and `secret_key`, both or neither: without them the AWS SDK's own chain, the environment and then the task's or machine's role), and `upload_url_ttl_seconds`. Clients upload straight to storage, so `public_endpoint` must be reachable from every client and allow their origins (`public_url`'s, and the desktop and mobile apps') by CORS.
-   - `[media] max_attachment_bytes` — the largest attachment anyone may upload (256 MiB by default), which upload URLs are signed for; files a browser could run are stored and served as `application/octet-stream` (`app::attachment::INLINE_TYPES`)
-   - `[media.previews]` — `make` (whether this server makes previews; every server queues them), `concurrency`, `max_picture_bytes` and `max_picture_pixels`, `ffmpeg` and `ffprobe` (the programs that take videos' posters; empty, none are taken), `max_video_bytes`, and `ffmpeg_memory_mib` (the address space each run of them may map); see Attachment previews
-   - `[limits] max_communities_per_user` — the most communities one user may belong to (500 by default); it bounds what an event stream connection reads and how far a profile change fans out. `max_event_streams_per_user` (20) and `max_event_streams_per_address` (200) cap the event streams one user, and one client address before they identify, hold open on each API server, and `max_identifying_event_streams` (half the pool) how many each API server identifies at once (`app::stream_admission`), turning the rest away with 1013 `serverBusy` and a `retryAfterSeconds`
-   - `[auth]` — `reverify_seconds` (how recent a verification security changes need, ten minutes by default), `password_hashing_threads` (one per logical CPU by default) and `password_hashing_wait_seconds` (ten) bound password work; see Sign-in and security.
-   - `[presence] away_after_seconds` — how long a connected user may go without using Aspen before showing as away (600 by default)
-   - `[search]` — `deep_concurrency` (2), how many searches that found nothing near the present read on through history at once on the whole deployment, each a core of the database's, and `round_seconds` (20), how long one request reads on before answering with how far it got (`app::deep_search`; see Search)
-   - `[rate_limits]` — per-endpoint rate limits laid over the built-in ones in `server/app/src/rate_limits.toml`, which documents the format; see Rate limits below. `device_exempt` lists the endpoints a request without a session may call without a device credential, `device_puzzle_bits` (20) how hard earning one is (see Sign-in and security), and `bot_multiplier` (10) how many times a person's own limits a bot's are. `max_suspension_seconds` (a day) caps how long an operator's suspension of them lasts on this server (see Benchmarking)
-   - `[metrics]` — `enabled` and `listen_addr` (`127.0.0.1:9464`) for the Prometheus endpoint, a listener of its own; keep it off public interfaces
-   - `[health] listen_addr` — where a private worker answers `GET /api/v1/health` and `/health/ready` (`127.0.0.1:9467`); a server that takes requests answers them on its own listener
-   - `[connections]` — `max`, `max_per_ip`, and `max_per_network` (100000, 512, and 4096), the connections the listener holds open at once, of everyone, of one address, and of one IPv4 /24 or IPv6 /48 (trusted proxies count only toward `max`), `max_per_user` (64), what a connection counts toward instead once someone signs in on it, `handshake_seconds` and `header_read_seconds` (10 and 30), how long a client has for its TLS handshake and an HTTP/1.1 request's headers, and `idle_seconds` (120), how long a connection stays open with no request in it (`connections`)
-   - `event_queue_size` — how many events one event stream connection may have waiting to be written (512 by default); a connection that falls that far behind is dropped and resumes
-   - `event_feed_shards` — how many tasks route events to this server's event stream connections (one per logical CPU by default; see Event routing)
-   - `event_retained_mib` — how much of the last minute's events, in MiB of their text, each API server keeps for catching connections up (256 by default); past it the oldest go early and a client resuming from before them reloads
-   - `[federation]` — `standing_interval_seconds` and `standing_grace_seconds` (how often foreign users are confirmed with their homes, and how long an unreached home is tolerated), `max_arrivals_per_home_per_day` (500, the most first arrivals from one home in a day), and `[federation.development]` (`extra_root_certificates`, `allow_private_addresses`) for deployments side by side on one machine; see Federation
-   - `[push] enabled` — whether apps may ask to be woken and messages wake them (true by default); see Push
-   - `[email]` — `smtp_url`, `from`, `send` (whether this server sends and makes digests; off, it only queues and needs no `smtp_url`), and `max_per_second` (the deployment-wide sending rate, counted in Valkey). Without it the deployment sends no mail and the email deployment settings cannot be turned on; the `mailpit` service in `docker-compose.yaml` catches a development server's mail (`smtp_url = "smtp://localhost:1025"`, inbox at http://localhost:8025). See Email
-   - `[jobs]` — `run` (whether this server runs background jobs, true by default) and `concurrency` (two per logical CPU), the places any class of job may take beside the one each class keeps; which jobs there are is in the database (see Jobs)
-   - `[plugins]` — `intercept_millis` (25), `observe_millis` (ten seconds), and `route_millis` (three seconds), how long a plugin's call may take to decide a message, handle an event, and answer a route, `memory_mib` (64), the most one call may use, `concurrency` (two per logical CPU) and `concurrency_per_plugin` (one per logical CPU), how many calls run at once in all and of one plugin, `notify_per_minute` (10) and `notify_per_day` (100), how many notices one plugin may give one person, and `storage_total_gib` (16), the most one plugin may keep in all; which plugins are installed, and their settings, are in the database (see Plugins)
 
-   What the deployment's administrators decide is not in `aspen.toml` but in the database, so every server follows one answer and a change needs no restart: the deployment settings (`app::deployment_settings`, one row of `deployment_settings`, each server keeping a copy that follows changes through the NATS key-value bucket `aspen_settings`). They are the display name and icon (which also name the system account and what authenticators call the deployment), `registration_invite_required`, `require_two_factor`, `bots_enabled` and `bots_max_per_user`, `everyone_mention_limit`, `custom_emoji_limit`, `upload_quota_gib`, `evidence_retention_days`, `file_transfers`, `email_required`, `email_verification_required`, `newsletter_enabled`, `event_stream_mib` and `voice_report_stream_mib` (how much of NATS's memory each in-memory stream reserves, automatic when unset; see NATS memory), and the federation gates (`emigration` and `immigration` for users and for bots, each `closed`, `open`, `allowList`, or `blockList`, a shared list, and whether a first arrival from elsewhere needs a registration invite). Holders of Manage deployment settings change them in the dashboard, holders of Manage federation the gates, and `aspen-chat-server settings show|set` any of them; see Administration. A setting belongs in `aspen.toml` when a server needs it to start or it is bound to the deployment's machines and domain, and in the deployment settings when it is a policy administrators choose.
+   A deployment is one origin: each API server serves the web client too (`api::web_client`), and
+   refuses to start without a built one. The server reads configuration from `aspen.toml` and from
+   environment variables with the `ASPEN_` prefix, which override the file (`__` separates nested
+   keys: `ASPEN_VOICE__IDLE_SESSION_SECONDS`). Every setting can be given there: a setting that is a
+   list or a table deserializes with `aspen_config_values::list` or `table` (`config_values/`,
+   shared with the voice server), which also read text, a list as values separated by commas or a
+   JSON array, a table as a JSON object; a new list or table setting takes one of them. Key config
+   values:
+   - `public_url` — the deployment's one address (`https://chat.example.org`, an origin alone), its
+     API and web client together; required. Every link to the deployment is built on it
+     (`GET /deployment` gives it to clients as `webClientUrl`), and what else names the deployment
+     follows from it: passkeys belong to its host (offered over `https`, or at `localhost` and names
+     under it), and over `https` its host, with `:port` when not 443, is the federation domain,
+     which never changes, since other deployments pin the key they find there: the first server to
+     start with it pins it in the database, and a server started with another refuses to start. An
+     `http` address takes no part in federation. In development it is the Vite dev server's,
+     `http://localhost:5173`, which proxies the server's own paths to it
+   - `[web_client] dir` — the built web client (`client/packages/app/dist` by default), which this
+     server serves at `public_url`, answering every path the API does not own with its `index.html`
+     and Open Graph tags (see The web client)
+   - `database_url` — PostgreSQL connection string, a URL or libpq's `key=value` pairs, taking
+     libpq's `sslmode` (`disable`, `prefer` by default, `require`, `verify-ca`, `verify-full`),
+     `sslrootcert` (a file or `system`), `sslcert`, and `sslkey` (`aspen_database`)
+   - `database_pool_size` — the most database connections the server holds (two per logical CPU by
+     default); every write holds one until its event is acknowledged
+   - `database_pool_wait_seconds` — how long a request or task waits for a database connection
+     before it is refused with `serverBusy` (ten by default). Do not hold one connection while
+     waiting for another (give it back first, as `app::message` does around plugins): when every
+     connection is held that way the pool has none to give, and every waiter is refused
+   - `nats_url` — NATS server address
+   - `nats_auth_token` — NATS authentication token, or `[nats_user]` `user` and `password` when NATS
+     has users, as it does once each voice server signs in as a user of its own allowed only its own
+     subjects (see Voice)
+   - `[nats] monitor_url` — the NATS server's monitoring port (`http://nats:8222`), where the server
+     says how much memory its streams may reserve; with it the two in-memory streams are sized to
+     what NATS has and the dashboard shows the limit (see NATS memory)
+   - `[nats.tls]`, `[valkey.tls]`, `[media.s3.tls]`, `[email.tls]` — each service's TLS files
+     (`aspen_tls::TlsFiles`): `ca_file`, authorities trusted besides the system's, and `cert_file`
+     and `key_file`, a client certificate (not for S3). Each is refused where its address would not
+     use TLS; `[nats.tls]` makes TLS required. Both servers warn at startup when NATS on another
+     machine is reached without TLS, and the API server refuses a Valkey password in a `redis://`
+     address to another machine
+   - `[voice]` — the failure threshold and window, the join token lifetime, the candidate cap, the
+     two silence limits, and the idle call limit. The voice servers themselves are rows of
+     `voice_server`, registered from the dashboard or with `aspen-chat-server voice-servers add`
+     (see Voice)
+   - `[media.s3]` — the object storage for attachments, icons, and preview images: `endpoint` (the
+     S3 API as this server reaches it), `public_endpoint` (the same API as clients reach it, which
+     the presigned upload URLs they are handed name; left out, they name `endpoint`, which only
+     suits clients on this machine), `public_base_url` (where clients download objects), `bucket`,
+     `region`, the credentials (`access_key` and `secret_key`, both or neither: without them the AWS
+     SDK's own chain, the environment and then the task's or machine's role), and
+     `upload_url_ttl_seconds`. Clients upload straight to storage, so `public_endpoint` must be
+     reachable from every client and allow their origins (`public_url`'s, and the desktop and mobile
+     apps') by CORS.
+   - `[media] max_attachment_bytes` — the largest attachment anyone may upload (256 MiB by default),
+     which upload URLs are signed for; files a browser could run are stored and served as
+     `application/octet-stream` (`app::attachment::INLINE_TYPES`)
+   - `[media.previews]` — `make` (whether this server makes previews; every server queues them),
+     `concurrency`, `max_picture_bytes` and `max_picture_pixels`, `ffmpeg` and `ffprobe` (the
+     programs that take videos' posters; empty, none are taken), `max_video_bytes`, and
+     `ffmpeg_memory_mib` (the address space each run of them may map); see Attachment previews
+   - `[limits] max_communities_per_user` — the most communities one user may belong to (500 by
+     default); it bounds what an event stream connection reads and how far a profile change fans
+     out. `max_event_streams_per_user` (20) and `max_event_streams_per_address` (200) cap the event
+     streams one user, and one client address before they identify, hold open on each API server,
+     and `max_identifying_event_streams` (half the pool) how many each API server identifies at once
+     (`app::stream_admission`), turning the rest away with 1013 `serverBusy` and a
+     `retryAfterSeconds`
+   - `[auth]` — `reverify_seconds` (how recent a verification security changes need, ten minutes by
+     default), `password_hashing_threads` (one per logical CPU by default) and
+     `password_hashing_wait_seconds` (ten) bound password work; see Sign-in and security.
+   - `[presence] away_after_seconds` — how long a connected user may go without using Aspen before
+     showing as away (600 by default)
+   - `[search]` — `deep_concurrency` (2), how many searches that found nothing near the present read
+     on through history at once on the whole deployment, each a core of the database's, and
+     `round_seconds` (20), how long one request reads on before answering with how far it got
+     (`app::deep_search`; see Search)
+   - `[rate_limits]` — per-endpoint rate limits laid over the built-in ones in
+     `server/app/src/rate_limits.toml`, which documents the format; see Rate limits below.
+     `device_exempt` lists the endpoints a request without a session may call without a device
+     credential, `device_puzzle_bits` (20) how hard earning one is (see Sign-in and security), and
+     `bot_multiplier` (10) how many times a person's own limits a bot's are.
+     `max_suspension_seconds` (a day) caps how long an operator's suspension of them lasts on this
+     server (see Benchmarking)
+   - `[metrics]` — `enabled` and `listen_addr` (`127.0.0.1:9464`) for the Prometheus endpoint, a
+     listener of its own; keep it off public interfaces
+   - `[health] listen_addr` — where a private worker answers `GET /api/v1/health` and
+     `/health/ready` (`127.0.0.1:9467`); a server that takes requests answers them on its own
+     listener
+   - `[connections]` — `max`, `max_per_ip`, and `max_per_network` (100000, 512, and 4096), the
+     connections the listener holds open at once, of everyone, of one address, and of one IPv4 /24
+     or IPv6 /48 (trusted proxies count only toward `max`), `max_per_user` (64), what a connection
+     counts toward instead once someone signs in on it, `handshake_seconds` and
+     `header_read_seconds` (10 and 30), how long a client has for its TLS handshake and an HTTP/1.1
+     request's headers, and `idle_seconds` (120), how long a connection stays open with no request
+     in it (`connections`)
+   - `event_queue_size` — how many events one event stream connection may have waiting to be written
+     (512 by default); a connection that falls that far behind is dropped and resumes
+   - `event_feed_shards` — how many tasks route events to this server's event stream connections
+     (one per logical CPU by default; see Event routing)
+   - `event_retained_mib` — how much of the last minute's events, in MiB of their text, each API
+     server keeps for catching connections up (256 by default); past it the oldest go early and a
+     client resuming from before them reloads
+   - `[federation]` — `standing_interval_seconds` and `standing_grace_seconds` (how often foreign
+     users are confirmed with their homes, and how long an unreached home is tolerated),
+     `max_arrivals_per_home_per_day` (500, the most first arrivals from one home in a day), and
+     `[federation.development]` (`extra_root_certificates`, `allow_private_addresses`) for
+     deployments side by side on one machine; see Federation
+   - `[push] enabled` — whether apps may ask to be woken and messages wake them (true by default);
+     see Push
+   - `[email]` — `smtp_url`, `from`, `send` (whether this server sends and makes digests; off, it
+     only queues and needs no `smtp_url`), and `max_per_second` (the deployment-wide sending rate,
+     counted in Valkey). Without it the deployment sends no mail and the email deployment settings
+     cannot be turned on; the `mailpit` service in `docker-compose.yaml` catches a development
+     server's mail (`smtp_url = "smtp://localhost:1025"`, inbox at http://localhost:8025). See Email
+   - `[jobs]` — `run` (whether this server runs background jobs, true by default) and `concurrency`
+     (two per logical CPU), the places any class of job may take beside the one each class keeps;
+     which jobs there are is in the database (see Jobs)
+   - `[plugins]` — `intercept_millis` (25), `observe_millis` (ten seconds), and `route_millis`
+     (three seconds), how long a plugin's call may take to decide a message, handle an event, and
+     answer a route, `memory_mib` (64), the most one call may use, `concurrency` (two per logical
+     CPU) and `concurrency_per_plugin` (one per logical CPU), how many calls run at once in all and
+     of one plugin, `notify_per_minute` (10) and `notify_per_day` (100), how many notices one plugin
+     may give one person, and `storage_total_gib` (16), the most one plugin may keep in all; which
+     plugins are installed, and their settings, are in the database (see Plugins)
+
+   What the deployment's administrators decide is not in `aspen.toml` but in the database, so every
+   server follows one answer and a change needs no restart: the deployment settings
+   (`app::deployment_settings`, one row of `deployment_settings`, each server keeping a copy that
+   follows changes through the NATS key-value bucket `aspen_settings`). They are the display name
+   and icon (which also name the system account and what authenticators call the deployment),
+   `registration_invite_required`, `require_two_factor`, `bots_enabled` and `bots_max_per_user`,
+   `everyone_mention_limit`, `custom_emoji_limit`, `upload_quota_gib`, `evidence_retention_days`,
+   `file_transfers`, `email_required`, `email_verification_required`, `newsletter_enabled`,
+   `event_stream_mib` and `voice_report_stream_mib` (how much of NATS's memory each in-memory stream
+   reserves, automatic when unset; see NATS memory), and the federation gates (`emigration` and
+   `immigration` for users and for bots, each `closed`, `open`, `allowList`, or `blockList`, a
+   shared list, and whether a first arrival from elsewhere needs a registration invite). Holders of
+   Manage deployment settings change them in the dashboard, holders of Manage federation the gates,
+   and `aspen-chat-server settings show|set` any of them; see Administration. A setting belongs in
+   `aspen.toml` when a server needs it to start or it is bound to the deployment's machines and
+   domain, and in the deployment settings when it is a policy administrators choose.
 
 4. Regenerate API schema files:
+
    ```
    cargo run -- --gen-openapi-schema
    ```
-   This writes `openapi.yaml`, `event_schema.json`, and `federation_schema.json` (what deployments exchange; see Federation) to the working directory and then exits. The voice server's `--gen-signal-schema` writes `voice_signal_schema.json` the same way. Both files are gitignored; the client's code generator (`pnpm codegen` in `client/`) reads them from the repository root and can regenerate them itself. Regenerate them whenever API types change.
+
+   This writes `openapi.yaml`, `event_schema.json`, and `federation_schema.json` (what deployments
+   exchange; see Federation) to the working directory and then exits. The voice server's
+   `--gen-signal-schema` writes `voice_signal_schema.json` the same way. Both files are gitignored;
+   the client's code generator (`pnpm codegen` in `client/`) reads them from the repository root and
+   can regenerate them itself. Regenerate them whenever API types change.
 
 5. Build for 64-bit ARM (a Raspberry Pi 5, say) on an x86-64 Linux machine:
+
    ```
    scripts/cross_aarch64.py
    ```
-   It fetches a Debian 12 arm64 sysroot (glibc 2.36, so the binaries run on Raspberry Pi OS Bookworm and newer) into `target/cross/`, compiles everything with the clang and lld already installed (the Rust code, the crates' C, and mediasoup's C++ through a generated Meson cross file), and checks the result: AArch64, no glibc symbol newer than the sysroot's, and each binary starting under Debian's user-mode emulator, which it also unpacks there (Meson runs mediasoup's code generator through it during the build). It needs no root. The binaries land in `target/aarch64-unknown-linux-gnu/release/`; on the Pi they need only `libssl3`. `eval "$(scripts/cross_aarch64.py env)"` sets up a shell to run cargo for the target by hand. Every ARM build sets `JEMALLOC_SYS_WITH_LG_PAGE=16`: jemalloc fixes its page size when compiled, a Raspberry Pi 5 boots a 16 KiB-page kernel by default, and a jemalloc built for 4 KiB pages aborts at startup there, while 64 KiB pages serve every smaller kernel page size.
+
+   It fetches a Debian 12 arm64 sysroot (glibc 2.36, so the binaries run on Raspberry Pi OS Bookworm
+   and newer) into `target/cross/`, compiles everything with the clang and lld already installed
+   (the Rust code, the crates' C, and mediasoup's C++ through a generated Meson cross file), and
+   checks the result: AArch64, no glibc symbol newer than the sysroot's, and each binary starting
+   under Debian's user-mode emulator, which it also unpacks there (Meson runs mediasoup's code
+   generator through it during the build). It needs no root. The binaries land in
+   `target/aarch64-unknown-linux-gnu/release/`; on the Pi they need only `libssl3`.
+   `eval "$(scripts/cross_aarch64.py env)"` sets up a shell to run cargo for the target by hand.
+   Every ARM build sets `JEMALLOC_SYS_WITH_LG_PAGE=16`: jemalloc fixes its page size when compiled,
+   a Raspberry Pi 5 boots a 16 KiB-page kernel by default, and a jemalloc built for 4 KiB pages
+   aborts at startup there, while 64 KiB pages serve every smaller kernel page size.
 
 6. Run two deployments that federate, for developing federation:
+
    ```
    scripts/dev_federation.py up      # then: check, down [--drop]
    ```
-   It makes a development certificate authority and certificates for `alpha.localhost` and `beta.localhost` (names under `localhost` resolve to loopback without configuration), and starts the debug builds as `alpha.localhost:8443` and `beta.localhost:8444` over real TLS, each with a database, NATS, and Valkey of its own and gates given with `settings set`, each trusting the authority for calls to the other through `[federation.development]`, and each serving the built web client, or a stand-in when there is none (`scripts/web_client.py`). `check` drives federation between them through the API and the terminal. Everything it makes is under `target/dev-federation/`; trust its `ca.pem` to reach the deployments from a browser.
 
-7. Check that a deployment wakes phones as `spec/push.md` says, against the deployments `dev_federation.py up` runs:
+   It makes a development certificate authority and certificates for `alpha.localhost` and
+   `beta.localhost` (names under `localhost` resolve to loopback without configuration), and starts
+   the debug builds as `alpha.localhost:8443` and `beta.localhost:8444` over real TLS, each with a
+   database, NATS, and Valkey of its own and gates given with `settings set`, each trusting the
+   authority for calls to the other through `[federation.development]`, and each serving the built
+   web client, or a stand-in when there is none (`scripts/web_client.py`). `check` drives federation
+   between them through the API and the terminal. Everything it makes is under
+   `target/dev-federation/`; trust its `ca.pem` to reach the deployments from a browser.
+
+7. Check that a deployment wakes phones as `spec/push.md` says, against the deployments
+   `dev_federation.py up` runs:
+
    ```
    scripts/dev_push.py
    ```
-   It stands in for a relay and a phone at `push.localhost`, checking each push's signature and decrypting it (Python's `cryptography`).
-   `scripts/bench_push.py [--members 10000]` measures the fan-out instead: it seeds a community of that many people with the benchmark seeder, gives each a phone at the same stand-in, has the owner post `@everyone`, reports when the first, half, and last pushes arrived, and purges the run. Run alpha from a release build (`up --alpha-bin target/release`) for figures worth comparing.
-   `scripts/push_relay_stand_in.py` stands in for the relay itself, for an app on a simulator or emulator, which registers with it and is pushed to through it: the iOS UI tests' wrapper runs against it (`client/docs/architecture/ios-app.md`).
+
+   It stands in for a relay and a phone at `push.localhost`, checking each push's signature and
+   decrypting it (Python's `cryptography`). `scripts/bench_push.py [--members 10000]` measures the
+   fan-out instead: it seeds a community of that many people with the benchmark seeder, gives each a
+   phone at the same stand-in, has the owner post `@everyone`, reports when the first, half, and
+   last pushes arrived, and purges the run. Run alpha from a release build
+   (`up --alpha-bin target/release`) for figures worth comparing. `scripts/push_relay_stand_in.py`
+   stands in for the relay itself, for an app on a simulator or emulator, which registers with it
+   and is pushed to through it: the iOS UI tests' wrapper runs against it
+   (`client/docs/architecture/ios-app.md`).
 
 8. Check built servers against the services in `docker-compose.yaml`:
+
    ```
    scripts/smoke_servers.py --bin target/release
    ```
-   It migrates a database of its own, runs a NATS of its own, starts both servers on ports of their own (a development stack keeps running beside it), registers and signs in a user, joins a call through the voice server, reads both metrics endpoints, runs `estimate-capacity`, and checks that a voice server whose id is not registered is listed in the fleet and stops when started, then drops the database. `scripts/stack.py` is the deployment both this and the next check run against, serving a stand-in web client (`scripts/web_client.py`), with a WebSocket client of the standard library. In a worktree, set `COMPOSE_PROJECT_NAME` to the main checkout's directory name so they find its running services.
+
+   It migrates a database of its own, runs a NATS of its own, starts both servers on ports of their
+   own (a development stack keeps running beside it), registers and signs in a user, joins a call
+   through the voice server, reads both metrics endpoints, runs `estimate-capacity`, and checks that
+   a voice server whose id is not registered is listed in the fleet and stops when started, then
+   drops the database. `scripts/stack.py` is the deployment both this and the next check run
+   against, serving a stand-in web client (`scripts/web_client.py`), with a WebSocket client of the
+   standard library. In a worktree, set `COMPOSE_PROJECT_NAME` to the main checkout's directory name
+   so they find its running services.
 
    Check that changes to access reach everything already open:
+
    ```
    scripts/check_permissions.py --bin target/debug
    ```
-   It tries each change to who may see or do what (an override, a role given, taken, or deleted, a move, a category deleted, a removal, a ban, a sign-out, a password change, an operator command) and watches every place someone on either side could notice: REST reads, an open event stream, a call on the voice server, attachments. Each feature that grants or shows something adds its scenario here (see the revocation checklist under Standards and Expectations).
+
+   It tries each change to who may see or do what (an override, a role given, taken, or deleted, a
+   move, a category deleted, a removal, a ban, a sign-out, a password change, an operator command)
+   and watches every place someone on either side could notice: REST reads, an open event stream, a
+   call on the voice server, attachments. Each feature that grants or shows something adds its
+   scenario here (see the revocation checklist under Standards and Expectations).
 
    Check that the NATS streams are sized to their settings and to the memory NATS has:
+
    ```
    scripts/check_nats_memory.py --bin target/debug
    ```
-   It runs a deployment whose NATS has a memory limit and a monitoring port, sets sizes from the dashboard and the terminal, asks for one NATS has no room for, and restarts NATS with another limit and no streams.
 
-9. Watch the API server's async tasks with [tokio-console](https://github.com/tokio-rs/console), which shows each task's busy and idle time, how often it is woken, and which have waited longest, for finding what a slow request or a stalled stream is waiting on:
+   It runs a deployment whose NATS has a memory limit and a monitoring port, sets sizes from the
+   dashboard and the terminal, asks for one NATS has no room for, and restarts NATS with another
+   limit and no streams.
+
+9. Watch the API server's async tasks with [tokio-console](https://github.com/tokio-rs/console),
+   which shows each task's busy and idle time, how often it is woken, and which have waited longest,
+   for finding what a slow request or a stalled stream is waiting on:
+
    ```
    RUSTFLAGS="--cfg tokio_unstable" cargo build --release -p aspen-chat-server --features console --target-dir target/console
    cargo install --locked tokio-console && tokio-console
    ```
-   The `console` feature serves the instrumentation on `127.0.0.1:6669` (`TOKIO_CONSOLE_BIND` moves it; keep it on loopback, like the metrics). Tokio compiles that instrumentation only under `--cfg tokio_unstable`, which the feature refuses to build without and which no other build sets; a target directory of its own keeps the flag from rebuilding the usual one. `ASPEN_LOG` filters the log output alone, not what the console reads.
 
-10. Share what worktrees compile with [sccache](https://github.com/mozilla/sccache), which is optional:
-   ```
-   sudo pacman -S sccache    # or: cargo install --locked sccache
-   ```
-   `.cargo/config.toml` names `scripts/sccache.sh` as Cargo's rustc wrapper, which compiles through sccache when it is on the `PATH` and with the compiler alone when it is not. Each worktree keeps a target directory of its own, and a compile the cache holds is fetched rather than run again. Most of a cold build's work is C and C++ (mediasoup's worker, which Meson sends through sccache on its own, and aws-lc, jemalloc, and libwebp, which the `cc` crate sends through the wrapper), and those hit in any worktree. A Rust dependency hits in another worktree only when sccache's server was started with `SCCACHE_BASEDIRS` naming both worktrees' roots (separated by `:`; `sccache --stop-server` makes the next build start it afresh) and both builds give `CARGO_TARGET_DIR` the same value or none, since its value is part of the cache key. The workspace's own crates (Cargo compiles them incrementally), proc-macro crates, and linking are never cached, so sccache shortens a worktree's first build, not rebuilds after an edit. The cache is `~/.cache/sccache`, 10 GiB unless `SCCACHE_CACHE_SIZE` says otherwise, of which a debug build of the servers takes about 2 GiB; `sccache --show-stats` counts its hits. `client/.cargo/config.toml` turns the wrapper off under `client/`, whose capture helper is built on Windows, where the script cannot run.
+   The `console` feature serves the instrumentation on `127.0.0.1:6669` (`TOKIO_CONSOLE_BIND` moves
+   it; keep it on loopback, like the metrics). Tokio compiles that instrumentation only under
+   `--cfg tokio_unstable`, which the feature refuses to build without and which no other build sets;
+   a target directory of its own keeps the flag from rebuilding the usual one. `ASPEN_LOG` filters
+   the log output alone, not what the console reads.
+
+10. Share what worktrees compile with [sccache](https://github.com/mozilla/sccache), which is
+    optional:
+
+```
+sudo pacman -S sccache    # or: cargo install --locked sccache
+```
+
+`.cargo/config.toml` names `scripts/sccache.sh` as Cargo's rustc wrapper, which compiles through
+sccache when it is on the `PATH` and with the compiler alone when it is not. Each worktree keeps a
+target directory of its own, and a compile the cache holds is fetched rather than run again. Most of
+a cold build's work is C and C++ (mediasoup's worker, which Meson sends through sccache on its own,
+and aws-lc, jemalloc, and libwebp, which the `cc` crate sends through the wrapper), and those hit in
+any worktree. A Rust dependency hits in another worktree only when sccache's server was started with
+`SCCACHE_BASEDIRS` naming both worktrees' roots (separated by `:`; `sccache --stop-server` makes the
+next build start it afresh) and both builds give `CARGO_TARGET_DIR` the same value or none, since
+its value is part of the cache key. The workspace's own crates (Cargo compiles them incrementally),
+proc-macro crates, and linking are never cached, so sccache shortens a worktree's first build, not
+rebuilds after an edit. The cache is `~/.cache/sccache`, 10 GiB unless `SCCACHE_CACHE_SIZE` says
+otherwise, of which a debug build of the servers takes about 2 GiB; `sccache --show-stats` counts
+its hits. `client/.cargo/config.toml` turns the wrapper off under `client/`, whose capture helper is
+built on Windows, where the script cannot run.
 
 11. Build the container images, and describe a deployment in files:
-   ```
-   docker build -f deploy/docker/Dockerfile --target api -t aspen-api .
-   docker build -f deploy/docker/Dockerfile --target voice -t aspen-voice .
-   ```
-   `api` holds `aspen-chat-server`, `aspen-migrate`, the web client, `curl`, and the box's tool (`/usr/share/aspen`), and no ffmpeg; `voice` holds `voice_server` and `curl`. Both read their configuration from `/etc/aspen`. `deploy/box/aspen-box` (Python 3.9's standard library alone, `deploy/box/aspen_box/`) runs a whole small deployment on one Linux machine with Docker Compose: every service on loopback behind Caddy, PostgreSQL and storage each bundled (storage as Garage) or kept elsewhere, voice servers on other machines (each a box of its own, `init-voice`, reaching NATS over TLS from the box's own authority), upgrades that start the new API server beside the old, backups, `export` (the database and people's files, for a deployment that replaces the box), and `doctor`, which checks the machine, DNS, certificates, and the storage's read path and says what to fix; `scripts/check_box.py` checks all of it against built images. `deploy/aws/` is an OpenTofu configuration for a whole deployment on AWS, and `deploy/aws-single/` runs the box on one AWS machine with its files in S3, releasing through Session Manager; both are prototypes that have been planned (`tofu test` in each, which needs no account) and never applied. All three write `aspen.toml`, `voice_server.toml`, and NATS's configuration from `deploy/templates/`, which hold only `${name}` placeholders so that OpenTofu and `aspen-box` fill them alike: a setting a deployment cannot start without is added there and to each caller. `deploy/aws/migrate.py` moves a box to the larger configuration: a box from `aws-single` hands over its bucket and read path (`media_bucket`, the media module's `handed_over`), any other has its files copied from its export, and both have their database restored from a dump, so whatever a deployment keeps outside PostgreSQL and the bucket must be added to `aspen-box export` and that move. See `deploy/README.md`, and `docs/architecture/operations/deploying-from-files-design-notes.md` for why it is the way it is.
+
+```
+docker build -f deploy/docker/Dockerfile --target api -t aspen-api .
+docker build -f deploy/docker/Dockerfile --target voice -t aspen-voice .
+```
+
+`api` holds `aspen-chat-server`, `aspen-migrate`, the web client, `curl`, and the box's tool
+(`/usr/share/aspen`), and no ffmpeg; `voice` holds `voice_server` and `curl`. Both read their
+configuration from `/etc/aspen`. `deploy/box/aspen-box` (Python 3.9's standard library alone,
+`deploy/box/aspen_box/`) runs a whole small deployment on one Linux machine with Docker Compose:
+every service on loopback behind Caddy, PostgreSQL and storage each bundled (storage as Garage) or
+kept elsewhere, voice servers on other machines (each a box of its own, `init-voice`, reaching NATS
+over TLS from the box's own authority), upgrades that start the new API server beside the old,
+backups, `export` (the database and people's files, for a deployment that replaces the box), and
+`doctor`, which checks the machine, DNS, certificates, and the storage's read path and says what to
+fix; `scripts/check_box.py` checks all of it against built images. `deploy/aws/` is an OpenTofu
+configuration for a whole deployment on AWS, and `deploy/aws-single/` runs the box on one AWS
+machine with its files in S3, releasing through Session Manager; both are prototypes that have been
+planned (`tofu test` in each, which needs no account) and never applied. All three write
+`aspen.toml`, `voice_server.toml`, and NATS's configuration from `deploy/templates/`, which hold
+only `${name}` placeholders so that OpenTofu and `aspen-box` fill them alike: a setting a deployment
+cannot start without is added there and to each caller. `deploy/aws/migrate.py` moves a box to the
+larger configuration: a box from `aws-single` hands over its bucket and read path (`media_bucket`,
+the media module's `handed_over`), any other has its files copied from its export, and both have
+their database restored from a dump, so whatever a deployment keeps outside PostgreSQL and the
+bucket must be added to `aspen-box export` and that move. See `deploy/README.md`, and
+`docs/architecture/operations/deploying-from-files-design-notes.md` for why it is the way it is.
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`, `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the example plugins' format, lints, tests, and builds for `wasm32-wasip2` (`plugins/word_filter`, `plugins/forum`, `plugins/calendar`, and `plugins/blackjack`, each a workspace of its own); the API, event, and signalling schemas, written by the two servers in a job of their own that the client, Android, Windows, macOS, iOS, and Flatpak jobs wait for rather than the workspace's tests; the client's typecheck, lint, and tests, with its browser tests on Chromium (a desktop and a phone) split across three runners; the Android app's build, its unit tests, and its device tests on an emulator, the debug APK kept as an artifact (`client/docs/architecture/android-builds.md`); the desktop app's Flatpak, built with `package:flatpak`, installed, and its capture helper asked what it can capture inside the sandbox; on macOS, the capture helper's lints and tests, the iOS app built for the simulator with the extension's Web Push check, and on a pull request an unsigned dmg, while `main` builds signed dmgs, sent to Apple's notary service without waiting, and an App Store build for TestFlight from the `apple-signing` environment (`client/docs/architecture/apple-builds.md`); `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the debug build; both AWS configurations' `tofu test`, and `scripts/check_box.py` against images built in the job; an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts; `scripts/check_permissions.py` and `scripts/check_nats_memory.py` run in the x86-64 job against its debug build, the first building and installing the example plugins. Every job runs the toolchain `rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the example plugins need, so rustup installs both wherever the repository is built. Clippy warnings fail the build.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`,
+`cargo clippy -- -D warnings`, and the workspace tests on x86-64; the example plugins' format,
+lints, tests, and builds for `wasm32-wasip2` (`plugins/word_filter`, `plugins/forum`,
+`plugins/calendar`, and `plugins/blackjack`, each a workspace of its own); the API, event, and
+signalling schemas, written by the two servers in a job of their own that the client, Android,
+Windows, macOS, iOS, and Flatpak jobs wait for rather than the workspace's tests; the client's
+format (`pnpm format:check`), typecheck, lint, and tests, with its browser tests on Chromium (a
+desktop and a phone) split across three runners; the Android app's build, its unit tests, and its
+device tests on an emulator, the debug APK kept as an artifact
+(`client/docs/architecture/android-builds.md`); the desktop app's Flatpak, built with
+`package:flatpak`, installed, and its capture helper asked what it can capture inside the sandbox;
+on macOS, the capture helper's lints and tests, the iOS app built for the simulator with the
+extension's Web Push check, and on a pull request an unsigned dmg, while `main` builds signed dmgs,
+sent to Apple's notary service without waiting, and an App Store build for TestFlight from the
+`apple-signing` environment (`client/docs/architecture/apple-builds.md`);
+`scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the
+debug build; both AWS configurations' `tofu test`, and `scripts/check_box.py` against images built
+in the job; an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included);
+the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both
+ARM builds, which are kept as artifacts; `scripts/check_permissions.py` and
+`scripts/check_nats_memory.py` run in the x86-64 job against its debug build, the first building and
+installing the example plugins. Every job runs the toolchain `rust-toolchain.toml` pins, which lists
+the `wasm32-wasip2` target the example plugins need, so rustup installs both wherever the repository
+is built. Clippy warnings fail the build.
 
-The version of every action a workflow uses (`uses: actions/checkout@v7`), and of anything else a workflow pins (a runner image, a Node.js or Java release), is looked up when it is written or changed, never recalled: `gh api repos/<owner>/<action>/releases/latest --jq .tag_name` names the newest release, and `runs.using` in that tag's `action.yml` the Node.js it runs on. Actions release majors several times a year and GitHub retires the Node.js runtimes under the old ones, so a version written from memory is usually behind and soon warns on every run. Read the release notes of each major version a bump crosses for what it breaks, and prefer a step the repository's own scripts can do to an action that has stopped being released.
+The version of every action a workflow uses (`uses: actions/checkout@v7`), and of anything else a
+workflow pins (a runner image, a Node.js or Java release), is looked up when it is written or
+changed, never recalled: `gh api repos/<owner>/<action>/releases/latest --jq .tag_name` names the
+newest release, and `runs.using` in that tag's `action.yml` the Node.js it runs on. Actions release
+majors several times a year and GitHub retires the Node.js runtimes under the old ones, so a version
+written from memory is usually behind and soon warns on every run. Read the release notes of each
+major version a bump crosses for what it breaks, and prefer a step the repository's own scripts can
+do to an action that has stopped being released.
 
-`.github/workflows/images.yml` publishes both images to the GitHub Container Registry (`ghcr.io/aspen-chat/aspen-api` and `aspen-voice`) for x86-64 and 64-bit ARM, each built on a runner of its architecture: every push to `main` as `main` and its commit's first twelve characters, and every tag `v*` as itself. The box and both AWS configurations run them by tag.
+`.github/workflows/images.yml` publishes both images to the GitHub Container Registry
+(`ghcr.io/aspen-chat/aspen-api` and `aspen-voice`) for x86-64 and 64-bit ARM, each built on a runner
+of its architecture: every push to `main` as `main` and its commit's first twelve characters, and
+every tag `v*` as itself. The box and both AWS configurations run them by tag.
 
-`.github/workflows/emoji-font.yml` runs every week: when `googlefonts/noto-emoji` has changed its fonts, it rebuilds the client's bundled emoji fonts with `client/scripts/noto_emoji.py update` and opens a pull request (see `client/docs/architecture/fonts.md`). Its pull requests start CI only when the repository has an `EMOJI_FONT_TOKEN` secret; the workflow file says why.
+`.github/workflows/emoji-font.yml` runs every week: when `googlefonts/noto-emoji` has changed its
+fonts, it rebuilds the client's bundled emoji fonts with `client/scripts/noto_emoji.py update` and
+opens a pull request (see `client/docs/architecture/fonts.md`). Its pull requests start CI only when
+the repository has an `EMOJI_FONT_TOKEN` secret; the workflow file says why.
 
-`.github/workflows/notarized-dmg.yml` runs every half hour: once Apple's notary service has accepted the newest dmgs `main` built, it staples their tickets and keeps them as an artifact (`client/docs/architecture/apple-builds.md`).
+`.github/workflows/notarized-dmg.yml` runs every half hour: once Apple's notary service has accepted
+the newest dmgs `main` built, it staples their tickets and keeps them as an artifact
+(`client/docs/architecture/apple-builds.md`).
 
 ### CLI Flags
 
 - `--gen-openapi-schema` — Generate schema files and exit; it reads no configuration
 - `--no-https` — Disable TLS (development only)
 - `-k, --key` / `-c, --cert` — TLS key/cert paths (PEM format)
-- `--listen-addr` — Bind address, repeatable; each one given must bind. Given none, `0.0.0.0` and `::`, each family only where the machine has it (`aspen_sockets`)
+- `--listen-addr` — Bind address, repeatable; each one given must bind. Given none, `0.0.0.0` and
+  `::`, each family only where the machine has it (`aspen_sockets`)
 - `--port` — Port (default `443`)
-- `--private-worker` — Serve no requests: open no listening socket but the health checks' (`[health] listen_addr`, loopback by default), need no web client, read no events for connections, and do only the background work every API server shares (mail and digests, voice reports, standing checks, plugins' observers and timers, push; `app::context::Role`). Refuses the listening and TLS flags. Without it a server refuses to start without the web client
+- `--private-worker` — Serve no requests: open no listening socket but the health checks'
+  (`[health] listen_addr`, loopback by default), need no web client, read no events for connections,
+  and do only the background work every API server shares (mail and digests, voice reports, standing
+  checks, plugins' observers and timers, push; `app::context::Role`). Refuses the listening and TLS
+  flags. Without it a server refuses to start without the web client
 
-Operator subcommands read the same configuration, log to stderr, and exit: `limits suspend|resume|status` and `bench seed|purge`, both described under Benchmarking, `admin grant|revoke|list|allow|deny`, `invites create|list|revoke`, and `settings show|set`, described under Administration, `communities unowned|set-owner`, under Roles and permissions, `jobs list|retry|cancel`, under Jobs, `attachments purge --message|--attachment`, under Reports, `voice-servers list|add|set|remove`, under Voice, `federation status|list|add|remove|contact|accept-key|list-add|list-remove|rotate-key --planned|--compromised`, under Federation, and `plugins install|list|show|settings|mode|order|enable|disable|remove|purge`, under Plugins.
+Operator subcommands read the same configuration, log to stderr, and exit:
+`limits suspend|resume|status` and `bench seed|purge`, both described under Benchmarking,
+`admin grant|revoke|list|allow|deny`, `invites create|list|revoke`, and `settings show|set`,
+described under Administration, `communities unowned|set-owner`, under Roles and permissions,
+`jobs list|retry|cancel`, under Jobs, `attachments purge --message|--attachment`, under Reports,
+`voice-servers list|add|set|remove`, under Voice,
+`federation status|list|add|remove|contact|accept-key|list-add|list-remove|rotate-key --planned|--compromised`,
+under Federation, and `plugins install|list|show|settings|mode|order|enable|disable|remove|purge`,
+under Plugins.
 
 ## Architecture
 
-Aspen uses PostgreSQL for data persistence, and in order to meet the highly real-time expectations of a chat app Aspen uses NATS JetStream in order to deliver a stream of events. These
-events describe changes to the chat environment that the user should be aware of, such as new messages, user online status, and more. NATS JetStream operates in memory, and preserves events
-for up to 1 minute. This allows time travel along the event stream up to 1 minute backwards in time. Aspen uses this to alleviate the symptoms of race conditions that may arise inside the
-PostgreSQL database when populating the client's initial state. Clients do not connect to NATS JetStream directly, and instead access this information through a WebSocket API provided by the
-main API server.
+Aspen uses PostgreSQL for data persistence, and in order to meet the highly real-time expectations
+of a chat app Aspen uses NATS JetStream in order to deliver a stream of events. These events
+describe changes to the chat environment that the user should be aware of, such as new messages,
+user online status, and more. NATS JetStream operates in memory, and preserves events for up to 1
+minute. This allows time travel along the event stream up to 1 minute backwards in time. Aspen uses
+this to alleviate the symptoms of race conditions that may arise inside the PostgreSQL database when
+populating the client's initial state. Clients do not connect to NATS JetStream directly, and
+instead access this information through a WebSocket API provided by the main API server.
 
-Aspen provides a REST API, along with an autogenerated `openapi.yaml` document which enables client software to automatically generate code which meets the API expectations. Additionally, the JSON types
-provided in the WebSocket event stream are described in `event_schema.json` which is a JSON Schema document.
+Aspen provides a REST API, along with an autogenerated `openapi.yaml` document which enables client
+software to automatically generate code which meets the API expectations. Additionally, the JSON
+types provided in the WebSocket event stream are described in `event_schema.json` which is a JSON
+Schema document.
 
 ### REST API shape
 
-Everything lives under `/api/v1` (`api::API_PREFIX`). The API is resource-oriented so that browsers, HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the shape they expect:
+Everything lives under `/api/v1` (`api::API_PREFIX`). The API is resource-oriented so that browsers,
+HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the shape they expect:
 
-- **Identity lives in the URL, never in the body.** `GET /channels/{channel}`, `PATCH /messages/{message}`, `DELETE /communities/{community}`. Collections are plural nouns; sub-resources hang off their parent (`GET /communities/{community}/channels`, `POST /channels/{channel}/messages`). The literal segment `@me` addresses the calling user (`GET /users/@me`, `PUT /communities/{community}/members/@me`, `PUT /messages/{message}/reactions/{emoji}/@me`).
-- **Reads are `GET` with query parameters.** Browsers cannot send a body with `GET`, so no read endpoint may take one. Windowed reads use keyset parameters (`?before=`, `?after=`, `?around=`, `?limit=`) over UUIDv7 ids. A read whose parameters cannot reasonably fit in a query string should be a `POST .../search` today and may move to the HTTP `QUERY` method (RFC 10008) once utoipa, axum, and openapi-typescript all support OpenAPI 3.2.
-- **Reads may sideload related records with `?include=`.** A read that supports it accepts a comma-separated list of relationship names (`GET /users/@me/communities?include=channels,categories,members`) and always returns the `{data, included}` envelope from `api::include` (`Sideloaded<T>` for one record, `SideloadedList<T>` for a list), whether or not `include` was given, so the generated client sees one response type per endpoint. `included` is keyed by record type (`communities`, `channels`, `categories`, `users`, `userCommunities`, `messages`, `attachments`, `reactions`, `polls`, `pollVotes`, `ownWriteIns`, `readStates`, `channelMutes`, `categoryCollapses`, `voiceSessions`, `voiceParticipants`, `customEmoji`); a key is present exactly when the caller asked for the relationship that produces it, and holds the same wire records the entity's own endpoints return. The member sample is capped, but the caller's own membership of each community is always among `userCommunities`, because it carries the order of their community list. Each endpoint declares its accepted names as an enum (`api::community::CommunityInclude`, `api::message::MessageInclude`, `api::invite::InviteInclude`, `api::dm::DmInclude`) and parses the parameter with `IncludeSet<E>`, documented in OpenAPI as an array with `style = Form, explode = false`; a name the enum lacks is ignored, never refused, since a newer client or another deployment's may ask for a relationship this version does not have. Sideloads are batched in the `app` layer, one query per relationship however many parent records there are; never load them per record. Reads that do not support `include` return the bare record or array.
-- **List parameters use `sort=` and `filter[field]=`.** When a list endpoint gains ordering or filtering, name the parameters `sort` (a field name, `-` prefixed for descending) and `filter[<field>]`, deserialized with `#[serde(rename = "filter[name]")]` on the query struct, so every list reads the same way. The keyset window parameters (`before`, `after`, `around`, `limit`) stay as they are.
-- **Writes:** `POST` on a collection creates and returns `201 Created` with a `Location` header (use `api::extract::Created`). `PATCH` partially updates and returns the updated record. `DELETE` returns `204 No Content` (`api::extract::NoContent`). `PUT` is used for idempotent set-membership operations (join a community, add a reaction) and returns `201` when it created something, `200` when it already existed.
-- **Updates use JSON Merge Patch semantics.** A field that is absent is unchanged; a field that is present is written, and `null` clears a nullable field. `message_gen` generates `*UpdateRequest` types with `Option<T>` fields, routing nullable fields through `aspen_wire::double_option` (which `api::extract` re-exports for hand-written types) so a JSON `null` arrives as `Some(None)`. The matching `Update` server events skip fields that did not change (`skip_serializing_if`), so clients can apply them as merge patches too. Hand-written update types must follow the same pattern.
-- **Errors are RFC 9457 Problem Details** (`application/problem+json`), produced by `api::error::ApiError` and documented as `Problem` on every non-2xx response. `code` (`api::error::ProblemCode`) is the stable discriminator clients branch on; `title` and `detail` are localized prose. `From<app::Error>` handles the common mappings (not found → 404, validation → 400, `Unauthorized` → 403, unique violation → 409, anything else → 500 with a `tracing::error!`). Map to a more specific code in the handler only when the handler knows the context (`usernameTaken`, `inviteCodeTaken`). Add a `ProblemCode` variant rather than inventing ad-hoc error bodies.
-- **Extractors:** use `api::extract::{Json, Path, Query}` rather than axum's own so that malformed input yields a Problem instead of plain text, and text holding U+0000 (an escaped `\u0000` in a body, `%00` in a path or query), which PostgreSQL cannot store, is refused with `validation`. They keep axum's type names on purpose; utoipa recognises handler arguments by name.
-- **Auth** is `Authorization: Bearer <session token>` (`api::auth::SessionUser`), declared in OpenAPI as the `bearerAuth` scheme. Every endpoint requires it except `GET /health` and `GET /health/ready` (see Health), registration (`POST /users`), `POST /auth/login` and `/auth/login/second-factor`, `POST /auth/token-refresh`, `GET /auth/methods`, `GET /deployment` (the deployment's display name and icon, which the sign-in screen shows; see Administration), the passkey ceremony endpoints (starting a `signIn` ceremony, reading, completing, and claiming one), the device link endpoints a device that is not signed in uses (starting a `request`, scanning an `offer`, claiming, and cancelling; see Sign-in and security), `GET /registration-invites/{code}` (see Administration), `POST /auth/federated-sign-in` and `GET /federation/icons/{icon}` (see Federation), the three steps of a password reset under `/auth/password-resets` (see Email), earning a device credential (`POST /auth/device-challenges` and `/auth/device-credentials`; see Sign-in and security), and the event stream. A request to any of these without a session presents a device credential as `Aspen-Device` unless `[rate_limits] device_exempt` lists the endpoint, and is otherwise refused with `401` `deviceCredentialRequired`; `api::rate_limit::document_rate_limits` declares the header and that answer on each, so handlers do not. Mark authenticated handlers with `security(("bearerAuth" = []))` so generated clients know to send the header, and optionally authenticated ones with `security((), ("bearerAuth" = []))`. A session whose account still owes the server a second factor (see Sign-in and security) is refused by `SessionUser` with `twoFactorEnrollmentRequired`, and one whose email address the deployment requires verified with `emailVerificationRequired` (see Email); the few handlers such a session may reach take `EnrollingSessionUser` instead.
-- **Documentation:** every handler carries a `#[utoipa::path]` with a `tag` (the `api::TAG_*` constants), explicit `params` for path and query inputs, and one `responses` entry per status code it can return, each error status with `body = Problem`. The generated client's typed error handling is only as good as these declarations.
-- **Rate limits** apply to every endpoint (`app::rate_limit`, `api::rate_limit`). Each endpoint's limits count along dimensions: `global`, `ip`, `device`, `user`, `username` (sign-in only, per username and client network: an IPv4 /24, an IPv6 /48), `username_failures` (sign-in only, a username's wrong passwords from anywhere, looked at before the password is checked and counted only after a wrong one), `ip_failures` (an address's requests whose handler says they proved wrong: a wrong password or code, an unknown invite or refresh token), `ip_rejected_tokens` (an address's bot tokens from before tokens were signed that no bot holds, looked at before one is looked up; a made-up session or bot token of the signed kind is refused by its signature with no lookup, `app::signed_token`), and `per_<param>`, `user_per_<param>`, `ip_per_<param>` for any path parameter. A request with a valid session counts as its user and never as its address or device; one without counts as its address and its device credential, which it must present (`Aspen-Device`) on every endpoint someone may call without signing in but those `device_exempt` lists, and earns by solving a puzzle (see Sign-in and security). Many people behind one address are so each counted on their own, and the address keeps only a ceiling over them. It gets the `default` limits wherever they apply, plus its groups' limits, with its own entry replacing its groups' dimension by dimension; `false` removes a dimension there, the default's included. The built-in limits are `server/app/src/rate_limits.toml`; `[rate_limits]` in `aspen.toml` is laid over them in code, a limit given there replacing the built-in one whole. Besides the OpenAPI operations, `GET /events` (the event stream), `GET /auth/passkey` (the passkey page, outside `/api/v1`), `GET /.well-known/aspen` (the federation document, also outside it), `GET` and `POST /email/unsubscribe` (the page unsubscribe links open, also outside it), and `GET /invite/{code}` and `GET /{*path}` (the web client's pages, also outside it) can be named. A request with a method its path lacks counts toward the `default` limits that need no session or parameter, and a method that is not a standard one is named `OTHER` in route keys and metrics, so made-up methods make no new buckets or series. The rules are compiled against the real routes at startup, so an unknown endpoint, a parameter the path lacks, or a user limit on an anonymous endpoint stops the server with a config error. Buckets are GCRA timestamps in Valkey, shared by every API server, and a Valkey outage lets requests through with a logged error, except on the endpoints `fail_closed` lists (those that guess a password, a code, or an invite) and for the username limits, which it refuses with `503` `serverBusy`. Global, parameter, address, device, and user limits are checked by a route layer before the handler (`api::rate_limit::limit_requests`), which looks up a presented session token once and leaves it for the session extractors; the username limits in the sign-in handler; failures by the handlers that can tell one (`api::rate_limit::Failures`); the web client's pages check their own in their handler, and over them serve the page without reading what it previews as rather than refusing it. A refusal is `429` `rateLimited` with `Retry-After`, and `api::rate_limit::document_rate_limits` adds that response to every operation in the OpenAPI document, so handlers do not declare it. The client address is the TCP peer, or, when the peer is listed in `trusted_proxies`, the right-most `X-Forwarded-For` entry that is not itself a trusted proxy (read with or without a port; an entry that is not an address ends the reading, and the client is the trusted proxy that passed it on); IPv6 clients count by their `/ipv6_prefix` (64) network. When adding an endpoint that writes, fans out, fetches from elsewhere, or can be used to guess something, give it its own limits in `rate_limits.toml`.
-- **Caching:** every answer under `/api/v1` carries `nosniff` and `Cache-Control: no-store` (`api_response_headers`); a handler whose answer may be kept (a federation icon) sets its own `Cache-Control`, which the layer leaves alone.
-- **Wire naming** is camelCase everywhere (`#[serde(rename_all = "camelCase")]` on every request, response, and record type).
-- **Other versions and forks call this API too** (clients of other deployments, since federation), so the API changes only by addition within `/api/v1`, and a request another deployment's client may send is never refused for a field this server does not know: `deny_unknown_fields` is only for requests that just this deployment's own clients send (the Administration Dashboard, bot management, security settings). `spec/federation.md` holds the rules.
+- **Identity lives in the URL, never in the body.** `GET /channels/{channel}`,
+  `PATCH /messages/{message}`, `DELETE /communities/{community}`. Collections are plural nouns;
+  sub-resources hang off their parent (`GET /communities/{community}/channels`,
+  `POST /channels/{channel}/messages`). The literal segment `@me` addresses the calling user
+  (`GET /users/@me`, `PUT /communities/{community}/members/@me`,
+  `PUT /messages/{message}/reactions/{emoji}/@me`).
+- **Reads are `GET` with query parameters.** Browsers cannot send a body with `GET`, so no read
+  endpoint may take one. Windowed reads use keyset parameters (`?before=`, `?after=`, `?around=`,
+  `?limit=`) over UUIDv7 ids. A read whose parameters cannot reasonably fit in a query string should
+  be a `POST .../search` today and may move to the HTTP `QUERY` method (RFC 10008) once utoipa,
+  axum, and openapi-typescript all support OpenAPI 3.2.
+- **Reads may sideload related records with `?include=`.** A read that supports it accepts a
+  comma-separated list of relationship names
+  (`GET /users/@me/communities?include=channels,categories,members`) and always returns the
+  `{data, included}` envelope from `api::include` (`Sideloaded<T>` for one record,
+  `SideloadedList<T>` for a list), whether or not `include` was given, so the generated client sees
+  one response type per endpoint. `included` is keyed by record type (`communities`, `channels`,
+  `categories`, `users`, `userCommunities`, `messages`, `attachments`, `reactions`, `polls`,
+  `pollVotes`, `ownWriteIns`, `readStates`, `channelMutes`, `categoryCollapses`, `voiceSessions`,
+  `voiceParticipants`, `customEmoji`); a key is present exactly when the caller asked for the
+  relationship that produces it, and holds the same wire records the entity's own endpoints return.
+  The member sample is capped, but the caller's own membership of each community is always among
+  `userCommunities`, because it carries the order of their community list. Each endpoint declares
+  its accepted names as an enum (`api::community::CommunityInclude`, `api::message::MessageInclude`,
+  `api::invite::InviteInclude`, `api::dm::DmInclude`) and parses the parameter with `IncludeSet<E>`,
+  documented in OpenAPI as an array with `style = Form, explode = false`; a name the enum lacks is
+  ignored, never refused, since a newer client or another deployment's may ask for a relationship
+  this version does not have. Sideloads are batched in the `app` layer, one query per relationship
+  however many parent records there are; never load them per record. Reads that do not support
+  `include` return the bare record or array.
+- **List parameters use `sort=` and `filter[field]=`.** When a list endpoint gains ordering or
+  filtering, name the parameters `sort` (a field name, `-` prefixed for descending) and
+  `filter[<field>]`, deserialized with `#[serde(rename = "filter[name]")]` on the query struct, so
+  every list reads the same way. The keyset window parameters (`before`, `after`, `around`, `limit`)
+  stay as they are.
+- **Writes:** `POST` on a collection creates and returns `201 Created` with a `Location` header (use
+  `api::extract::Created`). `PATCH` partially updates and returns the updated record. `DELETE`
+  returns `204 No Content` (`api::extract::NoContent`). `PUT` is used for idempotent set-membership
+  operations (join a community, add a reaction) and returns `201` when it created something, `200`
+  when it already existed.
+- **Updates use JSON Merge Patch semantics.** A field that is absent is unchanged; a field that is
+  present is written, and `null` clears a nullable field. `message_gen` generates `*UpdateRequest`
+  types with `Option<T>` fields, routing nullable fields through `aspen_wire::double_option` (which
+  `api::extract` re-exports for hand-written types) so a JSON `null` arrives as `Some(None)`. The
+  matching `Update` server events skip fields that did not change (`skip_serializing_if`), so
+  clients can apply them as merge patches too. Hand-written update types must follow the same
+  pattern.
+- **Errors are RFC 9457 Problem Details** (`application/problem+json`), produced by
+  `api::error::ApiError` and documented as `Problem` on every non-2xx response. `code`
+  (`api::error::ProblemCode`) is the stable discriminator clients branch on; `title` and `detail`
+  are localized prose. `From<app::Error>` handles the common mappings (not found → 404, validation →
+  400, `Unauthorized` → 403, unique violation → 409, anything else → 500 with a `tracing::error!`).
+  Map to a more specific code in the handler only when the handler knows the context
+  (`usernameTaken`, `inviteCodeTaken`). Add a `ProblemCode` variant rather than inventing ad-hoc
+  error bodies.
+- **Extractors:** use `api::extract::{Json, Path, Query}` rather than axum's own so that malformed
+  input yields a Problem instead of plain text, and text holding U+0000 (an escaped `\u0000` in a
+  body, `%00` in a path or query), which PostgreSQL cannot store, is refused with `validation`. They
+  keep axum's type names on purpose; utoipa recognises handler arguments by name.
+- **Auth** is `Authorization: Bearer <session token>` (`api::auth::SessionUser`), declared in
+  OpenAPI as the `bearerAuth` scheme. Every endpoint requires it except `GET /health` and
+  `GET /health/ready` (see Health), registration (`POST /users`), `POST /auth/login` and
+  `/auth/login/second-factor`, `POST /auth/token-refresh`, `GET /auth/methods`, `GET /deployment`
+  (the deployment's display name and icon, which the sign-in screen shows; see Administration), the
+  passkey ceremony endpoints (starting a `signIn` ceremony, reading, completing, and claiming one),
+  the device link endpoints a device that is not signed in uses (starting a `request`, scanning an
+  `offer`, claiming, and cancelling; see Sign-in and security), `GET /registration-invites/{code}`
+  (see Administration), `POST /auth/federated-sign-in` and `GET /federation/icons/{icon}` (see
+  Federation), the three steps of a password reset under `/auth/password-resets` (see Email),
+  earning a device credential (`POST /auth/device-challenges` and `/auth/device-credentials`; see
+  Sign-in and security), and the event stream. A request to any of these without a session presents
+  a device credential as `Aspen-Device` unless `[rate_limits] device_exempt` lists the endpoint, and
+  is otherwise refused with `401` `deviceCredentialRequired`;
+  `api::rate_limit::document_rate_limits` declares the header and that answer on each, so handlers
+  do not. Mark authenticated handlers with `security(("bearerAuth" = []))` so generated clients know
+  to send the header, and optionally authenticated ones with `security((), ("bearerAuth" = []))`. A
+  session whose account still owes the server a second factor (see Sign-in and security) is refused
+  by `SessionUser` with `twoFactorEnrollmentRequired`, and one whose email address the deployment
+  requires verified with `emailVerificationRequired` (see Email); the few handlers such a session
+  may reach take `EnrollingSessionUser` instead.
+- **Documentation:** every handler carries a `#[utoipa::path]` with a `tag` (the `api::TAG_*`
+  constants), explicit `params` for path and query inputs, and one `responses` entry per status code
+  it can return, each error status with `body = Problem`. The generated client's typed error
+  handling is only as good as these declarations.
+- **Rate limits** apply to every endpoint (`app::rate_limit`, `api::rate_limit`). Each endpoint's
+  limits count along dimensions: `global`, `ip`, `device`, `user`, `username` (sign-in only, per
+  username and client network: an IPv4 /24, an IPv6 /48), `username_failures` (sign-in only, a
+  username's wrong passwords from anywhere, looked at before the password is checked and counted
+  only after a wrong one), `ip_failures` (an address's requests whose handler says they proved
+  wrong: a wrong password or code, an unknown invite or refresh token), `ip_rejected_tokens` (an
+  address's bot tokens from before tokens were signed that no bot holds, looked at before one is
+  looked up; a made-up session or bot token of the signed kind is refused by its signature with no
+  lookup, `app::signed_token`), and `per_<param>`, `user_per_<param>`, `ip_per_<param>` for any path
+  parameter. A request with a valid session counts as its user and never as its address or device;
+  one without counts as its address and its device credential, which it must present
+  (`Aspen-Device`) on every endpoint someone may call without signing in but those `device_exempt`
+  lists, and earns by solving a puzzle (see Sign-in and security). Many people behind one address
+  are so each counted on their own, and the address keeps only a ceiling over them. It gets the
+  `default` limits wherever they apply, plus its groups' limits, with its own entry replacing its
+  groups' dimension by dimension; `false` removes a dimension there, the default's included. The
+  built-in limits are `server/app/src/rate_limits.toml`; `[rate_limits]` in `aspen.toml` is laid
+  over them in code, a limit given there replacing the built-in one whole. Besides the OpenAPI
+  operations, `GET /events` (the event stream), `GET /auth/passkey` (the passkey page, outside
+  `/api/v1`), `GET /.well-known/aspen` (the federation document, also outside it), `GET` and
+  `POST /email/unsubscribe` (the page unsubscribe links open, also outside it), and
+  `GET /invite/{code}` and `GET /{*path}` (the web client's pages, also outside it) can be named. A
+  request with a method its path lacks counts toward the `default` limits that need no session or
+  parameter, and a method that is not a standard one is named `OTHER` in route keys and metrics, so
+  made-up methods make no new buckets or series. The rules are compiled against the real routes at
+  startup, so an unknown endpoint, a parameter the path lacks, or a user limit on an anonymous
+  endpoint stops the server with a config error. Buckets are GCRA timestamps in Valkey, shared by
+  every API server, and a Valkey outage lets requests through with a logged error, except on the
+  endpoints `fail_closed` lists (those that guess a password, a code, or an invite) and for the
+  username limits, which it refuses with `503` `serverBusy`. Global, parameter, address, device, and
+  user limits are checked by a route layer before the handler (`api::rate_limit::limit_requests`),
+  which looks up a presented session token once and leaves it for the session extractors; the
+  username limits in the sign-in handler; failures by the handlers that can tell one
+  (`api::rate_limit::Failures`); the web client's pages check their own in their handler, and over
+  them serve the page without reading what it previews as rather than refusing it. A refusal is
+  `429` `rateLimited` with `Retry-After`, and `api::rate_limit::document_rate_limits` adds that
+  response to every operation in the OpenAPI document, so handlers do not declare it. The client
+  address is the TCP peer, or, when the peer is listed in `trusted_proxies`, the right-most
+  `X-Forwarded-For` entry that is not itself a trusted proxy (read with or without a port; an entry
+  that is not an address ends the reading, and the client is the trusted proxy that passed it on);
+  IPv6 clients count by their `/ipv6_prefix` (64) network. When adding an endpoint that writes, fans
+  out, fetches from elsewhere, or can be used to guess something, give it its own limits in
+  `rate_limits.toml`.
+- **Caching:** every answer under `/api/v1` carries `nosniff` and `Cache-Control: no-store`
+  (`api_response_headers`); a handler whose answer may be kept (a federation icon) sets its own
+  `Cache-Control`, which the layer leaves alone.
+- **Wire naming** is camelCase everywhere (`#[serde(rename_all = "camelCase")]` on every request,
+  response, and record type).
+- **Other versions and forks call this API too** (clients of other deployments, since federation),
+  so the API changes only by addition within `/api/v1`, and a request another deployment's client
+  may send is never refused for a field this server does not know: `deny_unknown_fields` is only for
+  requests that just this deployment's own clients send (the Administration Dashboard, bot
+  management, security settings). `spec/federation.md` holds the rules.
 
-The WebSocket event stream is served at `/api/v1/events` (`server/api/src/event_stream.rs`). It is not part of the OpenAPI document; `event_schema.json` describes every frame in both directions (root type `EventStreamProtocol`, with `ClientMessage` and `ServerMessage`). Browsers cannot set headers on a WebSocket upgrade, so authentication is in-band: the client's first frame must be `{"type":"identify","sessionToken":"…","resumeAfter":<sequence>?}` within ten seconds, or the server closes with code 4408 (4400 for a malformed frame, 4401 for a bad token), after sending an `error` frame with a localized `detail`. An open stream closes with 4401 when its sign-in ends (after the `signInsEnded` event) or expires, 4410 when its account is banned (after `accountBanned`), 4403 when the deployment starts requiring a second factor it lacks, and 4428 when the deployment requires a verified email address its account does not have; one more stream than `[limits] max_event_streams_per_user` or `max_event_streams_per_address` allow on that server, or one past its account's rate limits, is closed with 4429, and one the server is too busy to take on with 1013 (`serverBusy`); those two `error` frames carry `retryAfterSeconds`, which the client waits at least, spreading every retry over a growing window (see Event routing). After it the client sends only `{"type":"activity"}` and `{"type":"watchPresence","userIds":[…]}` frames (see Presence under Event routing), and `{"type":"typing"|"stoppedTyping","channelId":…}` and `{"type":"viewing","channelIds":[…]}` frames (see Typing). The server replies `{"type":"ready","userId":…,"resumed":bool}` and then `{"type":"event","sequence":N,"event":{…}}` frames. `sequence` is the JetStream stream sequence; a client that reconnects with `resumeAfter` set to the last sequence it processed gets exactly the events it missed and `resumed: true` when that position is still within `MAX_EVENT_AGE`, otherwise the usual replay window and `resumed: false`, which tells it to rebuild its cached state from REST. The server pings every 30 seconds and drops peers that miss two pongs. Each `event` payload is an object tagged with `serverEvent` (the entity) and `type` (`create`, `update`, `delete`) with the record's fields at the top level, plus a few custom events such as `voiceSpeaking`. The frame carries `eventId` when the event may reach the client more than once. What happens and is never kept, who is typing and changes to the presence of those a connection watches, comes as `{"type":"ephemeral","event":{…}}` frames instead, with no sequence, never replayed on resuming.
+The WebSocket event stream is served at `/api/v1/events` (`server/api/src/event_stream.rs`). It is
+not part of the OpenAPI document; `event_schema.json` describes every frame in both directions (root
+type `EventStreamProtocol`, with `ClientMessage` and `ServerMessage`). Browsers cannot set headers
+on a WebSocket upgrade, so authentication is in-band: the client's first frame must be
+`{"type":"identify","sessionToken":"…","resumeAfter":<sequence>?}` within ten seconds, or the server
+closes with code 4408 (4400 for a malformed frame, 4401 for a bad token), after sending an `error`
+frame with a localized `detail`. An open stream closes with 4401 when its sign-in ends (after the
+`signInsEnded` event) or expires, 4410 when its account is banned (after `accountBanned`), 4403 when
+the deployment starts requiring a second factor it lacks, and 4428 when the deployment requires a
+verified email address its account does not have; one more stream than
+`[limits] max_event_streams_per_user` or `max_event_streams_per_address` allow on that server, or
+one past its account's rate limits, is closed with 4429, and one the server is too busy to take on
+with 1013 (`serverBusy`); those two `error` frames carry `retryAfterSeconds`, which the client waits
+at least, spreading every retry over a growing window (see Event routing). After it the client sends
+only `{"type":"activity"}` and `{"type":"watchPresence","userIds":[…]}` frames (see Presence under
+Event routing), and `{"type":"typing"|"stoppedTyping","channelId":…}` and
+`{"type":"viewing","channelIds":[…]}` frames (see Typing). The server replies
+`{"type":"ready","userId":…,"resumed":bool}` and then `{"type":"event","sequence":N,"event":{…}}`
+frames. `sequence` is the JetStream stream sequence; a client that reconnects with `resumeAfter` set
+to the last sequence it processed gets exactly the events it missed and `resumed: true` when that
+position is still within `MAX_EVENT_AGE`, otherwise the usual replay window and `resumed: false`,
+which tells it to rebuild its cached state from REST. The server pings every 30 seconds and drops
+peers that miss two pongs. Each `event` payload is an object tagged with `serverEvent` (the entity)
+and `type` (`create`, `update`, `delete`) with the record's fields at the top level, plus a few
+custom events such as `voiceSpeaking`. The frame carries `eventId` when the event may reach the
+client more than once. What happens and is never kept, who is typing and changes to the presence of
+those a connection watches, comes as `{"type":"ephemeral","event":{…}}` frames instead, with no
+sequence, never replayed on resuming.
 
 ### Layers
 
 The server is split into three layers, each a crate of its own:
 
-- **`server/api/`** (`aspen_api`) — HTTP handlers and request/response types. Strictly concerned with HTTP interactions. Should not contain business logic, database queries, or message broker interactions. Think of this as a frontend to the app layer. Types the app layer needs (such as `app::channel::MessageWindow`) belong in `app`, not here; `api` depends on `app`, never the reverse. The `message_gen`-generated records and request types both layers share are in the `aspen_wire` crate (`server/wire/`), which `api::message_enum` names. The crate names `aspen_app` as `app`, so its paths read as the layers do.
-- **`server/app/`** (`aspen_app`) — Business logic. Responsible for checking permissions and carrying out the operations expected of each API endpoint. Contains the `MaybeLoaded` lazy-loading pattern, event publishing, shared context (`GlobalServerContext`), the configuration (`aspen_config`), and the ID types, which it re-exports from `aspen_wire`.
-- **`server/schema/`** (`aspen_schema`) — Auto-generated Diesel schema code. Files here should not be edited by hand; alter them by adding a migration in `migrate/src/migrations/`, applying it with `cargo run -p aspen-migrate -- up`, and then running `diesel print-schema > src/schema.rs` from `server/schema/`.
+- **`server/api/`** (`aspen_api`) — HTTP handlers and request/response types. Strictly concerned
+  with HTTP interactions. Should not contain business logic, database queries, or message broker
+  interactions. Think of this as a frontend to the app layer. Types the app layer needs (such as
+  `app::channel::MessageWindow`) belong in `app`, not here; `api` depends on `app`, never the
+  reverse. The `message_gen`-generated records and request types both layers share are in the
+  `aspen_wire` crate (`server/wire/`), which `api::message_enum` names. The crate names `aspen_app`
+  as `app`, so its paths read as the layers do.
+- **`server/app/`** (`aspen_app`) — Business logic. Responsible for checking permissions and
+  carrying out the operations expected of each API endpoint. Contains the `MaybeLoaded` lazy-loading
+  pattern, event publishing, shared context (`GlobalServerContext`), the configuration
+  (`aspen_config`), and the ID types, which it re-exports from `aspen_wire`.
+- **`server/schema/`** (`aspen_schema`) — Auto-generated Diesel schema code. Files here should not
+  be edited by hand; alter them by adding a migration in `migrate/src/migrations/`, applying it with
+  `cargo run -p aspen-migrate -- up`, and then running `diesel print-schema > src/schema.rs` from
+  `server/schema/`.
 
-`server/src/` is the `aspen-chat-server` binary itself: `main.rs`, the listener's connection limits (`connections`), and the operator subcommands (`operator`). Beneath `app` are crates that need nothing of it, each re-exported from the `app` module that uses it, so a path through `app` names it wherever it lives:
+`server/src/` is the `aspen-chat-server` binary itself: `main.rs`, the listener's connection limits
+(`connections`), and the operator subcommands (`operator`). Beneath `app` are crates that need
+nothing of it, each re-exported from the `app` module that uses it, so a path through `app` names it
+wherever it lives:
 
-- `aspen_wire` (`server/wire/`): what the server and its clients exchange, the IDs, and the SQL trait macros (`wire_name_traits!` and the rest).
-- `aspen_locale` (`server/locale/`): the catalogue, `t!`, and each request's language (`app::locale`).
-- `aspen_previews` (`server/previews/`): decoding, resizing, and encoding attachments' previews, and videos' posters.
-- `aspen_plugin_runtime` (`server/plugin_runtime/`): the bindings `spec/plugin.wit` generates, the engine and its epoch, and a call's limits.
-- `aspen_database` (`server/database/`, `app::database`): connecting to PostgreSQL as `database_url` says, with libpq's TLS parameters over OpenSSL (`postgres-openssl`), for the pool, the operator commands, `aspen-migrate`, and tests. Connect through it, never `AsyncPgConnection::establish`, which cannot use TLS. Its `Pool` times every wait for a connection and every statement run on one (`latency`), which the dashboard charts (see Administration); take pooled connections from it, never from a deadpool pool of your own.
-- `aspen_sockets` (`sockets/`, shared with the voice server): listening sockets of one address family each, so a server listens over IPv4 and IPv6 on one port, and which default addresses a machine without a family leaves out.
-- `aspen_tls` (`tls/`, shared with the voice server): each service's TLS files, NATS connections made with them, and the warning for NATS reached without TLS.
-- `aspen_outbound` (`server/outbound/`, `app::outbound`) and `aspen_link_preview` (`server/link_preview/`): requests to other hosts, and fetching and reading pages for link previews.
-- `aspen_webpush` (`server/webpush/`, `app::push::webpush`), `aspen_federation_core` (`server/federation_core/`, `app::federation::jws` and `policy`), and `aspen_email_templates` (`server/email_templates/`).
+- `aspen_wire` (`server/wire/`): what the server and its clients exchange, the IDs, and the SQL
+  trait macros (`wire_name_traits!` and the rest).
+- `aspen_locale` (`server/locale/`): the catalogue, `t!`, and each request's language
+  (`app::locale`).
+- `aspen_previews` (`server/previews/`): decoding, resizing, and encoding attachments' previews, and
+  videos' posters.
+- `aspen_plugin_runtime` (`server/plugin_runtime/`): the bindings `spec/plugin.wit` generates, the
+  engine and its epoch, and a call's limits.
+- `aspen_database` (`server/database/`, `app::database`): connecting to PostgreSQL as `database_url`
+  says, with libpq's TLS parameters over OpenSSL (`postgres-openssl`), for the pool, the operator
+  commands, `aspen-migrate`, and tests. Connect through it, never `AsyncPgConnection::establish`,
+  which cannot use TLS. Its `Pool` times every wait for a connection and every statement run on one
+  (`latency`), which the dashboard charts (see Administration); take pooled connections from it,
+  never from a deadpool pool of your own.
+- `aspen_sockets` (`sockets/`, shared with the voice server): listening sockets of one address
+  family each, so a server listens over IPv4 and IPv6 on one port, and which default addresses a
+  machine without a family leaves out.
+- `aspen_tls` (`tls/`, shared with the voice server): each service's TLS files, NATS connections
+  made with them, and the warning for NATS reached without TLS.
+- `aspen_outbound` (`server/outbound/`, `app::outbound`) and `aspen_link_preview`
+  (`server/link_preview/`): requests to other hosts, and fetching and reading pages for link
+  previews.
+- `aspen_webpush` (`server/webpush/`, `app::push::webpush`), `aspen_federation_core`
+  (`server/federation_core/`, `app::federation::jws` and `policy`), and `aspen_email_templates`
+  (`server/email_templates/`).
 
-Code moves into one of these only when it needs nothing of `app`; what reads the database, publishes events, or checks permissions stays in `app`. A trait impl naming one of their types goes in that crate, or in `app` when the impl also names an `app` type (the orphan rule allows nothing else): conversions from `app`'s types into the wire records are `From` impls in `app`.
+Code moves into one of these only when it needs nothing of `app`; what reads the database, publishes
+events, or checks permissions stays in `app`. A trait impl naming one of their types goes in that
+crate, or in `app` when the impl also names an `app` type (the orphan rule allows nothing else):
+conversions from `app`'s types into the wire records are `From` impls in `app`.
 
 ### Request Flow
 
-Client REST request → API handler (validate, parse) → App function (permissions, business logic, database) → Publish event to NATS → WebSocket stream delivers event to connected clients.
+Client REST request → API handler (validate, parse) → App function (permissions, business logic,
+database) → Publish event to NATS → WebSocket stream delivers event to connected clients.
 
 ### Architecture reference
 
-How each feature works is written up in `docs/architecture/`: one file per feature, or a folder (`index.md` and a page per subtopic) for the larger ones. The reasons behind a feature's design are kept apart from how it works, in `design-notes.md` in its folder or `<feature>-design-notes.md` beside its file; `docs/architecture/operations/` holds those for the operator guide. Before working on a feature, read its file or folder, and its design notes before changing a choice they explain, and keep it describing the code as it stands in the same commit, as every comment must. Where this file or one of those says "see Bots" or "described under Voice", it means the file of that title.
+How each feature works is written up in `docs/architecture/`: one file per feature, or a folder
+(`index.md` and a page per subtopic) for the larger ones. The reasons behind a feature's design are
+kept apart from how it works, in `design-notes.md` in its folder or `<feature>-design-notes.md`
+beside its file; `docs/architecture/operations/` holds those for the operator guide. Before working
+on a feature, read its file or folder, and its design notes before changing a choice they explain,
+and keep it describing the code as it stands in the same commit, as every comment must. Where this
+file or one of those says "see Bots" or "described under Voice", it means the file of that title.
 
-- `docs/architecture/background-tasks.md` — the poll closer, the voice report listener and reaper, closing polls, message kinds, and poll write-ins
+- `docs/architecture/background-tasks.md` — the poll closer, the voice report listener and reaper,
+  closing polls, message kinds, and poll write-ins
 - `docs/architecture/reactions.md` — reactions, their canonical emoji, summaries, and reactor lists
-- `docs/architecture/threads-and-dms/index.md` — threads, following them, echoes, DMs and group DMs, their calls and rings, and the system account
-- `docs/architecture/sign-in-and-security/index.md` — password sign-in, second factors, recovery codes, reverification, password hashing limits, passkeys, signing in from another device by a QR code, and device credentials, which a request without a session is counted by
+- `docs/architecture/threads-and-dms/index.md` — threads, following them, echoes, DMs and group DMs,
+  their calls and rings, and the system account
+- `docs/architecture/sign-in-and-security/index.md` — password sign-in, second factors, recovery
+  codes, reverification, password hashing limits, passkeys, signing in from another device by a QR
+  code, and device credentials, which a request without a session is counted by
 - `docs/architecture/user-preferences.md` — account-scoped preferences stored as one JSON object
-- `docs/architecture/read-positions.md` — read positions, threads' among them, unread, and unread tag counts
-- `docs/architecture/saved-messages.md` — saving messages for oneself, the saved list, and what losing access does to a save
-- `docs/architecture/activity-feed.md` — the activity feed: every message that tells its reader, by the notification rule, and its filters
+- `docs/architecture/read-positions.md` — read positions, threads' among them, unread, and unread
+  tag counts
+- `docs/architecture/saved-messages.md` — saving messages for oneself, the saved list, and what
+  losing access does to a save
+- `docs/architecture/activity-feed.md` — the activity feed: every message that tells its reader, by
+  the notification rule, and its filters
 - `docs/architecture/muting.md` — muting channels and DMs
-- `docs/architecture/joining.md` — a community's default channel, choosing the next when it is deleted, and the messages announcing who joins
+- `docs/architecture/joining.md` — a community's default channel, choosing the next when it is
+  deleted, and the messages announcing who joins
 - `docs/architecture/collapsed-categories.md` — folded categories that follow a user between devices
-- `docs/architecture/search.md` — message search: the probe, the walk through history, deep rounds and their places, and its indexes
+- `docs/architecture/search.md` — message search: the probe, the walk through history, deep rounds
+  and their places, and its indexes
 - `docs/architecture/notifications.md` — notification levels and what the apps tell of
 - `docs/architecture/tagging.md` — tagging members, roles, and everyone, and what counts
 - `docs/architecture/bots/index.md` — bots, their tokens, links, roles, and commands
 - `docs/architecture/custom-emoji.md` — a community's own emoji in text and reactions
 - `docs/architecture/blocking.md` — what a block does on the server
-- `docs/architecture/administration/index.md` — deployment roles, deployment moderation and its log, bans from the deployment, registration invites and dual invites, the deployment settings, and fleet health
-- `docs/architecture/voice/index.md` — voice servers, sessions, reports, the reaper, and the voice server's media, signalling, and limits
-- `docs/architecture/file-transfers.md` — file transfers in calls, the STUN and TURN relay, and their record
-- `docs/architecture/federation/index.md` — every phase of federation: identity and keys, gates and lists, the directory, signing in abroad, protocol versions, DMs across deployments, and standing
+- `docs/architecture/administration/index.md` — deployment roles, deployment moderation and its log,
+  bans from the deployment, registration invites and dual invites, the deployment settings, and
+  fleet health
+- `docs/architecture/voice/index.md` — voice servers, sessions, reports, the reaper, and the voice
+  server's media, signalling, and limits
+- `docs/architecture/file-transfers.md` — file transfers in calls, the STUN and TURN relay, and
+  their record
+- `docs/architecture/federation/index.md` — every phase of federation: identity and keys, gates and
+  lists, the directory, signing in abroad, protocol versions, DMs across deployments, and standing
 - `docs/architecture/push.md` — waking phones through Web Push
-- `docs/architecture/attachment-previews/index.md` — previews of pictures and videos' posters, how they are made and queued, and messages held for them
-- `docs/architecture/email/index.md` — email addresses and their verification, the shown address, password reset by email, the outbox, the daily digest, the newsletter, and unsubscribing
-- `docs/architecture/nats-memory.md` — how large the two in-memory NATS streams are, how that follows the settings and NATS's memory limit, and what the dashboard shows of it
-- `docs/architecture/event-routing/index.md` — event subjects, the event feed and its shards, visibility, `publish_event` scopes, and presence
-- `docs/architecture/typing.md` — who is typing: the event stream's typing frames, the core NATS subject they are published on, their routing, and their expiry
-- `docs/architecture/jobs/index.md` — background jobs: the `job` table, steps and checkpoints, claiming, classes and their places, failing, recurring jobs, each kind, and the dashboard's preview
-- `docs/architecture/health.md` — the two health endpoints, what each is for, and why neither is rate limited
-- `docs/architecture/benchmarking.md` — `aspen-bench`, seeding and purging runs, suspending rate limits, and the metrics both servers export
-- `docs/architecture/reports/index.md` — reports of messages, profiles, and nicknames, their categories, cases and their review, warnings, what deleting a message keeps, and the evidence kept of its files
-- `docs/architecture/message-links.md` — links between messages, what each reader finds at them, and how they are sideloaded
-- `docs/architecture/replies.md` — replying to a message of the same channel, tagging its author, and what is shown of a deleted original
-- `docs/architecture/roles-and-permissions/index.md` — community permissions, roles, overrides, ranking, bans, the everyone mention limit, and member search
-- `docs/architecture/web-client/index.md` — the web client every API server serves at `public_url`, its files and caching, and its pages' Open Graph tags: the deployment's, and an invite's community's
-- `docs/architecture/plugins/index.md` — installing plugins, where they run, the sandbox, intercepting and observing, what the host answers and as whom, annotations, storage, routes, plugin events, principals, channel types and views, timers, notices, cards, and capability URLs
+- `docs/architecture/attachment-previews/index.md` — previews of pictures and videos' posters, how
+  they are made and queued, and messages held for them
+- `docs/architecture/email/index.md` — email addresses and their verification, the shown address,
+  password reset by email, the outbox, the daily digest, the newsletter, and unsubscribing
+- `docs/architecture/nats-memory.md` — how large the two in-memory NATS streams are, how that
+  follows the settings and NATS's memory limit, and what the dashboard shows of it
+- `docs/architecture/event-routing/index.md` — event subjects, the event feed and its shards,
+  visibility, `publish_event` scopes, and presence
+- `docs/architecture/typing.md` — who is typing: the event stream's typing frames, the core NATS
+  subject they are published on, their routing, and their expiry
+- `docs/architecture/jobs/index.md` — background jobs: the `job` table, steps and checkpoints,
+  claiming, classes and their places, failing, recurring jobs, each kind, and the dashboard's
+  preview
+- `docs/architecture/health.md` — the two health endpoints, what each is for, and why neither is
+  rate limited
+- `docs/architecture/benchmarking.md` — `aspen-bench`, seeding and purging runs, suspending rate
+  limits, and the metrics both servers export
+- `docs/architecture/reports/index.md` — reports of messages, profiles, and nicknames, their
+  categories, cases and their review, warnings, what deleting a message keeps, and the evidence kept
+  of its files
+- `docs/architecture/message-links.md` — links between messages, what each reader finds at them, and
+  how they are sideloaded
+- `docs/architecture/replies.md` — replying to a message of the same channel, tagging its author,
+  and what is shown of a deleted original
+- `docs/architecture/roles-and-permissions/index.md` — community permissions, roles, overrides,
+  ranking, bans, the everyone mention limit, and member search
+- `docs/architecture/web-client/index.md` — the web client every API server serves at `public_url`,
+  its files and caching, and its pages' Open Graph tags: the deployment's, and an invite's
+  community's
+- `docs/architecture/plugins/index.md` — installing plugins, where they run, the sandbox,
+  intercepting and observing, what the host answers and as whom, annotations, storage, routes,
+  plugin events, principals, channel types and views, timers, notices, cards, and capability URLs
 
 ### Event Ordering Guarantee
 
-Updates must be sent to NATS JetStream in the same order they were committed to PostgreSQL. The ordering can be arbitrary, but it must be consistent between the two. To achieve this, `UPDATE` SQL queries should occur inside a SQL transaction. The correct sequence is:
+Updates must be sent to NATS JetStream in the same order they were committed to PostgreSQL. The
+ordering can be arbitrary, but it must be consistent between the two. To achieve this, `UPDATE` SQL
+queries should occur inside a SQL transaction. The correct sequence is:
 
 1. Begin a SQL transaction.
 2. Execute the update query.
@@ -288,178 +822,402 @@ Updates must be sent to NATS JetStream in the same order they were committed to 
 4. Wait for JetStream to acknowledge the event.
 5. Only then commit the SQL transaction.
 
-This ensures that if JetStream rejects or fails to acknowledge the event, the database change is rolled back, and the two sources of truth never diverge in ordering.
+This ensures that if JetStream rejects or fails to acknowledge the event, the database change is
+rolled back, and the two sources of truth never diverge in ordering.
 
 ## `message_gen` Procedural Macro
 
-`message_gen` is a procedural macro system which generates, for each record type Aspen handles, the wire record, the REST request bodies, and the server events, all from one definition so they cannot drift apart. Request bodies are used with the REST API, while server events are used with the WebSocket event API.
+`message_gen` is a procedural macro system which generates, for each record type Aspen handles, the
+wire record, the REST request bodies, and the server events, all from one definition so they cannot
+drift apart. Request bodies are used with the REST API, while server events are used with the
+WebSocket event API.
 
-`message_gen` is invoked inside of `server/wire/src/message_enum.rs`, in the `aspen_wire` crate, which holds what the server and its clients exchange: the generated types, the IDs, and the types the records hold (`Permission`, `ChannelType`, `Card`, and the rest), each re-exported from the `app` or `api` module that uses it. The macro is applied to an enum where each variant defines an entity and its fields. From this single definition, the macro generates:
+`message_gen` is invoked inside of `server/wire/src/message_enum.rs`, in the `aspen_wire` crate,
+which holds what the server and its clients exchange: the generated types, the IDs, and the types
+the records hold (`Permission`, `ChannelType`, `Card`, and the rest), each re-exported from the
+`app` or `api` module that uses it. The macro is applied to an enum where each variant defines an
+entity and its fields. From this single definition, the macro generates:
 
-- **Record structs** — plain data structs (with Serialize, ToSchema, JsonSchema) in `aspen_wire::message_enum` (`api::message_enum`), returned by REST reads and carried by `Create` events
-- **Request structs** in `aspen_wire::message_enum::request` — `{Entity}CreateRequest` (every client-settable field) and `{Entity}UpdateRequest` (updatable fields as `Option<T>`, merge-patch semantics). Identifiers and parent references are never in a body; they come from the URL path or the session. Neither struct is generated when it would be empty (a `React` is created by `PUT` on a URL that already names everything).
-- **ServerEvent enum** in `aspen_wire::message_enum::server_event` — with `Create`, `Update`, `Delete` variants per entity, used in the WebSocket event stream
+- **Record structs** — plain data structs (with Serialize, ToSchema, JsonSchema) in
+  `aspen_wire::message_enum` (`api::message_enum`), returned by REST reads and carried by `Create`
+  events
+- **Request structs** in `aspen_wire::message_enum::request` — `{Entity}CreateRequest` (every
+  client-settable field) and `{Entity}UpdateRequest` (updatable fields as `Option<T>`, merge-patch
+  semantics). Identifiers and parent references are never in a body; they come from the URL path or
+  the session. Neither struct is generated when it would be empty (a `React` is created by `PUT` on
+  a URL that already names everything).
+- **ServerEvent enum** in `aspen_wire::message_enum::server_event` — with `Create`, `Update`,
+  `Delete` variants per entity, used in the WebSocket event stream
 
 ### Field Annotations
 
-- `#[message_gen(id)]` — Marks the primary identifier field. Required for each entity. Server-authoritative by default (server generates the ID).
-- `#[message_gen(id = "client_authoritative")]` — The client provides the ID value (through the URL path, for example an emoji or an invite code).
-- `#[message_gen(parent)]` — The owning record, supplied through the URL path on create (`POST /channels/{channel}/messages` sets `Message.channel_id`). Implicitly permanent; excluded from both request bodies.
-- `#[message_gen(permanent)]` — Field is set at creation and cannot be updated. Included in `CreateRequest` but not `UpdateRequest`.
-- `#[message_gen(server_authoritative)]` — Server controls this field entirely. Clients cannot set or modify it (e.g., timestamps, author IDs).
-- `#[message_gen(server_authoritative = "mutable")]` — As above, but the server may change the field after creation (e.g., `Message.edited_at`), so the `Update` server event carries it as an `Option<T>` alongside the client-updatable fields. Set it in the event only when it changed.
-- `#[message_gen(default)]` — The field may be absent from a create request and from the record (in the schemas), and is then its type's default (`Role.hoist`). A non-nullable field added to an entity that already exists needs it, since the API changes only by addition: clients that predate it create without it, and newer clients read records from deployments that predate it.
-- `#[message_gen(secret)]` — Accepted on create but excluded from records and events. Used for genuinely secret inputs (passwords, invite codes) and for inputs the server transforms rather than stores (`Poll.duration_seconds`, which becomes `closes_at`).
+- `#[message_gen(id)]` — Marks the primary identifier field. Required for each entity.
+  Server-authoritative by default (server generates the ID).
+- `#[message_gen(id = "client_authoritative")]` — The client provides the ID value (through the URL
+  path, for example an emoji or an invite code).
+- `#[message_gen(parent)]` — The owning record, supplied through the URL path on create
+  (`POST /channels/{channel}/messages` sets `Message.channel_id`). Implicitly permanent; excluded
+  from both request bodies.
+- `#[message_gen(permanent)]` — Field is set at creation and cannot be updated. Included in
+  `CreateRequest` but not `UpdateRequest`.
+- `#[message_gen(server_authoritative)]` — Server controls this field entirely. Clients cannot set
+  or modify it (e.g., timestamps, author IDs).
+- `#[message_gen(server_authoritative = "mutable")]` — As above, but the server may change the field
+  after creation (e.g., `Message.edited_at`), so the `Update` server event carries it as an
+  `Option<T>` alongside the client-updatable fields. Set it in the event only when it changed.
+- `#[message_gen(default)]` — The field may be absent from a create request and from the record (in
+  the schemas), and is then its type's default (`Role.hoist`). A non-nullable field added to an
+  entity that already exists needs it, since the API changes only by addition: clients that predate
+  it create without it, and newer clients read records from deployments that predate it.
+- `#[message_gen(secret)]` — Accepted on create but excluded from records and events. Used for
+  genuinely secret inputs (passwords, invite codes) and for inputs the server transforms rather than
+  stores (`Poll.duration_seconds`, which becomes `closes_at`).
 
 ### Entity-Level Annotations
 
-- `#[message_gen(no_commands)]` — Skip generating REST CRUD commands for this entity (e.g., `UserStatus` which is managed internally).
-- `#[message_gen(no_events)]` — Skip generating WebSocket server events for this entity (e.g., `Attachment`, `Icon`).
+- `#[message_gen(no_commands)]` — Skip generating REST CRUD commands for this entity (e.g.,
+  `UserStatus` which is managed internally).
+- `#[message_gen(no_events)]` — Skip generating WebSocket server events for this entity (e.g.,
+  `Attachment`, `Icon`).
 
 ## Adding a New Entity
 
 1. **Create a migration**:
-   - Scaffold with `cargo run -p aspen-migrate -- new <slug>`. This creates a `migrate/src/migrations/m<ts>_<slug>/{mod.rs,up.sql,down.sql}` directory AND registers the module (`pub mod m<ts>_<slug>;` in `migrations/mod.rs`, `&migrations::m<ts>_<slug>::M,` appended to `MIGRATIONS` in `registry.rs`).
-   - Edit `up.sql` and `down.sql`. For migrations that need real Rust work (data backfills, calls into `MediaStore`, etc.), replace `mod.rs` with a hand-written `impl Migration` instead of `SqlMigration`.
-   - A migration that relies on a PostgreSQL extension (`pg_trgm` for `gin_trgm_ops`, `btree_gin` for a scalar column in a GIN index) runs `CREATE EXTENSION IF NOT EXISTS` for it before its first use, whether or not another migration creates it too. No `down.sql` drops an extension. A new extension is named in the PostgreSQL row of `docs/operators/installing/1-services.md`.
+   - Scaffold with `cargo run -p aspen-migrate -- new <slug>`. This creates a
+     `migrate/src/migrations/m<ts>_<slug>/{mod.rs,up.sql,down.sql}` directory AND registers the
+     module (`pub mod m<ts>_<slug>;` in `migrations/mod.rs`, `&migrations::m<ts>_<slug>::M,`
+     appended to `MIGRATIONS` in `registry.rs`).
+   - Edit `up.sql` and `down.sql`. For migrations that need real Rust work (data backfills, calls
+     into `MediaStore`, etc.), replace `mod.rs` with a hand-written `impl Migration` instead of
+     `SqlMigration`.
+   - A migration that relies on a PostgreSQL extension (`pg_trgm` for `gin_trgm_ops`, `btree_gin`
+     for a scalar column in a GIN index) runs `CREATE EXTENSION IF NOT EXISTS` for it before its
+     first use, whether or not another migration creates it too. No `down.sql` drops an extension. A
+     new extension is named in the PostgreSQL row of `docs/operators/installing/1-services.md`.
    - Apply it: `cargo run -p aspen-migrate -- up`.
-   - Regenerate `server/schema/src/schema.rs`: `cd server/schema && diesel print-schema > src/schema.rs`.
-2. **Add the entity to `message_enum.rs`** — add a new variant to the `MessageEnumSource` enum with appropriate field annotations.
-3. **Create `server/api/src/<entity>.rs`** — implement the HTTP handler functions following the REST API shape above (`POST /<entities>` or `POST /<parents>/{parent}/<entities>`, `GET`/`PATCH`/`DELETE /<entities>/{entity}`, plus any list endpoints), each with a complete `#[utoipa::path]`. Register the module in `server/api/src/lib.rs` and add a `TAG_*` constant.
-4. **Create `server/app/src/<entity>.rs`** — implement the business logic functions. Register the module in `server/app/src/lib.rs`.
-5. **Wire routes in `server/api/src/lib.rs`** — add `.routes(routes!(...))` calls in the `start` function.
-6. **Add an ID type** (if needed) in `server/wire/src/lib.rs` using the `id_type!` macro, and re-export it from `server/app/src/lib.rs`.
-7. **Decide who may use it** — check permissions in the app function (`app::permissions::require_member` or `channel_access`, then `require`), and document `403` on the handler when a permission can refuse. Answer the revocation checklist (under Standards and Expectations) for it, in its architecture file, and add its scenario to `scripts/check_permissions.py`.
-8. **Consider its rate limits** — the defaults cover every endpoint, but one that writes or is expensive usually wants its own entry in `server/app/src/rate_limits.toml`.
-9. **Regenerate schemas** — run `cargo run -- --gen-openapi-schema` and commit the updated `openapi.yaml` and `event_schema.json`.
+   - Regenerate `server/schema/src/schema.rs`:
+     `cd server/schema && diesel print-schema > src/schema.rs`.
+2. **Add the entity to `message_enum.rs`** — add a new variant to the `MessageEnumSource` enum with
+   appropriate field annotations.
+3. **Create `server/api/src/<entity>.rs`** — implement the HTTP handler functions following the REST
+   API shape above (`POST /<entities>` or `POST /<parents>/{parent}/<entities>`,
+   `GET`/`PATCH`/`DELETE /<entities>/{entity}`, plus any list endpoints), each with a complete
+   `#[utoipa::path]`. Register the module in `server/api/src/lib.rs` and add a `TAG_*` constant.
+4. **Create `server/app/src/<entity>.rs`** — implement the business logic functions. Register the
+   module in `server/app/src/lib.rs`.
+5. **Wire routes in `server/api/src/lib.rs`** — add `.routes(routes!(...))` calls in the `start`
+   function.
+6. **Add an ID type** (if needed) in `server/wire/src/lib.rs` using the `id_type!` macro, and
+   re-export it from `server/app/src/lib.rs`.
+7. **Decide who may use it** — check permissions in the app function
+   (`app::permissions::require_member` or `channel_access`, then `require`), and document `403` on
+   the handler when a permission can refuse. Answer the revocation checklist (under Standards and
+   Expectations) for it, in its architecture file, and add its scenario to
+   `scripts/check_permissions.py`.
+8. **Consider its rate limits** — the defaults cover every endpoint, but one that writes or is
+   expensive usually wants its own entry in `server/app/src/rate_limits.toml`.
+9. **Regenerate schemas** — run `cargo run -- --gen-openapi-schema` and commit the updated
+   `openapi.yaml` and `event_schema.json`.
 
 ## Error Handling
 
 Aspen uses both `thiserror` and `anyhow`, each with a distinct purpose:
 
-- **`thiserror`** (`app::Error` enum in `server/app/src/error.rs`) — for errors that calling code might conceivably want to catch and handle. Each variant represents a specific failure mode (database error, connection pool error, config error, etc.) and can be matched on.
-- **`anyhow`** — for errors that are fatal and require intervention from a server administrator or developer. These represent situations where the server cannot reasonably recover on its own.
+- **`thiserror`** (`app::Error` enum in `server/app/src/error.rs`) — for errors that calling code
+  might conceivably want to catch and handle. Each variant represents a specific failure mode
+  (database error, connection pool error, config error, etc.) and can be matched on.
+- **`anyhow`** — for errors that are fatal and require intervention from a server administrator or
+  developer. These represent situations where the server cannot reasonably recover on its own.
 
-The project defines `app::Result<T>` as an alias for `std::result::Result<T, app::Error>`. Error types use `#[from]` attributes for ergonomic `?` conversion.
+The project defines `app::Result<T>` as an alias for `std::result::Result<T, app::Error>`. Error
+types use `#[from]` attributes for ergonomic `?` conversion.
 
 ## Testing
 
-Testing infrastructure is still in its early stages. The long-term goal is rigorous test suites. Current guidance:
+Testing infrastructure is still in its early stages. The long-term goal is rigorous test suites.
+Current guidance:
 
 - Unit tests go inline as `#[cfg(test)] mod tests` within the module they test.
 - Integration tests will go in a top-level `tests/` directory once the test infrastructure matures.
-- Tests should hit a real PostgreSQL database via `docker-compose`, not mocks, to ensure database behavior matches production.
+- Tests should hit a real PostgreSQL database via `docker-compose`, not mocks, to ensure database
+  behavior matches production.
 
 ## Standards and Expectations
 
-You are an expert level architect and senior software engineer. You will think through your actions before you take them, and build out a maintainable and robust system which will survive
-scrutiny from the most talented software professionals in the world. Consider the performance and long term implications of your solutions before you implement them.
-If you receive a request which is ambiguous, you will seek clarification. If you receive a request which is ill advised, you will recommend against it. Time is precious, and you'd rather
-do it right the first time. You will always check your work by running `cargo clippy` and fixing any new problems.
+You are an expert level architect and senior software engineer. You will think through your actions
+before you take them, and build out a maintainable and robust system which will survive scrutiny
+from the most talented software professionals in the world. Consider the performance and long term
+implications of your solutions before you implement them. If you receive a request which is
+ambiguous, you will seek clarification. If you receive a request which is ill advised, you will
+recommend against it. Time is precious, and you'd rather do it right the first time. You will always
+check your work by running `cargo clippy` and fixing any new problems.
+
+After every change to a file under `client/` or to any Markdown file, run `npm run format` in
+`client/` before handing work back. It runs Prettier (`client/scripts/prettier.mjs`) over everything
+under `client/` that `client/.prettierignore` does not exclude, TypeScript and JavaScript (`.ts`,
+`.tsx`, `.js`, `.mjs`, `.cjs`), JSON, Markdown, CSS, YAML, and HTML, and over every Markdown file
+git tracks elsewhere in the repository. The repository root's `.prettierrc` sets the width to 100
+and wraps Markdown prose to it; tables and code blocks are left as written. CI runs
+`pnpm format:check` and fails on any file left unformatted.
 
 ### Check that each edit did what you meant
 
-After every edit, read the changed region back (or its diff) and confirm the file says what you intended: the text landed where you meant it, nothing beside it was duplicated, dropped, or left behind, and the file still reads as one coherent whole. A replacement that matched somewhere other than you expected, an insertion one item too high, or a block moved without its comment all compile cleanly, so the compiler, clippy, and the type checker never catch them. The commonest result is a doc comment stranded on the wrong item: when you add, move, or delete an item, its comment goes with it, and the item above and below still carry their own. Shell edits (`sed`, heredocs, scripts) report nothing about what they changed, so check their result with `git diff` before moving on.
+After every edit, read the changed region back (or its diff) and confirm the file says what you
+intended: the text landed where you meant it, nothing beside it was duplicated, dropped, or left
+behind, and the file still reads as one coherent whole. A replacement that matched somewhere other
+than you expected, an insertion one item too high, or a block moved without its comment all compile
+cleanly, so the compiler, clippy, and the type checker never catch them. The commonest result is a
+doc comment stranded on the wrong item: when you add, move, or delete an item, its comment goes with
+it, and the item above and below still carry their own. Shell edits (`sed`, heredocs, scripts)
+report nothing about what they changed, so check their result with `git diff` before moving on.
 
 ### When access is given or taken away
 
-Most security holes in a chat server are stale state: someone loses a permission, or a session, and something already open keeps acting on the old answer. Every feature that shows something to someone, or lets them do something, answers these in its architecture file in the commit that adds it, and `scripts/check_permissions.py` gains a scenario checking the answers:
+Most security holes in a chat server are stale state: someone loses a permission, or a session, and
+something already open keeps acting on the old answer. Every feature that shows something to
+someone, or lets them do something, answers these in its architecture file in the commit that adds
+it, and `scripts/check_permissions.py` gains a scenario checking the answers:
 
-1. **Who can observe it, and by which routes?** REST reads (alone and sideloaded), the event stream (which subject, which `Aspen-Channel` or `Aspen-Requires`), push, the voice server, search, message links, the client's cache.
-2. **What decides it, and where is that checked?** A read of one channel's contents goes through `channel_access`, whose `ChannelAccess` only that function can make, so taking one as an argument proves the check. A read listing what lies in several channels takes a `Visibility` and keeps only what it allows (`read_communities_channels`, `read_community_mutes`); never filter visibility in the `api` layer, where it is forgotten. An event decides its readers by its scope.
-3. **When the deciding permission is lost, what happens to what is already open?** Think through each way it can go: a role's permissions edited, a role taken or deleted, an override, a channel moved, a category deleted, a member removed, banned, or leaving, the owner changed, a deployment role, a sign-out, a password change, a ban from the deployment, an account deleted. For each, say what becomes of open event streams (the side losing access receives the change and nothing after it), calls (`app::events::rechecks_of`), phones (`app::push`), server caches, and the client's cache (`RecordStore`'s pruning).
-4. **When it is gained, how does a client already open find out without a reload?** Events that change who may view a channel reach both sides (`FeedEvent::before`); the client looks up what it hears of and lacks (`AspenSync`).
-5. **Does every path that changes it announce it?** That includes operator commands (`app::events::Publisher`), background tasks (inside `app::events::noting`), and database cascades: either the cascade's effect is announced, or every reader (the event feed's model, the client's store) infers it from the event that caused it.
-6. **Is it published inside the transaction that makes the change?** Then a rollback is answered by `communityResync` for the communities it was published to and `userResync` for the users (`app::events::settle`).
+1. **Who can observe it, and by which routes?** REST reads (alone and sideloaded), the event stream
+   (which subject, which `Aspen-Channel` or `Aspen-Requires`), push, the voice server, search,
+   message links, the client's cache.
+2. **What decides it, and where is that checked?** A read of one channel's contents goes through
+   `channel_access`, whose `ChannelAccess` only that function can make, so taking one as an argument
+   proves the check. A read listing what lies in several channels takes a `Visibility` and keeps
+   only what it allows (`read_communities_channels`, `read_community_mutes`); never filter
+   visibility in the `api` layer, where it is forgotten. An event decides its readers by its scope.
+3. **When the deciding permission is lost, what happens to what is already open?** Think through
+   each way it can go: a role's permissions edited, a role taken or deleted, an override, a channel
+   moved, a category deleted, a member removed, banned, or leaving, the owner changed, a deployment
+   role, a sign-out, a password change, a ban from the deployment, an account deleted. For each, say
+   what becomes of open event streams (the side losing access receives the change and nothing after
+   it), calls (`app::events::rechecks_of`), phones (`app::push`), server caches, and the client's
+   cache (`RecordStore`'s pruning).
+4. **When it is gained, how does a client already open find out without a reload?** Events that
+   change who may view a channel reach both sides (`FeedEvent::before`); the client looks up what it
+   hears of and lacks (`AspenSync`).
+5. **Does every path that changes it announce it?** That includes operator commands
+   (`app::events::Publisher`), background tasks (inside `app::events::noting`), and database
+   cascades: either the cascade's effect is announced, or every reader (the event feed's model, the
+   client's store) infers it from the event that caused it.
+6. **Is it published inside the transaction that makes the change?** Then a rollback is answered by
+   `communityResync` for the communities it was published to and `userResync` for the users
+   (`app::events::settle`).
 
-The code holds some of these on its own: `expected_kind` and `rechecks_of` match every event with no wildcard, so a new event cannot be published until its routing and its effect on calls are decided; `rechecks_of` runs those rechecks after the work commits, so no call site needs to remember them; `ChannelAccess` and `Visibility` cannot be made without the check they stand for. Prefer extending these to adding a rule here.
+The code holds some of these on its own: `expected_kind` and `rechecks_of` match every event with no
+wildcard, so a new event cannot be published until its routing and its effect on calls are decided;
+`rechecks_of` runs those rechecks after the work commits, so no call site needs to remember them;
+`ChannelAccess` and `Visibility` cannot be made without the check they stand for. Prefer extending
+these to adding a rule here.
 
 ### Work grows with the answer, not with what is stored
 
-Aspen must serve a deployment of millions as well as one of a dozen, so the cost of every request, event, and background pass is bounded by what it returns or changes, never by how much the deployment, a community, or an account has accumulated. A query that is fast on a development database and reads a whole table in production is a bug, even when nothing is wrong yet. When writing or reviewing anything that touches the database:
+Aspen must serve a deployment of millions as well as one of a dozen, so the cost of every request,
+event, and background pass is bounded by what it returns or changes, never by how much the
+deployment, a community, or an account has accumulated. A query that is fast on a development
+database and reads a whole table in production is a bug, even when nothing is wrong yet. When
+writing or reviewing anything that touches the database:
 
-1. **Every query has an index that bounds it.** Check the migrations for the index that serves each `WHERE` and `ORDER BY`, and run `EXPLAIN` against a seeded database (`bench seed`) when unsure. Shapes PostgreSQL cannot bound with an index:
-   - `OR` across columns or tables (`channel = ANY($1) OR parent_channel = ANY($1)`), or with a subquery arm: write a `UNION` of branches that each use an index.
-   - A function of an indexed column (`lower(name)`, `split_part(domain, …)`, `profile->>'icon'`) without an expression index on exactly that expression.
-   - A partial index whose predicate the query does not imply: `poll = $1` cannot use an index `WHERE kind = 'poll'`, and neither can the foreign key's own check.
+1. **Every query has an index that bounds it.** Check the migrations for the index that serves each
+   `WHERE` and `ORDER BY`, and run `EXPLAIN` against a seeded database (`bench seed`) when unsure.
+   Shapes PostgreSQL cannot bound with an index:
+   - `OR` across columns or tables (`channel = ANY($1) OR parent_channel = ANY($1)`), or with a
+     subquery arm: write a `UNION` of branches that each use an index.
+   - A function of an indexed column (`lower(name)`, `split_part(domain, …)`, `profile->>'icon'`)
+     without an expression index on exactly that expression.
+   - A partial index whose predicate the query does not imply: `poll = $1` cannot use an index
+     `WHERE kind = 'poll'`, and neither can the foreign key's own check.
    - A filter on a column the index does not lead with, a leading-wildcard `LIKE`, and `<>`.
-   - A time bound on rows keyed by UUIDv7 written against `timestamp`: bound the id instead (`aspen_uuid_floor`, `read_state::position_at`), which turns it into a range on the key.
-2. **Every list is limited, and every limit is clamped.** A read whose length is data-driven (members, messages, reactions, votes, bans, DMs, reports) takes `LIMIT` and pages by keyset (`?before=`, `?after=`). `OFFSET` only behind a small clamp. A count shown to people is cut off where it stops mattering (`count(*)` over a `LIMIT` subquery, shown as "99+"). A sample is chosen by an index walk with `LIMIT`, not by ranking everything and keeping the top. Name each limit as a constant or a setting.
-3. **The database does what it is good at.** Filter, sort, count, group, deduplicate, and join in SQL, not by loading rows into Rust. Never one query per row (N+1): batch with `= ANY`, `JOIN unnest(…)`, or a `LATERAL` per parent. Insert many rows in one statement. A read-modify-write is one `UPDATE … SET x = x + …` or `INSERT … ON CONFLICT … RETURNING (xmax = 0)`, or it holds the row `FOR UPDATE`; a `SELECT … FOR UPDATE` of a row that does not exist locks nothing.
-4. **A request does a bounded amount of work.** No statement, cascade, or loop inside a request's transaction touches a data-driven number of rows or publishes a data-driven number of events: deleting a role held by a million members, a banned user's messages, or a plugin's storage is a job (`app::jobs`, see Jobs), saved in the request's transaction and done in bounded steps, each committed on its own. A cascade's reach counts too.
-5. **Every foreign key's referencing column is indexed**, or deleting (or `SET NULL`ing) the referenced row reads the whole referencing table.
-6. **Every table that gains rows over time says what removes them.** Expired sessions and tokens, finished or abandoned work, unconfirmed uploads, and expired bans are swept in batches by a recurring job (see Jobs). Rows kept on purpose (evidence, logs) say so, and how long.
-7. **Memory is bounded too.** A cache or map that gains an entry per channel, user, or community has a size bound and evicts (`moka`); a buffer or queue has a capacity; a value read from storage or the network has a byte limit.
-8. **Background passes claim bounded batches.** Background work is a job; where a kind claims rows of its own, it claims `LIMIT n … FOR UPDATE SKIP LOCKED` in the order of an index whose predicate excludes rows it can never take, commits each batch, and keeps claiming while batches come back full, so several servers share the work and none rereads what it cannot use.
-9. **Hot paths do not do per-recipient work.** Fan-out to members (push, presence, typing, badges) reads denormalized counters or columns kept up to date where they change, or evaluates once per distinct role set rather than per person.
+   - A time bound on rows keyed by UUIDv7 written against `timestamp`: bound the id instead
+     (`aspen_uuid_floor`, `read_state::position_at`), which turns it into a range on the key.
+2. **Every list is limited, and every limit is clamped.** A read whose length is data-driven
+   (members, messages, reactions, votes, bans, DMs, reports) takes `LIMIT` and pages by keyset
+   (`?before=`, `?after=`). `OFFSET` only behind a small clamp. A count shown to people is cut off
+   where it stops mattering (`count(*)` over a `LIMIT` subquery, shown as "99+"). A sample is chosen
+   by an index walk with `LIMIT`, not by ranking everything and keeping the top. Name each limit as
+   a constant or a setting.
+3. **The database does what it is good at.** Filter, sort, count, group, deduplicate, and join in
+   SQL, not by loading rows into Rust. Never one query per row (N+1): batch with `= ANY`,
+   `JOIN unnest(…)`, or a `LATERAL` per parent. Insert many rows in one statement. A
+   read-modify-write is one `UPDATE … SET x = x + …` or
+   `INSERT … ON CONFLICT … RETURNING (xmax = 0)`, or it holds the row `FOR UPDATE`; a
+   `SELECT … FOR UPDATE` of a row that does not exist locks nothing.
+4. **A request does a bounded amount of work.** No statement, cascade, or loop inside a request's
+   transaction touches a data-driven number of rows or publishes a data-driven number of events:
+   deleting a role held by a million members, a banned user's messages, or a plugin's storage is a
+   job (`app::jobs`, see Jobs), saved in the request's transaction and done in bounded steps, each
+   committed on its own. A cascade's reach counts too.
+5. **Every foreign key's referencing column is indexed**, or deleting (or `SET NULL`ing) the
+   referenced row reads the whole referencing table.
+6. **Every table that gains rows over time says what removes them.** Expired sessions and tokens,
+   finished or abandoned work, unconfirmed uploads, and expired bans are swept in batches by a
+   recurring job (see Jobs). Rows kept on purpose (evidence, logs) say so, and how long.
+7. **Memory is bounded too.** A cache or map that gains an entry per channel, user, or community has
+   a size bound and evicts (`moka`); a buffer or queue has a capacity; a value read from storage or
+   the network has a byte limit.
+8. **Background passes claim bounded batches.** Background work is a job; where a kind claims rows
+   of its own, it claims `LIMIT n … FOR UPDATE SKIP LOCKED` in the order of an index whose predicate
+   excludes rows it can never take, commits each batch, and keeps claiming while batches come back
+   full, so several servers share the work and none rereads what it cannot use.
+9. **Hot paths do not do per-recipient work.** Fan-out to members (push, presence, typing, badges)
+   reads denormalized counters or columns kept up to date where they change, or evaluates once per
+   distinct role set rather than per person.
 
 ### Implement the trait rather than working around it
 
-When code would be simpler with a trait a type does not have, give the type the trait: derive it, implement it, or teach `message_gen` to derive it on what it generates. Do not clone field by field because a type is not `Clone`, sort by an inner field because an id is not `Ord`, round-trip through `serde_json` to parse a name because an enum is not `FromStr`, or keep a second table of names beside the serde attributes. For enums whose wire names are also their names in headers, the terminal, and errors, `aspen_wire::wire_name_traits!` (`app::wire_name_traits!`) gives `Display` and `FromStr` through the serde names, so those stay the only list. The ID types (`id_type!`) are `Ord`, `message_gen`'s records and server events are `Clone`, and its update requests are `Default`, a patch that changes nothing.
+When code would be simpler with a trait a type does not have, give the type the trait: derive it,
+implement it, or teach `message_gen` to derive it on what it generates. Do not clone field by field
+because a type is not `Clone`, sort by an inner field because an id is not `Ord`, round-trip through
+`serde_json` to parse a name because an enum is not `FromStr`, or keep a second table of names
+beside the serde attributes. For enums whose wire names are also their names in headers, the
+terminal, and errors, `aspen_wire::wire_name_traits!` (`app::wire_name_traits!`) gives `Display` and
+`FromStr` through the serde names, so those stay the only list. The ID types (`id_type!`) are `Ord`,
+`message_gen`'s records and server events are `Clone`, and its update requests are `Default`, a
+patch that changes nothing.
 
 Crates that provide these traits are welcome, and the workspace uses several:
-- `bitflags` for sets of flags. `Permissions` and `DeploymentPermissions` are stored as `BIGINT` through `aspen_wire::bigint_sql_traits!`.
-- `strum` for names and lists of variants that serde does not give (`IntoStaticStr`, `VariantNames`, `VariantArray`).
-- `smart-default` for config sections whose defaults are written on their fields, with `#[serde(default)]` so a missing key takes them.
+
+- `bitflags` for sets of flags. `Permissions` and `DeploymentPermissions` are stored as `BIGINT`
+  through `aspen_wire::bigint_sql_traits!`.
+- `strum` for names and lists of variants that serde does not give (`IntoStaticStr`, `VariantNames`,
+  `VariantArray`).
+- `smart-default` for config sections whose defaults are written on their fields, with
+  `#[serde(default)]` so a missing key takes them.
 - `humantime` for durations typed at the terminal.
 
 A conversion that takes one value and nothing else is `impl From`, not a `*_to_api` function.
 
 ## Comments document the current code, not its history
 
-Every comment and docstring anywhere in this repository — Rust in `server/`, TypeScript in `client/`, SQL in `migrations/`, config in `docker-compose.yaml`, and any future language we add — must describe the code as it stands in the tree right now. Do not write comments that contrast the current implementation with an earlier one, explain why today's code is "better than" or "replaces" something that used to exist, or cite removed helpers / classes / functions / modules by name as parallels or fallbacks. A reader opening the file a year from now has no way to resolve references like "the previous threaded implementation", "the client used to scrape this itself", "the old command-response enums", or "`_coerce_overrides` used to need"; those references become dead weight the moment the commit that removed the original code lands, and they actively mislead anyone grepping for the named symbol.
+Every comment and docstring anywhere in this repository — Rust in `server/`, TypeScript in
+`client/`, SQL in `migrations/`, config in `docker-compose.yaml`, and any future language we add —
+must describe the code as it stands in the tree right now. Do not write comments that contrast the
+current implementation with an earlier one, explain why today's code is "better than" or "replaces"
+something that used to exist, or cite removed helpers / classes / functions / modules by name as
+parallels or fallbacks. A reader opening the file a year from now has no way to resolve references
+like "the previous threaded implementation", "the client used to scrape this itself", "the old
+command-response enums", or "`_coerce_overrides` used to need"; those references become dead weight
+the moment the commit that removed the original code lands, and they actively mislead anyone
+grepping for the named symbol.
 
 Concretely, while editing:
 
-- State invariants, rationales, and trade-offs as present-tense facts about the current code. "`None` means no change" is good; "`None` means no change, matching the previous hand-coded merge semantics" is not.
-- Cross-layer references must point at *live* code. "`LinkPreviewImageCache` mirrors `IconCache`" is fine because both classes exist today; "`LinkPreviewImageCache` replaces the old `LinkPreviewCache`" is not.
-- If a non-obvious choice is only defensible by comparing to an alternative, compare to the *alternative* (what the code could have done instead and why it doesn't), not to a previous revision of this file.
-- When you refactor or delete code, sweep the comments in the same commit. A comment that names a helper is invalidated the moment that helper is renamed or removed; do not leave it behind to be cleaned up later.
-- This rule applies equally to this `AGENTS.md` and to `client/AGENTS.md`. If a rule here is justified by a historical bug, describe the bug and the invariant it implies — do not describe the removed fix.
-- The one narrow exception is historical context that a reader genuinely needs in order to understand why a rule is load-bearing (for example, "we had this exact freeze once, don't reintroduce it"). Even then, describe the *bug*, not the removed code that caused it.
+- State invariants, rationales, and trade-offs as present-tense facts about the current code.
+  "`None` means no change" is good; "`None` means no change, matching the previous hand-coded merge
+  semantics" is not.
+- Cross-layer references must point at _live_ code. "`LinkPreviewImageCache` mirrors `IconCache`" is
+  fine because both classes exist today; "`LinkPreviewImageCache` replaces the old
+  `LinkPreviewCache`" is not.
+- If a non-obvious choice is only defensible by comparing to an alternative, compare to the
+  _alternative_ (what the code could have done instead and why it doesn't), not to a previous
+  revision of this file.
+- When you refactor or delete code, sweep the comments in the same commit. A comment that names a
+  helper is invalidated the moment that helper is renamed or removed; do not leave it behind to be
+  cleaned up later.
+- This rule applies equally to this `AGENTS.md` and to `client/AGENTS.md`. If a rule here is
+  justified by a historical bug, describe the bug and the invariant it implies — do not describe the
+  removed fix.
+- The one narrow exception is historical context that a reader genuinely needs in order to
+  understand why a rule is load-bearing (for example, "we had this exact freeze once, don't
+  reintroduce it"). Even then, describe the _bug_, not the removed code that caused it.
 
-If you catch a stale "previously / used to / legacy / the old X / the client used to scrape this" comment while you're editing nearby code, fix it. Do not wait for a dedicated cleanup pass — those do not happen.
+If you catch a stale "previously / used to / legacy / the old X / the client used to scrape this"
+comment while you're editing nearby code, fix it. Do not wait for a dedicated cleanup pass — those
+do not happen.
 
 ## Comments say what the code cannot
 
-The people who read this code can read code. A comment earns its place by telling them something the code beside it does not already say plainly: why it is this way, an invariant it relies on or keeps, what would break if it changed, a unit, a limit and where it comes from, what a caller must do, a non-obvious consequence, or a pointer to the code or document that explains the rest. A comment that only restates what the code plainly says is removed.
+The people who read this code can read code. A comment earns its place by telling them something the
+code beside it does not already say plainly: why it is this way, an invariant it relies on or keeps,
+what would break if it changed, a unit, a limit and where it comes from, what a caller must do, a
+non-obvious consequence, or a pointer to the code or document that explains the rest. A comment that
+only restates what the code plainly says is removed.
 
 Comments that add nothing look like these:
 
-- Narrating the next line: `// Increment the counter` over `count += 1`, `// Return the result`, `// Commit the transaction` over `tx.commit()`, `// Loop over the members`.
-- Repeating a name: `/// The user's id.` on `user_id: UserId`, `/// Creates a new Foo.` on `fn new() -> Foo`, `/** Props for Button. */` on `ButtonProps`, `// Imports` over the imports.
-- Restating a signature: `/// Takes a channel id and returns its messages.` on `fn messages(channel: ChannelId) -> Vec<Message>`, a docstring listing parameters by name and type with nothing more about them.
-- Section labels the structure already shows: `// Tests` over `mod tests`, `// Handlers` over a block of handlers whose names say so, `// --- state ---` over a component's `useState` calls.
+- Narrating the next line: `// Increment the counter` over `count += 1`, `// Return the result`,
+  `// Commit the transaction` over `tx.commit()`, `// Loop over the members`.
+- Repeating a name: `/// The user's id.` on `user_id: UserId`, `/// Creates a new Foo.` on
+  `fn new() -> Foo`, `/** Props for Button. */` on `ButtonProps`, `// Imports` over the imports.
+- Restating a signature: `/// Takes a channel id and returns its messages.` on
+  `fn messages(channel: ChannelId) -> Vec<Message>`, a docstring listing parameters by name and type
+  with nothing more about them.
+- Section labels the structure already shows: `// Tests` over `mod tests`, `// Handlers` over a
+  block of handlers whose names say so, `// --- state ---` over a component's `useState` calls.
 - Commented-out code. Version control keeps it.
 
-Keep a comment when trimming it would lose something: a docstring on a public item whose name and type leave a question open (what `None` means, which unit, whether it is clamped, who may call it, what it costs) answers that question and nothing more. Rewrite rather than delete when a comment narrates the code but buries one useful fact; keep the fact. Doc comments the tooling requires (`#[utoipa::path]` descriptions shown in the OpenAPI document, schemars descriptions in the JSON schemas, `spec/plugin.wit` docs plugin authors read) are read by people who never see the code, so they are judged by what they tell that reader, not by what the code beside them says.
+Keep a comment when trimming it would lose something: a docstring on a public item whose name and
+type leave a question open (what `None` means, which unit, whether it is clamped, who may call it,
+what it costs) answers that question and nothing more. Rewrite rather than delete when a comment
+narrates the code but buries one useful fact; keep the fact. Doc comments the tooling requires
+(`#[utoipa::path]` descriptions shown in the OpenAPI document, schemars descriptions in the JSON
+schemas, `spec/plugin.wit` docs plugin authors read) are read by people who never see the code, so
+they are judged by what they tell that reader, not by what the code beside them says.
 
-When a comment is needed because the code is unclear, first try making the code clear: a better name, a named constant, a smaller function, a type that cannot hold the wrong value. Then comment what is still not plain.
+When a comment is needed because the code is unclear, first try making the code clear: a better
+name, a named constant, a smaller function, a type that cannot hold the wrong value. Then comment
+what is still not plain.
 
 ## Localization
 
-Aspen uses [`rust-i18n`](https://crates.io/crates/rust-i18n) for internationalization of all client-facing strings. The catalogue is the `aspen_locale` crate's (`server/locale/`, which invokes `i18n!`), and translation files live in `server/locales/`. Every crate that uses `t!` imports `aspen_locale::_rust_i18n_try_translate` at its root, where the expanded macro looks for it, so the server holds the catalogue once.
+Aspen uses [`rust-i18n`](https://crates.io/crates/rust-i18n) for internationalization of all
+client-facing strings. The catalogue is the `aspen_locale` crate's (`server/locale/`, which invokes
+`i18n!`), and translation files live in `server/locales/`. Every crate that uses `t!` imports
+`aspen_locale::_rust_i18n_try_translate` at its root, where the expanded macro looks for it, so the
+server holds the catalogue once.
 
-Each request is answered in its own language (`app::locale`, which is `aspen_locale`): a layer around every route negotiates `Accept-Language` against the locales the server has (a language matched whole, then with its subtags taken off, `en-GB` finding `en`; English when none matches), holds the result in a task-local for as long as the request is handled, and names it in `Content-Language` (with `Vary: Accept-Language`). The event stream takes `?locale=` on its upgrade URL instead, since a browser cannot set that header on a WebSocket. Work outside a request (background tasks) speaks English. The client sets both from its own language setting, so a deployment's errors read in the language the app shows. Two pseudo-locales are made from English at run time (`aspen_locale::PseudoLocales`, laid over the catalogue as a rust-i18n backend): `en-XA` accents every letter, doubles every vowel, and brackets the whole, which shows untranslated text and whether a layout takes longer strings, and `ar-XB` sets each word right to left, which exercises right-to-left layout. The client has the same two (`client/packages/app/src/i18n/pseudo.ts`), and both pass `spec/pseudo_locale_vectors.json`; change the three together.
+Each request is answered in its own language (`app::locale`, which is `aspen_locale`): a layer
+around every route negotiates `Accept-Language` against the locales the server has (a language
+matched whole, then with its subtags taken off, `en-GB` finding `en`; English when none matches),
+holds the result in a task-local for as long as the request is handled, and names it in
+`Content-Language` (with `Vary: Accept-Language`). The event stream takes `?locale=` on its upgrade
+URL instead, since a browser cannot set that header on a WebSocket. Work outside a request
+(background tasks) speaks English. The client sets both from its own language setting, so a
+deployment's errors read in the language the app shows. Two pseudo-locales are made from English at
+run time (`aspen_locale::PseudoLocales`, laid over the catalogue as a rust-i18n backend): `en-XA`
+accents every letter, doubles every vowel, and brackets the whole, which shows untranslated text and
+whether a layout takes longer strings, and `ar-XB` sets each word right to left, which exercises
+right-to-left layout. The client has the same two (`client/packages/app/src/i18n/pseudo.ts`), and
+both pass `spec/pseudo_locale_vectors.json`; change the three together.
 
 ### Rules
 
-- **Never hardcode English text** in API responses, validation errors, or any string returned to clients. Use the `t!()` macro instead: `aspen_locale::t!` (imported at each crate's root as `crate::t`), which is `rust_i18n`'s translation in the request's locale, never `rust_i18n::t!` itself, which would answer every request in one language.
-- Log messages (`tracing::error!`, `tracing::warn!`, etc.) are **not** localized — they are developer-facing and should remain in English.
-- **Every error a person reads says what went wrong and what to do about it**, in words the person who sees it can act on: "%{domain}'s certificate has expired. Its administrators need to renew it", never "could not be reached" when the cause is known. Name the thing (the domain, the limit, the permission) and the one who can fix it (the reader, the other side's administrators, this server's). Classify failures where they happen so the specific cause reaches the message (`app::federation::fetch::failure` does this for requests to other deployments), and give a refusal its reason in `detail` rather than a generic title. A Problem's `title` may stay general because its `detail` carries the specifics.
+- **Never hardcode English text** in API responses, validation errors, or any string returned to
+  clients. Use the `t!()` macro instead: `aspen_locale::t!` (imported at each crate's root as
+  `crate::t`), which is `rust_i18n`'s translation in the request's locale, never `rust_i18n::t!`
+  itself, which would answer every request in one language.
+- Log messages (`tracing::error!`, `tracing::warn!`, etc.) are **not** localized — they are
+  developer-facing and should remain in English.
+- **Every error a person reads says what went wrong and what to do about it**, in words the person
+  who sees it can act on: "%{domain}'s certificate has expired. Its administrators need to renew
+  it", never "could not be reached" when the cause is known. Name the thing (the domain, the limit,
+  the permission) and the one who can fix it (the reader, the other side's administrators, this
+  server's). Classify failures where they happen so the specific cause reaches the message
+  (`app::federation::fetch::failure` does this for requests to other deployments), and give a
+  refusal its reason in `detail` rather than a generic title. A Problem's `title` may stay general
+  because its `detail` carries the specifics.
 - Translation keys use **camelCase** (e.g., `inviteCodeLength`, `tryAgainLater`).
-- The `t!()` macro returns `Cow<'static, str>`. The `app::Error::Validation` variant and all manually-defined API response error/reason fields accept `Cow<'static, str>` to match. Do not call `.to_string()` on `t!()` output.
+- The `t!()` macro returns `Cow<'static, str>`. The `app::Error::Validation` variant and all
+  manually-defined API response error/reason fields accept `Cow<'static, str>` to match. Do not call
+  `.to_string()` on `t!()` output.
 
 ### Adding a new client-facing string
 
 1. Add the key and English text to `server/locales/en.yml`.
 2. Use `t!("keyName")` in your Rust code, adding `use crate::t;` to the file's imports.
-3. If the string contains interpolated values, use `t!("keyName", field = value)` and reference them in the YAML as `"... %{field} ..."`.
+3. If the string contains interpolated values, use `t!("keyName", field = value)` and reference them
+   in the YAML as `"... %{field} ..."`.
 
 ### File layout
 
-- `server/locales/en.yml` — English translations (the default, and the only catalogue besides the pseudo-locales made from it). Additional locale files (e.g., `fr.yml`, `de.yml`) go alongside it and are negotiated with no further change; the client needs a catalogue of its own for each (`client/packages/app/src/i18n/locales/<language>.json`, beside its `en.json`, named in `LANGUAGES` and `TRANSLATIONS` in `client/packages/app/src/i18n/locales.ts`). The client's strings are ICU MessageFormat, with plurals; see `client/AGENTS.md`.
+- `server/locales/en.yml` — English translations (the default, and the only catalogue besides the
+  pseudo-locales made from it). Additional locale files (e.g., `fr.yml`, `de.yml`) go alongside it
+  and are negotiated with no further change; the client needs a catalogue of its own for each
+  (`client/packages/app/src/i18n/locales/<language>.json`, beside its `en.json`, named in
+  `LANGUAGES` and `TRANSLATIONS` in `client/packages/app/src/i18n/locales.ts`). The client's strings
+  are ICU MessageFormat, with plurals; see `client/AGENTS.md`.
 
 ## Git Policy
 
-You are not to commit anything to `main` or push any branch to `origin`. If your work is deemed to be of sufficient quality, a human will send it on for you.
+You are not to commit anything to `main` or push any branch to `origin`. If your work is deemed to
+be of sufficient quality, a human will send it on for you.

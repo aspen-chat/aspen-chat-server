@@ -6,9 +6,9 @@
 aspen-chat-server --cert fullchain.pem --key privkey.pem
 ```
 
-| Flag | What it does |
-| --- | --- |
-| `--port` | The port to listen on. 443 by default. |
+| Flag            | What it does                                                                                                               |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `--port`        | The port to listen on. 443 by default.                                                                                     |
 | `--listen-addr` | The address to listen on. May be given more than once. Every interface over IPv4 and IPv6 by default (`0.0.0.0` and `::`). |
 
 - **An address you give must bind**, or the server refuses to start.
@@ -42,34 +42,33 @@ trusted_proxies = ["127.0.0.1"]
 
 ## Health checks
 
-Point whatever stands before the server at one of these. Neither needs a session, and neither
-is rate limited.
+Point whatever stands before the server at one of these. Neither needs a session, and neither is
+rate limited.
 
-| Ask | Answers | For |
-| --- | --- | --- |
-| `GET /api/v1/health` | `204` while the server is running. | A load balancer's or reverse proxy's health check. |
+| Ask                        | Answers                                                                                                                                                   | For                                                                                      |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `GET /api/v1/health`       | `204` while the server is running.                                                                                                                        | A load balancer's or reverse proxy's health check.                                       |
 | `GET /api/v1/health/ready` | `204` when it also reaches its database, NATS, and Valkey; otherwise `503` [`notReady`](../troubleshooting/server.md#notready), naming those it does not. | Waiting for a new server before stopping the one it replaces, and finding what is wrong. |
 
 A [private worker](#private-workers) answers both at the same paths on a listener of its own.
 
-**Use the first for a load balancer.** Every server shares the same services, so with the
-second a database outage would take every server out of the load balancer at once, and people
-would see its error page instead of the server's own message.
+**Use the first for a load balancer.** Every server shares the same services, so with the second a
+database outage would take every server out of the load balancer at once, and people would see its
+error page instead of the server's own message.
 
 ## Outbound requests
 
-The server fetches some things from addresses others choose: link previews, plugins' calls,
-other deployments, and the push services phones name.
+The server fetches some things from addresses others choose: link previews, plugins' calls, other
+deployments, and the push services phones name.
 
 - It fetches them directly, refusing private addresses.
 - It ignores `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`.
-- Let the API servers reach the internet on port 443 (and 80, for link previews) without a
-  proxy.
+- Let the API servers reach the internet on port 443 (and 80, for link previews) without a proxy.
 
 ## Running several
 
-Run as many API servers as you need. They share everything through the services, and any of
-them can serve any request.
+Run as many API servers as you need. They share everything through the services, and any of them can
+serve any request.
 
 ## Private workers
 

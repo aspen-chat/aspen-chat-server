@@ -60,10 +60,9 @@ system to open may be `http:`, but what the app reaches itself is `https:` or `w
 The shells' Content Security Policy (`shellPolicy` in `vite.config.ts`) allows the same. iOS has no
 transport security exception, and Android's release build allows no cleartext.
 
-A development build may reach this machine's own addresses (`localhost`, a name under it, a
-loopback address) over plain HTTP, since its dev server and tests run there: the dev server's
-build, and a shell built with `VITE_ALLOW_LOOPBACK_HTTP=1`, which `main.tsx` passes to
-`allowLoopbackPlainText`. Android's debug build allows cleartext to `localhost` alone. A release
-build sets neither. The desktop app's passkey hand-off returns to a listener on
-`http://127.0.0.1`, which RFC 8252 prescribes for a native app's loopback redirect; nothing is
-fetched from it.
+A development build may reach this machine's own addresses (`localhost`, a name under it, a loopback
+address) over plain HTTP, since its dev server and tests run there: the dev server's build, and a
+shell built with `VITE_ALLOW_LOOPBACK_HTTP=1`, which `main.tsx` passes to `allowLoopbackPlainText`.
+Android's debug build allows cleartext to `localhost` alone. A release build sets neither. The
+desktop app's passkey hand-off returns to a listener on `http://127.0.0.1`, which RFC 8252
+prescribes for a native app's loopback redirect; nothing is fetched from it.

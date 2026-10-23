@@ -20,6 +20,6 @@ Nothing crosses until you say so. Every gate is closed by default.
 
 ## Trying it on one machine
 
-`scripts/dev_federation.py up` runs two deployments, `alpha.localhost` and `beta.localhost`,
-with a development certificate authority. `scripts/dev_federation.py check` exercises federation
-between them.
+`scripts/dev_federation.py up` runs two deployments, `alpha.localhost` and `beta.localhost`, with a
+development certificate authority. `scripts/dev_federation.py check` exercises federation between
+them.

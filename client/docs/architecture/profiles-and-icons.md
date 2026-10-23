@@ -14,8 +14,8 @@
 
 ## Icons
 
-Icons are user avatars and community icons. They are uploaded through `AspenSync.uploadIcon`
-with the server's two-phase flow, then named by id on the user or community.
+Icons are user avatars and community icons. They are uploaded through `AspenSync.uploadIcon` with
+the server's two-phase flow, then named by id on the user or community.
 
 `IconPicker.tsx` runs the whole thing:
 
@@ -41,8 +41,8 @@ Profiles are fields on the user record.
 | `publicEmail` | The verified address the user chose to show. The card offers it as a `mailto:` link. Only the email settings change it; see [sign-in.md](sign-in.md) |
 
 - `AspenSync.updateProfile` edits them as a merge patch built by `src/features/users/profile.ts`.
-- `profile.ts` also decides what to call a user (`displayNameOf`). **Show that name wherever a
-  user is named, never `name` directly.**
+- `profile.ts` also decides what to call a user (`displayNameOf`). **Show that name wherever a user
+  is named, never `name` directly.**
 - `EditProfileDialog.tsx` is the signed-in user's editor.
 
 ## The profile card
@@ -53,10 +53,10 @@ Profiles are fields on the user record.
 
 Opened within a community (a `communityId` in the route), the card:
 
-- lists the roles the user holds there, read with `AspenSync.loadMember` when they are outside
-  the member sample;
-- offers those who may change them the roles they could give, and an × on each they could take
-  away (`useAssignableRoles`, which the members panel's role picker shares).
+- lists the roles the user holds there, read with `AspenSync.loadMember` when they are outside the
+  member sample;
+- offers those who may change them the roles they could give, and an × on each they could take away
+  (`useAssignableRoles`, which the members panel's role picker shares).
 
 ### Actions on someone else's card
 

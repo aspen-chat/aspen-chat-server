@@ -12,8 +12,8 @@ its `view`'s path.
   puzzle piece for a kind no plugin declares).
 - It opens like a text channel, and has a text channel's menu, muting and notification level
   included. The plugin's notices obey them.
-- `PluginChannelScreen` (`src/features/plugins/PluginChannel.tsx`) shows its header and the
-  plugin's view, or says it needs a plugin that does not run here.
+- `PluginChannelScreen` (`src/features/plugins/PluginChannel.tsx`) shows its header and the plugin's
+  view, or says it needs a plugin that does not run here.
 
 ## The view's frame
 
@@ -43,8 +43,8 @@ The page speaks `spec/plugins.md`'s bridge over a `MessagePort`.
 
 - `readTheme` resolves each colour token through a probe element, so `light-dark()` pairs arrive
   settled.
-- `useBridgeTheme` adds the address of `view-fonts.css` on the view's deployment, which `viewFonts.ts`
-  builds from every face the app bundles.
+- `useBridgeTheme` adds the address of `view-fonts.css` on the view's deployment, which
+  `viewFonts.ts` builds from every face the app bundles.
 - It also adds the files of the user's own faces drawn now (`fontLibrary.facesUnder`).
 - The view registers these with `FontFace`. Its origin is its own, so it can reach neither the app's
   stylesheets nor the library.
@@ -69,5 +69,5 @@ The page speaks `spec/plugins.md`'s bridge over a `MessagePort`.
   cannot use it.
 - Nothing posted to the frame's window is answered.
 - An answer goes back over the port it was asked on, and only while that port is still the frame's.
-- A later load of the same frame closes the port and puts "Load the view again" in the frame's place.
-  That makes a new frame with a new port.
+- A later load of the same frame closes the port and puts "Load the view again" in the frame's
+  place. That makes a new frame with a new port.

@@ -1,7 +1,7 @@
 # Jobs
 
-Background jobs are work a request decides but does not wait for, such as deleting a banned
-person's recent messages, and upkeep that runs on a schedule. Making previews is a job too (see
+Background jobs are work a request decides but does not wait for, such as deleting a banned person's
+recent messages, and upkeep that runs on a schedule. Making previews is a job too (see
 [Previews](previews.md#how-previews-are-made)).
 
 ## How jobs run
@@ -13,7 +13,7 @@ person's recent messages, and upkeep that runs on a schedule. Making previews is
 
 ## `[jobs]`
 
-| Setting | Default | |
-| --- | --- | --- |
-| `run` | `true` | Whether this server runs jobs. At least one server of the deployment must. |
+| Setting       | Default             |                                                                                                                                                                     |
+| ------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`         | `true`              | Whether this server runs jobs. At least one server of the deployment must.                                                                                          |
 | `concurrency` | two per logical CPU | The most jobs this server runs at once that any class of job may take. Each class (urgent, interactive, normal, bulk, maintenance) also keeps one place of its own. |

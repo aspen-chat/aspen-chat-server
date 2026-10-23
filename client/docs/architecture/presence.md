@@ -1,7 +1,7 @@
 # Presence
 
-The client reads presence for the users it shows, and its event stream tells it of changes to
-those it watches as they happen.
+The client reads presence for the users it shows, and its event stream tells it of changes to those
+it watches as they happen.
 
 ## Where it lives
 
@@ -32,10 +32,10 @@ those it watches as they happen.
   user change (`RecordStore.onChange`, which hears every topic a change touched), when the list
   differs from the last sent.
 - The server answers with `presence` frames (`ephemeral`): each change to a watched user, gathered
-  for up to a second, and each user a later list adds as they are now. The users of a
-  connection's first list are not told as they are: the whole read below covers them, so a crowd
-  reconnecting at once puts that work on requests, which a busy server can refuse, rather than on
-  its presence router. `applyStatuses` takes them.
+  for up to a second, and each user a later list adds as they are now. The users of a connection's
+  first list are not told as they are: the whole read below covers them, so a crowd reconnecting at
+  once puts that work on requests, which a busy server can refuse, rather than on its presence
+  router. `applyStatuses` takes them.
 - The server answers each list it takes up with a `presenceWatching` frame (`#onWatching`).
 
 ### Reading whole
@@ -43,13 +43,13 @@ those it watches as they happen.
 `AspenSync` also asks `GET /users/statuses` for `RecordStore.presenceCandidates()` (the user, the
 members shown for every community, and everyone in a call) in batches of `PRESENCE_BATCH`:
 
-1. on every connection, once `presenceWatching` says the server took up its first
-   `watchPresence`, or when the sync goes live if later: the server tells changes from the
-   take-up, so a change before it is in the read and one after it is told. With no answer within
-   `WATCH_ACK_TIMEOUT_MS` (ten seconds), the list was lost to a busy server: it is sent again,
-   and everyone shown is read anyway;
-2. then at most every `PRESENCE_READ_MS` (two minutes), checked at each `PRESENCE_POLL_MS` while
-   the page is visible, and when the page becomes visible again.
+1. on every connection, once `presenceWatching` says the server took up its first `watchPresence`,
+   or when the sync goes live if later: the server tells changes from the take-up, so a change
+   before it is in the read and one after it is told. With no answer within `WATCH_ACK_TIMEOUT_MS`
+   (ten seconds), the list was lost to a busy server: it is sent again, and everyone shown is read
+   anyway;
+2. then at most every `PRESENCE_READ_MS` (two minutes), checked at each `PRESENCE_POLL_MS` while the
+   page is visible, and when the page becomes visible again.
 
 It catches what the stream could not tell: a change lost on the way, and those beyond the 500
 watched.
@@ -69,8 +69,8 @@ user's own also follows what they choose at once (below).
 
 ## A channel's online count
 
-A channel's header shows how many people who may view it are online (not away), behind the
-online status's mark (`OnlineCount` in `ChannelHeader`).
+A channel's header shows how many people who may view it are online (not away), behind the online
+status's mark (`OnlineCount` in `ChannelHeader`).
 
 - No client knows every member of a large community, so the server counts
   (`GET /channels/{channel}/presence`).

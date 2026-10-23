@@ -4,8 +4,8 @@ Rationale behind the [plugins](index.md) pages.
 
 ## Drawing from records and the catalogue
 
-- **The app draws plugins' contributions from records and each plugin's catalogue.** A plugin the app
-  has never heard of shows as well as one it has. The one code of a plugin's the app shows is a
+- **The app draws plugins' contributions from records and each plugin's catalogue.** A plugin the
+  app has never heard of shows as well as one it has. The one code of a plugin's the app shows is a
   view's page, in a sandboxed frame.
 - **The catalogue is read again whenever an event names an unknown plugin.** One read is shared by
   every ask (`loadPlugins`). See [the catalogue](catalogue.md).
@@ -21,8 +21,8 @@ See [channels and views](channels-and-views.md).
 - **Theme colours are resolved through a probe element.** `light-dark()` pairs arrive settled.
 - **Fonts are handed over as addresses (`view-fonts.css` and the user's own faces).** The view's
   origin is its own, so it can reach neither the app's stylesheets nor the font library.
-- **`pluginRoute` refuses `.` and `..` segments and unknown methods, unsent.** A page cannot reach the
-  rest of the API.
+- **`pluginRoute` refuses `.` and `..` segments and unknown methods, unsent.** A page cannot reach
+  the rest of the API.
 - **A route's answer comes back as it came.** The plugin's status codes are its own: its `401`
   refreshes no session, its `403` flags no enrollment, and its `429` is not waited out.
 - **The port belongs to the page it was handed to.** A page the frame goes to after (a link, a

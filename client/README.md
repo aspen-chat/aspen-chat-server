@@ -25,14 +25,14 @@ pnpm dev              # Vite dev server on http://localhost:5173
 pnpm build            # web build (site root); mobile uses `build:shell`, desktop `build:desktop`
 ```
 
-A deployment is one origin, its API and web client together, so the dev server stands in for it:
-it proxies every path the server answers itself (`/api`, `/auth/passkey`, `/.well-known/aspen`,
+A deployment is one origin, its API and web client together, so the dev server stands in for it: it
+proxies every path the server answers itself (`/api`, `/auth/passkey`, `/.well-known/aspen`,
 `/email/unsubscribe`) to an Aspen server at `http://127.0.0.1:8000` by default, whose `aspen.toml`
 sets `public_url = "http://localhost:5173"` so links and passkeys name the dev server. Start one
 with `cargo run -- --no-https --port 8000`; it serves the built web client too, and will not start
-until `pnpm build` has made one, though day to day the dev server's is the one you use. Point
-the proxy somewhere else with `VITE_DEV_PROXY_TARGET`. The desktop and mobile apps bake in no
-server and ask for a deployment on first launch.
+until `pnpm build` has made one, though day to day the dev server's is the one you use. Point the
+proxy somewhere else with `VITE_DEV_PROXY_TARGET`. The desktop and mobile apps bake in no server and
+ask for a deployment on first launch.
 
 ## Code generation
 
@@ -62,8 +62,8 @@ pnpm --filter @aspen/mobile run:android   # build, sync, and install on a phone 
 
 ## Running the Android app on a phone
 
-The app bundles a copy of the `build:shell` output rather than loading a dev server, so rebuild
-and sync after every change to the client.
+The app bundles a copy of the `build:shell` output rather than loading a dev server, so rebuild and
+sync after every change to the client.
 
 Once: turn on Developer options on the phone (tap Settings → About phone → Build number seven
 times), turn on USB debugging, plug it in, and accept the prompt. `adb devices` should list it as
@@ -84,13 +84,13 @@ pnpm --filter @aspen/app build:shell
 
 `pnpm --filter @aspen/mobile open:android` opens the project in Android Studio instead.
 
-**Reaching a development server.** The app asks for a deployment on first launch, and reaches
-one over HTTPS alone, except from a development build at `localhost`
+**Reaching a development server.** The app asks for a deployment on first launch, and reaches one
+over HTTPS alone, except from a development build at `localhost`
 (`client/docs/architecture/message-rendering/address-safety.md`, Transport). Build the shell as a
 development build, `VITE_ALLOW_LOOPBACK_HTTP=1 pnpm --filter @aspen/app build:shell`; the debug
 build's network security config
-(`packages/mobile/android/app/src/debug/res/xml/network_security_config.xml`) allows plain HTTP
-to `localhost` and `127.0.0.1` alone. Forward the dev server's port over USB and enter
+(`packages/mobile/android/app/src/debug/res/xml/network_security_config.xml`) allows plain HTTP to
+`localhost` and `127.0.0.1` alone. Forward the dev server's port over USB and enter
 `http://localhost:5173`:
 
 ```sh
@@ -98,16 +98,17 @@ adb reverse tcp:5173 tcp:5173                 # again after each reconnect
 ```
 
 Attachments, icons, and uploads come from `[media.s3]`'s `public_endpoint` and `public_base_url`,
-which must then name `localhost` too, with their ports forwarded the same way, or be HTTPS. A call's media is UDP, which
-`adb reverse` does not carry, so the phone must reach the voice server over the network.
+which must then name `localhost` too, with their ports forwarded the same way, or be HTTPS. A call's
+media is UDP, which `adb reverse` does not carry, so the phone must reach the voice server over the
+network.
 
 **Debugging.** `chrome://inspect` in desktop Chrome opens DevTools on the app's web view;
-`adb logcat` has the native side. `pnpm --filter @aspen/mobile test:android` runs the JVM tests
-and, on the attached phone, the push handler's device tests, which post real notifications.
+`adb logcat` has the native side. `pnpm --filter @aspen/mobile test:android` runs the JVM tests and,
+on the attached phone, the push handler's device tests, which post real notifications.
 
 **Push** works only in a build with a relay in the `aspen_push_relay` string
-(`app/src/main/res/values/strings.xml`) and a `google-services.json` from the publisher's
-Firebase project; without them the app registers for nothing (see `docs/architecture/push.md`).
+(`app/src/main/res/values/strings.xml`) and a `google-services.json` from the publisher's Firebase
+project; without them the app registers for nothing (see `docs/architecture/push.md`).
 
 ## License
 

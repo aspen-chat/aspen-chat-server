@@ -1,6 +1,8 @@
 # The message box and drafts
 
-The message box (`Composer`) is where a user writes and sends messages. This page covers its layout, replying to a message, the typing line above it, the length limit, messages held for their previews, and drafts.
+The message box (`Composer`) is where a user writes and sends messages. This page covers its layout,
+replying to a message, the typing line above it, the length limit, messages held for their previews,
+and drafts.
 
 ## Where it lives
 
@@ -17,8 +19,11 @@ The message box (`Composer`) is where a user writes and sends messages. This pag
 
 - The box sits level with its buttons, all 42px tall.
 - Send is an icon (a paper plane), so the box keeps the room.
-- On a narrow screen, the other controls share one + button. Its menu offers attaching a file and making a poll (`CreatePollModal`, which the wide screen's own poll button opens too).
-- The user bar (`SidebarFooter`) at the sidebar's foot is at least as tall as the typing line and an empty box together (`composer-foot-height` in `styles.css`), at every message text size and spacing, so its top rule meets the typing line's in one line.
+- On a narrow screen, the other controls share one + button. Its menu offers attaching a file and
+  making a poll (`CreatePollModal`, which the wide screen's own poll button opens too).
+- The user bar (`SidebarFooter`) at the sidebar's foot is at least as tall as the typing line and an
+  empty box together (`composer-foot-height` in `styles.css`), at every message text size and
+  spacing, so its top rule meets the typing line's in one line.
 
 ### Enter
 
@@ -31,7 +36,8 @@ The message box (`Composer`) is where a user writes and sends messages. This pag
 
 ### Placeholder
 
-The box draws its placeholder itself, on one line, cut short with an ellipsis. The textarea carries it as `aria-placeholder`. **Why:** the textarea's own placeholder would wrap and grow the box.
+The box draws its placeholder itself, on one line, cut short with an ellipsis. The textarea carries
+it as `aria-placeholder`. **Why:** the textarea's own placeholder would wrap and grow the box.
 
 ### Width
 
@@ -43,38 +49,61 @@ The box grows with what is written, up to its row's width and no further:
 
 ### When the list shrinks
 
-When the message list shrinks, as when a phone's keyboard opens, it keeps its bottom edge where it was. It stays pinned to the newest message, or moves down by what it lost, so what is being answered stays in view. The web app asks for this with `interactive-widget=resizes-content` in its viewport.
+When the message list shrinks, as when a phone's keyboard opens, it keeps its bottom edge where it
+was. It stays pinned to the newest message, or moves down by what it lost, so what is being answered
+stays in view. The web app asks for this with `interactive-widget=resizes-content` in its viewport.
 
-WebKit on iOS ignores that setting: its keyboard is drawn over the page, which keeps its height, and WebKit scrolls only the focused field into view. Modals therefore follow the part of the page left visible (`theme/visibleArea.ts`, which sets `--visible-top` and `--visible-bottom`): their overlay ends where the keyboard begins, so a dialog's buttons stay above it.
+WebKit on iOS ignores that setting: its keyboard is drawn over the page, which keeps its height, and
+WebKit scrolls only the focused field into view. Modals therefore follow the part of the page left
+visible (`theme/visibleArea.ts`, which sets `--visible-top` and `--visible-bottom`): their overlay
+ends where the keyboard begins, so a dialog's buttons stay above it.
 
 ### Jump to latest
 
 "Jump to latest" answers at once:
 
-1. The pill keeps its own state, so a press repaints the pill alone, saying the newest are on their way.
+1. The pill keeps its own state, so a press repaints the pill alone, saying the newest are on their
+   way.
 2. The list then moves to the end of what it holds.
 3. `AspenSync.loadLatest` follows any page already being read rather than settling for it.
 
 ## Replying to a message
 
-A message's Reply (its row of actions, its right-click menu, a phone's long-press sheet) makes the next message sent a reply to it. The server's side is `docs/architecture/replies.md`.
+A message's Reply (its row of actions, its right-click menu, a phone's long-press sheet) makes the
+next message sent a reply to it. The server's side is `docs/architecture/replies.md`.
 
-- The box of each channel the reader may post in offers itself to the page (`useComposerTarget`); Reply is offered only where that channel has one, asked as the actions are built (`hasComposer`). A box starting a thread offers nothing, since it shares its channel's id.
-- `ReplyBar` above the box names whom the reply answers, with a toggle to tag them (on at first; offered only where the reader may tag members and the message is not their own) and a way to stop replying. Escape in the box stops it too, after any completion list has had the key.
-- The reader's focus goes to the box in an effect after the render that starts the reply, once a menu Reply was chosen from has given focus back. A phone's sheet holds focus until it has slid away, so its Reply waits for the sheet's `onClosed` (`afterClosing`).
-- Sending passes `reply` to `AspenSync.sendMessage`, and clears it. A message deleted meanwhile is said to be in the bar, and the server refuses the send.
-- Above a reply, `ReplyLine` shows the original's author (with `@` when the reply tagged them) and a line of its text (`replyPreview`: tags and custom emoji as names, spoilers masked, fences dropped), which jumps to it (`JumpToMessageContext`, given by `MessageList`: in the window it is flashed where it is; otherwise a channel opens around it by its route, and a thread reads around it). A deleted original is said to be, as the link's state or a failed read of it finds. A reply always begins its author's group (`breakBefore` in `useGroupContinuations`).
+- The box of each channel the reader may post in offers itself to the page (`useComposerTarget`);
+  Reply is offered only where that channel has one, asked as the actions are built (`hasComposer`).
+  A box starting a thread offers nothing, since it shares its channel's id.
+- `ReplyBar` above the box names whom the reply answers, with a toggle to tag them (on at first;
+  offered only where the reader may tag members and the message is not their own) and a way to stop
+  replying. Escape in the box stops it too, after any completion list has had the key.
+- The reader's focus goes to the box in an effect after the render that starts the reply, once a
+  menu Reply was chosen from has given focus back. A phone's sheet holds focus until it has slid
+  away, so its Reply waits for the sheet's `onClosed` (`afterClosing`).
+- Sending passes `reply` to `AspenSync.sendMessage`, and clears it. A message deleted meanwhile is
+  said to be in the bar, and the server refuses the send.
+- Above a reply, `ReplyLine` shows the original's author (with `@` when the reply tagged them) and a
+  line of its text (`replyPreview`: tags and custom emoji as names, spoilers masked, fences
+  dropped), which jumps to it (`JumpToMessageContext`, given by `MessageList`: in the window it is
+  flashed where it is; otherwise a channel opens around it by its route, and a thread reads around
+  it). A deleted original is said to be, as the link's state or a failed read of it finds. A reply
+  always begins its author's group (`breakBefore` in `useGroupContinuations`).
 
 ## Who is typing
 
 ### The line
 
-`TypingIndicator` shows who else is typing, on a line of its own just above the message box. `Composer` puts it there whether or not the caller may write.
+`TypingIndicator` shows who else is typing, on a line of its own just above the message box.
+`Composer` puts it there whether or not the caller may write.
 
-- It is a sunken band ruled off from the messages above it (`bg-surface-sunken`, `border-t`). Empty, it reads as part of the box rather than a gap in the list.
+- It is a sunken band ruled off from the messages above it (`bg-surface-sunken`, `border-t`). Empty,
+  it reads as part of the box rather than a gap in the list.
 - It is in message text at the reader's message text size (`message-text`).
-- It is kept one line tall (`h-[1lh]`) whether or not anyone is typing, so nothing moves when someone starts or stops.
-- It is not a live region. **Why:** a live region would talk over the conversation at every start and stop.
+- It is kept one line tall (`h-[1lh]`) whether or not anyone is typing, so nothing moves when
+  someone starts or stops.
+- It is not a live region. **Why:** a live region would talk over the conversation at every start
+  and stop.
 
 ### The words
 
@@ -85,18 +114,22 @@ A message's Reply (its row of actions, its right-click menu, a phone's long-pres
 | Four or more | "Several people are typing…"                                  |
 
 - Names come through `PersonName` in the channel's community, joined by `typingSentence`.
-- When the line runs out of room, each name is shortened, never the words around them, so it always says what is happening.
+- When the line runs out of room, each name is shortened, never the words around them, so it always
+  says what is happening.
 
 ### The dots
 
-`TypingDots` draws three dots beside the words, in the accent's colour. Each is lit and dimmed again in turn, from the start of the line.
+`TypingDots` draws three dots beside the words, in the accent's colour. Each is lit and dimmed again
+in turn, from the start of the line.
 
-- The animation is `typing-dot` in `styles.css`, timed by the motion tokens, so it follows the animation speed.
+- The animation is `typing-dot` in `styles.css`, timed by the motion tokens, so it follows the
+  animation speed.
 - It is a fade alone, so it goes on where motion is reduced.
 
 ### Telling the server
 
-- As its user writes, the box calls `AspenSync.noteTyping`, at most every `TYPING_REFRESH_MS`. It never does while `TYPING_NOTICES` is off.
+- As its user writes, the box calls `AspenSync.noteTyping`, at most every `TYPING_REFRESH_MS`. It
+  never does while `TYPING_NOTICES` is off.
 - It calls `stopTyping` when the box empties, a message is sent, or the box goes.
 - A draft the box opens with is not typing.
 
@@ -125,26 +158,36 @@ For the server's side, see `docs/architecture/typing.md` at the repository's roo
 
 ### Counting length
 
-Length is counted as the server counts it: Unicode scalar values, in the text as sent, with tags and custom emoji written out as references.
+Length is counted as the server counts it: Unicode scalar values, in the text as sent, with tags and
+custom emoji written out as references.
 
-- Within the last thousand characters, the message box and the editor count beneath themselves (`MessageLengthNote`).
-- Over the limit, they say by how much and what to do. Send and Save wait until the text is shortened.
-- Text pasted into the message box that would take it over the limit is attached instead, as a text file named `message.txt` in the user's language, and the box keeps what it held. Where the user may not attach files, or the message already carries the most attachments it may, the text is pasted and the box says it is too long.
+- Within the last thousand characters, the message box and the editor count beneath themselves
+  (`MessageLengthNote`).
+- Over the limit, they say by how much and what to do. Send and Save wait until the text is
+  shortened.
+- Text pasted into the message box that would take it over the limit is attached instead, as a text
+  file named `message.txt` in the user's language, and the box keeps what it held. Where the user
+  may not attach files, or the message already carries the most attachments it may, the text is
+  pasted and the box says it is too long.
 
 ### Nesting
 
-The server refuses text nesting quotes and lists more than 32 levels deep, with `messageNestingTooDeep`. The message box shows it as it shows any refusal.
+The server refuses text nesting quotes and lists more than 32 levels deep, with
+`messageNestingTooDeep`. The message box shows it as it shows any refusal.
 
 ## Messages held for their previews
 
-`AspenSync.sendMessage` sends with `mayHold`. A message whose picture or video is still having its preview made is held by the server for up to twenty seconds from the upload.
+`AspenSync.sendMessage` sends with `mayHold`. A message whose picture or video is still having its
+preview made is held by the server for up to twenty seconds from the upload.
 
 1. The server answers `202` with the held message.
-2. The store keeps it (`heldMessages`, topic `held:<place>`; see [Where a held message waits](#where-a-held-message-waits)).
+2. The store keeps it (`heldMessages`, topic `held:<place>`; see
+   [Where a held message waits](#where-a-held-message-waits)).
 3. The message box of that place shows it above itself, waiting (`HeldMessages.tsx`).
 4. It ends with one of:
    - `heldMessagePosted`: the message itself arrives in the list by its own event.
-   - `heldMessageFailed`: the box says why, and offers to send it again (`AspenSync.sendHeldAgain`) or let it go.
+   - `heldMessageFailed`: the box says why, and offers to send it again (`AspenSync.sendHeldAgain`)
+     or let it go.
 
 - The box clears as soon as the server has the message, held or posted.
 - Held messages are read at bootstrap (`GET /users/@me/held-messages`).
@@ -159,7 +202,8 @@ A held message's place (`heldPlace`) is one of:
 | The channel           | Usually                                                                                                |
 | `thread-of:<message>` | A dropped first reply whose thread went with it. `RecordStore` moves it there as the thread is removed |
 
-`AspenSync.sendHeldAgain` sends such a first reply with `replyInThread`, making the thread anew (see [Threads, DMs, and the system account](threads-and-dms.md#starting-a-thread)).
+`AspenSync.sendHeldAgain` sends such a first reply with `replyInThread`, making the thread anew (see
+[Threads, DMs, and the system account](threads-and-dms.md#starting-a-thread)).
 
 ## Drafts
 
@@ -171,12 +215,14 @@ A held message's place (`heldPlace`) is one of:
 - a thread's echo choice
 - the message it replies to, kept only with text or files
 
-A draft waits in its channel, on this device, per account. It survives going elsewhere, a notification opened, and a reload. It goes once sent.
+A draft waits in its channel, on this device, per account. It survives going elsewhere, a
+notification opened, and a reload. It goes once sent.
 
 ### How drafts are kept
 
 1. The Composer is keyed by its channel, so each box reads its own draft.
 2. On every change it notes the draft in memory (`noteDraft`). `readDraft` reads memory first.
-3. It keeps the draft in `localStorage` after a short pause, and at once when it unmounts or the page is hidden.
+3. It keeps the draft in `localStorage` after a short pause, and at once when it unmounts or the
+   page is hidden.
 
 `e2e/drafts.spec.ts` checks the notification path.

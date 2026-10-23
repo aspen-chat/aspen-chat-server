@@ -1,12 +1,13 @@
 # User preferences
 
-A user's account-scoped preferences are one JSON object. `client/docs/architecture/preferences.md` describes the client store that holds both these and device-scoped preferences.
+A user's account-scoped preferences are one JSON object. `client/docs/architecture/preferences.md`
+describes the client store that holds both these and device-scoped preferences.
 
-| Part | Where |
-| --- | --- |
-| Endpoints | `GET` and `PATCH /users/{user}/preferences` |
+| Part       | Where                                                           |
+| ---------- | --------------------------------------------------------------- |
+| Endpoints  | `GET` and `PATCH /users/{user}/preferences`                     |
 | Size limit | `app::preferences::MAX_PREFERENCES_BYTES` (the serialised size) |
-| Event | Custom `userPreferencesChanged` |
+| Event      | Custom `userPreferencesChanged`                                 |
 
 ## Access
 

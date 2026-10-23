@@ -26,16 +26,15 @@ Parsing and rendering recurse once per level of nesting. The limits are in
 - Whatever still fails to render falls back to plain text in an error boundary
   (`src/features/layout/ErrorBoundary.tsx`). There is one around the Markdown and one around each
   `MessageBody`.
-- A route that fails to draw shows `RouteError` in its place (the router's
-  `defaultErrorComponent`).
+- A route that fails to draw shows `RouteError` in its place (the router's `defaultErrorComponent`).
 
 So one message cannot blank the app.
 
 ## Which links become links
 
 - Only an absolute `http:`, `https:`, or `mailto:` address becomes a link (`messageLinkUrl`).
-- A relative or protocol-relative one (`//host/share/file`) stays plain text. On a page loaded from a
-  file (the desktop app's) it would be a `file:` link.
+- A relative or protocol-relative one (`//host/share/file`) stays plain text. On a page loaded from
+  a file (the desktop app's) it would be a `file:` link.
 - A link is always its own address (`remarkLiteralLinks.ts`). These show as the characters they were
   written as:
   - a link its author named with words of their own (`[text](url)`);
@@ -45,8 +44,8 @@ So one message cannot blank the app.
   The address inside is then linked as any bare address is. So `[my bank](https://evil.example)`
   cannot pass for a link to the bank.
 
-- Autolinks (`<https://…>`) and GFM's literal `https://…` and `www.…` stay links, since their text is
-  their address.
+- Autolinks (`<https://…>`) and GFM's literal `https://…` and `www.…` stay links, since their text
+  is their address.
 - The system account's notices quote names others chose (a community's, a person's). `MessageBody`
   renders its messages with `links` off: every address in them, Markdown or bare, shows as text, and
   the server fetches no previews for them.
@@ -69,8 +68,8 @@ Rules:
   itself is drawn again only when its content, tags, or community change.
 
 **Keep in step with the server.** The server's preview extractor
-(`server/app/src/link_preview/urls.rs`, list in `tlds.txt` beside it) applies the same rules, so what
-renders as a link is what gets a preview. Change both together.
+(`server/app/src/link_preview/urls.rs`, list in `tlds.txt` beside it) applies the same rules, so
+what renders as a link is what gets a preview. Change both together.
 
 ## Code highlighting
 
@@ -80,8 +79,8 @@ renders as a link is what gets a preview. Change both together.
 - Token colours are the `code-*` palette tokens, mapped from `hljs-*` classes at the end of
   `styles.css`.
 - Nothing is auto-detected. An unlabelled fence is plain.
-- A block longer than `MAX_HIGHLIGHT_LENGTH` (4096 code units, `CodeBlock.tsx`) is plain.
-  **Why:** some grammars take most of a second over a few kilobytes written to slow them.
+- A block longer than `MAX_HIGHLIGHT_LENGTH` (4096 code units, `CodeBlock.tsx`) is plain. **Why:**
+  some grammars take most of a second over a few kilobytes written to slow them.
 
 ## Spoilers
 

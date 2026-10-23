@@ -9,8 +9,8 @@
    aspen-chat-server admin grant <username>
    ```
 
-The command needs the database and NATS, as the servers do: it announces the change to the
-account's open apps.
+The command needs the database and NATS, as the servers do: it announces the change to the account's
+open apps.
 
 The account must be a person's on this deployment. Bots and users from other deployments hold no
 deployment roles, and the command refuses them.
@@ -18,18 +18,18 @@ deployment roles, and the command refuses them.
 It gives the account the deployment's top role. If there is none, it makes an Administrator role
 with every permission except the moderation ones:
 
-| Moderation permission | What it allows |
-| --- | --- |
-| `moderateCommunities` | Reading everything in any community or DM, the record of files sent in calls, and taking things out. Includes `removeContent`. |
-| `reviewReports` | The reports people make of messages, profiles, and nicknames, and warning the people reported. |
-| `removeContent` | Deleting a reported message, clearing a reported nickname, resetting a reported profile, and deleting a banned account's recent messages. |
-| `banUsers` | Banning accounts from the whole deployment. |
-| `messageAnyUser` | Messaging anyone, past blocks. |
+| Moderation permission | What it allows                                                                                                                            |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `moderateCommunities` | Reading everything in any community or DM, the record of files sent in calls, and taking things out. Includes `removeContent`.            |
+| `reviewReports`       | The reports people make of messages, profiles, and nicknames, and warning the people reported.                                            |
+| `removeContent`       | Deleting a reported message, clearing a reported nickname, resetting a reported profile, and deleting a banned account's recent messages. |
+| `banUsers`            | Banning accounts from the whole deployment.                                                                                               |
+| `messageAnyUser`      | Messaging anyone, past blocks.                                                                                                            |
 
 `aspen-chat-server admin allow <permission>` lets the top role do each of them too.
 
-From then on, administrators manage everything else from the Administration Dashboard. Start
-with its Settings tab: the display name and icon the sign-in screen welcomes people with, and the
+From then on, administrators manage everything else from the Administration Dashboard. Start with
+its Settings tab: the display name and icon the sign-in screen welcomes people with, and the
 deployment's policies.
 
 ## Making the deployment invite-only
@@ -47,8 +47,8 @@ The rest of the deployment settings can be set the same way (see
 
 ## Running commands
 
-Commands like these read the same `aspen.toml` as the server. Run them from the same directory,
-with the same environment.
+Commands like these read the same `aspen.toml` as the server. Run them from the same directory, with
+the same environment.
 
 ---
 

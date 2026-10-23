@@ -25,19 +25,20 @@ own resolution up to 4K and 60 frames a second (`SCREEN_QUALITY`).
 
 - Its `contentHint` option marks a picture that moves, such as a game, so the encoder gives up
   resolution rather than frames when bandwidth runs short.
-- `stopScreenShare()` closes both producers. The share also ends when the browser's own stop
-  control ends the track.
+- `stopScreenShare()` closes both producers. The share also ends when the browser's own stop control
+  ends the track.
 - `state.sharingScreen` and `state.localScreen` (the preview track) describe the user's own share.
 - In Electron, `getDisplayMedia` only works because the main process answers it in
   `setDisplayMediaRequestHandler` (`packages/desktop/src/main/index.ts`), with a picker. See
   [the screen picker](../screen-sharing-and-game-capture/screen-picker.md).
 - Game capture and external audio go through `startExternalScreenShare` and
-  `startScreenShare({ audio })`. See [screen sharing and game capture](../screen-sharing-and-game-capture/index.md).
+  `startScreenShare({ audio })`. See
+  [screen sharing and game capture](../screen-sharing-and-game-capture/index.md).
 
 ## Cameras
 
-- `startCamera()` asks `VoiceMedia.getCamera()` for the camera chosen in Settings (`video.input`,
-  a device preference), up to 1080p at 30 frames a second (`CAMERA_QUALITY`).
+- `startCamera()` asks `VoiceMedia.getCamera()` for the camera chosen in Settings (`video.input`, a
+  device preference), up to 1080p at 30 frames a second (`CAMERA_QUALITY`).
 - It is produced as `camera`, up to 4 Mbps (`CAMERA_ENCODING`).
 - The user sees it as `state.localCamera`. It moves to another camera when the choice changes.
 - `stopCamera()` ends it.

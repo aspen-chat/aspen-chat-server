@@ -1,6 +1,7 @@
 # Fonts
 
-Aspen bundles its own text and code faces, with Noto fallbacks for every present-day script and colour emoji. A user may also choose fonts from their own library, per install.
+Aspen bundles its own text and code faces, with Noto fallbacks for every present-day script and
+colour emoji. A user may also choose fonts from their own library, per install.
 
 Design notes: [fonts-design-notes.md](fonts-design-notes.md).
 
@@ -32,18 +33,22 @@ Design notes: [fonts-design-notes.md](fonts-design-notes.md).
 
 ### Fallback order
 
-What the text face does not draw falls back to bundled Noto faces before the system's, in this order:
+What the text face does not draw falls back to bundled Noto faces before the system's, in this
+order:
 
 1. Noto Sans: Latin, Cyrillic, Greek, and Devanagari, imported by `main.tsx`.
 2. Noto Color Emoji.
-3. A Noto Sans for every script in present-day use for a language of more than ten thousand living speakers. Tibetan uses Noto Serif Tibetan, since it has no Noto Sans face.
+3. A Noto Sans for every script in present-day use for a language of more than ten thousand living
+   speakers. Tibetan uses Noto Serif Tibetan, since it has no Noto Sans face.
 4. The five regional CJK faces.
 
 Code takes the system's monospace faces before the Noto ones, since the Noto ones are proportional.
 
 ### Generated stylesheets
 
-`fallbackFonts.ts` says which families are bundled and which are left out, and why. When Vite starts, it writes two stylesheets from the Fontsource packages and the emoji fonts into `src/generated/` (not kept in git):
+`fallbackFonts.ts` says which families are bundled and which are left out, and why. When Vite
+starts, it writes two stylesheets from the Fontsource packages and the emoji fonts into
+`src/generated/` (not kept in git):
 
 | File             | Contents                                                                                      | Loaded                                                                   |
 | ---------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
@@ -54,9 +59,12 @@ Until the faces load, text in those scripts shows in the system's fonts (`font-d
 
 ### Han characters
 
-`--font-han` puts the regional face first for the page's language (`<html lang>`, which follows the language Aspen is shown in). Otherwise the order is Simplified Chinese, Traditional Chinese, Hong Kong Chinese, Japanese, Korean.
+`--font-han` puts the regional face first for the page's language (`<html lang>`, which follows the
+language Aspen is shown in). Otherwise the order is Simplified Chinese, Traditional Chinese, Hong
+Kong Chinese, Japanese, Korean.
 
-**Why:** one Han character is drawn differently in Japanese, Korean, and Simplified, Traditional, and Hong Kong Chinese, and a message does not say which it is in.
+**Why:** one Han character is drawn differently in Japanese, Korean, and Simplified, Traditional,
+and Hong Kong Chinese, and a message does not say which it is in.
 
 ### Emoji
 
@@ -70,20 +78,24 @@ Noto Color Emoji is bundled twice, from Google's own releases (`googlefonts/noto
 - The one `@font-face` lists both with `tech()`, so each browser fetches only the one it draws.
 - Each is one whole file, not `unicode-range` slices.
 - The family is `Aspen Noto Color Emoji`, a name no system font has.
-- The emoji picker names system emoji fonts of its own with `!important`. `styles.css` overrides it with `--font-emoji`, so an emoji looks the same picked as sent.
+- The emoji picker names system emoji fonts of its own with `!important`. `styles.css` overrides it
+  with `--font-emoji`, so an emoji looks the same picked as sent.
 
 See the [design notes](fonts-design-notes.md#emoji) for why each of these holds.
 
 #### Building and updating the emoji fonts
 
-`scripts/noto_emoji.py` builds them into `packages/app/fonts/noto-color-emoji/`. That directory is kept in git, with the licence and a `manifest.json` naming the upstream commit and its files' hashes.
+`scripts/noto_emoji.py` builds them into `packages/app/fonts/noto-color-emoji/`. That directory is
+kept in git, with the licence and a `manifest.json` naming the upstream commit and its files'
+hashes.
 
 | Command  | What it does                                                  |
 | -------- | ------------------------------------------------------------- |
 | `build`  | Makes the same files again from the manifest's commit         |
 | `update` | Builds from the newest upstream commit that changed the fonts |
 
-`.github/workflows/emoji-font.yml` runs `update` every week and opens a pull request when upstream has changed them.
+`.github/workflows/emoji-font.yml` runs `update` every week and opens a pull request when upstream
+has changed them.
 
 #### Testing
 
@@ -100,12 +112,16 @@ Plugins' views draw in the same faces.
 
 - `src/faces.css` holds Aspen's own faces, and `main.tsx` imports it.
 - `src/viewFonts.css` holds those and every fallback face.
-- `viewFonts.ts` builds `viewFonts.css` as an entry of its own, written to `view-fonts.css` at the web client's root under that one name. The bridge hands that name to each view (see [Plugins](plugins/channels-and-views.md#the-theme)).
-- In `vite dev`, `viewFonts.ts` answers the same name, sending font files with `Access-Control-Allow-Origin`, since a view's page has an origin of its own.
+- `viewFonts.ts` builds `viewFonts.css` as an entry of its own, written to `view-fonts.css` at the
+  web client's root under that one name. The bridge hands that name to each view (see
+  [Plugins](plugins/channels-and-views.md#the-theme)).
+- In `vite dev`, `viewFonts.ts` answers the same name, sending font files with
+  `Access-Control-Allow-Origin`, since a view's page has an origin of its own.
 
 ### Licences
 
-Every bundled font's licence is on the Open Source Attributions page with every other package's (see [About Aspen](about.md)): each `@fontsource` dependency's, and the emoji fonts' directory's.
+Every bundled font's licence is on the Open Source Attributions page with every other package's (see
+[About Aspen](about.md)): each `@fontsource` dependency's, and the emoji fonts' directory's.
 
 ### Size
 
@@ -120,9 +136,11 @@ Bundled fonts come to about 39 MB of WOFF2 in the build, nearly all of it CJK an
 
 ### Choosing
 
-Settings, Fonts (`FontsSection`) chooses the font for text and for code on this install. Each is Aspen's own or a family from the user's font library. The select lists each family in itself.
+Settings, Fonts (`FontsSection`) chooses the font for text and for code on this install. Each is
+Aspen's own or a family from the user's font library. The select lists each family in itself.
 
-- The choice is remembered per install in `localStorage` (`aspen.font.text`, `aspen.font.code`), like the palette.
+- The choice is remembered per install in `localStorage` (`aspen.font.text`, `aspen.font.code`),
+  like the palette.
 - It never follows the account, since the files are not on the user's other devices.
 - It applies before sign-in too (`applyStoredFonts` in `main.tsx`).
 
@@ -145,7 +163,8 @@ It asks the browser to keep that storage.
 - its weight: from `OS/2`, or the range of a variable font's `wght` axis
 - whether it is italic or oblique
 
-Files group into families by that name. A face of a family, weight, and style already kept is replaced.
+Files group into families by that name. A face of a family, weight, and style already kept is
+replaced.
 
 | Format                   | Accepted                                                         |
 | ------------------------ | ---------------------------------------------------------------- |
@@ -158,15 +177,21 @@ Each refusal gives a reason naming the file.
 
 ### Applying a family
 
-1. When first used, the family is registered with `document.fonts` under an alias of its own (`AspenFont<n>`). There is one `FontFace` per file, with its weight and style, so bold and italic come from the family's own files where it has them, and a system font of the same name is never picked instead.
+1. When first used, the family is registered with `document.fonts` under an alias of its own
+   (`AspenFont<n>`). There is one `FontFace` per file, with its weight and style, so bold and italic
+   come from the family's own files where it has them, and a system font of the same name is never
+   picked instead.
 2. `applyFont` sets `--font-text-chosen` or `--font-code-chosen` on `<html>` to the alias.
-3. `--font-sans` and `--font-mono` put the chosen alias first, ahead of the bundled faces, which still draw what the user's font lacks.
+3. `--font-sans` and `--font-mono` put the chosen alias first, ahead of the bundled faces, which
+   still draw what the user's font lacks.
 
 ### When a family cannot be used
 
-- A family removed, or none of whose files the browser can draw, falls back to Aspen's own and is forgotten.
+- A family removed, or none of whose files the browser can draw, falls back to Aspen's own and is
+  forgotten.
 - A library that cannot be read leaves the choice remembered for the next launch.
 
 ### In plugins' views
 
-A plugin's view cannot read the library. It is handed the files of the families drawn now, under their aliases (`facesUnder`, through the bridge), and registers them itself.
+A plugin's view cannot read the library. It is handed the files of the families drawn now, under
+their aliases (`facesUnder`, through the bridge), and registers them itself.

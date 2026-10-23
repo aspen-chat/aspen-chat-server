@@ -2,42 +2,45 @@
 
 A reaction is a row of `react`: the emoji, the user, the message, and when.
 
-| Part | Where |
-| --- | --- |
-| Logic | `app::react` |
-| Canonical emoji | `app::react::canonical_emoji` |
-| Frequent emoji | `app::react::read_frequent` |
-| Indexes | `react_by_message` (summaries and reactor lists), `react_by_author` (frequent emoji) |
+| Part            | Where                                                                                |
+| --------------- | ------------------------------------------------------------------------------------ |
+| Logic           | `app::react`                                                                         |
+| Canonical emoji | `app::react::canonical_emoji`                                                        |
+| Frequent emoji  | `app::react::read_frequent`                                                          |
+| Indexes         | `react_by_message` (summaries and reactor lists), `react_by_author` (frequent emoji) |
 
 ## Endpoints
 
-| Endpoint | Does |
-| --- | --- |
-| `PUT /messages/{message}/reactions/{emoji}/@me` | Adds the caller's reaction |
-| `DELETE /messages/{message}/reactions/{emoji}/@me` | Removes it |
-| `GET /messages/{message}/reactions/{emoji}` | Everyone who reacted with an emoji |
-| `GET /users/@me/frequent-emoji` | The emoji the caller reacts with most |
+| Endpoint                                           | Does                                  |
+| -------------------------------------------------- | ------------------------------------- |
+| `PUT /messages/{message}/reactions/{emoji}/@me`    | Adds the caller's reaction            |
+| `DELETE /messages/{message}/reactions/{emoji}/@me` | Removes it                            |
+| `GET /messages/{message}/reactions/{emoji}`        | Everyone who reacted with an emoji    |
+| `GET /users/@me/frequent-emoji`                    | The emoji the caller reacts with most |
 
 ## The emoji
 
 - Only a single emoji is accepted.
-- It is stored, compared, and named in records and events in the fully qualified form Unicode lists for it (`app::react::canonical_emoji`). So `❤` and `❤️` are one reaction.
+- It is stored, compared, and named in records and events in the fully qualified form Unicode lists
+  for it (`app::react::canonical_emoji`). So `❤` and `❤️` are one reaction.
 - For a community's own emoji, see [Custom emoji](custom-emoji.md).
 
 ## Limits
 
-| Limit | Value |
-| --- | --- |
+| Limit                       | Value                                                                                   |
+| --------------------------- | --------------------------------------------------------------------------------------- |
 | Different emoji per message | 50 (`react::MAX_DISTINCT_PER_MESSAGE`). One more is refused with `reactTooManyDistinct` |
-| Reactors per page | At most 100 |
+| Reactors per page           | At most 100                                                                             |
 
-The distinct limit is checked under a lock on the message's row, in the transaction that adds the reaction. Adding to an emoji already there is always allowed.
+The distinct limit is checked under a lock on the message's row, in the transaction that adds the
+reaction. Adding to an emoji already there is always allowed.
 
 ## Reading reactions
 
 ### Summaries
 
-Message reads sideload reactions in brief with `include=reactions`: one `ReactionSummary` per message and emoji.
+Message reads sideload reactions in brief with `include=reactions`: one `ReactionSummary` per
+message and emoji.
 
 - The count.
 - Whether the caller reacted.
@@ -48,7 +51,8 @@ A summary stays small however popular a message is.
 
 ### Reactor lists
 
-`GET /messages/{message}/reactions/{emoji}` lists user records, earliest first, paged with `after` (the last user of the previous page) and `limit` (at most 100).
+`GET /messages/{message}/reactions/{emoji}` lists user records, earliest first, paged with `after`
+(the last user of the previous page) and `limit` (at most 100).
 
 ### Rules for both
 
@@ -58,7 +62,8 @@ A summary stays small however popular a message is.
 
 ## Frequent emoji
 
-`GET /users/@me/frequent-emoji` (`app::react::read_frequent`) gives the emoji the caller reacts with most, which the apps' quick reactions offer.
+`GET /users/@me/frequent-emoji` (`app::react::read_frequent`) gives the emoji the caller reacts with
+most, which the apps' quick reactions offer.
 
 ### Order
 
@@ -70,18 +75,20 @@ At most 20 (`MAX_FREQUENT`); 5 unless `limit` says.
 
 ### Counting
 
-- Counted from the caller's own rows of `react`, read newest first along `react_by_author` (`author`, `timestamp`, carrying `emoji` and `custom_emoji`).
-- Stops at their latest 10,000 (`FREQUENT_WINDOW`). So the read is an index-only scan whose cost stops growing with the reactions someone has made.
+- Counted from the caller's own rows of `react`, read newest first along `react_by_author`
+  (`author`, `timestamp`, carrying `emoji` and `custom_emoji`).
+- Stops at their latest 10,000 (`FREQUENT_WINDOW`). So the read is an index-only scan whose cost
+  stops growing with the reactions someone has made.
 - Nothing else is stored.
 - A reaction taken back no longer counts.
 - One on a message since deleted still does, since deleting a message keeps its reactions.
 
 ### `community`
 
-| `community` | What counts |
-| --- | --- |
-| Given | Unicode emoji, and that community's own custom emoji, no other's (a custom emoji reacts only where it is defined) |
-| Absent (a DM) | Only Unicode emoji |
+| `community`   | What counts                                                                                                       |
+| ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Given         | Unicode emoji, and that community's own custom emoji, no other's (a custom emoji reacts only where it is defined) |
+| Absent (a DM) | Only Unicode emoji                                                                                                |
 
 ### Access
 

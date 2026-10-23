@@ -12,8 +12,8 @@ cards, and how runs of one author's messages are grouped.
 - [Attachments](attachments.md): uploading, inline pictures and the gallery, previews and posters,
   and descriptions.
 - [Link and video cards](link-cards.md): video players, link preview cards, and plugins' chips.
-- [Address safety](address-safety.md): which addresses become links, pictures, or windows, in the app
-  and in the desktop and phone shells.
+- [Address safety](address-safety.md): which addresses become links, pictures, or windows, in the
+  app and in the desktop and phone shells.
 - [Message groups](message-groups.md): drawing a run of one author's messages as a group.
 - [Design notes](design-notes.md): why rendering works this way.
 

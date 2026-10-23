@@ -2,9 +2,8 @@
 
 ## The user's own mute and deafen
 
-- Muting and deafening show at once and disable the microphone's track locally
-  (`#holdMicrophone`, which keeps it disabled whenever `muted` is shown). The voice server never
-  refuses them.
+- Muting and deafening show at once and disable the microphone's track locally (`#holdMicrophone`,
+  which keeps it disabled whenever `muted` is shown). The voice server never refuses them.
 - Unmuting and undeafening are only asked for (`#asked`). They show once a `participantState` frame
   about the user themself says the server did them.
 - That frame sets `muted` and `deafened` in the call state. This is how a server mute shows on the

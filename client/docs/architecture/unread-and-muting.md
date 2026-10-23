@@ -18,8 +18,8 @@
 
 ### Read states
 
-Unread is `RecordStore` state, one `ReadState` per channel. It comes from the `readStates`
-sideload of the community list and the DM list.
+Unread is `RecordStore` state, one `ReadState` per channel. It comes from the `readStates` sideload
+of the community list and the DM list.
 
 A channel is unread while `lastMessage` sorts after `lastRead`.
 
@@ -38,8 +38,8 @@ for the DMs. They drive the rail's dots, which sit half under the entry's icon.
 
 ### Drawing unread
 
-- An unread channel's icon and name, or a whole unread DM row, are marked with
-  `unreadMarkClass`: an accent outline over a faint accent fill, padded so nothing moves.
+- An unread channel's icon and name, or a whole unread DM row, are marked with `unreadMarkClass`: an
+  accent outline over a faint accent fill, padded so nothing moves.
 - Every unread row's accessible name says so.
 - In do not disturb nothing is drawn unread and no tag is counted: `useUnread`, `useMentions`,
   `usePlaceMentions`, and `useUnreadPlaces` answer as if all were read, and the rail, which reads
@@ -56,16 +56,16 @@ for the DMs. They drive the rail's dots, which sit half under the entry's icon.
 - It reports only while the page is visible and focused.
 - Leaving the channel or hiding the page flushes the report.
 
-The activity feed marks places read without opening them, one at a time through `markRead` and
-all at once through `AspenSync.markManyRead`, which reports many positions in one request (see
+The activity feed marks places read without opening them, one at a time through `markRead` and all
+at once through `AspenSync.markManyRead`, which reports many positions in one request (see
 [Saved messages and activity](saved-and-activity.md)).
 
 ### Marking unread
 
 The one way a position moves back. It is offered:
 
-- in a message's actions, hover bar and long-press sheet alike (`MarkUnreadButton`), on messages
-  by someone else, where the caller keeps a position: a channel or DM they belong to, or a thread;
+- in a message's actions, hover bar and long-press sheet alike (`MarkUnreadButton`), on messages by
+  someone else, where the caller keeps a position: a channel or DM they belong to, or a thread;
 - in `ChannelMenu`, on a channel or DM read to its end, from its newest message by someone else,
   which only the server finds.
 
@@ -81,8 +81,8 @@ A refusal releases the hold, reads the state back, and is said in a toast, as su
 #### The hold
 
 While a channel is held unread, `useReadMarking` marks nothing in it read as it is shown, so it
-stays unread on the screen it was marked on. Marking on another device holds it on every device.
-The hold ends when:
+stays unread on the screen it was marked on. Marking on another device holds it on every device. The
+hold ends when:
 
 - the channel's list is opened or left (`useReadReports`);
 - the caller posts there;
@@ -92,8 +92,8 @@ The "New Messages" line follows the position while the channel is held.
 
 ### Threads
 
-A thread's list marks it read the same way. A thread's position is kept apart (`threadRead`,
-topic `read:<threadId>`):
+A thread's list marks it read the same way. A thread's position is kept apart (`threadRead`, topic
+`read:<threadId>`):
 
 - It comes from a read that sideloads it, and from `channelRead`.
 - The caller's own replies move it.
@@ -119,24 +119,24 @@ topic `read:<threadId>`):
   server announces no end it did not make.
 - `RecordStore.mute` says the mute in force on a channel (topic `mute:<channelId>`), as the server
   decides it (`docs/architecture/muting.md`): its own setting in force, else its category's mute,
-  naming that category. A category's mute, and a channel arriving in or moving to another
-  category, touch the topic of each channel it holds. `ownMute` is the channel's own setting,
-  which the Mute submenu reads.
+  naming that category. A category's mute, and a channel arriving in or moving to another category,
+  touch the topic of each channel it holds. `ownMute` is the channel's own setting, which the Mute
+  submenu reads.
 
 ### A muted channel or DM
 
 A muted channel or DM (`useMute`), by its own mute or its category's:
 
 - is drawn in `text-ink-faint`;
-- shows a muted bell (`MuteBell`): a focusable image whose tooltip says until when, in the words
-  of the Mute submenu (`useMuteEnd`), and that it is the category's when it is. A muted
-  category's heading shows one too. In the DM list the bell sits beside the options button
-  rather than in the row's link, which may hold nothing focusable;
+- shows a muted bell (`MuteBell`): a focusable image whose tooltip says until when, in the words of
+  the Mute submenu (`useMuteEnd`), and that it is the category's when it is. A muted category's
+  heading shows one too. In the DM list the bell sits beside the options button rather than in the
+  row's link, which may hold nothing focusable;
 - is never marked unread;
 - does not count toward `unreadPlaces`.
 
-Its read position is kept, so it is unread again once the mute ends. The "New Messages" line
-still shows inside it.
+Its read position is kept, so it is unread again once the mute ends. The "New Messages" line still
+shows inside it.
 
 ### The channel menu
 
@@ -147,8 +147,8 @@ still shows inside it.
 | Mute          | See below; it reads until when in its own place while the channel is muted |
 | Notifications | Names the level in force                                                   |
 
-Mute and Notifications are offered on a text channel, a DM, and a channel of a plugin's kind
-(whose plugin's notices its mute and level govern). The menu holds more besides; see
+Mute and Notifications are offered on a text channel, a DM, and a channel of a plugin's kind (whose
+plugin's notices its mute and level govern). The menu holds more besides; see
 [context-menus.md](context-menus.md).
 
 The Mute submenu (`ChannelMuteSubmenu`) offers, by the channel's state:
@@ -166,6 +166,6 @@ until when and Unmute.
 It opens:
 
 - on a right click on the channel's or DM's row, at the pointer;
-- from the row's `ChannelMenuButton`, which keyboards and touch screens use, since a long press on
-  a row starts dragging it. It opens beside the button, and below it on a one-pane screen, where
-  there is no room beside it.
+- from the row's `ChannelMenuButton`, which keyboards and touch screens use, since a long press on a
+  row starts dragging it. It opens beside the button, and below it on a one-pane screen, where there
+  is no room beside it.

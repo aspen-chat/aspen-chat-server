@@ -1,6 +1,10 @@
 # The iOS app's UI tests
 
-The iOS project (`packages/mobile/ios`) is kept, as Android's is. CI builds it, and signs it for the App Store, as `apple-builds.md` describes. Its UI tests drive the app with real taps and finger drags in WebKit, against a real deployment. They check what the browser specs cannot reach: the iOS web view itself, the system's keyboard, photo picker, and notifications, links opened from outside the app, and the app being suspended and resumed.
+The iOS project (`packages/mobile/ios`) is kept, as Android's is. CI builds it, and signs it for the
+App Store, as `apple-builds.md` describes. Its UI tests drive the app with real taps and finger
+drags in WebKit, against a real deployment. They check what the browser specs cannot reach: the iOS
+web view itself, the system's keyboard, photo picker, and notifications, links opened from outside
+the app, and the app being suspended and resumed.
 
 ## Where it lives
 
@@ -21,7 +25,14 @@ client/packages/mobile/ios/scripts/ui_tests.py --server https://<deployment> \
     --relay https://<host>:7788 --trust target/dev-federation/ca.pem --build
 ```
 
-The tests run a release build of the web app, which reaches everything over HTTPS (see `message-rendering/address-safety.md`, Transport): the deployment, its storage, its voice servers, and the stand-in, whose `--app-host` serves its app side over HTTPS with a certificate from the development authority. `--server` is the deployment as the simulator reaches it, and `--relay` the stand-in's app side. `--trust` has the simulator, and the wrapper, trust an authority, such as the development one. `--api` is the deployment as the Mac reaches it, when that differs (its plain port behind a TLS proxy): the extension's code run there trusts the system's authorities alone. The deployment needs these settings:
+The tests run a release build of the web app, which reaches everything over HTTPS (see
+`message-rendering/address-safety.md`, Transport): the deployment, its storage, its voice servers,
+and the stand-in, whose `--app-host` serves its app side over HTTPS with a certificate from the
+development authority. `--server` is the deployment as the simulator reaches it, and `--relay` the
+stand-in's app side. `--trust` has the simulator, and the wrapper, trust an authority, such as the
+development one. `--api` is the deployment as the Mac reaches it, when that differs (its plain port
+behind a TLS proxy): the extension's code run there trusts the system's authorities alone. The
+deployment needs these settings:
 
 | Setting                                                                            | Why                                                                                         |
 | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -33,15 +44,20 @@ The tests run a release build of the web app, which reaches everything over HTTP
 
 The wrapper does the rest:
 
-1. With `--build`, it builds the web app with `VITE_SCROLL_DEBUG=1` and the tests for the simulator, the app naming the stand-in as its relay. Install the client's dependencies first.
-2. It seeds a fixture under `target/ios-ui-tests/` on first use, and reuses it while the deployment still has it: a reader and a sender, the reader's community with 260 messages in `general`, `probe-voice`, and `scratch`, and the sender's community the reader is invited to.
-3. It installs the app afresh, so no session from an earlier run is kept, and adds a picture to the photo library.
+1. With `--build`, it builds the web app with `VITE_SCROLL_DEBUG=1` and the tests for the simulator,
+   the app naming the stand-in as its relay. Install the client's dependencies first.
+2. It seeds a fixture under `target/ios-ui-tests/` on first use, and reuses it while the deployment
+   still has it: a reader and a sender, the reader's community with 260 messages in `general`,
+   `probe-voice`, and `scratch`, and the sender's community the reader is invited to.
+3. It installs the app afresh, so no session from an earlier run is kept, and adds a picture to the
+   photo library.
 4. It answers the tests while they run (`ASPEN_TEST_HELPER`, below).
 5. It fails unless every test ran and passed. A skipped test fails the run.
 
 ### What the tests read
 
-The tests read these variables, which `xcodebuild test` passes on with the `TEST_RUNNER_` prefix. The wrapper gives them all. Without them, the tests skip.
+The tests read these variables, which `xcodebuild test` passes on with the `TEST_RUNNER_` prefix.
+The wrapper gives them all. Without them, the tests skip.
 
 | Variable                      | Use                                                                                                             |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
@@ -55,7 +71,8 @@ The tests read these variables, which `xcodebuild test` passes on with the `TEST
 | `ASPEN_TEST_INVITE_COMMUNITY` | That community's name                                                                                           |
 | `ASPEN_TEST_HELPER`           | The wrapper's helper, on loopback                                                                               |
 
-Signing in allows the system's notification alert, so the phone registers for push as a person's would.
+Signing in allows the system's notification alert, so the phone registers for push as a person's
+would.
 
 ### The helper
 
@@ -66,7 +83,11 @@ Signing in allows the system's notification alert, so the phone registers for pu
 
 Both answer with the text written.
 
-**The simulator never runs the service extension** (see `push.md`), and the app's push keys stay in the simulator's keychain. So the wrapper keeps a second subscription of the reader's on the Mac, with keys of its own. The extension's own code (`check_notification.sh`) reads the push to that subscription, and `xcrun simctl push` delivers the notification it makes. The tap the test makes then reaches the app as a tap on the extension's notification would.
+**The simulator never runs the service extension** (see `push.md`), and the app's push keys stay in
+the simulator's keychain. So the wrapper keeps a second subscription of the reader's on the Mac,
+with keys of its own. The extension's own code (`check_notification.sh`) reads the push to that
+subscription, and `xcrun simctl push` delivers the notification it makes. The tap the test makes
+then reaches the app as a tap on the extension's notification would.
 
 ## The tests
 

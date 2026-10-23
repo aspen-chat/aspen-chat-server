@@ -9,8 +9,8 @@ See [who scrolls the list](scrolling.md).
 - **On iOS the list scrolls itself, for one reason.** A box the browser scrolls for the user is the
   one thing that cannot be kept still there. iOS scrolls such a box in a process of its own, and
   places it from where a pan began plus the finger's travel. A position set from the page while a
-  finger drags or a fling runs (by WebKit's anchoring or by script) is applied and then overridden by
-  the pan's next update. The view lands wherever the change put it, a page's height away.
+  finger drags or a fling runs (by WebKit's anchoring or by script) is applied and then overridden
+  by the pan's next update. The view lands wherever the change put it, a page's height away.
 - **A box only scripts scroll has no such gesture.** Nothing overrides what the list sets. Scripts
   still scroll it, so focus, find-in-page, assistive technology, and Playwright bring things into
   view as they always did.
@@ -40,8 +40,8 @@ See [who scrolls the list](scrolling.md).
 See [keeping the view still](keeping-still.md).
 
 - **The browser's scroll anchoring is off on every platform.** The list keeps its own view still.
-- **A linked message is held by its middle.** A jump lands on it, and it stays centred whatever loads
-  around it or inside it.
+- **A linked message is held by its middle.** A jump lands on it, and it stays centred whatever
+  loads around it or inside it.
 - **The list's own moves catch up first (`catchUp`).** They run before the frame's resize observers
   are told, and would otherwise note the row where the change put it.
 - **Pinning is judged against the content's height measured afresh.** The browser also scrolls the
@@ -73,13 +73,13 @@ See [what a row holds](memory.md).
   their measured height, which would hold the least of all, but text that is not drawn is not found
   by the browser's find-in-page nor read by a screen reader moving through the conversation, and the
   list's stillness rests on real rows' real heights. So a row is made light instead.
-- **Actions are built for the rows in use, not for the row alone that is hovered.** Building them
-  as the pointer enters and dropping them as it leaves would close whatever they had opened, and
-  leave a dialog that closes with no button to give focus back to. A row keeps them until another
-  takes its place, which nothing can while what they opened is open.
-- **A stand-in button rather than nothing.** With nothing where the actions go, Shift+Tab into a
-  row from the row after would skip them, and a screen reader moving through the messages without
-  moving focus would never come upon them.
+- **Actions are built for the rows in use, not for the row alone that is hovered.** Building them as
+  the pointer enters and dropping them as it leaves would close whatever they had opened, and leave
+  a dialog that closes with no button to give focus back to. A row keeps them until another takes
+  its place, which nothing can while what they opened is open.
+- **A stand-in button rather than nothing.** With nothing where the actions go, Shift+Tab into a row
+  from the row after would skip them, and a screen reader moving through the messages without moving
+  focus would never come upon them.
 - **Overlays wait for their first opening, not for every opening.** One built and dropped each time
   would be gone before it could move as it closes.
 
@@ -93,8 +93,8 @@ See [history pages](history-pages.md).
 - **Without a bound on loose messages, a client left running holds every message its communities
   post**, about 2 KB each: the event stream brings all of them, open channel or not.
 - **Loose messages are bounded rather than refused.** A message that just arrived is wanted for a
-  while by what follows it: the notification it raises, the echo that shows it, the edit or
-  deletion that changes whether the reader is tagged.
-- **What is shown is told by subscription, not by a list of its own.** Every component that draws
-  a record subscribes to its topic, so the store knows what is in use with nothing more to keep in
+  while by what follows it: the notification it raises, the echo that shows it, the edit or deletion
+  that changes whether the reader is tagged.
+- **What is shown is told by subscription, not by a list of its own.** Every component that draws a
+  record subscribes to its topic, so the store knows what is in use with nothing more to keep in
   step.

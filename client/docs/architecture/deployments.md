@@ -1,6 +1,7 @@
 # Deployments and federation
 
-The user's home is the server they chose and signed in to. The other deployments they use are signed in to from there. The app shows them all together: one rail, one DM list, one call at a time.
+The user's home is the server they chose and signed in to. The other deployments they use are signed
+in to from there. The app shows them all together: one rail, one DM list, one call at a time.
 
 Design notes: [deployments-design-notes.md](deployments-design-notes.md).
 
@@ -19,13 +20,17 @@ Design notes: [deployments-design-notes.md](deployments-design-notes.md).
 
 ## Signing in abroad
 
-- The home lists the user's other deployments (`GET /users/@me/foreign-deployments`), so every device signs in to the same ones.
-- A session abroad comes from an assertion the home signs (`AspenClient.issueAssertion`), handed to the other deployment (`signInWithAssertion`).
+- The home lists the user's other deployments (`GET /users/@me/foreign-deployments`), so every
+  device signs in to the same ones.
+- A session abroad comes from an assertion the home signs (`AspenClient.issueAssertion`), handed to
+  the other deployment (`signInWithAssertion`).
 - A session that ends is replaced the same way, at most once per `REACQUIRE_INTERVAL_MS`.
 
 ### Protocol versions
 
-Before signing in at another deployment, the hub reads its `GET /auth/methods`. It signs in only where the deployment shares a protocol version with this client (`CLIENT_PROTOCOL`, `commonVersion`).
+Before signing in at another deployment, the hub reads its `GET /auth/methods`. It signs in only
+where the deployment shares a protocol version with this client (`CLIENT_PROTOCOL`,
+`commonVersion`).
 
 A deployment that shares none is `incompatible`, and `ForeignScope` says so.
 
@@ -41,13 +46,15 @@ Code that reads what a server sends ignores what it does not know, as `spec/fede
 Each deployment has:
 
 - its own `AspenClient`, at `https://{domain}`, whose session is stored per home account and domain
-- its own `AspenSync`, which shares the home's `PreferenceStore`, since preferences are the user's and kept at home
+- its own `AspenSync`, which shares the home's `PreferenceStore`, since preferences are the user's
+  and kept at home
 
 `DeploymentsProvider` owns them, under the home's `SyncProvider`.
 
 ## Scopes
 
-`AspenClientContext` and `AspenSyncContext` are the deployment being shown. Every component that calls `useSync()` acts where it is shown.
+`AspenClientContext` and `AspenSyncContext` are the deployment being shown. Every component that
+calls `useSync()` acts where it is shown.
 
 | Scope          | Puts in place                                                                                  |
 | -------------- | ---------------------------------------------------------------------------------------------- |
@@ -60,7 +67,8 @@ Each deployment has:
 
 `useSources` and `useEverywhere` read across every deployment. They feed:
 
-- the rail, ordered by the account preference `RAIL_ORDER`, with a globe on another deployment's communities
+- the rail, ordered by the account preference `RAIL_ORDER`, with a globe on another deployment's
+  communities
 - the one DM list, ordered by `RecordStore.dmActivity`
 
 Another deployment's users are shown by their handle, `@name@domain` (`handleOf`).
@@ -69,10 +77,13 @@ Another deployment's users are shown by their handle, `@name@domain` (`handleOf`
 
 Links carry the deployment (`ChannelHome.domain`, `src/features/messages/links.ts`; `useDomain`).
 
-An invite's shared link names its deployment: `/invite/{code}?at={domain}`. It is made by `invitePath` (`src/features/invites/inviteCode.ts`) and made a link by `shareUrl`. Whoever opens it is taken there, whatever their home:
+An invite's shared link names its deployment: `/invite/{code}?at={domain}`. It is made by
+`invitePath` (`src/features/invites/inviteCode.ts`) and made a link by `shareUrl`. Whoever opens it
+is taken there, whatever their home:
 
 - The invite screen goes on to `/at/{domain}/invite/{code}` when the domain is not the home's.
-- One pasted into the join form (`parseInvite`, which also reads `/at/{domain}/invite/…`) opens the same way.
+- One pasted into the join form (`parseInvite`, which also reads `/at/{domain}/invite/…`) opens the
+  same way.
 - One posted in a message (`MessageLink`) opens the same way.
 - A signed-out visitor is told their account may be on any deployment.
 
@@ -86,8 +97,10 @@ An invite's shared link names its deployment: `/invite/{code}?at={domain}`. It i
 
 ## DMs
 
-- A new message starts on the deployment the user picks (`StartOn` in the DM list's picker; the one shown by default). That deployment hosts it.
-- When the home says the user is in a DM elsewhere (`foreignDmJoined`, `AspenSync.onForeignDm`), the hub signs in there if needed and reads it.
+- A new message starts on the deployment the user picks (`StartOn` in the DM list's picker; the one
+  shown by default). That deployment hosts it.
+- When the home says the user is in a DM elsewhere (`foreignDmJoined`, `AspenSync.onForeignDm`), the
+  hub signs in there if needed and reads it.
 
 ## Calls
 
@@ -96,26 +109,32 @@ An invite's shared link names its deployment: `/invite/{code}?at={domain}`. It i
 
 ## Blocks across deployments
 
-A block made on any deployment hides the person on every one (`useBlocked` with `useBlockedAnywhere`). See also [Blocking](blocking.md).
+A block made on any deployment hides the person on every one (`useBlocked` with
+`useBlockedAnywhere`). See also [Blocking](blocking.md).
 
 ### Identities
 
-- `identityOf` names a person by their home's domain and their id there, from `homeDomain` and `homeId`.
+- `identityOf` names a person by their home's domain and their id there, from `homeDomain` and
+  `homeId`.
 - `ScopeDomainContext` says which deployment a record in scope is from.
 
 ### Whose word is believed
 
-- Only the viewer's home is believed about where a user from elsewhere is from, since it checked the assertion the user signed in with.
+- Only the viewer's home is believed about where a user from elsewhere is from, since it checked the
+  assertion the user signed in with.
 - Any other deployment's users from elsewhere are named by that deployment and their id there.
 - So a person from a third deployment, blocked on a foreign one, is hidden on that one alone.
 
-**Why:** a deployment that claims its user is someone else must not be able to have a block of that user hide the person it named. See [the design notes](deployments-design-notes.md#whose-word-is-believed-about-identity).
+**Why:** a deployment that claims its user is someone else must not be able to have a block of that
+user hide the person it named. See
+[the design notes](deployments-design-notes.md#whose-word-is-believed-about-identity).
 
 ### In calls
 
 The same holds below the UI:
 
-1. `ShareBlocksAcrossDeployments` hands every deployment's sync the blocked identities (`AspenSync.setBlockedIdentities`).
+1. `ShareBlocksAcrossDeployments` hands every deployment's sync the blocked identities
+   (`AspenSync.setBlockedIdentities`).
 2. That store's `silenced` (topic `silenced`, `useSilenced`) decides:
    - each voice's gain (`VoiceCall.refreshVolumes` whenever it changes)
    - which shared screens are hidden, even for someone whose record only arrives with the call
@@ -126,13 +145,16 @@ The same holds below the UI:
 `FileTransfers` handles file transfers in calls:
 
 - `VoiceCall` feeds it its signalling frames and carries its state as `files`.
-- Its peer connections are injected (`createPeerConnection`), so `transfers.test.ts` runs whole transfers between two fakes.
+- Its peer connections are injected (`createPeerConnection`), so `transfers.test.ts` runs whole
+  transfers between two fakes.
 
 The repository's `docs/architecture/file-transfers.md` describes the flow.
 
 ### File names
 
-An offered file's name is shown and saved without format and control characters (`plainFileName`). Attachments' names are shown the same way. **Why:** a bidirectional override must not make `gpj.exe` read as `exe.jpg`.
+An offered file's name is shown and saved without format and control characters (`plainFileName`).
+Attachments' names are shown the same way. **Why:** a bidirectional override must not make `gpj.exe`
+read as `exe.jpg`.
 
 ### Saving on mobile
 
@@ -143,10 +165,13 @@ In the mobile apps, a receiver chooses where a file goes through `AspenFilesPlug
 | Android  | `android/.../files/`                 | `DocumentSinkTest` checks the native side on a device                               |
 | iOS      | `ios/App/App/AspenFilesPlugin.swift` | The user picks a folder, and the file is made in it under the name it was sent with |
 
-`filesBridge.ts` wraps the plugin as a `FileSink`, writing through the bridge in base64 pieces of about a megabyte.
+`filesBridge.ts` wraps the plugin as a `FileSink`, writing through the bridge in base64 pieces of
+about a megabyte.
 
 ### iOS plugin registration
 
-The iOS app registers its own plugins in `MainViewController`, which `SceneDelegate` makes the window's root. The scene builds the window itself rather than from the storyboard.
+The iOS app registers its own plugins in `MainViewController`, which `SceneDelegate` makes the
+window's root. The scene builds the window itself rather than from the storyboard.
 
-**Warning:** a bare `CAPBridgeViewController` as the root would leave every one of the app's plugins unimplemented.
+**Warning:** a bare `CAPBridgeViewController` as the root would leave every one of the app's plugins
+unimplemented.

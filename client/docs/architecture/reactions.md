@@ -18,8 +18,8 @@ Reactions are store state per message. Per emoji the store holds:
 - the first few to react.
 
 They are installed from the `reactions` sideload of every message read (`setReactions`) and kept
-current by `react` events, for messages the store holds: a reaction to a message it does not hold
-is counted nowhere, since the read that brings the message brings its reactions whole.
+current by `react` events, for messages the store holds: a reaction to a message it does not hold is
+counted nowhere, since the read that brings the message brings its reactions whole.
 
 - The caller's own reaction is applied from the request's answer and again from its event. The
   second time changes nothing.
@@ -46,18 +46,18 @@ Drawing:
 
 - the `+N` chip;
 - the message's "View reactions" action;
-- a right click or long press on a chip. It opens on that chip's emoji, and the long press
-  toggles nothing.
+- a right click or long press on a chip. It opens on that chip's emoji, and the long press toggles
+  nothing.
 
 It lists every emoji and, for the chosen one, everyone who reacted, a page at a time
 (`AspenSync.loadReactors`).
 
 ## Quick reactions
 
-Quick reactions sit atop a touch screen's message actions (`MessageActionSheet`): five emoji and
-an unnamed Add a reaction button. The button opens the full picker in the sheet's place. A
-message's context menu (`MessageContextMenu`) has them atop it too, at a pointer's size
-(`compact`), its picker opening where the menu was.
+Quick reactions sit atop a touch screen's message actions (`MessageActionSheet`): five emoji and an
+unnamed Add a reaction button. The button opens the full picker in the sheet's place. A message's
+context menu (`MessageContextMenu`) has them atop it too, at a pointer's size (`compact`), its
+picker opening where the menu was.
 
 ### Which five
 
@@ -75,8 +75,8 @@ A custom emoji whose record is not held is left out.
 
 - The store keeps them per community: `RecordStore.frequentEmoji`, topic
   `frequentEmoji:<community>`, `""` for a DM.
-- It marks every list stale when one of the reader's own `react` events arrives, from this device
-  or another, or when the store resyncs.
+- It marks every list stale when one of the reader's own `react` events arrives, from this device or
+  another, or when the store resyncs.
 - A stale list is still shown while it is read again.
 - A list whose read started before the reader's latest reaction (`reactionChanges`) is kept stale.
 

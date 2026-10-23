@@ -1,6 +1,7 @@
 # The Flatpak
 
-The desktop app is packaged as a Flatpak for Linux, alongside the other Linux packages. It carries the same unpacked build they do; nothing is compiled for it.
+The desktop app is packaged as a Flatpak for Linux, alongside the other Linux packages. It carries
+the same unpacked build they do; nothing is compiled for it.
 
 ## Where it lives
 
@@ -15,7 +16,8 @@ The desktop app is packaged as a Flatpak for Linux, alongside the other Linux pa
 
 ## Building it
 
-`pnpm --filter @aspen/desktop package:flatpak`, on Linux. It runs `package:dir`, which leaves the unpacked app in `release/linux-unpacked`, then `scripts/flatpak.mjs`.
+`pnpm --filter @aspen/desktop package:flatpak`, on Linux. It runs `package:dir`, which leaves the
+unpacked app in `release/linux-unpacked`, then `scripts/flatpak.mjs`.
 
 The script needs:
 
@@ -39,17 +41,25 @@ The script fills the version from `package.json` and the build's date into the m
 
 ### Signing
 
-`ASPEN_FLATPAK_GPG_KEY` names the GnuPG key that signs the repository's commits and summary, and the bundle. `ASPEN_FLATPAK_GPG_HOMEDIR` names its keyring when it is not the default one.
+`ASPEN_FLATPAK_GPG_KEY` names the GnuPG key that signs the repository's commits and summary, and the
+bundle. `ASPEN_FLATPAK_GPG_HOMEDIR` names its keyring when it is not the default one.
 
-Without a key the build is unsigned. **Why it matters:** Flatpak installs whatever a remote's summary names, so a repository people add as a remote must be signed, and they are given the public key with it. An unsigned build is for installing by hand.
+Without a key the build is unsigned. **Why it matters:** Flatpak installs whatever a remote's
+summary names, so a repository people add as a remote must be signed, and they are given the public
+key with it. An unsigned build is for installing by hand.
 
 ## The runtime and the base app
 
-The app runs on `org.freedesktop.Platform`, which people's machines get from Flathub. The bundle names Flathub as the place to find it.
+The app runs on `org.freedesktop.Platform`, which people's machines get from Flathub. The bundle
+names Flathub as the place to find it.
 
-`org.electronjs.Electron2.BaseApp` is built into the app. It brings zypak. **Why:** Chromium sandboxes its processes with a setuid helper or with user namespaces, and a Flatpak allows neither. zypak has Flatpak make those sandboxes instead. The launcher starts the app through `zypak-wrapper`, and the manifest removes `chrome-sandbox`.
+`org.electronjs.Electron2.BaseApp` is built into the app. It brings zypak. **Why:** Chromium
+sandboxes its processes with a setuid helper or with user namespaces, and a Flatpak allows neither.
+zypak has Flatpak make those sandboxes instead. The launcher starts the app through `zypak-wrapper`,
+and the manifest removes `chrome-sandbox`.
 
-The binaries are not stripped (`build-options` in the manifest), so they are the ones electron-builder made.
+The binaries are not stripped (`build-options` in the manifest), so they are the ones
+electron-builder made.
 
 ## Permissions
 
@@ -62,10 +72,13 @@ The binaries are not stripped (`build-options` in the manifest), so they are the
 | `--filesystem=xdg-run/pipewire-0`                          | The capture helper, which lists the applications playing sound and takes one's through PipeWire. Without it the helper reports no application audio. |
 | `--talk-name=org.freedesktop.Notifications`                | Notifications.                                                                                                                                       |
 
-The app has no access to the user's files. Choosing a file to attach, and saving one, go through the desktop's file chooser portal.
+The app has no access to the user's files. Choosing a file to attach, and saving one, go through the
+desktop's file chooser portal.
 
 ## The desktop entry
 
 The entry registers the `aspen://` scheme (`MimeType`), so links open the app.
 
-Inside a Flatpak the shell calls `app.setDesktopName` with `$FLATPAK_ID.desktop`. **Why:** a desktop gives a window its entry's icon, and groups it with its other windows, only when the window names that entry. Electron otherwise names one after the package.
+Inside a Flatpak the shell calls `app.setDesktopName` with `$FLATPAK_ID.desktop`. **Why:** a desktop
+gives a window its entry's icon, and groups it with its other windows, only when the window names
+that entry. Electron otherwise names one after the package.

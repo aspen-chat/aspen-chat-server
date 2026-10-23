@@ -58,8 +58,8 @@ See the server's [attachment previews](../../../../docs/architecture/attachment-
 ### Videos
 
 - A video with a poster shows the poster with a play control (`InlineVideo`). Pressing it swaps in a
-  `<video>` of the original in the poster's room, so nothing of the video is fetched until the reader
-  asks.
+  `<video>` of the original in the poster's room, so nothing of the video is fetched until the
+  reader asks.
 - A video the browser cannot play, and one without a poster, is a download chip.
 
 ## Descriptions

@@ -19,11 +19,11 @@ aspen-chat-server federation list-add friends.example.net usersEmigrationAllow
 
 ## Deployments recorded on contact
 
-A deployment is also recorded the first time it is in contact, as when one of its people signs
-in here.
+A deployment is also recorded the first time it is in contact, as when one of its people signs in
+here.
 
-One recorded that way that nobody uses is forgotten thirty days after it was last contacted,
-unless it is waiting for you to accept a new key. "Nobody uses" means:
+One recorded that way that nobody uses is forgotten thirty days after it was last contacted, unless
+it is waiting for you to accept a new key. "Nobody uses" means:
 
 - no one of yours uses it,
 - none of its people are here,
@@ -37,5 +37,5 @@ Give it a note to keep it.
 `aspen-chat-server federation remove <domain>` (or Forget in the dashboard) forgets a deployment,
 its key, and the lists it is on.
 
-**A deployment on a block list cannot be forgotten**, since that would take it off the list and
-let it in. Take it off its block lists first if you mean to.
+**A deployment on a block list cannot be forgotten**, since that would take it off the list and let
+it in. Take it off its block lists first if you mean to.

@@ -4,15 +4,15 @@ Federation needs three things.
 
 ## A domain that will not change
 
-The host of an `https` `public_url` (see [`public_url`](../configuration/address.md#the-deployments-address)) is this
-deployment's name among deployments, such as `chat.example.org`. Add `:port` if it is not served
-on 443.
+The host of an `https` `public_url` (see
+[`public_url`](../configuration/address.md#the-deployments-address)) is this deployment's name among
+deployments, such as `chat.example.org`. Add `:port` if it is not served on 443.
 
-**A deployment that changes its domain is a stranger to every deployment it federated with.**
-Other deployments remember the key they find there.
+**A deployment that changes its domain is a stranger to every deployment it federated with.** Other
+deployments remember the key they find there.
 
-The first server to start with the domain records it in the database. A server started with
-another domain, or with an `http` address, refuses to start.
+The first server to start with the domain records it in the database. A server started with another
+domain, or with an `http` address, refuses to start.
 
 ## HTTPS with a certificate from a public authority
 
@@ -25,8 +25,8 @@ deployments reach yours only there, and:
 
 ## `/.well-known/aspen` reachable
 
-This is the document other deployments read: your domain, your key, and your gates. The API
-servers serve it, like everything at your address. Check it with:
+This is the document other deployments read: your domain, your key, and your gates. The API servers
+serve it, like everything at your address. Check it with:
 
 ```
 curl https://chat.example.org/.well-known/aspen

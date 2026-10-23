@@ -1,7 +1,7 @@
 # Deployment settings
 
-These are kept in the database, not in `aspen.toml`. Every server follows them, and a change
-takes effect at once without a restart.
+These are kept in the database, not in `aspen.toml`. Every server follows them, and a change takes
+effect at once without a restart.
 
 ## Changing them
 
@@ -16,11 +16,11 @@ takes effect at once without a restart.
 
 ## Accounts and registration
 
-| Setting | Default | |
-| --- | --- | --- |
-| `display-name` | none | What the deployment calls itself. See [Display name](#display-name). |
-| `registration-invite-required` | `false` | Creating an account takes a registration invite, made in the dashboard or with `aspen-chat-server invites create`. See [Dual invites](#dual-invites). |
-| `require-two-factor` | `false` | Every account must have an authenticator app or a passkey. An account without one can do nothing but add one or sign out; turned on, the apps of those without one are asked to at once. |
+| Setting                        | Default |                                                                                                                                                                                          |
+| ------------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `display-name`                 | none    | What the deployment calls itself. See [Display name](#display-name).                                                                                                                     |
+| `registration-invite-required` | `false` | Creating an account takes a registration invite, made in the dashboard or with `aspen-chat-server invites create`. See [Dual invites](#dual-invites).                                    |
+| `require-two-factor`           | `false` | Every account must have an authenticator app or a passkey. An account without one can do nothing but add one or sign out; turned on, the apps of those without one are asked to at once. |
 
 ### Display name
 
@@ -42,27 +42,26 @@ An invite made in the dashboard may also name a community.
 
 ## Bots, communities, and uploads
 
-| Setting | Default | |
-| --- | --- | --- |
-| `bots-enabled` | `true` | Whether people may make bots. Bots already made keep working either way. |
-| `bots-max-per-user` | `25` | The most bots one person may own. |
-| `everyone-mention-limit` | `200` | How many members a community gains before its everyone role loses Mention everyone. `0` never turns it off. See [below](#everyone-mention-limit). |
-| `custom-emoji-limit` | `1000` | The most custom emoji one community may hold. Each is a small picture (PNG, JPEG, WebP, or GIF, at most 256 KiB) in the object storage. |
-| `upload-quota-gib` | `25` | How many GiB one person may upload, attachments and pictures together, in any 24 hours. `0` sets no limit. See [below](#upload-quota). |
-| `evidence-retention-days` | `365` | How many days files kept as evidence (those of deleted messages, and attachments taken off theirs) are kept for reviewing reports, unless a report about the message is open or was closed within as long. `0` keeps them for good. See [Backups](../backups.md#evidence). |
-| `file-transfers` | `true` | Whether people may offer files to one another in calls. See [below](#file-transfers). |
+| Setting                   | Default |                                                                                                                                                                                                                                                                            |
+| ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bots-enabled`            | `true`  | Whether people may make bots. Bots already made keep working either way.                                                                                                                                                                                                   |
+| `bots-max-per-user`       | `25`    | The most bots one person may own.                                                                                                                                                                                                                                          |
+| `everyone-mention-limit`  | `200`   | How many members a community gains before its everyone role loses Mention everyone. `0` never turns it off. See [below](#everyone-mention-limit).                                                                                                                          |
+| `custom-emoji-limit`      | `1000`  | The most custom emoji one community may hold. Each is a small picture (PNG, JPEG, WebP, or GIF, at most 256 KiB) in the object storage.                                                                                                                                    |
+| `upload-quota-gib`        | `25`    | How many GiB one person may upload, attachments and pictures together, in any 24 hours. `0` sets no limit. See [below](#upload-quota).                                                                                                                                     |
+| `evidence-retention-days` | `365`   | How many days files kept as evidence (those of deleted messages, and attachments taken off theirs) are kept for reviewing reports, unless a report about the message is open or was closed within as long. `0` keeps them for good. See [Backups](../backups.md#evidence). |
+| `file-transfers`          | `true`  | Whether people may offer files to one another in calls. See [below](#file-transfers).                                                                                                                                                                                      |
 
 ### Everyone mention limit
 
 - It happens once per community.
-- The owner is told why by the deployment's own account, which cannot be signed in to, messaged,
-  or blocked.
+- The owner is told why by the deployment's own account, which cannot be signed in to, messaged, or
+  blocked.
 - The owner may turn Mention everyone back on.
 
 ### Upload quota
 
-- Each upload counts with the size it was started for, whether or not it is then sent or
-  deleted.
+- Each upload counts with the size it was started for, whether or not it is then sent or deleted.
 - Past the limit, an upload is refused, with when there will be room.
 
 ### File transfers
@@ -71,22 +70,22 @@ An invite made in the dashboard may also name a community.
   `voice_server.toml`; see [Voice server](voice-server.md#transfer)).
 - Either way, this deployment keeps a record of each offer and transfer for its moderators, never
   the file.
-- `false` turns the whole feature off: no one can offer a file, whatever the channels'
-  permissions, and calls in progress follow at once.
+- `false` turns the whole feature off: no one can offer a file, whatever the channels' permissions,
+  and calls in progress follow at once.
 
 ## NATS memory
 
-| Setting | Default | |
-| --- | --- | --- |
-| `event-stream-mib` | `auto` | How many MiB of NATS's memory the last minute of events may take, at least `16`. |
-| `voice-report-stream-mib` | `auto` | The same for the voice servers' reports not yet applied. |
+| Setting                   | Default |                                                                                  |
+| ------------------------- | ------- | -------------------------------------------------------------------------------- |
+| `event-stream-mib`        | `auto`  | How many MiB of NATS's memory the last minute of events may take, at least `16`. |
+| `voice-report-stream-mib` | `auto`  | The same for the voice servers' reports not yet applied.                         |
 
 - `auto` sizes a stream to what NATS has: see [NATS memory](services.md#nats-memory). In the
   dashboard, an empty field is `auto`.
-- NATS sets a stream's whole size aside whatever it holds. A size NATS has no memory for is
-  refused, saying how much there is where Aspen can read it.
-- A change resizes the stream at once. One made smaller than what it holds lets its oldest go,
-  and connected apps that needed them reload.
+- NATS sets a stream's whole size aside whatever it holds. A size NATS has no memory for is refused,
+  saying how much there is where Aspen can read it.
+- A change resizes the stream at once. One made smaller than what it holds lets its oldest go, and
+  connected apps that needed them reload.
 - The dashboard's **Server fleet** shows what each stream holds and may hold, and warns when the
   events stream is nearly full. Past its size, events go before their minute is up, and apps that
   reconnect reload instead of catching up.
@@ -95,11 +94,11 @@ An invite made in the dashboard may also name a community.
 
 All of these need [`[email]`](email.md).
 
-| Setting | Default | |
-| --- | --- | --- |
-| `email-required` | `false` | Creating an account takes an email address. It binds registration only: accounts made before it was turned on are not asked for one. |
+| Setting                       | Default |                                                                                                                                                    |
+| ----------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `email-required`              | `false` | Creating an account takes an email address. It binds registration only: accounts made before it was turned on are not asked for one.               |
 | `email-verification-required` | `false` | An account that has an email address must verify it, by the code mailed to it, before it can use the deployment. See [below](#email-verification). |
-| `newsletter-enabled` | `false` | The deployment has a newsletter. See [below](#newsletter). |
+| `newsletter-enabled`          | `false` | The deployment has a newsletter. See [below](#newsletter).                                                                                         |
 
 ### Email verification
 
@@ -119,9 +118,9 @@ All of these need [`[email]`](email.md).
 
 See [Federation](../federation/index.md).
 
-| Setting | Default | |
-| --- | --- | --- |
-| `users-emigration`, `bots-emigration` | `closed` | Whether this deployment's accounts may use other deployments: `closed`, `open`, `allowList`, or `blockList`. |
-| `users-immigration`, `bots-immigration` | `closed` | Whether other deployments' accounts may use this one, the same way. Closing or narrowing it signs out at once those it no longer admits. |
-| `users-shared-list`, `bots-shared-list` | `false` | Both directions read one list; both gates must then be the same kind of list. |
-| `users-immigration-invite-required`, `bots-immigration-invite-required` | `false` | An account of another deployment arriving for the first time needs a registration invite. |
+| Setting                                                                 | Default  |                                                                                                                                          |
+| ----------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `users-emigration`, `bots-emigration`                                   | `closed` | Whether this deployment's accounts may use other deployments: `closed`, `open`, `allowList`, or `blockList`.                             |
+| `users-immigration`, `bots-immigration`                                 | `closed` | Whether other deployments' accounts may use this one, the same way. Closing or narrowing it signs out at once those it no longer admits. |
+| `users-shared-list`, `bots-shared-list`                                 | `false`  | Both directions read one list; both gates must then be the same kind of list.                                                            |
+| `users-immigration-invite-required`, `bots-immigration-invite-required` | `false`  | An account of another deployment arriving for the first time needs a registration invite.                                                |

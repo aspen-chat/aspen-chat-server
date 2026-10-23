@@ -8,9 +8,9 @@ Code: `VoiceCall` in `packages/protocol/src/voice.ts`. State is `VoiceCallState`
 `join(channelId)` runs these steps:
 
 1. Ask the API server for a join offer: `POST /channels/{channel}/voice/join`.
-2. Open the microphone. A refusal fails the join with `errorKind: "microphone"` before any server
-   is tried or blamed. Browsers refuse media on an insecure origin, which is anything but `https`
-   or `localhost`.
+2. Open the microphone. A refusal fails the join with `errorKind: "microphone"` before any server is
+   tried or blamed. Browsers refuse media on an insecure origin, which is anything but `https` or
+   `localhost`.
 3. Ping each candidate voice server's `/health` at once, and try them nearest first.
 4. A candidate that refuses the token, or does not answer within `READY_TIMEOUT_MS`, is reported to
    `POST /voice-servers/{server}/failures`, and the next one is tried.
@@ -26,8 +26,8 @@ A transport that fails mid-call rejoins.
 
 ## Request timeouts and refusals
 
-- Every request the call waits on an answer to (each transport, its connection, each producer)
-  waits at most `READY_TIMEOUT_MS`.
+- Every request the call waits on an answer to (each transport, its connection, each producer) waits
+  at most `READY_TIMEOUT_MS`.
 - An `error` frame arriving first refuses the request. The voice server answers a request it will
   not honour with one. While a join's requests are in flight, that is the one refused (`refused`
   names its type).

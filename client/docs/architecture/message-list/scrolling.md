@@ -29,8 +29,8 @@ On every platform:
 ### Dragging
 
 - Once a finger has moved `DRAG_SLOP_PX`, it is dragging.
-- The rows then take no pointer until it lifts. Lifting it over a picture or a button is not a press,
-  as it would not be under a pan the browser made.
+- The rows then take no pointer until it lifts. Lifting it over a picture or a button is not a
+  press, as it would not be under a pan the browser made.
 
 ### Which events it takes
 

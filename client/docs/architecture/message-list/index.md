@@ -12,8 +12,8 @@ a page at a time, moves between messages by keyboard, and reads out arrivals.
 - [History pages](history-pages.md): page size, rendering pages as transitions, memoized rows, and
   what the store keeps of windows and of messages outside them.
 - [Moving between messages by keyboard](keyboard.md): the list's one tab stop and row keys.
-- [What a row holds](memory.md): actions built only for the rows in use, overlays built once
-  opened, and what a row costs.
+- [What a row holds](memory.md): actions built only for the rows in use, overlays built once opened,
+  and what a row costs.
 - [Reading out arrivals](announcing-arrivals.md): announcing new messages to screen readers.
 - [Tests](tests.md): the Playwright history tests and the iOS simulator test.
 - [Design notes](design-notes.md): why the list works this way.

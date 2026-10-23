@@ -1,12 +1,12 @@
 # Address and web client
 
-A deployment is one address. The API, the web client, and the pages the apps open are all
-served by each API server, at the same origin.
+A deployment is one address. The API, the web client, and the pages the apps open are all served by
+each API server, at the same origin.
 
 ## The deployment's address
 
-| Setting | Default | |
-| --- | --- | --- |
+| Setting      | Default  |                                                                                                                                                                                     |
+| ------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `public_url` | required | Your deployment's address, an origin alone, such as `https://chat.example.org`. **Once the deployment federates, it can never change**; see [below](#what-follows-from-public_url). |
 
 ### What follows from `public_url`
@@ -18,8 +18,8 @@ Everything that names the deployment follows from it:
 - Passkeys belong to its host.
 - Over `https`, its host, with `:port` when not 443, is the deployment's
   [federation](../federation/index.md) domain.
-- The web client and the desktop and mobile apps reach it over `https` alone. A plain `http`
-  address serves only development, at `localhost`, from a development build of the client.
+- The web client and the desktop and mobile apps reach it over `https` alone. A plain `http` address
+  serves only development, at `localhost`, from a development build of the client.
 
 ### Changing it
 
@@ -38,15 +38,15 @@ never change.**
 
 ## `[web_client]`
 
-| Setting | Default | |
-| --- | --- | --- |
-| `dir` | `client/packages/app/dist` | The built web client (`pnpm build` in `client/`). **The server will not start without it.** |
+| Setting | Default                    |                                                                                             |
+| ------- | -------------------------- | ------------------------------------------------------------------------------------------- |
+| `dir`   | `client/packages/app/dist` | The built web client (`pnpm build` in `client/`). **The server will not start without it.** |
 
 What the server does with it:
 
 - It serves the web client's files.
 - It answers every other path the API does not own with the client's `index.html`.
-- That page is given link preview tags (Open Graph). A link to your deployment shared in a chat
-  or a post shows your deployment's name and icon, and an invite link shows its community's.
-- Files are read as they are asked for, so a new release is served as soon as it is in place.
-  See [Releasing a new web client](../installing/5-web-client.md#releasing-a-new-web-client).
+- That page is given link preview tags (Open Graph). A link to your deployment shared in a chat or a
+  post shows your deployment's name and icon, and an invite link shows its community's.
+- Files are read as they are asked for, so a new release is served as soon as it is in place. See
+  [Releasing a new web client](../installing/5-web-client.md#releasing-a-new-web-client).

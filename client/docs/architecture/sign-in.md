@@ -14,15 +14,23 @@
 
 ## Device credentials
 
-Every request made before signing in presents the deployment's device credential (`Aspen-Device`), which is what the server counts it by: many people on one network are then each counted on their own.
+Every request made before signing in presents the deployment's device credential (`Aspen-Device`),
+which is what the server counts it by: many people on one network are then each counted on their
+own.
 
-- `AspenClient` earns one when a server answers `deviceCredentialRequired`, then sends the request again. Requests refused together share one earning.
-- Earning one means solving a puzzle of about a million SHA-256 hashes, a second or two on a phone. `solveInWorker` runs it in a worker so the screen does not freeze, and on the page's thread, a slice at a time, where workers cannot run.
-- The first request a new install makes waits for it: the welcome's read of `GET /deployment`, or `GET /auth/methods`.
-- It is kept per deployment in `localStorage` (`aspen.device.<host>`), outlives signing out, and is replaced when a server answers with a fresh one (`Aspen-Device-Credential`).
+- `AspenClient` earns one when a server answers `deviceCredentialRequired`, then sends the request
+  again. Requests refused together share one earning.
+- Earning one means solving a puzzle of about a million SHA-256 hashes, a second or two on a phone.
+  `solveInWorker` runs it in a worker so the screen does not freeze, and on the page's thread, a
+  slice at a time, where workers cannot run.
+- The first request a new install makes waits for it: the welcome's read of `GET /deployment`, or
+  `GET /auth/methods`.
+- It is kept per deployment in `localStorage` (`aspen.device.<host>`), outlives signing out, and is
+  replaced when a server answers with a fresh one (`Aspen-Device-Credential`).
 - Signed-in requests carry the session instead.
 
-How the server makes and checks them: `docs/architecture/sign-in-and-security/device-credentials.md` at the repository's root.
+How the server makes and checks them: `docs/architecture/sign-in-and-security/device-credentials.md`
+at the repository's root.
 
 ## The signed-out screens
 
@@ -68,8 +76,8 @@ It shows:
 `runPasskeyCeremony` runs any passkey ceremony end to end: `signIn`, `register`, or
 `reauthenticate`. It stores the session a `signIn` produces.
 
-A ceremony reaches an authenticator by a `PasskeyTransport`
-(`packages/protocol/src/passkeys.ts`), chosen in `src/features/auth/passkeyTransport.ts`:
+A ceremony reaches an authenticator by a `PasskeyTransport` (`packages/protocol/src/passkeys.ts`),
+chosen in `src/features/auth/passkeyTransport.ts`:
 
 | Shell                                       | Transport                                                                                                |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -89,8 +97,8 @@ On mobile:
 2. The return is the `aspen://auth/passkey` URL, caught with `@capacitor/app`.
 
 - The native projects register the `aspen` URL scheme: an intent filter on Android,
-  `CFBundleURLTypes` in `ios/App/App/Info.plist` on iOS, whose `SceneDelegate` hands opened URLs
-  to Capacitor (`SceneDelegateProxy`).
+  `CFBundleURLTypes` in `ios/App/App/Info.plist` on iOS, whose `SceneDelegate` hands opened URLs to
+  Capacitor (`SceneDelegateProxy`).
 - This path has not yet run on a device.
 
 ## Signing in from another device
@@ -111,8 +119,8 @@ On mobile:
 
 - A device names itself from its user agent alone (`thisDeviceName`: "Firefox on Linux", "Aspen on
   Android"), never a place.
-- The code warns that it is a secret and counts down its minute. Then it blurs, with a button for
-  a new one.
+- The code warns that it is a secret and counts down its minute. Then it blurs, with a button for a
+  new one.
 - A code still waiting when its screen closes is cancelled.
 - The code holds `/device-link?server={origin}#{id}` under the deployment's web client (see
   [qr-codes.md](qr-codes.md)). So a phone's own camera opens it in a browser too.
@@ -139,11 +147,10 @@ first's.
 
 ### From the server form
 
-The server form offers to scan a code instead of typing an address, since the code names its
-server.
+The server form offers to scan a code instead of typing an address, since the code names its server.
 
-- A scanned code, or one opened as a link (`aspen://app/device-link`) before any server is
-  chosen, fills the address in and says so.
+- A scanned code, or one opened as a link (`aspen://app/device-link`) before any server is chosen,
+  fills the address in and says so.
 - The person continues to it themselves.
 
 ### Routing
@@ -164,8 +171,8 @@ none.
 Where the deployment sends mail, the create-account form:
 
 - asks for an address, required where `required`;
-- once one is typed, and where the deployment has a newsletter, offers it with an unchecked "Send
-  me the newsletter".
+- once one is typed, and where the deployment has a newsletter, offers it with an unchecked "Send me
+  the newsletter".
 
 ### Resetting a password
 
@@ -187,9 +194,9 @@ A deployment requiring a verified address:
   `emailVerificationRequired`;
 - closes its event stream with 4428.
 
-`AspenClient` flags the session (`emailVerificationRequired`, `noticeVerificationRequired`), as
-it does a second factor owed. The root layout then shows `VerificationScreen`, after the
-enrollment screen if both are owed, until either:
+`AspenClient` flags the session (`emailVerificationRequired`, `noticeVerificationRequired`), as it
+does a second factor owed. The root layout then shows `VerificationScreen`, after the enrollment
+screen if both are owed, until either:
 
 - the code mailed to the address is typed; or
 - the address is changed and its code typed (`markEmailVerified`).
@@ -198,8 +205,8 @@ That mounts the app afresh.
 
 ### Email settings
 
-Signed in, Settings' Email (`EmailDialog`) shows the same `EmailPanel`. It is offered to a person
-of this deployment, where it sends mail.
+Signed in, Settings' Email (`EmailDialog`) shows the same `EmailPanel`. It is offered to a person of
+this deployment, where it sends mail.
 
 The panel holds:
 
@@ -209,8 +216,8 @@ The panel holds:
 - what the address receives:
   - whether the profile shows it;
   - the newsletter, offered where the deployment has one, or while subscribed;
-  - the daily digest, with its time zone (this device's when first turned on, then any the
-    browser knows) and hour.
+  - the daily digest, with its time zone (this device's when first turned on, then any the browser
+    knows) and hour.
 
 The panel reads `GET /users/@me/email` on opening, and again on each `emailAccountChanged` event
 (`RecordStore.emailChanges`, topic `email`).
