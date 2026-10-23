@@ -26,12 +26,17 @@ export const planesModalClass = modalFrameClass + " bg-surface max-w-md";
 export const widePlanesModalClass = modalFrameClass + " bg-surface max-w-3xl";
 /** The same, wide enough for the planes to stand in three columns (`PlaneColumns`), as Settings. */
 export const columnPlanesModalClass = modalFrameClass + " bg-surface max-w-6xl";
-const planeShapeClass =
-  "break-inside-avoid rounded-lg border bg-surface-raised px-3 py-1.5 shadow-sm";
+const planeLookClass = "break-inside-avoid rounded-lg border bg-surface-raised shadow-sm";
+const planeShapeClass = planeLookClass + " px-3 py-1.5";
 /** A plane's look alone, for an element that lays out its own contents, such as a list. */
 export const planeSurfaceClass = planeShapeClass + " border-line";
 /** A section drawn raised off its ground, its contents in a column; it never splits across columns. */
 export const planeClass = "flex flex-col gap-3 " + planeSurfaceClass;
+/**
+ * `planeClass` with twice its padding, for contents that reach its edges, such as a slider whose
+ * thumb would otherwise crowd the border at either end (the role editor's hue).
+ */
+export const roomyPlaneClass = "flex flex-col gap-3 border-line px-6 py-3 " + planeLookClass;
 /** A plane holding something that cannot be undone, such as deleting a community. */
 export const dangerPlaneClass = "flex flex-col gap-2 " + planeShapeClass + " border-danger/40";
 export const dialogClass = "flex flex-col gap-4 outline-none";

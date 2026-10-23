@@ -14,8 +14,8 @@ import {
 import { PermissionChecklist } from "@/features/community-settings/PermissionChecklist";
 import {
   dangerButtonClass,
-  planeClass,
   planeSurfaceClass,
+  roomyPlaneClass,
   secondaryButtonClass,
 } from "@/features/invites/dialog";
 import { ChoiceCheckbox } from "@/features/layout/choices";
@@ -262,7 +262,7 @@ function RoleEditor({
         event.preventDefault();
         void save();
       }}
-      className={planeClass + " min-w-0 flex-1"}
+      className={roomyPlaneClass + " min-w-0 flex-1"}
     >
       {role.bot != null && <BotRoleNote botId={role.bot} />}
       {role.everyone ? (
