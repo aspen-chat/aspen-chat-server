@@ -704,8 +704,10 @@ body {
   cursor: pointer;
   user-select: none;
 }
-.message-body .spoiler-hidden * {
-  color: transparent;
+/* Hidden, not just transparent: inline code, tags, and emoji draw boxes and pictures of their
+   own, which would show through the block. Their room is kept, so the block keeps its size. */
+.message-body .spoiler-hidden > .spoiler-content {
+  visibility: hidden;
 }
 .message-body .spoiler-hidden:hover {
   background: var(--color-ink-muted);

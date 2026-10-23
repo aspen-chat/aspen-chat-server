@@ -90,5 +90,10 @@ what renders as a link is what gets a preview. Change both together.
 - `remarkSpoilers.ts` wraps them, and `Spoiler.tsx` renders them as a block the reader activates to
   reveal.
 - Markup inside them is kept.
+- While hidden, the content is `inert` and `visibility: hidden` under the block. A click on a link,
+  tag, or chip in it lands on the spoiler and only reveals it, and nothing in it takes focus.
+  **Why:** a hidden link that took the click would be opened unseen, and inline code, tags, and
+  emoji draw boxes and pictures of their own that would show through a merely transparent text
+  colour.
 - A card for a link inside one is covered too (see
   [link and video cards](link-cards.md#links-inside-spoilers)).
