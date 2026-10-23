@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { community, settleAnimations, signInToWorld } from "./world";
 
 const organiserRole = "0190f0a0-0000-7000-8000-000000000041";
@@ -40,6 +40,52 @@ test("community settings list the roles, highest first, and the members with the
   await dialog.getByRole("searchbox", { name: "Find a member" }).fill("kate");
   await expect(dialog.getByText("Search every member by name.")).toBeVisible();
   await expect(dialog.getByRole("listitem")).toHaveCount(1);
+});
+
+/** How many columns the first group of permissions stands in: its boxes' distinct left edges. */
+async function permissionColumns(dialog: Locator): Promise<number> {
+  const lefts = await dialog
+    .locator("fieldset")
+    .first()
+    .getByRole("checkbox")
+    .evaluateAll((boxes) =>
+      boxes.map((box) => Math.round(box.closest("label")?.getBoundingClientRect().left ?? 0)),
+    );
+  return new Set(lefts).size;
+}
+
+test("a role's permissions stand in up to four columns, fewer where the window is narrower", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(isMobile, "a phone has room for one column, as before");
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await signInToWorld(page);
+  await page.getByRole("button", { name: "Community settings" }).click();
+  const dialog = page.getByRole("dialog");
+  await settleAnimations(page);
+  const overviewWidth = (await dialog.boundingBox())?.width ?? 0;
+  await dialog.getByRole("tab", { name: "Roles" }).click();
+  await dialog.getByRole("grid", { name: "Roles, highest first" }).getByRole("row").last().click();
+  // The Roles tab widens the settings to make the room; the others keep their width.
+  await expect.poll(async () => (await dialog.boundingBox())?.width).toBeGreaterThan(overviewWidth);
+  await expect.poll(() => permissionColumns(dialog)).toBe(4);
+  for (const [width, columns] of [
+    [1100, 3],
+    [800, 2],
+  ] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect.poll(() => permissionColumns(dialog)).toBe(columns);
+    // No box reaches past the settings' edge.
+    const edge = await dialog.evaluate((element) => element.getBoundingClientRect().right);
+    const rights = await dialog
+      .locator("fieldset label")
+      .evaluateAll((labels) => labels.map((label) => label.getBoundingClientRect().right));
+    expect(Math.max(...rights)).toBeLessThanOrEqual(edge);
+  }
+  await dialog.getByRole("tab", { name: "Overview" }).click();
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await expect.poll(async () => (await dialog.boundingBox())?.width).toBe(overviewWidth);
 });
 
 test("a channel's access starts open to everyone and explains what a member can do", async ({
