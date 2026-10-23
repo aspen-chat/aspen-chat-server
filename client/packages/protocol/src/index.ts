@@ -9,6 +9,7 @@ export {
   type AuthMethods,
   type DeploymentProfile,
   type DeviceLink,
+  type DeviceLinkAccount,
   type DeviceLinkClaim,
   type DeviceLinkProgress,
   type DeviceLinkScan,

@@ -109,6 +109,8 @@ On mobile:
 - A phone scans it.
 - Either of the two may be the one signed in.
 - Phones never show a code, and computers never scan.
+- Beside the QR code is a user code (`BCDF-GHJK`). Any device, a computer included, may type it
+  instead of scanning (`TypeDeviceLinkCode`, Type a code instead).
 
 ### The computer's code
 
@@ -119,22 +121,42 @@ On mobile:
 
 - A device names itself from its user agent alone (`thisDeviceName`: "Firefox on Linux", "Aspen on
   Android"), never a place.
-- The code warns that it is a secret and counts down its minute. Then it blurs, with a button for a
-  new one.
+- The code warns that it is a secret and counts down its five minutes. Then it blurs, with a button
+  for a new one.
 - A code still waiting when its screen closes is cancelled.
 - The code holds `/device-link?server={origin}#{id}` under the deployment's web client (see
   [qr-codes.md](qr-codes.md)). So a phone's own camera opens it in a browser too.
 - The phone app's scanner reads it and opens the same route with the id as `link`.
 
+### Confirming a typed request's account
+
+A signed-in device that typed a computer's code may have guessed it. So when the computer's claim
+answers `confirmAccount`, it shows the account it would be signed in to (picture, display name, and
+username) and a warning, and claims it (`claimDeviceLink` with `account`) only on This is my
+account. Don't sign in cancels the code.
+
 ### The phone's screen
 
 `DeviceLinkScreen` scans the code once. A scan uses the code up, so a second render reuses the
-first's.
+first's (`takenLinks.ts`).
 
 | Phone is   | Shows                                                                | Then                               |
 | ---------- | -------------------------------------------------------------------- | ---------------------------------- |
 | Signed in  | The computer's name, with a warning that a stranger's code is a trap | Signs it in only on Sign it in     |
 | Signed out | Which account the phone will be signed in to                         | Claims until the computer confirms |
+
+### Typing a code
+
+`TypeDeviceLinkCode` is a button beside the scanner on a phone, and beside the code's button on a
+computer. It opens a dialog with one field.
+
+- The code is read as the server reads it (`normalizeUserCode`: any case, hyphens and spaces
+  dropped, full-width letters as letters). Input that cannot be a code is refused at the field and
+  not sent, since the server counts every code that matches nothing against whoever typed it.
+- A signed-in device verifies again first when the server asks (`useOptionalReauth`).
+- Once taken, the dialog shows `DeviceLinkScreen` for the link, as a scanned code's route does, but
+  is left by closing the dialog rather than for `/`. A signed-in giver is then told that the other
+  device confirms the account to finish.
 
 ### A code for another server
 

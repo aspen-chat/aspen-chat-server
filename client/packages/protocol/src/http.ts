@@ -73,12 +73,15 @@ export type DeploymentProfile = Schemas["DeploymentProfile"];
 export type DeviceLink = Schemas["DeviceLink"];
 export type DeviceLinkScan = Schemas["DeviceLinkScan"];
 export type DeviceLinkProgress = Schemas["DeviceLinkProgress"];
+export type DeviceLinkAccount = Schemas["DeviceLinkAccount"];
 export type RegistrationInviteRead = Schemas["Sideloaded_RegistrationInvitePreview"];
 
 /** Where a sign-in code stands, for the device it signs in. A `signedIn` session is stored. */
 export type DeviceLinkClaim =
   | { status: "waiting" }
   | { status: "scanned"; deviceName: string }
+  /** The signed-in device typed the code: claim again naming this account once it is confirmed. */
+  | { status: "confirmAccount"; account: DeviceLinkAccount }
   | { status: "signedIn"; session: Session };
 
 /** How a password sign-in ended. */
@@ -238,23 +241,30 @@ export class AspenClient {
   }
 
   /**
-   * Starts a sign-in code (`/auth/device-links`). Signed in, it offers this account to a phone
-   * that scans it; signed out, it asks a signed-in phone for a sign-in, naming this device
-   * `deviceName`, and `verifier` is what to claim it with (`claimDeviceLink`).
+   * Starts a sign-in code (`/auth/device-links`), with a user code (`link.code`) to type where
+   * the QR code cannot be scanned. Signed in, it offers this account to a device that takes it;
+   * signed out, it asks a signed-in device for a sign-in, naming this device `deviceName`, and
+   * `verifier` is what to claim it with (`claimDeviceLink`).
    */
   async startDeviceLink(
     deviceName?: string,
   ): Promise<{ link: DeviceLink; verifier: string | null }> {
     if (this.session !== null) {
       return {
-        link: unwrap(await this.api.POST(`${API_PREFIX}/auth/device-links`, { body: {} })),
+        link: unwrap(
+          await this.api.POST(`${API_PREFIX}/auth/device-links`, { body: { withCode: true } }),
+        ),
         verifier: null,
       };
     }
     const { verifier, challenge } = await pkcePair();
     const link = unwrap(
       await this.api.POST(`${API_PREFIX}/auth/device-links`, {
-        body: { codeChallenge: challenge, ...(deviceName === undefined ? {} : { deviceName }) },
+        body: {
+          codeChallenge: challenge,
+          withCode: true,
+          ...(deviceName === undefined ? {} : { deviceName }),
+        },
       }),
     );
     return { link, verifier };
@@ -288,6 +298,32 @@ export class AspenClient {
     return { scan, verifier };
   }
 
+  /**
+   * Takes a sign-in code by typing the user code another device shows, as scanning its QR code
+   * would, and returns the link's id with what a scan returns. Signed in, the code must be one
+   * asking for a sign-in; signed out, one offering an account, and this device is named
+   * `deviceName`. Throws `ApiProblemError` (`deviceLinkCodeUnknown`) for a code that matches
+   * nothing waiting for this device.
+   */
+  async enterDeviceLinkCode(
+    code: string,
+    deviceName: string,
+  ): Promise<{ id: string; scan: DeviceLinkScan; verifier: string | null }> {
+    if (this.session !== null) {
+      const { id, ...scan } = unwrap(
+        await this.api.POST(`${API_PREFIX}/auth/device-link-entries`, { body: { code } }),
+      );
+      return { id, scan, verifier: null };
+    }
+    const { verifier, challenge } = await pkcePair();
+    const { id, ...scan } = unwrap(
+      await this.api.POST(`${API_PREFIX}/auth/device-link-entries`, {
+        body: { code, deviceName, codeChallenge: challenge },
+      }),
+    );
+    return { id, scan, verifier };
+  }
+
   /** Where a sign-in code this signed-in device shows stands. */
   async deviceLinkProgress(id: string): Promise<DeviceLinkProgress> {
     return unwrap(
@@ -319,13 +355,14 @@ export class AspenClient {
 
   /**
    * Asks for the sign-in a code promises this device, with the verifier it was started or
-   * scanned with; once the other device confirms, the session is stored.
+   * scanned with; once the other device confirms, the session is stored. `account` is the
+   * account this device's person confirmed after a `confirmAccount` answer.
    */
-  async claimDeviceLink(id: string, verifier: string): Promise<DeviceLinkClaim> {
+  async claimDeviceLink(id: string, verifier: string, account?: string): Promise<DeviceLinkClaim> {
     const claimed = unwrap(
       await this.api.POST(`${API_PREFIX}/auth/device-links/{link}/claim`, {
         params: { path: { link: id } },
-        body: { codeVerifier: verifier },
+        body: { codeVerifier: verifier, ...(account === undefined ? {} : { account }) },
       }),
     );
     switch (claimed.status) {
@@ -333,6 +370,8 @@ export class AspenClient {
         return { status: "signedIn", session: this.#adopt(claimed) };
       case "scanned":
         return { status: "scanned", deviceName: claimed.deviceName };
+      case "confirmAccount":
+        return { status: "confirmAccount", account: claimed };
       case "waiting":
         return { status: "waiting" };
     }

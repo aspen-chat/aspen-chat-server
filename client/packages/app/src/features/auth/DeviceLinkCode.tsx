@@ -1,8 +1,10 @@
-import { ApiProblemError, type DeviceLink } from "@aspen/protocol";
+import { ApiProblemError, type DeviceLink, type DeviceLinkAccount } from "@aspen/protocol";
 import { ArrowClockwiseIcon, WarningIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "react-aria-components";
 import { useAspenClient } from "@/api/context";
+import { initials } from "@/features/communities/initials";
+import { mediaUrl } from "@/features/layout/safeUrl";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
@@ -24,6 +26,9 @@ type Phase =
   | { kind: "starting" }
   | { kind: "showing"; link: DeviceLink; verifier: string | null }
   | { kind: "scanned"; link: DeviceLink; verifier: string | null; deviceName: string }
+  /** The giver typed the code, so this device's person confirms its account first. */
+  | { kind: "confirmAccount"; link: DeviceLink; verifier: string; account: DeviceLinkAccount }
+  | { kind: "accepted"; link: DeviceLink; verifier: string; account: DeviceLinkAccount }
   | { kind: "approved"; deviceName: string }
   | { kind: "expired" }
   | { kind: "failed"; message: string };
@@ -32,7 +37,10 @@ type Phase =
  * A sign-in code shown on a computer for a phone to scan (`app::device_link` on the server). Signed
  * out, it asks for a sign-in, and the computer is signed in once the phone confirms. Signed in, it
  * offers this account to a phone that is not, and this computer confirms the phone by its name.
- * The code lasts a minute; then it blurs and offers a new one. Whatever it ends with, a code left
+ * Beside it is the user code, for a device that cannot scan to type instead; a signed-in device
+ * that typed it may have guessed it, so a computer asking for a sign-in then shows the account
+ * it would be signed in to, and claims it only once its person confirms that account. The code
+ * lasts five minutes; then it blurs and offers a new one. Whatever it ends with, a code left
  * behind is cancelled. Offering takes a recent verification, which it asks for where a
  * `ReauthProvider` holds it (the security settings).
  */
@@ -93,22 +101,39 @@ export function DeviceLinkCode() {
     [client],
   );
 
-  const waiting = phase.kind === "showing" || phase.kind === "scanned" ? phase : null;
+  const waiting =
+    phase.kind === "showing" ||
+    phase.kind === "scanned" ||
+    phase.kind === "confirmAccount" ||
+    phase.kind === "accepted"
+      ? phase
+      : null;
   useEffect(() => {
     if (waiting === null) {
       return;
     }
     const { link, verifier } = waiting;
+    const account = waiting.kind === "accepted" ? waiting.account.userId : undefined;
     let stopped = false;
     const ask = async () => {
       try {
         if (verifier !== null) {
-          const claimed = await client.claimDeviceLink(link.id, verifier);
+          const claimed = await client.claimDeviceLink(link.id, verifier, account);
           // Signed in: the session is stored and the signed-in app replaces this screen.
           if (claimed.status === "signedIn") {
             live.current = null;
           } else if (claimed.status === "scanned" && !stopped) {
-            setPhase({ kind: "scanned", link, verifier, deviceName: claimed.deviceName });
+            setPhase((current) =>
+              current.kind === "showing" || current.kind === "scanned"
+                ? { kind: "scanned", link, verifier, deviceName: claimed.deviceName }
+                : current,
+            );
+          } else if (claimed.status === "confirmAccount" && !stopped) {
+            setPhase((current) =>
+              current.kind === "showing" || current.kind === "scanned"
+                ? { kind: "confirmAccount", link, verifier, account: claimed.account }
+                : current,
+            );
           }
         } else {
           const progress = await client.deviceLinkProgress(link.id);
@@ -216,6 +241,44 @@ export function DeviceLinkCode() {
       </div>
     );
   }
+  if (phase.kind === "confirmAccount") {
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-sm font-medium">{m.deviceLink.confirmAccount}</p>
+        <AccountCard account={phase.account} />
+        <Caution text={m.deviceLink.confirmAccountWarning} />
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            onPress={() => {
+              void client.cancelDeviceLink(phase.link.id).catch(() => undefined);
+              live.current = null;
+              setPhase({ kind: "expired" });
+            }}
+            className={secondaryButtonClass}
+          >
+            {m.deviceLink.decline}
+          </Button>
+          <Button
+            onPress={() => {
+              setPhase({ ...phase, kind: "accepted" });
+            }}
+            className={primaryButtonClass}
+          >
+            {m.deviceLink.acceptAccount}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  if (phase.kind === "accepted") {
+    return (
+      <p role="status" className="text-sm">
+        {format(m.deviceLink.acceptedAccount, {
+          account: phase.account.displayName ?? phase.account.userName,
+        })}
+      </p>
+    );
+  }
   if (phase.kind === "approved") {
     return (
       <p role="status" className="text-sm">
@@ -273,11 +336,50 @@ export function DeviceLinkCode() {
           <Skeleton className="size-56 rounded-md" />
         </div>
       )}
+      {shown?.code !== undefined && (
+        <div className="flex flex-col items-center gap-1">
+          <p className="text-center text-sm text-ink-muted">{m.deviceLink.userCodeHint}</p>
+          <p className="font-mono text-2xl font-semibold tracking-widest select-all">
+            {shown.code}
+          </p>
+        </div>
+      )}
       {secondsLeft !== null && (
         <p className="text-center text-xs text-ink-muted tabular-nums">
           {format(m.deviceLink.expiresIn, { seconds: String(secondsLeft) })}
         </p>
       )}
+    </div>
+  );
+}
+
+/** The account a device would be signed in to, as its picture and names. */
+function AccountCard({ account }: { account: DeviceLinkAccount }) {
+  const name = account.displayName ?? account.userName;
+  const src = mediaUrl(account.icon?.downloadUrl);
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-line px-3 py-2">
+      {src !== undefined ? (
+        <img
+          src={src}
+          alt=""
+          draggable={false}
+          className="size-11 shrink-0 rounded-full bg-surface-sunken object-cover select-none"
+        />
+      ) : (
+        <span
+          aria-hidden="true"
+          className="flex size-11 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[0.9375rem] font-semibold text-accent-strong select-none"
+        >
+          {initials(name)}
+        </span>
+      )}
+      <div className="min-w-0">
+        <p className="truncate font-medium">{name}</p>
+        {account.displayName !== undefined && account.displayName !== null && (
+          <p className="truncate text-sm text-ink-muted">@{account.userName}</p>
+        )}
+      </div>
     </div>
   );
 }
