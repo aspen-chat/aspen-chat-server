@@ -1356,6 +1356,7 @@
   "attachmentDescriptionHint": "Say what it shows, for people who can't see it. Screen readers read this in its place, and the gallery shows it beneath.",
   "attachmentDescribed": "Described",
   "describeFailed": "The description could not be saved: {reason}",
+  "pastedTextFileName": "message.txt",
   "tooManyAttachments": "A message may carry at most {max, plural, one {# attachment} other {# attachments}}. Send the rest in another message.",
   "imageAlt": "Image: {name}",
   "viewAllImages": "View all {count, plural, one {# image} other {# images}}",
