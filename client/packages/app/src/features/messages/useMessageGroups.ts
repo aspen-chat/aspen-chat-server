@@ -57,7 +57,8 @@ export function useGroupContinuations(
           at: Date.parse(message.timestamp),
           alone: message.kind !== "standard" && message.kind !== "poll",
           height: estimateHeight(contentsOf(message, store), metrics),
-          breakBefore: afterBreak,
+          // A reply's line stands above it, between it and the message before.
+          breakBefore: afterBreak || message.replyTo != null,
         });
       }
       afterBreak = part.index === lineIndex;
@@ -128,6 +129,7 @@ function contentsOf(message: Message, store: RecordStore): MessageContents {
     poll: message.poll != null,
     reactions: store.reactions(message.id).size > 0,
     thread: message.thread != null,
+    reply: message.replyTo != null,
   };
 }
 

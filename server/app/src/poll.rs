@@ -294,6 +294,8 @@ fn poll_message(poll: &Poll, kind: MessageKind, timestamp: DateTime<Utc>) -> Mes
         altered_by: Vec::new(),
         card: None,
         echo: None,
+        reply_to: None,
+        tags_replied: false,
     }
 }
 

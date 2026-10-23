@@ -1,6 +1,6 @@
 # The message box and drafts
 
-The message box (`Composer`) is where a user writes and sends messages. This page covers its layout, the typing line above it, the length limit, messages held for their previews, and drafts.
+The message box (`Composer`) is where a user writes and sends messages. This page covers its layout, replying to a message, the typing line above it, the length limit, messages held for their previews, and drafts.
 
 ## Where it lives
 
@@ -10,6 +10,7 @@ The message box (`Composer`) is where a user writes and sends messages. This pag
 | Typing line | `TypingIndicator`, `TypingDots`, `typingSentence` |
 | Length counting | `messageLength.ts`, `MessageLengthNote` |
 | Held messages | `HeldMessages.tsx` |
+| Replying | `ReplyBar`, `composerTargets.ts`; the line above a reply is `ReplyLine` |
 | Drafts | `src/features/messages/drafts.ts` |
 
 ## Layout
@@ -53,6 +54,16 @@ WebKit on iOS ignores that setting: its keyboard is drawn over the page, which k
 1. The pill keeps its own state, so a press repaints the pill alone, saying the newest are on their way.
 2. The list then moves to the end of what it holds.
 3. `AspenSync.loadLatest` follows any page already being read rather than settling for it.
+
+## Replying to a message
+
+A message's Reply (its row of actions, its right-click menu, a phone's long-press sheet) makes the next message sent a reply to it. The server's side is `docs/architecture/replies.md`.
+
+- The box of each channel the reader may post in offers itself to the page (`useComposerTarget`); Reply is offered only where that channel has one, asked as the actions are built (`hasComposer`). A box starting a thread offers nothing, since it shares its channel's id.
+- `ReplyBar` above the box names whom the reply answers, with a toggle to tag them (on at first; offered only where the reader may tag members and the message is not their own) and a way to stop replying. Escape in the box stops it too, after any completion list has had the key.
+- The reader's focus goes to the box in an effect after the render that starts the reply, once a menu Reply was chosen from has given focus back. A phone's sheet holds focus until it has slid away, so its Reply waits for the sheet's `onClosed` (`afterClosing`).
+- Sending passes `reply` to `AspenSync.sendMessage`, and clears it. A message deleted meanwhile is said to be in the bar, and the server refuses the send.
+- Above a reply, `ReplyLine` shows the original's author (with `@` when the reply tagged them) and a line of its text (`replyPreview`: tags and custom emoji as names, spoilers masked, fences dropped), which jumps to it (`JumpToMessageContext`, given by `MessageList`: in the window it is flashed where it is; otherwise a channel opens around it by its route, and a thread reads around it). A deleted original is said to be, as the link's state or a failed read of it finds. A reply always begins its author's group (`breakBefore` in `useGroupContinuations`).
 
 ## Who is typing
 
@@ -157,6 +168,7 @@ A held message's place (`heldPlace`) is one of:
 - picked tags
 - files already uploaded
 - a thread's echo choice
+- the message it replies to, kept only with text or files
 
 A draft waits in its channel, on this device, per account. It survives going elsewhere, a notification opened, and a reload. It goes once sent.
 

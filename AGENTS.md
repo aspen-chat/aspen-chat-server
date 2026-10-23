@@ -273,6 +273,7 @@ How each feature works is written up in `docs/architecture/`: one file per featu
 - `docs/architecture/benchmarking.md` — `aspen-bench`, seeding and purging runs, suspending rate limits, and the metrics both servers export
 - `docs/architecture/reports/index.md` — reports of messages, profiles, and nicknames, their categories, cases and their review, warnings, what deleting a message keeps, and the evidence kept of its files
 - `docs/architecture/message-links.md` — links between messages, what each reader finds at them, and how they are sideloaded
+- `docs/architecture/replies.md` — replying to a message of the same channel, tagging its author, and what is shown of a deleted original
 - `docs/architecture/roles-and-permissions/index.md` — community permissions, roles, overrides, ranking, bans, the everyone mention limit, and member search
 - `docs/architecture/web-client/index.md` — the web client every API server serves at `public_url`, its files and caching, and its pages' Open Graph tags: the deployment's, and an invite's community's
 - `docs/architecture/plugins/index.md` — installing plugins, where they run, the sandbox, intercepting and observing, what the host answers and as whom, annotations, storage, routes, plugin events, principals, channel types and views, timers, notices, cards, and capability URLs

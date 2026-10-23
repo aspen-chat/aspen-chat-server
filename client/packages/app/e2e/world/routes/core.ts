@@ -26,6 +26,8 @@ import {
   users,
   bob,
   communityReadStates,
+  generalMessages,
+  threadReplies,
 } from "../fixtures";
 import { type Asked, type WorldRoute, reply } from "../reply";
 
@@ -319,17 +321,27 @@ export function coreRoutes({
       },
     ],
     // Posting answers with the message as the server would record it, tagging the people of
-    // the world it names.
+    // the world it names, and, for a reply, the author of what it answers unless told not to.
     [
       "POST",
       /^\/channels\/[^/]+\/messages$/,
       () => {
-        const { content } = request.postDataJSON() as { content: string };
+        const { content, replyTo, tagReplied } = request.postDataJSON() as {
+          content: string;
+          replyTo?: string;
+          tagReplied?: boolean;
+        };
         const tagged = users.filter((u) => content.includes(`<@${u.id}>`)).map((u) => u.id);
+        const original = [...generalMessages, ...threadReplies].find((m) => m.id === replyTo);
+        const answered = original?.author as string | undefined;
+        if (answered !== undefined && answered !== me && tagReplied !== false) {
+          tagged.unshift(answered);
+        }
         return reply(
           message(990, me, content, 0, {
             channelId: path.split("/")[2],
-            mentions: { users: tagged, roles: [], everyone: false },
+            mentions: { users: [...new Set(tagged)], roles: [], everyone: false },
+            replyTo: replyTo ?? null,
           }),
           201,
         );

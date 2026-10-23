@@ -44,7 +44,8 @@ export type DrawerEdge = "end" | "bottom";
  * thrown, or, if the finger had come to rest, whichever way it is more than half. Opened
  * through `isOpen`, it slides all the way; a tap on the backdrop, Escape, the panel's X, or
  * the Android back button puts it away. Where motion is reduced it fades in and out in place,
- * and only a finger moves it.
+ * and only a finger moves it. It holds focus until it has gone, after which `onClosed` is told,
+ * for whatever means to put focus elsewhere.
  */
 export function Drawer({
   edge = "end",
@@ -52,6 +53,7 @@ export function Drawer({
   enabled = true,
   isOpen,
   onOpenChange,
+  onClosed,
   title,
   children,
 }: {
@@ -61,6 +63,8 @@ export function Drawer({
   enabled?: boolean;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Called once it has gone, having been out. */
+  onClosed?: () => void;
   title: string;
   children: ReactNode;
 }) {
@@ -176,6 +180,22 @@ export function Drawer({
     return () => {
       cancelled = true;
     };
+  }, [phase.kind]);
+
+  // Told after the render that takes it away, before its focus scope gives focus back on the
+  // next frame, so focus put elsewhere here stays there.
+  const latestClosed = useRef(onClosed);
+  useEffect(() => {
+    latestClosed.current = onClosed;
+  });
+  const wasOut = useRef(false);
+  useEffect(() => {
+    if (phase.kind !== "closed") {
+      wasOut.current = true;
+    } else if (wasOut.current) {
+      wasOut.current = false;
+      latestClosed.current?.();
+    }
   }, [phase.kind]);
 
   // While any listener is registered Capacitor leaves the back button to it alone, so one is

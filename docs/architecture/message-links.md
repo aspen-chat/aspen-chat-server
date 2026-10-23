@@ -48,3 +48,4 @@ Who may see what is decided when the links are read, for each reader. Message re
 - The available messages themselves go among `included.messages`. Their authors and attachments come with the read's own, when those are asked for.
 - A deleted message is `deleted` only where the reader may read its channel, so its having existed is no one else's to learn.
 - Links are recorded, never followed: the messages a linked message links to are not read with it.
+- `include=linked` reads the messages the read's messages reply to the same way (see [Replies](replies.md)).

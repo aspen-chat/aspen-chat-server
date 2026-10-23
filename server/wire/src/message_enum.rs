@@ -348,6 +348,17 @@ enum MessageEnumSource {
         // by the message's `Update` event. See `app::plugin::card`.
         #[message_gen(server_authoritative = "mutable")]
         card: Option<crate::plugin::card::Card>,
+        // The message this one replies to, which clients show above it: one that was live and in
+        // the same channel when this was posted, threads being channels of their own. It stays
+        // named once that message is deleted; what each reader finds there is read with
+        // `include=linked`, as for `linkedMessages`. See `app::message::reply`.
+        #[message_gen(permanent)]
+        reply_to: Option<MessageId>,
+        // With `replyTo`, whether this tags the author of the message it replies to, as `<@id>`
+        // in its text would, with the same permission; true when absent. An edit that tags
+        // afresh keeps it.
+        #[message_gen(secret)]
+        tag_replied: Option<bool>,
         // On a reply posted to a thread, also show it in the thread's parent channel, as a
         // `ThreadEcho` message there.
         #[message_gen(secret)]

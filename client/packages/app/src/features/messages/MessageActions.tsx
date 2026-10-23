@@ -1,5 +1,6 @@
 import type { Permission } from "@aspen/protocol";
 import {
+  ArrowBendUpLeftIcon,
   ChatsCircleIcon,
   CopyIcon,
   EnvelopeSimpleIcon,
@@ -20,6 +21,7 @@ import { ReactionPicker, ViewReactionsButton } from "@/features/messages/Reactio
 import { PinButton } from "@/features/messages/PinButton";
 import { SaveButton } from "@/features/messages/SaveButton";
 import { ACTION_ICON } from "@/features/messages/actionIcon";
+import { hasComposer, replyIn } from "@/features/messages/composerTargets";
 import { markUnread } from "@/features/messages/markUnread";
 import { ReportMessageButton } from "@/features/reports/ReportDialog";
 import { EchoReplyButton } from "@/features/threads/EchoReplyButton";
@@ -44,15 +46,17 @@ const listDangerClass = listRowClass + " text-danger";
 export type MessageSheet = "react" | "reactions" | "delete" | "report";
 
 /**
- * What can be done to a message: react, save it, mark it unread, pin, see who reacted, reply in
- * a thread, also send a thread reply to its channel, edit, delete, copy its text, copy a link
- * to it, report it, and copy its id. A computer shows them as a row of icon buttons at the
+ * What can be done to a message: react, reply to it, save it, mark it unread, pin, see who
+ * reacted, reply in a thread, also send a thread reply to its channel, edit, delete, copy its
+ * text, copy a link to it, report it, and copy its id. A computer shows them as a row of icon buttons at the
  * message's corner while the pointer is over it or focus is in it, and the picker and the
  * dialogs open from their buttons. A touch screen shows them as a list of icons and names, in a sheet under a
  * long press (`MessageActionSheet`), which every action closes: the ones that open something
  * hand that to `open`, since what opens from inside the sheet would go with it. The list
  * leaves out reacting, which the sheet offers above it, and ends with deleting, the one that
- * cannot be undone, away from the rest. Each is offered only where the permissions allow it.
+ * cannot be undone, away from the rest. Each is offered only where the permissions allow it;
+ * Reply where its channel's message box is open for the reader to write in (`replyIn`), which is
+ * asked as the actions are built, since a row is drawn before the box beside it is.
  */
 export function MessageActions({
   messageId,
@@ -71,6 +75,7 @@ export function MessageActions({
   onEdit,
   open,
   onDone,
+  afterClosing,
 }: {
   messageId: string;
   channelId: string;
@@ -102,6 +107,11 @@ export function MessageActions({
   open?: (sheet: MessageSheet) => void;
   /** Called after an action that is done at once, so the sheet offering the actions can close. */
   onDone?: () => void;
+  /**
+   * Runs an action that puts focus elsewhere once the sheet offering the actions has gone,
+   * since the sheet holds focus until then; without it, the action runs at once.
+   */
+  afterClosing?: (run: () => void) => void;
 }) {
   const m = useMessages();
   const hasReactions = useReactions(messageId).size > 0;
@@ -117,6 +127,30 @@ export function MessageActions({
           communityId={communityId}
           triggerClassName={actionClass}
           iconSize={ACTION_ICON}
+        />
+      )}
+      {hasComposer(channelId) && (
+        <IconAction
+          label={m.replies.reply}
+          {...action}
+          onPress={() => {
+            const start = () => {
+              replyIn(channelId, messageId);
+            };
+            if (afterClosing === undefined) {
+              start();
+            } else {
+              afterClosing(start);
+            }
+            onDone?.();
+          }}
+          icon={
+            <ArrowBendUpLeftIcon
+              size={ACTION_ICON}
+              aria-hidden="true"
+              className="rtl:-scale-x-100"
+            />
+          }
         />
       )}
       <SaveButton

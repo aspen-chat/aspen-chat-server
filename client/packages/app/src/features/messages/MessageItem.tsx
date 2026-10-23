@@ -56,6 +56,7 @@ import {
   type ChannelHome,
 } from "@/features/messages/links";
 import { LinkedMessages } from "@/features/messages/EmbeddedMessage";
+import { ReplyLine } from "@/features/messages/ReplyLine";
 import { WarningBody } from "@/features/messages/WarningBody";
 import { ReportModal } from "@/features/reports/ReportDialog";
 import { useAspenClient } from "@/api/context";
@@ -221,6 +222,8 @@ export const MessageItem = memo(function MessageItem({
   // Whether the message has been pressed long, from when its sheets are drawn: they stay drawn
   // once it has, so each can slide away when it closes.
   const [pressed, setPressed] = useState(false);
+  // What one of the sheet's actions left to do once the sheet has gone (`afterClosing`).
+  const afterSheet = useRef<(() => void) | null>(null);
   // The actions a right click offers, with what was right-clicked inside the message.
   const menu = useContextMenu();
   const [under, setUnder] = useState<UnderPointer>(null);
@@ -370,6 +373,9 @@ export const MessageItem = memo(function MessageItem({
   };
   // A message that tags the reader stands out, with a bar at its edge in place of padding.
   const tagsMe = sync.store.mentionsMe(message);
+  // A reply's line stands above the rest, across the picture's column too; a reply always
+  // begins its author's group (`useGroupContinuations`), so it has its header under the line.
+  const replyTo = message.replyTo ?? null;
   return (
     <article
       ref={row}
@@ -401,7 +407,8 @@ export const MessageItem = memo(function MessageItem({
             },
           })}
       className={
-        "group relative flex gap-3 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50 " +
+        "group relative flex gap-x-3 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50 " +
+        (replyTo !== null ? "flex-wrap gap-y-0.5 " : "") +
         (grouped ? "pt-0.5 " : "pt-1.5 ") +
         (continued ? "pb-0.5 " : "pb-1.5 ") +
         (touchOnly ? "select-none [-webkit-touch-callout:none] " : "") +
@@ -431,6 +438,11 @@ export const MessageItem = memo(function MessageItem({
               sentAt={fullTime.format(sentAt)}
               canReact={permissions.has("addReactions")}
               {...sheetProps("actions")}
+              onClosed={() => {
+                const run = afterSheet.current;
+                afterSheet.current = null;
+                run?.();
+              }}
               onMore={() => {
                 setSheet("react");
               }}
@@ -440,6 +452,9 @@ export const MessageItem = memo(function MessageItem({
                 open={setSheet}
                 onDone={() => {
                   setSheet(null);
+                }}
+                afterClosing={(run) => {
+                  afterSheet.current = run;
                 }}
               />
             </MessageActionSheet>
@@ -461,6 +476,7 @@ export const MessageItem = memo(function MessageItem({
           <ReportModal target={{ kind: "message", messageId: id }} {...sheetProps("report")} />
         </>
       )}
+      {replyTo !== null && <ReplyLine message={message} replyTo={replyTo} home={home} />}
       {grouped ? (
         <div className="w-11 shrink-0" aria-hidden="true" />
       ) : author === undefined ? (

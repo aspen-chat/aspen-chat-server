@@ -1,4 +1,4 @@
-import type { Attachment } from "@aspen/protocol";
+import type { Attachment, Reply } from "@aspen/protocol";
 import type { PickedTag } from "@/features/mentions/tags";
 
 /**
@@ -23,6 +23,8 @@ export interface Draft {
   readonly attachments: readonly Attachment[];
   /** In a thread, whether to show the reply in its parent channel too. */
   readonly echo: boolean;
+  /** The message it replies to, kept with what was written. */
+  readonly reply?: Reply;
   readonly savedAt: number;
 }
 

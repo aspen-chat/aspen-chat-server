@@ -30,7 +30,7 @@ use crate::attachment::preview;
 use crate::context::GlobalServerContext;
 use crate::jobs::{self, Claimed, JobClass, JobKind, NewJob, Outcome};
 use crate::t;
-use crate::{AttachmentId, ChannelId, EventScope, HeldMessageId, UserId};
+use crate::{AttachmentId, ChannelId, EventScope, HeldMessageId, MessageId, UserId};
 use aspen_schema::held_message;
 use aspen_wire::message_enum::server_event::ServerEvent;
 use chrono::{DateTime, Utc};
@@ -63,6 +63,11 @@ pub struct HeldMessage {
     pub attachments: Vec<AttachmentId>,
     #[diesel(sql_type = Bool)]
     pub echo_to_parent: bool,
+    /// The message it replies to (`super::reply`).
+    #[diesel(sql_type = Nullable<PgUuid>)]
+    pub reply_to: Option<MessageId>,
+    #[diesel(sql_type = Bool)]
+    pub tags_replied: bool,
     /// The language it was sent in, which a refusal to post it is told in.
     #[diesel(sql_type = Text)]
     pub locale: String,
@@ -78,8 +83,9 @@ pub enum Posted {
 
 /// Posts a message where `to` says, or holds it while one of its attachments' previews is being
 /// made when `may_hold`, as its client said it may. A message held has been checked as it would
-/// have been posted; its job posts it. A reply that makes its thread makes it whether it is
-/// posted or held, and one held waits in the thread.
+/// have been posted, what it replies to included; its job posts it. A reply that makes its
+/// thread makes it whether it is posted or held, and one held waits in the thread.
+#[allow(clippy::too_many_arguments)]
 pub async fn post(
     state: &GlobalServerContext,
     author: UserId,
@@ -87,6 +93,7 @@ pub async fn post(
     content: String,
     attachments: Vec<AttachmentId>,
     echo_to_parent: bool,
+    reply: Option<super::reply::Reply>,
     may_hold: bool,
 ) -> crate::Result<Posted> {
     super::check_content(&content)?;
@@ -94,6 +101,9 @@ pub async fn post(
         let mut conn = state.connection_pool.get().await?;
         if held_back(conn.as_mut(), &attachments).await? {
             let (channel, unmade) = super::resolve(conn.as_mut(), to).await?;
+            if unmade.is_some() && reply.is_some() {
+                return Err(crate::Error::Validation(t!("replyElsewhere")));
+            }
             if let Some(unmade) = &unmade {
                 super::check_first_reply(
                     state,
@@ -125,6 +135,9 @@ pub async fn post(
                             echo_to_parent,
                         )
                         .await?;
+                        if let Some(reply) = reply {
+                            super::reply::check(conn.as_mut(), channel, reply.to, false).await?;
+                        }
                         let held = HeldMessage {
                             id,
                             author,
@@ -132,6 +145,8 @@ pub async fn post(
                             content,
                             attachments,
                             echo_to_parent,
+                            reply_to: reply.map(|reply| reply.to),
+                            tags_replied: reply.is_some_and(|reply| reply.tag),
                             locale,
                             held_at,
                         };
@@ -148,6 +163,8 @@ pub async fn post(
                                     .map(Some)
                                     .collect::<Vec<_>>()),
                                 held_message::echo_to_parent.eq(held.echo_to_parent),
+                                held_message::reply_to.eq(held.reply_to),
+                                held_message::tags_replied.eq(held.tags_replied),
                                 held_message::locale.eq(&held.locale),
                                 held_message::held_at.eq(held.held_at),
                             ))
@@ -171,6 +188,7 @@ pub async fn post(
         content,
         attachments,
         echo_to_parent,
+        reply,
         super::Posting::Text,
         None,
     )
@@ -224,7 +242,8 @@ pub async fn read_held(
 ) -> crate::Result<Vec<HeldMessage>> {
     Ok(diesel::sql_query(
         r#"
-        SELECT id, author, channel, content, attachments, echo_to_parent, locale, held_at
+        SELECT id, author, channel, content, attachments, echo_to_parent, reply_to, tags_replied,
+               locale, held_at
         FROM held_message
         WHERE author = $1
           AND ($2::uuid IS NULL OR (held_at, id) > (
@@ -344,7 +363,8 @@ pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::
         let mut conn = state.connection_pool.get().await?;
         let held: Option<HeldMessage> = diesel::sql_query(
             r#"
-            SELECT id, author, channel, content, attachments, echo_to_parent, locale, held_at
+            SELECT id, author, channel, content, attachments, echo_to_parent, reply_to, tags_replied,
+                   locale, held_at
             FROM held_message WHERE id = $1
             "#,
         )
@@ -389,6 +409,10 @@ async fn release(
             row.content,
             row.attachments,
             row.echo_to_parent,
+            row.reply_to.map(|to| super::reply::Reply {
+                to,
+                tag: row.tags_replied,
+            }),
             super::Posting::Text,
             Some(row.id),
         )),

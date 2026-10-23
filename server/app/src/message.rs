@@ -71,9 +71,14 @@ pub struct Message {
     pub card: Option<Card>,
     /// For a thread reply, its live echo in the parent channel (`app::thread::echo`).
     pub echo: Option<MessageId>,
+    /// The message of its channel it replies to (`reply`).
+    pub reply_to: Option<MessageId>,
+    /// Whether it was posted tagging the author of `reply_to`.
+    pub tags_replied: bool,
 }
 
 pub mod held;
+pub mod reply;
 
 /// The message's wire record, with the relations it carries from child tables.
 pub fn record(
@@ -102,6 +107,7 @@ pub fn record(
         altered_by: row.altered_by.iter().flatten().cloned().collect(),
         card: row.card.clone(),
         echo: row.echo,
+        reply_to: row.reply_to,
     }
 }
 
@@ -425,16 +431,18 @@ pub async fn create_message(
         content,
         attachments,
         echo_to_parent,
+        None,
         posting,
         None,
     )
     .await
 }
 
-/// Posts a message as [`create_message`] does, where `to` says; `released` names the held
-/// message it posts (`held`), which goes in the same transaction, so that it is posted once
-/// however many servers try, and its author's apps learn which message it became. Only text is
-/// posted to a thread not made yet (`To::ThreadOf`).
+/// Posts a message as [`create_message`] does, where `to` says, replying to a message there as
+/// `reply` says; `released` names the held message it posts (`held`), which goes in the same
+/// transaction, so that it is posted once however many servers try, and its author's apps learn
+/// which message it became. Only text is posted to a thread not made yet (`To::ThreadOf`), and it
+/// replies to nothing, since the thread holds nothing yet.
 #[allow(clippy::too_many_arguments)]
 async fn post(
     state: &GlobalServerContext,
@@ -443,6 +451,7 @@ async fn post(
     content: String,
     attachments: Vec<AttachmentId>,
     echo_to_parent: bool,
+    reply: Option<reply::Reply>,
     posting: Posting,
     released: Option<HeldMessageId>,
 ) -> Result<Message, crate::Error> {
@@ -458,6 +467,9 @@ async fn post(
     // Commands are checked against their channel before it is made; only `held::post`, which
     // posts text, names a thread not made yet.
     debug_assert!(unmade.is_none() || (command.is_none() && warning.is_none() && card.is_none()));
+    if unmade.is_some() && reply.is_some() {
+        return Err(crate::Error::Validation(t!("replyElsewhere")));
+    }
     let unmade_access = match &unmade {
         Some(unmade) => Some(
             check_first_reply(
@@ -586,6 +598,15 @@ async fn post(
                     echo_to_parent,
                 )
                 .await?;
+                // Whom the reply tags for what it answers, if anyone.
+                let replied = match reply {
+                    Some(reply) => {
+                        reply::check(conn.as_mut(), channel_id, reply.to, released.is_some())
+                            .await?
+                            .filter(|original| reply.tag && *original != author)
+                    }
+                    None => None,
+                };
                 // The echo is made after the reply, which names it from the start.
                 let echo = echo_to_parent.then(MessageId::new);
                 // A command's text is the command as sent, checked here, and it tags no one.
@@ -610,14 +631,13 @@ async fn post(
                         (text, mention::Mentions::default())
                     }
                     None => {
-                        let mentions = mention::resolve(
-                            state,
-                            conn.as_mut(),
-                            channel_id,
-                            &access,
-                            mention::parse(&content),
-                        )
-                        .await?;
+                        let requested = match replied {
+                            Some(original) => mention::parse(&content).with_user(original),
+                            None => mention::parse(&content),
+                        };
+                        let mentions =
+                            mention::resolve(state, conn.as_mut(), channel_id, &access, requested)
+                                .await?;
                         (content, mentions)
                     }
                 };
@@ -655,6 +675,8 @@ async fn post(
                     altered_by: altered_by.into_iter().map(Some).collect(),
                     card,
                     echo,
+                    reply_to: reply.map(|reply| reply.to),
+                    tags_replied: reply.is_some_and(|reply| reply.tag),
                 };
                 diesel::insert_into(message::table)
                     .values(&message)
@@ -1010,18 +1032,20 @@ pub async fn update_message(
     let (message, attachments, previews_cleared) = conn
         .transaction(|conn| {
             async move {
-                // New text tags afresh, with the author's permissions as they are now.
+                // New text tags afresh, with the author's permissions as they are now, and as a
+                // reply tags who it tagged when posted.
                 let mentions = match &command.content {
-                    Some(content) => Some(
-                        mention::resolve(
-                            state,
-                            conn.as_mut(),
-                            channel_id,
-                            &access,
-                            mention::parse(content),
+                    Some(content) => {
+                        let requested =
+                            match reply::tagged_on_edit(conn.as_mut(), id, caller).await? {
+                                Some(original) => mention::parse(content).with_user(original),
+                                None => mention::parse(content),
+                            };
+                        Some(
+                            mention::resolve(state, conn.as_mut(), channel_id, &access, requested)
+                                .await?,
                         )
-                        .await?,
-                    ),
+                    }
                     None => None,
                 };
                 // New text links afresh.

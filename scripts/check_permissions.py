@@ -513,6 +513,64 @@ def thread_echoes(world: World, check: Checks) -> None:
           bool(of(got, "message", id=again["id"], type="delete"))
           and world.stack.status("GET", f"/messages/{again['id']}", token=member) == 404)
 
+def replies(world: World, check: Checks) -> None:
+    say("replies to messages: where they may point, whom they tag, and what is left of a deleted original")
+    stack, member = world.stack, world.member["token"]
+    talk = world.channel("replies")
+    hidden = world.channel("hidden-replies", overrides=[{"role": world.everyone, "allow": [], "deny": ["viewChannel"]}])
+    original = world.post(talk, "a question")
+    secret = world.post(hidden, "out of sight")
+    world.stream.gather(0.8)
+
+    def reply(to: str, content: str = "an answer", **more) -> tuple[int, dict]:
+        status, body = stack.request("POST", f"/channels/{talk}/messages",
+                                     {"content": content, "attachments": [], "replyTo": to, **more}, member)
+        return status, json.loads(body) if body else {}
+
+    status, tagged = reply(original)
+    got = world.stream.gather(1.0)
+    check("a reply names what it answers and tags its author",
+          status == 201 and tagged.get("replyTo") == original
+          and tagged["mentions"]["users"] == [world.owner["id"]], tagged)
+    check("and its creation carries the reply to the stream",
+          bool(of(got, "message", id=tagged.get("id"), type="create", replyTo=original)), got)
+    status, quiet = reply(original, tagReplied=False)
+    check("a reply told not to tag tags no one", status == 201 and quiet["mentions"]["users"] == [], quiet)
+    edited = stack.api("PATCH", f"/messages/{tagged['id']}", {"content": "an edited answer"}, member)
+    check("an edit that tags afresh still tags the original's author",
+          edited["mentions"]["users"] == [world.owner["id"]], edited)
+    world.as_owner("PUT", f"/channels/{talk}/overrides/{world.everyone}", {"allow": [], "deny": ["mentionMembers"]})
+    world.stream.gather(0.8)
+    status, untagged = reply(original)
+    check("without Mention members, a reply tags no one", status == 201 and untagged["mentions"]["users"] == [],
+          untagged)
+    world.as_owner("PUT", f"/channels/{talk}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    world.stream.gather(0.8)
+    check("without Send messages, no reply is posted", reply(original)[0] == 403)
+    world.as_owner("DELETE", f"/channels/{talk}/overrides/{world.everyone}")
+    world.stream.gather(0.8)
+    elsewhere, unknown = reply(secret), reply(str(uuid.uuid4()))
+    check("a reply to a message of a channel the member cannot see is refused as one to no message is",
+          elsewhere[0] == 400 and unknown[0] == 400
+          and elsewhere[1].get("code") == unknown[1].get("code")
+          and elsewhere[1].get("detail") == unknown[1].get("detail"), (elsewhere, unknown))
+    world.as_owner("DELETE", f"/messages/{original}")
+    world.stream.gather(0.8)
+    read = stack.api("GET", f"/messages/{quiet['id']}?include=linked", token=member)
+    included = read.get("included", {})
+    check("once the original is deleted, a reply's read says so and shows nothing of it",
+          read["data"].get("replyTo") == original
+          and included.get("linkedMessages") == [{"id": original, "state": "deleted", "community": None}]
+          and all(m["id"] != original for m in included.get("messages", [])), included)
+    check("and nobody replies to it any more", reply(original)[0] == 400)
+    world.as_owner("PUT", f"/channels/{talk}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.stream.gather(0.8)
+    check("a member shut out of the channel reads none of its replies",
+          stack.status("GET", f"/messages/{quiet['id']}?include=linked", token=member) == 404)
+    world.as_owner("DELETE", f"/channels/{talk}/overrides/{world.everyone}")
+    world.stream.gather(0.8)
+
+
 def join(token: str) -> WebSocket:
     """Joins a call on the voice server with a join token."""
     socket = WebSocket(f"ws://127.0.0.1:{PORTS.voice}/ws")
@@ -2807,7 +2865,7 @@ def join_messages(world: World, check: Checks) -> None:
 
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
-             poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, calls, attachments,
+             poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, replies, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, chosen_presence, lost_presence_keys, typing, name_colours, dual_invites, device_links,
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,

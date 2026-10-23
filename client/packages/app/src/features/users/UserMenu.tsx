@@ -66,7 +66,7 @@ import {
 } from "@/features/layout/menu";
 import { toast } from "@/features/layout/toast";
 import { useOnePane } from "@/features/layout/useMediaQuery";
-import { canMentionIn, mentionIn } from "@/features/mentions/composerMentions";
+import { hasComposer, mentionIn } from "@/features/messages/composerTargets";
 import { ReportModal } from "@/features/reports/ReportDialog";
 import { NicknameForm } from "@/features/users/Nickname";
 import { ProfileCard } from "@/features/users/ProfileCard";
@@ -145,11 +145,7 @@ export function UserMenuItems({
     message: other && !inTheirDm && (!blocked || messagesAnyone),
     call: other && !user.bot && !blocked,
     mention:
-      !self &&
-      !user.system &&
-      mentionChannel !== null &&
-      mayMention &&
-      canMentionIn(mentionChannel),
+      !self && !user.system && mentionChannel !== null && mayMention && hasComposer(mentionChannel),
   };
   const ownNickname =
     self &&

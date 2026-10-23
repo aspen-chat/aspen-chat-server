@@ -66,6 +66,12 @@ export type MessageHolding = components["schemas"]["MessageHolding"];
 /** What became of a message sent: posted, or held by the server for its previews. */
 export type Sent = { kind: "posted"; message: Message } | { kind: "held"; held: HeldMessage };
 
+/** What a message sent as a reply answers: a message of its channel, and whether it tags its author. */
+export interface Reply {
+  readonly to: string;
+  readonly tag: boolean;
+}
+
 /** What to search messages for (`AspenSync.searchMessages`); at least one of the first four. */
 export interface MessageSearch {
   /** Words, in web search syntax: `"a phrase"`, `or`, `-left out`. */
@@ -1060,8 +1066,10 @@ export class AspenSync {
 
   /**
    * Posts a message, optionally naming uploaded attachments. In a thread, `echoToParent` also
-   * shows it in the thread's parent channel. The result is cached at once unless the stream
-   * delivered the message first, in which case the streamed copy is newer and is kept.
+   * shows it in the thread's parent channel. With `reply`, it replies to a message of the same
+   * channel, tagging that message's author when `reply.tag` holds. The result is cached at once
+   * unless the stream delivered the message first, in which case the streamed copy is newer and
+   * is kept.
    *
    * The server may hold a message while a preview of one of its attachments is being made, up to
    * twenty seconds from the upload, and post it then: the held message is kept in the store
@@ -1071,7 +1079,7 @@ export class AspenSync {
     channelId: string,
     content: string,
     attachments: readonly string[] = [],
-    options: { echoToParent?: boolean } = {},
+    options: { echoToParent?: boolean; reply?: Reply } = {},
   ): Promise<Sent> {
     const result = await this.#client.api.POST("/api/v1/channels/{channel}/messages", {
       params: { path: { channel: channelId } },
@@ -1079,6 +1087,9 @@ export class AspenSync {
         content,
         attachments: [...attachments],
         ...(options.echoToParent === true ? { echoToParent: true } : {}),
+        ...(options.reply === undefined
+          ? {}
+          : { replyTo: options.reply.to, tagReplied: options.reply.tag }),
         mayHold: true,
       },
     });
@@ -1105,10 +1116,13 @@ export class AspenSync {
     if (entry === undefined) {
       return undefined;
     }
-    const { channelId, content, attachments, echoToParent } = entry.message;
+    const { channelId, content, attachments, echoToParent, replyTo, tagReplied } = entry.message;
     const sent =
       entry.startsThreadOf === null
-        ? await this.sendMessage(channelId, content, attachments, { echoToParent })
+        ? await this.sendMessage(channelId, content, attachments, {
+            echoToParent,
+            ...(replyTo == null ? {} : { reply: { to: replyTo, tag: tagReplied ?? true } }),
+          })
         : await this.replyInThread(entry.startsThreadOf, content, attachments, { echoToParent });
     this.store.forgetHeldMessage(heldId);
     return sent;

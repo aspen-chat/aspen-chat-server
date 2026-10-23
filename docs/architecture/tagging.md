@@ -27,6 +27,7 @@ A tag counts wherever the message renders as text, never in code of any kind.
 - What counts is `Message.mentions` (`{users, roles, everyone}`) and a row per tag in `mention`.
 - Each row carries `home_channel`, its message's (a thread reply's is the thread's parent), set by a trigger. The activity feed reads a place's tags of everyone, its threads' among them, through it (see [Activity feed](activity-feed.md)).
 - Both are written in the transaction that posts or edits the message.
+- A reply tags the author of what it answers too, unless told not to, with Mention members like any tag (see [Replies](replies.md)).
 - An edit of the text tags afresh, with its author's permissions of the moment, and announces the new set in the message's `update`.
 
 ## Reading
