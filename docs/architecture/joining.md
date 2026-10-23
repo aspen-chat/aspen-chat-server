@@ -19,15 +19,9 @@ Each community has a default channel: the text channel new members are shown fir
 
 ### Choosing the next one
 
-`choose` ranks the community's live text channels by:
+`choose` takes the oldest of the community's live text channels that everyone's role may view, after its category's override and then its own for everyone's role (`CommunityModel::everyone_views`), or the oldest of all when everyone's role may view none. A channel's age is its UUIDv7 id, so the order needs no other column.
 
-1. whether everyone's role may view it, after its category's override and then its own for everyone's role (`CommunityModel::everyone_views`), those everyone may view first;
-2. its age, the millisecond of its UUIDv7 id, oldest first;
-3. its messages in the last 30 days, most first, counted only of channels tied on both of the above and at most 10,000 each;
-
-and the lowest id wins whatever is still tied. A channel's id records the millisecond it was made, so the count decides only between channels made in the same millisecond, which in practice only `bench seed` does.
-
-The `join_messages` migration gave each existing community the channel the first two rules pick.
+The `join_messages` migration gave each existing community the channel `choose` would pick.
 
 ## Join messages
 

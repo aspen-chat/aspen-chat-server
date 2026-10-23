@@ -11,9 +11,7 @@ CREATE INDEX community_default_channel ON community (default_channel)
 
 -- Each community starts with the text channel `app::default_channel::choose` would pick: one
 -- everyone's role may view (View channel, bit 32, after its category's and then its own
--- override for everyone's role), then the oldest, by its UUIDv7 id. Recent messages, which
--- `choose` breaks ties of the same millisecond with, are left out: no two channels made before
--- now share one but those a benchmark seeds.
+-- override for everyone's role), then the oldest, by its UUIDv7 id.
 UPDATE community SET default_channel = chosen.id
 FROM (
     SELECT DISTINCT ON (c.community) c.community, c.id

@@ -15,25 +15,19 @@ use crate::{ChannelId, CommunityId, EventScope, MaybeLoaded, MessageId, UserId, 
 use aspen_schema::{channel, community, message};
 use aspen_wire::message::MessageKind;
 use aspen_wire::message_enum::server_event::{CommunityEvent, MessageEvent, ServerEvent};
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
-/// How far back a channel's messages count toward breaking a tie between two channels made in
-/// the same millisecond.
-const RECENT_DAYS: i64 = 30;
-/// The most recent messages counted of one channel: past it, more makes no difference.
-const RECENT_COUNT_CAP: i64 = 10_000;
-
-/// The channel `community` should default to, of its live text channels: one everyone's role
-/// may view before one it may not, then the oldest, then the one with the most messages in the
-/// last `RECENT_DAYS` days. `None` without a text channel. A community holds at most
-/// `app::community::MAX_CHANNELS_AND_CATEGORIES` channels, and recent messages are counted only
-/// of channels tied on the rest, up to `RECENT_COUNT_CAP` each.
+/// The channel `community` should default to, of its live text channels: the oldest that
+/// everyone's role may view, or the oldest of all when everyone's role may view none. `None`
+/// without a text channel. A community holds at most `app::community::MAX_CHANNELS_AND_CATEGORIES`
+/// channels.
 pub async fn choose(
     conn: &mut AsyncPgConnection,
     community: CommunityId,
 ) -> crate::Result<Option<ChannelId>> {
+    // Oldest first: a UUIDv7 id begins with the moment it was made.
     let channels: Vec<ChannelId> = channel::table
         .select(channel::id)
         .filter(
@@ -53,51 +47,11 @@ pub async fn choose(
         .await?
         .remove(&community)
         .unwrap_or_else(|| CommunityModel::new(community));
-    // A channel's age is its UUIDv7 id's millisecond.
-    let rank = |channel: &ChannelId| {
-        (
-            !model.everyone_views(*channel),
-            channel.0.get_timestamp().map(|at| at.to_unix()),
-        )
-    };
-    let best = channels.iter().map(rank).min();
-    let tied: Vec<ChannelId> = channels
+    Ok(channels
         .iter()
-        .filter(|channel| Some(rank(channel)) == best)
-        .copied()
-        .collect();
-    if tied.len() <= 1 {
-        return Ok(tied.into_iter().next());
-    }
-    #[derive(QueryableByName)]
-    struct Recent {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        channel: ChannelId,
-        #[diesel(sql_type = diesel::sql_types::BigInt)]
-        recent: i64,
-    }
-    let since = crate::read_state::position_at(Utc::now() - Duration::days(RECENT_DAYS));
-    let counts: Vec<Recent> = diesel::sql_query(
-        "SELECT c AS channel,
-                (SELECT count(*) FROM (
-                    SELECT 1 FROM message
-                    WHERE channel = c AND id >= $2 AND deleted_at IS NULL
-                    LIMIT $3
-                ) recent) AS recent
-         FROM unnest($1::uuid[]) c",
-    )
-    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(
-        tied.iter().map(|channel| channel.0).collect::<Vec<_>>(),
-    )
-    .bind::<diesel::sql_types::Uuid, _>(since.0)
-    .bind::<diesel::sql_types::BigInt, _>(RECENT_COUNT_CAP)
-    .load(conn)
-    .await?;
-    // The oldest id wins what the count leaves tied, so the choice never depends on order.
-    Ok(counts
-        .into_iter()
-        .min_by_key(|row| (std::cmp::Reverse(row.recent), row.channel))
-        .map(|row| row.channel))
+        .find(|channel| model.everyone_views(**channel))
+        .or(<[ChannelId]>::first(&channels))
+        .copied())
 }
 
 /// Holds `community`'s row until the caller's transaction ends, for reading and changing its
@@ -288,7 +242,7 @@ mod tests {
     /// `choose` against the database `DATABASE_URL` names, inside a transaction that is never
     /// committed; without one it checks nothing.
     #[tokio::test]
-    async fn a_default_is_seen_by_everyone_then_oldest_then_busiest() {
+    async fn a_default_is_seen_by_everyone_then_oldest() {
         let Ok(url) = std::env::var("DATABASE_URL") else {
             eprintln!("DATABASE_URL is not set; skipped");
             return;
@@ -301,9 +255,9 @@ mod tests {
         const HIDDEN: &str = "01800000-0000-7000-8000-000000000010";
         // An older voice channel, never a default.
         const VOICE: &str = "01700000-0000-7000-8000-000000000011";
-        // Two made in the same millisecond, the second busier.
-        const QUIET: &str = "01900000-0000-7000-8000-000000000012";
-        const BUSY: &str = "01900000-0000-7000-8000-000000000013";
+        // Seen by everyone, the older first.
+        const OLDER: &str = "01900000-0000-7000-8000-000000000012";
+        const NEWER: &str = "01910000-0000-7000-8000-000000000013";
         // Younger, in a category everyone's role is allowed into.
         const YOUNG: &str = "01a00000-0000-7000-8000-000000000014";
         let view = Permissions::VIEW_CHANNEL.bits();
@@ -320,32 +274,23 @@ mod tests {
              INSERT INTO channel (id, name, ty, sort_index, community, parent_category)
                  VALUES ('{HIDDEN}', 'hidden', 'text', 0, '{COMMUNITY}', NULL),
                         ('{VOICE}', 'voice', 'voice', 1, '{COMMUNITY}', NULL),
-                        ('{QUIET}', 'quiet', 'text', 2, '{COMMUNITY}', NULL),
-                        ('{BUSY}', 'busy', 'text', 3, '{COMMUNITY}', NULL),
+                        ('{OLDER}', 'older', 'text', 2, '{COMMUNITY}', NULL),
+                        ('{NEWER}', 'newer', 'text', 3, '{COMMUNITY}', NULL),
                         ('{YOUNG}', 'young', 'text', 4, '{COMMUNITY}', '{CATEGORY}');
              INSERT INTO channel_override (channel, role, allow, deny)
                  VALUES ('{HIDDEN}', '{EVERYONE}', 0, {view});"#
         ))
         .await
         .unwrap();
-        for _ in 0..2 {
-            conn.batch_execute(&format!(
-                "INSERT INTO message (id, author, channel, content, timestamp)
-                 VALUES ('{}', '{USER}', '{BUSY}', 'm', now())",
-                MessageId::new().0
-            ))
-            .await
-            .unwrap();
-        }
         let community = CommunityId(uuid::Uuid::parse_str(COMMUNITY).unwrap());
         let id = |id: &str| Some(ChannelId(uuid::Uuid::parse_str(id).unwrap()));
         assert_eq!(
             choose(&mut conn, community).await.unwrap(),
-            id(BUSY),
-            "seen by everyone, oldest, then busiest"
+            id(OLDER),
+            "the oldest seen by everyone"
         );
         conn.batch_execute(&format!(
-            "UPDATE channel SET deleted_at = now() WHERE id IN ('{BUSY}', '{QUIET}');
+            "UPDATE channel SET deleted_at = now() WHERE id IN ('{OLDER}', '{NEWER}');
              INSERT INTO category_override (category, role, allow, deny)
                  VALUES ('{CATEGORY}', '{EVERYONE}', 0, {view});"
         ))
