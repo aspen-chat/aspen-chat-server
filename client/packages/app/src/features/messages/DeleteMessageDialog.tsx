@@ -1,17 +1,7 @@
-import { ACTION_ICON } from "@/features/messages/actionIcon";
 import { ApiProblemError } from "@aspen/protocol";
-import { TrashIcon } from "@phosphor-icons/react";
 import { useState } from "react";
-import {
-  Button,
-  Dialog,
-  DialogTrigger,
-  Modal,
-  ModalOverlay,
-  type ModalOverlayProps,
-} from "react-aria-components";
+import { Button, Dialog, Modal, ModalOverlay, type ModalOverlayProps } from "react-aria-components";
 import { useSync } from "@/api/hooks";
-import { Tooltip } from "@/features/layout/Tooltip";
 import {
   dangerButtonClass,
   dialogClass,
@@ -21,30 +11,9 @@ import {
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
 
-/** A message's Delete control and the confirmation it asks for. */
-export function DeleteMessageDialog({
-  messageId,
-  triggerClassName,
-}: {
-  messageId: string;
-  triggerClassName: string;
-}) {
-  const m = useMessages();
-  return (
-    <DialogTrigger>
-      <Tooltip text={m.deleteMessage}>
-        <Button className={triggerClassName} aria-label={m.deleteMessage}>
-          <TrashIcon size={ACTION_ICON} aria-hidden="true" />
-        </Button>
-      </Tooltip>
-      <DeleteMessageModal messageId={messageId} />
-    </DialogTrigger>
-  );
-}
-
 /**
- * The confirmation that deletes the message: opened by the trigger around it, or, given
- * `isOpen`, by whatever holds it (a touch screen's message actions, which close as it opens).
+ * The confirmation that deletes the message, opened by whatever holds it (`isOpen`): a message's
+ * menu or a touch screen's message actions, which close as it opens.
  */
 export function DeleteMessageModal({
   messageId,

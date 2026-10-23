@@ -18,6 +18,7 @@ import {
 // React Aria Components has no long press; the hook it is built on does.
 import { useLongPress } from "react-aria";
 import { Button } from "react-aria-components";
+import { Tooltip } from "@/features/layout/Tooltip";
 import {
   useChannel,
   useChannelAccess,
@@ -158,7 +159,8 @@ function actionsPlace(
  * grouped message, which has none, keeps it after whatever it ends with.
  *
  * Its actions (`MessageActions`) show in a bar rising over its top corner while the pointer is
- * over it or focus is in it, kept out of the layout so the header and body sit where they
+ * over it or focus is in it, ending with a button that opens the menu a right click does, which
+ * has the rest; the bar is kept out of the layout so the header and body sit where they
  * would without it; near the top of its list, the bar rises only as far as there is room. They
  * are built only while the row is engaged (`useRowEngagement`): each button of theirs holds
  * state of its own, and a window of messages holds thousands of them, nearly all unseen. A row
@@ -227,6 +229,8 @@ export const MessageItem = memo(function MessageItem({
   // The actions a right click offers, with what was right-clicked inside the message.
   const menu = useContextMenu();
   const [under, setUnder] = useState<UnderPointer>(null);
+  // The last of the pointer's actions, which opens the same menu beside it.
+  const moreButton = useRef<HTMLButtonElement>(null);
   // The reader's most used emoji are read as the finger goes down, or the menu opens, so the
   // quick reactions have them by the time they show.
   const readQuickReactions = () => {
@@ -427,6 +431,7 @@ export const MessageItem = memo(function MessageItem({
           canReact={permissions.has("addReactions")}
           actions={actions}
           open={setSheet}
+          button={moreButton}
         />
       )}
       {(pressed || menu.opened) && (
@@ -527,7 +532,23 @@ export const MessageItem = memo(function MessageItem({
             style={{ top: -toolbarRise }}
           >
             {engaged ? (
-              <MessageActions {...actions} />
+              <>
+                <MessageActions {...actions} />
+                <Tooltip text={m.moreMessageActions}>
+                  <Button
+                    ref={moreButton}
+                    aria-label={m.moreMessageActions}
+                    onPress={(event) => {
+                      readQuickReactions();
+                      setUnder(null);
+                      menu.toggleFromButton(event.pointerType === "keyboard");
+                    }}
+                    className={actionClass}
+                  >
+                    <DotsThreeIcon size={ACTION_ICON} aria-hidden="true" />
+                  </Button>
+                </Tooltip>
+              </>
             ) : (
               <ActionsStandIn
                 onReach={(end) => {

@@ -1289,6 +1289,7 @@
   "deleting": "Deleting…",
   "messageActionsLabel": "Message actions",
   "showMessageActions": "Show message actions",
+  "moreMessageActions": "More actions",
   "longPressForActions": "Press and hold for the message's actions",
   "copyMessageText": "Copy text",
   "copiedMessageText": "Copied text",

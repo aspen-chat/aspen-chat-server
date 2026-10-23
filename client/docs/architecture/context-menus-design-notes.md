@@ -11,6 +11,10 @@ drift from the row: an action added to one and not the other, or offered under o
 person's actions are likewise one `UserMenuItems`, which every place that names someone opens, and
 which a DM's row and a call's participant hold inside their own menus.
 
+The row over a message keeps to what is done often (react, reply, save, pin, reactions, thread,
+echo, edit) and ends with a button opening the menu, which has everything. With every action in it,
+the row ran past the edge of a thread's pane at its first width, and of the channel beside it.
+
 ## One menu per thing clicked
 
 A DM's row, and a person in a call, are both a place and a person. Two menus, one for each, would

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   bob,
   gifPageLink,
@@ -41,6 +41,86 @@ test("right-clicking a message offers its actions by name", async ({ page }) => 
   await page.screenshot({ path: "test-results/message-menu.png" });
   await menu.getByRole("menuitem", { name: "Copy text" }).click();
   await expect(menu).toBeHidden();
+});
+
+/** Where `locator` is drawn, which it must be. */
+async function boxOf(locator: Locator) {
+  const box = await locator.boundingBox();
+  if (box === null) {
+    throw new Error("not drawn");
+  }
+  return box;
+}
+
+/** What the row of actions over a message leaves to its menu. */
+const menuOnly = [
+  "Mark unread",
+  "Delete message",
+  "Copy text",
+  "Copy link",
+  "Report message",
+  "Copy message ID",
+];
+
+test("the row of actions over a message ends with a button opening its menu", async ({ page }) => {
+  const others = message(page);
+  await others.hover();
+  const bar = others.getByRole("group", { name: "Message actions" });
+  await expect(bar.getByRole("button").last()).toHaveAccessibleName("More actions");
+  for (const name of menuOnly) {
+    await expect(bar.getByRole("button", { name })).toHaveCount(0);
+  }
+  await bar.getByRole("button", { name: "More actions" }).click();
+  const menu = messageMenu(page);
+  for (const item of ["Mark unread", "Copy text", "Copy link", "Report message"]) {
+    await expect(menu.getByRole("menuitem", { name: item })).toBeVisible();
+  }
+  // Beside the button, not wherever the pointer was.
+  const button = await boxOf(bar.getByRole("button", { name: "More actions" }));
+  expect((await boxOf(menu)).y).toBeGreaterThanOrEqual(button.y + button.height);
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+
+  // The caller's own message, from the keyboard: its menu deletes it.
+  const own = page.locator("article").filter({ hasText: ownText }).last();
+  await own.hover();
+  await own.getByRole("button", { name: "More actions" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(menu.getByRole("menuitem").first()).toBeFocused();
+  await menu.getByRole("menuitem", { name: "Delete message" }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+});
+
+test("the row of actions fits a thread at its first width, and the channel beside it", async ({
+  page,
+}) => {
+  // Developer mode, which offers each message's ID, and the caller's own messages, which they
+  // may edit, delete, and echo to the channel: the most a message offers.
+  await page.route(/\/api\/v1\/users\/(@|%40)me\/preferences$/, async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      json: { values: { "developer.mode": true }, updatedAt: new Date().toISOString() },
+    });
+  });
+  await page.reload();
+  await page.getByRole("link", { name: /2 replies/ }).click();
+  const thread = page.getByRole("complementary", { name: "Thread" });
+  for (const [pane, text] of [
+    [thread, "Perfect, thank you!"],
+    [page.locator("main"), "Who is bringing snacks on Saturday?"],
+  ] as const) {
+    const own = pane.locator("article").filter({ hasText: text }).last();
+    await own.hover();
+    const bar = own.getByRole("group", { name: "Message actions" });
+    await expect(bar.getByRole("button", { name: "Reply", exact: true })).toBeVisible();
+    const room = await boxOf(pane);
+    const row = await boxOf(bar);
+    expect(row.x).toBeGreaterThanOrEqual(room.x);
+    expect(row.x + row.width).toBeLessThanOrEqual(room.x + room.width);
+  }
 });
 
 const bobsName = "Bob With A Rather Long Display Name";

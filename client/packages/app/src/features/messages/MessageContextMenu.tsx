@@ -1,5 +1,5 @@
 import { ArrowSquareOutIcon, CopyIcon, DownloadSimpleIcon, LinkIcon } from "@phosphor-icons/react";
-import type { ComponentProps } from "react";
+import type { ComponentProps, RefObject } from "react";
 import { Menu, MenuSection } from "react-aria-components";
 import { copyText } from "@/features/layout/clipboard";
 import { ContextMenu } from "@/features/layout/ContextMenu";
@@ -29,12 +29,13 @@ function openElsewhere(url: string) {
 }
 
 /**
- * A message's actions, opened by right-clicking it: the reader's quick reactions, where they
- * may react, with Add a reaction beside them; what was right-clicked, when it is an attachment
- * or a link's picture (open it, save it, copy a picture, copy its address) or a link (open it,
- * copy its address); and then every action the
- * row of buttons over the message offers, by name, through the same `MessageActions`. What an
- * action opens goes through `open`, outside the menu, which closes as it is chosen.
+ * A message's actions, opened by right-clicking it or by the last button of the row over it
+ * (`button`), beside which it then opens: the reader's quick reactions, where they may react,
+ * with Add a reaction beside them; what was right-clicked, when it is an attachment or a link's
+ * picture (open it, save it, copy a picture, copy its address) or a link (open it, copy its
+ * address); and then every action the message has, by name, through the same `MessageActions`,
+ * those the row offers and those it leaves to the menu. What an action opens goes through
+ * `open`, outside the menu, which closes as it is chosen.
  */
 export function MessageContextMenu({
   menu,
@@ -42,12 +43,14 @@ export function MessageContextMenu({
   canReact,
   actions,
   open,
+  button,
 }: {
   menu: ContextMenuState;
   under: UnderPointer;
   canReact: boolean;
   actions: Omit<ComponentProps<typeof MessageActions>, "open" | "onDone">;
   open: (sheet: MessageSheet) => void;
+  button: RefObject<HTMLElement | null>;
 }) {
   const m = useMessages();
   const close = () => {
@@ -72,7 +75,7 @@ export function MessageContextMenu({
     );
   };
   return (
-    <ContextMenu menu={menu} label={m.messageActionsLabel}>
+    <ContextMenu menu={menu} label={m.messageActionsLabel} button={button}>
       {canReact && (
         <QuickReactions
           messageId={actions.messageId}

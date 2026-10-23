@@ -31,20 +31,22 @@ test("with developer mode on, IDs are offered for copying, last in each place", 
     .getByText("general", { exact: true })
     .click();
 
-  // A message's actions end with its ID.
+  // A message's menu, from the last of its actions, has its ID last before deleting it.
   const own = page.locator("article").filter({ hasText: ownText }).last();
   await own.hover();
-  const actions = own.getByRole("group", { name: "Message actions" }).getByRole("button");
-  await expect(actions.last()).toHaveAccessibleName("Copy message ID");
+  await own.getByRole("button", { name: "More actions" }).click();
+  const actions = page.getByRole("menu", { name: "Message actions" }).getByRole("menuitem");
+  await expect(actions.last()).toHaveText("Delete message");
+  await expect(actions.nth(-2)).toHaveText("Copy message ID");
   // Reading the clipboard back takes a permission only Chromium's driver grants.
   if (browserName === "chromium") {
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   }
-  await actions.last().click();
-  await expect(actions.last()).toHaveAccessibleName("Copied message ID");
+  await actions.nth(-2).click();
   if (browserName === "chromium") {
-    const copied = await page.evaluate(() => navigator.clipboard.readText());
-    expect(copied).toBe(await own.getAttribute("data-message-id"));
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe(await own.getAttribute("data-message-id"));
   }
 
   // So does a channel's menu.

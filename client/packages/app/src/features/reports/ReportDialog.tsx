@@ -1,10 +1,9 @@
 import { ApiProblemError, type ProfileAspect, type ReportCategory } from "@aspen/protocol";
-import { CaretDownIcon, FlagIcon } from "@phosphor-icons/react";
+import { CaretDownIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import {
   Button,
   Dialog,
-  DialogTrigger,
   Label,
   ListBox,
   ListBoxItem,
@@ -39,8 +38,6 @@ import { ChoiceCheckbox } from "@/features/layout/choices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { Skeleton } from "@/features/layout/Skeleton";
 import { toast } from "@/features/layout/toast";
-import { Tooltip } from "@/features/layout/Tooltip";
-import { ACTION_ICON } from "@/features/messages/actionIcon";
 import { PROFILE_ASPECTS } from "@/features/users/profileAspects";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -54,30 +51,9 @@ export type ReportTarget =
   | { kind: "profile"; userId: string; name: string }
   | { kind: "nickname"; communityId: string; userId: string; nickname: string };
 
-/** A message's Report control and the dialog it opens. */
-export function ReportMessageButton({
-  messageId,
-  triggerClassName,
-}: {
-  messageId: string;
-  triggerClassName: string;
-}) {
-  const m = useMessages();
-  return (
-    <DialogTrigger>
-      <Tooltip text={m.reports.reportMessage}>
-        <Button className={triggerClassName} aria-label={m.reports.reportMessage}>
-          <FlagIcon size={ACTION_ICON} aria-hidden="true" />
-        </Button>
-      </Tooltip>
-      <ReportModal target={{ kind: "message", messageId }} />
-    </DialogTrigger>
-  );
-}
-
 /**
  * The report form, in a modal: opened by the trigger around it, or, given `isOpen`, by whatever
- * holds it (a touch screen's message actions, which close as it opens).
+ * holds it (a message's menu, or a touch screen's message actions, which close as it opens).
  */
 export function ReportModal({
   target,

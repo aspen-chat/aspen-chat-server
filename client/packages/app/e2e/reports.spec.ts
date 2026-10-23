@@ -35,7 +35,11 @@ async function messageAction(page: Page, isMobile: boolean, action: string) {
       .tap();
   } else {
     await message.hover();
-    await message.getByRole("button", { name: action }).click();
+    await message.getByRole("button", { name: "More actions" }).click();
+    await page
+      .getByRole("menu", { name: "Message actions" })
+      .getByRole("menuitem", { name: action })
+      .click();
   }
 }
 
