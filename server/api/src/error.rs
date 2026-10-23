@@ -85,6 +85,10 @@ pub enum ProblemCode {
     LastSecondFactor,
     /// The authenticator's response to a passkey ceremony did not verify.
     PasskeyRejected,
+    /// A passkey sign-in named a credential no account on this deployment holds: it was
+    /// removed, its account deleted, or it was never registered here. A web client tells the
+    /// browser (`PublicKeyCredential.signalUnknownCredential`) so it stops offering it.
+    PasskeyUnknown,
     /// A sign-in code (`/auth/device-links`) is unknown, has expired, or was already used to
     /// sign in. Make a new one.
     DeviceLinkExpired,
@@ -176,9 +180,9 @@ impl ProblemCode {
             | ProblemCode::RateLimited
             | ProblemCode::UploadQuotaExceeded
             | ProblemCode::ChannelBusy => StatusCode::TOO_MANY_REQUESTS,
-            ProblemCode::PasskeyRejected | ProblemCode::DeviceChallengeInvalid => {
-                StatusCode::BAD_REQUEST
-            }
+            ProblemCode::PasskeyRejected
+            | ProblemCode::PasskeyUnknown
+            | ProblemCode::DeviceChallengeInvalid => StatusCode::BAD_REQUEST,
             ProblemCode::PasskeysUnavailable => StatusCode::NOT_FOUND,
             ProblemCode::PasswordResetUnavailable | ProblemCode::PasswordResetExpired => {
                 StatusCode::NOT_FOUND
@@ -234,6 +238,7 @@ impl ProblemCode {
             ProblemCode::UploadQuotaExceeded => t!("problemUploadQuotaExceeded"),
             ProblemCode::LastSecondFactor => t!("problemLastSecondFactor"),
             ProblemCode::PasskeyRejected => t!("problemPasskeyRejected"),
+            ProblemCode::PasskeyUnknown => t!("problemPasskeyUnknown"),
             ProblemCode::PasskeysUnavailable => t!("problemPasskeysUnavailable"),
             ProblemCode::DeviceLinkExpired => t!("problemDeviceLinkExpired"),
             ProblemCode::DeviceLinkUsed => t!("problemDeviceLinkUsed"),
@@ -392,6 +397,9 @@ impl From<app::Error> for ApiError {
             app::Error::PasskeyRejected(reason) => {
                 tracing::debug!(reason, "passkey rejected");
                 Self::new(ProblemCode::PasskeyRejected)
+            }
+            app::Error::PasskeyUnknown => {
+                Self::new(ProblemCode::PasskeyUnknown).with_detail(t!("passkeyUnknownDetail"))
             }
             app::Error::PollClosed => Self::new(ProblemCode::PollClosed),
             app::Error::RegistrationInviteRequired => {

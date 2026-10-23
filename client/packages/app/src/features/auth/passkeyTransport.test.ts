@@ -23,7 +23,7 @@ describe("passkeyTransport", () => {
   it("runs in the page when the web client is under the relying party's domain", () => {
     // jsdom serves the page from localhost.
     vi.stubGlobal("PublicKeyCredential", {});
-    expect(passkeyTransport("web", withPasskeys)).toEqual({ kind: "inPage" });
+    expect(passkeyTransport("web", withPasskeys)).toEqual({ kind: "inPage", rpId: "localhost" });
     expect(
       passkeyTransport("web", { ...server, passkeys: { rpId: "chat.example.org" } }),
     ).toBeNull();

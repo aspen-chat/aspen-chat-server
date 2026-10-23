@@ -33,6 +33,7 @@ import uuid
 import zlib
 from pathlib import Path
 
+from software_passkey import SoftwarePasskey, b64url
 from stack import REPO, Failed, Ports, Stack, WebSocket, compose, psql, start_services, wait_for, wait_for_services
 
 PORTS = Ports(nats=14322, api=18100, voice=19101, api_metrics=19564, voice_metrics=19565, rtc_min=45200, rtc_max=45399,
@@ -40,8 +41,11 @@ PORTS = Ports(nats=14322, api=18100, voice=19101, api_metrics=19564, voice_metri
 PASSWORD = "check-permissions-password"
 # Scenarios make several accounts and many changes in moments, as no person would. Mail goes to
 # an SMTP port nothing listens on, so what is queued stays among the jobs to be read.
+# An Android app the deployment names (`[auth] android_apps`), whose passkey ceremonies it accepts.
+ANDROID_APP = ("org.example.fork", bytes(range(32)))
 SETTINGS = ("[rate_limits]\nenabled = false\n"
-            "[email]\nsmtp_url = \"smtp://127.0.0.1:9\"\nfrom = \"Aspen <noreply@localhost>\"\n")
+            "[email]\nsmtp_url = \"smtp://127.0.0.1:9\"\nfrom = \"Aspen <noreply@localhost>\"\n"
+            f"[auth]\nandroid_apps = [\"{ANDROID_APP[0]}={ANDROID_APP[1].hex()}\"]\n")
 
 
 def eventually(probe, seconds: float = 15) -> bool:
@@ -1572,6 +1576,67 @@ def typed_device_links(world: World, check: Checks) -> None:
     check("a cancelled link's code matches nothing", cancelled[0] == 404 and "deviceLinkCodeUnknown" in cancelled[1],
           cancelled)
 
+
+def passkeys(world: World, check: Checks) -> None:
+    say("passkeys: who reads the accepted list, and what sign-in says of one removed")
+    stack = world.stack
+    member = world.member
+    authenticator = SoftwarePasskey("localhost", f"http://localhost:{PORTS.api}")
+
+    def sign_in(origin: str | None = None) -> tuple[int, str]:
+        started = stack.api("POST", "/auth/passkey-ceremonies", {"purpose": "signIn"})
+        return stack.request("POST", f"/auth/passkey-ceremonies/{started['id']}/credential",
+                             {"credential": authenticator.assert_(started["options"], origin)})
+
+    stack.api("POST", "/auth/reauthenticate", {"method": "password", "secret": PASSWORD}, member["token"])
+    started = stack.api("POST", "/auth/passkey-ceremonies", {"purpose": "register", "name": "Script"},
+                        member["token"])
+    added = stack.api("POST", f"/auth/passkey-ceremonies/{started['id']}/credential",
+                      {"credential": authenticator.register(started["options"])}, member["token"])
+    check("a passkey registers", added.get("outcome") == "passkeyAdded", added)
+    passkey = added.get("passkey", {})
+    check("and is known by its credential id", passkey.get("credentialId") == authenticator.id, passkey)
+    settings = stack.api("GET", "/users/@me/security", token=member["token"])
+    check("the account's own settings give the user handle its passkeys hold",
+          settings["passkeyUserHandle"] == b64url(uuid.UUID(member["id"]).bytes), settings)
+    check("and the whole accepted list", [p["credentialId"] for p in settings["passkeys"]] == [authenticator.id],
+          settings)
+    check("no one else reads them", stack.status("GET", f"/users/{member['id']}/security", token=world.owner["token"]) == 403)
+    check("nor anyone signed out", stack.status("GET", f"/users/{member['id']}/security") == 401)
+    status, body = sign_in()
+    check("it signs its account in", status == 200 and json.loads(body).get("userId") == member["id"], (status, body))
+
+    methods = stack.api("GET", "/auth/methods")
+    fingerprint = ":".join(f"{byte:02X}" for byte in ANDROID_APP[1])
+    named = {"packageName": ANDROID_APP[0], "sha256CertFingerprint": fingerprint}
+    check("the deployment names the Android apps it accepts",
+          named in (methods.get("passkeys") or {}).get("androidApps", []), methods)
+    status, body = stack.request("GET", f"{stack.base}/.well-known/assetlinks.json")
+    statements = json.loads(body) if status == 200 else []
+    check("in its Digital Asset Links too", {"relation": ["delegate_permission/common.get_login_creds"],
+                                             "target": {"namespace": "android_app", "package_name": ANDROID_APP[0],
+                                                        "sha256_cert_fingerprints": [fingerprint]}} in statements,
+          (status, body))
+    status, body = sign_in(f"android:apk-key-hash:{b64url(ANDROID_APP[1])}")
+    check("a ceremony that app ran signs in", status == 200, (status, body))
+    status, body = sign_in(f"android:apk-key-hash:{b64url(bytes(32))}")
+    check("one another app ran does not", status == 400 and "passkeyRejected" in body, (status, body))
+
+    # The passkey turned two-factor sign-in on, so another sign-in is the passkey's own.
+    status, body = sign_in()
+    signed = json.loads(body) if status == 200 else {}
+    second = {"token": signed.get("sessionToken"), "refresh": signed.get("refreshToken")}
+    stack.api("DELETE", f"/users/@me/passkeys/{passkey.get('id')}", token=member["token"])
+    settings = stack.api("GET", "/users/@me/security", token=second["token"])
+    check("after removal the accepted list, read from any sign-in, is empty", settings["passkeys"] == [], settings)
+    status, body = sign_in()
+    check("and signing in with the removed passkey says it is unknown, so the browser forgets it",
+          status == 400 and "passkeyUnknown" in body, (status, body))
+    stack.api("POST", "/auth/logout", {"refreshToken": second["refresh"]}, second["token"])
+    check("a sign-in that ended reads no list",
+          stack.status("GET", "/users/@me/security", token=second["token"]) == 401)
+
+
 def name_colours(world: World, check: Checks) -> None:
     say("name colours, from a community role and a deployment role")
     stack = world.stack
@@ -3013,6 +3078,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, replies, calls, attachments,
              operators, deployment_settings, sign_ins, removal, presence, chosen_presence, lost_presence_keys, typing, channel_mana, name_colours, dual_invites, device_links, typed_device_links,
+             passkeys,
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
@@ -3034,7 +3100,7 @@ def main() -> None:
     check = Checks()
     try:
         say("starting a database and a NATS of its own, the chat server, and the voice server")
-        with Stack(args.bin.resolve(), "permissions", PORTS, SETTINGS) as stack:
+        with Stack(args.bin.resolve(), "permissions", PORTS, SETTINGS, public_host="localhost") as stack:
             run = format(int(time.time() * 1000) % 36**6, "x")
             only = None if args.only is None else set(args.only.split(","))
             for index, scenario in enumerate(SCENARIOS):

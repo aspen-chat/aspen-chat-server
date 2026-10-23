@@ -8,6 +8,8 @@
 | The welcome                    | `DeploymentWelcome` (`src/features/auth/DeploymentWelcome.tsx`)                                                                                                        |
 | Which server                   | `defaultServerUrl` (`src/config.ts`), `ServerChoice`, `ServerForm`, `normalizeServerUrl`, `detectShell`                                                                |
 | Passkeys                       | `runPasskeyCeremony`, `PasskeyTransport` (`packages/protocol/src/passkeys.ts`), `src/features/auth/passkeyTransport.ts`, `packages/desktop/src/main/passkeyHandoff.ts` |
+| Passkey autofill and signals   | `useConditionalPasskey`, `passkeySignals.ts` (`src/features/auth`), `runConditionalPasskeySignIn`                                                                      |
+| Android's own passkeys         | `nativePasskeys.ts` (`src/features/auth`), `AspenPasskeysPlugin` (`packages/mobile/android`)                                                                           |
 | Signing in from another device | `OtherDeviceSignIn`, `DeviceLinkCode`, `DeviceLinkScreen`, `thisDeviceName`                                                                                            |
 | Email                          | `src/features/email`: `useEmailPolicy`, `PasswordReset`, `VerificationScreen`, `EmailDialog`, `EmailPanel`                                                             |
 | Device credentials             | `AspenClient` and `device.ts` (`packages/protocol/src`), `src/api/devices.ts`, `src/api/devicePuzzle.worker.ts`                                                        |
@@ -84,6 +86,7 @@ chosen in `src/features/auth/passkeyTransport.ts`:
 | Web client served under the server's `rpId` | Runs the ceremony in its own page                                                                        |
 | Web client served elsewhere                 | Offers no passkeys                                                                                       |
 | Desktop and mobile                          | Hands it to the server's `/auth/passkey` page in the system browser, never running one in their own page |
+| Android, where the deployment names the app | Runs it through Credential Manager, falling back to the system browser                                   |
 
 On the desktop (`packages/desktop/src/main/passkeyHandoff.ts`):
 
@@ -100,6 +103,55 @@ On mobile:
   `CFBundleURLTypes` in `ios/App/App/Info.plist` on iOS, whose `SceneDelegate` hands opened URLs to
   Capacitor (`SceneDelegateProxy`).
 - This path has not yet run on a device.
+
+### Android's own passkeys
+
+A deployment that names the Android app in its `/.well-known/assetlinks.json` lets the app use its
+passkeys through Credential Manager, as a page at its domain would (see the server's
+`docs/architecture/sign-in-and-security/passkeys.md`). `resolvePasskeyTransport` picks the `native`
+transport when:
+
+- the shell is the Android app with `AspenPasskeysPlugin`, on Android 9 or later;
+- `GET /auth/methods` lists the app's package with a certificate it is signed with
+  (`passkeys.androidApps`; a deployment that predates the list names none).
+
+The plugin hands Credential Manager the ceremony's `publicKey` options as the server gave them, and
+the credential back as the JSON the server reads. It asks only for passkeys and providers at hand on
+the phone (`preferImmediatelyAvailableCredentials`): otherwise, with none for the deployment,
+Google's sheet waits to be dismissed, which reads as cancelled, where the browser could still have
+reached a security key or another phone. `PasskeyPlatformTest` (a device test) holds that a
+deployment that does not name the app fails at once as `unavailable`. The ceremony starts and
+completes as one in a page does, by the sign-in that started it. When Credential Manager is missing,
+no provider answers, or Android refuses the app for the domain (`unavailable`), the ceremony is left
+to expire and another goes to the system browser (`fallback`). A dismissed prompt (`cancelled`) ends
+it.
+
+### Autofill
+
+The web client's sign-in form offers passkeys among the username field's suggestions
+(`autocomplete="username webauthn"`), where it runs ceremonies in its own page and the browser has
+conditional mediation. `useConditionalPasskey` starts a `signIn` ceremony as the form opens
+(`runConditionalPasskeySignIn`, `mediation: "conditional"`), and the one picked signs in.
+
+- Signing in with a password, pressing the passkey button, or leaving the form aborts it first.
+- It ends 15 seconds before its ceremony expires.
+- Another starts only when the person returns to the username field with none waiting, never on a
+  timer: each start counts toward the sign-in rate limits.
+- A refused start is silent. A passkey the server refuses shows its Problem, as the button's does.
+
+### Signals
+
+Where the page runs ceremonies itself (`inPage`), it tells the browser's passkey managers what the
+server holds, through WebAuthn's Signals API (`signalUnknownCredential`,
+`signalAllAcceptedCredentials`, `signalCurrentUserDetails` in `packages/protocol/src/passkeys.ts`),
+feature-detected and silent where missing:
+
+- a passkey the server answers `passkeyUnknown` for, from the ceremony that used it;
+- every passkey of the account, each time Sign-in and security reads its settings
+  (`useSignalAcceptedPasskeys`), so after every change there too;
+- the username and display name after the profile's display name changes (`signalProfileToPasskeys`,
+  which reads the account's user handle from its security settings only where the browser has the
+  signal, and sends nothing for an account without passkeys).
 
 ## Signing in from another device
 

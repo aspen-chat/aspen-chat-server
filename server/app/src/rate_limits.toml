@@ -43,7 +43,8 @@
 #
 # Endpoints are named by method and path template without `/api/v1`, as in the OpenAPI
 # document, plus `GET /events` for the event stream, `GET /auth/passkey` for the passkey page,
-# `GET /.well-known/aspen` for the federation document, `GET` and `POST /email/unsubscribe`
+# `GET /.well-known/aspen` for the federation document, `GET /.well-known/assetlinks.json` for
+# the Android apps that may use this deployment's passkeys, `GET` and `POST /email/unsubscribe`
 # for the page unsubscribe links open, and `GET /invite/{code}` and `GET /{*path}` for the web
 # client's pages (all but the first served at those paths, outside `/api/v1`). The pages
 # check their own limits and are served, over them, without what they preview as; the web
@@ -100,6 +101,7 @@ device_exempt = [
   "POST /auth/passkey-ceremonies/{ceremony}/credential",
   "POST /auth/token-refresh",
   "GET /.well-known/aspen",
+  "GET /.well-known/assetlinks.json",
   "GET /federation/icons/{icon}",
   "POST /federation/notices",
   "POST /federation/standing",
@@ -469,6 +471,11 @@ ip = { requests = 3000, per_seconds = 60, burst = 1000 }
 # Other deployments read it when they meet this one and now and then after; each API server of
 # theirs reads it on its own.
 ip = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."GET /.well-known/assetlinks.json"]
+# Google's servers read it for every device that checks an app against this deployment, and
+# devices themselves now and then; the answer is the same each time and costs nothing to make.
+ip = { requests = 600, per_seconds = 60, burst = 200 }
 
 [rate_limits.endpoints."POST /auth/assertions"]
 # A client asks for one each time it signs in somewhere; people have a handful of deployments.

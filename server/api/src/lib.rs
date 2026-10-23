@@ -16,6 +16,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 pub mod activity;
 pub mod admin;
+pub mod asset_links;
 pub mod attachment;
 pub mod auth;
 pub mod ban;
@@ -723,6 +724,17 @@ pub async fn start(write_schema: bool, role: Role) -> Result<Option<Serving>, ap
             rate_limit::limit_requests,
         ))
         .route_layer(axum::middleware::from_fn(metrics::observe));
+    // Android reads which apps may use this deployment's passkeys here (`api::asset_links`).
+    let asset_links = OpenApiRouter::<GlobalServerContext>::new()
+        .route(
+            rate_limit::ASSET_LINKS.1,
+            axum::routing::get(asset_links::asset_links),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            context.clone(),
+            rate_limit::limit_requests,
+        ))
+        .route_layer(axum::middleware::from_fn(metrics::observe));
     // An invite's page, which checks its own limits (`api::web_client`). A path under `/api/`
     // that no route has, such as a newer version's, is not found rather than a page.
     let web = OpenApiRouter::<GlobalServerContext>::new()
@@ -740,6 +752,7 @@ pub async fn start(write_schema: bool, role: Role) -> Result<Option<Serving>, ap
         .merge(page)
         .merge(unsubscribe)
         .merge(well_known)
+        .merge(asset_links)
         .merge(web);
     // Every other path is the web client's: a file of it, or its page.
     let files = web_client::files(context.clone());

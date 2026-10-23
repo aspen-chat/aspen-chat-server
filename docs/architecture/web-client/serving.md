@@ -23,6 +23,7 @@ Vite's origin, which proxies the server's own paths to the server.
 | Every other path under `/api/` | A `404` Problem rather than a page, so a newer client's request is not answered with HTML |
 | `/auth/passkey`                | The passkey page                                                                          |
 | `/.well-known/aspen`           | The federation document                                                                   |
+| `/.well-known/assetlinks.json` | The Android apps that may use the deployment's passkeys (`api::asset_links`)              |
 | `/email/unsubscribe`           | The unsubscribe page                                                                      |
 | `/invite/{code}`               | The invite page                                                                           |
 

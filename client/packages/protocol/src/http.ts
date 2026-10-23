@@ -15,7 +15,9 @@ import {
   handoffPageUrl,
   pkcePair,
   PasskeyCancelledError,
+  PasskeyUnavailableError,
   runInPage,
+  signalUnknownCredential,
   type Passkey,
   type PasskeyPurpose,
   type PasskeyTransport,
@@ -88,6 +90,12 @@ export type DeviceLinkClaim =
 export type LoginOutcome =
   | { status: "signedIn"; session: Session }
   | { status: "secondFactorRequired"; ticket: string; methods: SecondFactorMethod[] };
+
+/**
+ * How long before its ceremony expires a conditional sign-in stops offering passkeys, so that a
+ * pick never reaches the server after it.
+ */
+const CONDITIONAL_EXPIRY_MARGIN_MS = 15_000;
 
 /** What a passkey ceremony asks for. */
 export interface PasskeyRequest {
@@ -402,13 +410,39 @@ export class AspenClient {
         await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies`, { body: request }),
       );
       const credential = await runInPage(started.purpose, started.options);
-      const completed = unwrap(
-        await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies/{ceremony}/credential`, {
-          params: { path: { ceremony: started.id } },
-          body: { credential },
-        }),
+      return this.#completeInPage(transport.rpId, started.id, credential);
+    }
+    if (transport.kind === "native") {
+      // Run like one in this page: started and completed by this sign-in, so it stays bound
+      // to it. A ceremony the platform cannot run is left to expire, and another goes to the
+      // system browser.
+      const started = unwrap(
+        await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies`, { body: request }),
       );
-      return this.#passkeyOutcome(completed);
+      const publicKey = (started.options as { publicKey?: unknown }).publicKey;
+      let credential: Record<string, unknown>;
+      try {
+        credential =
+          started.purpose === "register"
+            ? await transport.native.create(publicKey)
+            : await transport.native.get(publicKey);
+      } catch (e) {
+        if (e instanceof PasskeyUnavailableError) {
+          return this.runPasskeyCeremony(request, {
+            kind: "handoff",
+            handoff: transport.fallback,
+          });
+        }
+        throw e;
+      }
+      return this.#passkeyOutcome(
+        unwrap(
+          await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies/{ceremony}/credential`, {
+            params: { path: { ceremony: started.id } },
+            body: { credential },
+          }),
+        ),
+      );
     }
     const handoff = await transport.handoff.prepare();
     try {
@@ -432,6 +466,69 @@ export class AspenClient {
     } finally {
       handoff.dispose();
     }
+  }
+
+  /**
+   * Signs in with a passkey offered among the username field's autofill suggestions
+   * (`mediation: "conditional"`), in a page under the relying party's domain. It waits until
+   * the user picks one, `signal` aborts it, or the ceremony is about to expire, which ends it
+   * as cancelled: the server would refuse a pick after that. Throws `PasskeyCancelledError`
+   * for all three, `PasskeyUnavailableError` when the server refuses to start it (nothing the
+   * person asked for failed), and `ApiProblemError` when it refuses the passkey picked.
+   */
+  async runConditionalPasskeySignIn(rpId: string, signal: AbortSignal): Promise<PasskeyOutcome> {
+    const start = await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies`, {
+      body: { purpose: "signIn" },
+    });
+    if (start.data === undefined) {
+      throw new PasskeyUnavailableError(problemOf(start.error, start.response).code);
+    }
+    const started = start.data;
+    const ending = new AbortController();
+    const end = () => {
+      ending.abort();
+    };
+    signal.addEventListener("abort", end);
+    const lifetime = Date.parse(started.expiresAt) - Date.now() - CONDITIONAL_EXPIRY_MARGIN_MS;
+    const expiry = setTimeout(end, Math.max(0, lifetime));
+    let credential: Record<string, unknown>;
+    try {
+      if (signal.aborted) {
+        throw new PasskeyCancelledError();
+      }
+      credential = await runInPage("signIn", started.options, {
+        mediation: "conditional",
+        signal: ending.signal,
+      });
+    } catch (e) {
+      if (ending.signal.aborted) {
+        throw new PasskeyCancelledError();
+      }
+      throw e;
+    } finally {
+      clearTimeout(expiry);
+      signal.removeEventListener("abort", end);
+    }
+    return this.#completeInPage(rpId, started.id, credential);
+  }
+
+  /**
+   * Completes a ceremony this page ran. A passkey the server holds no longer is named to the
+   * browser (`signalUnknownCredential`), so its passkey managers may stop offering it.
+   */
+  async #completeInPage(
+    rpId: string,
+    ceremony: string,
+    credential: Record<string, unknown>,
+  ): Promise<PasskeyOutcome> {
+    const completed = await this.api.POST(
+      `${API_PREFIX}/auth/passkey-ceremonies/{ceremony}/credential`,
+      { params: { path: { ceremony } }, body: { credential } },
+    );
+    if (completed.error?.code === "passkeyUnknown" && typeof credential.id === "string") {
+      signalUnknownCredential(rpId, credential.id);
+    }
+    return this.#passkeyOutcome(unwrap(completed));
   }
 
   #passkeyOutcome(result: Schemas["PasskeyCeremonyOutcome"]): PasskeyOutcome {

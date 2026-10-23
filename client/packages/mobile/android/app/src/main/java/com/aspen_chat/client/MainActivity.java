@@ -4,6 +4,7 @@ import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
 import com.aspen_chat.client.files.AspenFilesPlugin;
 import com.aspen_chat.client.navigation.AspenNavigationPlugin;
+import com.aspen_chat.client.passkeys.AspenPasskeysPlugin;
 import com.aspen_chat.client.push.AspenPushPlugin;
 
 public class MainActivity extends BridgeActivity {
@@ -14,6 +15,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(AspenPushPlugin.class);
         registerPlugin(AspenFilesPlugin.class);
         registerPlugin(AspenNavigationPlugin.class);
+        registerPlugin(AspenPasskeysPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

@@ -35,6 +35,11 @@ pub struct SecuritySettings {
     /// An authenticator app is set up.
     pub totp: bool,
     pub passkeys: Vec<Passkey>,
+    /// The WebAuthn user handle every passkey of the account holds, in base64url, which the
+    /// Signals API names the account by (`PublicKeyCredential.signalAllAcceptedCredentials`
+    /// and `signalCurrentUserDetails`). With `passkeys`, it is the whole list the browser's
+    /// passkey managers should keep for this account.
+    pub passkey_user_handle: String,
     /// Unused recovery codes left.
     pub recovery_codes_remaining: i64,
     /// Until when this session may change security settings without verifying again.
@@ -67,6 +72,7 @@ pub async fn get_security(
         two_factor_required: overview.required,
         totp: overview.totp,
         passkeys: overview.passkeys.into_iter().map(Passkey::from).collect(),
+        passkey_user_handle: app::passkey::user_handle(session.user.id),
         recovery_codes_remaining: overview.recovery_codes_remaining,
         verified_until: overview.verified_until,
     }))

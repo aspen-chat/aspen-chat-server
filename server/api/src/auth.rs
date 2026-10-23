@@ -20,6 +20,8 @@ use aspen_app::user::UserPg;
 use axum::Extension;
 use axum::extract::{FromRequestParts, OptionalFromRequestParts, State};
 use axum::http::request::Parts;
+use base64::Engine as _;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use hyper::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
@@ -228,6 +230,30 @@ pub struct PasskeySupport {
     /// runs ceremonies in its own page; anything else hands them to the page at
     /// `/auth/passkey` on this server, opened in the system browser.
     pub rp_id: String,
+    /// The Android apps this deployment names in `/.well-known/assetlinks.json`, which may run
+    /// ceremonies themselves through Credential Manager. An app not listed, or a deployment
+    /// that leaves this out, hands them to the page instead.
+    #[schema(required = false)]
+    pub android_apps: Vec<AndroidPasskeyApp>,
+}
+
+/// An Android app that may use this deployment's passkeys.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidPasskeyApp {
+    pub package_name: String,
+    /// The SHA-256 fingerprint of a certificate the app is signed with, as upper-case hex pairs
+    /// joined by colons.
+    pub sha256_cert_fingerprint: String,
+}
+
+impl From<app::passkey::AndroidApp> for AndroidPasskeyApp {
+    fn from(app: app::passkey::AndroidApp) -> Self {
+        Self {
+            sha256_cert_fingerprint: app.fingerprint_hex(),
+            package_name: app.package,
+        }
+    }
 }
 
 /// How this server lets people sign in and register. Unauthenticated.
@@ -241,7 +267,13 @@ pub async fn auth_methods(State(state): State<GlobalServerContext>) -> Json<Auth
     let auth = &state.config.auth;
     let settings = state.settings();
     Json(AuthMethods {
-        passkeys: auth.rp_id.clone().map(|rp_id| PasskeySupport { rp_id }),
+        passkeys: auth.rp_id.clone().map(|rp_id| PasskeySupport {
+            rp_id,
+            android_apps: app::passkey::android_apps(&state.config)
+                .into_iter()
+                .map(AndroidPasskeyApp::from)
+                .collect(),
+        }),
         two_factor_required: settings.require_two_factor,
         registration_invite_required: settings.registration_invite_required,
         federation_domain: app::federation::own_domain(&state.config.federation).map(String::from),
@@ -319,6 +351,10 @@ pub async fn reauthenticate(
 #[serde(rename_all = "camelCase")]
 pub struct Passkey {
     pub id: app::PasskeyId,
+    /// The WebAuthn credential id, in base64url: what the browser's passkey managers know the
+    /// passkey by, which the Signals API names it by
+    /// (`PublicKeyCredential.signalAllAcceptedCredentials`).
+    pub credential_id: String,
     pub name: String,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
@@ -328,6 +364,7 @@ impl From<PasskeySummary> for Passkey {
     fn from(summary: PasskeySummary) -> Self {
         Self {
             id: summary.id,
+            credential_id: BASE64_URL_SAFE_NO_PAD.encode(summary.credential_id),
             name: summary.name,
             created_at: summary.created_at,
             last_used_at: summary.last_used_at,

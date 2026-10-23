@@ -66,6 +66,9 @@ pub const PASSKEY_PAGE: (&str, &str) = ("GET", "/auth/passkey");
 /// This deployment's federation document, served outside `API_PREFIX` at the path every
 /// deployment uses, and not in the OpenAPI document.
 pub const WELL_KNOWN: (&str, &str) = ("GET", "/.well-known/aspen");
+/// This deployment's Digital Asset Links (`api::asset_links`), served outside `API_PREFIX` at
+/// the path Android reads, and not in the OpenAPI document.
+pub const ASSET_LINKS: (&str, &str) = ("GET", "/.well-known/assetlinks.json");
 /// The page unsubscribe links in mail open, served outside `API_PREFIX` and not in the OpenAPI
 /// document; posting to it unsubscribes, under the same limits.
 pub const UNSUBSCRIBE_PAGE: (&str, &str) = ("GET", "/email/unsubscribe");
@@ -86,7 +89,7 @@ pub const PLUGIN_CAPABILITY: &str = "/plugins/{plugin}/capabilities/{secret}";
 const PLUGIN_ROUTE_METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
 /// Every route the limits can name: the OpenAPI document's operations, the event stream, the
-/// passkey page, the federation document, the unsubscribe page, the web client's pages, and
+/// passkey page, the federation document, the Digital Asset Links, the unsubscribe page, the web client's pages, and
 /// plugins' routes.
 pub fn routes() -> Vec<Route> {
     let openapi = crate::openapi();
@@ -105,6 +108,7 @@ pub fn routes() -> Vec<Route> {
     for (method, template) in [
         PASSKEY_PAGE,
         WELL_KNOWN,
+        ASSET_LINKS,
         UNSUBSCRIBE_PAGE,
         ("POST", UNSUBSCRIBE_PAGE.1),
         WEB_CLIENT_INVITE,

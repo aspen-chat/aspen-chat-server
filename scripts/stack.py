@@ -194,11 +194,15 @@ class WebSocket:
 class Stack:
     """A deployment of `bins` named `name`, on `ports`, with `settings` added to its aspen.toml."""
 
-    def __init__(self, bins: Path, name: str, ports: Ports, settings: str = ""):
+    def __init__(self, bins: Path, name: str, ports: Ports, settings: str = "",
+                 public_host: str = "127.0.0.1"):
+        """`public_host` is `public_url`'s host: `localhost` offers passkeys, at that domain,
+        which an address does not."""
         self.bins = bins
         self.name = name
         self.ports = ports
         self.settings = settings
+        self.public_host = public_host
         self.database = f"aspen_{name}_{os.getpid()}"
         self.database_url = f"postgres://postgres:aspen_test@127.0.0.1:5432/{self.database}"
         self.work = Path(tempfile.mkdtemp(prefix=f"aspen-{name}-"))
@@ -232,7 +236,7 @@ class Stack:
     def _write_configs(self) -> None:
         p = self.ports
         (self.work / "aspen.toml").write_text(
-            f'public_url = "http://127.0.0.1:{p.api}"\n'
+            f'public_url = "http://{self.public_host}:{p.api}"\n'
             f'database_url = "{self.database_url}"\n'
             f'nats_url = "nats://127.0.0.1:{p.nats}"\n'
             'nats_auth_token = "aspen_test"\n'

@@ -369,6 +369,13 @@ pub struct AuthConfig {
     /// with `serverBusy`.
     #[default = 10]
     pub password_hashing_wait_seconds: u64,
+    /// Android apps, besides the official one (`passkey::OFFICIAL_ANDROID_APPS`), that may use
+    /// this deployment's passkeys through Android's Credential Manager, each written
+    /// `<package>=<SHA-256 fingerprint of its signing certificate>` (`passkey::AndroidApp`): a
+    /// fork, or a build signed with another key. Each is named in `/.well-known/assetlinks.json`
+    /// and its origin accepted in ceremonies. Without passkeys (`rp_id`) none is.
+    #[serde(deserialize_with = "aspen_config_values::list")]
+    pub android_apps: Vec<crate::passkey::AndroidApp>,
 }
 
 /// Ceilings that keep one user's footprint bounded.
@@ -1283,6 +1290,47 @@ mod tests {
         assert_eq!(
             config.federation.development.extra_root_certificates.len(),
             2
+        );
+    }
+
+    /// Android apps named in the environment are accepted as passkey origins.
+    #[test]
+    fn android_apps_become_passkey_origins() {
+        let file = "public_url = \"https://chat.example.org\"\ndatabase_url = \"postgres://x\"\n\
+                    nats_url = \"nats://x\"\nnats_auth_token = \"t\"\nvalkey_url = \"redis://x\"\n";
+        let fingerprint = ["AB"; 32].join(":");
+        let variables = [(
+            "ASPEN_AUTH__ANDROID_APPS".to_string(),
+            format!("org.example.fork={fingerprint}"),
+        )]
+        .into_iter()
+        .collect();
+        let config = load_from(
+            config::File::from_str(file, config::FileFormat::Toml),
+            environment().source(Some(variables)),
+        )
+        .unwrap();
+        let apps = crate::passkey::android_apps(&config);
+        assert_eq!(apps.len(), config.auth.android_apps.len());
+        assert_eq!(apps[0].package, "org.example.fork");
+        assert_eq!(apps[0].fingerprint_hex(), fingerprint);
+        let webauthn = crate::passkey::relying_party(&config, "Example")
+            .unwrap()
+            .unwrap();
+        let origins: Vec<String> = webauthn
+            .get_allowed_origins()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            origins,
+            [
+                "https://chat.example.org/".to_string(),
+                format!(
+                    "android:apk-key-hash:{}",
+                    base64::Engine::encode(&base64::prelude::BASE64_URL_SAFE_NO_PAD, [0xAB; 32])
+                )
+            ]
         );
     }
 

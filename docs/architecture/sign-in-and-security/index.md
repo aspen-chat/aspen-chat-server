@@ -16,7 +16,8 @@ request without a session is counted by.
 - [Reverification and security settings](reverification.md): `verified_at`,
   `POST /auth/reauthenticate`, and the security settings endpoints.
 - [Passkeys](passkeys.md): WebAuthn ceremonies and the hand-off to the system browser for the
-  desktop and mobile apps.
+  desktop and mobile apps, the signals that keep passkey managers in step, autofill, and the Android
+  apps that run ceremonies themselves.
 - [Device links](device-links.md): signing in one device from another by a QR code or a typed code.
 - [Device credentials](device-credentials.md): the puzzle a client solves to be counted as a device
   of its own before signing in, and who a request counts as.
@@ -30,7 +31,7 @@ Why things are the way they are: [design notes](design-notes.md).
 | Usernames                          | `app::user::validate_username`, `app::user::named`                                  |
 | Password sign-in, tokens, sessions | `app::login`, `api::rate_limit::limit_sign_in`                                      |
 | Second factors, attempt limits     | `app::two_factor`                                                                   |
-| Passkeys                           | `app::passkey`, `api::passkey_page`                                                 |
+| Passkeys                           | `app::passkey`, `api::passkey_page`, `api::asset_links`                             |
 | Device links                       | `app::device_link`                                                                  |
 | Device credentials                 | `app::device_credential`, `aspen_limits::puzzle`, `api::rate_limit::limit_requests` |
 | Email addresses and password reset | see [Email](../email/index.md)                                                      |

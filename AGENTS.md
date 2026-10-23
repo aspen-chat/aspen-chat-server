@@ -179,7 +179,10 @@ or what an operator must open, route, or back up updates it in the same commit.
      `retryAfterSeconds`
    - `[auth]` — `reverify_seconds` (how recent a verification security changes need, ten minutes by
      default), `password_hashing_threads` (one per logical CPU by default) and
-     `password_hashing_wait_seconds` (ten) bound password work; see Sign-in and security.
+     `password_hashing_wait_seconds` (ten) bound password work, and `android_apps` names Android
+     apps besides the official one that may use the deployment's passkeys through Credential Manager
+     (`<package>=<certificate SHA-256>`, served in `/.well-known/assetlinks.json`); see Sign-in and
+     security.
    - `[presence] away_after_seconds` — how long a connected user may go without using Aspen before
      showing as away (600 by default)
    - `[search]` — `deep_concurrency` (2), how many searches that found nothing near the present read
@@ -628,8 +631,9 @@ HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the s
   built-in limits are `server/app/src/rate_limits.toml`; `[rate_limits]` in `aspen.toml` is laid
   over them in code, a limit given there replacing the built-in one whole. Besides the OpenAPI
   operations, `GET /events` (the event stream), `GET /auth/passkey` (the passkey page, outside
-  `/api/v1`), `GET /.well-known/aspen` (the federation document, also outside it), `GET` and
-  `POST /email/unsubscribe` (the page unsubscribe links open, also outside it), and
+  `/api/v1`), `GET /.well-known/aspen` (the federation document, also outside it),
+  `GET /.well-known/assetlinks.json` (the Android apps that may use its passkeys, also outside it),
+  `GET` and `POST /email/unsubscribe` (the page unsubscribe links open, also outside it), and
   `GET /invite/{code}` and `GET /{*path}` (the web client's pages, also outside it) can be named. A
   request with a method its path lacks counts toward the `default` limits that need no session or
   parameter, and a method that is not a standard one is named `OTHER` in route keys and metrics, so
@@ -775,8 +779,9 @@ a NATS stream or subject, or a client package updates them in the same commit.
 - `docs/architecture/threads-and-dms/index.md` — threads, following them, echoes, DMs and group DMs,
   their calls and rings, and the system account
 - `docs/architecture/sign-in-and-security/index.md` — password sign-in, second factors, recovery
-  codes, reverification, password hashing limits, passkeys, signing in from another device by a QR
-  code, and device credentials, which a request without a session is counted by
+  codes, reverification, password hashing limits, passkeys (their signals, autofill, and Android's
+  own), signing in from another device by a QR code, and device credentials, which a request without
+  a session is counted by
 - `docs/architecture/user-preferences.md` — account-scoped preferences stored as one JSON object
 - `docs/architecture/read-positions.md` — read positions, threads' among them, unread, and unread
   tag counts

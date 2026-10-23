@@ -138,6 +138,8 @@ problemTooManyAttempts: "Too many wrong attempts. Wait a few minutes and try aga
 problemLastSecondFactor: "This server requires two-factor sign-in, so your last second factor can't be removed."
 problemPasskeyRejected: "The passkey couldn't be verified. Try again, or sign in another way."
 problemPasskeysUnavailable: "Passkeys aren't set up on this server."
+problemPasskeyUnknown: "This passkey isn't registered here."
+passkeyUnknownDetail: "This server has no account with that passkey: it was removed, or its account was deleted. Remove it from your password manager, and sign in another way."
 problemDeviceLinkExpired: "This sign-in code has expired."
 problemDeviceLinkUsed: "This sign-in code was already used."
 deviceLinkExpiredDetail: "This sign-in code has expired or was already used. Make a new one on the other device and scan it again."
