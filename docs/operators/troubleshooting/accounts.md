@@ -45,10 +45,11 @@ way, such as deleting the account so they can register again.
 
 ## Signing in from another device
 
-| Code                | What it means                                                                                                 | What to do                                                                                                                                                        |
-| ------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deviceLinkExpired` | A sign-in code (the QR code one device shows another) can no longer be used. See [below](#devicelinkexpired). | Make a new code. If codes expire before anyone can scan them, check the clocks are not the problem: the code's minute is counted on the server.                   |
-| `deviceLinkUsed`    | Another device scanned the sign-in code first.                                                                | The person makes a new code, and must not confirm the device that scanned the old one. **If they did not scan it themselves, someone photographed their screen.** |
+| Code                    | What it means                                                                                                                       | What to do                                                                                                                                                        |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deviceLinkExpired`     | A sign-in code (the QR code one device shows another) can no longer be used. See [below](#devicelinkexpired).                       | Make a new code. If codes expire before anyone can scan them, check the clocks are not the problem: the code's minute is counted on the server.                   |
+| `deviceLinkUsed`        | Another device scanned the sign-in code first.                                                                                      | The person makes a new code, and must not confirm the device that scanned the old one. **If they did not scan it themselves, someone photographed their screen.** |
+| `deviceLinkCodeUnknown` | A typed sign-in code (the letters beside the QR code) matches no code waiting for that device. See [below](#devicelinkcodeunknown). | Check the code and type it again, or make a new one.                                                                                                              |
 
 ### `deviceLinkExpired`
 
@@ -58,6 +59,21 @@ A sign-in code expires when:
 - it was declined or already used;
 - the signed-in device that confirmed it signed out or changed its password before the other device
   claimed it.
+
+A code shown with letters beside it lasts five minutes rather than one.
+
+### `deviceLinkCodeUnknown`
+
+A typed code is refused alike when it:
+
+- was mistyped;
+- has expired or was cancelled;
+- was shown for the other side: a signed-in device types the code of a device asking to be signed
+  in, and a signed-out device the code of one offering its account.
+
+Wrong codes are limited per address or account, and for everyone together (see
+[Rate limits](../configuration/rate-limits.md#typed-sign-in-codes)). Past those, typing a code is
+refused with `rateLimited` until they refill, while scanning still works.
 
 ## Registration and accounts
 

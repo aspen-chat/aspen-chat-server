@@ -17,7 +17,7 @@ request without a session is counted by.
   `POST /auth/reauthenticate`, and the security settings endpoints.
 - [Passkeys](passkeys.md): WebAuthn ceremonies and the hand-off to the system browser for the
   desktop and mobile apps.
-- [Device links](device-links.md): signing in one device from another by a QR code.
+- [Device links](device-links.md): signing in one device from another by a QR code or a typed code.
 - [Device credentials](device-credentials.md): the puzzle a client solves to be counted as a device
   of its own before signing in, and who a request counts as.
 

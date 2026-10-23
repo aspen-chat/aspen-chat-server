@@ -30,6 +30,9 @@ them: a limit you give replaces the built-in one whole.
   proves wrong from one address (`ip_failures`): wrong passwords and codes, unknown refresh tokens
   and invites. A crowd mostly gets these right, so the address's attempts can be generous while a
   machine guessing is soon held.
+- **Failures of users and of everyone:** where someone signed in can guess, what proves wrong counts
+  toward their account (`user_failures`) instead, and where guesses from many addresses together
+  must be held, toward everyone's (`global_failures`). Typed sign-in codes use both.
 - **Made-up tokens:** session and bot tokens are signed, so a made-up one is refused without reading
   the database and counts toward nothing. Bot tokens made before tokens were signed can only be
   checked by a lookup, so each address may present a limited number of those that no bot holds
@@ -88,6 +91,28 @@ The device and address limits hold back one machine, which must solve a puzzle f
 claims to be. Anyone with many addresses is held back by the global limit, unless the deployment
 requires a registration invite or a verified email address (see
 [Deployment settings](deployment-settings.md)).
+
+## Typed sign-in codes
+
+A sign-in code (signing in one device from another) shows eight letters beside its QR code, which
+the other device may type instead (`POST /auth/device-link-entries`). Those letters can be guessed,
+so wrong ones are limited three ways:
+
+| Limit             | Built in         | What it counts                            |
+| ----------------- | ---------------- | ----------------------------------------- |
+| `ip_failures`     | 10 in 10 minutes | Wrong codes from one address, signed out. |
+| `user_failures`   | 10 in 10 minutes | Wrong codes from one account, signed in.  |
+| `global_failures` | 60 in 10 minutes | Wrong codes from everyone together.       |
+
+While `global_failures` is spent, everyone's typed codes are refused (`rateLimited`) until it
+refills. Scanning the QR code still works. It keeps a guesser with many addresses to a match about
+once in eight years while a thousand codes are live at once. A deployment whose people mistype more
+than this raises it:
+
+```toml
+[rate_limits.endpoints."POST /auth/device-link-entries"]
+global_failures = { requests = 300, per_seconds = 600, burst = 60 }
+```
 
 ## Limits for one endpoint
 

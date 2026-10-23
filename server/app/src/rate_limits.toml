@@ -28,6 +28,10 @@
 #   ip_failures        one address's requests that proved wrong (a wrong password or code, an
 #                      unknown invite or refresh token): looked at before the request is
 #                      handled, counted when its handler says it failed
+#   user_failures      one signed-in user's requests that proved wrong, looked at and counted
+#                      as ip_failures are (authenticated endpoints only)
+#   global_failures    everyone's requests that proved wrong, signed in or not, looked at and
+#                      counted as ip_failures are
 #   ip_rejected_tokens one address's bot tokens from before tokens were signed that no bot
 #                      holds: looked at before one is looked up, counted when it is rejected
 #   per_<param>        everyone's, per value of the path parameter, e.g. per_channel
@@ -71,6 +75,7 @@ fail_closed = [
   "POST /auth/device-links/{link}/scan",
   "GET /auth/device-links/{link}",
   "POST /auth/device-links/{link}/claim",
+  "POST /auth/device-link-entries",
   "POST /auth/password-resets",
   "POST /auth/password-resets/{reset}/codes",
   "POST /auth/password-resets/{reset}/completion",
@@ -161,8 +166,8 @@ endpoints = [
 ]
 limits = { ip = { requests = 3000, per_seconds = 60, burst = 1000, bucket = "sign_in" } }
 
-# Asked every couple of seconds while a sign-in code shows (`app::device_link`), for a minute
-# at most; counted per code, so a device making codes one after another is held by the
+# Asked every couple of seconds while a sign-in code shows (`app::device_link`), for five
+# minutes at most; counted per code, so a device making codes one after another is held by the
 # `sign_in` limit on making them.
 [rate_limits.groups.device_link_polling]
 endpoints = [
@@ -378,6 +383,24 @@ ip = { requests = 300, per_seconds = 60, burst = 100 }
 [rate_limits.endpoints."POST /auth/device-links"]
 global = { requests = 3000, per_seconds = 60, burst = 1000 }
 ip = { requests = 300, per_seconds = 60, burst = 100 }
+
+# Typing a sign-in code's user code (`app::device_link`). Unlike a QR code's id, a user code can
+# be guessed: 20^8 codes, of which the live ones are at most the starts of the last five
+# minutes. So what bounds guessing is how many may prove wrong: a person mistyping a few times
+# from one device or account (`ip_failures`, `user_failures`, which an address or a user
+# reaches long before it could hope for a match), and everyone's wrong codes together
+# (`global_failures`), which a crowd of addresses cannot widen. At its ceiling, a guesser gets
+# about 8640 tries a day, finding one of a thousand live codes about once in three thousand
+# days, and a found code still waits for its holder to confirm a stranger. Spent, typed codes
+# are refused for everyone until it refills, while QR codes still work; a deployment whose
+# people mistype more than this raises it in aspen.toml.
+[rate_limits.endpoints."POST /auth/device-link-entries"]
+device = { requests = 30, per_seconds = 60, burst = 10 }
+ip = { requests = 3000, per_seconds = 60, burst = 1000 }
+user = { requests = 30, per_seconds = 60, burst = 10 }
+ip_failures = { requests = 10, per_seconds = 600, burst = 5 }
+user_failures = { requests = 10, per_seconds = 600, burst = 5 }
+global_failures = { requests = 60, per_seconds = 600, burst = 30 }
 
 # Each mails the reset code again, to an address its asker answered with; the account's mail
 # is also limited where it is queued (`app::email::reset`).

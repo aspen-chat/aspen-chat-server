@@ -102,7 +102,46 @@ See [Device links](device-links.md).
   of its own on another device, outliving the stolen one.
 - **Starts are limited globally as well as per address.** Each start keeps state in Valkey until it
   expires.
-- **Nothing is announced; both sides poll.** A link lives for a minute and has no event.
+- **Nothing is announced; both sides poll.** A link lives for a few minutes at most and has no
+  event.
+
+### User codes
+
+- **Every link a current app starts has a user code, of both kinds.** Whoever would have scanned may
+  type instead, so a television, a console, a desktop, or a command line can take either side.
+- **A link has a code only when its starter asks (`withCode`).** An app that predates codes shows
+  none, and a code nobody shows is only something to guess.
+- **RFC 8628's base-20 alphabet, eight letters.** It has no vowels, so no words, and no letter
+  mistaken for a digit. Eight letters are about 34.5 bits, short enough to type on a remote.
+- **Kept under its digest, reserved with `SET NX`.** As the link's id is kept, and no two live links
+  share a code.
+- **Five minutes rather than one.** Typing takes longer than scanning: reading eight letters,
+  perhaps with a remote, perhaps after the giver confirms it's them with a password and a code. The
+  QR code lasts as long, since a photograph of the screen shows the letters too. Links without a
+  code keep their minute.
+- **Wrong codes are failures, of the address, the account, and everyone.** A code can be guessed
+  where an id cannot, so what bounds guessing is how many may prove wrong. The global ceiling is
+  what a crowd of addresses cannot widen.
+- **Each entry is counted before its code is looked at, and given back if right.** Counted only
+  after proving wrong, entries sent at once would all pass the look taken before any had failed, and
+  a guesser could send a thousand for each one the ceiling allows.
+- **The global ceiling refuses everyone's typed codes once spent.** That lets a guesser stop typed
+  codes for a while, which is better than letting them keep guessing. QR codes still work.
+- **Every miss answers alike.** An unknown, expired, or cancelled code, and one of the other side's
+  kind, are all `deviceLinkCodeUnknown`. Telling them apart would tell a guesser which codes are
+  live.
+- **A request taken by a typed code waits for its receiver to confirm the giver's account.** A
+  signed-in guesser who matched a stranger's code could otherwise sign the stranger's device in to
+  the guesser's account, which the stranger would then use as their own. The receiver sees the name
+  and picture, and declines an account that is not theirs.
+- **The confirmation is a field of the claim, not a step of its own.** The receiver already proves
+  itself to the claim with its verifier, so naming the account there adds no endpoint and no state.
+- **A QR request asks for no confirmation.** Its id cannot be guessed, so its giver saw the
+  receiver's screen, as the receiver meant. Asking would add a tap to the common path and guard
+  against nothing new.
+- **A typed offer asks for nothing more than a scanned one.** A guesser who matched an offer's code
+  becomes a receiver the giver must approve by its name, as a photographed QR code's thief does, and
+  the person who meant to type it is told `deviceLinkUsed`.
 
 ## Device credentials
 

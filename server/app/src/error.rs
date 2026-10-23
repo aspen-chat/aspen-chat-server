@@ -130,6 +130,10 @@ pub enum Error {
     /// A device link was already scanned by another device.
     #[error("the sign-in code was already scanned")]
     DeviceLinkUsed,
+    /// A typed device link user code matches no link this caller could take: unknown,
+    /// expired, cancelled, or of the other side's kind, alike.
+    #[error("no sign-in code matches what was typed")]
+    DeviceLinkCodeUnknown,
     #[error("the request needs a session")]
     Unauthenticated,
     #[error("webauthn error {0}")]

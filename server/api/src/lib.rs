@@ -227,6 +227,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(device_link::scan_device_link))
         .routes(routes!(device_link::approve_device_link))
         .routes(routes!(device_link::claim_device_link))
+        .routes(routes!(device_link::enter_device_link_code))
         .routes(routes!(auth::logout))
         .routes(routes!(auth::token_refresh))
         .routes(routes!(device_credential::challenge))

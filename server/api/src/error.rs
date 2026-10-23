@@ -91,6 +91,10 @@ pub enum ProblemCode {
     /// A sign-in code was already scanned by another device. Whoever scanned it may be
     /// waiting for the signed-in device to confirm them, which it should not.
     DeviceLinkUsed,
+    /// A typed sign-in code (`/auth/device-link-entries`) matches no code waiting for this
+    /// device: mistyped, expired, cancelled, or shown for a device on the other side (signed in
+    /// or out). Check the code on the other device, or make a new one.
+    DeviceLinkCodeUnknown,
     /// Passkeys are not configured on this server.
     PasskeysUnavailable,
     /// Registration: the requested username is already in use.
@@ -181,6 +185,7 @@ impl ProblemCode {
             }
             ProblemCode::DeviceLinkExpired => StatusCode::NOT_FOUND,
             ProblemCode::DeviceLinkUsed => StatusCode::CONFLICT,
+            ProblemCode::DeviceLinkCodeUnknown => StatusCode::NOT_FOUND,
             ProblemCode::NotFound => StatusCode::NOT_FOUND,
             ProblemCode::Conflict
             | ProblemCode::PollClosed
@@ -232,6 +237,7 @@ impl ProblemCode {
             ProblemCode::PasskeysUnavailable => t!("problemPasskeysUnavailable"),
             ProblemCode::DeviceLinkExpired => t!("problemDeviceLinkExpired"),
             ProblemCode::DeviceLinkUsed => t!("problemDeviceLinkUsed"),
+            ProblemCode::DeviceLinkCodeUnknown => t!("problemDeviceLinkCodeUnknown"),
             ProblemCode::UsernameTaken => t!("usernameAlreadyTaken"),
             ProblemCode::CustomEmojiNameTaken => t!("customEmojiNameTaken"),
             ProblemCode::InviteCodeTaken => t!("problemInviteCodeTaken"),
@@ -380,6 +386,8 @@ impl From<app::Error> for ApiError {
             app::Error::DeviceLinkUsed => {
                 Self::new(ProblemCode::DeviceLinkUsed).with_detail(t!("deviceLinkUsedDetail"))
             }
+            app::Error::DeviceLinkCodeUnknown => Self::new(ProblemCode::DeviceLinkCodeUnknown)
+                .with_detail(t!("deviceLinkCodeUnknownDetail")),
             app::Error::PasskeysUnavailable => Self::new(ProblemCode::PasskeysUnavailable),
             app::Error::PasskeyRejected(reason) => {
                 tracing::debug!(reason, "passkey rejected");

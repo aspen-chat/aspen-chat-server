@@ -48,6 +48,7 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | `passkeyRejected`             | [People and their accounts](accounts.md)                    |
 | `deviceLinkExpired`           | [People and their accounts](accounts.md)                    |
 | `deviceLinkUsed`              | [People and their accounts](accounts.md)                    |
+| `deviceLinkCodeUnknown`       | [People and their accounts](accounts.md)                    |
 | `registrationInviteRequired`  | [People and their accounts](accounts.md)                    |
 | `registrationInviteInvalid`   | [People and their accounts](accounts.md)                    |
 | `usernameTaken`               | [People and their accounts](accounts.md)                    |

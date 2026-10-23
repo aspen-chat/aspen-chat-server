@@ -1491,6 +1491,87 @@ def device_links(world: World, check: Checks) -> None:
     check("as the giver", got.get("userId") == world.member["id"], got)
     check("and once", claim(link) == 404)
 
+
+def typed_device_links(world: World, check: Checks) -> None:
+    say("typed sign-in codes: the same stops as scanned ones, and the receiver confirming its giver")
+    stack = world.stack
+    verifier = "t" * 43
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    receiver = {"deviceName": "Television", "codeChallenge": challenge}
+
+    def claim(link: str, account: str | None = None) -> tuple[int, str]:
+        body = {"codeVerifier": verifier} if account is None else {"codeVerifier": verifier, "account": account}
+        return stack.request("POST", f"/auth/device-links/{link}/claim", body)
+
+    def offered(giver: dict) -> str:
+        made = stack.api("POST", "/auth/device-links", {"withCode": True}, giver["token"])
+        entered = stack.api("POST", "/auth/device-link-entries", {**receiver, "code": made["code"].lower()})
+        stack.api("PUT", f"/auth/device-links/{entered['id']}/approval", token=giver["token"])
+        return entered["id"]
+
+    def asked() -> dict:
+        return stack.api("POST", "/auth/device-links", {**receiver, "withCode": True})
+
+    giver = world.sign_in(world.member["name"])
+    link = offered(giver)
+    stack.api("POST", "/auth/logout", {"refreshToken": giver["refresh"]}, giver["token"])
+    check("a typed code approved by a sign-in that then signs out signs nothing in", claim(link)[0] == 404)
+    giver = world.sign_in(world.member["name"])
+    link = offered(giver)
+    stack.api("PUT", "/users/@me/password", {"oldPassword": PASSWORD, "newPassword": PASSWORD + "!"},
+              world.member["token"])
+    check("nor one approved before a password change elsewhere", claim(link)[0] == 404)
+    stack.api("PUT", "/users/@me/password", {"oldPassword": PASSWORD + "!", "newPassword": PASSWORD},
+              world.member["token"])
+
+    stale = world.sign_in(world.member["name"])
+    psql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{world.member['id']}'",
+         stack.database)
+    waiting = asked()
+    typed = stack.request("POST", "/auth/device-link-entries", {"code": waiting["code"]}, stale["token"])
+    check("a sign-in not verified lately cannot give itself by typing a code",
+          typed[0] == 403 and "reauthenticationRequired" in typed[1], typed)
+    for sign_in in (stale, world.member):
+        stack.api("POST", "/auth/reauthenticate", {"method": "password", "secret": PASSWORD}, sign_in["token"])
+    taken = stack.api("POST", "/auth/device-link-entries", {"code": waiting["code"]}, stale["token"])
+    check("once verified, the same code is still there to type", taken.get("id") == waiting["id"], taken)
+    stack.api("POST", "/auth/logout", {"refreshToken": stale["refresh"]}, stale["token"])
+
+    giver = world.sign_in(world.member["name"])
+    waiting = asked()
+    stack.api("POST", "/auth/device-link-entries", {"code": waiting["code"]}, giver["token"])
+    stack.api("PUT", f"/auth/device-links/{waiting['id']}/approval", token=giver["token"])
+    pending = claim(waiting["id"])
+    check("a request taken by a typed code asks its receiver to confirm the giver",
+          pending[0] == 200 and json.loads(pending[1]).get("status") == "confirmAccount"
+          and json.loads(pending[1]).get("userId") == world.member["id"], pending)
+    other = claim(waiting["id"], world.owner["id"])
+    check("and naming another account signs nothing in",
+          other[0] == 200 and json.loads(other[1]).get("status") == "confirmAccount", other)
+    got = claim(waiting["id"], world.member["id"])
+    check("naming the giver's signs in as the giver",
+          got[0] == 200 and json.loads(got[1]).get("userId") == world.member["id"], got)
+    giver = world.sign_in(world.member["name"])
+    waiting = asked()
+    stack.api("POST", "/auth/device-link-entries", {"code": waiting["code"]}, giver["token"])
+    stack.api("PUT", f"/auth/device-links/{waiting['id']}/approval", token=giver["token"])
+    stack.api("POST", "/auth/logout", {"refreshToken": giver["refresh"]}, giver["token"])
+    check("a confirmed giver that signed out signs nothing in", claim(waiting["id"], world.member["id"])[0] == 404)
+
+    offer = stack.api("POST", "/auth/device-links", {"withCode": True}, world.member["token"])
+    mistyped = stack.request("POST", "/auth/device-link-entries", {**receiver, "code": "BBBB-BBBB"})
+    owner = world.sign_in(world.owner["name"])
+    as_giver = stack.request("POST", "/auth/device-link-entries", {"code": offer["code"]}, owner["token"])
+    check("a wrong code and an offer's code typed by someone signed in are refused alike",
+          mistyped[0] == as_giver[0] == 404 and "deviceLinkCodeUnknown" in mistyped[1]
+          and "deviceLinkCodeUnknown" in as_giver[1], (mistyped, as_giver))
+    entered = stack.request("POST", "/auth/device-link-entries", {**receiver, "code": offer["code"]})
+    check("without using the offer up", entered[0] == 200, entered)
+    stack.api("DELETE", f"/auth/device-links/{offer['id']}")
+    cancelled = stack.request("POST", "/auth/device-link-entries", {**receiver, "code": offer["code"]})
+    check("a cancelled link's code matches nothing", cancelled[0] == 404 and "deviceLinkCodeUnknown" in cancelled[1],
+          cancelled)
+
 def name_colours(world: World, check: Checks) -> None:
     say("name colours, from a community role and a deployment role")
     stack = world.stack
@@ -2931,7 +3012,7 @@ def join_messages(world: World, check: Checks) -> None:
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, replies, calls, attachments,
-             operators, deployment_settings, sign_ins, removal, presence, chosen_presence, lost_presence_keys, typing, channel_mana, name_colours, dual_invites, device_links,
+             operators, deployment_settings, sign_ins, removal, presence, chosen_presence, lost_presence_keys, typing, channel_mana, name_colours, dual_invites, device_links, typed_device_links,
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
