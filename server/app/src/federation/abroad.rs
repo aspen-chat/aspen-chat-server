@@ -156,7 +156,7 @@ pub async fn issue(
             iat: now.timestamp(),
             exp: expires_at.timestamp(),
             jti: Uuid::new_v4(),
-            method: caller.method,
+            method: caller.method.carried_abroad(),
             profile: Profile {
                 name: user.name.clone(),
                 display_name: user.display_name.clone(),

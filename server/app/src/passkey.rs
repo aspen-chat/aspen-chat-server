@@ -262,7 +262,8 @@ pub fn validate_return_to(return_to: &str) -> crate::Result<Url> {
     }
 }
 
-fn validate_code_challenge(challenge: &str) -> crate::Result<()> {
+/// Checks a PKCE `S256` challenge: 32 bytes in base64url.
+pub fn validate_code_challenge(challenge: &str) -> crate::Result<()> {
     let decoded = BASE64_URL_SAFE_NO_PAD
         .decode(challenge)
         .map_err(|_| crate::Error::Validation(t!("invalidCodeChallenge")))?;
@@ -442,7 +443,9 @@ fn ensure_starter(starter: Option<&str>, caller: Option<&Caller>) -> crate::Resu
     }
 }
 
-fn digest(secret: &str) -> String {
+/// A secret's SHA-256 in base64url: the form a PKCE `S256` challenge takes (RFC 7636), and that
+/// return codes are kept and compared in.
+pub fn digest(secret: &str) -> String {
     BASE64_URL_SAFE_NO_PAD.encode(Sha256::digest(secret.as_bytes()))
 }
 
@@ -811,6 +814,9 @@ pub async fn remove(
             .returning(passkey::name)
             .get_result(conn)
             .await?;
+            if !crate::identity_provider::has_way_in(conn, user_id).await? {
+                return Err(crate::Error::LastSignInMethod);
+            }
             two_factor::factor_removed(state, conn, user_id, Factor::Passkey { name }).await
         }
         .scope_boxed()

@@ -32,6 +32,7 @@ like a community's roles, and each holds deployment permissions.
 | `managePlugins`             | Installed plugins' settings, mode, order, and whether they run. Installing them is the terminal's; see [Plugins](../plugins/index.md)                                               |
 | `sendNewsletters`           | See [Email](../email/index.md)                                                                                                                                                      |
 | `viewJobs`                  | The preview of background jobs (`GET /admin/jobs`); see [Jobs](../jobs/index.md). The migration that made it gave it to every role holding Manage deployment settings               |
+| `manageIdentityProviders`   | The OpenID Connect providers people sign in through; see [Identity providers](../sign-in-and-security/identity-providers.md). The migration that made it gave it to every role holding Manage deployment settings |
 
 Rules:
 

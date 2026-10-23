@@ -283,6 +283,31 @@ pub async fn register(
     queue_verification(state, conn, user_id, address).await
 }
 
+/// Records a new account's address inside its registration transaction as already verified,
+/// by an identity provider this deployment trusts for it (`app::identity_provider`), so no code
+/// is sent.
+pub async fn register_verified(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    user_id: UserId,
+    address: &str,
+    newsletter: bool,
+) -> crate::Result<()> {
+    let newsletter = newsletter && state.settings().newsletter_enabled;
+    diesel::insert_into(user_email::table)
+        .values((
+            user_email::user.eq(user_id),
+            user_email::address.eq(address),
+            user_email::verified_at.eq(diesel::dsl::now),
+            user_email::newsletter.eq(newsletter),
+            user_email::locale.eq(crate::locale::current()),
+            user_email::unsubscribe_token.eq(unsubscribe_token()),
+        ))
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 /// The caller's account, or `None` without an address.
 pub async fn read(
     state: &GlobalServerContext,

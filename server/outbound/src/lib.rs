@@ -176,6 +176,99 @@ impl Resolve for PublicResolver {
     }
 }
 
+/// Why a request to another host failed, as far as its error tells, for callers to put in
+/// words the person who asked can act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Failure {
+    /// The name does not resolve.
+    NotFound,
+    /// The name resolves only to addresses inside a network ([`PublicResolver`]).
+    NoPublicAddress,
+    /// The host presented a certificate this server does not trust.
+    Certificate(CertificateFailure),
+    /// TLS failed for another reason.
+    Tls,
+    /// Nothing listens there.
+    ConnectionRefused,
+    /// No answer came within the client's timeout.
+    TimedOut,
+    /// It failed some other way.
+    NoAnswer,
+}
+
+/// What is wrong with a certificate a host presented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CertificateFailure {
+    Expired,
+    NotYetValid,
+    WrongName,
+    Untrusted,
+    Invalid,
+}
+
+/// Which of the ways a request can fail `error` was, found among its causes.
+pub fn classify(error: &reqwest::Error) -> Failure {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(cause) = source {
+        if let Some(resolve) = cause.downcast_ref::<ResolveError>() {
+            return match resolve {
+                ResolveError::NotFound(_) => Failure::NotFound,
+                ResolveError::NoPublicAddress(_) => Failure::NoPublicAddress,
+            };
+        }
+        if let Some(tls) = cause.downcast_ref::<rustls::Error>() {
+            return tls_failure(tls);
+        }
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            if let Some(tls) = io.get_ref().and_then(|e| e.downcast_ref::<rustls::Error>()) {
+                return tls_failure(tls);
+            }
+            if io.kind() == std::io::ErrorKind::ConnectionRefused {
+                return Failure::ConnectionRefused;
+            }
+        }
+        source = cause.source();
+    }
+    if error.is_timeout() {
+        Failure::TimedOut
+    } else {
+        Failure::NoAnswer
+    }
+}
+
+fn tls_failure(error: &rustls::Error) -> Failure {
+    use rustls::CertificateError as Certificate;
+    match error {
+        rustls::Error::InvalidCertificate(certificate) => Failure::Certificate(match certificate {
+            Certificate::Expired | Certificate::ExpiredContext { .. } => {
+                CertificateFailure::Expired
+            }
+            Certificate::NotValidYet | Certificate::NotValidYetContext { .. } => {
+                CertificateFailure::NotYetValid
+            }
+            Certificate::NotValidForName | Certificate::NotValidForNameContext { .. } => {
+                CertificateFailure::WrongName
+            }
+            Certificate::UnknownIssuer => CertificateFailure::Untrusted,
+            _ => CertificateFailure::Invalid,
+        }),
+        _ => Failure::Tls,
+    }
+}
+
+/// An error and its causes on one line, which is where a TLS or DNS failure's reason is, for
+/// the log.
+pub fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

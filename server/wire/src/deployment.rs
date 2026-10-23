@@ -27,6 +27,7 @@ bitflags::bitflags! {
         const REMOVE_CONTENT = 1 << 13;
         const SEND_NEWSLETTERS = 1 << 14;
         const VIEW_JOBS = 1 << 15;
+        const MANAGE_IDENTITY_PROVIDERS = 1 << 16;
     }
 }
 
@@ -100,6 +101,7 @@ pub enum DeploymentPermission {
     ManagePlugins,
     SendNewsletters,
     ViewJobs,
+    ManageIdentityProviders,
 }
 
 impl DeploymentPermission {
@@ -122,6 +124,7 @@ impl DeploymentPermission {
             Self::RemoveContent => DeploymentPermissions::REMOVE_CONTENT,
             Self::SendNewsletters => DeploymentPermissions::SEND_NEWSLETTERS,
             Self::ViewJobs => DeploymentPermissions::VIEW_JOBS,
+            Self::ManageIdentityProviders => DeploymentPermissions::MANAGE_IDENTITY_PROVIDERS,
         }
     }
 
@@ -151,6 +154,7 @@ impl DeploymentPermission {
             Self::RemoveContent => t!("deploymentRemoveContent"),
             Self::SendNewsletters => t!("deploymentSendNewsletters"),
             Self::ViewJobs => t!("deploymentViewJobs"),
+            Self::ManageIdentityProviders => t!("deploymentManageIdentityProviders"),
         }
     }
 }

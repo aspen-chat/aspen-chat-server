@@ -113,7 +113,20 @@ pub async fn login(
     let ip = client.and_then(|Extension(ClientIp(ip))| ip);
     crate::rate_limit::limit_sign_in(&state, &request.username, ip).await?;
     match app::login::try_login(&state, &request.username, &request.password).await? {
-        LoginOutcome::SignedIn(session) => Ok(Json(LoginResult::SignedIn(session.into()))),
+        LoginOutcome::InvalidCredentials => {
+            crate::rate_limit::note_wrong_password(&state, &request.username, ip).await;
+            crate::rate_limit::note_failure(&state, &failures).await;
+            Err(ApiError::new(ProblemCode::InvalidCredentials))
+        }
+        outcome => Ok(Json(login_result(&state, outcome)?)),
+    }
+}
+
+/// A first factor's outcome as the client reads it: the session, or the second factors the
+/// account can finish with. `invalidCredentials` for a wrong password.
+pub fn login_result(state: &GlobalServerContext, outcome: LoginOutcome) -> ApiResult<LoginResult> {
+    match outcome {
+        LoginOutcome::SignedIn(session) => Ok(LoginResult::SignedIn(session.into())),
         LoginOutcome::SecondFactorRequired { ticket, methods } => {
             let mut offered = Vec::new();
             if methods.totp {
@@ -125,18 +138,12 @@ pub async fn login(
             if methods.recovery_code {
                 offered.push(SecondFactorMethod::RecoveryCode);
             }
-            Ok(Json(LoginResult::SecondFactorRequired(
-                SecondFactorChallenge {
-                    ticket,
-                    methods: offered,
-                },
-            )))
+            Ok(LoginResult::SecondFactorRequired(SecondFactorChallenge {
+                ticket,
+                methods: offered,
+            }))
         }
-        LoginOutcome::InvalidCredentials => {
-            crate::rate_limit::note_wrong_password(&state, &request.username, ip).await;
-            crate::rate_limit::note_failure(&state, &failures).await;
-            Err(ApiError::new(ProblemCode::InvalidCredentials))
-        }
+        LoginOutcome::InvalidCredentials => Err(ApiError::new(ProblemCode::InvalidCredentials)),
     }
 }
 
@@ -219,6 +226,9 @@ pub struct AuthMethods {
     pub software: aspen_app::federation::protocol::Software,
     /// Present when the deployment wakes phones (`POST /users/@me/push-subscriptions`).
     pub push: Option<crate::push::PushSupport>,
+    /// The identity providers people may sign in through
+    /// (`POST /auth/identity-provider-flows`), by name.
+    pub identity_providers: Vec<crate::identity_provider::OfferedIdentityProvider>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -235,12 +245,25 @@ pub struct PasskeySupport {
     get,
     path = "/auth/methods",
     tag = TAG_AUTH,
-    responses((status = OK, body = AuthMethods))
+    responses(
+        (status = OK, body = AuthMethods),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
 )]
-pub async fn auth_methods(State(state): State<GlobalServerContext>) -> Json<AuthMethods> {
+pub async fn auth_methods(
+    State(state): State<GlobalServerContext>,
+) -> ApiResult<Json<AuthMethods>> {
     let auth = &state.config.auth;
+    let identity_providers = {
+        let mut conn = state
+            .connection_pool
+            .get()
+            .await
+            .map_err(app::Error::from)?;
+        app::identity_provider::offered(&mut conn).await?
+    };
     let settings = state.settings();
-    Json(AuthMethods {
+    Ok(Json(AuthMethods {
         passkeys: auth.rp_id.clone().map(|rp_id| PasskeySupport { rp_id }),
         two_factor_required: settings.require_two_factor,
         registration_invite_required: settings.registration_invite_required,
@@ -252,7 +275,8 @@ pub async fn auth_methods(State(state): State<GlobalServerContext>) -> Json<Auth
         }),
         protocol: app::federation::protocol::Protocol::with_plugins(&state.plugins),
         software: app::federation::protocol::Software::ours(),
-    })
+        identity_providers: identity_providers.into_iter().map(Into::into).collect(),
+    }))
 }
 
 /// How the caller proves who they are again.

@@ -70,6 +70,15 @@ pub const WELL_KNOWN: (&str, &str) = ("GET", "/.well-known/aspen");
 /// document; posting to it unsubscribes, under the same limits.
 pub const UNSUBSCRIBE_PAGE: (&str, &str) = ("GET", "/email/unsubscribe");
 
+/// Where identity providers send the browser back, and post their back-channel logouts
+/// (`api::identity_provider`), served outside `API_PREFIX` and not in the OpenAPI document, at
+/// the paths `app::identity_provider` names.
+pub const OIDC_CALLBACK: (&str, &str) = ("GET", aspen_app::identity_provider::CALLBACK_PATH);
+pub const OIDC_BACK_CHANNEL_LOGOUT: (&str, &str) = (
+    "POST",
+    aspen_app::identity_provider::BACK_CHANNEL_LOGOUT_PATH,
+);
+
 /// The web client's pages (`api::web_client`), served outside `API_PREFIX` and not in the
 /// OpenAPI document: an invite's, and every other. Each checks its own limits, and over them is
 /// served without reading what it previews as rather than refused. Its files are not limited.
@@ -86,8 +95,8 @@ pub const PLUGIN_CAPABILITY: &str = "/plugins/{plugin}/capabilities/{secret}";
 const PLUGIN_ROUTE_METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
 /// Every route the limits can name: the OpenAPI document's operations, the event stream, the
-/// passkey page, the federation document, the unsubscribe page, the web client's pages, and
-/// plugins' routes.
+/// passkey page, the federation document, the unsubscribe page, the identity provider callback
+/// and back-channel logout, the web client's pages, and plugins' routes.
 pub fn routes() -> Vec<Route> {
     let openapi = crate::openapi();
     let mut routes = Vec::new();
@@ -107,6 +116,8 @@ pub fn routes() -> Vec<Route> {
         WELL_KNOWN,
         UNSUBSCRIBE_PAGE,
         ("POST", UNSUBSCRIBE_PAGE.1),
+        OIDC_CALLBACK,
+        OIDC_BACK_CHANNEL_LOGOUT,
         WEB_CLIENT_INVITE,
         WEB_CLIENT_PAGE,
     ] {

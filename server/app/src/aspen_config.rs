@@ -81,6 +81,8 @@ pub struct AspenConfig {
     #[serde(default)]
     pub push: PushConfig,
     #[serde(default)]
+    pub identity_providers: IdentityProvidersConfig,
+    #[serde(default)]
     pub web_client: WebClientConfig,
     #[serde(default)]
     pub plugins: PluginsConfig,
@@ -454,6 +456,20 @@ pub struct PushConfig {
     pub enabled: bool,
 }
 
+/// Signing in through OpenID Connect providers (`app::identity_provider`). Which providers there
+/// are is in the database.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct IdentityProvidersConfig {
+    /// Whether a provider's issuer may resolve to an address inside a network (a Keycloak on the
+    /// LAN). Off, the server reaches providers only on the public internet, so whoever may add a
+    /// provider in the dashboard cannot make it call services only it can see.
+    pub allow_private_addresses: bool,
+    /// Certificate authorities, in PEM, trusted for providers besides the system's: a company's
+    /// own authority, which its identity provider's certificate is issued by.
+    pub ca_file: Option<PathBuf>,
+}
+
 /// How this server runs background jobs (`app::jobs`). Which jobs there are is in the database;
 /// every server that runs jobs takes its share of them.
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
@@ -624,6 +640,7 @@ impl std::fmt::Debug for AspenConfig {
             connections,
             federation,
             push,
+            identity_providers,
             web_client,
             plugins,
             jobs,
@@ -659,6 +676,7 @@ impl std::fmt::Debug for AspenConfig {
             .field("connections", connections)
             .field("federation", federation)
             .field("push", push)
+            .field("identity_providers", identity_providers)
             .field("web_client", web_client)
             .field("plugins", plugins)
             .field("jobs", jobs)
