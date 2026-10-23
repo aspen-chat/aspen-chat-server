@@ -642,29 +642,28 @@ HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the s
   `GET /.well-known/assetlinks.json` (the Android apps that may use its passkeys, also outside it),
   `GET` and `POST /email/unsubscribe` (the page unsubscribe links open, also outside it),
   `GET /auth/oidc/callback` and `POST /auth/oidc/back-channel-logout` (where identity providers send
-  the browser back and post their logouts, also outside it), and
-  `GET /invite/{code}` and `GET /{*path}` (the web client's pages, also outside it) can be named. A
-  request with a method its path lacks counts toward the `default` limits that need no session or
-  parameter, and a method that is not a standard one is named `OTHER` in route keys and metrics, so
-  made-up methods make no new buckets or series. The rules are compiled against the real routes at
-  startup, so an unknown endpoint, a parameter the path lacks, or a user limit on an anonymous
-  endpoint stops the server with a config error. Buckets are GCRA timestamps in Valkey, shared by
-  every API server, and a Valkey outage lets requests through with a logged error, except on the
-  endpoints `fail_closed` lists (those that guess a password, a code, or an invite) and for the
-  username limits, which it refuses with `503` `serverBusy`. Global, parameter, address, device, and
-  user limits are checked by a route layer before the handler (`api::rate_limit::limit_requests`),
-  which looks up a presented session token once and leaves it for the session extractors; the
-  username limits in the sign-in handler; failures by the handlers that can tell one
-  (`api::rate_limit::Failures`); the web client's pages check their own in their handler, and over
-  them serve the page without reading what it previews as rather than refusing it. A refusal is
-  `429` `rateLimited` with `Retry-After`, and `api::rate_limit::document_rate_limits` adds that
-  response to every operation in the OpenAPI document, so handlers do not declare it. The client
-  address is the TCP peer, or, when the peer is listed in `trusted_proxies`, the right-most
-  `X-Forwarded-For` entry that is not itself a trusted proxy (read with or without a port; an entry
-  that is not an address ends the reading, and the client is the trusted proxy that passed it on);
-  IPv6 clients count by their `/ipv6_prefix` (64) network. When adding an endpoint that writes, fans
-  out, fetches from elsewhere, or can be used to guess something, give it its own limits in
-  `rate_limits.toml`.
+  the browser back and post their logouts, also outside it), and `GET /invite/{code}` and
+  `GET /{*path}` (the web client's pages, also outside it) can be named. A request with a method its
+  path lacks counts toward the `default` limits that need no session or parameter, and a method that
+  is not a standard one is named `OTHER` in route keys and metrics, so made-up methods make no new
+  buckets or series. The rules are compiled against the real routes at startup, so an unknown
+  endpoint, a parameter the path lacks, or a user limit on an anonymous endpoint stops the server
+  with a config error. Buckets are GCRA timestamps in Valkey, shared by every API server, and a
+  Valkey outage lets requests through with a logged error, except on the endpoints `fail_closed`
+  lists (those that guess a password, a code, or an invite) and for the username limits, which it
+  refuses with `503` `serverBusy`. Global, parameter, address, device, and user limits are checked
+  by a route layer before the handler (`api::rate_limit::limit_requests`), which looks up a
+  presented session token once and leaves it for the session extractors; the username limits in the
+  sign-in handler; failures by the handlers that can tell one (`api::rate_limit::Failures`); the web
+  client's pages check their own in their handler, and over them serve the page without reading what
+  it previews as rather than refusing it. A refusal is `429` `rateLimited` with `Retry-After`, and
+  `api::rate_limit::document_rate_limits` adds that response to every operation in the OpenAPI
+  document, so handlers do not declare it. The client address is the TCP peer, or, when the peer is
+  listed in `trusted_proxies`, the right-most `X-Forwarded-For` entry that is not itself a trusted
+  proxy (read with or without a port; an entry that is not an address ends the reading, and the
+  client is the trusted proxy that passed it on); IPv6 clients count by their `/ipv6_prefix` (64)
+  network. When adding an endpoint that writes, fans out, fetches from elsewhere, or can be used to
+  guess something, give it its own limits in `rate_limits.toml`.
 - **Caching:** every answer under `/api/v1` carries `nosniff` and `Cache-Control: no-store`
   (`api_response_headers`); a handler whose answer may be kept (a federation icon) sets its own
   `Cache-Control`, which the layer leaves alone.
@@ -789,8 +788,8 @@ a NATS stream or subject, or a client package updates them in the same commit.
   their calls and rings, and the system account
 - `docs/architecture/sign-in-and-security/index.md` — password sign-in, second factors, recovery
   codes, reverification, password hashing limits, passkeys (their signals, autofill, and Android's
-  own), signing in from another device by a QR code, signing in through OpenID Connect identity providers, and device credentials, which a request without
-  a session is counted by
+  own), signing in from another device by a QR code, signing in through OpenID Connect identity
+  providers, and device credentials, which a request without a session is counted by
 - `docs/architecture/user-preferences.md` — account-scoped preferences stored as one JSON object
 - `docs/architecture/read-positions.md` — read positions, threads' among them, unread, and unread
   tag counts
