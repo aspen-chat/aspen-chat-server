@@ -397,9 +397,12 @@ pub async fn read_user(
     id: UserId,
 ) -> crate::Result<User> {
     let user = User::load_from_db(state, id).await?;
-    Ok(with_online_status(state, viewer, vec![user.user_pg])
-        .await?
-        .remove(0))
+    let mut conn = state.connection_pool.get().await?;
+    Ok(
+        with_online_status(state, conn.as_mut(), viewer, vec![user.user_pg])
+            .await?
+            .remove(0),
+    )
 }
 
 /// Loads every live user among `ids`, in no particular order, with their presence as `viewer`
@@ -419,19 +422,19 @@ pub async fn read_users(
         .filter(user::id.eq_any(ids).and(user::deleted_at.is_null()))
         .load(conn.as_mut())
         .await?;
-    drop(conn);
-    with_online_status(state, viewer, users).await
+    with_online_status(state, conn.as_mut(), viewer, users).await
 }
 
 /// Pairs each row with its online status as `viewer` may learn it
 /// (`app::user_status::statuses_for`).
 pub async fn with_online_status(
     state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
     viewer: UserId,
     users: Vec<UserPg>,
 ) -> crate::Result<Vec<User>> {
     let online_status =
-        crate::user_status::statuses_for(state, viewer, users.iter().map(|u| u.id).collect())
+        crate::user_status::statuses_for(state, conn, viewer, users.iter().map(|u| u.id).collect())
             .await?;
     Ok(users
         .into_iter()
@@ -503,11 +506,15 @@ pub async fn update_user(
     }
     drop(conn);
     let updated = apply_profile_update(state.clone(), id, command).await?;
-    Ok(
-        with_online_status(&state, requesting_user, vec![updated.user_pg])
-            .await?
-            .remove(0),
+    let mut conn = state.connection_pool.get().await?;
+    Ok(with_online_status(
+        &state,
+        conn.as_mut(),
+        requesting_user,
+        vec![updated.user_pg],
     )
+    .await?
+    .remove(0))
 }
 
 /// Writes a checked profile update to `id`'s account and announces it to everyone who shares a

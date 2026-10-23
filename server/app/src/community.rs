@@ -920,7 +920,7 @@ async fn memberships_of(
         .map(|(community, user)| (*community, user.id))
         .collect();
     let mut roles = crate::role::roles_of_members(conn, &keys).await?;
-    let users = crate::user::with_online_status(state, caller, users).await?;
+    let users = crate::user::with_online_status(state, conn, caller, users).await?;
     Ok(communities
         .into_iter()
         .zip(sort_indexes)

@@ -56,7 +56,11 @@ fn share_of(span: Duration, share: f64) -> Duration {
     Duration::milliseconds((span.num_milliseconds() as f64 * share) as i64)
 }
 
-/// Writes `plan` in one transaction and says what was made.
+/// Writes `plan` in one transaction and says what was made, then analyzes the database. A run
+/// starts moments after seeding, before autovacuum has seen the rows; planned against
+/// statistics of near-empty tables, a query can hash a whole table where an index would find
+/// a few rows (presence's shared-community check read a 2,000-member community's every pair of
+/// members, seconds per startup), so the run would measure the seeding, not the deployment.
 pub async fn seed(
     conn: &mut AsyncPgConnection,
     plan: &SeedPlan,
@@ -74,165 +78,169 @@ pub async fn seed(
         ..plan.clone()
     })?;
     let now = Utc::now();
-    conn.transaction(|conn| {
-        async move {
-            diesel::insert_into(benchmark_run::table)
-                .values((
-                    benchmark_run::run.eq(&plan.run),
-                    benchmark_run::plan.eq(&plan_json),
-                ))
-                .execute(conn)
-                .await?;
-
-            let users: Vec<SeededUser> = (0..plan.users)
-                .map(|index| SeededUser {
-                    id: Uuid::now_v7(),
-                    name: user_name(&plan.run, index),
-                })
-                .collect();
-            for chunk in users.chunks(BATCH) {
-                let rows: Vec<_> = chunk
-                    .iter()
-                    .map(|u| {
-                        (
-                            user::id.eq(u.id),
-                            user::name.eq(&u.name),
-                            user::password_hash.eq(&password_hash),
-                            user::created_at.eq(now),
-                            user::last_seen_at.eq(now),
-                        )
-                    })
-                    .collect();
-                diesel::insert_into(user::table)
-                    .values(rows)
-                    .execute(conn)
-                    .await?;
-                let tags: Vec<_> = chunk
-                    .iter()
-                    .map(|u| {
-                        (
-                            benchmark_user::run.eq(&plan.run),
-                            benchmark_user::user.eq(u.id),
-                        )
-                    })
-                    .collect();
-                diesel::insert_into(benchmark_user::table)
-                    .values(tags)
-                    .execute(conn)
-                    .await?;
-            }
-
-            let mut communities = Vec::with_capacity(plan.communities.len());
-            // Each user's communities are ordered as they were joined.
-            let mut next_sort_index = vec![0i32; plan.users as usize];
-            for (index, planned) in plan.communities.iter().enumerate() {
-                let id = Uuid::now_v7();
-                // Its first member owns it; everyone holds the default everyone role.
-                let owner =
-                    <[u32]>::first(&planned.members).map(|member| users[*member as usize].id);
-                diesel::insert_into(community::table)
+    let manifest = conn
+        .transaction::<_, crate::Error, _>(|conn| {
+            async move {
+                diesel::insert_into(benchmark_run::table)
                     .values((
-                        community::id.eq(id),
-                        community::name.eq(format!("bench {} {index}", plan.run)),
-                        community::owner.eq(owner),
+                        benchmark_run::run.eq(&plan.run),
+                        benchmark_run::plan.eq(&plan_json),
                     ))
                     .execute(conn)
                     .await?;
-                crate::role::create_default_roles(conn, crate::CommunityId(id)).await?;
-                diesel::insert_into(benchmark_community::table)
-                    .values((
-                        benchmark_community::run.eq(&plan.run),
-                        benchmark_community::community.eq(id),
-                    ))
-                    .execute(conn)
-                    .await?;
-                for chunk in planned.members.chunks(BATCH) {
+
+                let users: Vec<SeededUser> = (0..plan.users)
+                    .map(|index| SeededUser {
+                        id: Uuid::now_v7(),
+                        name: user_name(&plan.run, index),
+                    })
+                    .collect();
+                for chunk in users.chunks(BATCH) {
                     let rows: Vec<_> = chunk
                         .iter()
-                        .map(|member| {
-                            let slot = &mut next_sort_index[*member as usize];
-                            let sort_index = *slot;
-                            *slot += 1;
+                        .map(|u| {
                             (
-                                community_user::user.eq(users[*member as usize].id),
-                                community_user::community.eq(id),
-                                community_user::sort_index.eq(sort_index),
+                                user::id.eq(u.id),
+                                user::name.eq(&u.name),
+                                user::password_hash.eq(&password_hash),
+                                user::created_at.eq(now),
+                                user::last_seen_at.eq(now),
                             )
                         })
                         .collect();
-                    diesel::insert_into(community_user::table)
+                    diesel::insert_into(user::table)
                         .values(rows)
                         .execute(conn)
                         .await?;
+                    let tags: Vec<_> = chunk
+                        .iter()
+                        .map(|u| {
+                            (
+                                benchmark_user::run.eq(&plan.run),
+                                benchmark_user::user.eq(u.id),
+                            )
+                        })
+                        .collect();
+                    diesel::insert_into(benchmark_user::table)
+                        .values(tags)
+                        .execute(conn)
+                        .await?;
                 }
-                let mut text_channels = Vec::new();
-                let mut voice_channels = Vec::new();
-                let channels: Vec<(Uuid, String, ChannelType, i32)> = (0..planned.text_channels)
-                    .map(|n| (format!("text-{n}"), ChannelType::Text))
-                    .chain(
-                        (0..planned.voice_channels)
-                            .map(|n| (format!("voice-{n}"), ChannelType::Voice)),
-                    )
-                    .enumerate()
-                    .map(|(sort, (name, ty))| {
-                        (
-                            Uuid::now_v7(),
-                            name,
-                            ty,
-                            i32::try_from(sort).unwrap_or(i32::MAX),
-                        )
-                    })
-                    .collect();
-                for (channel_id, name, ty, sort_index) in &channels {
-                    diesel::insert_into(channel::table)
+
+                let mut communities = Vec::with_capacity(plan.communities.len());
+                // Each user's communities are ordered as they were joined.
+                let mut next_sort_index = vec![0i32; plan.users as usize];
+                for (index, planned) in plan.communities.iter().enumerate() {
+                    let id = Uuid::now_v7();
+                    // Its first member owns it; everyone holds the default everyone role.
+                    let owner =
+                        <[u32]>::first(&planned.members).map(|member| users[*member as usize].id);
+                    diesel::insert_into(community::table)
                         .values((
-                            channel::id.eq(channel_id),
-                            channel::community.eq(Some(id)),
-                            channel::name.eq(name),
-                            channel::ty.eq(ty),
-                            channel::sort_index.eq(sort_index),
+                            community::id.eq(id),
+                            community::name.eq(format!("bench {} {index}", plan.run)),
+                            community::owner.eq(owner),
                         ))
                         .execute(conn)
                         .await?;
-                    match ty {
-                        ChannelType::Text => text_channels.push(*channel_id),
-                        _ => voice_channels.push(*channel_id),
-                    }
-                }
-                // Its first text channel is its default, as a community's is when it is made.
-                if let Some(first) = <[Uuid]>::first(&text_channels) {
-                    diesel::update(community::table.filter(community::id.eq(id)))
-                        .set(community::default_channel.eq(first))
+                    crate::role::create_default_roles(conn, crate::CommunityId(id)).await?;
+                    diesel::insert_into(benchmark_community::table)
+                        .values((
+                            benchmark_community::run.eq(&plan.run),
+                            benchmark_community::community.eq(id),
+                        ))
                         .execute(conn)
                         .await?;
+                    for chunk in planned.members.chunks(BATCH) {
+                        let rows: Vec<_> = chunk
+                            .iter()
+                            .map(|member| {
+                                let slot = &mut next_sort_index[*member as usize];
+                                let sort_index = *slot;
+                                *slot += 1;
+                                (
+                                    community_user::user.eq(users[*member as usize].id),
+                                    community_user::community.eq(id),
+                                    community_user::sort_index.eq(sort_index),
+                                )
+                            })
+                            .collect();
+                        diesel::insert_into(community_user::table)
+                            .values(rows)
+                            .execute(conn)
+                            .await?;
+                    }
+                    let mut text_channels = Vec::new();
+                    let mut voice_channels = Vec::new();
+                    let channels: Vec<(Uuid, String, ChannelType, i32)> = (0..planned
+                        .text_channels)
+                        .map(|n| (format!("text-{n}"), ChannelType::Text))
+                        .chain(
+                            (0..planned.voice_channels)
+                                .map(|n| (format!("voice-{n}"), ChannelType::Voice)),
+                        )
+                        .enumerate()
+                        .map(|(sort, (name, ty))| {
+                            (
+                                Uuid::now_v7(),
+                                name,
+                                ty,
+                                i32::try_from(sort).unwrap_or(i32::MAX),
+                            )
+                        })
+                        .collect();
+                    for (channel_id, name, ty, sort_index) in &channels {
+                        diesel::insert_into(channel::table)
+                            .values((
+                                channel::id.eq(channel_id),
+                                channel::community.eq(Some(id)),
+                                channel::name.eq(name),
+                                channel::ty.eq(ty),
+                                channel::sort_index.eq(sort_index),
+                            ))
+                            .execute(conn)
+                            .await?;
+                        match ty {
+                            ChannelType::Text => text_channels.push(*channel_id),
+                            _ => voice_channels.push(*channel_id),
+                        }
+                    }
+                    // Its first text channel is its default, as a community's is when it is made.
+                    if let Some(first) = <[Uuid]>::first(&text_channels) {
+                        diesel::update(community::table.filter(community::id.eq(id)))
+                            .set(community::default_channel.eq(first))
+                            .execute(conn)
+                            .await?;
+                    }
+                    let mut threads = Vec::new();
+                    let mut open_polls = Vec::new();
+                    for channel_id in &text_channels {
+                        let (channel_threads, channel_polls) =
+                            seed_channel(conn, id, *channel_id, planned, &users, now).await?;
+                        threads.extend(channel_threads);
+                        open_polls.extend(channel_polls);
+                    }
+                    communities.push(SeededCommunity {
+                        id,
+                        members: planned.members.clone(),
+                        text_channels,
+                        voice_channels,
+                        threads,
+                        open_polls,
+                    });
                 }
-                let mut threads = Vec::new();
-                let mut open_polls = Vec::new();
-                for channel_id in &text_channels {
-                    let (channel_threads, channel_polls) =
-                        seed_channel(conn, id, *channel_id, planned, &users, now).await?;
-                    threads.extend(channel_threads);
-                    open_polls.extend(channel_polls);
-                }
-                communities.push(SeededCommunity {
-                    id,
-                    members: planned.members.clone(),
-                    text_channels,
-                    voice_channels,
-                    threads,
-                    open_polls,
-                });
+                Ok(Manifest {
+                    run: plan.run.clone(),
+                    password: password.clone(),
+                    users,
+                    communities,
+                })
             }
-            Ok(Manifest {
-                run: plan.run.clone(),
-                password: password.clone(),
-                users,
-                communities,
-            })
-        }
-        .scope_boxed()
-    })
-    .await
+            .scope_boxed()
+        })
+        .await?;
+    diesel::sql_query("ANALYZE").execute(conn).await?;
+    Ok(manifest)
 }
 
 /// A text channel's seeded contents: its history, some of it tagging members, the threads

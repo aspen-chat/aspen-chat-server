@@ -213,6 +213,8 @@ pub async fn announce_join(
         altered_by: Vec::new(),
         card: None,
         echo: None,
+        reply_to: None,
+        tags_replied: false,
     };
     diesel::insert_into(message::table)
         .values(&row)

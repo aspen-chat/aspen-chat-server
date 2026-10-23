@@ -427,7 +427,7 @@ pub async fn get_statuses(
     if ids.len() > STATUS_QUERY_LIMIT {
         return Err(app::Error::Validation(t!("tooManyIds", max = STATUS_QUERY_LIMIT)).into());
     }
-    let statuses = app::user_status::statuses_for(&state, session.user.id, ids).await?;
+    let statuses = app::user_status::read_statuses(&state, session.user.id, ids).await?;
     Ok(Json(
         statuses
             .into_iter()

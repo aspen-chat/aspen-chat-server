@@ -275,7 +275,9 @@ pub async fn create(
             .scope_boxed()
         })
         .await?;
-    let bot = with_online_status(state, owner, vec![bot]).await?.remove(0);
+    let bot = with_online_status(state, conn.as_mut(), owner, vec![bot])
+        .await?
+        .remove(0);
     Ok((bot, token))
 }
 
@@ -288,7 +290,7 @@ pub async fn list_owned(state: &GlobalServerContext, owner: UserId) -> crate::Re
         .order_by(user::created_at.asc())
         .load(conn.as_mut())
         .await?;
-    with_online_status(state, owner, bots).await
+    with_online_status(state, conn.as_mut(), owner, bots).await
 }
 
 /// A bot `caller` owns.
@@ -299,7 +301,7 @@ pub async fn read_owned(
 ) -> crate::Result<User> {
     let mut conn = state.connection_pool.get().await?;
     let row = owned_bot(conn.as_mut(), caller, bot).await?;
-    Ok(with_online_status(state, caller, vec![row])
+    Ok(with_online_status(state, conn.as_mut(), caller, vec![row])
         .await?
         .remove(0))
 }
@@ -386,7 +388,7 @@ async fn standing_transfers(
         .filter(user::id.eq_any(&ids).and(user::deleted_at.is_null()))
         .load(conn)
         .await?;
-    let users = with_online_status(state, viewer, users).await?;
+    let users = with_online_status(state, conn, viewer, users).await?;
     let find = |id: UserId| users.iter().find(|u| u.user_pg.id == id).cloned();
     Ok(rows
         .into_iter()
@@ -602,7 +604,7 @@ pub async fn accept_transfer(
             .scope_boxed()
         })
         .await?;
-    let bot = with_online_status(state, caller, vec![row])
+    let bot = with_online_status(state, conn.as_mut(), caller, vec![row])
         .await?
         .remove(0);
     Ok((bot, token))
@@ -685,7 +687,7 @@ pub async fn set_public(
             .scope_boxed()
         })
         .await?;
-    Ok(with_online_status(state, caller, vec![row])
+    Ok(with_online_status(state, conn.as_mut(), caller, vec![row])
         .await?
         .remove(0))
 }
