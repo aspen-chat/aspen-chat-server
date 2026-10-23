@@ -753,6 +753,12 @@ on a feature, read its file or folder, and its design notes before changing a ch
 and keep it describing the code as it stands in the same commit, as every comment must. Where this
 file or one of those says "see Bots" or "described under Voice", it means the file of that title.
 
+`docs/diagrams/` draws the whole in Mermaid: the deployment's processes and services and what NATS
+carries between them, the Rust crates and their dependencies, the client packages and the schemas
+generated between server and client, and the flows of posting a message, joining a call, and signing
+in abroad. A change that adds or removes a crate, a dependency between workspace crates, a service,
+a NATS stream or subject, or a client package updates them in the same commit.
+
 - `docs/architecture/background-tasks.md` — the poll closer, the voice report listener and reaper,
   closing polls, message kinds, and poll write-ins
 - `docs/architecture/reactions.md` — reactions, their canonical emoji, summaries, and reactor lists
