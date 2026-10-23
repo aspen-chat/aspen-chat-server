@@ -192,6 +192,10 @@ export function handoffPageUrl(baseUrl: string, ceremony: string): string {
 /**
  * Reads the browser's return from a return address: the `ceremony`, `outcome`, and `code` the
  * handoff page added to its query. `null` when the URL is not such a return.
+ *
+ * An identity provider's flow, handed to the system browser on the same return addresses,
+ * comes back with `flow` and `code` alone; it is read as a finished ceremony whose id is the
+ * flow's (`AspenClient.runIdentityProviderHandoff`).
  */
 export function parseHandoffReturn(url: string): HandoffReturn | null {
   let parsed: URL;
@@ -199,6 +203,11 @@ export function parseHandoffReturn(url: string): HandoffReturn | null {
     parsed = new URL(url);
   } catch {
     return null;
+  }
+  const flow = parsed.searchParams.get("flow");
+  const flowCode = parsed.searchParams.get("code");
+  if (flow !== null && flowCode !== null && !parsed.searchParams.has("ceremony")) {
+    return { ceremony: flow, outcome: "done", code: flowCode };
   }
   const ceremony = parsed.searchParams.get("ceremony");
   const outcome = parsed.searchParams.get("outcome");

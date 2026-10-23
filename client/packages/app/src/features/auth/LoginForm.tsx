@@ -1,7 +1,10 @@
 import {
   ApiProblemError,
   PasskeyCancelledError,
+  type AccountOffer,
+  type IdentityProviderOutcome,
   type PasskeyTransport,
+  type PendingAccount,
   type SecondFactorMethod,
   type TypedSecondFactor,
 } from "@aspen/protocol";
@@ -16,6 +19,8 @@ import { usePasskeyTransport } from "./passkeyTransport";
 import { SecondFactorFields } from "./SecondFactorFields";
 import { PasswordReset } from "@/features/email/PasswordReset";
 import { useEmailPolicy } from "@/features/email/policy";
+import { IdentityProviderButtons } from "./IdentityProviderButtons";
+import { ProviderAccountStep } from "./ProviderAccountStep";
 import {
   alertClass,
   fieldClass,
@@ -29,7 +34,9 @@ import {
 type Step =
   | { kind: "password" }
   | { kind: "secondFactor"; ticket: string; methods: SecondFactorMethod[] }
-  | { kind: "reset" };
+  | { kind: "reset" }
+  /** An identity provider signed someone in whom no account here is linked to yet. */
+  | { kind: "providerAccount"; offer: AccountOffer; account: PendingAccount };
 
 /** Why an attempt failed, as the form shows it; `null` when the user backed out. */
 function failure(e: unknown): string | null {
@@ -41,10 +48,12 @@ function failure(e: unknown): string | null {
 
 /**
  * Signing in to the currently selected server: a username and password, then a second factor
- * when the account has two-factor sign-in on; or a passkey on its own; or another device, by a
- * QR code (`OtherDeviceSignIn`). Where the deployment sends email, a forgotten password is reset
- * by a code mailed to the account's address (`PasswordReset`). Failures show the
- * server's localized Problem text. Which server it is shows above it (`DeploymentWelcome`).
+ * when the account has two-factor sign-in on; or a passkey on its own; or an identity provider,
+ * which may ask for a second factor in the same way, or a username for a new account
+ * (`ProviderAccountStep`); or another device, by a QR code (`OtherDeviceSignIn`). Where the
+ * deployment sends email, a forgotten password is reset by a code mailed to the account's address
+ * (`PasswordReset`). Failures show the server's localized Problem text. Which server it is shows
+ * above it (`DeploymentWelcome`).
  */
 export function LoginForm({ onSwitchToRegister }: { onSwitchToRegister: () => void }) {
   const transport = usePasskeyTransport();
@@ -60,6 +69,17 @@ export function LoginForm({ onSwitchToRegister }: { onSwitchToRegister: () => vo
           setNotice(m.email.resetDone);
           setStep({ kind: "password" });
         }}
+        onCancel={() => {
+          setStep({ kind: "password" });
+        }}
+      />
+    );
+  }
+  if (step.kind === "providerAccount") {
+    return (
+      <ProviderAccountStep
+        offer={step.offer}
+        account={step.account}
         onCancel={() => {
           setStep({ kind: "password" });
         }}
@@ -94,6 +114,14 @@ export function LoginForm({ onSwitchToRegister }: { onSwitchToRegister: () => vo
         setError(null);
         setStep({ kind: "secondFactor", ticket, methods });
       }}
+      onProviderOutcome={(outcome) => {
+        // A session it made is stored, and the signed-in app takes over.
+        if (outcome.outcome === "secondFactorRequired") {
+          setStep({ kind: "secondFactor", ticket: outcome.ticket, methods: outcome.methods });
+        } else if (outcome.outcome === "accountRequired") {
+          setStep({ kind: "providerAccount", offer: outcome.offer, account: outcome.account });
+        }
+      }}
       onSwitchToRegister={onSwitchToRegister}
     />
   );
@@ -106,6 +134,7 @@ function PasswordStep({
   notice,
   onForgotPassword,
   onSecondFactor,
+  onProviderOutcome,
   onSwitchToRegister,
 }: {
   transport: PasskeyTransport | null;
@@ -115,6 +144,8 @@ function PasswordStep({
   notice: string | null;
   onForgotPassword: () => void;
   onSecondFactor: (ticket: string, methods: SecondFactorMethod[]) => void;
+  /** What a flow through the system browser did, in the apps. */
+  onProviderOutcome: (outcome: IdentityProviderOutcome) => void;
   onSwitchToRegister: () => void;
 }) {
   const m = useMessages();
@@ -226,6 +257,16 @@ function PasswordStep({
           </Button>
         </>
       )}
+      <IdentityProviderButtons
+        isDisabled={pending !== null}
+        onStart={() => {
+          setError(null);
+        }}
+        onOutcome={onProviderOutcome}
+        onError={(e) => {
+          setError(failure(e));
+        }}
+      />
       <OtherDeviceSignIn className={outlineButtonClass} />
       <p className="text-sm text-ink-muted">
         {m.noAccountYet}{" "}
@@ -237,7 +278,11 @@ function PasswordStep({
   );
 }
 
-function SecondFactorStep({
+/**
+ * The second factor a password's or an identity provider's sign-in still owes, finished with a
+ * code or a passkey; `onStartOver` goes back to the start, with why when the ticket lapsed.
+ */
+export function SecondFactorStep({
   ticket,
   methods,
   transport,

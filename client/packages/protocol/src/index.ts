@@ -199,6 +199,10 @@ export {
   type Resolution,
   type AdminPlugin,
   type AdminPluginUpdateRequest,
+  type IdentityProviderList,
+  type IdentityProviderSettings,
+  type IdentityProviderCreateRequest,
+  type IdentityProviderUpdateRequest,
 } from "./admin";
 export {
   ACTIVITY_INTERVAL_MS,
@@ -430,3 +434,14 @@ export {
 } from "./deployments";
 export { CLIENT_PROTOCOL, commonVersion, supports, type Protocol } from "./protocol";
 export { ATTACHMENT_DESCRIPTION_MAX_CHARS, type AttachmentChange } from "./upload";
+export {
+  offeredProviders,
+  parseProviderFragment,
+  type AccountOffer,
+  type IdentityProviderOutcome,
+  type IdentityProviderPurpose,
+  type LinkedIdentity,
+  type OfferedIdentityProvider,
+  type PendingAccount,
+  type ProviderReturn,
+} from "./identityProviders";

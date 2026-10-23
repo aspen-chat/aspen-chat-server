@@ -18,6 +18,7 @@ import {
 } from "react-aria-components";
 import { useAspenClient } from "@/api/context";
 import { SecondFactorFields } from "@/features/auth/SecondFactorFields";
+import { useProviderFlow } from "@/features/auth/identityProviders";
 import {
   alertClass,
   fieldClass,
@@ -35,7 +36,8 @@ import {
 import { formString } from "@/forms";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
-import type { SecuritySettings } from "./api";
+import { format } from "@/i18n/messages";
+import { hasPassword, linkedIdentities, type SecuritySettings } from "./api";
 import { ReauthContext, type WithReauth } from "./reauthContext";
 
 function needsReauth(e: unknown): boolean {
@@ -96,7 +98,11 @@ function ReauthDialog({
 }) {
   const m = useMessages();
   const client = useAspenClient();
+  const runProvider = useProviderFlow();
   const twoFactor = settings.twoFactorEnabled;
+  // An account made through an identity provider may have no password to confirm with.
+  const passwordless = !hasPassword(settings);
+  const identities = linkedIdentities(settings);
   const [method, setMethod] = useState<TypedSecondFactor>(settings.totp ? "totp" : "recoveryCode");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,8 +122,10 @@ function ReauthDialog({
     }
   }
 
-  const passkeyAvailable = twoFactor && settings.passkeys.length > 0 && transport !== null;
+  const passkeyAvailable =
+    (twoFactor || passwordless) && settings.passkeys.length > 0 && transport !== null;
   const codesAvailable = settings.totp || settings.recoveryCodesRemaining > 0;
+  const submitAvailable = twoFactor ? codesAvailable : !passwordless;
   return (
     <ModalOverlay
       isOpen
@@ -153,6 +161,8 @@ function ReauthDialog({
                   recoveryAvailable={settings.recoveryCodesRemaining > 0}
                 />
               )
+            ) : passwordless ? (
+              <p className={hintClass}>{m.security.reauthNoPassword}</p>
             ) : (
               <>
                 <p className={hintClass}>{m.security.reauthPassword}</p>
@@ -175,6 +185,25 @@ function ReauthDialog({
                 {error}
               </p>
             )}
+            {/* An identity provider verifies again in the system browser in the apps; the web
+                client goes to it in this tab, and the change is made again on returning. */}
+            {identities.map((identity) => (
+              <Button
+                key={identity.id}
+                isDisabled={pending}
+                onPress={() => {
+                  void attempt(() =>
+                    runProvider(
+                      { id: identity.provider, name: identity.providerName },
+                      "reauthenticate",
+                    ),
+                  );
+                }}
+                className={secondaryButtonClass}
+              >
+                {format(m.security.reauthProvider, { provider: identity.providerName })}
+              </Button>
+            ))}
             <div className="flex flex-wrap items-center justify-end gap-2">
               {passkeyAvailable && (
                 <Button
@@ -189,7 +218,7 @@ function ReauthDialog({
                   {m.twoFactor.usePasskey}
                 </Button>
               )}
-              {(!twoFactor || codesAvailable) && (
+              {submitAvailable && (
                 <Button type="submit" isDisabled={pending} className={primaryButtonClass}>
                   {pending ? m.twoFactor.verifying : m.security.confirm}
                 </Button>

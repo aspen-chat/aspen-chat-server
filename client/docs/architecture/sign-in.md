@@ -11,6 +11,7 @@
 | Signing in from another device | `OtherDeviceSignIn`, `DeviceLinkCode`, `DeviceLinkScreen`, `thisDeviceName`                                                                                            |
 | Email                          | `src/features/email`: `useEmailPolicy`, `PasswordReset`, `VerificationScreen`, `EmailDialog`, `EmailPanel`                                                             |
 | Device credentials             | `AspenClient` and `device.ts` (`packages/protocol/src`), `src/api/devices.ts`, `src/api/devicePuzzle.worker.ts`                                                        |
+| Identity providers             | `identityProviders.ts` (`packages/protocol/src`), `src/features/auth`: `identityProviders.ts`, `IdentityProviderButtons`, `ProviderReturn`, `ProviderAccountStep`      |
 
 ## Device credentials
 
@@ -157,6 +158,92 @@ The server form offers to scan a code instead of typing an address, since the co
 
 - Signed out, the root layout shows the screen in place of the sign-in forms (`/device-link`).
 - Signed in, the router has it as a route.
+
+## Identity providers
+
+People may sign in through the OpenID Connect providers the deployment's administrators chose (the
+server's `docs/architecture/sign-in-and-security/identity-providers.md`). `GET /auth/methods` lists
+them (`offeredProviders`; a deployment that predates them lists none), and the sign-in screen has a
+"Continue with {name}" button for each (`IdentityProviderButtons`), below the passkey button.
+
+Every exchange with a provider is a flow, of a purpose: `signIn`, `link`, or `reauthenticate`.
+`useProviderFlow` runs one. The client starts it with a PKCE challenge of its own
+(`AspenClient.startIdentityProviderFlow`), the browser signs in at the provider and comes back with
+the flow's id and a one-time return code, and the client claims what the provider said with its
+verifier and that code (`claimIdentityProviderFlow`).
+
+### Where the browser goes
+
+| Shell              | The provider's sign-in                                                                      | The return                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Web client         | This tab. The verifier is kept in `sessionStorage` by the flow's id (`keepFlow`)            | `/sign-in/provider#flow={id}&code={code}`, a route of its own (`ProviderReturn`)                                  |
+| Desktop and mobile | The system browser, through the passkey hand-off's machinery (`runIdentityProviderHandoff`) | The hand-off's return address, with `flow` and `code` in the query, read as a finished ceremony named by the flow |
+
+In the web client:
+
+- The tab remembers where it was (`returnPath`), and lands there when the flow is done.
+- A flow is taken from storage once (`takeFlow`), and flows older than the server keeps them are
+  dropped as another starts (`FLOW_KEPT_MS`).
+- The return page takes the fragment off the address before claiming, and claims each flow once
+  however often it is drawn. Signed out, the root layout shows it in place of the sign-in forms.
+- A return this tab did not start says so, with the way back to signing in.
+
+In the apps (`providerHandoff`):
+
+- The desktop prepares a passkey hand-off's loopback listener and opens the provider instead of the
+  passkey page (`passkey:open-provider`, `openProvider` in
+  `packages/desktop/src/main/passkeyHandoff.ts`), which takes only HTTPS (or this machine's own
+  addresses in an unpackaged build). The listener reads the return (`flow` and `code`) and sends the
+  tab on to the server's passkey page to say it is done.
+- A phone uses the passkey hand-off as it is: `aspen://auth/passkey`, read by `parseHandoffReturn`.
+- Closing the browser, or the hand-off giving up, is backing out (`PasskeyCancelledError`), which
+  shows nothing.
+
+### What a claim does
+
+| Outcome                | Then                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `signedIn`             | The session is stored, and the signed-in app opens                                                                 |
+| `secondFactorRequired` | `SecondFactorStep`, as after a password                                                                            |
+| `accountRequired`      | `ProviderAccountStep`, below                                                                                       |
+| `linked`               | Said in a toast. The apps reload the security settings; the web client returns to where it was                     |
+| `reauthenticated`      | The apps finish the change that asked; the web client returns to where it was and asks in a toast to make it again |
+| A Problem              | Its text, as the server gave it: `identityProviderFailed`'s detail says why the provider did not sign them in      |
+
+### A new account
+
+`ProviderAccountStep` asks for a username, prefilled with the provider's (`suggestedName`), and
+makes the account with the same verifier (`createIdentityProviderAccount`).
+
+- It asks for a registration invite only where the offer says one is needed (`inviteRequired`).
+- It names the display name and the address the account will have, when the provider gave them.
+- Without an address from the provider, it asks for one as registration does: required where the
+  offer says (`emailRequired`), and optional where the deployment sends mail.
+- The newsletter is offered as registration offers it.
+- A username someone holds (`usernameTaken`) shows at the field, and another may be tried.
+- "Sign in another way" goes back to signing in.
+
+### Security settings
+
+Sign-in and security (`SecurityPanel`) shows, for a person of this deployment:
+
+- the identity providers linked to the account, each with when it was linked and last used, and an
+  unlink button. Unlinking needs a recent verification, and the server refuses the account's only
+  way in (`lastSignInMethod`), which shows as the section's error;
+- a "Link {name}" button for each provider the server offers that is not linked, running a `link`
+  flow, which needs a recent verification before it starts;
+- for an account without a password (`hasPassword` false), "Set a password" in place of changing it,
+  without the current one, after verifying again.
+
+A server that predates providers leaves out `hasPassword` and `identities`, read as a password and
+none (`hasPassword`, `linkedIdentities` in `src/features/security/api.ts`).
+
+### Verifying again
+
+The verify-again dialog (`ReauthProvider`) offers "Confirm with {name}" for each linked provider, a
+`reauthenticate` flow. For an account without a password it asks for no password: a passkey or a
+provider confirms it. In the web client the tab goes to the provider, so the change that asked is
+made again on returning; in the apps it finishes in place.
 
 ## Email
 

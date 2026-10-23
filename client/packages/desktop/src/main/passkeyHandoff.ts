@@ -16,6 +16,8 @@ import { createServer, type Server } from "node:http";
 export const PASSKEY_PREPARE_CHANNEL = "passkey:prepare";
 export const PASSKEY_OPEN_CHANNEL = "passkey:open";
 export const PASSKEY_DISPOSE_CHANNEL = "passkey:dispose";
+/** Opens an identity provider's sign-in on a prepared handoff (`openProvider`). */
+export const PASSKEY_OPEN_PROVIDER_CHANNEL = "passkey:open-provider";
 
 /** How long the browser has to come back before the handoff counts as abandoned. */
 const HANDOFF_TIMEOUT_MS = 10 * 60 * 1000;
@@ -37,6 +39,18 @@ interface Pending {
 const pending = new Map<string, Pending>();
 
 function parseReturn(url: URL): HandoffReturn | null {
+  // An identity provider's flow comes back with its id and a return code alone
+  // (`parseHandoffReturn` in `@aspen/protocol` reads it the same way).
+  const flow = url.searchParams.get("flow");
+  const flowCode = url.searchParams.get("code");
+  if (
+    url.pathname === RETURN_PATH &&
+    flow !== null &&
+    flowCode !== null &&
+    !url.searchParams.has("ceremony")
+  ) {
+    return { ceremony: flow, outcome: "done", code: flowCode };
+  }
   const ceremony = url.searchParams.get("ceremony");
   const outcome = url.searchParams.get("outcome");
   if (url.pathname !== RETURN_PATH || ceremony === null) {
@@ -113,6 +127,30 @@ async function open(id: string, url: string): Promise<HandoffReturn> {
 }
 
 /**
+ * Opens an identity provider's sign-in (`authorizeUrl`) for a handoff prepared like a passkey
+ * ceremony's: the provider returns the browser to the server, which sends it on to this
+ * handoff's listener, and the tab is then sent to `server`'s passkey page to say it is done.
+ */
+async function openProvider(
+  id: string,
+  authorizeUrl: string,
+  server: string,
+): Promise<HandoffReturn> {
+  const entry = pending.get(id);
+  if (entry === undefined) {
+    throw new Error("unknown passkey handoff");
+  }
+  const provider = new URL(authorizeUrl);
+  const home = new URL(server);
+  if (!securePage(provider) || !securePage(home)) {
+    throw new Error("refusing to open an identity provider or a server not reached over HTTPS");
+  }
+  entry.pageOrigin = home.origin;
+  await shell.openExternal(provider.toString());
+  return entry.returned;
+}
+
+/**
  * Whether the page is served over HTTPS, or over plain HTTP at this machine's own addresses in
  * an unpackaged build, whose development server and deployment run there.
  */
@@ -144,6 +182,19 @@ export function servePasskeyHandoff(): void {
     }
     return open(id, url);
   });
+  ipcMain.handle(
+    PASSKEY_OPEN_PROVIDER_CHANNEL,
+    (_event, id: unknown, authorizeUrl: unknown, server: unknown) => {
+      if (
+        typeof id !== "string" ||
+        typeof authorizeUrl !== "string" ||
+        typeof server !== "string"
+      ) {
+        throw new Error("passkey:open-provider takes a handoff id, a URL, and a server");
+      }
+      return openProvider(id, authorizeUrl, server);
+    },
+  );
   ipcMain.on(PASSKEY_DISPOSE_CHANNEL, (_event, id: unknown) => {
     if (typeof id === "string") {
       dispose(id);

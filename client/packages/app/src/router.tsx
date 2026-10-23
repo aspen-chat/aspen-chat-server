@@ -23,6 +23,7 @@ import { ForeignScope } from "@/api/deployments";
 import { BotAddScreen } from "@/features/bots/BotAddScreen";
 import { DeviceLinkRoute } from "@/features/auth/DeviceLinkScreen";
 import { RegisterLanding } from "@/features/auth/RegisterLanding";
+import { ProviderReturn } from "@/features/auth/ProviderReturn";
 
 /**
  * URL scheme, shared by every shell so a link copied from one opens in another:
@@ -47,6 +48,9 @@ import { RegisterLanding } from "@/features/auth/RegisterLanding";
  *   /device-link?server={origin}#{id}                   a sign-in code scanned or opened: sign in
  *                                                       this device, or confirm another; the
  *                                                       app's own scanner passes `link={id}`
+ *   /sign-in/provider#flow={id}&code={code}             the web client's return from an identity
+ *                                                       provider: claim the flow, signed in or
+ *                                                       out
  *   /activity                                           the messages that tell the user of
  *                                                       themselves, from every deployment
  *   /saved                                              the user's saved messages, from every
@@ -99,6 +103,13 @@ export const deviceLinkRoute = createRoute({
     ...(typeof search.link === "string" ? { link: search.link } : {}),
   }),
   component: DeviceLinkRoute,
+});
+
+/** Where the server sends the web client's tab back from an identity provider. */
+export const providerReturnRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sign-in/provider",
+  component: ProviderReturn,
 });
 
 export const activityRoute = createRoute({
@@ -334,6 +345,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   registerRoute,
   deviceLinkRoute,
+  providerReturnRoute,
   activityRoute,
   savedRoute,
   adminRoute,
