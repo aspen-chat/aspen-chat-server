@@ -44,6 +44,10 @@ export function isVideoType(mimeType: string): boolean {
   return mimeType.toLowerCase().startsWith("video/");
 }
 
+export function isAudioType(mimeType: string): boolean {
+  return mimeType.toLowerCase().startsWith("audio/");
+}
+
 /** Whether a file is one a description is offered for: a picture or a video. */
 export function describable(mimeType: string): boolean {
   return mimeType.startsWith("image/") || mimeType.startsWith("video/");

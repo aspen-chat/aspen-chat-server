@@ -1429,6 +1429,17 @@
     "discard": "Discard"
   },
   "playVideo": "Play {title}",
+  "audio": {
+    "play": "Play {title}",
+    "pause": "Pause {title}",
+    "seek": "Position in {title}",
+    "position": "{elapsed} of {total}",
+    "mute": "Mute",
+    "unmute": "Unmute",
+    "muteTitle": "Mute {title}",
+    "unmuteTitle": "Unmute {title}",
+    "volume": "Volume of {title}"
+  },
   "revealSpoiler": "Spoiler, activate to reveal",
   "revealSpoilerCard": "Reveal spoiler",
   "poll": {

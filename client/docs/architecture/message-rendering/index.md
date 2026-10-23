@@ -10,7 +10,7 @@ cards, and how runs of one author's messages are grouped.
 - [Links to a deployment](self-links.md): chips that name what a link to a deployment the user uses
   leads to.
 - [Attachments](attachments.md): uploading, inline pictures and the gallery, previews and posters,
-  and descriptions.
+  the sound player, and descriptions.
 - [Link and video cards](link-cards.md): video players, link preview cards, and plugins' chips.
 - [Address safety](address-safety.md): which addresses become links, pictures, or windows, in the
   app and in the desktop and phone shells.

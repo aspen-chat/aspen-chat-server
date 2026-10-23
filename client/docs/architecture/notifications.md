@@ -57,8 +57,10 @@ Exceptions:
 
 ## Sounds
 
-Every sound the app plays is a recording in `src/features/notifications/sounds/`, played by
-`playSound`, or `loopSound` until stopped (`sounds.ts`):
+Every sound the app plays of its own is a recording in `src/features/notifications/sounds/`, played
+by `playSound`, or `loopSound` until stopped (`sounds.ts`). Sounds and videos attached to messages
+play in their own players, through the system's default output (see
+[Attachments](message-rendering/attachments.md)).
 
 | File                    | Plays when                                                                                                                                                                            | Through                                                          |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |

@@ -1,12 +1,12 @@
 # Attachments
 
-| Part                       | Where                                                                               |
-| -------------------------- | ----------------------------------------------------------------------------------- |
-| Uploading                  | `AspenSync.uploadAttachment`, `upload.ts` (`packages/protocol/src/`)                |
-| Inline pictures and videos | `src/features/messages/Attachments.tsx` (`MessageMedia`, `InlineVideo`, `keptRoom`) |
-| Gallery                    | `ImageGallery.tsx`                                                                  |
-| Records on demand          | `useAttachment`                                                                     |
-| Describing                 | `AttachmentDescriptionButton`, `AspenSync.describeAttachment`                       |
+| Part                                | Where                                                                                              |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Uploading                           | `AspenSync.uploadAttachment`, `upload.ts` (`packages/protocol/src/`)                               |
+| Inline pictures, videos, and sounds | `src/features/messages/Attachments.tsx` (`MessageMedia`, `InlineVideo`, `InlineAudio`, `keptRoom`) |
+| Gallery                             | `ImageGallery.tsx`                                                                                 |
+| Records on demand                   | `useAttachment`                                                                                    |
+| Describing                          | `AttachmentDescriptionButton`, `AspenSync.describeAttachment`                                      |
 
 ## Uploading
 
@@ -61,6 +61,28 @@ See the server's [attachment previews](../../../../docs/architecture/attachment-
   `<video>` of the original in the poster's room, so nothing of the video is fetched until the
   reader asks.
 - A video the browser cannot play, and one without a poster, is a download chip.
+
+### Sounds
+
+An `audio/` attachment plays in a small player (`InlineAudio`): its name, which downloads it, a mute
+control and a volume, a play and pause control, a position to scrub, shaded up to where it has
+played (`SliderRail`'s `filled`), and the time played against its length (`formatClock`).
+
+- It is one size whatever it plays, so it keeps its room from the first.
+- Only the file's start is fetched (`preload="metadata"`), for its length, until it is played.
+- Dragging the position moves the sound when the thumb is let go. Arrow keys move it by a second, or
+  a tenth of one in a sound under ten seconds (`scrubStep`).
+- A sound whose file does not give its length (a recording streamed as it was made) plays with the
+  position disabled until the browser finds its end.
+- It plays through the system's default output, as a video does.
+- Each player starts at the volume the reader last chose in any of them (`chosenVolume`), for as
+  long as the page lasts. Turned all the way down, it shows as muted, and unmuting it brings it back
+  to full.
+- iOS keeps every element at full volume, leaving it to the device's buttons, so there the player
+  has a mute control alone (`volumeSettable`).
+- A sound the browser cannot play is a download chip. The server serves the audio types browsers
+  play as themselves (`app::attachment::INLINE_TYPES`) and any other as `application/octet-stream`,
+  which no browser plays.
 
 ## Descriptions
 

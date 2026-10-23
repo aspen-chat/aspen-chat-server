@@ -1,5 +1,6 @@
 import type { FileSink, OfferState, TransferMode } from "@aspen/protocol";
 import { nativeCanChooseDestination, nativeChooseDestination } from "@/api/filesBridge";
+import { formatClock } from "@/features/layout/clock";
 
 /** How long an offer may stand, in seconds, as the offer dialog lists them; the first is the default. */
 export const VALIDITY_CHOICES = ["60", "300", "900", "1800", "3600"] as const;
@@ -23,15 +24,9 @@ export function formatSize(bytes: number, locale: string): string {
   }).format(value);
 }
 
-/** Time left as `m:ss` under an hour, and `h:mm:ss` from there. */
+/** Time left, rounded up to the second, as `formatClock` writes it. */
 export function formatTimeLeft(ms: number): string {
-  const total = Math.max(0, Math.ceil(ms / 1000));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const seconds = String(total % 60).padStart(2, "0");
-  return hours > 0
-    ? `${String(hours)}:${String(minutes).padStart(2, "0")}:${seconds}`
-    : `${String(minutes)}:${seconds}`;
+  return formatClock(Math.ceil(ms / 1000));
 }
 
 /** The ways an offer can reach this user: direct when its sender allows it, relayed when the server relays. */
