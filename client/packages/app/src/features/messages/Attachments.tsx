@@ -1,5 +1,7 @@
 import { plainFileName, type Attachment } from "@aspen/protocol";
 import {
+  ArrowClockwiseIcon,
+  ArrowCounterClockwiseIcon,
   PauseIcon,
   PaperclipIcon,
   PlayIcon,
@@ -10,7 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Button, Slider } from "react-aria-components";
+import { Button, Slider, useLocale } from "react-aria-components";
 import { useAttachments, useStore } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { ImageGallery } from "@/features/messages/ImageGallery";
@@ -452,12 +454,15 @@ function InlineVideo({ attachment }: { attachment: Attachment }) {
 }
 
 /**
- * Seconds one press of an arrow key moves a sound's position, and where the thumb comes to rest
- * as it is dragged: a second, or a tenth of one in a sound too short for whole seconds to scrub
- * through.
+ * How many steps a sound's position slider counts from its start to its end: one press of an
+ * arrow key moves it a step, and the thumb comes to rest on one as it is dragged. A step is about a
+ * second, or a tenth of one in a sound too short for whole seconds to scrub through, and divides
+ * the length exactly. The slider counts steps rather than seconds because React Aria snaps a value
+ * to a whole number of steps from the minimum, and would hold the thumb short of a length that is
+ * not one.
  */
-function scrubStep(duration: number): number {
-  return duration < 10 ? 0.1 : 1;
+function scrubSteps(duration: number): number {
+  return Math.max(1, Math.round(duration / (duration < 10 ? 0.1 : 1)));
 }
 
 /**
@@ -483,19 +488,23 @@ function volumeSettable(): boolean {
 
 /**
  * A sound in a small player: its name, which downloads it, a mute control and a volume, a play
- * and pause control, a position to scrub, and the time played against its length. Only the sound's length and the start of its
- * file are fetched until it is played. The player is one size whatever it plays, so its room is
- * kept from the first. A sound the browser cannot play is offered for download instead, and one
- * whose length the file does not give (a recording streamed as it was made) plays without a
- * position to scrub until the browser has found its end.
+ * and pause control (a replay control once it has played to its end), a position to scrub, and
+ * the time played against its length. Only the sound's length and the start of its file are
+ * fetched until it is played. The player is as wide as its whole name needs, from a floor up to
+ * the width it has, and otherwise one size whatever it plays, so its room is kept from the first.
+ * A sound the browser cannot play is offered for download instead, and one whose length the file
+ * does not give (a recording streamed as it was made) plays without a position to scrub until the
+ * browser has found its end.
  */
 function InlineAudio({ attachment }: { attachment: Attachment }) {
   const m = useMessages();
+  const { direction } = useLocale();
   const keepStill = useKeepStill();
   const audio = useRef<HTMLAudioElement>(null);
   const position = useRef<HTMLInputElement>(null);
   const [failed, setFailed] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const [ended, setEnded] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState<number | null>(null);
   // Where the thumb is while it is dragged; the sound moves there when it is let go.
@@ -507,6 +516,8 @@ function InlineAudio({ attachment }: { attachment: Attachment }) {
   const elapsed = formatClock(shown, duration ?? shown);
   const total = duration === null ? null : formatClock(duration);
   const valueText = total === null ? elapsed : format(m.audio.position, { elapsed, total });
+  const steps = duration === null || duration === 0 ? 0 : scrubSteps(duration);
+  const toSeconds = (step: number) => (steps === 0 ? 0 : (step / steps) * (duration ?? 0));
   useLayoutEffect(() => {
     keepStill();
   }, [failed, keepStill]);
@@ -537,7 +548,7 @@ function InlineAudio({ attachment }: { attachment: Attachment }) {
       {...(attachment.description == null ? {} : { "aria-description": attachment.description })}
       data-media-url={attachment.downloadUrl}
       data-media-name={attachment.fileName}
-      className="flex w-80 max-w-full flex-col gap-1 rounded-md border border-line bg-surface-sunken px-2 py-1.5"
+      className="flex w-max min-w-[min(24rem,100%)] max-w-full flex-col gap-2 rounded-md border border-line bg-surface-sunken px-4 py-3"
     >
       <audio
         ref={audio}
@@ -550,6 +561,19 @@ function InlineAudio({ attachment }: { attachment: Attachment }) {
         }}
         onPlay={() => {
           setPlaying(true);
+          setEnded(false);
+        }}
+        onSeeked={(event) => {
+          setEnded(event.currentTarget.ended);
+        }}
+        onEnded={(event) => {
+          // The last `timeupdate` may come short of the end, and a length estimated from the
+          // file's start may be revised, so the position is put at the end it reached.
+          const element = event.currentTarget;
+          const length = Number.isFinite(element.duration) ? element.duration : element.currentTime;
+          setDuration(length);
+          setTime(length);
+          setEnded(true);
         }}
         onPause={() => {
           setPlaying(false);
@@ -620,7 +644,9 @@ function InlineAudio({ attachment }: { attachment: Attachment }) {
       </div>
       <div className="flex items-center gap-2">
         <Button
-          aria-label={format(playing ? m.audio.pause : m.audio.play, { title: label })}
+          aria-label={format(playing ? m.audio.pause : ended ? m.audio.replay : m.audio.play, {
+            title: label,
+          })}
           onPress={() => {
             const element = audio.current;
             if (element === null) {
@@ -638,32 +664,41 @@ function InlineAudio({ attachment }: { attachment: Attachment }) {
         >
           {playing ? (
             <PauseIcon size={16} weight="fill" aria-hidden="true" />
+          ) : ended ? (
+            // The arrow turns back against the direction of reading.
+            direction === "rtl" ? (
+              <ArrowClockwiseIcon size={16} weight="bold" aria-hidden="true" />
+            ) : (
+              <ArrowCounterClockwiseIcon size={16} weight="bold" aria-hidden="true" />
+            )
           ) : (
             <PlayIcon size={16} weight="fill" aria-hidden="true" />
           )}
         </Button>
         <Slider
           aria-label={format(m.audio.seek, { title: label })}
-          value={Math.min(shown, duration ?? 0)}
+          value={steps === 0 ? 0 : (Math.min(shown, duration ?? 0) / (duration ?? 1)) * steps}
           minValue={0}
-          maxValue={duration ?? 0}
-          step={scrubStep(duration ?? 0)}
-          isDisabled={duration === null || duration === 0}
+          maxValue={steps}
+          isDisabled={steps === 0}
           onChange={(value) => {
             if (typeof value === "number") {
-              setScrubbing(value);
+              setScrubbing(toSeconds(value));
             }
           }}
           onChangeEnd={(value) => {
             if (typeof value === "number") {
+              const seconds = toSeconds(value);
               if (audio.current !== null) {
-                audio.current.currentTime = value;
+                audio.current.currentTime = seconds;
               }
-              setTime(value);
+              setTime(seconds);
               setScrubbing(null);
             }
           }}
-          className="min-w-0 flex-1 disabled:opacity-60"
+          // The thumb's centre travels to the track's ends, so half of it overhangs each; the
+          // margin keeps that half clear of the play control and the time.
+          className="mx-2 min-w-0 flex-1 disabled:opacity-60"
         >
           <SliderRail inputRef={position} filled />
         </Slider>

@@ -9,12 +9,13 @@ import { general, me, signInToWorld } from "./world";
 
 const attachmentId = "0190f0a0-0000-7000-8002-000000000101";
 const SOUND_URL = "https://media.test/tone.wav";
-const SOUND_SECONDS = 3;
+// Not a whole number of tenths, so the position must still reach its end when the sound does.
+const SOUND_SECONDS = 3.04;
 
 /** `seconds` of a quiet 440 Hz tone as 8 kHz, 8-bit mono PCM in a WAV file. */
 function tone(seconds: number): Buffer {
   const rate = 8000;
-  const samples = rate * seconds;
+  const samples = Math.round(rate * seconds);
   const wav = Buffer.alloc(44 + samples);
   wav.write("RIFF", 0, "ascii");
   wav.writeUInt32LE(36 + samples, 4);
@@ -165,6 +166,16 @@ test("a sound plays, pauses, and scrubs in its own player", async ({ page }) => 
   await expect
     .poll(() => player.locator("audio").evaluate((audio: HTMLAudioElement) => audio.currentTime))
     .toBeCloseTo(1.5, 1);
+
+  // Played to its end, its position sits at the end and it offers to play it again.
+  await player.getByRole("button", { name: "Play tone.wav" }).click();
+  const replay = player.getByRole("button", { name: "Replay tone.wav" });
+  await expect(replay).toBeVisible();
+  await expect(position).toHaveAttribute("aria-valuetext", "0:03 of 0:03");
+  await expect(position).toHaveValue((await position.getAttribute("max")) ?? "");
+  await replay.click();
+  await expect(player.getByRole("button", { name: "Pause tone.wav" })).toBeVisible();
+  await expect(player.getByText("0:01 / 0:03")).toBeVisible();
 });
 
 test("a sound's volume turns down and mutes", async ({ page }) => {

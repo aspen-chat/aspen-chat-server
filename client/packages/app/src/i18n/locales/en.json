@@ -1437,6 +1437,7 @@
   "audio": {
     "play": "Play {title}",
     "pause": "Pause {title}",
+    "replay": "Replay {title}",
     "seek": "Position in {title}",
     "position": "{elapsed} of {total}",
     "mute": "Mute",

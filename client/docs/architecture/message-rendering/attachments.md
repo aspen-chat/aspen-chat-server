@@ -70,10 +70,16 @@ An `audio/` attachment plays in a small player (`InlineAudio`): its name, which 
 control and a volume, a play and pause control, a position to scrub, shaded up to where it has
 played (`SliderRail`'s `filled`), and the time played against its length (`formatClock`).
 
-- It is one size whatever it plays, so it keeps its room from the first.
+- It is as wide as its whole name needs, from 24rem up to the width the message has, where the name
+  is cut short; otherwise it is one size whatever it plays, so it keeps its room from the first.
+- Once it has played to its end, the play control replays it, shown as an arrow turning back against
+  the direction of reading (counter-clockwise, clockwise right to left), and the position sits at
+  the end it reached.
 - Only the file's start is fetched (`preload="metadata"`), for its length, until it is played.
-- Dragging the position moves the sound when the thumb is let go. Arrow keys move it by a second, or
-  a tenth of one in a sound under ten seconds (`scrubStep`).
+- Dragging the position moves the sound when the thumb is let go. Arrow keys move it by about a
+  second, or a tenth of one in a sound under ten seconds, a step that divides its length exactly
+  (`scrubSteps`): the slider counts those steps rather than seconds, since React Aria snaps a value
+  to a whole number of steps and would hold the thumb short of a length that is not one.
 - A sound whose file does not give its length (a recording streamed as it was made) plays with the
   position disabled until the browser finds its end.
 - It plays through the system's default output, as a video does.
