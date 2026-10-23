@@ -1,6 +1,12 @@
-import { ApiProblemError, type Attachment, type Reply } from "@aspen/protocol";
+import {
+  ApiProblemError,
+  type Attachment,
+  type AttachmentChange,
+  type Reply,
+} from "@aspen/protocol";
 import {
   ChartBarIcon,
+  EyeSlashIcon,
   FileIcon,
   PaperclipIcon,
   PaperPlaneRightIcon,
@@ -24,6 +30,7 @@ import {
   ProgressBar,
   TextArea,
   TextField,
+  ToggleButton,
 } from "react-aria-components";
 import { useEmojiCompletion } from "@/features/emoji/useEmojiCompletion";
 import { useTagging } from "@/features/mentions/useTagging";
@@ -68,6 +75,8 @@ interface Pending {
    * has reached the server (`describe`).
    */
   description: string;
+  /** Whether readers' apps are to cover it as a spoiler; the record has it as `description`. */
+  spoiler: boolean;
   /** An object URL for the file's own bytes when it is an image, shown as a thumbnail. */
   thumbnail: string | null;
   state:
@@ -94,6 +103,11 @@ const DRAFT_SAVE_DELAY_MS = 400;
 const menuItemClass =
   "flex cursor-default items-center gap-2 rounded px-2 py-1.5 text-sm outline-none " +
   "focus:bg-surface-hover pointer-coarse:py-2.5";
+
+/** The controls on a file waiting to be sent, in a column at its end. */
+const pendingControlClass =
+  "rounded p-0.5 text-ink-faint outline-none hover:text-ink pointer-coarse:p-1.5 " +
+  "focus-visible:ring-2 focus-visible:ring-accent/50";
 
 const toolButtonClass =
   "shrink-0 rounded-md border border-line p-2.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
@@ -160,6 +174,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
       name: attachment.fileName,
       mimeType: attachment.mimeType,
       description: attachment.description ?? "",
+      spoiler: attachment.spoiler ?? false,
       thumbnail: isImageType(attachment.mimeType)
         ? (mediaUrl(attachment.downloadUrl) ?? null)
         : null,
@@ -179,9 +194,9 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     }
   }
   const fileInput = useRef<HTMLInputElement>(null);
-  // Descriptions given while a file was still uploading, by its key, for the upload to give
-  // the server once it is done.
-  const describedEarly = useRef(new Map<number, string>());
+  // Changes made while a file was still uploading (its description, its spoiler mark), by its
+  // key, for the upload to give the server once it is done.
+  const changedEarly = useRef(new Map<number, AttachmentChange>());
   const channel = useChannel(channelId);
   // A thread's people are named as in the community of the channel it is in.
   const parentChannel = useChannel(channel?.parentChannel ?? "");
@@ -370,6 +385,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
           name: file.name,
           mimeType: file.type,
           description: "",
+          spoiler: false,
           thumbnail,
           state: { kind: "uploading", sent: 0 },
         },
@@ -387,12 +403,12 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
           }),
         )
         .then(async (uploaded) => {
-          const early = describedEarly.current.get(key);
-          describedEarly.current.delete(key);
-          // A description that fails to reach the server now is given again on sending.
+          const early = changedEarly.current.get(key);
+          changedEarly.current.delete(key);
+          // A change that fails to reach the server now is given again on sending.
           return early === undefined
             ? uploaded
-            : await sync.describeAttachment(uploaded.id, early || null).catch(() => uploaded);
+            : await sync.updateAttachment(uploaded.id, early).catch(() => uploaded);
         })
         .then(
           (attachment) => {
@@ -409,17 +425,24 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   }
 
   /**
-   * Keeps what a file shows as the user described it, and gives it to the server once the file
-   * is there; a file still uploading gives it when the upload is done.
+   * Keeps a change to a file (what it shows as the user described it, whether it is a spoiler),
+   * and gives it to the server once the file is there; a file still uploading gives it when the
+   * upload is done. A change the server refuses is said in `failed`, a template of `reason`.
    */
-  function describe(key: number, description: string) {
+  function changeAttachment(
+    key: number,
+    local: { description: string } | { spoiler: boolean },
+    failed: string,
+  ) {
     const item = pending.find((p) => p.key === key);
-    setPending((list) => list.map((p) => (p.key === key ? { ...p, description } : p)));
+    setPending((list) => list.map((p) => (p.key === key ? { ...p, ...local } : p)));
+    const change: AttachmentChange =
+      "description" in local ? { description: local.description || null } : local;
     if (item?.state.kind !== "ready") {
-      describedEarly.current.set(key, description);
+      changedEarly.current.set(key, { ...changedEarly.current.get(key), ...change });
       return;
     }
-    sync.describeAttachment(item.state.attachment.id, description || null).then(
+    sync.updateAttachment(item.state.attachment.id, change).then(
       (attachment) => {
         setPending((list) =>
           list.map((p) =>
@@ -431,7 +454,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
       },
       (e: unknown) => {
         setError(
-          format(m.describeFailed, {
+          format(failed, {
             reason: e instanceof ApiProblemError ? e.message : String(e),
           }),
         );
@@ -452,14 +475,25 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
       if (text.startsWith("/") && sync.store.commands(channelId) === undefined) {
         await sync.loadCommands(channelId).catch(() => undefined);
       }
-      // Descriptions that have not reached the server yet (one given just as its upload ended,
-      // or one whose saving failed) go before the message that carries their files.
+      // Changes that have not reached the server yet (one made just as its upload ended, or
+      // one whose saving failed) go before the message that carries their files.
       await Promise.all(
-        pending.flatMap((p) =>
-          p.state.kind === "ready" && p.description !== (p.state.attachment.description ?? "")
-            ? [sync.describeAttachment(p.state.attachment.id, p.description || null)]
-            : [],
-        ),
+        pending.flatMap((p) => {
+          if (p.state.kind !== "ready") {
+            return [];
+          }
+          const record = p.state.attachment;
+          const described = p.description !== (record.description ?? "");
+          const spoiled = p.spoiler !== (record.spoiler ?? false);
+          return described || spoiled
+            ? [
+                sync.updateAttachment(record.id, {
+                  ...(described ? { description: p.description || null } : {}),
+                  ...(spoiled ? { spoiler: p.spoiler } : {}),
+                }),
+              ]
+            : [];
+        }),
       );
       const prepared = commands.prepare(text, readyIds);
       if (prepared.kind === "refused") {
@@ -565,7 +599,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
             <li
               key={p.key}
               className={
-                "motion-grow relative flex items-center gap-2 rounded-md border p-1.5 pe-8 text-sm " +
+                "motion-grow flex items-center gap-2 rounded-md border p-1.5 text-sm " +
                 (p.state.kind === "failed" ? "border-danger text-danger" : "border-line")
               }
             >
@@ -573,7 +607,10 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
                 <img
                   src={p.thumbnail}
                   alt=""
-                  className="h-14 w-14 rounded object-cover bg-surface-sunken"
+                  className={
+                    "h-14 w-14 rounded object-cover bg-surface-sunken" +
+                    (p.spoiler ? " blur-sm" : "")
+                  }
                 />
               ) : (
                 <FileIcon size={20} aria-hidden="true" className="text-ink-muted" />
@@ -602,25 +639,38 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
                   </span>
                 )}
               </span>
-              {describable(p.mimeType) && p.state.kind !== "failed" && (
-                <AttachmentDescriptionButton
-                  name={p.name}
-                  description={p.description}
-                  onSave={(description) => {
-                    describe(p.key, description);
+              <span className="flex flex-col items-center gap-0.5 self-stretch">
+                <Button
+                  aria-label={format(m.removeAttachment, { name: p.name })}
+                  onPress={() => {
+                    setPending((list) => list.filter((other) => other.key !== p.key));
                   }}
-                  className="absolute end-1 bottom-1 rounded p-0.5 text-ink-faint outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
-                />
-              )}
-              <Button
-                aria-label={format(m.removeAttachment, { name: p.name })}
-                onPress={() => {
-                  setPending((list) => list.filter((other) => other.key !== p.key));
-                }}
-                className="absolute top-1 end-1 rounded p-0.5 text-ink-faint outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
-              >
-                <XIcon size={14} aria-hidden="true" />
-              </Button>
+                  className={pendingControlClass}
+                >
+                  <XIcon size={14} aria-hidden="true" />
+                </Button>
+                {p.state.kind !== "failed" && (
+                  <>
+                    <SpoilerToggle
+                      name={p.name}
+                      spoiler={p.spoiler}
+                      onChange={(spoiler) => {
+                        changeAttachment(p.key, { spoiler }, m.spoilerFailed);
+                      }}
+                    />
+                    {describable(p.mimeType) && (
+                      <AttachmentDescriptionButton
+                        name={p.name}
+                        description={p.description}
+                        onSave={(description) => {
+                          changeAttachment(p.key, { description }, m.describeFailed);
+                        }}
+                        className={pendingControlClass}
+                      />
+                    )}
+                  </>
+                )}
+              </span>
             </li>
           ))}
         </ul>
@@ -818,5 +868,34 @@ function BlockedNote({ userId }: { userId: string }) {
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Marks a file waiting to be sent as a spoiler, which readers' apps cover until each reader
+ * reveals it, or takes the mark off; its eye is filled while it is on.
+ */
+function SpoilerToggle({
+  name,
+  spoiler,
+  onChange,
+}: {
+  name: string;
+  spoiler: boolean;
+  onChange: (spoiler: boolean) => void;
+}) {
+  const m = useMessages();
+  const label = format(m.markSpoiler, { name });
+  return (
+    <Tooltip text={label}>
+      <ToggleButton
+        aria-label={label}
+        isSelected={spoiler}
+        onChange={onChange}
+        className={pendingControlClass + " selected:text-accent"}
+      >
+        <EyeSlashIcon size={14} weight={spoiler ? "fill" : "regular"} aria-hidden="true" />
+      </ToggleButton>
+    </Tooltip>
   );
 }

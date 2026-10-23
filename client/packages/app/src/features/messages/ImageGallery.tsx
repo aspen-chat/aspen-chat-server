@@ -2,6 +2,7 @@ import { ArrowSquareOutIcon, CaretLeftIcon, CaretRightIcon, XIcon } from "@phosp
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { Button, Dialog, Link, Modal, ModalOverlay, useLocale } from "react-aria-components";
 import { pictureAlt, type Picture } from "@/features/messages/images";
+import { SpoilerCover } from "@/features/messages/SpoilerCard";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -11,19 +12,26 @@ const navButtonClass =
 
 /**
  * Every picture of a message, one at a time, over a darkened page, with its uploader's
- * description beneath it when it has one: arrows and the arrow keys move between them, a strip of thumbnails jumps to one, and Escape, the close control, or a
- * click on the empty space around the picture leaves. Opens on the picture at `initial`.
+ * description beneath it when it has one: arrows and the arrow keys move between them, a strip
+ * of thumbnails jumps to one, and Escape, the close control, or a click on the empty space
+ * around the picture leaves. Opens on the picture at `initial`. A spoiler the reader has not
+ * revealed (`isCovered`) is covered here as in the message, its thumbnail blurred and its
+ * description left out, until they reveal it (`onReveal`, with its attachment's id).
  */
 export function ImageGallery({
   pictures,
   initial,
   isOpen,
   onClose,
+  isCovered,
+  onReveal,
 }: {
   pictures: readonly Picture[];
   initial: number;
   isOpen: boolean;
   onClose: () => void;
+  isCovered: (picture: Picture) => boolean;
+  onReveal: (attachmentId: string) => void;
 }) {
   const m = useMessages();
   return (
@@ -39,7 +47,15 @@ export function ImageGallery({
     >
       <Modal className="h-full w-full outline-none motion-dialog">
         <Dialog aria-label={m.gallery.label} className="flex h-full w-full flex-col outline-none">
-          {({ close }) => <GalleryBody pictures={pictures} initial={initial} close={close} />}
+          {({ close }) => (
+            <GalleryBody
+              pictures={pictures}
+              initial={initial}
+              close={close}
+              isCovered={isCovered}
+              onReveal={onReveal}
+            />
+          )}
         </Dialog>
       </Modal>
     </ModalOverlay>
@@ -50,10 +66,14 @@ function GalleryBody({
   pictures,
   initial,
   close,
+  isCovered,
+  onReveal,
 }: {
   pictures: readonly Picture[];
   initial: number;
   close: () => void;
+  isCovered: (picture: Picture) => boolean;
+  onReveal: (attachmentId: string) => void;
 }) {
   const m = useMessages();
   const { direction } = useLocale();
@@ -104,6 +124,7 @@ function GalleryBody({
   if (current === undefined) {
     return null;
   }
+  const currentCovered = isCovered(current);
   return (
     <div
       role="group"
@@ -147,13 +168,32 @@ function GalleryBody({
             resolve against; centred only, the wrapper would take the picture's own height and a
             tall photo would spill over the controls above it. */}
         <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center self-stretch overflow-hidden">
-          <img
-            key={current.src}
-            src={current.src}
-            alt={pictureAlt(current, format(m.imageAlt, { name: current.name }))}
-            referrerPolicy="no-referrer"
-            className="max-h-full max-w-full object-contain"
-          />
+          {currentCovered ? (
+            <SpoilerCover
+              onReveal={() => {
+                if (current.attachmentId !== undefined) {
+                  onReveal(current.attachmentId);
+                }
+              }}
+              className="flex max-h-full max-w-full"
+            >
+              <img
+                key={current.src}
+                src={current.src}
+                alt=""
+                referrerPolicy="no-referrer"
+                className="max-h-full max-w-full object-contain"
+              />
+            </SpoilerCover>
+          ) : (
+            <img
+              key={current.src}
+              src={current.src}
+              alt={pictureAlt(current, format(m.imageAlt, { name: current.name }))}
+              referrerPolicy="no-referrer"
+              className="max-h-full max-w-full object-contain"
+            />
+          )}
         </div>
         <Button
           onPress={next}
@@ -164,7 +204,7 @@ function GalleryBody({
           <CaretRightIcon size={24} aria-hidden="true" className="rtl:-scale-x-100" />
         </Button>
       </div>
-      {current.description != null && (
+      {current.description != null && !currentCovered && (
         // Its uploader's description, for every reader; the picture's text alternative already
         // carries it to assistive technology, so it is not read twice.
         <p
@@ -181,7 +221,11 @@ function GalleryBody({
               onPress={() => {
                 setIndex(i);
               }}
-              aria-label={pictureAlt(picture, format(m.imageAlt, { name: picture.name }))}
+              aria-label={
+                isCovered(picture)
+                  ? m.gallery.spoiler
+                  : pictureAlt(picture, format(m.imageAlt, { name: picture.name }))
+              }
               aria-pressed={i === index}
               className={
                 "block h-14 w-14 overflow-hidden rounded-md outline-none focus-visible:ring-2 focus-visible:ring-white/70 " +
@@ -195,7 +239,7 @@ function GalleryBody({
                 alt=""
                 loading="lazy"
                 referrerPolicy="no-referrer"
-                className="h-full w-full object-cover"
+                className={"h-full w-full object-cover" + (isCovered(picture) ? " blur-md" : "")}
               />
             </Button>
           </li>

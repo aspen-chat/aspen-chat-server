@@ -48,6 +48,9 @@ interface types {
         height: option<u32>,
         /// What a picture or video shows, in its uploader's words, for those who cannot see it.
         description: option<string>,
+        /// Whether its uploader marked it a spoiler, which apps cover until each reader reveals
+        /// it. A plugin that shows it elsewhere, or tells of what it holds, covers it too.
+        spoiler: bool,
     }
 
     /// A message about to be saved.

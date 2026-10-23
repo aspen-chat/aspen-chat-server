@@ -8,7 +8,8 @@
 //!   with a public `downloadUrl`.
 //! - `GET /attachments/{id}` — metadata and `downloadUrl` of a ready attachment, for its
 //!   uploader or anyone who may view a message it is in.
-//! - `PATCH /attachments/{id}` — the uploader sets or clears its description until it is sent.
+//! - `PATCH /attachments/{id}` — the uploader sets or clears its description, and marks or
+//!   unmarks it a spoiler, until it is sent.
 //! - `DELETE /attachments/{id}` — the uploader drops an attachment in no message, row and
 //!   object.
 //!
@@ -52,6 +53,11 @@ pub struct Attachment {
     /// is what is shown at full size and saved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<AttachmentPreview>,
+    /// Whether apps hide it, pictures and text alike, until each reader reveals it, as its
+    /// uploader chose before sending it. Absent from a deployment that predates it, and false.
+    #[serde(default)]
+    #[schema(required = false)]
+    pub spoiler: bool,
 }
 
 pub fn attachment_to_api(
@@ -69,6 +75,7 @@ pub fn attachment_to_api(
         height: row.height.and_then(|h| u32::try_from(h).ok()),
         description: row.description,
         preview,
+        spoiler: row.spoiler,
     }
 }
 
@@ -118,6 +125,9 @@ pub struct AttachmentUploadInitRequest {
     /// characters; blank is none.
     #[serde(default)]
     pub description: Option<String>,
+    /// Whether readers' apps hide it until revealed; false when absent.
+    #[serde(default)]
+    pub spoiler: bool,
 }
 
 /// A change to an attachment not yet sent, as a merge patch.
@@ -129,6 +139,9 @@ pub struct AttachmentUpdateRequest {
     #[serde(default, deserialize_with = "double_option")]
     #[schema(nullable)]
     pub description: Option<Option<String>>,
+    /// Whether readers' apps hide it until revealed.
+    #[serde(default)]
+    pub spoiler: Option<bool>,
 }
 
 /// A reserved attachment slot. `PUT` the file bytes to `uploadUrl` before `expiresAt`, with
@@ -170,11 +183,14 @@ pub async fn init_attachment_upload(
     let upload = app::attachment::init_upload(
         &state,
         user.id,
-        request.file_name,
-        request.mime_type,
-        request.byte_size,
-        size,
-        description,
+        app::attachment::NewAttachment {
+            file_name: request.file_name,
+            mime_type: request.mime_type,
+            byte_size: request.byte_size,
+            size,
+            description,
+            spoiler: request.spoiler,
+        },
     )
     .await?;
     Ok(Created::new(
@@ -262,9 +278,16 @@ pub async fn update_attachment(
     Path(attachment): Path<AttachmentId>,
     Json(request): Json<AttachmentUpdateRequest>,
 ) -> ApiResult<Json<Attachment>> {
-    let row =
-        app::attachment::describe_attachment(&state, user.id, attachment, request.description)
-            .await?;
+    let row = app::attachment::update_attachment(
+        &state,
+        user.id,
+        attachment,
+        app::attachment::AttachmentChange {
+            description: request.description,
+            spoiler: request.spoiler,
+        },
+    )
+    .await?;
     Ok(Json(attachment_to_api(&state, row)))
 }
 

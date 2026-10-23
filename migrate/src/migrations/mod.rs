@@ -122,3 +122,4 @@ pub mod m20261017_052909_category_mutes_and_notifications;
 pub mod m20261018_224440_channel_mana;
 pub mod m20261022_231920_message_replies;
 pub mod m20261022_232808_join_messages;
+pub mod m20261023_120000_attachment_spoilers;

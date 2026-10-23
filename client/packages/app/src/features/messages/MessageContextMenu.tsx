@@ -10,14 +10,13 @@ import { toast } from "@/features/layout/toast";
 import { QuickReactions } from "@/features/messages/MessageActionSheet";
 import { MessageActions, type MessageSheet } from "@/features/messages/MessageActions";
 import {
-  UnreadableFile,
   canCopyPictures,
   copyPicture,
   saveFrom,
+  toastFileFailure,
 } from "@/features/messages/mediaFile";
 import type { UnderPointer } from "@/features/messages/underPointer";
 import { useMessages } from "@/i18n/context";
-import { format } from "@/i18n/messages";
 
 /** Opens `url` in a new tab, or the system's browser, as a link in a message would. */
 function openElsewhere(url: string) {
@@ -66,13 +65,7 @@ export function MessageContextMenu({
   // Says why a file could not be read: the storage's, which its administrators set up, or else
   // what went wrong.
   const failed = (failure: unknown) => {
-    toast(
-      failure instanceof UnreadableFile
-        ? m.contextMenu.unreadableFile
-        : format(m.contextMenu.fileFailed, {
-            problem: failure instanceof Error ? failure.message : String(failure),
-          }),
-    );
+    toastFileFailure(m, failure);
   };
   return (
     <ContextMenu menu={menu} label={m.messageActionsLabel} button={button}>

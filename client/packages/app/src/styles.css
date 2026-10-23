@@ -729,6 +729,21 @@ body {
   background: var(--color-surface-sunken);
 }
 
+/* A text or code attachment's first lines (`TextAttachment`), drawn as a code block in a message
+   is, inside the card that holds its name and controls. */
+.text-attachment pre {
+  overflow-x: auto;
+  padding: 0.5rem 0.75rem;
+}
+.text-attachment pre:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+.text-attachment pre code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+}
+
 /* highlight.js token classes mapped onto the palette, so code follows the theme. */
 .hljs-keyword,
 .hljs-selector-tag,

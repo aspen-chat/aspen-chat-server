@@ -1,4 +1,6 @@
 import { saveFile } from "@/features/layout/saveFile";
+import { toast } from "@/features/layout/toast";
+import { format, type Messages } from "@/i18n/messages";
 
 /**
  * A file the deployment's storage would not let the app read: its read path sends no
@@ -27,6 +29,17 @@ async function readFile(url: string): Promise<Blob> {
 /** Saves the file at `url` under `name`, as `saveFile` saves any. */
 export async function saveFrom(url: string, name: string): Promise<boolean> {
   return saveFile(await readFile(url), name);
+}
+
+/** Tells the reader, in a toast, that a file could not be read to be saved or copied, and why. */
+export function toastFileFailure(m: Messages, failure: unknown): void {
+  toast(
+    failure instanceof UnreadableFile
+      ? m.contextMenu.unreadableFile
+      : format(m.contextMenu.fileFailed, {
+          problem: failure instanceof Error ? failure.message : String(failure),
+        }),
+  );
 }
 
 /** `blob`, a picture, as a PNG: the one picture type every clipboard takes. */

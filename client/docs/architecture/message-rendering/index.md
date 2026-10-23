@@ -10,7 +10,7 @@ cards, and how runs of one author's messages are grouped.
 - [Links to a deployment](self-links.md): chips that name what a link to a deployment the user uses
   leads to.
 - [Attachments](attachments.md): uploading, inline pictures and the gallery, previews and posters,
-  the sound player, and descriptions.
+  the sound player, text and code files' first lines, spoilers, and descriptions.
 - [Link and video cards](link-cards.md): video players, link preview cards, and plugins' chips.
 - [Address safety](address-safety.md): which addresses become links, pictures, or windows, in the
   app and in the desktop and phone shells.
@@ -27,7 +27,7 @@ Paths are under `src/features/` unless they name a package.
 | Code highlighting | `messages/highlighter.ts`, `messages/CodeBlock.tsx`                                                                                                                         |
 | Linkifying        | `messages/linkify.ts`                                                                                                                                                       |
 | Self links        | `messages/selfLinks.ts`, `messages/SelfLink.tsx`                                                                                                                            |
-| Attachments       | `messages/Attachments.tsx`, `messages/ImageGallery.tsx`; uploading in `packages/protocol/src/upload.ts`                                                                     |
+| Attachments       | `messages/Attachments.tsx`, `messages/ImageGallery.tsx`, `messages/TextAttachment.tsx`, `messages/textPreview.ts`; uploading in `packages/protocol/src/upload.ts`           |
 | Cards             | `messages/VideoCard.tsx`, `messages/video.ts`, `LinkPreviewCard` in `messages/MessageBody.tsx`, `messages/SpoilerCard.tsx`, `messages/spoileredLinks.ts`                    |
 | Error fallback    | `layout/ErrorBoundary.tsx`                                                                                                                                                  |
 | Address checks    | `layout/safeUrl.ts`; desktop `packages/desktop/src/main/navigation.ts`                                                                                                      |

@@ -4,9 +4,11 @@
 | ----------------------------------- | -------------------------------------------------------------------------------------------------- |
 | Uploading                           | `AspenSync.uploadAttachment`, `upload.ts` (`packages/protocol/src/`)                               |
 | Inline pictures, videos, and sounds | `src/features/messages/Attachments.tsx` (`MessageMedia`, `InlineVideo`, `InlineAudio`, `keptRoom`) |
+| Text and code files                 | `TextAttachment.tsx`, `textPreview.ts`                                                             |
+| Spoilers                            | `SpoilerCover` in `SpoilerCard.tsx`, `SpoilerToggle` in `Composer.tsx`                             |
 | Gallery                             | `ImageGallery.tsx`                                                                                 |
 | Records on demand                   | `useAttachment`                                                                                    |
-| Describing                          | `AttachmentDescriptionButton`, `AspenSync.describeAttachment`                                      |
+| Describing                          | `AttachmentDescriptionButton`, `AspenSync.updateAttachment`                                        |
 
 ## Uploading
 
@@ -84,6 +86,55 @@ played (`SliderRail`'s `filled`), and the time played against its length (`forma
   play as themselves (`app::attachment::INLINE_TYPES`) and any other as `application/octet-stream`,
   which no browser plays.
 
+## Text and code files
+
+A text or code file shows its first `TEXT_PREVIEW_LINES` (20) lines in its message, as a code block
+under its download chip (`TextAttachment`).
+
+- Which files: those whose declared type is text (`text/*`, JSON, XML, scripts; `TEXT_TYPES`), and
+  those whose extension or whole name is a text or source file's whatever their type, since most
+  systems declare none for source files (`textLanguage`, `textPreview.ts`).
+- Code is highlighted by its extension, which highlight.js resolves through its aliases (`rs`,
+  `py`); prose and data (`.txt`, `.log`, `.csv`) show as written. See [Markdown](markdown.md) for
+  the highlighter and its length limit.
+- The lines are read from storage as a picture is, without credentials, and reading stops at the
+  line past the twentieth or at `TEXT_PREVIEW_MAX_BYTES` (32 KiB), whichever comes first, cancelling
+  the rest of the download. What was read is kept for the `KEPT_HEADS` (64) files asked for most
+  recently, and one read serves every message showing the file at once.
+- A file with more than it shows ends in a Download to see more button, centred, in the app's own
+  type, which saves the whole file (`saveFrom`).
+- Until its lines arrive a few lines' worth of skeleton stands in; the list keeps the view still
+  when they replace it.
+- A file that cannot be read (storage that sends no `Access-Control-Allow-Origin`), or that holds a
+  NUL and so is not text, shows as its download chip alone.
+
+## Spoilers
+
+An attachment's uploader may mark it a spoiler before sending it, and readers' apps cover it until
+each reader reveals it.
+
+- It is the attachment record's `spoiler`, false when absent (as from a deployment that predates
+  it). The server takes it at the reservation or by `PATCH /attachments/{attachment}`, from the
+  uploader alone and only until the attachment is in a message, as a description
+  (`app::attachment::update_attachment`).
+- In the message box each file waiting to be sent has a toggle (`SpoilerToggle`, an eye struck
+  through, filled while on), and a picture's thumbnail blurs while it is on. The mark reaches the
+  server as a description does: at once, when the upload ends, and again before sending
+  (`AspenSync.updateAttachment`).
+- Every kind is covered (`SpoilerCover`): a picture, a video's poster, a sound's player, a text or
+  code file's card, and a download chip, whose name might give it away. The cover is blurred past
+  reading under a Reveal spoiler button, and what it covers is `inert`, as a covered link card is
+  (see [link and video cards](link-cards.md#links-inside-spoilers)). It keeps its room, and a text
+  file's lines are read all the same, so revealing moves nothing.
+- The attachment's own controls (remove, copy ID) stay usable over the cover.
+- What a reader has revealed stays revealed while the message is shown (`MessageMedia`'s
+  `revealed`), the gallery included. In the gallery a covered picture is covered too, its thumbnail
+  blurred, its description left out, and its thumbnail named "Spoiler image".
+- A spoiler changes nothing about who may read the attachment, so nothing is added to who observes
+  it or when that changes (see [Who may write and read it](#who-may-write-and-read-it)). Its bytes
+  are fetched as any attachment's are; the cover is for the reader's eyes, not a secret.
+- A plugin shown the message is shown the mark in the attachment's record (`spec/plugin.wit`).
+
 ## Descriptions
 
 A picture or video may carry a description, in its uploader's words, for readers who cannot see it.
@@ -105,7 +156,7 @@ A picture or video may carry a description, in its uploader's words, for readers
 In the message box each picture or video waiting to be sent has a describe control
 (`AttachmentDescriptionButton`, filled once described). Its modal keeps the text in the composer's
 `Pending`. The server takes it with `PATCH /attachments/{attachment}`
-(`AspenSync.describeAttachment`):
+(`AspenSync.updateAttachment`):
 
 - at once, when the file is uploaded;
 - when the upload ends, when it is not;
