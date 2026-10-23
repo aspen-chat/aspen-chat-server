@@ -2,24 +2,19 @@ import type { Mentions } from "@aspen/protocol";
 import { type ReactNode, isValidElement, memo, useContext } from "react";
 import { Link } from "@tanstack/react-router";
 import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { parseInvite, type InviteRef } from "@/features/invites/inviteCode";
 import { CodeBlock } from "@/features/messages/CodeBlock";
 import { openInviteLink, useDomain } from "@/features/messages/links";
 import { parseSelfLink, type KnownHosts } from "@/features/messages/selfLinks";
 import { SelfLink } from "@/features/messages/SelfLink";
-import { remarkLiteralLinks } from "@/features/messages/remarkLiteralLinks";
 import { HomeClientContext } from "@/api/context";
 import { useForeignDeployments } from "@/api/deploymentsContext";
-import { remarkBareLinks } from "@/features/messages/remarkBareLinks";
 import { Mention } from "@/features/messages/Mention";
 import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
 import { ErrorBoundary } from "@/features/layout/ErrorBoundary";
-import { opensTooDeeply, remarkLimits, tableRow } from "@/features/messages/markdownLimits";
+import { opensTooDeeply, tableRow } from "@/features/messages/markdownLimits";
+import { MESSAGE_REMARK_PLUGINS } from "@/features/messages/remarkPipeline";
 import { MentionContext } from "@/features/messages/mentionContext";
-import { remarkCustomEmoji } from "@/features/messages/remarkCustomEmoji";
-import { remarkMentions } from "@/features/messages/remarkMentions";
-import { remarkSpoilers } from "@/features/messages/remarkSpoilers";
 import { Spoiler } from "@/features/messages/Spoiler";
 import { messageLinkUrl } from "@/features/layout/safeUrl";
 
@@ -195,15 +190,7 @@ export const Markdown = memo(function Markdown({
       <ErrorBoundary fallback={plain} resetKey={content}>
         <MentionContext.Provider value={{ mentions, communityId }}>
           <ReactMarkdown
-            remarkPlugins={[
-              remarkGfm,
-              remarkLimits,
-              remarkLiteralLinks,
-              remarkSpoilers,
-              remarkMentions,
-              remarkCustomEmoji,
-              remarkBareLinks,
-            ]}
+            remarkPlugins={MESSAGE_REMARK_PLUGINS}
             remarkRehypeOptions={REMARK_REHYPE_OPTIONS}
             components={links ? components : linklessComponents}
             skipHtml

@@ -44,8 +44,10 @@ So one message cannot blank the app.
   The address inside is then linked as any bare address is. So `[my bank](https://evil.example)`
   cannot pass for a link to the bank.
 
-- Autolinks (`<https://…>`) and GFM's literal `https://…` and `www.…` stay links, since their text
-  is their address.
+- Autolinks (`<https://…>`) and email addresses stay links, since their text is their address.
+- GFM's literal `https://…` and `www.…` links become text, linked again by the tokenizer below with
+  the server's rules. GFM ends one only at whitespace or `<`, so in `||https://example.org||` it
+  would take the spoiler's closing marker into the address, and the spoiler would never close.
 - The system account's notices quote names others chose (a community's, a person's). `MessageBody`
   renders its messages with `links` off: every address in them, Markdown or bare, shows as text, and
   the server fetches no previews for them.
@@ -88,3 +90,5 @@ what renders as a link is what gets a preview. Change both together.
 - `remarkSpoilers.ts` wraps them, and `Spoiler.tsx` renders them as a block the reader activates to
   reveal.
 - Markup inside them is kept.
+- A card for a link inside one is covered too (see
+  [link and video cards](link-cards.md#links-inside-spoilers)).

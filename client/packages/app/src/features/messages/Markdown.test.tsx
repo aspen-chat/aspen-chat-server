@@ -70,6 +70,23 @@ describe("Markdown", () => {
     expect((reddit.match(/role="button"/g) ?? []).length).toBe(2);
     expect(reddit).toContain(">hidden</span>");
 
+    for (const ending of [
+      "https://aspen.example||",
+      "www.example.org||",
+      "https://aspen.example/a||",
+    ]) {
+      const linked = render(`||**bold** and ${ending} after`);
+      expect(linked).toContain('role="button"');
+      expect(linked).toContain("<strong>bold</strong>");
+      expect(linked).toMatch(/href="https:\/\/(aspen\.example|www\.example\.org)\/(a)?"/);
+      expect(linked).toContain("</a></span></span> after");
+    }
+
+    const adjacent = render("||www.example.org|| and ||https://aspen.example||");
+    expect((adjacent.match(/role="button"/g) ?? []).length).toBe(2);
+    expect(adjacent).toContain('href="https://www.example.org/"');
+    expect(adjacent).not.toContain("||");
+
     expect(render("a || b")).toContain("a || b");
     expect(render("|| ||")).toContain("|| ||");
     expect(render("`||code||`")).toContain("<code>||code||</code>");

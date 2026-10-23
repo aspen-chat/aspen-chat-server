@@ -107,9 +107,13 @@ fn push_url(
     true
 }
 
-/// Trailing characters we trim off a naked URL match. Lifted from the set of
-/// punctuation GFM autolink usually ignores at the end of the match.
-const BARE_URL_TRAILING: &[char] = &['.', ',', ';', ':', '!', '?', ')', ']', '"', '\'', '>', '`'];
+/// Trailing characters we trim off a naked URL match: the punctuation GFM autolink usually
+/// ignores at the end of the match, and `|`, which no address ends with unencoded, so a
+/// spoiler's closing `||` is not taken into the one it hides. The client's `linkify` trims the
+/// same.
+const BARE_URL_TRAILING: &[char] = &[
+    '.', ',', ';', ':', '!', '?', ')', ']', '"', '\'', '>', '`', '|',
+];
 
 /// Every TLD IANA delegates, lower case. The client links bare domains against the same list.
 static KNOWN_TLDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
@@ -125,8 +129,9 @@ static KNOWN_TLDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 /// `www.` prefix makes the intent clear and links it anyway. The client keeps the same set.
 const EXTENSION_LIKE_TLDS: &[&str] = &["rs", "py", "sh", "md", "pl", "ps"];
 
-/// Characters that may open a token without being part of it.
-const BARE_DOMAIN_LEADING: &[char] = &['(', '[', '{', '<', '"', '\'', '`'];
+/// Characters that may open a token without being part of it, among them a spoiler's opening
+/// `||` or `>!`.
+const BARE_DOMAIN_LEADING: &[char] = &['(', '[', '{', '<', '"', '\'', '`', '|', '!'];
 
 /// Find bare domains such as `github.io/pages` in a plain-text span and return them as
 /// `https://` URLs. A token is a whitespace-delimited run; tokens with a scheme belong to
@@ -317,6 +322,18 @@ mod tests {
             vec![
                 "https://angle.example.com/".to_string(),
                 "https://bare.example.com/path".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn spoiler_markers_are_not_part_of_the_address() {
+        assert_eq!(
+            urls_from("||https://hidden.example.com/page|| ||github.io/pages|| >!docs.rs/serde!<"),
+            vec![
+                "https://hidden.example.com/page".to_string(),
+                "https://github.io/pages".to_string(),
+                "https://docs.rs/serde".to_string(),
             ],
         );
     }

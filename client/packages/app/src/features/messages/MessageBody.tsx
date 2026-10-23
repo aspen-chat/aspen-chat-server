@@ -7,6 +7,8 @@ import { useKeepStill } from "@/features/messages/keepStill";
 import type { ChannelHome } from "@/features/messages/links";
 import { Markdown } from "@/features/messages/Markdown";
 import { PollCard } from "@/features/messages/PollCard";
+import { normalizedUrl, spoileredLinks } from "@/features/messages/spoileredLinks";
+import { SpoilerCard } from "@/features/messages/SpoilerCard";
 import { AlteredBy } from "@/features/plugins/Annotations";
 import { useCardPlugin } from "@/features/plugins/cardPlugin";
 import { PluginCard } from "@/features/plugins/PluginCard";
@@ -94,12 +96,18 @@ function MessageBodyContent({
     ...p,
     imageUrl: mediaUrl(p.imageUrl) ?? null,
   }));
+  // A preview of a link inside a spoiler would give the spoiler away, so it is always a card,
+  // never a picture among the message's, and drawn covered (`SpoilerCard`).
+  const spoilered = linkPreviews.length === 0 ? null : spoileredLinks(message.content);
+  const isSpoilered = (p: LinkPreview) => spoilered?.has(normalizedUrl(p.url) ?? p.url) === true;
   // A link that looks like a picture by its extension is drawn from the preview's picture: a
   // share page named like a gif (tenor.com/….gif) is a page, and only the preview's picture,
   // its og:image, is the gif. Until the preview comes, or when it has no picture, the link
   // stays a link in the text.
   const found = new Map(
-    linkPreviews.flatMap((p) => (p.imageUrl == null ? [] : [[p.url, p] as const])),
+    linkPreviews.flatMap((p) =>
+      p.imageUrl == null || isSpoilered(p) ? [] : [[p.url, p] as const],
+    ),
   );
   const foundImages = imageLinks.flatMap((url) => {
     const p = found.get(url);
@@ -114,12 +122,12 @@ function MessageBodyContent({
   const previewImages = [
     ...foundImages,
     ...previews.flatMap((p) =>
-      isPictureOnly(p) && p.imageUrl != null
+      isPictureOnly(p) && p.imageUrl != null && !isSpoilered(p)
         ? [{ src: p.imageUrl, name: p.url, width: p.imageWidth, height: p.imageHeight }]
         : [],
     ),
   ];
-  const cards = previews.filter((p) => !isPictureOnly(p));
+  const cards = previews.filter((p) => !isPictureOnly(p) || isSpoilered(p));
   const pictureOnly = onlyImageLinks(message.content, (url) =>
     previewImages.some((picture) => picture.name === url),
   );
@@ -196,7 +204,13 @@ function MessageBodyContent({
           trailing={i === cards.length - 1 ? trailingAfter("cards") : undefined}
           card
         >
-          <LinkPreviewCard preview={preview} />
+          {isSpoilered(preview) ? (
+            <SpoilerCard>
+              <LinkPreviewCard preview={preview} />
+            </SpoilerCard>
+          ) : (
+            <LinkPreviewCard preview={preview} />
+          )}
         </Trailed>
       ))}
     </>

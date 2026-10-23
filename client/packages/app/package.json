@@ -112,7 +112,9 @@
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
     "tlds": "^1.261.0",
+    "unified": "^11.0.5",
     "unist-util-visit": "^5.1.0",
     "zxing-wasm": "^3.1.5"
   },

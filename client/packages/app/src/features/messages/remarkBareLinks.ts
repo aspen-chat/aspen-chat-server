@@ -3,10 +3,10 @@ import { visit } from "unist-util-visit";
 import { linkify } from "@/features/messages/linkify";
 
 /**
- * A remark plugin that turns bare domains and URLs left in text into links, using the same
- * tokenizer as the server's preview extractor. GitHub-flavoured Markdown already links
- * `http(s)` and `www.` literals; this catches `github.io/pages`-style mentions it leaves as
- * text. Code spans and blocks are not text nodes, so they are untouched.
+ * A remark plugin that turns bare domains and URLs in text into links, using the same
+ * tokenizer as the server's preview extractor: `http(s)` URLs, and bare domains such as
+ * `github.io/pages`. GitHub-flavoured Markdown's own literal links reach it as text
+ * (`remarkLiteralLinks`). Code spans and blocks are not text nodes, so they are untouched.
  */
 export function remarkBareLinks() {
   return (tree: Root) => {

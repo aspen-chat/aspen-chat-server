@@ -21,8 +21,11 @@ const EXTENSION_LIKE_TLDS: ReadonlySet<string> = new Set(["rs", "py", "sh", "md"
  */
 const CANDIDATE =
   /(https?:\/\/[^\s<>]+)|(?<![\w@./-])((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+([a-z]{2,63}))(:\d{1,5})?((?:\/[^\s<>]*)?)/gi;
-/** Punctuation that usually belongs to the sentence rather than the link when it ends one. */
-const TRAILING: ReadonlySet<string> = new Set([".", ",", ";", ":", "!", "?", "'", '"']);
+/**
+ * Punctuation that usually belongs to the sentence rather than the link when it ends one, and
+ * `|`, which no address ends with unencoded (a spoiler's closing `||`).
+ */
+const TRAILING: ReadonlySet<string> = new Set([".", ",", ";", ":", "!", "?", "'", '"', "|"]);
 
 /**
  * The longest candidate that becomes a link; a longer one is left as text. The server's preview

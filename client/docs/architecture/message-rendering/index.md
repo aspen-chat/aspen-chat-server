@@ -21,15 +21,15 @@ cards, and how runs of one author's messages are grouped.
 
 Paths are under `src/features/` unless they name a package.
 
-| Part              | Where                                                                                                                                         |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Markdown          | `messages/Markdown.tsx`, `messages/markdownLimits.ts`, `messages/remarkLiteralLinks.ts`, `messages/remarkSpoilers.ts`, `messages/Spoiler.tsx` |
-| Code highlighting | `messages/highlighter.ts`, `messages/CodeBlock.tsx`                                                                                           |
-| Linkifying        | `messages/linkify.ts`                                                                                                                         |
-| Self links        | `messages/selfLinks.ts`, `messages/SelfLink.tsx`                                                                                              |
-| Attachments       | `messages/Attachments.tsx`, `messages/ImageGallery.tsx`; uploading in `packages/protocol/src/upload.ts`                                       |
-| Cards             | `messages/VideoCard.tsx`, `messages/video.ts`, `LinkPreviewCard` in `messages/MessageBody.tsx`                                                |
-| Error fallback    | `layout/ErrorBoundary.tsx`                                                                                                                    |
-| Address checks    | `layout/safeUrl.ts`; desktop `packages/desktop/src/main/navigation.ts`                                                                        |
-| Grouping          | `messages/messageGroups.ts`, `useGroupContinuations` in `MessageList`                                                                         |
-| Styles            | `message-body` rules and `code-*` tokens in `styles.css`                                                                                      |
+| Part              | Where                                                                                                                                                                       |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Markdown          | `messages/Markdown.tsx`, `messages/markdownLimits.ts`, `messages/remarkLiteralLinks.ts`, `messages/remarkPipeline.ts`, `messages/remarkSpoilers.ts`, `messages/Spoiler.tsx` |
+| Code highlighting | `messages/highlighter.ts`, `messages/CodeBlock.tsx`                                                                                                                         |
+| Linkifying        | `messages/linkify.ts`                                                                                                                                                       |
+| Self links        | `messages/selfLinks.ts`, `messages/SelfLink.tsx`                                                                                                                            |
+| Attachments       | `messages/Attachments.tsx`, `messages/ImageGallery.tsx`; uploading in `packages/protocol/src/upload.ts`                                                                     |
+| Cards             | `messages/VideoCard.tsx`, `messages/video.ts`, `LinkPreviewCard` in `messages/MessageBody.tsx`, `messages/SpoilerCard.tsx`, `messages/spoileredLinks.ts`                    |
+| Error fallback    | `layout/ErrorBoundary.tsx`                                                                                                                                                  |
+| Address checks    | `layout/safeUrl.ts`; desktop `packages/desktop/src/main/navigation.ts`                                                                                                      |
+| Grouping          | `messages/messageGroups.ts`, `useGroupContinuations` in `MessageList`                                                                                                       |
+| Styles            | `message-body` rules and `code-*` tokens in `styles.css`                                                                                                                    |

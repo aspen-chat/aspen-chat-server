@@ -33,6 +33,16 @@ describe("linkify", () => {
     ]);
   });
 
+  it("leaves spoiler markers out of the address, as the server's extractor does", () => {
+    expect(linkify("||https://example.org/page|| ||github.io/pages||")).toEqual([
+      text("||"),
+      link("https://example.org/page"),
+      text("|| ||"),
+      link("https://github.io/pages", "github.io/pages"),
+      text("||"),
+    ]);
+  });
+
   it("links bare domains with a known TLD over https, keeping the text as typed", () => {
     expect(linkify("try facebook.com or GitHub.io/pages, then docs.rs/serde.")).toEqual([
       text("try "),

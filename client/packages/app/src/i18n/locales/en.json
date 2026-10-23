@@ -1426,6 +1426,7 @@
   },
   "playVideo": "Play {title}",
   "revealSpoiler": "Spoiler, activate to reveal",
+  "revealSpoilerCard": "Reveal spoiler",
   "poll": {
     "close": "Close poll",
     "closing": "Closing…",

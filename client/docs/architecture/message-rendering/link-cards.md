@@ -31,6 +31,20 @@ A link preview's picture is always the server's copy (see
 [attachments](attachments.md#inline-pictures)), and must pass the address checks in
 [address safety](address-safety.md).
 
+## Links inside spoilers
+
+A card would give away a spoiler whose text holds its link, so a preview of a link inside a spoiler
+is drawn covered (`SpoilerCard`), never as one of the message's pictures:
+
+- Which links a spoiler holds is read by `spoileredLinks` (`spoileredLinks.ts`), which parses the
+  body with the plugins `Markdown` renders it with (`MESSAGE_REMARK_PLUGINS`, `remarkPipeline.ts`),
+  and only when the body has a spoiler marker. A preview matches by its `url`, which the server
+  writes as a WHATWG URL serializes (`normalizedUrl`).
+- A preview that is a picture alone becomes a card too, with its address for a title.
+- The card is blurred past reading under a Reveal spoiler button, and `inert` until the reader
+  presses it: its links and play control take no pointer or focus, and assistive technology hears
+  only the button. Revealing the card does not reveal the text's spoiler, nor the other way round.
+
 ## Plugins
 
 - What the deployment's plugins say about a message shows beneath it as chips
