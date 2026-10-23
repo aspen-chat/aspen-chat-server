@@ -124,7 +124,12 @@ describe("AspenClient's device credential", () => {
     const devices = new MemoryDeviceCredentialStore();
     devices.save("device-1");
     const sessions = new MemorySessionStore();
-    const client = new AspenClient({ baseUrl, sessionStore: sessions, deviceStore: devices, fetch });
+    const client = new AspenClient({
+      baseUrl,
+      sessionStore: sessions,
+      deviceStore: devices,
+      fetch,
+    });
     await client.api.GET("/api/v1/auth/methods");
     expect(calls[0]?.device).toBe("device-1");
     expect(devices.load()).toBe("device-2");
@@ -135,7 +140,12 @@ describe("AspenClient's device credential", () => {
       sessionTokenExpires: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
     };
     sessions.save(session);
-    const signedIn = new AspenClient({ baseUrl, sessionStore: sessions, deviceStore: devices, fetch });
+    const signedIn = new AspenClient({
+      baseUrl,
+      sessionStore: sessions,
+      deviceStore: devices,
+      fetch,
+    });
     await signedIn.api.GET("/api/v1/auth/methods");
     expect(calls[1]?.device).toBeNull();
     expect(calls[1]?.authorization).toBe("Bearer session-1");
@@ -143,7 +153,8 @@ describe("AspenClient's device credential", () => {
 
   it("asks for another challenge when the first expired while it was solved", async () => {
     const challenge = "Y2hhbGxlbmdl";
-    const asked = () => json(200, { challenge, difficulty: 1, expiresAt: new Date().toISOString() });
+    const asked = () =>
+      json(200, { challenge, difficulty: 1, expiresAt: new Date().toISOString() });
     const { fetch, calls } = scripted([
       () => problem(401, "deviceCredentialRequired"),
       asked,

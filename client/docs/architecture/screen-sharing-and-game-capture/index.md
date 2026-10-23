@@ -21,14 +21,14 @@ share goes through a picker.
 
 ## Key files
 
-| Part | Where |
-| --- | --- |
-| Helper (Rust, own Cargo workspace) | `packages/desktop/native/capture` |
-| Helper's request protocol | top of the helper's `main.rs` |
-| libobs bindings (Windows) | `native/capture/src/obs/` |
-| macOS sound | `native/capture/src/sck_audio.rs` |
-| Linux sound | `native/capture/src/pipewire_audio.rs`, `app_audio.rs` |
-| Fetching libobs | `scripts/fetch-libobs.mjs` (`pnpm fetch:libobs`) |
-| Main process side | `packages/desktop/src/main/gameCapture.ts`, `captureKinds.ts` |
-| Renderer side | `src/features/voice/gameCapture.ts` |
-| Dialogs | `GameCaptureDialog`, `ShareControl`, `SourcePickerDialog` |
+| Part                               | Where                                                         |
+| ---------------------------------- | ------------------------------------------------------------- |
+| Helper (Rust, own Cargo workspace) | `packages/desktop/native/capture`                             |
+| Helper's request protocol          | top of the helper's `main.rs`                                 |
+| libobs bindings (Windows)          | `native/capture/src/obs/`                                     |
+| macOS sound                        | `native/capture/src/sck_audio.rs`                             |
+| Linux sound                        | `native/capture/src/pipewire_audio.rs`, `app_audio.rs`        |
+| Fetching libobs                    | `scripts/fetch-libobs.mjs` (`pnpm fetch:libobs`)              |
+| Main process side                  | `packages/desktop/src/main/gameCapture.ts`, `captureKinds.ts` |
+| Renderer side                      | `src/features/voice/gameCapture.ts`                           |
+| Dialogs                            | `GameCaptureDialog`, `ShareControl`, `SourcePickerDialog`     |

@@ -5,15 +5,15 @@ those it watches as they happen.
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| Reading statuses | `AspenSync`, `RecordStore.presenceCandidates()`, `applyStatuses` |
-| Watching statuses | `AspenSync`'s `#tellWatching`, `RecordStore.presenceWatchList`, `RecordStore.onChange`, `EventStream.sendWatchPresence` |
-| Reporting activity | `AspenSync.noteActivity`, `src/api/activity.ts`, `SyncProvider` |
-| A channel's online count | `OnlineCount` in `ChannelHeader`, `useChannelOnline`, `AspenSync.watchChannelPresence` |
-| Drawing a status | `PresenceMark` and `StatusDot` (`src/features/users/PresenceMark.tsx`), `knownStatus` (`presenceStatus.ts`) |
-| Choosing a status | `PresenceMenu` (`src/features/users/PresenceMenu.tsx`), `AspenSync.setChosenPresence` |
-| The chosen status | `RecordStore.chosenPresence`, `doNotDisturb` (topic `presence`), `useChosenPresence`, `useDoNotDisturb` |
+| Part                     | Where                                                                                                                   |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Reading statuses         | `AspenSync`, `RecordStore.presenceCandidates()`, `applyStatuses`                                                        |
+| Watching statuses        | `AspenSync`'s `#tellWatching`, `RecordStore.presenceWatchList`, `RecordStore.onChange`, `EventStream.sendWatchPresence` |
+| Reporting activity       | `AspenSync.noteActivity`, `src/api/activity.ts`, `SyncProvider`                                                         |
+| A channel's online count | `OnlineCount` in `ChannelHeader`, `useChannelOnline`, `AspenSync.watchChannelPresence`                                  |
+| Drawing a status         | `PresenceMark` and `StatusDot` (`src/features/users/PresenceMark.tsx`), `knownStatus` (`presenceStatus.ts`)             |
+| Choosing a status        | `PresenceMenu` (`src/features/users/PresenceMenu.tsx`), `AspenSync.setChosenPresence`                                   |
+| The chosen status        | `RecordStore.chosenPresence`, `doNotDisturb` (topic `presence`), `useChosenPresence`, `useDoNotDisturb`                 |
 
 ## Reading statuses
 
@@ -84,13 +84,13 @@ online status's mark (`OnlineCount` in `ChannelHeader`).
 `PresenceMark` draws a status as a shape as well as a colour. It reads without telling green from
 yellow, in greyscale, and under forced colours.
 
-| Status | Shape |
-| --- | --- |
-| Online | A full dot |
-| Away | A crescent |
+| Status         | Shape                                                                     |
+| -------------- | ------------------------------------------------------------------------- |
+| Online         | A full dot                                                                |
+| Away           | A crescent                                                                |
 | Do not disturb | A dot with a bar cut through it, in `busy` (each palette's danger colour) |
-| Offline | A ring |
-| Invisible | A ring, since that is how everyone else sees it |
+| Offline        | A ring                                                                    |
+| Invisible      | A ring, since that is how everyone else sees it                           |
 
 - Over a picture it is named for assistive technology (`StatusDot`, on a disc of the ground the
   picture sits on): in the member list, and over the user's own in the user bar.

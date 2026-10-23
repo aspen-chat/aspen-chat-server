@@ -4,14 +4,14 @@ The message box (`Composer`) is where a user writes and sends messages. This pag
 
 ## Where it lives
 
-| Part | Code |
-| --- | --- |
-| Message box | `Composer` |
-| Typing line | `TypingIndicator`, `TypingDots`, `typingSentence` |
-| Length counting | `messageLength.ts`, `MessageLengthNote` |
-| Held messages | `HeldMessages.tsx` |
-| Replying | `ReplyBar`, `composerTargets.ts`; the line above a reply is `ReplyLine` |
-| Drafts | `src/features/messages/drafts.ts` |
+| Part            | Code                                                                    |
+| --------------- | ----------------------------------------------------------------------- |
+| Message box     | `Composer`                                                              |
+| Typing line     | `TypingIndicator`, `TypingDots`, `typingSentence`                       |
+| Length counting | `messageLength.ts`, `MessageLengthNote`                                 |
+| Held messages   | `HeldMessages.tsx`                                                      |
+| Replying        | `ReplyBar`, `composerTargets.ts`; the line above a reply is `ReplyLine` |
+| Drafts          | `src/features/messages/drafts.ts`                                       |
 
 ## Layout
 
@@ -22,10 +22,10 @@ The message box (`Composer`) is where a user writes and sends messages. This pag
 
 ### Enter
 
-| Device | Enter | Sends |
-| --- | --- | --- |
-| A computer | Sends | Enter or the button |
-| A touch-only device (`TOUCH_ONLY`) | Writes a new line, in the box and in a message being edited | The button |
+| Device                             | Enter                                                       | Sends               |
+| ---------------------------------- | ----------------------------------------------------------- | ------------------- |
+| A computer                         | Sends                                                       | Enter or the button |
+| A touch-only device (`TOUCH_ONLY`) | Writes a new line, in the box and in a message being edited | The button          |
 
 **Why:** a touch-only device's keyboard has no Shift+Enter.
 
@@ -78,11 +78,11 @@ A message's Reply (its row of actions, its right-click menu, a phone's long-pres
 
 ### The words
 
-| Typing | Text |
-| --- | --- |
-| One person | "*name* is typing…" |
+| Typing       | Text                                                          |
+| ------------ | ------------------------------------------------------------- |
+| One person   | "_name_ is typing…"                                           |
 | Two or three | Names joined as the language lists things, then "are typing…" |
-| Four or more | "Several people are typing…" |
+| Four or more | "Several people are typing…"                                  |
 
 - Names come through `PersonName` in the channel's community, joined by `typingSentence`.
 - When the line runs out of room, each name is shortened, never the words around them, so it always says what is happening.
@@ -118,10 +118,10 @@ For the server's side, see `docs/architecture/typing.md` at the repository's roo
 
 ## Message length
 
-| Limit | Value | Where |
-| --- | --- | --- |
-| Text length | `MESSAGE_MAX_CHARS` (10,000) characters, the server's limit | `messageLength.ts` |
-| Nesting of quotes and lists | 32 levels | `app::message::MAX_NESTING` on the server; `markdownLimits.ts` renders beyond it as plain text |
+| Limit                       | Value                                                       | Where                                                                                          |
+| --------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Text length                 | `MESSAGE_MAX_CHARS` (10,000) characters, the server's limit | `messageLength.ts`                                                                             |
+| Nesting of quotes and lists | 32 levels                                                   | `app::message::MAX_NESTING` on the server; `markdownLimits.ts` renders beyond it as plain text |
 
 ### Counting length
 
@@ -154,9 +154,9 @@ The server refuses text nesting quotes and lists more than 32 levels deep, with 
 
 A held message's place (`heldPlace`) is one of:
 
-| Place | When |
-| --- | --- |
-| The channel | Usually |
+| Place                 | When                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------ |
+| The channel           | Usually                                                                                                |
 | `thread-of:<message>` | A dropped first reply whose thread went with it. `RecordStore` moves it there as the thread is removed |
 
 `AspenSync.sendHeldAgain` sends such a first reply with `replyInThread`, making the thread anew (see [Threads, DMs, and the system account](threads-and-dms.md#starting-a-thread)).

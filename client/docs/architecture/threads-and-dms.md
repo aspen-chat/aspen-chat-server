@@ -2,14 +2,14 @@
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| The thread panel | `ThreadPanel` (`src/features/threads`), shown by `ChannelScreen` |
-| Starting a thread | `NewThreadPanel`, `AspenSync.replyInThread` |
-| Following | `FollowButton`, `AspenSync.setFollowing` |
-| Echoes | `EchoReplyButton`, `AspenSync.echoReply`, `echoToParent` |
-| DMs | `DmLayout` (`src/features/dms`), `PeoplePicker`, `DmHeader` |
-| The system account | `SystemBadge`, `systemDmPeer` |
+| Part               | Where                                                            |
+| ------------------ | ---------------------------------------------------------------- |
+| The thread panel   | `ThreadPanel` (`src/features/threads`), shown by `ChannelScreen` |
+| Starting a thread  | `NewThreadPanel`, `AspenSync.replyInThread`                      |
+| Following          | `FollowButton`, `AspenSync.setFollowing`                         |
+| Echoes             | `EchoReplyButton`, `AspenSync.echoReply`, `echoToParent`         |
+| DMs                | `DmLayout` (`src/features/dms`), `PeoplePicker`, `DmHeader`      |
+| The system account | `SystemBadge`, `systemDmPeer`                                    |
 
 ## Threads
 

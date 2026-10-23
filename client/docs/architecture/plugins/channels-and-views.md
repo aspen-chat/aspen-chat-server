@@ -30,14 +30,14 @@ There is no same origin, so the page holds no session and reads nothing of the a
 
 The page speaks `spec/plugins.md`'s bridge over a `MessagePort`.
 
-| Message | What it does |
-| --- | --- |
-| `hello` | Posted to the frame once its page has loaded. Hands the page one end of a `MessageChannel`, with the plugin, view, channel and its name, community, the person, locale and direction, the plugin's catalogue, `apiBase`, and the theme. |
-| `theme` | Sent when the palette, mode, fonts, or the system's scheme change. See [the theme](#the-theme). |
-| `request` | Made as the person through `AspenSync.pluginRoute`. See [requests](#requests). |
-| `users` | People from the store or read (`AspenSync.loadUsers`), at most 100. |
-| Plugin events | The plugin's `pluginEvent`s for the channel, its community, or the person (`AspenSync.onPluginEvent`). |
-| `open` | Opens a channel the store holds. |
+| Message       | What it does                                                                                                                                                                                                                            |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hello`       | Posted to the frame once its page has loaded. Hands the page one end of a `MessageChannel`, with the plugin, view, channel and its name, community, the person, locale and direction, the plugin's catalogue, `apiBase`, and the theme. |
+| `theme`       | Sent when the palette, mode, fonts, or the system's scheme change. See [the theme](#the-theme).                                                                                                                                         |
+| `request`     | Made as the person through `AspenSync.pluginRoute`. See [requests](#requests).                                                                                                                                                          |
+| `users`       | People from the store or read (`AspenSync.loadUsers`), at most 100.                                                                                                                                                                     |
+| Plugin events | The plugin's `pluginEvent`s for the channel, its community, or the person (`AspenSync.onPluginEvent`).                                                                                                                                  |
+| `open`        | Opens a channel the store holds.                                                                                                                                                                                                        |
 
 ### The theme
 

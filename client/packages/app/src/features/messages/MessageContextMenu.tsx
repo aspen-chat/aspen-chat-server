@@ -1,9 +1,4 @@
-import {
-  ArrowSquareOutIcon,
-  CopyIcon,
-  DownloadSimpleIcon,
-  LinkIcon,
-} from "@phosphor-icons/react";
+import { ArrowSquareOutIcon, CopyIcon, DownloadSimpleIcon, LinkIcon } from "@phosphor-icons/react";
 import type { ComponentProps } from "react";
 import { Menu, MenuSection } from "react-aria-components";
 import { copyText } from "@/features/layout/clipboard";

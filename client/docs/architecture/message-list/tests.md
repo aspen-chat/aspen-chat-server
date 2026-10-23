@@ -7,11 +7,11 @@ Tests scroll the list as a script does, by its position, which both ways of scro
 The Chromium history tests run both ways of scrolling. Chromium stands in for iOS by claiming the
 property the list knows it by.
 
-| Test | What it does | Fails if |
-| --- | --- | --- |
+| Test          | What it does                                                                                                                          | Fails if                                                                                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Dragging back | Drags a phone back through 600 messages of tall pictures and paragraphs, a few pixels at a time, resting the finger before each lift. | Any step moves what is in view by other than the finger's distance, or the top of what is loaded (where a page would be awaited) ever comes into view. |
-| Flicking back | Flicks back through the same history in quick, gathering flicks. | The awaited top shows in more than `SEAM_SHARE` of its frames. |
-| Reading back | Reads back through a history of short lines a little longer than the window. | Any message in view leaves the page, or anything newer is read meanwhile. |
+| Flicking back | Flicks back through the same history in quick, gathering flicks.                                                                      | The awaited top shows in more than `SEAM_SHARE` of its frames.                                                                                         |
+| Reading back  | Reads back through a history of short lines a little longer than the window.                                                          | Any message in view leaves the page, or anything newer is read meanwhile.                                                                              |
 
 ## iOS simulator: `testReadingBackQuicklyNeverJumps`
 

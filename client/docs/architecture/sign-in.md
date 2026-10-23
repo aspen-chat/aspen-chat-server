@@ -2,15 +2,15 @@
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| Signed-out screens | `SignedOut` in `src/features/layout/RootLayout.tsx` |
-| The welcome | `DeploymentWelcome` (`src/features/auth/DeploymentWelcome.tsx`) |
-| Which server | `defaultServerUrl` (`src/config.ts`), `ServerChoice`, `ServerForm`, `normalizeServerUrl`, `detectShell` |
-| Passkeys | `runPasskeyCeremony`, `PasskeyTransport` (`packages/protocol/src/passkeys.ts`), `src/features/auth/passkeyTransport.ts`, `packages/desktop/src/main/passkeyHandoff.ts` |
-| Signing in from another device | `OtherDeviceSignIn`, `DeviceLinkCode`, `DeviceLinkScreen`, `thisDeviceName` |
-| Email | `src/features/email`: `useEmailPolicy`, `PasswordReset`, `VerificationScreen`, `EmailDialog`, `EmailPanel` |
-| Device credentials | `AspenClient` and `device.ts` (`packages/protocol/src`), `src/api/devices.ts`, `src/api/devicePuzzle.worker.ts` |
+| Part                           | Where                                                                                                                                                                  |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Signed-out screens             | `SignedOut` in `src/features/layout/RootLayout.tsx`                                                                                                                    |
+| The welcome                    | `DeploymentWelcome` (`src/features/auth/DeploymentWelcome.tsx`)                                                                                                        |
+| Which server                   | `defaultServerUrl` (`src/config.ts`), `ServerChoice`, `ServerForm`, `normalizeServerUrl`, `detectShell`                                                                |
+| Passkeys                       | `runPasskeyCeremony`, `PasskeyTransport` (`packages/protocol/src/passkeys.ts`), `src/features/auth/passkeyTransport.ts`, `packages/desktop/src/main/passkeyHandoff.ts` |
+| Signing in from another device | `OtherDeviceSignIn`, `DeviceLinkCode`, `DeviceLinkScreen`, `thisDeviceName`                                                                                            |
+| Email                          | `src/features/email`: `useEmailPolicy`, `PasswordReset`, `VerificationScreen`, `EmailDialog`, `EmailPanel`                                                             |
+| Device credentials             | `AspenClient` and `device.ts` (`packages/protocol/src`), `src/api/devices.ts`, `src/api/devicePuzzle.worker.ts`                                                        |
 
 ## Device credentials
 
@@ -47,9 +47,9 @@ It shows:
 
 `defaultServerUrl` (`src/config.ts`) decides which server the app signs in to.
 
-| Shell | Server | Changing it |
-| --- | --- | --- |
-| Web client | Always the origin serving the page, which is the deployment's (its API and web client share one origin). It never asks | Not offered (`ServerChoice.changeServer` is `null`) |
+| Shell              | Server                                                                                                                                                              | Changing it                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Web client         | Always the origin serving the page, which is the deployment's (its API and web client share one origin). It never asks                                              | Not offered (`ServerChoice.changeServer` is `null`)                                   |
 | Desktop and mobile | None baked in. The server the user entered. Until there is one, `ServerForm` asks: "Welcome to Aspen Chat." under Aspen's icon, above an empty Deployment URL field | The welcome offers to change it, which asks again from an empty field with a way back |
 
 - `ServerForm` keeps only the address's origin (`normalizeServerUrl`).
@@ -71,11 +71,11 @@ It shows:
 A ceremony reaches an authenticator by a `PasskeyTransport`
 (`packages/protocol/src/passkeys.ts`), chosen in `src/features/auth/passkeyTransport.ts`:
 
-| Shell | Transport |
-| --- | --- |
-| Web client served under the server's `rpId` | Runs the ceremony in its own page |
-| Web client served elsewhere | Offers no passkeys |
-| Desktop and mobile | Hands it to the server's `/auth/passkey` page in the system browser, never running one in their own page |
+| Shell                                       | Transport                                                                                                |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Web client served under the server's `rpId` | Runs the ceremony in its own page                                                                        |
+| Web client served elsewhere                 | Offers no passkeys                                                                                       |
+| Desktop and mobile                          | Hands it to the server's `/auth/passkey` page in the system browser, never running one in their own page |
 
 On the desktop (`packages/desktop/src/main/passkeyHandoff.ts`):
 
@@ -104,10 +104,10 @@ On mobile:
 
 ### The computer's code
 
-| Computer is | The code | Then |
-| --- | --- | --- |
-| Signed out | Asks for a sign-in | It claims one every couple of seconds (`AspenClient.claimDeviceLink`, which stores the session) until the phone confirms |
-| Signed in | Offers the account | It asks every couple of seconds whether the code was scanned, then asks the user to confirm the phone by the name the phone gave |
+| Computer is | The code           | Then                                                                                                                             |
+| ----------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Signed out  | Asks for a sign-in | It claims one every couple of seconds (`AspenClient.claimDeviceLink`, which stores the session) until the phone confirms         |
+| Signed in   | Offers the account | It asks every couple of seconds whether the code was scanned, then asks the user to confirm the phone by the name the phone gave |
 
 - A device names itself from its user agent alone (`thisDeviceName`: "Firefox on Linux", "Aspen on
   Android"), never a place.
@@ -123,10 +123,10 @@ On mobile:
 `DeviceLinkScreen` scans the code once. A scan uses the code up, so a second render reuses the
 first's.
 
-| Phone is | Shows | Then |
-| --- | --- | --- |
-| Signed in | The computer's name, with a warning that a stranger's code is a trap | Signs it in only on Sign it in |
-| Signed out | Which account the phone will be signed in to | Claims until the computer confirms |
+| Phone is   | Shows                                                                | Then                               |
+| ---------- | -------------------------------------------------------------------- | ---------------------------------- |
+| Signed in  | The computer's name, with a warning that a stranger's code is a trap | Signs it in only on Sign it in     |
+| Signed out | Which account the phone will be signed in to                         | Claims until the computer confirms |
 
 ### A code for another server
 

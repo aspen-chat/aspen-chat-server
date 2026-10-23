@@ -9,11 +9,11 @@ Message bodies are GitHub-flavoured Markdown, rendered by `src/features/messages
 Parsing and rendering recurse once per level of nesting. The limits are in
 `src/features/messages/markdownLimits.ts`.
 
-| Limit | Value | What happens past it |
-| --- | --- | --- |
-| `MAX_NESTING` | 32 levels | The body shows as its plain text. |
-| `MAX_TABLE_COLUMNS` | 64 | The table shows as its source in a code block. |
-| `MAX_TABLE_CELLS` | 5000 | The table shows as its source in a code block. |
+| Limit               | Value     | What happens past it                           |
+| ------------------- | --------- | ---------------------------------------------- |
+| `MAX_NESTING`       | 32 levels | The body shows as its plain text.              |
+| `MAX_TABLE_COLUMNS` | 64        | The table shows as its source in a code block. |
+| `MAX_TABLE_CELLS`   | 5000      | The table shows as its source in a code block. |
 
 - A body whose lines open `MAX_NESTING` quotes or lists at once is never parsed (`opensTooDeeply`).
 - Any other too-deep body is caught once parsed, with a walk of its own (`remarkLimits`).
@@ -44,6 +44,7 @@ So one message cannot blank the app.
 
   The address inside is then linked as any bare address is. So `[my bank](https://evil.example)`
   cannot pass for a link to the bank.
+
 - Autolinks (`<https://…>`) and GFM's literal `https://…` and `www.…` stay links, since their text is
   their address.
 - The system account's notices quote names others chose (a community's, a person's). `MessageBody`

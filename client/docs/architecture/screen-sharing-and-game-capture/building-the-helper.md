@@ -6,11 +6,11 @@ and joins them into one universal binary with `lipo`, adding both Rust targets w
 
 ## What each platform needs
 
-| Platform | Links libobs | Build needs |
-| --- | --- | --- |
-| Windows | Always (`src/obs/`, behind `cfg(obs)`) | The bundled libobs from `pnpm fetch:libobs` (below). |
-| Linux | Only with the `libobs` feature | PipeWire's and libopus's development files. No libobs. |
-| macOS | Only with the `libobs` feature | Xcode's toolchain and `cmake`. libopus is built from source. |
+| Platform | Links libobs                           | Build needs                                                  |
+| -------- | -------------------------------------- | ------------------------------------------------------------ |
+| Windows  | Always (`src/obs/`, behind `cfg(obs)`) | The bundled libobs from `pnpm fetch:libobs` (below).         |
+| Linux    | Only with the `libobs` feature         | PipeWire's and libopus's development files. No libobs.       |
+| macOS    | Only with the `libobs` feature         | Xcode's toolchain and `cmake`. libopus is built from source. |
 
 The `libobs` feature on Linux and macOS is for developing the picture path there.
 

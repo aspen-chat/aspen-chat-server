@@ -4,15 +4,15 @@ Custom emoji are a community's own. Each is a name and a picture that is an icon
 
 ## Where it lives
 
-| Part | Code |
-| --- | --- |
-| Records | `CustomEmoji`, from the `emoji` sideload of the community reads and `customEmoji` events |
-| Store | `RecordStore.customEmoji(communityId)`, topic `emoji:<communityId>`, `useCustomEmoji` |
-| Reference parsing and encoding | `src/features/emoji/customEmoji.ts` |
-| Drawing | `remarkCustomEmoji`, `CustomEmojiGlyph` |
-| Completion | `useEmojiCompletion` (`src/features/emoji`) |
-| Picker data | `emojiData.ts` |
-| Settings tab | `EmojiPanel` |
+| Part                           | Code                                                                                     |
+| ------------------------------ | ---------------------------------------------------------------------------------------- |
+| Records                        | `CustomEmoji`, from the `emoji` sideload of the community reads and `customEmoji` events |
+| Store                          | `RecordStore.customEmoji(communityId)`, topic `emoji:<communityId>`, `useCustomEmoji`    |
+| Reference parsing and encoding | `src/features/emoji/customEmoji.ts`                                                      |
+| Drawing                        | `remarkCustomEmoji`, `CustomEmojiGlyph`                                                  |
+| Completion                     | `useEmojiCompletion` (`src/features/emoji`)                                              |
+| Picker data                    | `emojiData.ts`                                                                           |
+| Settings tab                   | `EmojiPanel`                                                                             |
 
 ## In message text
 

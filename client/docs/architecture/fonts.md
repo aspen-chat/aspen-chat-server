@@ -6,25 +6,25 @@ Design notes: [fonts-design-notes.md](fonts-design-notes.md).
 
 ## Where it lives
 
-| Part | Code |
-| --- | --- |
-| Font stacks | `--font-sans`, `--font-mono` in `src/styles.css` |
-| Bundled-family list and generated stylesheets | `fallbackFonts.ts` (a Vite plugin), writing into `src/generated/` |
-| Aspen's own faces | `src/faces.css` |
-| Faces for plugins' views | `src/viewFonts.css`, built by `viewFonts.ts` |
-| Emoji font builder | `scripts/noto_emoji.py`, output in `packages/app/fonts/noto-color-emoji/` |
-| Emoji font updates | `.github/workflows/emoji-font.yml` |
-| Settings | `FontsSection` |
-| The user's font library | `theme/fontLibrary.ts`, `theme/fontFile.ts` |
-| Tests | `e2e/fonts.spec.ts` |
+| Part                                          | Code                                                                      |
+| --------------------------------------------- | ------------------------------------------------------------------------- |
+| Font stacks                                   | `--font-sans`, `--font-mono` in `src/styles.css`                          |
+| Bundled-family list and generated stylesheets | `fallbackFonts.ts` (a Vite plugin), writing into `src/generated/`         |
+| Aspen's own faces                             | `src/faces.css`                                                           |
+| Faces for plugins' views                      | `src/viewFonts.css`, built by `viewFonts.ts`                              |
+| Emoji font builder                            | `scripts/noto_emoji.py`, output in `packages/app/fonts/noto-color-emoji/` |
+| Emoji font updates                            | `.github/workflows/emoji-font.yml`                                        |
+| Settings                                      | `FontsSection`                                                            |
+| The user's font library                       | `theme/fontLibrary.ts`, `theme/fontFile.ts`                               |
+| Tests                                         | `e2e/fonts.spec.ts`                                                       |
 
 ## The faces Aspen bundles
 
 ### Text and code
 
-| Use | Face | Property | Tailwind |
-| --- | --- | --- | --- |
-| Text | Inclusive Sans | `--font-sans` | `font-sans` |
+| Use                                               | Face           | Property      | Tailwind    |
+| ------------------------------------------------- | -------------- | ------------- | ----------- |
+| Text                                              | Inclusive Sans | `--font-sans` | `font-sans` |
 | Code (and every code span and block in a message) | Intel One Mono | `--font-mono` | `font-mono` |
 
 - Both are Fontsource's variable packages, upright and italic, imported by `main.tsx`.
@@ -45,10 +45,10 @@ Code takes the system's monospace faces before the Noto ones, since the Noto one
 
 `fallbackFonts.ts` says which families are bundled and which are left out, and why. When Vite starts, it writes two stylesheets from the Fontsource packages and the emoji fonts into `src/generated/` (not kept in git):
 
-| File | Contents | Loaded |
-| --- | --- | --- |
-| `fontFaces.css` | Each family's own script slices as WOFF2; some 600 kB of rules | Imported dynamically by `main.tsx`, so it never holds up the first paint |
-| `fontStacks.css` | The custom properties the stacks are built on: `--font-emoji`, `--font-scripts`, `--font-han` | Imported with the page |
+| File             | Contents                                                                                      | Loaded                                                                   |
+| ---------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `fontFaces.css`  | Each family's own script slices as WOFF2; some 600 kB of rules                                | Imported dynamically by `main.tsx`, so it never holds up the first paint |
+| `fontStacks.css` | The custom properties the stacks are built on: `--font-emoji`, `--font-scripts`, `--font-han` | Imported with the page                                                   |
 
 Until the faces load, text in those scripts shows in the system's fonts (`font-display: swap`).
 
@@ -62,10 +62,10 @@ Until the faces load, text in those scripts shows in the system's fonts (`font-d
 
 Noto Color Emoji is bundled twice, from Google's own releases (`googlefonts/noto-emoji`):
 
-| Build | Size | Drawn by |
-| --- | --- | --- |
-| COLRv1 | About 2 MB | Chromium and Firefox |
-| Bitmap, pictures moved into an `sbix` table (the format of Apple's own emoji) | About 9.5 MB | WebKit |
+| Build                                                                         | Size         | Drawn by             |
+| ----------------------------------------------------------------------------- | ------------ | -------------------- |
+| COLRv1                                                                        | About 2 MB   | Chromium and Firefox |
+| Bitmap, pictures moved into an `sbix` table (the format of Apple's own emoji) | About 9.5 MB | WebKit               |
 
 - The one `@font-face` lists both with `tech()`, so each browser fetches only the one it draws.
 - Each is one whole file, not `unicode-range` slices.
@@ -78,9 +78,9 @@ See the [design notes](fonts-design-notes.md#emoji) for why each of these holds.
 
 `scripts/noto_emoji.py` builds them into `packages/app/fonts/noto-color-emoji/`. That directory is kept in git, with the licence and a `manifest.json` naming the upstream commit and its files' hashes.
 
-| Command | What it does |
-| --- | --- |
-| `build` | Makes the same files again from the manifest's commit |
+| Command  | What it does                                                  |
+| -------- | ------------------------------------------------------------- |
+| `build`  | Makes the same files again from the manifest's commit         |
 | `update` | Builds from the newest upstream commit that changed the fonts |
 
 `.github/workflows/emoji-font.yml` runs `update` every week and opens a pull request when upstream has changed them.
@@ -111,10 +111,10 @@ Every bundled font's licence is on the Open Source Attributions page with every 
 
 Bundled fonts come to about 39 MB of WOFF2 in the build, nearly all of it CJK and emoji.
 
-| Shell | What it fetches |
-| --- | --- |
-| Web client | Only the slices a page draws. Of the emoji fonts, only the one its browser draws, whole, once the page shows an emoji. |
-| Desktop and mobile apps | All of them, shipped |
+| Shell                   | What it fetches                                                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Web client              | Only the slices a page draws. Of the emoji fonts, only the one its browser draws, whole, once the page shows an emoji. |
+| Desktop and mobile apps | All of them, shipped                                                                                                   |
 
 ## The user's own fonts
 
@@ -130,9 +130,9 @@ Settings, Fonts (`FontsSection`) chooses the font for text and for code on this 
 
 `theme/fontLibrary.ts` keeps the files the user adds, whole, in IndexedDB database `aspen-fonts`:
 
-| Store | Holds |
-| --- | --- |
-| `faces` | What each face says of itself |
+| Store   | Holds                                                              |
+| ------- | ------------------------------------------------------------------ |
+| `faces` | What each face says of itself                                      |
 | `files` | Each face's file, apart, so listing the library reads no font data |
 
 It asks the browser to keep that storage.
@@ -147,12 +147,12 @@ It asks the browser to keep that storage.
 
 Files group into families by that name. A face of a family, weight, and style already kept is replaced.
 
-| Format | Accepted |
-| --- | --- |
-| TrueType, OpenType, WOFF | Yes |
-| WOFF2 | No: one Brotli stream, which browsers do not offer to decompress |
-| Font collections | No: several faces a `FontFace` cannot choose between |
-| Anything unreadable | No |
+| Format                   | Accepted                                                         |
+| ------------------------ | ---------------------------------------------------------------- |
+| TrueType, OpenType, WOFF | Yes                                                              |
+| WOFF2                    | No: one Brotli stream, which browsers do not offer to decompress |
+| Font collections         | No: several faces a `FontFace` cannot choose between             |
+| Anything unreadable      | No                                                               |
 
 Each refusal gives a reason naming the file.
 

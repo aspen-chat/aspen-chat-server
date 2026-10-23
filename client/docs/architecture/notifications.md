@@ -4,14 +4,14 @@ Each user's notification settings decide which arriving messages tell of themsel
 
 ## Where it lives
 
-| Part | Code |
-| --- | --- |
-| Settings and levels | `RecordStore.notificationLevel` (topic `notifications`), `useNotificationLevel` |
-| Thread follows | `follows` (topic `follow:<threadId>`) |
-| Deciding | `notifies(message)` |
-| Announcing | `AspenSync.onNotify`, `onPluginNotice` |
-| Chime and system notifications | `NotifyOnMessages`, `src/features/notifications` |
-| Sounds | `sounds.ts`, `sounds/`, `speakers.ts`; `PlaySounds` |
+| Part                           | Code                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------- |
+| Settings and levels            | `RecordStore.notificationLevel` (topic `notifications`), `useNotificationLevel` |
+| Thread follows                 | `follows` (topic `follow:<threadId>`)                                           |
+| Deciding                       | `notifies(message)`                                                             |
+| Announcing                     | `AspenSync.onNotify`, `onPluginNotice`                                          |
+| Chime and system notifications | `NotifyOnMessages`, `src/features/notifications`                                |
+| Sounds                         | `sounds.ts`, `sounds/`, `speakers.ts`; `PlaySounds`                             |
 
 ## State
 
@@ -54,13 +54,13 @@ Exceptions:
 
 Every sound the app plays is a recording in `src/features/notifications/sounds/`, played by `playSound`, or `loopSound` until stopped (`sounds.ts`):
 
-| File | Plays when | Through |
-| --- | --- | --- |
-| `chime.wav` | A message or plugin notice tells of itself (`NotifyOnMessages`) | The notification sound's speaker |
-| `ringtone.wav` | Looped while a call rings the user (`IncomingCall`; see [DM calls and rings](voice/dm-calls-and-rings.md)) | The notification sound's speaker |
-| `dial-tone.wav` | Looped while the user's DM call rings someone (`DmCall`) | The voice chat's speaker |
-| `call-joined.wav` | The user's call connects, or connects again after a rejoin; someone else joins it | The voice chat's speaker |
-| `call-left.wav` | The user leaves their call; someone else leaves it | The voice chat's speaker |
+| File               | Plays when                                                                                                                                                                            | Through                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `chime.wav`        | A message or plugin notice tells of itself (`NotifyOnMessages`)                                                                                                                       | The notification sound's speaker                                 |
+| `ringtone.wav`     | Looped while a call rings the user (`IncomingCall`; see [DM calls and rings](voice/dm-calls-and-rings.md))                                                                            | The notification sound's speaker                                 |
+| `dial-tone.wav`    | Looped while the user's DM call rings someone (`DmCall`)                                                                                                                              | The voice chat's speaker                                         |
+| `call-joined.wav`  | The user's call connects, or connects again after a rejoin; someone else joins it                                                                                                     | The voice chat's speaker                                         |
+| `call-left.wav`    | The user leaves their call; someone else leaves it                                                                                                                                    | The voice chat's speaker                                         |
 | `disconnected.wav` | The user's call is lost under them (a lost server or socket, a failed rejoin, or an end the call bar explains), or a deployment's event stream stays down for `DISCONNECTED_GRACE_MS` | The call's speaker, or the notification sound's for a deployment |
 
 `PlaySounds` decides when the last three play, for every deployment the user uses: `watchCallSounds` (`src/features/voice/callSounds.ts`) and `watchConnectionSounds` (`connectionSounds.ts`).
@@ -84,19 +84,19 @@ Sounds play through Web Audio, one context for each device they play through (`s
 
 How a speaker reaches the chosen device depends on the browser:
 
-| Browser | How |
-| --- | --- |
-| Chromium (the desktop app, Android, Chrome, Edge) | The context is opened on the device (`AudioContext`'s `sinkId`) |
-| Firefox | The context plays into a stream that an `<audio>` element plays through the device (`setSinkId`), since Firefox cannot open a context on a device. Its clock does not follow the device, so `WAKE_SECONDS` is all the wait there is, and a device slower to wake can still lose a sound's start |
-| Safari | Neither can choose a device; every sound plays through the system's default |
+| Browser                                           | How                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chromium (the desktop app, Android, Chrome, Edge) | The context is opened on the device (`AudioContext`'s `sinkId`)                                                                                                                                                                                                                                 |
+| Firefox                                           | The context plays into a stream that an `<audio>` element plays through the device (`setSinkId`), since Firefox cannot open a context on a device. Its clock does not follow the device, so `WAKE_SECONDS` is all the wait there is, and a device slower to wake can still lose a sound's start |
+| Safari                                            | Neither can choose a device; every sound plays through the system's default                                                                                                                                                                                                                     |
 
 Firefox and Chromium name a device to a page only once it may capture sound, so a device chosen before that plays through the default.
 
 ## Where the user sets it
 
-| Setting | Where |
-| --- | --- |
-| A channel's level | The channel's menu, "Notify me about" |
-| A category's level | The category's heading menu, "Notify me about" (`categoryNotificationLevel`) |
-| A community's level | Community settings (`CommunityNotifications`) |
-| The two device preferences | Settings (`NotificationsSection`) |
+| Setting                    | Where                                                                        |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| A channel's level          | The channel's menu, "Notify me about"                                        |
+| A category's level         | The category's heading menu, "Notify me about" (`categoryNotificationLevel`) |
+| A community's level        | Community settings (`CommunityNotifications`)                                |
+| The two device preferences | Settings (`NotificationsSection`)                                            |

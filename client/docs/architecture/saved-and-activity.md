@@ -4,16 +4,16 @@ Two pages of the reader's own, across every deployment they use (`useSources`).
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| Rail links | `CommunityRail`, `railLinkClass` |
-| Page layout | `PersonalPage` (`src/features/activity`), `RailPage` (`src/features/layout`) |
-| A listed message | `ListedMessage` (`src/features/messages`), `useMessagePlace`, `useMessageOnDemand` |
-| Saved messages | `SavedScreen`, `SaveButton`, `SavedMark`, `RecordStore.saves` |
-| The activity feed | `ActivityScreen`, `ActivityFilters`, `readFilter` |
-| Its tabs | `ACTIVITY_TAB`, `FeedTab`, `UnreadTab`, `useFeeds` in `ActivityScreen` |
-| What is unread | `unreadEntries` (`unread.ts`), `RecordStore.unreadChannels`, `ChannelItem` |
-| A thread in the feed | `foldThreads` (`threads.ts`), `ThreadItem` in `ActivityScreen` |
+| Part                 | Where                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------- |
+| Rail links           | `CommunityRail`, `railLinkClass`                                                   |
+| Page layout          | `PersonalPage` (`src/features/activity`), `RailPage` (`src/features/layout`)       |
+| A listed message     | `ListedMessage` (`src/features/messages`), `useMessagePlace`, `useMessageOnDemand` |
+| Saved messages       | `SavedScreen`, `SaveButton`, `SavedMark`, `RecordStore.saves`                      |
+| The activity feed    | `ActivityScreen`, `ActivityFilters`, `readFilter`                                  |
+| Its tabs             | `ACTIVITY_TAB`, `FeedTab`, `UnreadTab`, `useFeeds` in `ActivityScreen`             |
+| What is unread       | `unreadEntries` (`unread.ts`), `RecordStore.unreadChannels`, `ChannelItem`         |
+| A thread in the feed | `foldThreads` (`threads.ts`), `ThreadItem` in `ActivityScreen`                     |
 
 ## Opening the pages
 
@@ -21,10 +21,10 @@ One round link at the top of the community rail (`CommunityRail`), above the DMs
 It is drawn as the DMs' is (`railLinkClass`) and ringed while either page is open. Saved messages
 open from the page's own rail (`PersonalPage`), which goes between the two.
 
-| Page | Route |
-| --- | --- |
-| Activity | `/activity` |
-| Saved messages | `/saved` |
+| Page           | Route       |
+| -------------- | ----------- |
+| Activity       | `/activity` |
+| Saved messages | `/saved`    |
 
 They are never under `/at/{domain}`, since they span deployments.
 
@@ -69,10 +69,10 @@ with it.
 
 ### Store state
 
-| State | Topic | Holds |
-| --- | --- | --- |
-| `RecordStore.saves` | `saved` | Saves, newest save first |
-| `isSaved` | `saved:<messageId>` | Whether one message is saved |
+| State               | Topic               | Holds                        |
+| ------------------- | ------------------- | ---------------------------- |
+| `RecordStore.saves` | `saved`             | Saves, newest save first     |
+| `isSaved`           | `saved:<messageId>` | Whether one message is saved |
 
 - Read whole at bootstrap (`replaceSaves`) from `GET /users/@me/saved-messages`. A deployment
   without it answers with nothing.
@@ -87,11 +87,11 @@ with it.
 - A saved message carries a quiet bookmark (`SavedMark` in `MessageBody`). It is named for
   assistive technology. Where it goes:
 
-  | Screen | Message | Bookmark |
-  | --- | --- | --- |
-  | Not touch | Any | After whatever it ends with, kept with a grouped message's time |
-  | Touch | With a header | After the time in the message's header |
-  | Touch | Grouped (shows no time) | After whatever it ends with (`MessageBody`'s `savedMark`) |
+  | Screen    | Message                 | Bookmark                                                        |
+  | --------- | ----------------------- | --------------------------------------------------------------- |
+  | Not touch | Any                     | After whatever it ends with, kept with a grouped message's time |
+  | Touch     | With a header           | After the time in the message's header                          |
+  | Touch     | Grouped (shows no time) | After whatever it ends with (`MessageBody`'s `savedMark`)       |
 
 ### `SavedScreen`
 
@@ -108,13 +108,13 @@ Each row removes its save.
 `ActivityScreen` shows what is said where the reader reads, under one of five tabs. The tab is a
 device preference (`ACTIVITY_TAB`), Unread until one is chosen.
 
-| Tab | Shows | Read with |
-| --- | --- | --- |
-| Unread | Every unread channel, DM, and followed thread, each one entry | The store's read states, and the `threads` view with `filter[unread]` |
-| Mentions | Messages that tag the reader | The `mentions` view |
-| DMs | The reader's DMs' messages | The `dms` view |
-| Threads | Replies in the threads they follow | The `threads` view |
-| All | Everything said where they read | The `all` view |
+| Tab      | Shows                                                         | Read with                                                             |
+| -------- | ------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Unread   | Every unread channel, DM, and followed thread, each one entry | The store's read states, and the `threads` view with `filter[unread]` |
+| Mentions | Messages that tag the reader                                  | The `mentions` view                                                   |
+| DMs      | The reader's DMs' messages                                    | The `dms` view                                                        |
+| Threads  | Replies in the threads they follow                            | The `threads` view                                                    |
+| All      | Everything said where they read                               | The `all` view                                                        |
 
 Muted channels are in none of them.
 
@@ -174,11 +174,11 @@ stands. Its older replies there are left out. The entry (`ThreadItem`) shows:
 The replies are the thread's window in the store (`useMessageWindow`), so they follow the thread
 live.
 
-| The store's window | What the entry does |
-| --- | --- |
-| Reaches the latest | Shows its last five |
+| The store's window            | What the entry does                                                   |
+| ----------------------------- | --------------------------------------------------------------------- |
+| Reaches the latest            | Shows its last five                                                   |
 | Missing, or not at the latest | Reads the latest page (`AspenSync.loadLatest`), in skeleton meanwhile |
-| The read failed | Shows the feed's newest reply alone |
+| The read failed               | Shows the feed's newest reply alone                                   |
 
 An entry subscribes to its thread's window, so the store keeps one window for each thread the
 feed shows, however many (`KEPT_WINDOWS_MAX` drops only windows nothing shows).
@@ -191,8 +191,8 @@ it up the feed. A thread deleted since, or left with no replies, leaves the feed
 What every tab shows is narrowed in the page's rail (`ActivityFilters`), folded away on a one-pane
 screen.
 
-| Filter | Preference | How it is read |
-| --- | --- | --- |
+| Filter                                                             | Preference                                                                                  | How it is read                                |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- | --------------------------------------------- |
 | Each deployment, and within it the reader's DMs and each community | `ACTIVITY_HIDDEN`, a device preference of what is hidden, so a community joined later shows | `readFilter` turns it into each read's filter |
 
 `readFilter`:

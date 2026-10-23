@@ -4,14 +4,14 @@ The Administration Dashboard is where holders of deployment permissions run the 
 
 ## Where it lives
 
-| Part | Code |
-| --- | --- |
-| Dashboard | `/admin/{tab}`, `src/features/admin` |
+| Part                                | Code                                                                                                              |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Dashboard                           | `/admin/{tab}`, `src/features/admin`                                                                              |
 | The caller's deployment permissions | `RecordStore.deploymentPermissions` (topic `admin`); `useDeploymentPermissions`, `useDeploymentCan`, `useIsAdmin` |
-| Moderators' reads | `useAdminRead` |
-| Directories | `Directory` |
-| Growth and database latency charts | `LineChart` |
-| Deployment roles | `deploymentRoleRecords.ts` |
+| Moderators' reads                   | `useAdminRead`                                                                                                    |
+| Directories                         | `Directory`                                                                                                       |
+| Growth and database latency charts  | `LineChart`                                                                                                       |
+| Deployment roles                    | `deploymentRoleRecords.ts`                                                                                        |
 
 ## Layout
 
@@ -28,21 +28,21 @@ The permissions are read at bootstrap from `GET /users/@me/admin` and kept by `d
 
 ## Tabs and the permission each needs
 
-| Tab | Permission | Notes |
-| --- | --- | --- |
-| Totals and growth | `viewDashboard` | See [Figures](#figures) |
-| Fleet, with the database's latency | `viewDashboard` | See [Database latency](#database-latency) |
-| Registration invites | `manageRegistrationInvites` | See [Registration invites](#registration-invites) |
-| Email newsletter | `sendNewsletters` | `Newsletter.tsx`; see [Newsletter](#newsletter) |
-| Directories | `viewDashboard`, `moderateCommunities`, `banUsers`, `reviewReports`, or `removeContent` | See [Directories](#directories) |
-| Reports | `reviewReports` | Described in [Reports](reports.md) |
-| Report categories | `manageReportCategories` | Described in [Reports](reports.md) |
-| Moderation log | `viewDashboard` | See [Moderation log](#moderation-log) |
-| Deployment profile and policies | `manageDeploymentSettings` | See [Deployment settings](#deployment-settings) |
-| Federation | `manageFederation` | `Federation.tsx`; see [Federation](#federation) |
-| Deployment roles | Everyone; editable with `manageDeploymentRoles` | See [Deployment roles](#deployment-roles) |
-| File transfer record | `moderateCommunities` | |
-| Plugins | `viewDashboard` or `managePlugins` | Described in [Plugins](plugins/index.md) |
+| Tab                                | Permission                                                                              | Notes                                             |
+| ---------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Totals and growth                  | `viewDashboard`                                                                         | See [Figures](#figures)                           |
+| Fleet, with the database's latency | `viewDashboard`                                                                         | See [Database latency](#database-latency)         |
+| Registration invites               | `manageRegistrationInvites`                                                             | See [Registration invites](#registration-invites) |
+| Email newsletter                   | `sendNewsletters`                                                                       | `Newsletter.tsx`; see [Newsletter](#newsletter)   |
+| Directories                        | `viewDashboard`, `moderateCommunities`, `banUsers`, `reviewReports`, or `removeContent` | See [Directories](#directories)                   |
+| Reports                            | `reviewReports`                                                                         | Described in [Reports](reports.md)                |
+| Report categories                  | `manageReportCategories`                                                                | Described in [Reports](reports.md)                |
+| Moderation log                     | `viewDashboard`                                                                         | See [Moderation log](#moderation-log)             |
+| Deployment profile and policies    | `manageDeploymentSettings`                                                              | See [Deployment settings](#deployment-settings)   |
+| Federation                         | `manageFederation`                                                                      | `Federation.tsx`; see [Federation](#federation)   |
+| Deployment roles                   | Everyone; editable with `manageDeploymentRoles`                                         | See [Deployment roles](#deployment-roles)         |
+| File transfer record               | `moderateCommunities`                                                                   |                                                   |
+| Plugins                            | `viewDashboard` or `managePlugins`                                                      | Described in [Plugins](plugins/index.md)          |
 
 ## Reads and refreshing
 

@@ -4,11 +4,11 @@
 
 Who is in each channel's call is store state:
 
-| Part | Name |
-| --- | --- |
-| Store | `RecordStore.channelVoice` |
-| Topic | `voice:<channelId>` |
-| Hook | `useChannelVoice` |
+| Part       | Name                                                                                        |
+| ---------- | ------------------------------------------------------------------------------------------- |
+| Store      | `RecordStore.channelVoice`                                                                  |
+| Topic      | `voice:<channelId>`                                                                         |
+| Hook       | `useChannelVoice`                                                                           |
 | Built from | the `voice` sideload and the `voiceSession`, `voiceParticipant`, and `voiceSpeaking` events |
 
 - Each participant carries `speaking` and `lastSpokeAt`.
@@ -35,12 +35,12 @@ Who is in each channel's call is store state:
 
 Volume and muting here are for this user alone. Nothing the server or the other person can see.
 
-| Control | Device preference | `AspenSync` setter | Applied as | To consumers |
-| --- | --- | --- | --- | --- |
-| Voice volume | `userVolume(userId)`, a gain from 0 to `MAX_USER_VOLUME` | `setUserVolume` | `effectiveUserVolume` | `microphone` |
-| Voice "mute for me" | `userMuted(userId)` (keeps their volume) | `setUserMuted` | `effectiveUserVolume` | `microphone` |
-| Stream volume | `streamVolume` | `setStreamVolume` | `effectiveStreamVolume` | `screenAudio` |
-| Stream mute | `streamMuted` | `setStreamMuted` | `effectiveStreamVolume` | `screenAudio` |
+| Control             | Device preference                                        | `AspenSync` setter | Applied as              | To consumers  |
+| ------------------- | -------------------------------------------------------- | ------------------ | ----------------------- | ------------- |
+| Voice volume        | `userVolume(userId)`, a gain from 0 to `MAX_USER_VOLUME` | `setUserVolume`    | `effectiveUserVolume`   | `microphone`  |
+| Voice "mute for me" | `userMuted(userId)` (keeps their volume)                 | `setUserMuted`     | `effectiveUserVolume`   | `microphone`  |
+| Stream volume       | `streamVolume`                                           | `setStreamVolume`  | `effectiveStreamVolume` | `screenAudio` |
+| Stream mute         | `streamMuted`                                            | `setStreamMuted`   | `effectiveStreamVolume` | `screenAudio` |
 
 `VoiceCall` asks `userVolume(user, source)` for the gain of each consumer.
 

@@ -6,12 +6,12 @@ language's code highlighting, the QR code reader), which the server may no longe
 
 ## Where it lives
 
-| Part | Code |
-| --- | --- |
-| Naming each build | `webClientBuild` in `packages/app/vite.config.ts`: `__ASPEN_WEB_CLIENT_BUILD__` in the code, `<meta name="aspen-web-client-build">` in the page |
-| What the deployment serves | `webClientBuild` in the event stream's `ready` frame; `AspenSync.webClientBuild` |
-| The strip, and reloading | `NewRelease` and `releaseReload.ts` in `packages/app/src/features/layout/` |
-| A part that fails to load | the `vite:preloadError` listener in `packages/app/src/main.tsx` |
+| Part                       | Code                                                                                                                                            |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Naming each build          | `webClientBuild` in `packages/app/vite.config.ts`: `__ASPEN_WEB_CLIENT_BUILD__` in the code, `<meta name="aspen-web-client-build">` in the page |
+| What the deployment serves | `webClientBuild` in the event stream's `ready` frame; `AspenSync.webClientBuild`                                                                |
+| The strip, and reloading   | `NewRelease` and `releaseReload.ts` in `packages/app/src/features/layout/`                                                                      |
+| A part that fails to load  | the `vite:preloadError` listener in `packages/app/src/main.tsx`                                                                                 |
 
 ## What happens
 

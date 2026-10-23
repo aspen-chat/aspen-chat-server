@@ -40,8 +40,8 @@ A shell without the helper on disk shows no game option.
 
 The drives run the shell headlessly with:
 
-| Variable | Effect |
-| --- | --- |
-| `ASPEN_DESKTOP_HIDDEN=1` | Runs the shell hidden. |
+| Variable                     | Effect                                                                                    |
+| ---------------------------- | ----------------------------------------------------------------------------------------- |
+| `ASPEN_DESKTOP_HIDDEN=1`     | Runs the shell hidden.                                                                    |
 | `ASPEN_DESKTOP_FAKE_MEDIA=1` | Chromium answers `getDisplayMedia` itself with a synthetic screen, so no picker is shown. |
-| `ASPEN_DESKTOP_USER_DATA` | Points at a scratch profile. |
+| `ASPEN_DESKTOP_USER_DATA`    | Points at a scratch profile.                                                              |

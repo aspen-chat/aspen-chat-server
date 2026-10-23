@@ -18,10 +18,10 @@ Every `newConsumer` the server announces is consumed:
 `startScreenShare()` asks `VoiceMedia.getScreen()`: `getDisplayMedia` with audio, at the screen's
 own resolution up to 4K and 60 frames a second (`SCREEN_QUALITY`).
 
-| Producer | Settings |
-| --- | --- |
-| `screen` (the picture) | One layer, up to 25 Mbps at 60 fps, starting at 10 Mbps (`SCREEN_ENCODING`, `SCREEN_VIDEO_CODEC`). The network's bandwidth estimate brings it down. |
-| `screenAudio` (any sound) | Stereo Opus at 128 kbps without DTX (`SCREEN_AUDIO_CODEC`). |
+| Producer                  | Settings                                                                                                                                            |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `screen` (the picture)    | One layer, up to 25 Mbps at 60 fps, starting at 10 Mbps (`SCREEN_ENCODING`, `SCREEN_VIDEO_CODEC`). The network's bandwidth estimate brings it down. |
+| `screenAudio` (any sound) | Stereo Opus at 128 kbps without DTX (`SCREEN_AUDIO_CODEC`).                                                                                         |
 
 - Its `contentHint` option marks a picture that moves, such as a game, so the encoder gives up
   resolution rather than frames when bandwidth runs short.
@@ -50,12 +50,12 @@ own resolution up to 4K and 60 frames a second (`SCREEN_QUALITY`).
 `getCamera` tries the chosen camera and then every other, so one held by another app does not leave
 the user without the rest. A failure is a `CameraError` whose `failure` says why:
 
-| `failure` | Meaning |
-| --- | --- |
-| `none` | No camera is connected. |
-| `denied` | Access was denied. |
-| `failed` | Every camera failed. |
-| `unsent` | The voice server did not take it. |
+| `failure` | Meaning                           |
+| --------- | --------------------------------- |
+| `none`    | No camera is connected.           |
+| `denied`  | Access was denied.                |
+| `failed`  | Every camera failed.              |
+| `unsent`  | The voice server did not take it. |
 
 It is kept as `state.cameraError` until the camera turns on, `clearCameraError()`, or the call ends.
 The call bar shows it under its buttons with what to do.

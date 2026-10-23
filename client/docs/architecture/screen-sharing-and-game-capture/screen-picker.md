@@ -4,11 +4,11 @@ Screen sharing on the desktop shell always goes through a picker. In Electron, `
 works only because the main process answers it in `setDisplayMediaRequestHandler`
 (`packages/desktop/src/main/index.ts`).
 
-| Where | Picker |
-| --- | --- |
-| Wayland | The desktop portal's. |
-| macOS 15 and later | The system picker. |
-| Everywhere else | `SourcePickerDialog`, below. |
+| Where              | Picker                       |
+| ------------------ | ---------------------------- |
+| Wayland            | The desktop portal's.        |
+| macOS 15 and later | The system picker.           |
+| Everywhere else    | `SourcePickerDialog`, below. |
 
 ## `SourcePickerDialog`
 

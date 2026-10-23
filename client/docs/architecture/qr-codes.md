@@ -2,15 +2,15 @@
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| Drawing a code | `QrCode` (`src/features/qr/QrCode.tsx`), `qrDrawing` (`qrDrawing.ts`) |
-| Saving a code | `QrDownload`, `qrSvgDocument`, `saveFile` (`src/features/layout/saveFile.ts`) |
-| Invite codes | `InviteQr` |
-| Links in codes | `shareUrl`, `useShareUrl` (`src/features/qr/shareLinks.ts`) |
-| Scanning | `QrScannerDialog` (`QrScanner.tsx`), `zxing.ts`, `ScanCodeButton` |
-| Reading a link | `parseAspenLink` (`aspenLinks.ts`) |
-| App links | `useOpenAppLinks` (`src/api/appLinks.ts`), `packages/desktop/src/main/appLinks.ts` |
+| Part           | Where                                                                              |
+| -------------- | ---------------------------------------------------------------------------------- |
+| Drawing a code | `QrCode` (`src/features/qr/QrCode.tsx`), `qrDrawing` (`qrDrawing.ts`)              |
+| Saving a code  | `QrDownload`, `qrSvgDocument`, `saveFile` (`src/features/layout/saveFile.ts`)      |
+| Invite codes   | `InviteQr`                                                                         |
+| Links in codes | `shareUrl`, `useShareUrl` (`src/features/qr/shareLinks.ts`)                        |
+| Scanning       | `QrScannerDialog` (`QrScanner.tsx`), `zxing.ts`, `ScanCodeButton`                  |
+| Reading a link | `parseAspenLink` (`aspenLinks.ts`)                                                 |
+| App links      | `useOpenAppLinks` (`src/api/appLinks.ts`), `packages/desktop/src/main/appLinks.ts` |
 
 ## Drawing
 
@@ -41,10 +41,10 @@ that breaks scanning fails there.
 
 Saving goes through `saveFile`:
 
-| Where | How |
-| --- | --- |
-| Browsers and Electron | A download |
-| Mobile apps | The system's picker (`filesBridge`); their web views cannot follow a download link |
+| Where                 | How                                                                                |
+| --------------------- | ---------------------------------------------------------------------------------- |
+| Browsers and Electron | A download                                                                         |
+| Mobile apps           | The system's picker (`filesBridge`); their web views cannot follow a download link |
 
 ## Invite codes
 
@@ -59,11 +59,11 @@ Invites show their code wherever they are made or looked at (`InviteQr`):
 `shareUrl` (`src/features/qr/shareLinks.ts`) makes the links codes hold, and every invite link
 copied.
 
-| Case | Links are under |
-| --- | --- |
-| The home deployment's web client is known | That web client, which `GET /deployment` names (`webClientUrl`, its `public_url`), so they open on any device |
-| It cannot be read, in a browser | The web client serving the page |
-| It cannot be read, in the desktop and mobile apps | `aspen://app/…`, which only an installed app opens |
+| Case                                              | Links are under                                                                                               |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| The home deployment's web client is known         | That web client, which `GET /deployment` names (`webClientUrl`, its `public_url`), so they open on any device |
+| It cannot be read, in a browser                   | The web client serving the page                                                                               |
+| It cannot be read, in the desktop and mobile apps | `aspen://app/…`, which only an installed app opens                                                            |
 
 `useShareUrl` is `null` until the deployment has said, so no link or code shows an address that
 is about to change.
@@ -88,12 +88,12 @@ shared:
 
 It answers a code that is not Aspen's, or not the kind wanted there, without closing.
 
-| Where | Scans |
-| --- | --- |
-| The join form | Invites |
+| Where                | Scans         |
+| -------------------- | ------------- |
+| The join form        | Invites       |
 | Sign-in and security | Sign-in codes |
-| The sign-in screen | Sign-in codes |
-| The server form | Sign-in codes |
+| The sign-in screen   | Sign-in codes |
+| The server form      | Sign-in codes |
 
 ## App links
 

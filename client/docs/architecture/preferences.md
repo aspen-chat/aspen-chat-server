@@ -6,16 +6,16 @@ with `usePreference(definition)`. The design notes are in
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| The store and definitions | `packages/protocol/src/preferences.ts` |
-| The settings UI | `SettingsDialog` (`src/features/settings`, the gear in the user footer) |
-| Audio device lists | `useAudioDevices` |
-| Zoom | `src/theme/zoom.ts`, `packages/desktop/src/main/zoom.ts` |
-| System text size on iOS | `followSystemTextSize` (`src/theme/systemTextSize.ts`) |
-| Contrast | `applyContrastMode` (`src/theme/palettes.ts`) |
-| Message text size and spacing | `useFollowMessageTextSize`, `.message-text` in `styles.css` |
-| Step slider | `StepSlider` (`src/features/layout/StepSlider.tsx`) |
+| Part                          | Where                                                                   |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| The store and definitions     | `packages/protocol/src/preferences.ts`                                  |
+| The settings UI               | `SettingsDialog` (`src/features/settings`, the gear in the user footer) |
+| Audio device lists            | `useAudioDevices`                                                       |
+| Zoom                          | `src/theme/zoom.ts`, `packages/desktop/src/main/zoom.ts`                |
+| System text size on iOS       | `followSystemTextSize` (`src/theme/systemTextSize.ts`)                  |
+| Contrast                      | `applyContrastMode` (`src/theme/palettes.ts`)                           |
+| Message text size and spacing | `useFollowMessageTextSize`, `.message-text` in `styles.css`             |
+| Step slider                   | `StepSlider` (`src/features/layout/StepSlider.tsx`)                     |
 
 ## Definitions and scopes
 
@@ -27,10 +27,10 @@ Each preference is a `PreferenceDefinition` with:
 - a `parse` that turns whatever was stored into the value or `undefined`, so a stale entry falls
   back rather than surprising a reader.
 
-| Scope | Stored in | Behaviour |
-| --- | --- | --- |
-| `device` | The install's storage (`localStorage` in a page; the sync options can supply another) | Never leaves the install |
-| `account` | The server (`/users/@me/preferences`) | Loaded at bootstrap, written as a merge patch, re-fetched when a `userPreferencesChanged` event names the user |
+| Scope     | Stored in                                                                             | Behaviour                                                                                                      |
+| --------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `device`  | The install's storage (`localStorage` in a page; the sync options can supply another) | Never leaves the install                                                                                       |
+| `account` | The server (`/users/@me/preferences`)                                                 | Loaded at bootstrap, written as a merge patch, re-fetched when a `userPreferencesChanged` event names the user |
 
 `get` returns the same object for the same stored value, as an external-store snapshot must.
 
@@ -39,15 +39,15 @@ The palette (light or dark) and the fonts ([fonts.md](fonts.md)) are kept per in
 
 ## Preferences
 
-| Preference | Key | Scope | What it does |
-| --- | --- | --- | --- |
-| `AUDIO_INPUT` | | device | Microphone: the system default or a `NamedDevice` |
-| `AUDIO_OUTPUT` | | device | Speaker: the system default or a `NamedDevice` |
-| `NOTIFICATION_OUTPUT` | | device | Where notification sounds play; defaults to following the voice output |
-| `NAME_COLORS` | | device | Whether names are drawn in their roles' colours ([roles-and-permissions.md](roles-and-permissions.md)) |
-| `TYPING_NOTICES` | `privacy.typingNotices` | account | Whether others are told when the user is typing; on unless turned off under Privacy |
-| `MESSAGE_TEXT_SIZE` | `look.messageTextSize` | account | Size of messages and the message box |
-| `MESSAGE_SPACING` | `look.messageSpacing` | account | Line spacing of messages |
+| Preference            | Key                     | Scope   | What it does                                                                                           |
+| --------------------- | ----------------------- | ------- | ------------------------------------------------------------------------------------------------------ |
+| `AUDIO_INPUT`         |                         | device  | Microphone: the system default or a `NamedDevice`                                                      |
+| `AUDIO_OUTPUT`        |                         | device  | Speaker: the system default or a `NamedDevice`                                                         |
+| `NOTIFICATION_OUTPUT` |                         | device  | Where notification sounds play; defaults to following the voice output                                 |
+| `NAME_COLORS`         |                         | device  | Whether names are drawn in their roles' colours ([roles-and-permissions.md](roles-and-permissions.md)) |
+| `TYPING_NOTICES`      | `privacy.typingNotices` | account | Whether others are told when the user is typing; on unless turned off under Privacy                    |
+| `MESSAGE_TEXT_SIZE`   | `look.messageTextSize`  | account | Size of messages and the message box                                                                   |
+| `MESSAGE_SPACING`     | `look.messageSpacing`   | account | Line spacing of messages                                                                               |
 
 ### Audio devices
 
@@ -89,12 +89,12 @@ page loads, so nothing jumps at launch.
 - The title bar the desktop app draws grows with the zoom ([title-bar.md](title-bar.md)).
 - Nowhere else does the app zoom itself.
 
-| Platform | What zooms |
-| --- | --- |
-| Desktop app | The shell's zoom above |
-| Browser | The browser's own zoom, which a page can neither read nor set |
-| Android | The web view follows Font size (its text zoom) and Display size (fewer CSS pixels across, so the layout reflows) on its own |
-| iOS and iPadOS | `followSystemTextSize` follows Larger Text; Display Zoom reaches the page as fewer points across |
+| Platform       | What zooms                                                                                                                  |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Desktop app    | The shell's zoom above                                                                                                      |
+| Browser        | The browser's own zoom, which a page can neither read nor set                                                               |
+| Android        | The web view follows Font size (its text zoom) and Display size (fewer CSS pixels across, so the layout reflows) on its own |
+| iOS and iPadOS | `followSystemTextSize` follows Larger Text; Display Zoom reaches the page as fewer points across                            |
 
 On a phone, Settings names the system's settings in the slider's place.
 
@@ -126,11 +126,11 @@ A large text size then truncates their lines rather than pushing their controls 
 Contrast is kept per install with the palette and theme (`applyContrastMode` in
 `src/theme/palettes.ts`, `aspen.contrast`).
 
-| Mode | Effect |
-| --- | --- |
-| System | Follows `prefers-contrast: more` |
-| Standard | Standard contrast |
-| More | Sets `data-contrast="more"` on the root |
+| Mode     | Effect                                  |
+| -------- | --------------------------------------- |
+| System   | Follows `prefers-contrast: more`        |
+| Standard | Standard contrast                       |
+| More     | Sets `data-contrast="more"` on the root |
 
 - `data-contrast="more"` has a block in `styles.css`. It mixes each palette's muted and faint
   inks, comment colour, and lines from its own ink and ground, so it holds in every palette.

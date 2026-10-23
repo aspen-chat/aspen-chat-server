@@ -4,13 +4,13 @@ Bots are users with `bot` set. Nothing in the app signs in as a bot; bots use th
 
 ## Where it lives
 
-| Part | Code |
-| --- | --- |
-| Bot badge | `BotBadge` |
-| ID wizard | `CopyIdButton`, `CopyIdMenuItem` (`src/features/layout/CopyId.tsx`), `useIdWizard` |
-| Managing bots | `BotsDialog`, `src/features/bots` |
-| Adding a bot | `BotAddScreen` |
-| Commands | `src/features/commands`, `useCommandLine`, `commandLine.ts` |
+| Part          | Code                                                                               |
+| ------------- | ---------------------------------------------------------------------------------- |
+| Bot badge     | `BotBadge`                                                                         |
+| ID wizard     | `CopyIdButton`, `CopyIdMenuItem` (`src/features/layout/CopyId.tsx`), `useIdWizard` |
+| Managing bots | `BotsDialog`, `src/features/bots`                                                  |
+| Adding a bot  | `BotAddScreen`                                                                     |
+| Commands      | `src/features/commands`, `useCommandLine`, `commandLine.ts`                        |
 
 ## How bots are shown
 
@@ -37,15 +37,15 @@ A new place that shows something with an id gives it a copy control.
 
 The dialog lists the caller's bots: `RecordStore.ownedBots` (topic `bots`). It is derived from the cached users whose `botOwner` is the caller, and filled by `AspenSync.loadBots`.
 
-| Action | How |
-| --- | --- |
-| Make a bot | `AspenSync.createBot`. The token is shown once, as it arrives. |
-| Set its picture | `IconPicker`, written with `AspenSync.updateBotProfile` |
-| Make it public or private | `AspenSync.setBotPublic` |
+| Action                                                      | How                                                                 |
+| ----------------------------------------------------------- | ------------------------------------------------------------------- |
+| Make a bot                                                  | `AspenSync.createBot`. The token is shown once, as it arrives.      |
+| Set its picture                                             | `IconPicker`, written with `AspenSync.updateBotProfile`             |
+| Make it public or private                                   | `AspenSync.setBotPublic`                                            |
 | Copy the link that adds it with the permissions it suggests | `botAddLink`: the page's address on the web, the path in the shells |
-| Make a new token | `AspenSync.rotateBotToken` |
-| Hand it to someone | `PeoplePicker`, `AspenSync.transferBot` |
-| Delete it | `AspenSync.deleteBot` |
+| Make a new token                                            | `AspenSync.rotateBotToken`                                          |
+| Hand it to someone                                          | `PeoplePicker`, `AspenSync.transferBot`                             |
+| Delete it                                                   | `AspenSync.deleteBot`                                               |
 
 These writes are applied from their answers. **Why:** a bot's own events reach only those who share a community with it.
 
@@ -96,11 +96,11 @@ The channel's commands are store state:
 
 ### Sending
 
-| The line | What happens |
-| --- | --- |
-| Names a command here | Invoked (`AspenSync.invokeCommand`) |
-| Names a command two bots answer, untagged | Refused in the box, naming both |
-| Any other line beginning with `/` | Sent as a message |
+| The line                                  | What happens                        |
+| ----------------------------------------- | ----------------------------------- |
+| Names a command here                      | Invoked (`AspenSync.invokeCommand`) |
+| Names a command two bots answer, untagged | Refused in the box, naming both     |
+| Any other line beginning with `/`         | Sent as a message                   |
 
 ### A command's message
 

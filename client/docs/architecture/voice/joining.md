@@ -58,20 +58,20 @@ A rejoin keeps the microphone the same way.
 
 The `voiceSessionEnded` event (which `AspenSync` hands to the call) carries a reason:
 
-| Reason | What the client does |
-| --- | --- |
-| `serverLost`, `serverRemoved` | Rejoins after a random pause of at most `REJOIN_DELAY_MAX_MS` (a second). |
-| `idle` | Sets `endedReason`, which `VoiceEndedDialog` shows until `acknowledgeEnd()`. |
-| `empty` | The user's own leave. |
+| Reason                        | What the client does                                                         |
+| ----------------------------- | ---------------------------------------------------------------------------- |
+| `serverLost`, `serverRemoved` | Rejoins after a random pause of at most `REJOIN_DELAY_MAX_MS` (a second).    |
+| `idle`                        | Sets `endedReason`, which `VoiceEndedDialog` shows until `acknowledgeEnd()`. |
+| `empty`                       | The user's own leave.                                                        |
 
 A socket that drops unannounced also rejoins after the same random pause.
 
 ### `kicked` frames
 
-| Reason | What the client does |
-| --- | --- |
-| `kicked` | Sets `endedReason: "kicked"` for `VoiceEndedDialog`. |
-| `accessLost` | Sets `endedReason: "accessLost"` for `VoiceEndedDialog`. The user may no longer be in the call. |
-| `replaced` | Ends the call silently. Another of the user's own clients took over. |
-| `signedOut` | Ends the call silently. The sign-in it joined with ended, which signs this client out too. |
-| `serverStopping` | Rejoins. |
+| Reason           | What the client does                                                                            |
+| ---------------- | ----------------------------------------------------------------------------------------------- |
+| `kicked`         | Sets `endedReason: "kicked"` for `VoiceEndedDialog`.                                            |
+| `accessLost`     | Sets `endedReason: "accessLost"` for `VoiceEndedDialog`. The user may no longer be in the call. |
+| `replaced`       | Ends the call silently. Another of the user's own clients took over.                            |
+| `signedOut`      | Ends the call silently. The sign-in it joined with ended, which signs this client out too.      |
+| `serverStopping` | Rejoins.                                                                                        |

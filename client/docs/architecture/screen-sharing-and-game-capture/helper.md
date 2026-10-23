@@ -6,11 +6,11 @@ request protocol is documented at the top of its `main.rs`.
 
 ## What it does on each platform
 
-| Platform | Picture | Sound |
-| --- | --- | --- |
-| Windows | The helper, through libobs: a game hook, or a window capture (see [Windows game capture](windows-capture.md)). | The captured window's own sound, through libobs. |
-| macOS | The browser's own screen share. | The helper, through ScreenCaptureKit (see [application audio](application-audio.md#macos)). |
-| Linux (X11 and Wayland) | The browser's own screen share, picked in the system's picker. | The helper, through PipeWire (see [application audio](application-audio.md#linux)). |
+| Platform                | Picture                                                                                                        | Sound                                                                                       |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Windows                 | The helper, through libobs: a game hook, or a window capture (see [Windows game capture](windows-capture.md)). | The captured window's own sound, through libobs.                                            |
+| macOS                   | The browser's own screen share.                                                                                | The helper, through ScreenCaptureKit (see [application audio](application-audio.md#macos)). |
+| Linux (X11 and Wayland) | The browser's own screen share, picked in the system's picker.                                                 | The helper, through PipeWire (see [application audio](application-audio.md#linux)).         |
 
 On Windows the helper encodes the picture as H.264 constrained baseline and sends it as SRTP
 straight to the voice server's plain RTP transport. The video never passes through the shell or the

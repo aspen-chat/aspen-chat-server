@@ -3,11 +3,11 @@
 A link to a deployment the user uses shows as a chip naming what it leads to, rather than its
 address.
 
-| Part | Where |
-| --- | --- |
-| Parsing | `parseSelfLink` in `src/features/messages/selfLinks.ts` |
-| The chip | `SelfLink.tsx` |
-| Opening it | `selfLinkRoute` |
+| Part       | Where                                                   |
+| ---------- | ------------------------------------------------------- |
+| Parsing    | `parseSelfLink` in `src/features/messages/selfLinks.ts` |
+| The chip   | `SelfLink.tsx`                                          |
+| Opening it | `selfLinkRoute`                                         |
 
 ## Which links
 
@@ -34,13 +34,13 @@ the message is from.
 Names come from the store of the deployment the link is to (`SourceScope`). Wherever a name is
 unknown or not the reader's to see, the chip uses a word for the kind of thing (`unnamed`).
 
-| Thing | Named from |
-| --- | --- |
-| Community, channel | The store. |
-| DM | Its people, read on demand with `AspenSync.ensureChannel`, with a skeleton meanwhile. |
-| Message | Its author, as the read of the linking message sideloaded it (`include=linked`). |
-| Thread | The word "Thread", since a thread's starter message names it. |
-| Invite | Its code. Reading what an invite opens counts against the limit on guessing invites. |
+| Thing              | Named from                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| Community, channel | The store.                                                                            |
+| DM                 | Its people, read on demand with `AspenSync.ensureChannel`, with a skeleton meanwhile. |
+| Message            | Its author, as the read of the linking message sideloaded it (`include=linked`).      |
+| Thread             | The word "Thread", since a thread's starter message names it.                         |
+| Invite             | Its code. Reading what an invite opens counts against the limit on guessing invites.  |
 
 ## Using the chip
 

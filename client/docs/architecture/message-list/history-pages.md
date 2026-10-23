@@ -1,12 +1,12 @@
 # History pages
 
-| Constant | Value |
-| --- | --- |
-| `HISTORY_PAGE_SIZE` | 50 messages |
-| `WINDOW_MAX_MESSAGES` | 300 messages in a channel's window |
-| `LIVE_WINDOW_MAX_MESSAGES` | 600, for a window followed live |
-| `KEPT_WINDOWS_MAX` | 30 channels' windows |
-| `LOOSE_MESSAGES_MAX` | 1000 messages no window holds |
+| Constant                   | Value                              |
+| -------------------------- | ---------------------------------- |
+| `HISTORY_PAGE_SIZE`        | 50 messages                        |
+| `WINDOW_MAX_MESSAGES`      | 300 messages in a channel's window |
+| `LIVE_WINDOW_MAX_MESSAGES` | 600, for a window followed live    |
+| `KEPT_WINDOWS_MAX`         | 30 channels' windows               |
+| `LOOSE_MESSAGES_MAX`       | 1000 messages no window holds      |
 
 - `useHistoryPaging` (`historyPaging.ts`) decides when a page is read. It is asked whenever the view
   moves or is placed afresh.

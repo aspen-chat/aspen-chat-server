@@ -17,13 +17,13 @@ button, and the desktop app in its title bar.
 - It names where the reader is no more closely than a community: never a channel, a DM's people,
   or a thread.
 
-| Screen | Page |
-| --- | --- |
+| Screen                                                                 | Page                 |
+| ---------------------------------------------------------------------- | -------------------- |
 | A community (`ChannelSidebarLayout`), at home or on another deployment | The community's name |
-| Direct messages (`DmLayout`) | Direct messages |
-| Activity, Saved messages | Their headings |
-| The Administration Dashboard | Administration |
-| Open source attributions | Its heading |
+| Direct messages (`DmLayout`)                                           | Direct messages      |
+| Activity, Saved messages                                               | Their headings       |
+| The Administration Dashboard                                           | Administration       |
+| Open source attributions                                               | Its heading          |
 
 ## The desktop app's title bar
 

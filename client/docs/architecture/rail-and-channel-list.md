@@ -2,14 +2,14 @@
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| Drop to new order | `src/features/layout/reorder.ts` |
-| Reordering requests | `AspenSync.reorderCommunities`, `arrangeChannels`, `arrangeCategories` |
-| The Layout tab | `LayoutPanel`, `planMove` (`src/features/community-settings/layoutOrder.ts`) |
-| The rail and folders | `CommunityRail`, `RailFolder.tsx` |
-| What a rail drop means | `moveInRail` (`railOrder.ts`) |
-| Folded categories | `ChannelSidebar`, `useCollapsed`, `AspenSync.setCategoryCollapsed` |
+| Part                   | Where                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| Drop to new order      | `src/features/layout/reorder.ts`                                             |
+| Reordering requests    | `AspenSync.reorderCommunities`, `arrangeChannels`, `arrangeCategories`       |
+| The Layout tab         | `LayoutPanel`, `planMove` (`src/features/community-settings/layoutOrder.ts`) |
+| The rail and folders   | `CommunityRail`, `RailFolder.tsx`                                            |
+| What a rail drop means | `moveInRail` (`railOrder.ts`)                                                |
+| Folded categories      | `ChannelSidebar`, `useCollapsed`, `AspenSync.setCategoryCollapsed`           |
 
 ## Reordering
 
@@ -29,11 +29,11 @@ Reordering is drag and drop from React Aria: `useDragAndDrop` on a `GridList`.
 2. patch only the records whose index changed;
 3. arrange the cache at once, so the events that follow are no-ops.
 
-| What | Order kept in |
-| --- | --- |
+| What        | Order kept in                                                                                          |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
 | Communities | Per user, on the caller's membership (`UserCommunity.sortIndex`), which every community read sideloads |
-| Channels | Position, and `parentCategory` when moved |
-| Categories | Position |
+| Channels    | Position, and `parentCategory` when moved                                                              |
+| Categories  | Position                                                                                               |
 
 A channel dragged into another group, or onto an empty category's drop zone, moves there.
 An empty group says so ("No channels yet; drop one here"), but for the top level beside at least
@@ -50,12 +50,12 @@ Every drop is saved at once, by the same requests as the sidebar's.
 
 `planMove` decides what a drop means; its tests list every case.
 
-| Dragged | Dropped | Result |
-| --- | --- | --- |
-| A channel | Between two rows | Joins the group of the row above, right after it: first under a heading, last in the group above when just over a category's heading |
-| A channel | On a heading | Goes to the end of that group |
-| A category | Just over another category's heading, or at the end | Moves there with its channels |
-| A category | Anywhere else | Nothing; it is not offered as a place |
+| Dragged    | Dropped                                             | Result                                                                                                                               |
+| ---------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| A channel  | Between two rows                                    | Joins the group of the row above, right after it: first under a heading, last in the group above when just over a category's heading |
+| A channel  | On a heading                                        | Goes to the end of that group                                                                                                        |
+| A category | Just over another category's heading, or at the end | Moves there with its channels                                                                                                        |
+| A category | Anywhere else                                       | Nothing; it is not offered as a place                                                                                                |
 
 - Holders of Manage channels move, rename, and delete channels; holders of Manage categories
   do the same to categories and make new ones (`RenameCategoryDialog`, `DeleteCategoryDialog`,
@@ -72,10 +72,10 @@ Communities gather into folders on the rail, as apps do on an iPhone's home scre
 
 ### Storage
 
-| Preference | Key | Holds |
-| --- | --- | --- |
+| Preference     | Key            | Holds                                                                                                      |
+| -------------- | -------------- | ---------------------------------------------------------------------------------------------------------- |
 | `RAIL_FOLDERS` | `rail.folders` | Each folder's id, name, tint from `FOLDER_COLORS`, whether it is open, and its members' rail keys in order |
-| `RAIL_ORDER` | | The rail order; names a folder where it stands as `folder:{id}` |
+| `RAIL_ORDER`   |                | The rail order; names a folder where it stands as `folder:{id}`                                            |
 
 - Both are account preferences, written together in one request (`PreferenceStore.setAccount`).
 - A client that knows nothing of folders shows their communities at the end of its rail.
@@ -89,13 +89,13 @@ touch, and keyboard dragging and screen readers work the same throughout.
 
 `moveInRail` decides; its tests in `railOrder.ts` list every case.
 
-| Dropped | Onto or where | Result |
-| --- | --- | --- |
-| A community | Another community | Makes a folder of the two |
-| A community | A folder, or one of its communities | Joins it |
-| A community | Among an open folder's communities | Goes in there |
-| A community | After an open folder's last community | Comes out |
-| A folder | Anywhere | Moves whole, never onto anything |
+| Dropped     | Onto or where                         | Result                           |
+| ----------- | ------------------------------------- | -------------------------------- |
+| A community | Another community                     | Makes a folder of the two        |
+| A community | A folder, or one of its communities   | Joins it                         |
+| A community | Among an open folder's communities    | Goes in there                    |
+| A community | After an open folder's last community | Comes out                        |
+| A folder    | Anywhere                              | Moves whole, never onto anything |
 
 A folder left with one community goes.
 

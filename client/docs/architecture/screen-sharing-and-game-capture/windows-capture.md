@@ -37,8 +37,8 @@ alone, as [Application audio](application-audio.md) describes.
 
 ## Answering RTCP
 
-| RTCP from the server | The helper's answer |
-| --- | --- |
-| NACK | Resends from a buffer of recent packets. |
-| Receiver's bandwidth estimate | Re-tunes the encoder's bitrate. |
-| Keyframe request | Relies on a one-second keyframe interval, since libobs cannot be asked for one. |
+| RTCP from the server          | The helper's answer                                                             |
+| ----------------------------- | ------------------------------------------------------------------------------- |
+| NACK                          | Resends from a buffer of recent packets.                                        |
+| Receiver's bandwidth estimate | Re-tunes the encoder's bitrate.                                                 |
+| Keyframe request              | Relies on a one-second keyframe interval, since libobs cannot be asked for one. |

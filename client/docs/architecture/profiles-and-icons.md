@@ -2,15 +2,15 @@
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| Uploading an icon | `AspenSync.uploadIcon` (`upload.ts`) |
-| Picking and cropping | `IconPicker.tsx`, `CropDialog`, `crop.ts` (`src/features/media`) |
-| Showing an icon | `Avatar`, `useIcon` |
-| Profile patches and names | `src/features/users/profile.ts` (`displayNameOf`) |
-| The profile card | `ProfileCard.tsx` |
-| Editing one's profile | `EditProfileDialog.tsx` |
-| Nicknames | `src/features/users/nameIn.ts`, `src/features/users/Nickname.tsx` |
+| Part                      | Where                                                             |
+| ------------------------- | ----------------------------------------------------------------- |
+| Uploading an icon         | `AspenSync.uploadIcon` (`upload.ts`)                              |
+| Picking and cropping      | `IconPicker.tsx`, `CropDialog`, `crop.ts` (`src/features/media`)  |
+| Showing an icon           | `Avatar`, `useIcon`                                               |
+| Profile patches and names | `src/features/users/profile.ts` (`displayNameOf`)                 |
+| The profile card          | `ProfileCard.tsx`                                                 |
+| Editing one's profile     | `EditProfileDialog.tsx`                                           |
+| Nicknames                 | `src/features/users/nameIn.ts`, `src/features/users/Nickname.tsx` |
 
 ## Icons
 
@@ -32,12 +32,12 @@ with the server's two-phase flow, then named by id on the user or community.
 
 Profiles are fields on the user record.
 
-| Field | What it is |
-| --- | --- |
-| `displayName` | The name shown |
-| `pronouns` | Pronouns |
-| `bio` | Bio |
-| `status` | `{ text, emoji? }` |
+| Field         | What it is                                                                                                                                           |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `displayName` | The name shown                                                                                                                                       |
+| `pronouns`    | Pronouns                                                                                                                                             |
+| `bio`         | Bio                                                                                                                                                  |
+| `status`      | `{ text, emoji? }`                                                                                                                                   |
 | `publicEmail` | The verified address the user chose to show. The card offers it as a `mailto:` link. Only the email settings change it; see [sign-in.md](sign-in.md) |
 
 - `AspenSync.updateProfile` edits them as a merge patch built by `src/features/users/profile.ts`.
@@ -60,12 +60,12 @@ Opened within a community (a `communityId` in the route), the card:
 
 ### Actions on someone else's card
 
-| Action | Notes |
-| --- | --- |
-| Message | A block takes it away, except for a holder of Message any user |
-| Call | A block takes it away |
-| Block | |
-| Report profile | See [reports.md](reports.md) |
+| Action         | Notes                                                          |
+| -------------- | -------------------------------------------------------------- |
+| Message        | A block takes it away, except for a holder of Message any user |
+| Call           | A block takes it away                                          |
+| Block          |                                                                |
+| Report profile | See [reports.md](reports.md)                                   |
 
 The dots at the top of the card (`MoreActions`) open the user's menu (`UserMenu`), everything else
 that can be done to them, moderation included, as a right click on their name does elsewhere; on a
@@ -97,7 +97,7 @@ The card opened in a community shows the nickname with the display name beneath.
 
 ### Setting and clearing
 
-| Where | Who | What |
-| --- | --- | --- |
-| The reader's own card, and community settings' Overview | The reader | `NicknameForm` (`src/features/users/Nickname.tsx`) sets theirs with Change nickname (`AspenSync.setNickname`), and clears it with nothing |
-| Anyone else's card, and the members panel | Holders of Manage nicknames over someone ranked below them, never the owner | `ClearNicknameButton` clears it (`useMayClearNickname`, `AspenSync.clearNickname`) |
+| Where                                                   | Who                                                                         | What                                                                                                                                      |
+| ------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| The reader's own card, and community settings' Overview | The reader                                                                  | `NicknameForm` (`src/features/users/Nickname.tsx`) sets theirs with Change nickname (`AspenSync.setNickname`), and clears it with nothing |
+| Anyone else's card, and the members panel               | Holders of Manage nicknames over someone ranked below them, never the owner | `ClearNicknameButton` clears it (`useMayClearNickname`, `AspenSync.clearNickname`)                                                        |

@@ -17,9 +17,9 @@ A DM or group DM holds a call too.
 A call that rings the user (`RecordStore.myRings`, on any deployment they use) shows
 `IncomingCall`: a modal over the whole app naming who is calling and from where.
 
-| Control | Effect |
-| --- | --- |
-| Accept | Opens the DM and joins. |
+| Control            | Effect                                       |
+| ------------------ | -------------------------------------------- |
+| Accept             | Opens the DM and joins.                      |
 | Decline, or Escape | `AspenSync.declineCall`. The modal has no X. |
 
 While it shows:
@@ -45,7 +45,7 @@ While it shows:
 
 ## Call notices in the history
 
-| Message kind | Rendered as |
-| --- | --- |
-| `call` | `CallNotice`, its length in words by `callLength`. |
+| Message kind                                | Rendered as                                                              |
+| ------------------------------------------- | ------------------------------------------------------------------------ |
+| `call`                                      | `CallNotice`, its length in words by `callLength`.                       |
 | `missedCall` (a DM call no one else joined) | `MissedCallNotice`: "Missed call from" the caller's chip beside a red X. |

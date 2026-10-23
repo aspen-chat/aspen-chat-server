@@ -4,12 +4,12 @@ A poll is a record of its own, shown in a message and kept current by the event 
 
 ## Where it lives
 
-| Part | File |
-| --- | --- |
-| The poll in a message | `src/features/messages/PollCard.tsx` |
-| Making a poll | `src/features/messages/CreatePollDialog.tsx` |
-| The closing announcement | `src/features/messages/PollClosedNotice.tsx` |
-| Outcome text, answer indexes | `src/features/messages/poll.ts` |
+| Part                         | File                                         |
+| ---------------------------- | -------------------------------------------- |
+| The poll in a message        | `src/features/messages/PollCard.tsx`         |
+| Making a poll                | `src/features/messages/CreatePollDialog.tsx` |
+| The closing announcement     | `src/features/messages/PollClosedNotice.tsx` |
+| Outcome text, answer indexes | `src/features/messages/poll.ts`              |
 
 ## Messages and records
 

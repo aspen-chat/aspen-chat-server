@@ -6,10 +6,10 @@ For blocks across deployments, see [Deployments and federation](deployments.md#b
 
 ## State
 
-| What | Store | Topic | Hook |
-| --- | --- | --- | --- |
-| Whether one user is blocked | `RecordStore.blocked` | `block:<userId>` | `useBlocked` |
-| The list of blocked users | `RecordStore.blockedUsers` | `blocks` | `useBlockedUsers` |
+| What                        | Store                      | Topic            | Hook              |
+| --------------------------- | -------------------------- | ---------------- | ----------------- |
+| Whether one user is blocked | `RecordStore.blocked`      | `block:<userId>` | `useBlocked`      |
+| The list of blocked users   | `RecordStore.blockedUsers` | `blocks`         | `useBlockedUsers` |
 
 - Read at bootstrap from `GET /users/@me/blocks`, with the blocked users sideloaded.
 - Kept by `userBlockChanged` events.

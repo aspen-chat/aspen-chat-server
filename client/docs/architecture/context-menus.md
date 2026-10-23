@@ -6,20 +6,20 @@ here are in [context-menus-design-notes.md](context-menus-design-notes.md).
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| State, and when the browser's own menu is wanted | `useContextMenu`, `wantsNativeMenu`, `claimContextMenu` (`src/features/layout/contextMenuState.ts`) |
-| The popover, its point, and passing right clicks on | `ContextMenu`, `MenuPoint` (`src/features/layout/ContextMenu.tsx`) |
-| Items and their look | `MenuAction`, `MenuRule`, `ParentLabel`, `menuItemClass` and the rest (`src/features/layout/menu.tsx`) |
-| Actions that are buttons elsewhere | `IconAction` inside `ActionsAsMenuItems` (`src/features/layout`) |
-| Asking before what is hard to undo | `ConfirmModal` (`src/features/layout`) |
-| A message | `MessageContextMenu`, `underPointer`, `saveFrom` and `copyPicture` (`mediaFile.ts`) (`src/features/messages`) |
-| A person | `UserMenu`, `UserMenuItems`, `UserDialogs` (`src/features/users`), opened through `ProfilePopover` |
-| A channel or DM | `ChannelMenu` (`src/features/channels`) |
-| A person in a call | `ParticipantMenu` (`src/features/voice`) |
-| A category | `CategoryMenu` (`src/features/channels`) |
-| A community on the rail | `CommunityMenu` (`src/features/communities`) |
-| A listed message (saved, activity, pins) | `ListedMessageMenu` in `ListedMessage`, `EntryMenu` in `ActivityScreen` |
+| Part                                                 | Where                                                                                                             |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| State, and when the browser's own menu is wanted     | `useContextMenu`, `wantsNativeMenu`, `claimContextMenu` (`src/features/layout/contextMenuState.ts`)               |
+| The popover, its point, and passing right clicks on  | `ContextMenu`, `MenuPoint` (`src/features/layout/ContextMenu.tsx`)                                                |
+| Items and their look                                 | `MenuAction`, `MenuRule`, `ParentLabel`, `menuItemClass` and the rest (`src/features/layout/menu.tsx`)            |
+| Actions that are buttons elsewhere                   | `IconAction` inside `ActionsAsMenuItems` (`src/features/layout`)                                                  |
+| Asking before what is hard to undo                   | `ConfirmModal` (`src/features/layout`)                                                                            |
+| A message                                            | `MessageContextMenu`, `underPointer`, `saveFrom` and `copyPicture` (`mediaFile.ts`) (`src/features/messages`)     |
+| A person                                             | `UserMenu`, `UserMenuItems`, `UserDialogs` (`src/features/users`), opened through `ProfilePopover`                |
+| A channel or DM                                      | `ChannelMenu` (`src/features/channels`)                                                                           |
+| A person in a call                                   | `ParticipantMenu` (`src/features/voice`)                                                                          |
+| A category                                           | `CategoryMenu` (`src/features/channels`)                                                                          |
+| A community on the rail                              | `CommunityMenu` (`src/features/communities`)                                                                      |
+| A listed message (saved, activity, pins)             | `ListedMessageMenu` in `ListedMessage`, `EntryMenu` in `ActivityScreen`                                           |
 | Mention, from a person's menu, and a message's Reply | `useComposerTarget`, `mentionIn`, `replyIn` (`src/features/messages/composerTargets.ts`), `useTagging`'s `insert` |
 
 ## Opening one
@@ -28,14 +28,14 @@ here are in [context-menus-design-notes.md](context-menus-design-notes.md).
 whatever the menu is for. It opens the menu at the pointer, unless the browser's own menu is
 wanted (`wantsNativeMenu`):
 
-| The right click | Gets |
-| --- | --- |
-| With Shift held | The browser's menu, anywhere |
-| In a text field (`input`, `textarea`, `select`, `contenteditable`) | The browser's menu, with spelling, cut, and paste |
-| On a playing `video` or `audio` | The browser's menu, which controls it |
-| Over text selected inside what was clicked | The browser's menu, to copy or look it up |
-| From a finger held down (`pointerType` `touch`) | Nothing of the app's: the touch screen's own long press |
-| Already taken by something inside (`defaultPrevented`) | That one's menu, not the one around it |
+| The right click                                                    | Gets                                                    |
+| ------------------------------------------------------------------ | ------------------------------------------------------- |
+| With Shift held                                                    | The browser's menu, anywhere                            |
+| In a text field (`input`, `textarea`, `select`, `contenteditable`) | The browser's menu, with spelling, cut, and paste       |
+| On a playing `video` or `audio`                                    | The browser's menu, which controls it                   |
+| Over text selected inside what was clicked                         | The browser's menu, to copy or look it up               |
+| From a finger held down (`pointerType` `touch`)                    | Nothing of the app's: the touch screen's own long press |
+| Already taken by something inside (`defaultPrevented`)             | That one's menu, not the one around it                  |
 
 The last is how menus nest: a person's name inside a message opens the person's menu and not the
 message's.
@@ -113,11 +113,11 @@ member of the member list, the DM header), so a right click on any of them opens
 
 `UserMenuItems` offers, each only where it would be allowed:
 
-| Group | Items |
-| --- | --- |
-| Reaching them | Profile (their card, at the point), Message, Call, Mention, Copy username |
+| Group           | Items                                                                                               |
+| --------------- | --------------------------------------------------------------------------------------------------- |
+| Reaching them   | Profile (their card, at the point), Message, Call, Mention, Copy username                           |
 | Between the two | Change nickname (their own menu, in a community), Block or Unblock, Report profile, Report nickname |
-| Moderation | Roles (a submenu), Clear nickname, Remove from community, Ban from community, Ban from this server |
+| Moderation      | Roles (a submenu), Clear nickname, Remove from community, Ban from community, Ban from this server  |
 
 - Message and Call go through `useReach`, as the profile card's buttons do. Neither is offered for
   the reader or the system account; Message is not offered inside their DM, nor to someone blocked

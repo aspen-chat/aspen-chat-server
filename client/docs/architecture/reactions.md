@@ -2,12 +2,12 @@
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| Store state | `RecordStore.reactions` (topic `reactions:<messageId>`), `setReactions` |
-| Chips | `ReactionChips` (`src/features/messages/Reactions.tsx`) |
-| Everyone who reacted | `ReactionsDialog`, `AspenSync.loadReactors` |
-| Quick reactions | `MessageActionSheet`, `useFrequentEmoji`, `AspenSync.loadFrequentEmoji`, `quickReactions` |
+| Part                 | Where                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| Store state          | `RecordStore.reactions` (topic `reactions:<messageId>`), `setReactions`                   |
+| Chips                | `ReactionChips` (`src/features/messages/Reactions.tsx`)                                   |
+| Everyone who reacted | `ReactionsDialog`, `AspenSync.loadReactors`                                               |
+| Quick reactions      | `MessageActionSheet`, `useFrequentEmoji`, `AspenSync.loadFrequentEmoji`, `quickReactions` |
 
 ## Store state
 

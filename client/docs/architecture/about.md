@@ -4,15 +4,15 @@ About Aspen is a dialog over Settings that shows which deployment and versions t
 
 ## Where it lives
 
-| Part | Code |
-| --- | --- |
-| About Aspen dialog | `AboutDialog`, `src/features/about/` |
-| Attributions page | `/attributions`, `AttributionsScreen` |
-| Attributions list | `virtual:attributions` (`Attributions`, `attributionTypes.ts`) |
-| Build info | `virtual:build-info` (`BuildInfo`) |
-| Vite plugin making both modules | `packages/app/attributions/plugin.ts` |
-| What no package manager records | `attributions/native.ts` |
-| Licence texts | `attributions/texts/`, `attributions/spdx/` |
+| Part                            | Code                                                           |
+| ------------------------------- | -------------------------------------------------------------- |
+| About Aspen dialog              | `AboutDialog`, `src/features/about/`                           |
+| Attributions page               | `/attributions`, `AttributionsScreen`                          |
+| Attributions list               | `virtual:attributions` (`Attributions`, `attributionTypes.ts`) |
+| Build info                      | `virtual:build-info` (`BuildInfo`)                             |
+| Vite plugin making both modules | `packages/app/attributions/plugin.ts`                          |
+| What no package manager records | `attributions/native.ts`                                       |
+| Licence texts                   | `attributions/texts/`, `attributions/spdx/`                    |
 
 ## About Aspen
 
@@ -24,13 +24,13 @@ It shows Aspen's icon (`brand/aspen-icon.svg`) and the deployment the user is on
 
 It then lists the versions of everything this copy of Aspen is made of:
 
-| Row | What it shows | Source |
-| --- | --- | --- |
-| Aspen app | The app's version and the commit it was built from, with "with changes" when the checkout had uncommitted changes. Outside a git checkout the commit is the one the build is handed, as an image build is (`ASPEN_BUILD_COMMIT`), or none, and only the version shows. | `virtual:build-info` |
-| Desktop app | Electron's and Chromium's versions | The preload bridge, `window.aspenDesktop.versions` |
-| Phone app | The platform, and the app's version and build | `@capacitor/app`'s `getInfo` |
-| Server | The software the server says it runs | `software` in `GET /auth/methods` |
-| Protocol | The protocol versions this app speaks and the server's. Each is a single version, or the range from the oldest a side still speaks to the newest. | `CLIENT_PROTOCOL`, and `protocol` in `GET /auth/methods` |
+| Row         | What it shows                                                                                                                                                                                                                                                          | Source                                                   |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Aspen app   | The app's version and the commit it was built from, with "with changes" when the checkout had uncommitted changes. Outside a git checkout the commit is the one the build is handed, as an image build is (`ASPEN_BUILD_COMMIT`), or none, and only the version shows. | `virtual:build-info`                                     |
+| Desktop app | Electron's and Chromium's versions                                                                                                                                                                                                                                     | The preload bridge, `window.aspenDesktop.versions`       |
+| Phone app   | The platform, and the app's version and build                                                                                                                                                                                                                          | `@capacitor/app`'s `getInfo`                             |
+| Server      | The software the server says it runs                                                                                                                                                                                                                                   | `software` in `GET /auth/methods`                        |
+| Protocol    | The protocol versions this app speaks and the server's. Each is a single version, or the range from the oldest a side still speaks to the newest.                                                                                                                      | `CLIENT_PROTOCOL`, and `protocol` in `GET /auth/methods` |
 
 Its link opens the attributions page. That closes Settings, and About Aspen with it.
 
@@ -70,12 +70,12 @@ The page imports it dynamically, as a chunk of its own: about 2 MB, 160 kB compr
 
 ### What each part lists
 
-| Part | What is listed |
-| --- | --- |
-| The app | The npm packages `@aspen/app` depends on in production, and theirs, walked through `node_modules` as Node resolves them. Workspace packages are Aspen's own, so they are walked through but not listed. Noto Color Emoji, which `scripts/noto_emoji.py` builds, is listed from its directory. |
-| The desktop app | Electron (a development dependency, since electron-builder copies it in). Chromium (see below). The capture helper's crates. What the Windows app ships from OBS Studio's release. |
-| The phone apps | The npm packages `@aspen/mobile` depends on: Capacitor and its plugins, which carry the native Android and iOS code. |
-| The servers | The crates the API server, the voice server, and `aspen-migrate` are built from, on the platforms they are built for. The C and C++ libraries mediasoup's worker builds from its Meson wraps. |
+| Part            | What is listed                                                                                                                                                                                                                                                                                |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The app         | The npm packages `@aspen/app` depends on in production, and theirs, walked through `node_modules` as Node resolves them. Workspace packages are Aspen's own, so they are walked through but not listed. Noto Color Emoji, which `scripts/noto_emoji.py` builds, is listed from its directory. |
+| The desktop app | Electron (a development dependency, since electron-builder copies it in). Chromium (see below). The capture helper's crates. What the Windows app ships from OBS Studio's release.                                                                                                            |
+| The phone apps  | The npm packages `@aspen/mobile` depends on: Capacitor and its plugins, which carry the native Android and iOS code.                                                                                                                                                                          |
+| The servers     | The crates the API server, the voice server, and `aspen-migrate` are built from, on the platforms they are built for. The C and C++ libraries mediasoup's worker builds from its Meson wraps.                                                                                                 |
 
 Chromium's notices are too many to carry in the list. They ship as `LICENSES.chromium.html` among the app's resources (`electron-builder.yml`). The file comes with Electron's own files, which a fresh install does not hold until `install-electron` fetches them, so `package:build` runs that first. They open in the system's browser through `window.aspenDesktop.chromiumNotices` (`packages/desktop/src/main/chromiumNotices.ts`).
 

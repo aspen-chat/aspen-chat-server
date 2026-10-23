@@ -14,11 +14,11 @@ The list is one stop in the tab order (`messageRows.ts`).
 
 On a row itself (not a control inside it):
 
-| Key | Goes to |
-| --- | --- |
-| Up, Down | The row before, the row after. |
-| Home, End | The first, the last row the list holds. |
-| Tab | On into the row's controls, which focus reveals as hover does. |
+| Key       | Goes to                                                        |
+| --------- | -------------------------------------------------------------- |
+| Up, Down  | The row before, the row after.                                 |
+| Home, End | The first, the last row the list holds.                        |
+| Tab       | On into the row's controls, which focus reveals as hover does. |
 
 Focus anywhere in a row engages it, which builds its actions (see [what a row holds](memory.md)).
 A row reached from after it by Shift+Tab meets the button standing in for its actions, which

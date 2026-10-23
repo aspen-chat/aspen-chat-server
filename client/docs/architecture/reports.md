@@ -2,27 +2,27 @@
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| Report buttons | `ReportMessageButton`, `ReportProfileButton`, `ReportNicknameButton` (`src/features/users/Nickname.tsx`) |
-| The report dialog | `ReportModal` (`src/features/reports/ReportDialog.tsx`) |
-| Profile aspects | `PROFILE_ASPECTS` (`src/features/users/profileAspects.ts`) |
-| Message links | `messageUrl`, `parseSelfLink` (`links.test.ts`), `SelfLink` |
-| Embedded messages | `LinkedMessages`, `EmbeddedMessage` (`src/features/messages/EmbeddedMessage.tsx`) |
-| Warnings | `WarningBody` (`src/features/messages/WarningBody.tsx`), `ProfileSnapshotCard` |
-| Review | `src/features/admin/Reports.tsx`, `ResolveDialog`, `NicknameCase` |
-| Categories | `src/features/admin/ReportCategories.tsx` |
-| Bans from the deployment | `UserBanDialog`, `BanFields` |
+| Part                     | Where                                                                                                    |
+| ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Report buttons           | `ReportMessageButton`, `ReportProfileButton`, `ReportNicknameButton` (`src/features/users/Nickname.tsx`) |
+| The report dialog        | `ReportModal` (`src/features/reports/ReportDialog.tsx`)                                                  |
+| Profile aspects          | `PROFILE_ASPECTS` (`src/features/users/profileAspects.ts`)                                               |
+| Message links            | `messageUrl`, `parseSelfLink` (`links.test.ts`), `SelfLink`                                              |
+| Embedded messages        | `LinkedMessages`, `EmbeddedMessage` (`src/features/messages/EmbeddedMessage.tsx`)                        |
+| Warnings                 | `WarningBody` (`src/features/messages/WarningBody.tsx`), `ProfileSnapshotCard`                           |
+| Review                   | `src/features/admin/Reports.tsx`, `ResolveDialog`, `NicknameCase`                                        |
+| Categories               | `src/features/admin/ReportCategories.tsx`                                                                |
+| Bans from the deployment | `UserBanDialog`, `BanFields`                                                                             |
 
 ## Reporting
 
 ### Who is offered Report
 
-| What | Button | Offered to | Not offered for |
-| --- | --- | --- | --- |
-| A message | Report (`ReportMessageButton`, or the `report` sheet on a touch screen), in the message's actions | Anyone but its author | The system account's notices and a call's record |
-| A profile | Report profile (`ReportProfileButton`), on the profile card | Anyone but the person themselves | The system account |
-| A nickname | Report nickname (`ReportNicknameButton`), on the profile card opened in a community where they have a nickname | | |
+| What       | Button                                                                                                         | Offered to                       | Not offered for                                  |
+| ---------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------ |
+| A message  | Report (`ReportMessageButton`, or the `report` sheet on a touch screen), in the message's actions              | Anyone but its author            | The system account's notices and a call's record |
+| A profile  | Report profile (`ReportProfileButton`), on the profile card                                                    | Anyone but the person themselves | The system account                               |
+| A nickname | Report nickname (`ReportNicknameButton`), on the profile card opened in a community where they have a nickname |                                  |                                                  |
 
 ### The dialog
 
@@ -54,10 +54,10 @@ two routes back (`links.test.ts`).
 
 ### In a message's text
 
-| Link to | Drawn as |
-| --- | --- |
+| Link to                                       | Drawn as                                                                                                                                                                |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The home deployment, or another the user uses | A chip naming the message's place and author that opens it here (`SelfLink`, see [message-rendering](message-rendering/self-links.md)), with the message itself beneath |
-| Any other host | An ordinary link |
+| Any other host                                | An ordinary link                                                                                                                                                        |
 
 ### Embedded messages
 
@@ -104,11 +104,11 @@ The dashboard's Reports tab (`src/features/admin/Reports.tsx`, permission Review
 
 A case shows every report of it, and what was reported:
 
-| Reported | Shown |
-| --- | --- |
-| A message | The message, deleted or not, where it was posted, and the conversation around it on request. A page at a time either way, the reported message outlined |
-| A profile | The profile as reported beside how it is now |
-| A nickname | The nickname as reported, in which community, and what it is now when the reviewer may read that community's members (`NicknameCase`) |
+| Reported   | Shown                                                                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A message  | The message, deleted or not, where it was posted, and the conversation around it on request. A page at a time either way, the reported message outlined |
+| A profile  | The profile as reported beside how it is now                                                                                                            |
+| A nickname | The nickname as reported, in which community, and what it is now when the reviewer may read that community's members (`NicknameCase`)                   |
 
 The people and files the dashboard's reads name are put in the cache, so messages there draw as
 everywhere else. Channels and communities are not, since they would join the reviewer's own
@@ -118,14 +118,14 @@ lists.
 
 Take action opens `ResolveDialog`, offering only what the reviewer may do:
 
-| Action | Permission |
-| --- | --- |
+| Action                                                                 | Permission     |
+| ---------------------------------------------------------------------- | -------------- |
 | Warn, with their words. The system account sends it without their name | Every reviewer |
-| Delete the message | Remove content |
-| Clear the nickname | Remove content |
-| Reset chosen aspects of a profile of this deployment | Remove content |
-| Ban from the server, through the same `BanFields` as a community's ban | Ban users |
-| Delete their recent messages, with the ban | Remove content |
+| Delete the message                                                     | Remove content |
+| Clear the nickname                                                     | Remove content |
+| Reset chosen aspects of a profile of this deployment                   | Remove content |
+| Ban from the server, through the same `BanFields` as a community's ban | Ban users      |
+| Delete their recent messages, with the ban                             | Remove content |
 
 - Dismiss sets a case aside. The Dismissed list restores it.
 - A case the reviewer may not act on says another moderator must. That is a case about them, or

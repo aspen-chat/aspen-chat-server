@@ -1,9 +1,9 @@
 # Who scrolls the list
 
-| Platform | Who scrolls | Switch |
-| --- | --- | --- |
-| iOS and iPadOS | The list scrolls itself. | `OWNS_SCROLLING` in `listScroller.ts` |
-| Everywhere else | The browser scrolls the box, on its compositor. | |
+| Platform        | Who scrolls                                     | Switch                                |
+| --------------- | ----------------------------------------------- | ------------------------------------- |
+| iOS and iPadOS  | The list scrolls itself.                        | `OWNS_SCROLLING` in `listScroller.ts` |
+| Everywhere else | The browser scrolls the box, on its compositor. |                                       |
 
 On every platform:
 

@@ -26,10 +26,10 @@ The call bar shows it under its buttons until the user tries again, dismisses it
 
 Moderation lives in `ParticipantMenu` (see [participants and volume](participants-and-volume.md)).
 
-| Action | Call | Notes |
-| --- | --- | --- |
+| Action                | Call                             | Notes                                                              |
+| --------------------- | -------------------------------- | ------------------------------------------------------------------ |
 | Server mute or unmute | `AspenSync.muteVoiceParticipant` | `202 Accepted`. The mute is the community's and outlasts the call. |
-| Remove | `kickVoiceParticipant` | `202 Accepted`. |
+| Remove                | `kickVoiceParticipant`           | `202 Accepted`.                                                    |
 
 Both actions' effects arrive as the participant's own events.
 

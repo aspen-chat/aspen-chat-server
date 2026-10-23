@@ -5,18 +5,18 @@
 Holders of Manage plugins have a Plugins tab (`PluginsPanel`). It lists each plugin with whether it
 runs there.
 
-| Part | Name |
-| --- | --- |
-| Read | `useCommunityPlugins`, `GET /communities/{community}/plugins` |
-| Topic | `communityPlugins:<communityId>` |
+| Part            | Name                                                                   |
+| --------------- | ---------------------------------------------------------------------- |
+| Read            | `useCommunityPlugins`, `GET /communities/{community}/plugins`          |
+| Topic           | `communityPlugins:<communityId>`                                       |
 | Kept current by | `communityPlugin` events, which only holders of Manage plugins receive |
 
 What it offers depends on where the plugin runs:
 
-| Plugin runs | Offers |
-| --- | --- |
+| Plugin runs           | Offers                                                                                                                                                              |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Where it is turned on | Turn on, with the permissions its account asks for ticked where the caller holds them (`AspenSync.enableCommunityPlugin`), and Turn off (`disableCommunityPlugin`). |
-| Everywhere | Bringing its account in. |
+| Everywhere            | Bringing its account in.                                                                                                                                            |
 
 Its settings are a `SettingsForm`.
 

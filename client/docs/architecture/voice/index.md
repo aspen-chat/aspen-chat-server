@@ -21,15 +21,15 @@ bar, the call screen, DM calls and rings, and the per-person and moderation menu
 
 ## Key files
 
-| Part | Where |
-| --- | --- |
-| `VoiceCall`, `VoiceCallState` | `packages/protocol/src/voice.ts` |
-| `VoiceMedia` interface | `packages/protocol/src/voiceMedia.ts` |
-| Browser media (`getUserMedia`, `<audio>` elements) | `packages/protocol/src/browserMedia.ts` |
-| Signalling frames | `src/generated/voiceSignal.ts` |
-| Which participants to show | `src/features/voice/voiceList.ts` |
-| Ringtone and dial tone | `loopSound` in `src/features/notifications/sounds.ts` (see [sounds](../notifications.md#sounds)) |
-| Joining, leaving, and disconnected sounds | `src/features/voice/callSounds.ts` (see [sounds](../notifications.md#sounds)) |
-| Ring notifications | `src/features/voice/ringNotifications.ts` |
-| Full screen | `ScreenTile`, `fullScreen.ts`, `useOrientationLock` |
-| Desktop screen picker | `packages/desktop/src/main/index.ts` (see [screen sharing](../screen-sharing-and-game-capture/index.md)) |
+| Part                                               | Where                                                                                                    |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `VoiceCall`, `VoiceCallState`                      | `packages/protocol/src/voice.ts`                                                                         |
+| `VoiceMedia` interface                             | `packages/protocol/src/voiceMedia.ts`                                                                    |
+| Browser media (`getUserMedia`, `<audio>` elements) | `packages/protocol/src/browserMedia.ts`                                                                  |
+| Signalling frames                                  | `src/generated/voiceSignal.ts`                                                                           |
+| Which participants to show                         | `src/features/voice/voiceList.ts`                                                                        |
+| Ringtone and dial tone                             | `loopSound` in `src/features/notifications/sounds.ts` (see [sounds](../notifications.md#sounds))         |
+| Joining, leaving, and disconnected sounds          | `src/features/voice/callSounds.ts` (see [sounds](../notifications.md#sounds))                            |
+| Ring notifications                                 | `src/features/voice/ringNotifications.ts`                                                                |
+| Full screen                                        | `ScreenTile`, `fullScreen.ts`, `useOrientationLock`                                                      |
+| Desktop screen picker                              | `packages/desktop/src/main/index.ts` (see [screen sharing](../screen-sharing-and-game-capture/index.md)) |

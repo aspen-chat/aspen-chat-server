@@ -2,17 +2,17 @@
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| Read states | `RecordStore` (topic `read:<channelId>`), `useReadState`, `useUnread` |
-| Unread places | `unreadPlaces()` (topic `unread`), `useUnreadPlaces`, `UNREAD_DMS` |
-| Unread channels | `unreadChannels()` (topic `unread`), which the activity feed's Unread tab lists |
-| Marking read | `MessageList`, `AspenSync.markRead` |
-| Marking unread | `AspenSync.markUnread`, `markUnread`, `MarkUnreadButton`, `ChannelMenu`, `unreadHeld` |
-| Thread positions | `threadRead` (topic `read:<threadId>`) |
-| Mutes | `replaceMutes`, `useMute`, `useOwnMute`, `useCategoryMute`, `MuteBell`, `useMuteEnd`, `nextMuteEnd`, `expireMutes` |
-| Mute and Notifications submenus | `ChannelMuteSubmenu`, `CategoryMuteSubmenu`, `NotificationsSubmenu` (`src/features/channels/muteMenus.tsx`) |
-| The channel menu | `ChannelMenu`, `ChannelMenuButton` (`src/features/channels`) |
+| Part                            | Where                                                                                                              |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Read states                     | `RecordStore` (topic `read:<channelId>`), `useReadState`, `useUnread`                                              |
+| Unread places                   | `unreadPlaces()` (topic `unread`), `useUnreadPlaces`, `UNREAD_DMS`                                                 |
+| Unread channels                 | `unreadChannels()` (topic `unread`), which the activity feed's Unread tab lists                                    |
+| Marking read                    | `MessageList`, `AspenSync.markRead`                                                                                |
+| Marking unread                  | `AspenSync.markUnread`, `markUnread`, `MarkUnreadButton`, `ChannelMenu`, `unreadHeld`                              |
+| Thread positions                | `threadRead` (topic `read:<threadId>`)                                                                             |
+| Mutes                           | `replaceMutes`, `useMute`, `useOwnMute`, `useCategoryMute`, `MuteBell`, `useMuteEnd`, `nextMuteEnd`, `expireMutes` |
+| Mute and Notifications submenus | `ChannelMuteSubmenu`, `CategoryMuteSubmenu`, `NotificationsSubmenu` (`src/features/channels/muteMenus.tsx`)        |
+| The channel menu                | `ChannelMenu`, `ChannelMenuButton` (`src/features/channels`)                                                       |
 
 ## Unread
 
@@ -23,13 +23,13 @@ sideload of the community list and the DM list.
 
 A channel is unread while `lastMessage` sorts after `lastRead`.
 
-| Event | Effect |
-| --- | --- |
-| Someone else's new message | Moves `lastMessage` |
-| The caller's own new message | Moves `lastRead` |
-| `channelRead` | Brings another device's reading |
-| `channelMarkedUnread` | Moves the position back, and holds the channel unread |
-| A deleted message that was a channel's `lastMessage` | `AspenSync` reads that channel's state again |
+| Event                                                | Effect                                                |
+| ---------------------------------------------------- | ----------------------------------------------------- |
+| Someone else's new message                           | Moves `lastMessage`                                   |
+| The caller's own new message                         | Moves `lastRead`                                      |
+| `channelRead`                                        | Brings another device's reading                       |
+| `channelMarkedUnread`                                | Moves the position back, and holds the channel unread |
+| A deleted message that was a channel's `lastMessage` | `AspenSync` reads that channel's state again          |
 
 ### Unread places
 
@@ -142,10 +142,10 @@ still shows inside it.
 
 `ChannelMenu` (`src/features/channels`) holds two submenus above the channel's other actions:
 
-| Submenu | Offers |
-| --- | --- |
-| Mute | See below; it reads until when in its own place while the channel is muted |
-| Notifications | Names the level in force |
+| Submenu       | Offers                                                                     |
+| ------------- | -------------------------------------------------------------------------- |
+| Mute          | See below; it reads until when in its own place while the channel is muted |
+| Notifications | Names the level in force                                                   |
 
 Mute and Notifications are offered on a text channel, a DM, and a channel of a plugin's kind
 (whose plugin's notices its mute and level govern). The menu holds more besides; see
@@ -153,12 +153,12 @@ Mute and Notifications are offered on a text channel, a DM, and a channel of a p
 
 The Mute submenu (`ChannelMuteSubmenu`) offers, by the channel's state:
 
-| State | Offers |
-| --- | --- |
-| Not muted | The lengths of mute |
-| Muted by its own mute | Unmute: removing its own mute, or, while its category is muted too, keeping it unmuted, since removing it would leave it muted with the category |
-| Muted with its category | Keep unmuted |
-| Kept unmuted inside a muted category | The lengths of mute, and Follow its category, which removes its own setting |
+| State                                | Offers                                                                                                                                           |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Not muted                            | The lengths of mute                                                                                                                              |
+| Muted by its own mute                | Unmute: removing its own mute, or, while its category is muted too, keeping it unmuted, since removing it would leave it muted with the category |
+| Muted with its category              | Keep unmuted                                                                                                                                     |
+| Kept unmuted inside a muted category | The lengths of mute, and Follow its category, which removes its own setting                                                                      |
 
 A category's heading menu has a Mute submenu of its own (`CategoryMuteSubmenu`): the lengths, or
 until when and Unmute.

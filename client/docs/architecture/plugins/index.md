@@ -20,12 +20,12 @@ only by the bridge.
 
 ## Key files
 
-| Part | Where |
-| --- | --- |
-| Plugin text | `packages/protocol/src/plugins.ts` (`pluginText`, `pluginKey`) |
-| Annotations | `src/features/plugins/Annotations.tsx` |
-| Settings form | `src/features/plugins/SettingsForm.tsx` |
-| Dashboard tab | `src/features/admin/Plugins.tsx` |
-| Plugin channels and views | `src/features/plugins/PluginChannel.tsx` |
-| Cards | `src/features/plugins/PluginCard.tsx` |
-| Bridge protocol | `spec/plugins.md` |
+| Part                      | Where                                                          |
+| ------------------------- | -------------------------------------------------------------- |
+| Plugin text               | `packages/protocol/src/plugins.ts` (`pluginText`, `pluginKey`) |
+| Annotations               | `src/features/plugins/Annotations.tsx`                         |
+| Settings form             | `src/features/plugins/SettingsForm.tsx`                        |
+| Dashboard tab             | `src/features/admin/Plugins.tsx`                               |
+| Plugin channels and views | `src/features/plugins/PluginChannel.tsx`                       |
+| Cards                     | `src/features/plugins/PluginCard.tsx`                          |
+| Bridge protocol           | `spec/plugins.md`                                              |

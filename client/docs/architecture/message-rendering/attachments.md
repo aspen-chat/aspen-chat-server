@@ -1,12 +1,12 @@
 # Attachments
 
-| Part | Where |
-| --- | --- |
-| Uploading | `AspenSync.uploadAttachment`, `upload.ts` (`packages/protocol/src/`) |
+| Part                       | Where                                                                               |
+| -------------------------- | ----------------------------------------------------------------------------------- |
+| Uploading                  | `AspenSync.uploadAttachment`, `upload.ts` (`packages/protocol/src/`)                |
 | Inline pictures and videos | `src/features/messages/Attachments.tsx` (`MessageMedia`, `InlineVideo`, `keptRoom`) |
-| Gallery | `ImageGallery.tsx` |
-| Records on demand | `useAttachment` |
-| Describing | `AttachmentDescriptionButton`, `AspenSync.describeAttachment` |
+| Gallery                    | `ImageGallery.tsx`                                                                  |
+| Records on demand          | `useAttachment`                                                                     |
+| Describing                 | `AttachmentDescriptionButton`, `AspenSync.describeAttachment`                       |
 
 ## Uploading
 
@@ -72,11 +72,11 @@ A picture or video may carry a description, in its uploader's words, for readers
 
 ### Where it shows
 
-| Place | How |
-| --- | --- |
-| Inline and in the gallery | The picture's text alternative (`pictureAlt`, which falls back to "Image: {name}"). |
-| Beneath the picture in the gallery | Shown, and hidden from assistive technology there, which has it already. |
-| A video's download chip | Its `aria-description`. |
+| Place                              | How                                                                                 |
+| ---------------------------------- | ----------------------------------------------------------------------------------- |
+| Inline and in the gallery          | The picture's text alternative (`pictureAlt`, which falls back to "Image: {name}"). |
+| Beneath the picture in the gallery | Shown, and hidden from assistive technology there, which has it already.            |
+| A video's download chip            | Its `aria-description`.                                                             |
 
 ### Writing one
 

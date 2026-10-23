@@ -4,13 +4,13 @@ Tags are `<@user>`, `<@&role>`, and `@everyone`.
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| Drawing tags | `remarkMentions`, `Mention` (`src/features/messages`) |
-| Completing tags in a message box | `useTagging` (`src/features/mentions`), `SuggestionList` |
-| Encoding and decoding | `encodeTags`, `decodeTags` |
-| Unread tag counts | `MentionBadge`, `placeMentions`, `RecordStore.mentionsMe` |
-| End-to-end test | `e2e/tagging.spec.ts` |
+| Part                             | Where                                                     |
+| -------------------------------- | --------------------------------------------------------- |
+| Drawing tags                     | `remarkMentions`, `Mention` (`src/features/messages`)     |
+| Completing tags in a message box | `useTagging` (`src/features/mentions`), `SuggestionList`  |
+| Encoding and decoding            | `encodeTags`, `decodeTags`                                |
+| Unread tag counts                | `MentionBadge`, `placeMentions`, `RecordStore.mentionsMe` |
+| End-to-end test                  | `e2e/tagging.spec.ts`                                     |
 
 ## Drawing tags in messages
 

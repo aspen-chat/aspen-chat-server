@@ -2,12 +2,12 @@
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| The resolver | `packages/protocol/src/permissions.ts` (mirrors the server's `app::permissions`) |
-| Shared test cases | `spec/permission_vectors.json` at the repository root |
-| Management UI | `src/features/community-settings` |
-| Name colours | `src/features/users/nameColor.ts`, `src/theme/nameColors.ts`, `nameHueOf` (`packages/protocol/src/nameHue.ts`) |
+| Part              | Where                                                                                                          |
+| ----------------- | -------------------------------------------------------------------------------------------------------------- |
+| The resolver      | `packages/protocol/src/permissions.ts` (mirrors the server's `app::permissions`)                               |
+| Shared test cases | `spec/permission_vectors.json` at the repository root                                                          |
+| Management UI     | `src/features/community-settings`                                                                              |
+| Name colours      | `src/features/users/nameColor.ts`, `src/theme/nameColors.ts`, `nameHueOf` (`packages/protocol/src/nameHue.ts`) |
 
 ## Resolving permissions
 
@@ -28,10 +28,10 @@ The store holds:
 They come from the `roles` sideload, which the bootstrap and `loadCommunity` ask for, and from
 `role`, `channelOverride`, `categoryOverride`, and `userCommunity` events.
 
-| Question | Store method | Topic | Hooks |
-| --- | --- | --- | --- |
-| What may the caller do in a community? | `access(communityId)` | `access:<id>` | `useAccess`, `useCan` |
-| What may the caller do in a channel? | `channelAccess(channelId)` | `channelAccess:<id>` | `useChannelAccess`, `useChannelCan` |
+| Question                               | Store method               | Topic                | Hooks                               |
+| -------------------------------------- | -------------------------- | -------------------- | ----------------------------------- |
+| What may the caller do in a community? | `access(communityId)`      | `access:<id>`        | `useAccess`, `useCan`               |
+| What may the caller do in a channel?   | `channelAccess(channelId)` | `channelAccess:<id>` | `useChannelAccess`, `useChannelCan` |
 
 - A thread's channel permissions are its parent's.
 - In a DM the caller has every channel permission, and pinning.
@@ -53,13 +53,13 @@ Controls the caller may not use are not shown:
 
 ## Losing and gaining access
 
-| Change | What the client does |
-| --- | --- |
-| The caller loses sight of a channel | The store lets it go at once, as on `channelRemoved` |
-| The caller may gain some channels | `AspenSync` reads the community again after a random pause of at most `ACCESS_RELOAD_SPREAD_MS`, since the server sends nothing about channels a member could not see |
-| A category's own overrides no longer leave the caller View channel | The store lets go of the category and its overrides. Its channels the caller may still view stay filed under it, and the sidebar shows them at the top level |
-| A `categoryOverride` about a category the store does not hold | The store reads the community again |
-| The caller loses Manage invites | The store lets go of every invite but the caller's own. Without it the server sends only the caller's own |
+| Change                                                             | What the client does                                                                                                                                                  |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The caller loses sight of a channel                                | The store lets it go at once, as on `channelRemoved`                                                                                                                  |
+| The caller may gain some channels                                  | `AspenSync` reads the community again after a random pause of at most `ACCESS_RELOAD_SPREAD_MS`, since the server sends nothing about channels a member could not see |
+| A category's own overrides no longer leave the caller View channel | The store lets go of the category and its overrides. Its channels the caller may still view stay filed under it, and the sidebar shows them at the top level          |
+| A `categoryOverride` about a category the store does not hold      | The store reads the community again                                                                                                                                   |
+| The caller loses Manage invites                                    | The store lets go of every invite but the caller's own. Without it the server sends only the caller's own                                                             |
 
 - Categories follow the same rule as channels, by their own overrides alone.
 - A category the store does not hold counts in `channelAccess` as denying View channel. A
@@ -80,12 +80,12 @@ Opened from the wrench in the sidebar's header, by pressing or right-clicking th
 above its channels, and from its menu on the rail (`CommunitySettingsModal`, the same modal
 without the wrench).
 
-| Section | Holds |
-| --- | --- |
+| Section  | Holds                                                                                                                                                                                                                                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Overview | Name and icon, for holders of Manage community New members (the default channel, among the text channels they can see, and "Don't post a message when someone joins", each saved as it changes; see the server's `docs/architecture/joining.md`), the caller's own nickname, ownership, delete or leave |
-| Layout | For holders of Manage channels or Manage categories: `LayoutPanel`, the channels and categories as one list to arrange, rename, and delete, and New category (see [rail-and-channel-list.md](rail-and-channel-list.md)) |
-| Roles | Templates, and a grouped `PermissionChecklist` whose unheld permissions are disabled |
-| Members | Each member by their nickname, with their roles, Remove, Clear nickname (Manage nicknames; see [profiles-and-icons.md](profiles-and-icons.md)), and Ban for holders of Ban members, over those ranked below them (`useMemberModeration`, which a person's menu shares) |
+| Layout   | For holders of Manage channels or Manage categories: `LayoutPanel`, the channels and categories as one list to arrange, rename, and delete, and New category (see [rail-and-channel-list.md](rail-and-channel-list.md))                                                                                 |
+| Roles    | Templates, and a grouped `PermissionChecklist` whose unheld permissions are disabled                                                                                                                                                                                                                    |
+| Members  | Each member by their nickname, with their roles, Remove, Clear nickname (Manage nicknames; see [profiles-and-icons.md](profiles-and-icons.md)), and Ban for holders of Ban members, over those ranked below them (`useMemberModeration`, which a person's menu shares)                                  |
 
 ### Bans
 

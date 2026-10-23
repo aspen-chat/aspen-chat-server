@@ -5,13 +5,13 @@ are in [push-design-notes.md](push-design-notes.md).
 
 ## Where it lives
 
-| Part | Where |
-| --- | --- |
-| Asking, registering, subscribing | `WakeThisPhone` (`src/api/push.tsx`) |
-| Relay subscriptions and decryption | `syncPush` (`packages/protocol/src/push.ts`) |
-| Native plugin bridge | `AspenPush` (`src/api/pushBridge.ts`) |
-| Android | `packages/mobile/android`: `AspenPushPlugin`, `AspenMessagingService`, `PushHandler`, `WebPush` |
-| iOS | `packages/mobile/ios/App`: `AspenPushPlugin.swift`, `PushState.swift`, `NotificationService.swift`, `WebPush.swift`, `AppDelegate` |
+| Part                               | Where                                                                                                                              |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Asking, registering, subscribing   | `WakeThisPhone` (`src/api/push.tsx`)                                                                                               |
+| Relay subscriptions and decryption | `syncPush` (`packages/protocol/src/push.ts`)                                                                                       |
+| Native plugin bridge               | `AspenPush` (`src/api/pushBridge.ts`)                                                                                              |
+| Android                            | `packages/mobile/android`: `AspenPushPlugin`, `AspenMessagingService`, `PushHandler`, `WebPush`                                    |
+| iOS                                | `packages/mobile/ios/App`: `AspenPushPlugin.swift`, `PushState.swift`, `NotificationService.swift`, `WebPush.swift`, `AppDelegate` |
 
 ## In the app
 
@@ -102,13 +102,13 @@ The `AppDelegate` posts APNs registration to the Capacitor push plugin.
 
 ## Testing
 
-| Check | What it does |
-| --- | --- |
-| `ios/scripts/check_webpush.sh` | Runs `WebPush.swift` against RFC 8291's example with `swiftc`; no target needed |
-| `xcrun simctl push <device> com.aspen-chat.client payload.json` | Delivers a push to the simulator without APNs or the relay, with `aspen.s` and `aspen.c` as the relay would send them. Shows only the placeholder |
+| Check                                                                    | What it does                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ios/scripts/check_webpush.sh`                                           | Runs `WebPush.swift` against RFC 8291's example with `swiftc`; no target needed                                                                                                                                                                                       |
+| `xcrun simctl push <device> com.aspen-chat.client payload.json`          | Delivers a push to the simulator without APNs or the relay, with `aspen.s` and `aspen.c` as the relay would send them. Shows only the placeholder                                                                                                                     |
 | `ios/scripts/check_notification.sh state.json payload.json [shown.json]` | Runs the extension's work on a Mac with its own sources, on a kept state and such a payload. Reaches the deployment the state names and prints what the notification would show; given `shown.json`, writes there the payload of that notification, for `simctl push` |
-| `ios/scripts/ui_tests.py` | Runs the iOS UI tests, among them a tapped notification's, end to end through `scripts/push_relay_stand_in.py` (see `ios-app.md`) |
-| `pnpm --filter @aspen/mobile test:android` | Runs the JVM tests and, on a connected device or emulator, the handler end to end against a stand-in deployment |
+| `ios/scripts/ui_tests.py`                                                | Runs the iOS UI tests, among them a tapped notification's, end to end through `scripts/push_relay_stand_in.py` (see `ios-app.md`)                                                                                                                                     |
+| `pnpm --filter @aspen/mobile test:android`                               | Runs the JVM tests and, on a connected device or emulator, the handler end to end against a stand-in deployment                                                                                                                                                       |
 
 - The simulator's bridge adds the notification as a request directly, never through the path
   that launches service extensions. The extension runs only on a device.
@@ -122,7 +122,7 @@ The `AppDelegate` posts APNs registration to the Capacitor push plugin.
 holds the web view's sessions on each deployment and the push state's keys. The person signs in
 again on a new phone.
 
-| Platform | How |
-| --- | --- |
-| Android | The manifest sets `android:allowBackup="false"`. `res/xml/data_extraction_rules.xml` excludes every domain from cloud backup and from moving to a new device, which Android 12 and later do even without backups |
-| iOS | The push state's keychain item is `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. `PushStateStore` moves an item kept otherwise to it on every read. The app marks the web view's data directory, `Library/WebKit`, excluded from backup at every launch (`AppDelegate`) |
+| Platform | How                                                                                                                                                                                                                                                                          |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Android  | The manifest sets `android:allowBackup="false"`. `res/xml/data_extraction_rules.xml` excludes every domain from cloud backup and from moving to a new device, which Android 12 and later do even without backups                                                             |
+| iOS      | The push state's keychain item is `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. `PushStateStore` moves an item kept otherwise to it on every read. The app marks the web view's data directory, `Library/WebKit`, excluded from backup at every launch (`AppDelegate`) |

@@ -4,11 +4,11 @@ Annotations are what plugins say about a message or a person.
 
 ## On messages
 
-| Part | Name |
-| --- | --- |
-| Store | `RecordStore.annotations` |
-| Topic | `annotations:<messageId>` |
-| Hook | `useAnnotations` |
+| Part     | Name                                                          |
+| -------- | ------------------------------------------------------------- |
+| Store    | `RecordStore.annotations`                                     |
+| Topic    | `annotations:<messageId>`                                     |
+| Hook     | `useAnnotations`                                              |
 | Drawn by | `MessageAnnotations` (`src/features/plugins/Annotations.tsx`) |
 
 How they arrive:
@@ -32,12 +32,12 @@ popover saying which plugin said it, with its detail and link, so nothing depend
 
 ## On people
 
-| Part | Name |
-| --- | --- |
-| Read | when their card first shows them: `useUserAnnotations`, `AspenSync.loadUserAnnotations` |
-| Topic | `userAnnotations:<userId>` |
-| Kept current by | `userAnnotation` events |
-| Drawn by | `UserAnnotations` on `ProfileCard` |
+| Part            | Name                                                                                    |
+| --------------- | --------------------------------------------------------------------------------------- |
+| Read            | when their card first shows them: `useUserAnnotations`, `AspenSync.loadUserAnnotations` |
+| Topic           | `userAnnotations:<userId>`                                                              |
+| Kept current by | `userAnnotation` events                                                                 |
+| Drawn by        | `UserAnnotations` on `ProfileCard`                                                      |
 
 ## Changed by a plugin
 

@@ -135,11 +135,7 @@ export function unreadPlaces(
   const places = new Set<string>();
   for (const state of readStates.values()) {
     const channel = channels.get(state.channel);
-    if (
-      channel !== undefined &&
-      !muted(state.channel) &&
-      isUnread(readStates.get(state.channel))
-    ) {
+    if (channel !== undefined && !muted(state.channel) && isUnread(readStates.get(state.channel))) {
       places.add(channel.community ?? UNREAD_DMS);
     }
   }

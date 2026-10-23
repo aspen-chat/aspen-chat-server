@@ -6,16 +6,16 @@ Design notes: [deployments-design-notes.md](deployments-design-notes.md).
 
 ## Where it lives
 
-| Part | Code |
-| --- | --- |
-| The deployments a user uses | `Deployments`, `packages/protocol/src/deployments.ts` |
-| Their clients and syncs | `DeploymentsProvider`, `src/api/deployments.tsx` |
-| Reading across deployments | `useSources`, `useEverywhere` (`src/api/everywhere.ts`) |
-| Protocol versions | `CLIENT_PROTOCOL`, `commonVersion` (`packages/protocol/src/protocol.ts`) |
-| Identities | `identityOf` (`packages/protocol/src/identity.ts`), `useBlockedAnywhere` (`src/api/identity.ts`) |
-| One call at a time | `useOneCallAtATime`, `src/api/calls.ts` |
-| File transfers in calls | `FileTransfers`, `packages/protocol/src/transfers.ts` |
-| File names | `plainFileName`, `packages/protocol/src/fileNames.ts` |
+| Part                        | Code                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------ |
+| The deployments a user uses | `Deployments`, `packages/protocol/src/deployments.ts`                                            |
+| Their clients and syncs     | `DeploymentsProvider`, `src/api/deployments.tsx`                                                 |
+| Reading across deployments  | `useSources`, `useEverywhere` (`src/api/everywhere.ts`)                                          |
+| Protocol versions           | `CLIENT_PROTOCOL`, `commonVersion` (`packages/protocol/src/protocol.ts`)                         |
+| Identities                  | `identityOf` (`packages/protocol/src/identity.ts`), `useBlockedAnywhere` (`src/api/identity.ts`) |
+| One call at a time          | `useOneCallAtATime`, `src/api/calls.ts`                                                          |
+| File transfers in calls     | `FileTransfers`, `packages/protocol/src/transfers.ts`                                            |
+| File names                  | `plainFileName`, `packages/protocol/src/fileNames.ts`                                            |
 
 ## Signing in abroad
 
@@ -49,12 +49,12 @@ Each deployment has:
 
 `AspenClientContext` and `AspenSyncContext` are the deployment being shown. Every component that calls `useSync()` acts where it is shown.
 
-| Scope | Puts in place |
-| --- | --- |
-| (default) | The home |
-| `ForeignScope` | Under `/at/{domain}`, that deployment |
-| `HomeScope` | The home again, for what is the account's: the user footer, settings, security, bots, sign-out |
-| `SourceScope` | One deployment for each entry of a list that mixes them |
+| Scope          | Puts in place                                                                                  |
+| -------------- | ---------------------------------------------------------------------------------------------- |
+| (default)      | The home                                                                                       |
+| `ForeignScope` | Under `/at/{domain}`, that deployment                                                          |
+| `HomeScope`    | The home again, for what is the account's: the user footer, settings, security, bots, sign-out |
+| `SourceScope`  | One deployment for each entry of a list that mixes them                                        |
 
 ## Reading across deployments
 
@@ -78,11 +78,11 @@ An invite's shared link names its deployment: `/invite/{code}?at={domain}`. It i
 
 ## Adding, leaving, and signing out
 
-| Action | Where |
-| --- | --- |
-| Add a server | The add dialog's last option (`OtherServerForm`) |
-| Leave one | Settings (`OtherServersSection`) |
-| Sign out | Signing out at home signs out everywhere (`useSignOut`) |
+| Action       | Where                                                   |
+| ------------ | ------------------------------------------------------- |
+| Add a server | The add dialog's last option (`OtherServerForm`)        |
+| Leave one    | Settings (`OtherServersSection`)                        |
+| Sign out     | Signing out at home signs out everywhere (`useSignOut`) |
 
 ## DMs
 
@@ -138,10 +138,10 @@ An offered file's name is shown and saved without format and control characters 
 
 In the mobile apps, a receiver chooses where a file goes through `AspenFilesPlugin`:
 
-| Platform | Code | Behaviour |
-| --- | --- | --- |
-| Android | `android/.../files/` | `DocumentSinkTest` checks the native side on a device |
-| iOS | `ios/App/App/AspenFilesPlugin.swift` | The user picks a folder, and the file is made in it under the name it was sent with |
+| Platform | Code                                 | Behaviour                                                                           |
+| -------- | ------------------------------------ | ----------------------------------------------------------------------------------- |
+| Android  | `android/.../files/`                 | `DocumentSinkTest` checks the native side on a device                               |
+| iOS      | `ios/App/App/AspenFilesPlugin.swift` | The user picks a folder, and the file is made in it under the name it was sent with |
 
 `filesBridge.ts` wraps the plugin as a `FileSink`, writing through the bridge in base64 pieces of about a megabyte.
 

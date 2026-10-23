@@ -940,7 +940,12 @@ describe("RecordStore mutes", () => {
       until: "2026-09-28T13:00:00Z",
     });
     expect(store.mute(dev.id)).toEqual({ until: "2026-09-28T13:00:00Z", category: null });
-    store.applyEvent({ serverEvent: "channelMuteChanged", channel: dev.id, muted: null, until: null });
+    store.applyEvent({
+      serverEvent: "channelMuteChanged",
+      channel: dev.id,
+      muted: null,
+      until: null,
+    });
     expect(store.mute(dev.id)?.category).toBe(work.id);
     store.expireMutes(Date.parse("2026-09-28T12:00:00Z"));
     expect(store.mute(dev.id)).toBeUndefined();
