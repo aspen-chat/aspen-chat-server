@@ -42,38 +42,40 @@ A voice server reads `voice_server.toml` the same way, with the prefix `ASPEN_VO
 
 ### `aspen.toml`
 
-| Section                                                                                                | Page                                                         | What it sets                                                        |
-| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------------- |
-| `public_url`                                                                                           | [Address and web client](address.md#the-deployments-address) | The deployment's one address. **Can never change once federating.** |
-| `[web_client]`                                                                                         | [Address and web client](address.md#web_client)              | Where the built web client is.                                      |
-| `database_url`, `database_pool_*`, `nats_*`, `[nats_user]`, `[nats.tls]`, `valkey_url`, `[valkey.tls]` | [Services](services.md#the-services)                         | PostgreSQL, NATS, and Valkey.                                       |
-| `event_queue_size`, `event_feed_shards`, `event_retained_mib`                                          | [Connections](connections.md#event-delivery)                 | Delivering events to connected clients.                             |
-| `[connections]`                                                                                        | [Connections](connections.md#connections)                    | What the listener admits, and timeouts.                             |
-| `[auth]`                                                                                               | [Accounts](accounts.md#auth)                                 | Reverification and password hashing.                                |
-| `[limits]`                                                                                             | [Accounts](accounts.md#limits)                               | Communities per account, event streams per account and address.     |
-| `[presence]`                                                                                           | [Accounts](accounts.md#presence)                             | When people show as away.                                           |
-| `[media]`                                                                                              | [Media](media.md#media)                                      | Attachment size and served types.                                   |
-| `[media.s3]`                                                                                           | [Media](media.md#medias3)                                    | Object storage.                                                     |
-| `[media.s3.tls]`                                                                                       | [Media](media.md#medias3tls)                                 | Authorities to trust for the storage's `endpoint`.                  |
-| `[media.previews]`                                                                                     | [Previews](previews.md#mediapreviews)                        | Previews of pictures and videos' posters.                           |
-| `[voice]`                                                                                              | [Voice](voice.md#voice)                                      | Voice server failures, join tokens, and idle calls.                 |
-| `[plugins]`                                                                                            | [Plugins](plugins.md#plugins)                                | Plugin time, memory, concurrency, notice, and storage limits.       |
-| `[jobs]`                                                                                               | [Jobs](jobs.md#jobs)                                         | Whether this server runs background jobs, and how many at once.     |
-| `[search]`                                                                                             | [Search](search.md#search)                                   | How many long searches read at once, and for how long per request.  |
-| `[push]`                                                                                               | [Push](push.md#push)                                         | Waking phones.                                                      |
-| `[email]`                                                                                              | [Email](email.md#email)                                      | Sending mail.                                                       |
-| `[email.tls]`                                                                                          | [Email](email.md#emailtls)                                   | Authorities and a client certificate for the SMTP server.           |
-| `[metrics]`                                                                                            | [Metrics](metrics.md#metrics)                                | The Prometheus endpoint.                                            |
-| `[rate_limits]`                                                                                        | [Rate limits](rate-limits.md#rate_limits)                    | Rate limits and trusted proxies.                                    |
-| `[federation]`                                                                                         | [Federation](federation.md#federation)                       | Standing checks and arrivals.                                       |
-| `[federation.development]`                                                                             | [Federation](federation.md#federationdevelopment)            | Deployments side by side on one machine.                            |
+| Section                                                                                                | Page                                                           | What it sets                                                        |
+| ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `public_url`                                                                                           | [Address and web client](address.md#the-deployments-address)   | The deployment's one address. **Can never change once federating.** |
+| `[web_client]`                                                                                         | [Address and web client](address.md#web_client)                | Where the built web client is.                                      |
+| `database_url`, `database_pool_*`, `nats_*`, `[nats_user]`, `[nats.tls]`, `valkey_url`, `[valkey.tls]` | [Services](services.md#the-services)                           | PostgreSQL, NATS, and Valkey.                                       |
+| `event_queue_size`, `event_feed_shards`, `event_retained_mib`                                          | [Connections](connections.md#event-delivery)                   | Delivering events to connected clients.                             |
+| `[connections]`                                                                                        | [Connections](connections.md#connections)                      | What the listener admits, and timeouts.                             |
+| `[auth]`                                                                                               | [Accounts](accounts.md#auth)                                   | Reverification and password hashing.                                |
+| `[limits]`                                                                                             | [Accounts](accounts.md#limits)                                 | Communities per account, event streams per account and address.     |
+| `[presence]`                                                                                           | [Accounts](accounts.md#presence)                               | When people show as away.                                           |
+| `[media]`                                                                                              | [Media](media.md#media)                                        | Attachment size and served types.                                   |
+| `[media.s3]`                                                                                           | [Media](media.md#medias3)                                      | Object storage.                                                     |
+| `[media.s3.tls]`                                                                                       | [Media](media.md#medias3tls)                                   | Authorities to trust for the storage's `endpoint`.                  |
+| `[media.previews]`                                                                                     | [Previews](previews.md#mediapreviews)                          | Previews of pictures and videos' posters.                           |
+| `[voice]`                                                                                              | [Voice](voice.md#voice)                                        | Voice server failures, join tokens, and idle calls.                 |
+| `[plugins]`                                                                                            | [Plugins](plugins.md#plugins)                                  | Plugin time, memory, concurrency, notice, and storage limits.       |
+| `[jobs]`                                                                                               | [Jobs](jobs.md#jobs)                                           | Whether this server runs background jobs, and how many at once.     |
+| `[search]`                                                                                             | [Search](search.md#search)                                     | How many long searches read at once, and for how long per request.  |
+| `[push]`                                                                                               | [Push](push.md#push)                                           | Waking phones.                                                      |
+| `[identity_providers]`                                                                                 | [Identity providers](identity-providers.md#identity_providers) | Reaching the providers people sign in through.                      |
+| `[email]`                                                                                              | [Email](email.md#email)                                        | Sending mail.                                                       |
+| `[email.tls]`                                                                                          | [Email](email.md#emailtls)                                     | Authorities and a client certificate for the SMTP server.           |
+| `[metrics]`                                                                                            | [Metrics](metrics.md#metrics)                                  | The Prometheus endpoint.                                            |
+| `[rate_limits]`                                                                                        | [Rate limits](rate-limits.md#rate_limits)                      | Rate limits and trusted proxies.                                    |
+| `[federation]`                                                                                         | [Federation](federation.md#federation)                         | Standing checks and arrivals.                                       |
+| `[federation.development]`                                                                             | [Federation](federation.md#federationdevelopment)              | Deployments side by side on one machine.                            |
 
 ### In the database
 
-| What                                               | Page                                          |
-| -------------------------------------------------- | --------------------------------------------- |
-| Deployment settings (`aspen-chat-server settings`) | [Deployment settings](deployment-settings.md) |
-| Voice servers (`aspen-chat-server voice-servers`)  | [Voice](voice.md#voice-servers)               |
+| What                                                        | Page                                                          |
+| ----------------------------------------------------------- | ------------------------------------------------------------- |
+| Deployment settings (`aspen-chat-server settings`)          | [Deployment settings](deployment-settings.md)                 |
+| Voice servers (`aspen-chat-server voice-servers`)           | [Voice](voice.md#voice-servers)                               |
+| Identity providers (`aspen-chat-server identity-providers`) | [Identity providers](identity-providers.md#adding-a-provider) |
 
 ### `voice_server.toml`
 

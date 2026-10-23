@@ -47,6 +47,11 @@ ALTER TABLE refresh_token
     ADD COLUMN identity_provider UUID REFERENCES identity_provider (id),
     ADD COLUMN identity_provider_session TEXT;
 
+-- A sign-in through a provider proves one factor or two (`login::SignInMethod`).
+ALTER TABLE refresh_token DROP CONSTRAINT refresh_token_method_check,
+    ADD CONSTRAINT refresh_token_method_check CHECK (method IN
+        ('password', 'secondFactor', 'passkey', 'token', 'identityProvider', 'identityProviderTwoFactor'));
+
 CREATE INDEX refresh_token_identity_provider ON refresh_token (identity_provider, identity_provider_session)
     WHERE identity_provider IS NOT NULL;
 

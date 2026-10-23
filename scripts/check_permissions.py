@@ -9,7 +9,9 @@ event stream, a call in progress on the voice server, the operator commands, and
 `AGENTS.md`'s revocation checklist names what each feature must answer; this is where the
 answers are checked. Add a scenario here with each feature that grants or shows something.
 
-Needs Python 3.10 and nothing beyond its standard library, and `docker compose` with the
+Needs Python 3.10 and nothing beyond its standard library but the `openssl` command, which the
+stand-in identity provider signs with and the development authority issues its certificate with
+(`oidc_provider_stand_in`, `dev_ca`), and `docker compose` with the
 database, valkey, and seaweedfs services up (`--start-services` starts them) and the NATS image
 the stack runs its own of.
 """
@@ -21,6 +23,7 @@ import base64
 import hashlib
 import json
 import shutil
+import ssl
 import struct
 import subprocess
 import sys
@@ -33,6 +36,8 @@ import uuid
 import zlib
 from pathlib import Path
 
+import dev_ca
+import oidc_provider_stand_in
 from stack import REPO, Failed, Ports, Stack, WebSocket, compose, psql, start_services, wait_for, wait_for_services
 
 PORTS = Ports(nats=14322, api=18100, voice=19101, api_metrics=19564, voice_metrics=19565, rtc_min=45200, rtc_max=45399,
@@ -40,8 +45,13 @@ PORTS = Ports(nats=14322, api=18100, voice=19101, api_metrics=19564, voice_metri
 PASSWORD = "check-permissions-password"
 # Scenarios make several accounts and many changes in moments, as no person would. Mail goes to
 # an SMTP port nothing listens on, so what is queued stays among the jobs to be read.
+# The stand-in identity provider is on this machine, with a certificate from the development
+# authority.
 SETTINGS = ("[rate_limits]\nenabled = false\n"
-            "[email]\nsmtp_url = \"smtp://127.0.0.1:9\"\nfrom = \"Aspen <noreply@localhost>\"\n")
+            "[email]\nsmtp_url = \"smtp://127.0.0.1:9\"\nfrom = \"Aspen <noreply@localhost>\"\n"
+            f"[identity_providers]\nallow_private_addresses = true\nca_file = {json.dumps(str(dev_ca.CA))}\n")
+# Where the stand-in identity provider listens (`oidc_provider_stand_in`).
+OIDC_PORT = 18443
 
 
 def eventually(probe, seconds: float = 15) -> bool:
@@ -1491,6 +1501,175 @@ def device_links(world: World, check: Checks) -> None:
     check("as the giver", got.get("userId") == world.member["id"], got)
     check("and once", claim(link) == 404)
 
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def redirected_to(url: str) -> str:
+    """Where `url` sends the browser, as a browser would be sent: the stand-in provider over TLS
+    from the development authority, and the chat server's callback."""
+    opener = urllib.request.build_opener(
+        NoRedirects, urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=str(dev_ca.CA))))
+    try:
+        with opener.open(url, timeout=15) as response:
+            raise Failed(f"{url} answered {response.status}, not a redirect")
+    except urllib.error.HTTPError as error:
+        if error.code not in (302, 303):
+            raise Failed(f"{url} answered {error.code}: {error.read()[:300]!r}")
+        return error.headers["location"]
+
+
+def provider_flow(stack: Stack, provider: str, purpose: str, token: str | None = None) -> tuple[int, dict, str, str]:
+    """Runs a flow through the stand-in as the web client and the browser would: starts it, follows
+    the provider and the callback, and claims what came back. Answers the claim's status and body,
+    the flow's id, and its verifier."""
+    verifier = base64.urlsafe_b64encode(uuid.uuid4().bytes * 2).rstrip(b"=").decode()
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    started = stack.api("POST", "/auth/identity-provider-flows",
+                        {"provider": provider, "purpose": purpose, "codeChallenge": challenge}, token)
+    back = redirected_to(redirected_to(started["authorizeUrl"]))
+    returned = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(back).fragment))
+    status, text = stack.request("POST", f"/auth/identity-provider-flows/{returned['flow']}/claim",
+                                 {"codeVerifier": verifier, "code": returned["code"]}, token)
+    return status, json.loads(text) if text else {}, returned["flow"], verifier
+
+
+def back_channel_logout(stack: Stack, token: str) -> int:
+    data = urllib.parse.urlencode({"logout_token": token}).encode()
+    request = urllib.request.Request(f"{stack.base}/auth/oidc/back-channel-logout", data=data, method="POST",
+                                     headers={"content-type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+
+
+def identity_providers(world: World, check: Checks) -> None:
+    say("identity providers: signing in through one, its logouts, and its links")
+    stack = world.stack
+    with oidc_provider_stand_in.Provider(OIDC_PORT) as idp:
+        secret = stack.work / f"idp-secret-{world.run}"
+        secret.write_text(idp.client_secret)
+        name = f"Stand-in {world.run}"
+        stack.command("identity-providers", "add", name, "--issuer", idp.issuer, "--client-id", idp.client_id,
+                      "--client-secret-file", str(secret))
+        offered = [p for p in stack.api("GET", "/auth/methods")["identityProviders"] if p["name"] == name]
+        check("the sign-in screen offers the provider an operator added", len(offered) == 1, offered)
+        provider = offered[0]["id"]
+        sub, username = f"sub-{world.run}", f"idp{world.run}"
+
+        idp.sign_in_next(sub=sub, amr=["pwd"], sid="first", preferred_username=username, name="Provider Person")
+        status, claimed, flow, verifier = provider_flow(stack, provider, "signIn")
+        check("a first sign-in offers an account", claimed.get("outcome") == "accountRequired", claimed)
+        check("named as the provider names them", claimed.get("suggestedName") == username, claimed)
+        made = stack.api("POST", f"/auth/identity-provider-flows/{flow}/account",
+                         {"codeVerifier": verifier, "name": username})
+        first = {"token": made["sessionToken"], "refresh": made["refreshToken"]}
+        account = made["userId"]
+        check("and makes it", stack.status("POST", f"/auth/identity-provider-flows/{flow}/account",
+                                           {"codeVerifier": verifier, "name": username + "x"}) == 404)
+        idp.sign_in_next(sub=sub, amr=["pwd"], sid="second")
+        status, claimed, _, _ = provider_flow(stack, provider, "signIn")
+        check("the same identity signs into the same account",
+              claimed.get("outcome") == "signedIn" and claimed.get("userId") == account, claimed)
+        second = {"token": claimed["sessionToken"], "refresh": claimed["refreshToken"]}
+        first_stream, second_stream = stack.events(first["token"]), stack.events(second["token"])
+        first_stream.gather(0.3)
+        second_stream.gather(0.3)
+
+        logout = idp.logout_token(sid="first")
+        check("a back-channel logout naming a session is taken", back_channel_logout(stack, logout) == 200)
+        first_stream.gather(1.0)
+        second_stream.gather(0.2)
+        check("and closes that sign-in's stream", first_stream.closed == 4401, first_stream.closed)
+        check("and its refresh token gives no session",
+              stack.status("POST", "/auth/token-refresh", {"refreshToken": first["refresh"]}) == 401)
+        check("but leaves the provider's other session", second_stream.closed is None, second_stream.closed)
+        check("a logout token used again is refused", back_channel_logout(stack, logout) == 400)
+        forged = idp.logout_token(sid="second", iss="https://elsewhere.localhost")
+        check("as is one from an issuer the server does not know", back_channel_logout(stack, forged) == 400)
+        nonce = idp.logout_token(sid="second", nonce="n")
+        check("and an ID token passed off as one", back_channel_logout(stack, nonce) == 400)
+        header, _, signature = idp.logout_token(sid="first").split(".")
+        payload = base64.urlsafe_b64encode(json.dumps(
+            {"iss": idp.issuer, "aud": idp.client_id, "iat": int(time.time()), "jti": "tampered",
+             "events": {oidc_provider_stand_in.LOGOUT_EVENT: {}}, "sid": "second"}).encode()).rstrip(b"=").decode()
+        check("and one whose claims were changed after signing",
+              back_channel_logout(stack, f"{header}.{payload}.{signature}") == 400)
+        second_stream.gather(0.3)
+        check("which leaves the session it named", second_stream.closed is None, second_stream.closed)
+
+        security = stack.api("GET", "/users/@me/security", token=second["token"])
+        check("the account has no password", security.get("hasPassword") is False, security)
+        identity = security["identities"][0]["id"]
+        status, text = stack.request("DELETE", f"/users/@me/identities/{identity}", token=second["token"])
+        check("its only way in cannot be unlinked", status == 409 and "lastSignInMethod" in text, (status, text))
+        stack.api("PUT", "/users/@me/password", {"newPassword": PASSWORD}, second["token"])
+        password = world.sign_in(username)
+        password_stream = stack.events(password["token"])
+        idp.sign_in_next(sub=sub, amr=["pwd", "otp"], sid="third")
+        status, claimed, _, _ = provider_flow(stack, provider, "signIn")
+        third_stream = stack.events(claimed["sessionToken"])
+        password_stream.gather(0.3)
+        third_stream.gather(0.3)
+        check("a sign-in that reports a second factor is signed in at once",
+              claimed.get("status") == "signedIn", claimed)
+        check("a logout naming only the person is taken",
+              back_channel_logout(stack, idp.logout_token(sub=sub)) == 200)
+        third_stream.gather(1.0)
+        password_stream.gather(0.2)
+        check("and ends every sign-in the provider made of them", third_stream.closed == 4401, third_stream.closed)
+        check("but not the one made with their password", password_stream.closed is None, password_stream.closed)
+
+        stale = world.sign_in(username)
+        psql(f"UPDATE refresh_token SET verified_at = now() - interval '1 day' WHERE \"user\" = '{account}'",
+             stack.database)
+        refused = stack.status("DELETE", f"/users/@me/identities/{identity}", token=stale["token"])
+        check("unlinking needs a recent verification", refused == 403, refused)
+        idp.sign_in_next(sub=sub, amr=["pwd"], sid="again")
+        status, claimed, _, _ = provider_flow(stack, provider, "reauthenticate", stale["token"])
+        check("verifying again at the provider counts", claimed.get("outcome") == "reauthenticated", claimed)
+        idp.sign_in_next(sub="someone-else", amr=["pwd"])
+        status, claimed, _, _ = provider_flow(stack, provider, "reauthenticate", stale["token"])
+        check("but not as someone else there", status == 401, (status, claimed))
+        check("after which it unlinks",
+              stack.status("DELETE", f"/users/@me/identities/{identity}", token=stale["token"]) == 204)
+        idp.sign_in_next(sub=sub, amr=["pwd"])
+        status, claimed, _, _ = provider_flow(stack, provider, "signIn")
+        check("and the identity signs that account in no more", claimed.get("outcome") == "accountRequired", claimed)
+
+        linker = world.sign_in(world.member["name"])
+        verifier = "w" * 43
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        idp.sign_in_next(sub=f"member-{world.run}", amr=["pwd"])
+        started = stack.api("POST", "/auth/identity-provider-flows",
+                            {"provider": provider, "purpose": "link", "codeChallenge": challenge}, linker["token"])
+        back = redirected_to(redirected_to(started["authorizeUrl"]))
+        returned = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(back).fragment))
+        stack.api("POST", "/auth/logout", {"refreshToken": linker["refresh"]}, linker["token"])
+        status, _ = stack.request("POST", f"/auth/identity-provider-flows/{returned['flow']}/claim",
+                                  {"codeVerifier": verifier, "code": returned["code"]}, world.member["token"])
+        check("a link whose starting sign-in ended links nothing", status == 403, status)
+        status, claimed, _, _ = provider_flow(stack, provider, "link", world.member["token"])
+        check("one from a standing sign-in links", claimed.get("outcome") == "linked", claimed)
+        status, claimed, _, _ = provider_flow(stack, provider, "signIn")
+        check("and that identity then signs the member in",
+              claimed.get("userId") == world.member["id"], claimed)
+
+        stack.command("identity-providers", "set", name, "--enabled", "false")
+        check("a disabled provider is offered no more",
+              all(p["id"] != provider for p in stack.api("GET", "/auth/methods")["identityProviders"]))
+        refused = stack.request("POST", "/auth/identity-provider-flows",
+                                {"provider": provider, "purpose": "signIn", "codeChallenge": challenge})
+        check("and starts no flow", refused[0] == 404 and "identityProviderUnavailable" in refused[1], refused)
+        stack.command("identity-providers", "remove", name)
+        check("removing it lets its links go",
+              eventually(lambda: psql(f"SELECT count(*) FROM user_identity WHERE provider = '{provider}'",
+                                      stack.database) == "0"))
+
+
 def name_colours(world: World, check: Checks) -> None:
     say("name colours, from a community role and a deployment role")
     stack = world.stack
@@ -2935,7 +3114,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
-             marking_unread, join_messages]
+             marking_unread, join_messages, identity_providers]
 
 
 def main() -> None:
@@ -2950,6 +3129,7 @@ def main() -> None:
         say("starting the database, Valkey, and SeaweedFS")
         start_services()
     wait_for_services()
+    dev_ca.authority()
     check = Checks()
     try:
         say("starting a database and a NATS of its own, the chat server, and the voice server")

@@ -22,6 +22,10 @@ Code: `app::login` (`token_digest`, `sign_in_id`, `try_token_refresh`, `revoke_o
 - A sign-in's id (`login::sign_in_id`) is the first half of its refresh token's digest.
 - A refresh token is not rotated when used. It stands for its sign-in until it expires (a year) or
   the sign-in ends.
+- A sign-in made through an identity provider records the provider and the provider's session id
+  (`identity_provider`, `identity_provider_session`), which its back-channel logout ends it by (see
+  [Identity providers](identity-providers.md#back-channel-logout)). One given by a device link
+  copies them from the sign-in that gave it.
 
 ## Refreshing
 
