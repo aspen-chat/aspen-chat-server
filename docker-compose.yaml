@@ -17,7 +17,9 @@ services:
   nats:
     # 2.10 or later: the event stream reads several subjects with one consumer.
     image: nats:2.11-alpine
-    command: --jetstream --auth aspen_test
+    # `ASPEN_DEV_NATS_TOKEN` (in `.env` beside this file, say) gives it a token of its own, which a
+    # deployment other devices reach needs (docs/development/local-https.md).
+    command: --jetstream --auth ${ASPEN_DEV_NATS_TOKEN:-aspen_test}
     ports:
       - "${ASPEN_DEV_BIND:-127.0.0.1}:4222:4222"
   valkey:
@@ -37,6 +39,22 @@ services:
       - AWS_ACCESS_KEY_ID=GK484e56c38fb7e14b182bf47a
       - AWS_SECRET_ACCESS_KEY=6b49da9e42f7959cc946d7987a504763f6ec405b88abeeec08aa926b61316027
       - S3_BUCKET=aspen-media
+  caddy:
+    # TLS in front of a deployment on this machine for other devices to reach, at
+    # https://$ASPEN_DEV_HOST and names under it (scripts/caddy/Caddyfile), with a certificate
+    # from the development authority. Started only when asked for:
+    # `ASPEN_DEV_HOST=192-168-2-220.nip.io docker compose --profile https up -d caddy`; see
+    # docs/development/local-https.md.
+    image: caddy:2-alpine
+    profiles: ["https"]
+    network_mode: "host"
+    environment:
+      ASPEN_DEV_HOST: ${ASPEN_DEV_HOST:-}
+      ASPEN_DEV_HTTPS_PORT: ${ASPEN_DEV_HTTPS_PORT:-443}
+    volumes:
+      - ./scripts/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./target/dev-ca:/certs:ro
+      - caddydata:/data
   mailpit:
     # Catches the mail a development server sends (`[email] smtp_url = "smtp://localhost:1025"`)
     # and shows it at http://localhost:8025 instead of delivering it.
@@ -47,3 +65,4 @@ services:
 volumes:
   db:
   seaweeddata:
+  caddydata:

@@ -20,8 +20,7 @@ aspen-chat-server --cert fullchain.pem --key privkey.pem
 
 The server does not notice a renewed certificate. Restart it after renewing.
 
-Without `--cert` and `--key`, it makes a self-signed certificate for `localhost`. That only suits
-development.
+Without `--cert` and `--key`, and without `--no-https` (below), it refuses to start.
 
 ## Behind a reverse proxy
 

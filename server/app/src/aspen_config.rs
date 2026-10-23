@@ -16,7 +16,8 @@ pub struct AspenConfig {
     /// the deployment is built on it (invites, sign-in codes, mail), and the rest of what names
     /// the deployment follows from it as the config loads
     /// ([`AspenConfig::derive_from_public_url`]): passkeys belong to its host, and over `https`
-    /// its host is the federation domain.
+    /// its host is the federation domain. It is `http` only at this machine (`localhost`, a name
+    /// under it, or a loopback address), where browsers treat plain HTTP as secure.
     pub public_url: String,
     #[serde(default = "default_event_queue_size")]
     pub event_queue_size: usize,
@@ -1085,13 +1086,13 @@ pub fn is_loopback_host(host: &url::Host<&str>) -> bool {
 }
 
 impl AspenConfig {
-    /// Whether this deployment is one others may reach: `public_url` is `https` at a host that is
-    /// not this machine. Development deployments, `http` or under `localhost`
-    /// (`scripts/dev_federation.py`), may use what is meant only for development.
+    /// Whether this deployment is one others may reach: `public_url`'s host is not this machine,
+    /// which only an `https` one may be ([`AspenConfig::derive_from_public_url`]). Development
+    /// deployments, at `localhost` or a name under it (`scripts/dev_federation.py`), may use what
+    /// is meant only for development.
     pub fn is_public(&self) -> bool {
-        url::Url::parse(&self.public_url).is_ok_and(|url| {
-            url.scheme() == "https" && url.host().is_some_and(|host| !is_loopback_host(&host))
-        })
+        url::Url::parse(&self.public_url)
+            .is_ok_and(|url| url.host().is_some_and(|host| !is_loopback_host(&host)))
     }
 
     /// Refuses `[federation.development]` unless `public_url`'s host is this machine (`localhost`,
@@ -1191,6 +1192,13 @@ impl AspenConfig {
             ));
         }
         let https = parsed.scheme() == "https";
+        if !https && !parsed.host().is_some_and(|host| is_loopback_host(&host)) {
+            return Err(invalid(
+                "is http at a host that is not this machine; browsers elsewhere refuse passkeys, \
+                 Web Crypto, and service workers to such a page. Use https, with a certificate \
+                 from scripts/dev_ca.py in development",
+            ));
+        }
         self.federation.domain = match (https, parsed.host_str()) {
             (true, Some(host)) => {
                 let authority = match parsed.port() {
@@ -1326,9 +1334,19 @@ mod tests {
             ("http://localhost:5173".into(), None, some("localhost"))
         );
         assert_eq!(
-            derived("http://192.168.2.220:8000").unwrap(),
-            ("http://192.168.2.220:8000".into(), None, None)
+            derived("http://127.0.0.1:8000").unwrap(),
+            ("http://127.0.0.1:8000".into(), None, None)
         );
+        assert_eq!(
+            derived("https://192-168-2-220.nip.io").unwrap(),
+            (
+                "https://192-168-2-220.nip.io".into(),
+                some("192-168-2-220.nip.io"),
+                some("192-168-2-220.nip.io")
+            )
+        );
+        assert!(derived("http://192.168.2.220:8000").is_err());
+        assert!(derived("http://chat.example.org").is_err());
         assert!(derived("https://example.org/aspen").is_err());
         assert!(derived("https://example.org/?x=1").is_err());
         assert!(derived("https://user@example.org").is_err());
@@ -1551,7 +1569,7 @@ mod tests {
                 .check_credentials()
                 .is_err()
         );
-        for development in ["http://192.168.2.220:8000", "https://alpha.localhost:8443"] {
+        for development in ["http://localhost:5173", "https://alpha.localhost:8443"] {
             assert!(
                 config(development, "")
                     .check_development_credentials()
@@ -1600,7 +1618,7 @@ mod tests {
                     .is_ok()
             );
         }
-        for elsewhere in ["https://chat.example.org", "http://192.168.2.220:8000"] {
+        for elsewhere in ["https://chat.example.org", "https://192-168-2-220.nip.io"] {
             assert!(config(elsewhere, "").check_federation_development().is_ok());
             assert!(
                 config(elsewhere, private)

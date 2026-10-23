@@ -342,8 +342,9 @@ fn security_headers(config: &AspenConfig, headers: &mut HeaderMap) {
 /// upload), and any `https:` and `wss:` address: the client holds sessions on other
 /// deployments, whose APIs, storage, voice servers, and plugin views are anywhere, and plays
 /// videos in the players of the providers the server previews. An `http:` deployment, which is
-/// a development one, also reaches `http:` and `ws:` addresses, as its storage and voice servers
-/// are. Nothing may frame the page.
+/// at this machine alone (`AspenConfig::derive_from_public_url`), also reaches this machine's
+/// own addresses over `http:` and `ws:`, as its storage and voice servers may be. Nothing may
+/// frame the page.
 fn content_security_policy(public_url: &str, s3: &MediaS3Config) -> String {
     let development = public_url.starts_with("http://");
     let origin = |url: &str| {
@@ -360,7 +361,11 @@ fn content_security_policy(public_url: &str, s3: &MediaS3Config) -> String {
         url.set_scheme(scheme).ok()?;
         origin(url.as_str()).or_else(|| Some(url.as_str().trim_end_matches('/').to_string()))
     });
-    let plain = if development { " http:" } else { "" };
+    let plain = if development {
+        format!(" {}", loopback_sources("http"))
+    } else {
+        String::new()
+    };
     let join = |sources: &[Option<&str>]| {
         sources
             .iter()
@@ -376,7 +381,8 @@ fn content_security_policy(public_url: &str, s3: &MediaS3Config) -> String {
         Some("https: wss:"),
         storage.as_deref(),
         uploads.as_deref(),
-        development.then_some("http: ws:"),
+        development.then(|| loopback_sources("http")).as_deref(),
+        development.then(|| loopback_sources("ws")).as_deref(),
     ]);
     format!(
         "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
@@ -385,6 +391,14 @@ fn content_security_policy(public_url: &str, s3: &MediaS3Config) -> String {
          worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'none'; \
          form-action 'self'; frame-ancestors 'none'"
     )
+}
+
+/// This machine's own addresses over `scheme`, at any port. An IPv6 literal (`[::1]`) cannot
+/// be a CSP source, so `::1` is reached as `localhost`.
+fn loopback_sources(scheme: &str) -> String {
+    ["localhost", "*.localhost", "127.0.0.1"]
+        .map(|host| format!("{scheme}://{host}:*"))
+        .join(" ")
 }
 
 fn tags(state: &GlobalServerContext, base: &str, uri: &Uri, preview: Preview) -> Tags {
@@ -561,13 +575,21 @@ mod tests {
     }
 
     #[test]
-    fn a_development_policy_reaches_plain_http() {
+    fn a_development_policy_reaches_plain_http_on_this_machine_alone() {
         let policy = content_security_policy("http://localhost:5173", &MediaS3Config::default());
         assert!(policy.contains("http://127.0.0.1:3902"));
         assert!(policy.contains("http://127.0.0.1:3900"));
         assert!(policy.contains("ws://localhost:5173"));
-        assert!(policy.contains("http: ws:"));
-        assert!(policy.contains("frame-src 'self' https: http:;"));
+        assert!(policy.contains(
+            "http://localhost:* http://*.localhost:* http://127.0.0.1:* ws://localhost:* \
+             ws://*.localhost:* ws://127.0.0.1:*;"
+        ));
+        assert!(policy.contains(
+            "frame-src 'self' https: http://localhost:* http://*.localhost:* http://127.0.0.1:*;"
+        ));
+        assert!(!policy.contains(" http: "));
+        assert!(!policy.contains(" ws: "));
+        assert!(!policy.contains("http:;"));
     }
 
     #[test]

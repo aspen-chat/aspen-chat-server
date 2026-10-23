@@ -1,0 +1,42 @@
+# TLS in front of a development deployment, for reaching it from other devices: the `caddy`
+# service in docker-compose.yaml, with the certificate `scripts/dev_ca.py issue $ASPEN_DEV_HOST
+# '*.$ASPEN_DEV_HOST'` writes (docs/development/local-https.md). The deployment, its voice
+# server, and SeaweedFS's S3 API and filer each answer at a name of their own under the host, all
+# on one port. Every upstream is this machine's, speaking plain HTTP.
+{
+	# The certificates are given; nothing is fetched from an ACME authority, and nothing listens
+	# on port 80 to redirect.
+	auto_https off
+	servers {
+		protocols h1 h2
+	}
+}
+
+(dev_tls) {
+	tls /certs/{$ASPEN_DEV_HOST}.pem /certs/{$ASPEN_DEV_HOST}.key
+}
+
+https://{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTPS_PORT:443} {
+	import dev_tls
+	# `aspen-chat-server --no-https --port 8000`, with 127.0.0.1 among `[rate_limits]
+	# trusted_proxies` so each client is counted by its own address.
+	reverse_proxy {$ASPEN_DEV_API:127.0.0.1:8000}
+}
+
+https://voice.{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTPS_PORT:443} {
+	import dev_tls
+	reverse_proxy {$ASPEN_DEV_VOICE:127.0.0.1:9001}
+}
+
+# `[media.s3] public_endpoint`. Uploads are signed for this host, which Caddy passes on unchanged,
+# so SeaweedFS checks each signature against the name it was made for.
+https://s3.{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTPS_PORT:443} {
+	import dev_tls
+	reverse_proxy 127.0.0.1:8333
+}
+
+# `[media.s3] public_base_url`, the filer's `/buckets/<bucket>`.
+https://media.{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTPS_PORT:443} {
+	import dev_tls
+	reverse_proxy 127.0.0.1:8888
+}

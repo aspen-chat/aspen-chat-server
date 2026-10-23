@@ -11,10 +11,10 @@ either) with CORS for the web view, and answers `GET /stand-in/pushes?after=<n>`
 since the `n`th, for a test on another machine to read. It is plain HTTP, which only a
 development build of the app reaches, and only at this machine; with `--app-host`, the name or
 address the app reaches it by, it is HTTPS with a certificate for that host from
-`dev_federation.py`'s development authority, which the app's device must trust. The push side,
+the development authority (`dev_ca.py`), which the app's device must trust. The push side,
 HTTPS on loopback as `push.localhost` (`--push-port`) with a certificate from the same
 authority, takes what a deployment sends; the deployment trusts that authority through
-`[federation.development] extra_root_certificates` (`target/dev-federation/ca.pem`) and reaches
+`[federation.development] extra_root_certificates` (`target/dev-ca/ca.pem`) and reaches
 loopback with `allow_private_addresses`. A push is kept as the APNs payload the relay would
 send, which only the device it is for could decrypt; nothing is sent onward.
 """
@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from dev_federation import issue_certificate, make_certificates  # noqa: E402
+from dev_ca import issue  # noqa: E402
 
 HOST = "push.localhost"
 
@@ -183,15 +183,14 @@ def main() -> int:
     parser.add_argument("--push-port", type=int, default=7789)
     parser.add_argument("--app-host", help="serve the app side over HTTPS as this name or address")
     arguments = parser.parse_args()
-    make_certificates()
     AppSide.push_origin = f"https://{HOST}:{arguments.push_port}"
     app = ThreadingHTTPServer(("0.0.0.0", arguments.app_port), AppSide)
     app_origin = f"http://0.0.0.0:{arguments.app_port}"
     if arguments.app_host is not None:
-        app.socket = tls(*issue_certificate(arguments.app_host)).wrap_socket(app.socket, server_side=True)
+        app.socket = tls(*issue(arguments.app_host)).wrap_socket(app.socket, server_side=True)
         app_origin = f"https://{arguments.app_host}:{arguments.app_port}"
     push = ThreadingHTTPServer(("127.0.0.1", arguments.push_port), PushSide)
-    push.socket = tls(*issue_certificate(HOST)).wrap_socket(push.socket, server_side=True)
+    push.socket = tls(*issue(HOST)).wrap_socket(push.socket, server_side=True)
     threading.Thread(target=push.serve_forever, daemon=True).start()
     say(f"app side {app_origin}, push side {AppSide.push_origin}")
     try:

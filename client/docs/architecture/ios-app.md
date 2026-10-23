@@ -22,25 +22,25 @@ the app, and the app being suspended and resumed.
 ```
 scripts/push_relay_stand_in.py --app-host <host>                 # beside the deployment
 client/packages/mobile/ios/scripts/ui_tests.py --server https://<deployment> \
-    --relay https://<host>:7788 --trust target/dev-federation/ca.pem --build
+    --relay https://<host>:7788 --trust target/dev-ca/ca.pem --build
 ```
 
 The tests run a release build of the web app, which reaches everything over HTTPS (see
 `message-rendering/address-safety.md`, Transport): the deployment, its storage, its voice servers,
 and the stand-in, whose `--app-host` serves its app side over HTTPS with a certificate from the
-development authority. `--server` is the deployment as the simulator reaches it, and `--relay` the
-stand-in's app side. `--trust` has the simulator, and the wrapper, trust an authority, such as the
-development one. `--api` is the deployment as the Mac reaches it, when that differs (its plain port
-behind a TLS proxy): the extension's code run there trusts the system's authorities alone. The
-deployment needs these settings:
+development authority (`scripts/dev_ca.py`). `--server` is the deployment as the simulator reaches
+it, and `--relay` the stand-in's app side. `--trust` has the simulator, and the wrapper, trust an
+authority, such as the development one. `--api` is the deployment as the Mac reaches it, when that
+differs (its plain port behind a TLS proxy): the extension's code run there trusts the system's
+authorities alone. The deployment needs these settings:
 
-| Setting                                                                            | Why                                                                                         |
-| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `[federation.development] extra_root_certificates`, `target/dev-federation/ca.pem` | The stand-in's push side has a certificate from that authority                              |
-| `[federation.development] allow_private_addresses = true`                          | The stand-in's push side is on loopback, as `push.localhost`                                |
-| `[presence] away_after_seconds`, the wrapper's `--away-after` (15)                 | A user who has just used Aspen is not woken; the test waits that long after leaving the app |
-| `[media.s3] public_endpoint` and `public_base_url` over `https`                    | The photo test uploads its picture and looks for it                                         |
-| Its voice servers' `url` over `https`                                              | The call test joins one                                                                     |
+| Setting                                                                    | Why                                                                                         |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `[federation.development] extra_root_certificates`, `target/dev-ca/ca.pem` | The stand-in's push side has a certificate from that authority                              |
+| `[federation.development] allow_private_addresses = true`                  | The stand-in's push side is on loopback, as `push.localhost`                                |
+| `[presence] away_after_seconds`, the wrapper's `--away-after` (15)         | A user who has just used Aspen is not woken; the test waits that long after leaving the app |
+| `[media.s3] public_endpoint` and `public_base_url` over `https`            | The photo test uploads its picture and looks for it                                         |
+| Its voice servers' `url` over `https`                                      | The call test joins one                                                                     |
 
 The wrapper does the rest:
 
