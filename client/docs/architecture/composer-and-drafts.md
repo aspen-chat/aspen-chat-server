@@ -129,6 +129,7 @@ Length is counted as the server counts it: Unicode scalar values, in the text as
 
 - Within the last thousand characters, the message box and the editor count beneath themselves (`MessageLengthNote`).
 - Over the limit, they say by how much and what to do. Send and Save wait until the text is shortened.
+- Text pasted into the message box that would take it over the limit is attached instead, as a text file named `message.txt` in the user's language, and the box keeps what it held. Where the user may not attach files, or the message already carries the most attachments it may, the text is pasted and the box says it is too long.
 
 ### Nesting
 

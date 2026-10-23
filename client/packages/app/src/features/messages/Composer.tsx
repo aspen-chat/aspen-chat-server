@@ -7,7 +7,14 @@ import {
   PlusIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ClipboardEvent,
+  type KeyboardEvent,
+} from "react";
 import {
   Button,
   Menu,
@@ -73,6 +80,12 @@ let nextKey = 1;
 /** The most attachments the server takes in one message (`app::message::MAX_ATTACHMENTS`). */
 const MAX_ATTACHMENTS = 50;
 
+/**
+ * The type a paste too long for a message is attached as. Its charset is named, so a browser
+ * opening it reads text in any script as written.
+ */
+const PASTED_TEXT_TYPE = "text/plain;charset=utf-8";
+
 /** How long typing pauses before the draft is kept. */
 const DRAFT_SAVE_DELAY_MS = 400;
 
@@ -86,7 +99,8 @@ const toolButtonClass =
 
 /**
  * The message box. Enter sends, Shift+Enter breaks a line. Files chosen with the attach button
- * upload at once and are sent with the next message; a message may be files alone. A message's
+ * upload at once and are sent with the next message; a message may be files alone. Text pasted
+ * that would take the message past its length limit is attached as a text file instead. A message's
  * Reply makes the next message a reply to it (`replyIn`), shown in a bar over the box
  * (`ReplyBar`) until it is sent, cancelled, or Escape is pressed in the box. In a thread,
  * `echoTarget` names the parent channel and a checkbox offers to show the reply there too; it
@@ -293,6 +307,30 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   function attach(event: ChangeEvent<HTMLInputElement>) {
     const chosen = Array.from(event.target.files ?? []);
     event.target.value = "";
+    upload(chosen);
+  }
+
+  /**
+   * Attaches pasted text as a file when pasting it would take the message past
+   * `MESSAGE_MAX_CHARS`, so it can still be sent whole. Where the caller may not attach files,
+   * or the message carries all it may, the text is pasted and the length note says it is too
+   * long.
+   */
+  function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const text = event.clipboardData.getData("text/plain");
+    if (text === "" || !permissions.has("attachFiles") || pending.length >= MAX_ATTACHMENTS) {
+      return;
+    }
+    const { selectionStart, selectionEnd } = event.currentTarget;
+    const replaced = messageLength(draft.slice(selectionStart, selectionEnd));
+    if (length - replaced + messageLength(text) <= MESSAGE_MAX_CHARS) {
+      return;
+    }
+    event.preventDefault();
+    upload([new File([text], m.pastedTextFileName, { type: PASTED_TEXT_TYPE })]);
+  }
+
+  function upload(chosen: File[]) {
     // The server takes at most `MAX_ATTACHMENTS` in one message; files past that are not uploaded.
     const files = chosen.slice(0, Math.max(0, MAX_ATTACHMENTS - pending.length));
     if (files.length < chosen.length) {
@@ -677,6 +715,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
             aria-placeholder={placeholder}
             rows={1}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             className="message-box-text block max-h-40 w-full max-w-full min-w-0 resize-none wrap-anywhere rounded-md border border-line bg-surface-raised px-3 py-2 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"
           />
           {draft === "" && (
