@@ -1,4 +1,5 @@
-import { resolveDevice, type DeviceChoice } from "@aspen/protocol";
+import type { DeviceChoice } from "@aspen/protocol";
+import { play, type Playing } from "./speakers";
 
 /** The app's sounds, each a recording in `sounds/` (`SOUND_FILES`). */
 export type Sound =
@@ -23,14 +24,44 @@ const SOUND_FILES: Record<Sound, string> = {
 };
 
 /**
- * The recordings as `data:` URLs, which every build's Content Security Policy lets play (the
- * desktop app's page, loaded from a file, may play nothing from its own origin). Each is a chunk
+ * The recordings as `data:` URLs, which are decoded without a request, so no Content Security
+ * Policy can refuse them (the desktop app's page may connect to no `data:` URL). Each is a chunk
  * of its own, loaded the first time it plays, so none is part of the page's first load.
  */
 const recordings = import.meta.glob<string>("./sounds/*.wav", {
   query: "?inline",
   import: "default",
 });
+
+/** Each recording decoded, kept from the first time it plays. */
+const decoded = new Map<Sound, Promise<AudioBuffer>>();
+
+async function decode(sound: Sound, context: BaseAudioContext): Promise<AudioBuffer> {
+  const load = recordings[`./sounds/${SOUND_FILES[sound]}`];
+  if (load === undefined) {
+    throw new Error(`No recording for ${sound}`);
+  }
+  const url = await load();
+  const text = atob(url.slice(url.indexOf(",") + 1));
+  const bytes = Uint8Array.from(text, (c) => c.charCodeAt(0));
+  return context.decodeAudioData(bytes.buffer);
+}
+
+/**
+ * `sound` decoded by `context`. A buffer plays in any context, resampled where the rates differ,
+ * so each recording is decoded once. A failure is not kept, so the next play tries again.
+ */
+function bufferOf(sound: Sound, context: BaseAudioContext): Promise<AudioBuffer> {
+  let buffer = decoded.get(sound);
+  if (buffer === undefined) {
+    buffer = decode(sound, context);
+    decoded.set(sound, buffer);
+    buffer.catch(() => {
+      decoded.delete(sound);
+    });
+  }
+  return buffer;
+}
 
 /**
  * How soon a sound may play again, for those that may not repeat at once. Several people
@@ -72,17 +103,10 @@ function takePlace(sound: Sound): (() => void) | null {
   };
 }
 
-function urlOf(sound: Sound): Promise<string> {
-  const load = recordings[`./sounds/${SOUND_FILES[sound]}`];
-  if (load === undefined) {
-    throw new Error(`No recording for ${sound}`);
-  }
-  return load();
-}
-
 /**
- * Plays `sound` through `device`, unless it played less than its `REPEAT_GAP_MS` ago or
- * `MAX_PLAYING_PER_SOUND` of it are playing.
+ * Plays `sound` through `device` (`play`), unless it played less than its `REPEAT_GAP_MS` ago or
+ * `MAX_PLAYING_PER_SOUND` of it are playing. Settles once it has started; a sound the browser
+ * refuses to play is simply not heard.
  */
 export async function playSound(sound: Sound, device: DeviceChoice | null): Promise<void> {
   const now = Date.now();
@@ -95,10 +119,10 @@ export async function playSound(sound: Sound, device: DeviceChoice | null): Prom
   }
   lastPlayed.set(sound, now);
   try {
-    await playThrough(await urlOf(sound), device, release);
-  } catch (error) {
+    const playing = await play((context) => bufferOf(sound, context), device);
+    void playing.ended.then(release);
+  } catch {
     release();
-    throw error;
   }
 }
 
@@ -112,49 +136,17 @@ export function loopSound(sound: Sound, device: DeviceChoice | null): () => void
     return () => undefined;
   }
   let stopped = false;
-  let playing: HTMLAudioElement | null = null;
-  void urlOf(sound)
-    .then((url) => (stopped ? null : playThrough(url, device, release, true)))
-    .then((audio) => {
-      if (stopped) {
-        audio?.pause();
-      } else {
-        playing = audio;
-      }
-    })
-    .catch(release);
+  let playing: Playing | null = null;
+  play((context) => bufferOf(sound, context), device, true).then((started) => {
+    playing = started;
+    void started.ended.then(release);
+    if (stopped) {
+      started.stop();
+    }
+  }, release);
   return () => {
     stopped = true;
-    playing?.pause();
+    playing?.stop();
     release();
   };
-}
-
-/**
- * An element playing `url` through `device`, or the system's default where the browser cannot
- * choose. A browser that has not yet been interacted with may refuse to play; the sound is then
- * simply not heard. `release` is called when the element ends, fails, or is refused; a looped
- * one never ends, so whoever stops it releases its place.
- */
-async function playThrough(
-  url: string,
-  device: DeviceChoice | null,
-  release: () => void,
-  loop = false,
-): Promise<HTMLAudioElement> {
-  const audio = new Audio(url);
-  audio.loop = loop;
-  audio.addEventListener("ended", release);
-  audio.addEventListener("error", release);
-  if (device !== null && "setSinkId" in audio) {
-    const outputs = (await navigator.mediaDevices.enumerateDevices()).filter(
-      (d) => d.kind === "audiooutput",
-    );
-    const id = resolveDevice(device, outputs);
-    if (id !== null) {
-      await audio.setSinkId(id).catch(() => undefined);
-    }
-  }
-  await audio.play().catch(release);
-  return audio;
 }

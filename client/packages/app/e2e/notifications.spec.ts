@@ -33,9 +33,17 @@ test.beforeEach(async ({ page }) => {
       }
     }
     Object.defineProperty(window, "Notification", { value: StandIn });
-    HTMLMediaElement.prototype.play = function play() {
-      window.soundsPlayed += 1;
-      return Promise.resolve();
+    // Counted when started, which is after the recording has been decoded.
+    window.AudioContext = class Counted extends AudioContext {
+      override createBufferSource() {
+        const source = super.createBufferSource();
+        const start = source.start.bind(source);
+        source.start = (...args) => {
+          window.soundsPlayed += 1;
+          start(...args);
+        };
+        return source;
+      }
     };
   });
 });

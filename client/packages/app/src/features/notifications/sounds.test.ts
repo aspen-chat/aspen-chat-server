@@ -1,22 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Playing } from "./speakers";
 
-/** Stands in for `HTMLAudioElement`, recording what is playing and letting a test end it. */
-class FakeAudio extends EventTarget {
-  static playing = new Set<FakeAudio>();
-  loop = false;
-  constructor(readonly src: string) {
-    super();
+const { play } = vi.hoisted(() => ({ play: vi.fn<() => Promise<Playing>>() }));
+
+vi.mock("./speakers", () => ({ play }));
+
+/** Stands in for a sound `play` started, recording what is playing and letting a test end it. */
+class FakePlaying implements Playing {
+  static playing = new Set<FakePlaying>();
+  ended: Promise<void>;
+  private resolve: () => void = () => undefined;
+  constructor() {
+    this.ended = new Promise((resolve) => {
+      this.resolve = resolve;
+    });
+    FakePlaying.playing.add(this);
   }
-  play(): Promise<void> {
-    FakeAudio.playing.add(this);
-    return Promise.resolve();
-  }
-  pause(): void {
-    FakeAudio.playing.delete(this);
+  stop(): void {
+    this.end();
   }
   end(): void {
-    FakeAudio.playing.delete(this);
-    this.dispatchEvent(new Event("ended"));
+    FakePlaying.playing.delete(this);
+    this.resolve();
   }
 }
 
@@ -28,11 +33,11 @@ async function sounds() {
 
 describe("sound limits", () => {
   beforeEach(() => {
-    FakeAudio.playing.clear();
-    vi.stubGlobal("Audio", FakeAudio);
+    play.mockImplementation(() => Promise.resolve(new FakePlaying()));
   });
   afterEach(() => {
-    vi.unstubAllGlobals();
+    FakePlaying.playing.clear();
+    play.mockReset();
   });
 
   it("plays at most two of one sound at once", async () => {
@@ -40,7 +45,7 @@ describe("sound limits", () => {
     for (let i = 0; i < 5; i++) {
       await playSound("chime", null);
     }
-    expect(FakeAudio.playing.size).toBe(MAX_PLAYING_PER_SOUND);
+    expect(FakePlaying.playing.size).toBe(MAX_PLAYING_PER_SOUND);
   });
 
   it("counts each sound on its own", async () => {
@@ -49,7 +54,7 @@ describe("sound limits", () => {
     await playSound("chime", null);
     loopSound("ringtone", null);
     await vi.waitFor(() => {
-      expect(FakeAudio.playing.size).toBe(3);
+      expect(FakePlaying.playing.size).toBe(3);
     });
   });
 
@@ -57,14 +62,15 @@ describe("sound limits", () => {
     const { playSound } = await sounds();
     await playSound("chime", null);
     await playSound("chime", null);
-    const [first] = FakeAudio.playing;
+    const [first] = FakePlaying.playing;
     if (first === undefined) {
       throw new Error("Nothing is playing");
     }
     first.end();
+    await first.ended;
     await playSound("chime", null);
-    expect(FakeAudio.playing.size).toBe(2);
-    expect(FakeAudio.playing.has(first)).toBe(false);
+    expect(FakePlaying.playing.size).toBe(2);
+    expect(FakePlaying.playing.has(first)).toBe(false);
   });
 
   it("gives a loop's place back when it is stopped", async () => {
@@ -73,30 +79,38 @@ describe("sound limits", () => {
     loopSound("ringtone", null);
     const refused = loopSound("ringtone", null);
     await vi.waitFor(() => {
-      expect(FakeAudio.playing.size).toBe(2);
+      expect(FakePlaying.playing.size).toBe(2);
     });
     refused();
     stopFirst();
     stopFirst();
-    expect(FakeAudio.playing.size).toBe(1);
+    expect(FakePlaying.playing.size).toBe(1);
     loopSound("ringtone", null);
     loopSound("ringtone", null);
     await vi.waitFor(() => {
-      expect(FakeAudio.playing.size).toBe(2);
+      expect(FakePlaying.playing.size).toBe(2);
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(FakeAudio.playing.size).toBe(2);
+    expect(FakePlaying.playing.size).toBe(2);
+  });
+
+  it("stops a loop stopped before it started", async () => {
+    const { loopSound } = await sounds();
+    loopSound("ringtone", null)();
+    await vi.waitFor(() => {
+      expect(play).toHaveBeenCalledOnce();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(FakePlaying.playing.size).toBe(0);
   });
 
   it("gives the place back when the browser refuses to play", async () => {
     const { playSound } = await sounds();
-    const play = vi
-      .spyOn(FakeAudio.prototype, "play")
-      .mockRejectedValue(new DOMException("", "NotAllowedError"));
+    play.mockRejectedValueOnce(new DOMException("", "NotAllowedError"));
+    play.mockRejectedValueOnce(new DOMException("", "NotAllowedError"));
     await playSound("chime", null);
     await playSound("chime", null);
-    play.mockRestore();
     await playSound("chime", null);
-    expect(FakeAudio.playing.size).toBe(1);
+    expect(FakePlaying.playing.size).toBe(1);
   });
 });
