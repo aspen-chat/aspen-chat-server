@@ -8,7 +8,11 @@ import { message } from "./world/fixtures";
  * minutes on, which begins a group of its own.
  */
 
+/** A link long enough to wrap over several lines, whose last line leaves room after it. */
+const longLink = "https://example.com/" + "segment/".repeat(30) + "?query=" + "abc".repeat(30);
+
 const history = [
+  message(311, bob, `A very long URL: ${longLink}`, 0),
   message(310, bob, "Back again after forty minutes.", 1),
   message(309, me, "Third of mine.", 41),
   message(308, me, "Second of mine.", 42),
@@ -64,6 +68,33 @@ test("a grouped message shows its time after its text while the pointer is over 
   await expect(time).toBeHidden();
   await row(page, "Three.").hover();
   await expect(time).toBeVisible();
+});
+
+test("a grouped message's time ends the last line of its text where the line has room", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(isMobile, "a phone's actions say when it was sent instead");
+  const long = row(page, "A very long URL");
+  const link = long.getByRole("link", { name: /example\.com/ });
+  const lines = await link.evaluate((a) =>
+    Array.from(a.getClientRects(), (r) => ({ top: r.top, bottom: r.bottom, right: r.right })),
+  );
+  expect(lines.length).toBeGreaterThan(1);
+  const height = (await long.boundingBox())?.height;
+  await long.hover();
+  const time = long.locator("time[aria-hidden]");
+  await expect(time).toBeVisible();
+  const box = await time.boundingBox();
+  const last = lines.at(-1);
+  if (box === null || last === undefined) {
+    throw new Error("the time or the link's last line has no box");
+  }
+  // Beside the link's last line, not under it, and the message no taller for it.
+  expect(box.y + box.height / 2).toBeGreaterThan(last.top);
+  expect(box.y + box.height / 2).toBeLessThan(last.bottom);
+  expect(box.x).toBeGreaterThanOrEqual(last.right);
+  expect((await long.boundingBox())?.height).toBe(height);
 });
 
 test("a long press says when a grouped message was sent", async ({ page, isMobile }) => {

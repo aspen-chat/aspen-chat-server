@@ -611,12 +611,6 @@ body {
   max-width: 100%;
   overflow-wrap: anywhere;
 }
-/* A message's text and the marks after it (`MessageBody`) share its first line's baseline; a
-   body opening with a boxed block has no line at its top, so the marks keep to the box's top
-   edge instead of dropping to the first line inside it. */
-.message-text-row:has(> .message-body > :is(pre, table):first-child) {
-  align-items: flex-start;
-}
 /* Paragraphs stand apart by what a line's height adds to its text, half the text's size at the
    normal spacing, so they part further as the line spacing grows. */
 .message-body > * + * {
@@ -624,6 +618,11 @@ body {
 }
 .message-body p {
   white-space: pre-wrap;
+}
+/* What follows a message whose text ends with code or a table stands under it with only its
+   marks' own room above, so a mark that is hidden takes no room at all (`Markdown`'s `after`). */
+.message-body > .message-after {
+  margin-top: 0;
 }
 .message-body code {
   font-family: var(--font-mono);

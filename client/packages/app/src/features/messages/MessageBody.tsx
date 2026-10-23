@@ -26,16 +26,16 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
  * What a message says and holds, drawn the same wherever it is shown (the channel, the pins
  * list): its text as Markdown with its tags, marked when edited or changed by a plugin, its
  * poll or plugin's card, its pictures and files, and cards for its links. A message that is
- * nothing but links to pictures the server has previews of shows the pictures alone. `hideText` leaves the text out where something takes its place (the editor,
- * an echo's reply); `onRemoveAttachment` offers each attachment's removal to those who may.
- * `still` draws it for reference only, as another message shows it: no poll to vote in, no
- * card's buttons to press. The reader's mark on a message they saved, then `trailing`, follow
- * whatever the message ends with: its text, after its edited mark, or beside its last card or
- * its pictures where the line has room, and under them where it has not (`Trailed`). Beside
- * the text, the marks sit level with its top: on its first line's baseline, or at the top edge
- * of a code block or table it opens with (`.message-text-row` in `styles.css`), and under it
- * where the line has no room. A message that fails to draw shows its text alone,
- * plainly, rather than taking the list it is in down with it. Without `savedMark` the saved
+ * nothing but links to pictures the server has previews of shows the pictures alone.
+ * `hideText` leaves the text out where something takes its place (the editor, an echo's
+ * reply); `onRemoveAttachment` offers each attachment's removal to those who may. `still` draws
+ * it for reference only, as another message shows it: no poll to vote in, no card's buttons to
+ * press. The reader's mark on a message they saved, then `trailing`, follow whatever the
+ * message ends with: its text, after its edited mark, or beside its last card or its pictures
+ * where the line has room, and under them where it has not (`Trailed`). After the text, the
+ * marks end its last line, as a word would, wrapping under it where the line has no room, and
+ * stand under a code block or table it ends with (`Markdown`'s `after`). A message that fails
+ * to draw shows its text alone, plainly, rather than taking the list it is in down with it. Without `savedMark` the saved
  * mark is left to whoever draws the message, as `MessageItem` gives it to its header on a touch
  * screen.
  */
@@ -145,6 +145,23 @@ function MessageBodyContent({
       </>
     ) : undefined;
   const trailingAfter = (block: typeof last) => (block === last ? tail : undefined);
+  const afterText =
+    message.editedAt != null ||
+    message.alteredBy.length > 0 ||
+    trailingAfter("text") !== undefined ? (
+      <>
+        {message.editedAt != null && (
+          <span
+            className="text-xs text-ink-faint"
+            title={format(m.editedAt, { date: timeFormat.format(new Date(message.editedAt)) })}
+          >
+            {m.edited}
+          </span>
+        )}
+        <AlteredBy pluginIds={message.alteredBy} />
+        {trailingAfter("text")}
+      </>
+    ) : null;
   const trailed = (block: typeof last) => ({
     trailing: trailingAfter(block),
     drop: trailingDrop,
@@ -153,25 +170,18 @@ function MessageBodyContent({
   return (
     <>
       {!hideText && (
-        <div className="message-text-row flex flex-wrap items-baseline gap-x-1">
-          {!pictureOnly && (
+        <div className="flex flex-wrap items-baseline gap-x-1">
+          {pictureOnly ? (
+            afterText
+          ) : (
             <Markdown
               content={message.content}
               mentions={message.mentions}
               communityId={home.community}
               links={!fromSystem}
+              after={afterText}
             />
           )}
-          {message.editedAt != null && (
-            <span
-              className="text-xs text-ink-faint"
-              title={format(m.editedAt, { date: timeFormat.format(new Date(message.editedAt)) })}
-            >
-              {m.edited}
-            </span>
-          )}
-          <AlteredBy pluginIds={message.alteredBy} />
-          {trailingAfter("text")}
         </div>
       )}
       {pollId !== null && (

@@ -3,8 +3,37 @@ import { describe, expect, it } from "vitest";
 import { Markdown } from "./Markdown";
 
 const render = (content: string) => renderToStaticMarkup(<Markdown content={content} />);
+const renderAfter = (content: string) =>
+  renderToStaticMarkup(<Markdown content={content} after={<i>12:30</i>} />);
+/** What follows the text, ending its last line or standing under its last block. */
+const inline = /<span class="message-after[^"]*inline-flex[^"]*"><i>12:30<\/i><\/span>/;
+const block = /<span class="message-after[^"]* flex [^"]*"><i>12:30<\/i><\/span>/;
 
 describe("Markdown", () => {
+  it("ends the last line of text with what follows it, wherever that line is", () => {
+    expect(renderAfter("one\n\ntwo")).toMatch(new RegExp(`two${inline.source}</p></div>$`));
+    expect(renderAfter("- a\n- b")).toMatch(new RegExp(`b${inline.source}</li>`));
+    expect(renderAfter("> said\n> and more")).toMatch(
+      new RegExp(`and more${inline.source}</p>\\s*</blockquote>`),
+    );
+    expect(renderAfter("# Heading")).toMatch(new RegExp(`Heading${inline.source}</h1>`));
+    expect(renderAfter("one\n\ntwo").match(/message-after/g)).toHaveLength(1);
+  });
+
+  it("puts what follows code or a table under it", () => {
+    expect(renderAfter("```\nlet x = 1;\n```")).toMatch(
+      new RegExp(`</pre>\\s*${block.source}</div>$`),
+    );
+    expect(renderAfter("| a |\n| - |\n| b |")).toMatch(
+      new RegExp(`</table>\\s*${block.source}</div>$`),
+    );
+  });
+
+  it("draws nothing after text with nothing to follow it", () => {
+    expect(render("one\n\n```\ncode\n```")).not.toContain("message-after");
+    expect(render("plain")).toBe('<div class="message-body"><p>plain</p></div>');
+  });
+
   it("renders GitHub-flavoured Markdown", () => {
     const html = render("**bold** _it_ `x < y` ~~gone~~\n\n- one\n- two");
     expect(html).toContain("<strong>bold</strong>");
