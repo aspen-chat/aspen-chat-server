@@ -19,7 +19,7 @@ Everything that names the deployment follows from it:
 - Over `https`, its host, with `:port` when not 443, is the deployment's
   [federation](../federation/index.md) domain.
 - The web client and the desktop and mobile apps reach it over `https` alone. A plain `http` address
-  serves only development, at `localhost`, from a development build of the client.
+  serves only development, on this machine, from a development build of the client.
 
 ### Changing it
 
@@ -30,10 +30,12 @@ never change.**
 - A server started with another refuses to start, and says which to set.
 - **Changing the host also makes every registered passkey useless.**
 
-### `http` and passkeys
+### `http`
 
+- **An `http` address must be on this machine**: `localhost`, a name under it, or a loopback
+  address. A server given one elsewhere refuses to start, since a browser on another machine
+  withholds passkeys and much of what the web client needs from a plain `http` page.
 - Passkeys are offered over `https`, and at `localhost` and names under it.
-- An `http` address on any other host offers no passkeys.
 - An `http` address takes no part in federation.
 
 ## `[web_client]`

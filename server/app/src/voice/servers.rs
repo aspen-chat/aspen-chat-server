@@ -66,8 +66,9 @@ pub async fn list_servers_in(conn: &mut AsyncPgConnection) -> crate::Result<Vec<
 }
 
 /// Refuses a voice server address that is not `http` or `https`, or not `https` where
-/// `public_url` is: a page loaded over `https` may not open an unencrypted WebSocket, and the
-/// join token and media keys would cross the network readable.
+/// `public_url` is or where the voice server is not on this machine: a page loaded over `https`
+/// may not open an unencrypted WebSocket, and the join token and media keys would cross the
+/// network readable.
 pub fn check_url(config: &crate::aspen_config::AspenConfig, url: &str) -> crate::Result<()> {
     check_url_at(config.public_url.starts_with("https:"), url)
 }
@@ -79,8 +80,17 @@ fn check_url_at(deployment_https: bool, url: &str) -> crate::Result<()> {
     let Some(parsed) = parsed else {
         return Err(crate::Error::Validation(t!("voiceServerUrlInvalid")));
     };
-    if deployment_https && parsed.scheme() != "https" {
+    if parsed.scheme() == "https" {
+        return Ok(());
+    }
+    if deployment_https {
         return Err(crate::Error::Validation(t!("voiceServerUrlInsecure")));
+    }
+    if !parsed
+        .host()
+        .is_some_and(|host| crate::aspen_config::is_loopback_host(&host))
+    {
+        return Err(crate::Error::Validation(t!("voiceServerUrlPlainElsewhere")));
     }
     Ok(())
 }
@@ -771,13 +781,18 @@ pub(super) async fn reap_silent_servers(
 mod tests {
     use super::*;
 
-    /// A voice server is at an http or https address, and an https deployment's at https.
+    /// A voice server is at an https address, or an http one on this machine for an http
+    /// deployment.
     #[test]
     fn voice_server_addresses_are_checked() {
         assert!(check_url_at(true, "https://voice-1.example.org").is_ok());
         assert!(check_url_at(true, "http://voice-1.example.org").is_err());
         assert!(check_url_at(true, "http://127.0.0.1:9000").is_err());
         assert!(check_url_at(false, "http://127.0.0.1:9000").is_ok());
+        assert!(check_url_at(false, "http://localhost:9000").is_ok());
+        assert!(check_url_at(false, "https://192.168.2.220:9443").is_ok());
+        assert!(check_url_at(false, "http://192.168.2.220:9001").is_err());
+        assert!(check_url_at(false, "http://voice-1.example.org").is_err());
         assert!(check_url_at(false, "wss://voice-1.example.org").is_err());
         assert!(check_url_at(false, "voice-1.example.org").is_err());
     }

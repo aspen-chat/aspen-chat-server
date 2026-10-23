@@ -63,10 +63,10 @@ struct Opt {
     #[clap(long)]
     keylog: bool,
     /// TLS private key in PEM format
-    #[clap(short = 'k', long, requires = "cert")]
+    #[clap(short = 'k', long, requires = "cert", conflicts_with = "no_https")]
     key: Option<PathBuf>,
     /// TLS certificate in PEM format
-    #[clap(short = 'c', long, requires = "key")]
+    #[clap(short = 'c', long, requires = "key", conflicts_with = "no_https")]
     cert: Option<PathBuf>,
     /// Address(es) to listen on, can be either IPv4 or IPv6.
     /// Pass multiple times to listen on more than one address. Each one given must bind, and an
@@ -165,6 +165,47 @@ enum Command {
     },
 }
 
+/// The TLS this server answers with: the `--cert` and `--key` given, or none under
+/// `--no-https`. Given neither, it refuses to start rather than present a certificate no client
+/// trusts; `scripts/dev_ca.py` issues one for development.
+fn tls_acceptor(options: &Opt) -> Result<Option<TlsAcceptor>> {
+    if options.no_https {
+        return Ok(None);
+    }
+    let (Some(key_path), Some(cert_path)) = (&options.key, &options.cert) else {
+        bail!(
+            "no certificate: give --cert and --key (scripts/dev_ca.py issues them for \
+             development), or --no-https behind a proxy that terminates TLS"
+        );
+    };
+    // TODO: Hot reload these files when they change. certbot and things like it will update the data periodically. It'd be nice to not require
+    // a server reboot to start using the new cert and key.
+    let key = fs::read(key_path).context("failed to read private key")?;
+    let key = if key_path.extension().is_some_and(|x| x == "der") {
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key))
+    } else {
+        rustls_pemfile::private_key(&mut &*key)
+            .context("malformed PKCS #1 private key")?
+            .ok_or_else(|| anyhow::Error::msg("no private keys found"))?
+    };
+    let cert_chain = fs::read(cert_path).context("failed to read certificate chain")?;
+    let cert_chain = if cert_path.extension().is_some_and(|x| x == "der") {
+        vec![CertificateDer::from(cert_chain)]
+    } else {
+        rustls_pemfile::certs(&mut &*cert_chain)
+            .collect::<Result<_, _>>()
+            .context("invalid PEM-encoded certificate")?
+    };
+    let mut server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, key)?;
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+    if options.keylog {
+        server_config.key_log = Arc::new(rustls::KeyLogFile::new());
+    }
+    Ok(Some(TlsAcceptor::from(Arc::new(server_config))))
+}
+
 // tokio-console reads instrumentation Tokio compiles only under this flag.
 #[cfg(all(feature = "console", not(tokio_unstable)))]
 compile_error!(
@@ -250,6 +291,11 @@ async fn run(options: Opt) -> Result<()> {
     } else {
         app::context::Role::Public
     };
+    let tls_acceptor = if options.private_worker || options.gen_openapi_schema {
+        None
+    } else {
+        tls_acceptor(&options)?
+    };
     let app = api::start(options.gen_openapi_schema, role).await?;
     let (exit_tx, mut exit_rx) = oneshot::channel();
     let mut exit_tx = Some(exit_tx);
@@ -270,71 +316,6 @@ async fn run(options: Opt) -> Result<()> {
         let _ = exit_rx.await;
         return Ok(());
     };
-    // TODO: Hot reload these files when they change. certbot and things like it will update the data periodically. It'd be nice to not require
-    // a server reboot to start using the new cert and key.
-    let (certs, key) = if let (Some(key_path), Some(cert_path)) = (&options.key, &options.cert) {
-        let key = fs::read(key_path).context("failed to read private key")?;
-        let key = if key_path.extension().is_some_and(|x| x == "der") {
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key))
-        } else {
-            rustls_pemfile::private_key(&mut &*key)
-                .context("malformed PKCS #1 private key")?
-                .ok_or_else(|| anyhow::Error::msg("no private keys found"))?
-        };
-        let cert_chain = fs::read(cert_path).context("failed to read certificate chain")?;
-        let cert_chain = if cert_path.extension().is_some_and(|x| x == "der") {
-            vec![CertificateDer::from(cert_chain)]
-        } else {
-            rustls_pemfile::certs(&mut &*cert_chain)
-                .collect::<Result<_, _>>()
-                .context("invalid PEM-encoded certificate")?
-        };
-
-        (cert_chain, key)
-    } else {
-        let dirs =
-            directories_next::ProjectDirs::from("org", "aspen-chat", "aspen-server").unwrap();
-        let path = dirs.data_local_dir();
-        let cert_path = path.join("cert.der");
-        let key_path = path.join("key.der");
-        let (cert, key) = match fs::read(&cert_path).and_then(|x| Ok((x, fs::read(&key_path)?))) {
-            Ok((cert, key)) => (
-                CertificateDer::from(cert),
-                PrivateKeyDer::try_from(key).map_err(anyhow::Error::msg)?,
-            ),
-            Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
-                info!("generating self-signed certificate");
-                let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
-                let key = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
-                let cert = cert.cert.into();
-                fs::create_dir_all(path).context("failed to create certificate directory")?;
-                fs::write(&cert_path, &cert).context("failed to write certificate")?;
-                fs::write(&key_path, key.secret_pkcs8_der())
-                    .context("failed to write private key")?;
-                (cert, key.into())
-            }
-            Err(e) => {
-                bail!("failed to read certificate: {}", e);
-            }
-        };
-
-        (vec![cert], key)
-    };
-
-    let tls_acceptor = (!options.no_https)
-        .then(|| -> Result<TlsAcceptor> {
-            let mut server_config = ServerConfig::builder()
-                .with_no_client_auth()
-                .with_single_cert(certs, key)?;
-            server_config.alpn_protocols =
-                vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
-            if options.keylog {
-                server_config.key_log = Arc::new(rustls::KeyLogFile::new());
-            }
-            Ok(TlsAcceptor::from(Arc::new(server_config)))
-        })
-        .transpose()?;
-
     let listen_required = !options.listen_addr.is_empty();
     let listen_addrs: Vec<StdSocketAddr> = if listen_required {
         &options.listen_addr[..]

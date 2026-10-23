@@ -7,15 +7,15 @@
 
 The deployments are `alpha.localhost:8443` and `beta.localhost:8444`. Names under `localhost`
 resolve to the loopback address on their own, and each server presents a certificate for its
-name from a development certificate authority made here, which each trusts for calls to the
-other through `[federation.development] extra_root_certificates`. To reach them from a browser
-or another tool, trust `target/dev-federation/ca.pem` there. Nothing here serves plain HTTP.
+name from the development certificate authority (`scripts/dev_ca.py`), which each trusts for
+calls to the other through `[federation.development] extra_root_certificates`. To reach them from
+a browser or another tool, trust `target/dev-ca/ca.pem` there. Nothing here serves plain HTTP.
 
 Each deployment has a database of its own (`aspen_dev_alpha`, `aspen_dev_beta`) in the
 docker-compose PostgreSQL, and a NATS and a Valkey of its own in containers this script starts,
 so neither shares an event stream, rate limits, or fleet heartbeats with the other or with a
 development stack on the usual ports. Everything else it makes is in `target/dev-federation/`:
-the authority and certificates, each deployment's `aspen.toml`, and the servers' logs. The
+each deployment's `aspen.toml`, and the servers' logs. The
 servers are the debug builds in `target/debug` (`cargo build` first), or, with `--alpha-bin` and
 `--beta-bin`, builds of other versions, which is how two versions are checked against each other;
 `up` leaves them running and `down` stops them. Databases are kept between runs; `down --drop` drops them too.
@@ -27,7 +27,6 @@ Needs Python 3.10, `openssl`, and `docker compose` with the database and Seaweed
 from __future__ import annotations
 
 import argparse
-import ipaddress
 import json
 import os
 import signal
@@ -42,12 +41,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import device_credential
+from dev_ca import CA, issue
 from web_client import built_or_stand_in
 
 REPO = Path(__file__).resolve().parent.parent
 WORK = REPO / "target" / "dev-federation"
 BIN = REPO / "target" / "debug"
-CA = WORK / "ca.pem"
 # The S3 credentials docker-compose.yaml gives SeaweedFS.
 S3_ACCESS_KEY = "GK484e56c38fb7e14b182bf47a"
 S3_SECRET_KEY = "6b49da9e42f7959cc946d7987a504763f6ec405b88abeeec08aa926b61316027"
@@ -121,49 +120,8 @@ def clean_env() -> dict[str, str]:
 
 
 def make_certificates() -> None:
-    WORK.mkdir(parents=True, exist_ok=True)
-    if not CA.exists():
-        say("making the development certificate authority")
-        run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
-            "-keyout", str(WORK / "ca.key"), "-out", str(CA), "-days", "3650",
-            "-subj", "/CN=Aspen development certificate authority",
-            "-addext", "basicConstraints=critical,CA:TRUE",
-            "-addext", "keyUsage=critical,keyCertSign,cRLSign", check=True)
     for deployment in DEPLOYMENTS:
-        issue_certificate(deployment.host)
-
-
-def is_address(host: str) -> bool:
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return True
-
-
-def issue_certificate(host: str) -> tuple[Path, Path]:
-    """A certificate for `host`, a name or an IP address, from the development authority, made
-    once: its PEM and key."""
-    cert = WORK / f"{host}.pem"
-    key = WORK / f"{host}.key"
-    if cert.exists():
-        return cert, key
-    say(f"issuing a certificate for {host}")
-    request = WORK / f"{host}.csr"
-    extensions = WORK / f"{host}.ext"
-    extensions.write_text(
-        f"subjectAltName={'IP' if is_address(host) else 'DNS'}:{host}\n"
-        "extendedKeyUsage=serverAuth\n"
-        "basicConstraints=critical,CA:FALSE\n"
-        "keyUsage=critical,digitalSignature\n"
-    )
-    run("openssl", "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
-        "-keyout", str(key), "-out", str(request), "-subj", f"/CN={host}", check=True)
-    run("openssl", "x509", "-req", "-in", str(request), "-CA", str(CA), "-CAkey", str(WORK / "ca.key"),
-        "-CAcreateserial", "-out", str(cert), "-days", "825", "-extfile", str(extensions), check=True)
-    request.unlink()
-    extensions.unlink()
-    return cert, key
+        issue(deployment.host)
 
 
 def start_services(deployment: Deployment) -> None:
@@ -279,11 +237,12 @@ STARTED: dict[str, subprocess.Popen] = {}
 
 def start_server(deployment: Deployment, extra_env: dict[str, str] | None = None) -> None:
     say(f"starting {deployment.name} at https://{deployment.domain}")
+    cert, key = issue(deployment.host)
     log = open(deployment.dir / "server.log", "a")
     process = subprocess.Popen(
         [str(bin_of(deployment) / "aspen-chat-server"), "--port", str(deployment.port),
          "--listen-addr", "::1", "--listen-addr", "127.0.0.1",
-         "--key", str(WORK / f"{deployment.host}.key"), "--cert", str(WORK / f"{deployment.host}.pem")],
+         "--key", str(key), "--cert", str(cert)],
         cwd=deployment.dir, env={**clean_env(), **(extra_env or {})}, stdout=log, stderr=subprocess.STDOUT,
         start_new_session=True,
     )

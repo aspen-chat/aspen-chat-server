@@ -99,8 +99,8 @@ for the API servers. See [Voice servers](../installing/6-voice-servers.md#give-i
 `docker-compose.yaml` and the development scripts publish passwords and keys in Aspen's repository:
 `aspen_test`, the storage keys, and `[media.s3]`'s defaults.
 
-A server whose `public_url` is `https` at a host other than `localhost` (or a name under it) refuses
-to start with any of them as:
+A server whose `public_url` is at a host other than `localhost`, a name under it, or a loopback
+address refuses to start with any of them as:
 
 - `database_url`'s password
 - `nats_auth_token`

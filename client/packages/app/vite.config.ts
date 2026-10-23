@@ -1,6 +1,9 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { Agent } from "node:https";
+import { rootCertificates } from "node:tls";
 import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { attributions } from "./attributions/plugin";
@@ -11,10 +14,42 @@ import { viewFonts } from "./viewFonts";
  * Development proxy target. A deployment is one origin, its API and web client together, so in
  * `vite dev` this origin stands in for it: every path the server owns besides the web client is
  * proxied to the server below, whose `public_url` names this origin
- * (`http://localhost:5173`), so links, passkeys, and the pages the apps open all agree. Point it
- * at a `--no-https` server, or set `VITE_DEV_PROXY_TARGET` to something else.
+ * (`http://localhost:5173`, or its `https:` address under `VITE_DEV_HTTPS_CERT`), so links,
+ * passkeys, and the pages the apps open all agree. Point it at a `--no-https` server, or set
+ * `VITE_DEV_PROXY_TARGET` to something else; an `https:` target's certificate is verified
+ * (`proxyAgent`).
  */
 const defaultDevProxyTarget = "http://127.0.0.1:8000";
+
+/**
+ * The development certificate authority (`scripts/dev_ca.py`), which an `https:` proxy target's
+ * certificate is checked against besides the system's authorities, when it has been made.
+ */
+const devCa = fileURLToPath(new URL("../../../target/dev-ca/ca.pem", import.meta.url));
+
+/**
+ * How the proxy reaches an `https:` target: verifying its certificate against the system's
+ * authorities and the development one.
+ */
+function proxyAgent(target: string): Agent | undefined {
+  if (!target.startsWith("https:")) return undefined;
+  const ca = existsSync(devCa) ? [...rootCertificates, readFileSync(devCa, "utf8")] : undefined;
+  return new Agent({ ca, keepAlive: true });
+}
+
+/**
+ * The dev server's own TLS, from `VITE_DEV_HTTPS_CERT` and `VITE_DEV_HTTPS_KEY` (PEM files, such
+ * as `scripts/dev_ca.py issue` writes), for reaching it from another device, where a browser
+ * gives plain HTTP none of the APIs the app needs. Without them it serves plain HTTP, which a
+ * browser on this machine treats as secure at `localhost`.
+ */
+function devHttps(env: Record<string, string>): { cert: Buffer; key: Buffer } | undefined {
+  const cert = env["VITE_DEV_HTTPS_CERT"];
+  const key = env["VITE_DEV_HTTPS_KEY"];
+  if (!cert && !key) return undefined;
+  if (!cert || !key) throw new Error("give both VITE_DEV_HTTPS_CERT and VITE_DEV_HTTPS_KEY");
+  return { cert: readFileSync(cert), key: readFileSync(key) };
+}
 
 /** The paths the server answers itself rather than with the web client (`api::start`). */
 const serverPaths = ["/api", "/auth/passkey", "/.well-known/aspen", "/email/unsubscribe"];
@@ -111,6 +146,7 @@ function webClientBuild(command: "build" | "serve"): Plugin {
 export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const proxyTarget = env["VITE_DEV_PROXY_TARGET"] ?? defaultDevProxyTarget;
+  const https = command === "serve" ? devHttps(env) : undefined;
   return {
     plugins: [
       fallbackFonts(),
@@ -141,14 +177,14 @@ export default defineConfig(({ mode, command }) => {
     server: {
       port: 5173,
       strictPort: true,
+      ...(https && { https }),
       proxy: Object.fromEntries(
         serverPaths.map((path) => [
           path,
           {
             target: proxyTarget,
+            agent: proxyAgent(proxyTarget),
             changeOrigin: true,
-            // Development servers use a self-signed certificate.
-            secure: false,
             ws: path === "/api",
           },
         ]),

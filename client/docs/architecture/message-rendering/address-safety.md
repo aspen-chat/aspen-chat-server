@@ -63,6 +63,8 @@ transport security exception, and Android's release build allows no cleartext.
 A development build may reach this machine's own addresses (`localhost`, a name under it, a loopback
 address) over plain HTTP, since its dev server and tests run there: the dev server's build, and a
 shell built with `VITE_ALLOW_LOOPBACK_HTTP=1`, which `main.tsx` passes to `allowLoopbackPlainText`.
-Android's debug build allows cleartext to `localhost` alone. A release build sets neither. The
-desktop app's passkey hand-off returns to a listener on `http://127.0.0.1`, which RFC 8252
-prescribes for a native app's loopback redirect; nothing is fetched from it.
+Android's debug build allows cleartext to `localhost` alone, and trusts the certificate authorities
+the device's user installed, such as the development one (`scripts/dev_ca.py`), so it reaches a
+development deployment on another machine over HTTPS. A release build does neither. The desktop
+app's passkey hand-off returns to a listener on `http://127.0.0.1`, which RFC 8252 prescribes for a
+native app's loopback redirect; nothing is fetched from it.

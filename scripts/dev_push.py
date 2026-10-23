@@ -29,9 +29,9 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dev_ca import issue  # noqa: E402
 from dev_federation import (  # noqa: E402
-    ALPHA, PASSWORD, Failed, api, expect, issue_certificate, make_certificates, running_pid, say,
-    sign_in,
+    ALPHA, PASSWORD, Failed, api, expect, running_pid, say, sign_in,
 )
 
 HOST = "push.localhost"
@@ -91,7 +91,7 @@ class Endpoint(BaseHTTPRequestHandler):
 
 def serve(handler: type[BaseHTTPRequestHandler] = Endpoint) -> str:
     """Serves `handler` over HTTPS at `push.localhost` on a free port, answering its origin."""
-    cert, key = issue_certificate(HOST)
+    cert, key = issue(HOST)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(str(cert), str(key))
     with socket.socket() as probe:
@@ -138,7 +138,6 @@ def main() -> int:
     if running_pid(ALPHA) is None:
         say("alpha is not running; run `scripts/dev_federation.py up` first")
         return 1
-    make_certificates()
     origin = serve()
     try:
         check(origin)

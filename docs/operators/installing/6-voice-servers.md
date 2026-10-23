@@ -25,7 +25,9 @@ Each voice server is its own machine (or container) with its own `voice_server.t
    ```
 
    It may be run again with the same arguments, so a deployment script can run it every time. The
-   dashboard registers servers too.
+   dashboard registers servers too. The address must be `https`; a plain `http` one is taken only on
+   the API server's own machine (`localhost` or a loopback address), and only by a deployment whose
+   `public_url` is `http` too.
 
 3. Note the id it prints. It prints the id, the line to put in `voice_server.toml`, and the entry
    for the voice server's NATS user ([below](#give-it-a-nats-user)), like this:

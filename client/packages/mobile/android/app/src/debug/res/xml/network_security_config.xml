@@ -1,9 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Debug builds may talk plain HTTP to this device itself, as the instrumented tests' stand-in
-     deployment does; every other address still needs HTTPS. -->
+     deployment does; every other address still needs HTTPS. They also trust the authorities the
+     device's user installed, such as the development one (scripts/dev_ca.py), which a release
+     build does not. -->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>
     </domain-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
 </network-security-config>

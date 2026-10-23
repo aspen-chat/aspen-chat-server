@@ -33,8 +33,9 @@ explicit direction.
 - **Serialization:** Serde + `serde_json`
 - **OpenAPI generation:** utoipa
 - **JSON Schema generation:** schemars
-- **TLS:** rustls (with self-signed cert generation via `rcgen` for development); PostgreSQL over
-  TLS through OpenSSL (`postgres-openssl`, as libpq does), every other service over rustls
+- **TLS:** rustls (the certificate given with `--cert` and `--key`, which `scripts/dev_ca.py` issues
+  for development from an authority of its own); PostgreSQL over TLS through OpenSSL
+  (`postgres-openssl`, as libpq does), every other service over rustls
 - **Signatures and keys:** `aws-lc-rs`, the crypto rustls uses too (Ed25519 federation keys and
   compact JWS with EdDSA, join-token keys, Web Push's ECDH, HKDF, AES-GCM, and VAPID signatures)
 - **Email:** `lettre` over SMTP, written from `askama` templates (`server/templates/email/`), with
@@ -96,8 +97,15 @@ or what an operator must open, route, or back up updates it in the same commit.
 
    ```
    (cd client && pnpm install && pnpm build)
-   cargo run
+   cargo run -- --no-https --port 8000
    ```
+
+   That serves plain HTTP for the Vite dev server to proxy to (`public_url` is
+   `http://localhost:5173`). A server refuses to start without either `--no-https` or a certificate
+   (`--cert` and `--key`), and refuses an `http` `public_url` anywhere but this machine. To reach a
+   development deployment from another device, or to work on anything TLS changes, serve it over
+   HTTPS with a certificate from the development authority: `docs/development/local-https.md` says
+   how, and how to trust that authority on each platform.
 
    A deployment is one origin: each API server serves the web client too (`api::web_client`), and
    refuses to start without a built one. The server reads configuration from `aspen.toml` and from
@@ -114,7 +122,8 @@ or what an operator must open, route, or back up updates it in the same commit.
      under it), and over `https` its host, with `:port` when not 443, is the federation domain,
      which never changes, since other deployments pin the key they find there: the first server to
      start with it pins it in the database, and a server started with another refuses to start. An
-     `http` address takes no part in federation. In development it is the Vite dev server's,
+     `http` address must be at this machine (`localhost`, a name under it, or a loopback address)
+     and takes no part in federation. In development it is the Vite dev server's,
      `http://localhost:5173`, which proxies the server's own paths to it
    - `[web_client] dir` — the built web client (`client/packages/app/dist` by default), which this
      server serves at `public_url`, answering every path the API does not own with its `index.html`
@@ -281,14 +290,14 @@ or what an operator must open, route, or back up updates it in the same commit.
    scripts/dev_federation.py up      # then: check, down [--drop]
    ```
 
-   It makes a development certificate authority and certificates for `alpha.localhost` and
-   `beta.localhost` (names under `localhost` resolve to loopback without configuration), and starts
-   the debug builds as `alpha.localhost:8443` and `beta.localhost:8444` over real TLS, each with a
-   database, NATS, and Valkey of its own and gates given with `settings set`, each trusting the
-   authority for calls to the other through `[federation.development]`, and each serving the built
-   web client, or a stand-in when there is none (`scripts/web_client.py`). `check` drives federation
-   between them through the API and the terminal. Everything it makes is under
-   `target/dev-federation/`; trust its `ca.pem` to reach the deployments from a browser.
+   It issues certificates from the development authority (`scripts/dev_ca.py`) for `alpha.localhost`
+   and `beta.localhost` (names under `localhost` resolve to loopback without configuration), and
+   starts the debug builds as `alpha.localhost:8443` and `beta.localhost:8444` over real TLS, each
+   with a database, NATS, and Valkey of its own and gates given with `settings set`, each trusting
+   the authority for calls to the other through `[federation.development]`, and each serving the
+   built web client, or a stand-in when there is none (`scripts/web_client.py`). `check` drives
+   federation between them through the API and the terminal. Everything else it makes is under
+   `target/dev-federation/`; trust `target/dev-ca/ca.pem` to reach the deployments from a browser.
 
 7. Check that a deployment wakes phones as `spec/push.md` says, against the deployments
    `dev_federation.py up` runs:
@@ -473,8 +482,9 @@ the newest dmgs `main` built, it staples their tickets and keeps them as an arti
 ### CLI Flags
 
 - `--gen-openapi-schema` — Generate schema files and exit; it reads no configuration
-- `--no-https` — Disable TLS (development only)
-- `-k, --key` / `-c, --cert` — TLS key/cert paths (PEM format)
+- `--no-https` — Serve plain HTTP, behind a proxy that terminates TLS or for the Vite dev server
+- `-k, --key` / `-c, --cert` — TLS key/cert paths (PEM format); without them, and without
+  `--no-https`, the server refuses to start
 - `--listen-addr` — Bind address, repeatable; each one given must bind. Given none, `0.0.0.0` and
   `::`, each family only where the machine has it (`aspen_sockets`)
 - `--port` — Port (default `443`)
