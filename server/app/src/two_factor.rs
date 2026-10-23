@@ -917,6 +917,8 @@ pub async fn reauthenticate(
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PasskeySummary {
     pub id: crate::PasskeyId,
+    /// The WebAuthn credential id, which the Signals API names the passkey by.
+    pub credential_id: Vec<u8>,
     pub name: String,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,

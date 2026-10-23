@@ -71,6 +71,24 @@ See [Passkeys](passkeys.md).
   runs ceremonies in its own page, and a web page that forwarded its query would hand the return
   code on.
 - **The ceremony id travels in the URL fragment.** So it reaches no server log.
+- **A credential is reported unknown only when the user handle's account does not hold it.** The
+  client has the browser forget what is reported unknown, so another account's passkey, offered for
+  the wrong ticket, must never be. Reporting it tells a caller only whether a credential id it
+  already holds belongs to an account, and credential ids are random.
+- **The server states the user handle rather than leaving the client to derive it.** It is the
+  account id's bytes because registration made it so (`start_passkey_registration`), which a test
+  holds; the client need not know that.
+- **`signalAllAcceptedCredentials` is sent with the list just read, after every change.** A manager
+  hides what is missing from it, so it is only ever sent whole. A passkey added elsewhere meanwhile
+  may be hidden until the panel next reads, which shows it again.
+- **The hand-off page sends only `signalUnknownCredential`.** Anyone holding its link can open it,
+  so it is given nothing about the account, and it does not take the account's list from what a
+  ceremony's options happen to hold.
+- **Autofill starts follow what the person does.** Each start is counted toward the sign-in limits
+  and stores state in Valkey for five minutes. Restarting on a timer would spend a device's budget,
+  and everyone's, on pages nobody is looking at.
+- **Autofill ends before its ceremony expires rather than restarting by itself.** A pick after
+  expiry would fail, and starting another would be a start nobody asked for.
 
 ### The return code
 
@@ -83,6 +101,26 @@ See [Passkeys](passkeys.md).
   ceremony is claimed only where it was run.
 - The page also tells whoever opens it to continue only for a request they made in the app on that
   device.
+
+### Android apps
+
+- **The app runs ceremonies through Credential Manager where the deployment names it, and hands them
+  to the browser otherwise.** One app build serves every deployment. A deployment names it in its
+  own `assetlinks.json`, which Android checks; the app's manifest names no domain, so nothing in the
+  build limits which deployments it reaches.
+- **The browser stays the fallback.** Credential Manager may be missing, find no provider, or refuse
+  the app while Google has not read the deployment's file; each of those hands the ceremony to the
+  system browser rather than failing it.
+- **The app asks Credential Manager only for passkeys at hand on the phone.** With none for the
+  deployment, Google's sheet would wait to be dismissed, which reads as cancelled. Asked so, it
+  fails at once, and the browser, which also reaches security keys and other phones, takes over.
+- **Only `get_login_creds`.** App Links' `handle_all_urls` would claim the deployment's web
+  addresses for the app, which it does not open.
+- **No release certificate is built in yet.** The official app has no release signing key. Debug
+  builds are each signed with their builder's own key, so an operator names those they trust.
+- **iOS cannot do the same.** An iOS app may use a domain's passkeys only if its entitlements list
+  the domain (`webcredentials:`), and they are signed into the build. One build cannot list every
+  deployment, so the iOS app keeps the hand-off.
 
 ## Device links
 

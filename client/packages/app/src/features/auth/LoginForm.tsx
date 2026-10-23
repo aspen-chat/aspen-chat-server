@@ -13,6 +13,7 @@ import { formString } from "@/forms";
 import { useMessages } from "@/i18n/context";
 import { OtherDeviceSignIn } from "./OtherDeviceSignIn";
 import { usePasskeyTransport } from "./passkeyTransport";
+import { useConditionalPasskey } from "./useConditionalPasskey";
 import { SecondFactorFields } from "./SecondFactorFields";
 import { PasswordReset } from "@/features/email/PasswordReset";
 import { useEmailPolicy } from "@/features/email/policy";
@@ -121,10 +122,12 @@ function PasswordStep({
   const client = useAspenClient();
   const [pending, setPending] = useState<"password" | "passkey" | null>(null);
   const emailAvailable = useEmailPolicy()?.available === true;
+  const autofill = useConditionalPasskey(transport, pending !== null, setError);
 
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
+    autofill.stop();
     setPending("password");
     setError(null);
     try {
@@ -143,6 +146,7 @@ function PasswordStep({
   }
 
   async function passkey(transport: PasskeyTransport) {
+    autofill.stop();
     setPending("passkey");
     setError(null);
     try {
@@ -168,6 +172,7 @@ function PasswordStep({
           isRequired
           autoComplete="username webauthn"
           className={fieldClass}
+          onFocus={autofill.rearm}
         >
           <Label className={labelClass}>{m.usernameLabel}</Label>
           <Input className={inputClass} />

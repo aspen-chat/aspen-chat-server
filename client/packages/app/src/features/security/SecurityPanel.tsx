@@ -11,6 +11,7 @@ import { useAspenClient } from "@/api/context";
 import { useMe } from "@/api/hooks";
 import { PASSWORD_MIN_LENGTH } from "@/features/auth/password";
 import { OtherDeviceSignIn } from "@/features/auth/OtherDeviceSignIn";
+import { useSignalAcceptedPasskeys } from "@/features/auth/passkeySignals";
 import { detectShell } from "@/config";
 import {
   alertClass,
@@ -83,6 +84,7 @@ function Sections({
   const me = useMe();
   const [codes, setCodes] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useSignalAcceptedPasskeys(settings, transport);
   /** Runs a change, shows any new recovery codes, and reloads the settings. */
   const change = useCallback(
     async (run: () => Promise<string[] | null | undefined>) => {

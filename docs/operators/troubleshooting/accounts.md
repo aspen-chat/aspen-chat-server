@@ -16,6 +16,7 @@
 | `lastSecondFactor`            | Removing the account's only second factor, where two factors are required.                              | Add another first.                                                                                           |
 | `passkeysUnavailable`         | `public_url` is `http` at a host other than `localhost`, where browsers allow no passkeys.              | Serve the deployment over `https` (see [`public_url`](../configuration/address.md#the-deployments-address)). |
 | `passkeyRejected`             | The passkey's answer did not verify.                                                                    | Open the deployment at its `public_url`. See [below](#passkeyrejected).                                      |
+| `passkeyUnknown`              | A sign-in used a passkey no account here holds: it was removed, or its account deleted.                 | Nothing. The web client tells the browser, whose password manager may stop offering it.                      |
 
 ### `passkeyRejected`
 
@@ -23,6 +24,22 @@ Most often:
 
 - the page is not at `public_url` (a different address reaching the same server), or
 - `public_url`'s host changed since the passkey was made.
+- An Android app signed with a certificate `[auth] android_apps` does not name ran it.
+
+### The Android app opens the browser for passkeys
+
+The app uses its own passkey prompt only where the deployment names it. Check, in order:
+
+1. `curl -i https://<public_url's host>/.well-known/assetlinks.json` answers `200`,
+   `application/json`, with no redirect, and names the app's package and certificate (see
+   [Android apps and passkeys](../configuration/accounts.md#android-apps-and-passkeys)).
+2. Google can read it: the address is reachable from the internet at port 443, with a certificate
+   from a public authority.
+3. The phone has a passkey provider (Google Password Manager, or another set up under Passwords and
+   accounts) and runs Android 9 or later.
+
+Google keeps what it read for a while, so a fix can take a day to reach phones. The browser still
+works meanwhile.
 
 ## Email
 

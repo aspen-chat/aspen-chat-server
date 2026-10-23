@@ -39,6 +39,17 @@ trusted_proxies = ["127.0.0.1"]
 
 **Without this, the rate limits count every client as the proxy.**
 
+Pass every path through unchanged, those outside `/api/v1` included. Two are read by others than
+browsers, which give up at a redirect or at anything but the server's own answer:
+
+- `/.well-known/aspen`, which other deployments read (see
+  [Federation](../federation/before-you-start.md#well-knownaspen-reachable)).
+- `/.well-known/assetlinks.json`, which Google reads before Android phones let the app use the
+  deployment's passkeys (see
+  [Android apps and passkeys](../configuration/accounts.md#android-apps-and-passkeys)). It must
+  answer `200` with `Content-Type: application/json`, over `https` at port 443, with no redirect. Do
+  not serve a file of your own there: the server's names the apps it accepts.
+
 ## Health checks
 
 Point whatever stands before the server at one of these. Neither needs a session, and neither is

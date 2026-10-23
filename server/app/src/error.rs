@@ -121,6 +121,11 @@ pub enum Error {
     PasskeysUnavailable,
     #[error("the passkey was not accepted: {0}")]
     PasskeyRejected(String),
+    /// A sign-in named a credential no account here holds: removed, its account deleted, or
+    /// never registered here. The client tells the browser so (WebAuthn's
+    /// `signalUnknownCredential`), which may then stop offering it.
+    #[error("the passkey is not registered here")]
+    PasskeyUnknown,
     #[error("the sign-in ticket is unknown, expired, or used")]
     InvalidTicket,
     /// A device link (`app::device_link`) is unknown, expired, already claimed, or not the
