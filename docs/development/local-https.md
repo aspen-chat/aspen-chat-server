@@ -33,20 +33,20 @@ Its key never signs for any other site, so a device that trusts it trusts nothin
 
 Install `target/dev-ca/ca.pem` wherever a client should reach a development deployment.
 
-| Where                         | How                                                                                                                                                                                                                                                       |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Arch, Fedora                  | `sudo trust anchor --store target/dev-ca/ca.pem`                                                                                                                                                                                                          |
-| Debian, Ubuntu                | `sudo cp target/dev-ca/ca.pem /usr/local/share/ca-certificates/aspen-dev-ca.crt && sudo update-ca-certificates`                                                                                                                                           |
-| Chrome, Chromium, Electron    | On Linux they read the NSS database: `certutil -d sql:$HOME/.pki/nssdb -A -t C,, -n "Aspen development" -i target/dev-ca/ca.pem`. On macOS and Windows, the system's store.                                                                               |
-| Firefox                       | Its own store: Settings, Privacy & Security, Certificates, View Certificates, Authorities, Import, and tick "Trust this CA to identify websites".                                                                                                          |
-| macOS                         | `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ca.pem`                                                                                                                                                             |
-| Windows                       | `certutil -addstore -f Root ca.pem` from an administrator's prompt, or `certutil -user -addstore Root ca.pem` for one account.                                                                                                                             |
-| iOS                           | Open `ca.pem` on the device (AirDrop, or mail it), install the profile under Settings, General, VPN & Device Management, then turn it on under Settings, General, About, Certificate Trust Settings. The app and Safari both trust it.                   |
-| iOS Simulator                 | `xcrun simctl keychain booted add-root-cert ca.pem`, or the UI tests' `--trust` (`client/docs/architecture/ios-app.md`).                                                                                                                                  |
-| Android, and its emulator     | Settings, Security, Encryption & credentials, Install a certificate, CA certificate. Chrome and Aspen's debug build trust it; a release build of Aspen trusts only the system's authorities.                                                              |
-| Node (Playwright, the scripts) | `NODE_EXTRA_CA_CERTS=target/dev-ca/ca.pem`. The Vite dev server's proxy already checks an `https` target against it.                                                                                                                                     |
-| Python                        | `ssl.create_default_context(cafile="target/dev-ca/ca.pem")`, as `scripts/dev_federation.py` does.                                                                                                                                                         |
-| Another deployment            | `[federation.development] extra_root_certificates`, for deployments side by side at `localhost` (`scripts/dev_federation.py`).                                                                                                                            |
+| Where                          | How                                                                                                                                                                                                                                    |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Arch, Fedora                   | `sudo trust anchor --store target/dev-ca/ca.pem`                                                                                                                                                                                       |
+| Debian, Ubuntu                 | `sudo cp target/dev-ca/ca.pem /usr/local/share/ca-certificates/aspen-dev-ca.crt && sudo update-ca-certificates`                                                                                                                        |
+| Chrome, Chromium, Electron     | On Linux they read the NSS database: `certutil -d sql:$HOME/.pki/nssdb -A -t C,, -n "Aspen development" -i target/dev-ca/ca.pem`. On macOS and Windows, the system's store.                                                            |
+| Firefox                        | Its own store: Settings, Privacy & Security, Certificates, View Certificates, Authorities, Import, and tick "Trust this CA to identify websites".                                                                                      |
+| macOS                          | `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ca.pem`                                                                                                                                          |
+| Windows                        | `certutil -addstore -f Root ca.pem` from an administrator's prompt, or `certutil -user -addstore Root ca.pem` for one account.                                                                                                         |
+| iOS                            | Open `ca.pem` on the device (AirDrop, or mail it), install the profile under Settings, General, VPN & Device Management, then turn it on under Settings, General, About, Certificate Trust Settings. The app and Safari both trust it. |
+| iOS Simulator                  | `xcrun simctl keychain booted add-root-cert ca.pem`, or the UI tests' `--trust` (`client/docs/architecture/ios-app.md`).                                                                                                               |
+| Android, and its emulator      | Settings, Security, Encryption & credentials, Install a certificate, CA certificate. Chrome and Aspen's debug build trust it; a release build of Aspen trusts only the system's authorities.                                           |
+| Node (Playwright, the scripts) | `NODE_EXTRA_CA_CERTS=target/dev-ca/ca.pem`. The Vite dev server's proxy already checks an `https` target against it.                                                                                                                   |
+| Python                         | `ssl.create_default_context(cafile="target/dev-ca/ca.pem")`, as `scripts/dev_federation.py` does.                                                                                                                                      |
+| Another deployment             | `[federation.development] extra_root_certificates`, for deployments side by side at `localhost` (`scripts/dev_federation.py`).                                                                                                         |
 
 ## On this machine alone
 
@@ -74,12 +74,12 @@ under `home.arpa` in your router's DNS works the same, without depending on `nip
 `caddy` service in `docker-compose.yaml` (`scripts/caddy/Caddyfile`), terminates TLS for the API
 server, the voice server, and SeaweedFS, each at a name of its own on port 443:
 
-| Address                         | Proxied to                       |
-| ------------------------------- | -------------------------------- |
-| `https://$HOST`                 | the API server, `127.0.0.1:8000` |
-| `https://voice.$HOST`           | the voice server, `127.0.0.1:9001` |
-| `https://s3.$HOST`              | SeaweedFS's S3 API, uploads      |
-| `https://media.$HOST`           | SeaweedFS's filer, downloads     |
+| Address               | Proxied to                         |
+| --------------------- | ---------------------------------- |
+| `https://$HOST`       | the API server, `127.0.0.1:8000`   |
+| `https://voice.$HOST` | the voice server, `127.0.0.1:9001` |
+| `https://s3.$HOST`    | SeaweedFS's S3 API, uploads        |
+| `https://media.$HOST` | SeaweedFS's filer, downloads       |
 
 1. Issue a certificate for the host and the names under it, and start Caddy:
 
@@ -102,8 +102,9 @@ server, the voice server, and SeaweedFS, each at a name of its own on port 443:
      `docker compose up -d nats`, and the same token as `nats_auth_token` in `aspen.toml` and
      `voice_server.toml`;
    - storage: an S3 identity of its own, added beside the repository's in SeaweedFS's shell
-     (`weed shell`, then `s3.configure -user=<name> -access_key=<…> -secret_key=<…>
-     -actions=Read,Write,List,Tagging -buckets=aspen-media -apply`), named in `[media.s3]`.
+     (`weed shell`, then
+     `s3.configure -user=<name> -access_key=<…> -secret_key=<…> -actions=Read,Write,List,Tagging -buckets=aspen-media -apply`),
+     named in `[media.s3]`.
 
 3. Serve the API server behind Caddy, and name the proxied addresses:
 

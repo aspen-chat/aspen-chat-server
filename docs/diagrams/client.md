@@ -43,9 +43,9 @@ flowchart TB
 
 ## Schemas join the server and the client
 
-The client never declares a server type by hand. Each server writes the schemas of what it sends
-and accepts, and `pnpm codegen` turns them into `@aspen/protocol`'s generated types, so a change on
-the server surfaces as a compile error in the client.
+The client never declares a server type by hand. Each server writes the schemas of what it sends and
+accepts, and `pnpm codegen` turns them into `@aspen/protocol`'s generated types, so a change on the
+server surfaces as a compile error in the client.
 
 ```mermaid
 flowchart LR

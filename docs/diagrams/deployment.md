@@ -61,8 +61,8 @@ flowchart TB
   work (mail, voice reports, standing checks, plugins' observers and timers, push). See
   [the web client](../architecture/web-client/index.md) and `app::context::Role`.
 - Clients signal with a voice server over its own WebSocket (`GET /ws`, through the proxy where one
-  terminates TLS) and send media straight to it. The API server offers them candidates and signs
-  the token they join with; the voice server never reads the database. See
+  terminates TLS) and send media straight to it. The API server offers them candidates and signs the
+  token they join with; the voice server never reads the database. See
   [Voice](../architecture/voice/index.md).
 - Clients upload attachments straight to storage with presigned URLs, and download them from
   `public_base_url`. The API server only signs, confirms, and makes previews (with `ffmpeg` and
