@@ -483,7 +483,6 @@ test("a plugin's notice shows a system notification naming the plugin", async ({
       }
     }
     Object.defineProperty(window, "Notification", { value: StandIn });
-    HTMLMediaElement.prototype.play = () => Promise.resolve();
   });
   const { publish } = await withBoards(page);
   await openGeneral(page);
