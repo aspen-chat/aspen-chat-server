@@ -44,8 +44,8 @@ const listDangerClass = listRowClass + " text-danger";
 export type MessageSheet = "react" | "reactions" | "delete" | "report";
 
 /**
- * What can be done to a message: react, reply to it, save it, mark it unread, pin, see who
- * reacted, reply in a thread, also send a thread reply to its channel, edit, copy its text, copy
+ * What can be done to a message: react, reply to it, reply in a thread, save it, mark it unread,
+ * pin, see who reacted, also send a thread reply to its channel, edit, copy its text, copy
  * a link to it, report it, copy its id, and delete it. Given `open`, they are a list of icons and
  * names, which every action closes: a touch screen's sheet under a long press
  * (`MessageActionSheet`) and a computer's menu (`MessageContextMenu`); the ones that open
@@ -153,6 +153,17 @@ export function MessageActions({
           }
         />
       )}
+      {canThread && (
+        <IconAction
+          label={m.threads.replyInThread}
+          {...action}
+          onPress={() => {
+            onDone?.();
+            onOpenThread();
+          }}
+          icon={<ChatsCircleIcon size={ACTION_ICON} aria-hidden="true" />}
+        />
+      )}
       <SaveButton
         messageId={messageId}
         {...action}
@@ -191,17 +202,6 @@ export function MessageActions({
             icon={<UsersIcon size={ACTION_ICON} aria-hidden="true" />}
           />
         )
-      )}
-      {canThread && (
-        <IconAction
-          label={m.threads.replyInThread}
-          {...action}
-          onPress={() => {
-            onDone?.();
-            onOpenThread();
-          }}
-          icon={<ChatsCircleIcon size={ACTION_ICON} aria-hidden="true" />}
-        />
       )}
       {echoParent !== null && (
         <EchoReplyButton
