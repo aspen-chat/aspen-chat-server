@@ -60,7 +60,9 @@ describe("Markdown", () => {
     const html = render("the killer is ||**the butler**|| obviously");
     expect(html).toContain('role="button"');
     expect(html).toContain('aria-label="Spoiler, activate to reveal"');
-    expect(html).toContain('<span aria-hidden="true"><strong>the butler</strong></span>');
+    expect(html).toContain(
+      '<span inert="" class="spoiler-content"><strong>the butler</strong></span>',
+    );
     expect(html).not.toContain("||");
     expect(html).toContain("the killer is ");
     expect(html).toContain(" obviously");
