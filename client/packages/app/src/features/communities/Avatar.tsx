@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useIcon, useIconLoading } from "@/api/hooks";
 import { mediaUrl } from "@/features/layout/safeUrl";
+import { initials } from "@/features/communities/initials";
 
 /**
  * A round picture for a user or community: their icon when they have one, otherwise a circle
@@ -68,14 +69,4 @@ export function Avatar({
       {initials(name)}
     </span>
   );
-}
-
-function initials(name: string): string {
-  const words = name
-    .trim()
-    .split(/\s+/)
-    .filter((w) => w.length > 0);
-  const first = words[0]?.[0] ?? "?";
-  const second = words.length > 1 ? (words[words.length - 1]?.[0] ?? "") : "";
-  return (first + second).toUpperCase();
 }
