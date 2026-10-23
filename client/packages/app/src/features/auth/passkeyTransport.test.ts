@@ -6,6 +6,7 @@ const server = {
   registrationInviteRequired: false,
   protocol: { version: 1, minimum: 1 },
   software: { name: "aspen", version: "0.1.0" },
+  identityProviders: [],
 };
 const withPasskeys = { ...server, passkeys: { rpId: "localhost" } };
 const withoutPasskeys = { ...server, passkeys: null };

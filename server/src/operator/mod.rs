@@ -11,7 +11,8 @@
 //! (`app::federation`), as Manage federation does from the dashboard, and can also replace the
 //! key, which no account can. `settings` shows and changes the deployment's settings
 //! (`app::deployment_settings`), and `voice-servers` keeps the registry of voice servers
-//! (`app::voice`), as the dashboard does. `plugins` installs, configures, and removes plugins
+//! (`app::voice`), as the dashboard does. `identity-providers` keeps the OpenID Connect providers
+//! people sign in through (`app::identity_provider`), as the dashboard does. `plugins` installs, configures, and removes plugins
 //! (`app::plugin::install`), which no account can install or grant permissions to.
 //! `attachments purge` deletes outright what is kept of deleted messages' files for reviewing
 //! reports (`app::attachment::evidence`), which nothing over the API can.
@@ -21,6 +22,7 @@ mod attachments;
 mod bench;
 mod communities;
 mod federation;
+mod identity_providers;
 mod invites;
 mod jobs;
 mod limits;
@@ -33,6 +35,7 @@ pub use attachments::{AttachmentsCommand, attachments};
 pub use bench::{BenchCommand, bench};
 pub use communities::{CommunitiesCommand, communities};
 pub use federation::{FederationCommand, federation};
+pub use identity_providers::{IdentityProvidersCommand, identity_providers};
 pub use invites::{InvitesCommand, invites};
 pub use jobs::{JobsCommand, jobs};
 pub use limits::{LimitsCommand, limits};

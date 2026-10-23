@@ -68,8 +68,8 @@ same commit, as with comments.
   the dmg and notarizing it (stapled later by `notarized-dmg.yml`), the App Store build for
   TestFlight, and the secrets they need.
 - [`administration.md`](docs/architecture/administration.md): the dashboard's tabs, the permissions
-  each needs, directories, moderation log, growth charts, registration invites, and foreign users'
-  bans.
+  each needs, directories, moderation log, growth charts, registration invites, identity providers,
+  and foreign users' bans.
 - [`blocking.md`](docs/architecture/blocking.md): blocks as store state, collapsed runs of blocked
   messages, blocked DMs, and blocks in calls.
 - [`bots.md`](docs/architecture/bots.md): bot badges, developer mode and the ID wizard, the bots
@@ -131,8 +131,9 @@ same commit, as with comments.
 - [`search.md`](docs/architecture/search.md): message search across channels, communities, and
   deployments.
 - [`sign-in.md`](docs/architecture/sign-in.md): the signed-out screens, the server each shell signs
-  in to, passkey ceremonies and their hand-off to the system browser, and signing in from another
-  device by a QR code.
+  in to, passkey ceremonies and their hand-off to the system browser, signing in from another device
+  by a QR code, and identity providers: their flows, the web client's return page, new accounts,
+  links, and verifying again through them.
 - [`tagging.md`](docs/architecture/tagging.md): rendering tags, completing them in the message box,
   and mention counts.
 - [`threads-and-dms.md`](docs/architecture/threads-and-dms.md): threads, following them, echoes, DMs

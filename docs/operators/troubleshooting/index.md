@@ -45,6 +45,12 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 | `lastSecondFactor`            | [People and their accounts](accounts.md)                    |
 | `reauthenticationRequired`    | [People and their accounts](accounts.md)                    |
 | `passkeysUnavailable`         | [People and their accounts](accounts.md)                    |
+| `identityProviderUnreachable` | [People and their accounts](accounts.md#identity-providers) |
+| `identityProviderFailed`      | [People and their accounts](accounts.md#identity-providers) |
+| `identityProviderUnavailable` | [People and their accounts](accounts.md#identity-providers) |
+| `identityProviderFlowExpired` | [People and their accounts](accounts.md#identity-providers) |
+| `identityTaken`               | [People and their accounts](accounts.md#identity-providers) |
+| `lastSignInMethod`            | [People and their accounts](accounts.md#identity-providers) |
 | `passkeyRejected`             | [People and their accounts](accounts.md)                    |
 | `deviceLinkExpired`           | [People and their accounts](accounts.md)                    |
 | `deviceLinkUsed`              | [People and their accounts](accounts.md)                    |

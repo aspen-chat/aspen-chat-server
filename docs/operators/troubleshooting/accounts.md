@@ -41,6 +41,29 @@ The app uses its own passkey prompt only where the deployment names it. Check, i
 Google keeps what it read for a while, so a fix can take a day to reach phones. The browser still
 works meanwhile.
 
+## Identity providers
+
+| Code                          | What it means                                                                                                   | What to do                                                                                                                      |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `identityProviderUnreachable` | The server could not read a provider's discovery document, keys, or token. The detail says which way it failed. | See [below](#identityproviderunreachable).                                                                                      |
+| `identityProviderFailed`      | The provider did not sign the person in, or its answer did not verify. The detail says why.                     | A refused code or an unverified token usually means the client ID or secret is wrong: check them with `identity-providers set`. |
+| `identityProviderUnavailable` | The provider is disabled or removed.                                                                            | Enable it with `identity-providers set <name> --enabled true`, if that was not meant.                                           |
+| `identityProviderFlowExpired` | The sign-in took longer than ten minutes, or was finished already.                                              | The person starts again.                                                                                                        |
+| `identityTaken`               | That identity at the provider is linked to another account.                                                     | The person signs in to that account, or unlinks it there first.                                                                 |
+| `lastSignInMethod`            | Removing a passkey or a provider would leave the account no way in.                                             | The person adds a password, a passkey, or another provider first.                                                               |
+
+### `identityProviderUnreachable`
+
+- **Private or local network:** set `[identity_providers] allow_private_addresses`.
+- **Certificate not trusted:** give your authority with `[identity_providers] ca_file`.
+- **No discovery document, or another issuer named:** the issuer must be exactly what the provider's
+  `/.well-known/openid-configuration` names, often with a path (a Keycloak realm's).
+- **Redirected:** give the issuer the provider's document names, not an address that redirects to
+  it.
+
+Back-channel logouts the server refuses are answered `400` and logged with the reason
+(`refused a back-channel logout`).
+
 ## Email
 
 | Code                        | What it means                                                                                                                                                             | What to do                                                                                                                |

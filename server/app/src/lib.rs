@@ -54,6 +54,7 @@ pub mod file_transfer;
 pub mod fleet;
 pub mod health;
 pub mod icon;
+pub mod identity_provider;
 pub mod invite;
 pub mod jobs;
 pub mod link_preview;
@@ -117,10 +118,10 @@ pub use error::Result;
 // The helper macros and IDs are `aspen_wire`'s, named here as they always are.
 pub use aspen_wire::{
     AnnotationId, AttachmentId, CategoryId, ChannelId, CommunityId, CustomEmojiId,
-    DeploymentRoleId, FederationKeyId, HeldMessageId, IconId, LinkPreviewImageId, MessageId,
-    NewsletterPostId, PasskeyId, PluginNoticeId, PollId, PushKeyId, PushSubscriptionId,
-    ReportCaseId, ReportCategoryId, ReportId, RoleId, SavedMessageId, UserId, VoiceServerId,
-    VoiceSessionId,
+    DeploymentRoleId, FederationKeyId, HeldMessageId, IconId, IdentityProviderId,
+    LinkPreviewImageId, MessageId, NewsletterPostId, PasskeyId, PluginNoticeId, PollId, PushKeyId,
+    PushSubscriptionId, ReportCaseId, ReportCategoryId, ReportId, RoleId, SavedMessageId, UserId,
+    UserIdentityId, VoiceServerId, VoiceSessionId,
 };
 pub use aspen_wire::{jsonb_sql_traits, text_sql_traits, wire_name_traits};
 

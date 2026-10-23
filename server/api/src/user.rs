@@ -89,13 +89,7 @@ pub async fn create_user(
         matches!(e, app::Error::RegistrationInviteInvalid)
     })
     .await;
-    let new_user_id = created.map_err(|e| match e {
-        app::Error::Diesel(diesel::result::Error::DatabaseError(
-            DatabaseErrorKind::UniqueViolation,
-            _,
-        )) => ApiError::new(ProblemCode::UsernameTaken),
-        other => other.into(),
-    })?;
+    let new_user_id = created.map_err(username_taken)?;
     Ok(Created::new(
         format!("{API_PREFIX}/users/{}", new_user_id.0),
         User {
@@ -241,14 +235,17 @@ pub async fn delete_user(
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangePasswordRequest {
-    pub old_password: String,
+    /// The current password. An account without one (made through an identity provider) leaves
+    /// it out, and sets its first password with a recently verified session instead.
+    #[serde(default)]
+    pub old_password: Option<String>,
     pub new_password: String,
 }
 
-/// Replaces the user's password. Every other session and refresh token belonging to the user is
-/// revoked; the session making this call remains valid. The current password is proof enough
-/// for an account without two-factor sign-in; one with it also needs a recently verified
-/// session.
+/// Replaces the user's password, or sets the first password of an account that has none. Every
+/// other session and refresh token belonging to the user is revoked; the session making this
+/// call remains valid. The current password is proof enough for an account without two-factor
+/// sign-in; one with it, or one without a password, needs a recently verified session.
 #[utoipa::path(
     put,
     path = "/users/{user}/password",
@@ -280,7 +277,7 @@ pub async fn change_password(
         &state,
         &session.caller,
         &state.config.auth,
-        &request.old_password,
+        request.old_password.as_deref(),
         &request.new_password,
     )
     .await?
@@ -292,6 +289,17 @@ pub async fn change_password(
         ChangePasswordOutcome::RequirementNotMet(requirement) => {
             Err(ApiError::password_requirement(requirement))
         }
+    }
+}
+
+/// A new account's unique violation, which only its name can cause, as `usernameTaken`.
+pub fn username_taken(e: app::Error) -> ApiError {
+    match e {
+        app::Error::Diesel(diesel::result::Error::DatabaseError(
+            DatabaseErrorKind::UniqueViolation,
+            _,
+        )) => ApiError::new(ProblemCode::UsernameTaken),
+        other => other.into(),
     }
 }
 

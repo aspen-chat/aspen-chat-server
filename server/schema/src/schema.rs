@@ -410,6 +410,22 @@ diesel::table! {
 }
 
 diesel::table! {
+    identity_provider (id) {
+        id -> Uuid,
+        name -> Text,
+        issuer -> Text,
+        client_id -> Text,
+        client_secret -> Text,
+        enabled -> Bool,
+        skip_invite -> Bool,
+        enforces_two_factor -> Bool,
+        trust_email -> Bool,
+        created_at -> Timestamptz,
+        removed_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     invite (code) {
         code -> Text,
         community -> Uuid,
@@ -743,6 +759,8 @@ diesel::table! {
         verified_at -> Timestamptz,
         method -> Text,
         created_at -> Timestamptz,
+        identity_provider -> Nullable<Uuid>,
+        identity_provider_session -> Nullable<Text>,
     }
 }
 
@@ -945,6 +963,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    user_identity (id) {
+        id -> Uuid,
+        user -> Uuid,
+        provider -> Uuid,
+        subject -> Text,
+        created_at -> Timestamptz,
+        last_used_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
     user_preferences (user) {
         user -> Uuid,
         values -> Jsonb,
@@ -1107,6 +1136,7 @@ diesel::joinable!(react -> user (author));
 diesel::joinable!(read_state -> channel (channel));
 diesel::joinable!(read_state -> user (user));
 diesel::joinable!(recovery_code -> user (user));
+diesel::joinable!(refresh_token -> identity_provider (identity_provider));
 diesel::joinable!(refresh_token -> user (user));
 diesel::joinable!(registration_invite -> invite (community_invite));
 diesel::joinable!(report -> report_case (case));
@@ -1128,6 +1158,8 @@ diesel::joinable!(user_deployment_role -> deployment_role (role));
 diesel::joinable!(user_deployment_role -> user (user));
 diesel::joinable!(user_email -> user (user));
 diesel::joinable!(user_foreign_deployment -> user (user));
+diesel::joinable!(user_identity -> identity_provider (provider));
+diesel::joinable!(user_identity -> user (user));
 diesel::joinable!(user_preferences -> user (user));
 diesel::joinable!(voice_mute -> community (community));
 diesel::joinable!(voice_participant -> user (user));
@@ -1173,6 +1205,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     file_transfer,
     held_message,
     icon,
+    identity_provider,
     invite,
     job,
     mention,
@@ -1216,6 +1249,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     user_deployment_role,
     user_email,
     user_foreign_deployment,
+    user_identity,
     user_preferences,
     voice_mute,
     voice_participant,

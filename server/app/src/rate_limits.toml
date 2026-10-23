@@ -87,6 +87,9 @@ fail_closed = [
   "PUT /communities/{community}/members/@me",
   "POST /communities/{community}/invites",
   "POST /auth/device-credentials",
+  "POST /auth/identity-provider-flows",
+  "POST /auth/identity-provider-flows/{flow}/claim",
+  "POST /auth/identity-provider-flows/{flow}/account",
 ]
 # Endpoints a request without a session may call without a device credential
 # (`app::device_credential`): what browsers open as pages, what other deployments' servers and
@@ -111,6 +114,8 @@ device_exempt = [
   "GET /{*path}",
   "GET /plugins/{plugin}/assets/{*path}",
   "GET /plugins/{plugin}/capabilities/{secret}",
+  "GET /auth/oidc/callback",
+  "POST /auth/oidc/back-channel-logout",
 ]
 # The zero bits a device credential's puzzle asks for: about a million hashes, a second or two
 # on a mid-range phone and a fraction of one on a computer. Each more doubles it.
@@ -154,6 +159,8 @@ endpoints = [
   "POST /auth/password-resets",
   "POST /auth/password-resets/{reset}/codes",
   "POST /auth/password-resets/{reset}/completion",
+  "POST /auth/identity-provider-flows",
+  "POST /auth/identity-provider-flows/{flow}/claim",
 ]
 limits = { device = { requests = 30, per_seconds = 60, burst = 10, bucket = "sign_in" }, ip = { requests = 3000, per_seconds = 60, burst = 1000, bucket = "sign_in" }, ip_failures = { requests = 200, per_seconds = 600, burst = 100, bucket = "sign_in_failures" } }
 
@@ -181,6 +188,7 @@ limits = { ip_per_link = { requests = 60, per_seconds = 60, burst = 10 } }
 # Changing how an account signs in.
 [rate_limits.groups.security]
 endpoints = [
+  "DELETE /users/{user}/identities/{identity}",
   "POST /auth/reauthenticate",
   "PUT /users/{user}/password",
   "DELETE /users/{user}",
@@ -258,6 +266,10 @@ endpoints = [
   "GET /admin/newsletter/posts/{post}",
   "PATCH /admin/newsletter/posts/{post}",
   "DELETE /admin/newsletter/posts/{post}",
+  "GET /admin/identity-providers",
+  "POST /admin/identity-providers",
+  "PATCH /admin/identity-providers/{provider}",
+  "DELETE /admin/identity-providers/{provider}",
 ]
 limits = { user = { requests = 120, per_seconds = 60, burst = 30, bucket = "admin" } }
 
@@ -363,7 +375,7 @@ ip_failures = { requests = 100, per_seconds = 600, burst = 50, bucket = "invite_
 # Every account made, from everyone together: enough for a launch's rush (600 at once, then
 # twenty a second, 72000 an hour), while a crowd of addresses cannot make accounts without end.
 # A deployment expecting more raises it in aspen.toml.
-global = { requests = 1200, per_seconds = 60, burst = 600 }
+global = { requests = 1200, per_seconds = 60, burst = 600, bucket = "registration" }
 
 # Each sends mail: a code to an address the caller says is theirs.
 [rate_limits.endpoints."POST /users/{user}/email/verification-codes"]
@@ -403,6 +415,34 @@ user = { requests = 30, per_seconds = 60, burst = 10 }
 ip_failures = { requests = 10, per_seconds = 600, burst = 5 }
 user_failures = { requests = 10, per_seconds = 600, burst = 5 }
 global_failures = { requests = 60, per_seconds = 600, burst = 30 }
+
+# Starting a flow keeps it in Valkey for ten minutes, and makes this server read the provider's
+# discovery document when its cached copy has expired, so everyone's starts together are limited
+# as passkey ceremonies' are.
+[rate_limits.endpoints."POST /auth/identity-provider-flows"]
+global = { requests = 3000, per_seconds = 60, burst = 1000 }
+ip = { requests = 300, per_seconds = 60, burst = 100 }
+
+# Making the account a provider's sign-in offered: an account, as `POST /users` makes one.
+[rate_limits.endpoints."POST /auth/identity-provider-flows/{flow}/account"]
+device = { requests = 5, per_seconds = 3600, burst = 3 }
+ip = { requests = 1000, per_seconds = 3600 }
+ip_failures = { requests = 100, per_seconds = 600, burst = 50, bucket = "invite_failures" }
+global = { requests = 1200, per_seconds = 60, burst = 600, bucket = "registration" }
+
+# Where a provider sends the browser back: a page the browser opens, presenting no device
+# credential (`device_exempt`). Each names a flow only its starter and the provider know, and
+# makes this server exchange its code with the provider, so an address's are limited like
+# sign-ins' are.
+[rate_limits.endpoints."GET /auth/oidc/callback"]
+ip = { requests = 3000, per_seconds = 60, burst = 1000, bucket = "sign_in" }
+
+# Providers post logouts from their own servers, for everyone they sign out at once. A token
+# whose signature fails makes this server read the provider's keys again, so everyone's are
+# limited too.
+[rate_limits.endpoints."POST /auth/oidc/back-channel-logout"]
+ip = { requests = 600, per_seconds = 60, burst = 200 }
+global = { requests = 3000, per_seconds = 60, burst = 1000 }
 
 # Each mails the reset code again, to an address its asker answered with; the account's mail
 # is also limited where it is queued (`app::email::reset`).

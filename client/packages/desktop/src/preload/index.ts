@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld("aspenDesktop", {
   passkeyHandoff: {
     prepare: () => ipcRenderer.invoke("passkey:prepare"),
     open: (id: unknown, url: unknown) => ipcRenderer.invoke("passkey:open", id, url),
+    openProvider: (id: unknown, authorizeUrl: unknown, server: unknown) =>
+      ipcRenderer.invoke("passkey:open-provider", id, authorizeUrl, server),
     dispose: (id: unknown) => {
       ipcRenderer.send("passkey:dispose", id);
     },

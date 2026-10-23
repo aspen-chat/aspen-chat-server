@@ -152,6 +152,23 @@ pub enum ProblemCode {
     PluginUnavailable,
     /// `GET /health/ready`: this server cannot reach a service it needs. `detail` names which.
     NotReady,
+    /// The identity provider is unknown, removed, or turned off. Read `GET /auth/methods` again
+    /// for those offered.
+    IdentityProviderUnavailable,
+    /// An identity provider could not be reached, or did not answer as one does. `detail` says
+    /// which, and who can fix it.
+    IdentityProviderUnreachable,
+    /// Signing in at the identity provider did not succeed, or what it said did not verify.
+    /// `detail` says why.
+    IdentityProviderFailed,
+    /// The identity provider flow is unknown, expired, or already used. Start again.
+    IdentityProviderFlowExpired,
+    /// The identity at the provider is linked to another account. Sign in to that one, or unlink
+    /// it there first.
+    IdentityTaken,
+    /// Removing this would leave the account no way to sign in: add a password, a passkey, or
+    /// another identity provider first.
+    LastSignInMethod,
     /// Something failed on the server. Retrying later may succeed.
     Internal,
 }
@@ -210,6 +227,12 @@ impl ProblemCode {
                 StatusCode::SERVICE_UNAVAILABLE
             }
             ProblemCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            ProblemCode::IdentityProviderUnavailable | ProblemCode::IdentityProviderFlowExpired => {
+                StatusCode::NOT_FOUND
+            }
+            ProblemCode::IdentityProviderUnreachable => StatusCode::BAD_GATEWAY,
+            ProblemCode::IdentityProviderFailed => StatusCode::UNAUTHORIZED,
+            ProblemCode::IdentityTaken | ProblemCode::LastSignInMethod => StatusCode::CONFLICT,
         }
     }
 
@@ -264,6 +287,12 @@ impl ProblemCode {
             ProblemCode::PluginUnavailable => t!("problemPluginUnavailable"),
             ProblemCode::NotReady => t!("problemNotReady"),
             ProblemCode::Internal => t!("tryAgainLater"),
+            ProblemCode::IdentityProviderUnavailable => t!("problemIdentityProviderUnavailable"),
+            ProblemCode::IdentityProviderUnreachable => t!("problemIdentityProviderUnreachable"),
+            ProblemCode::IdentityProviderFailed => t!("problemIdentityProviderFailed"),
+            ProblemCode::IdentityProviderFlowExpired => t!("problemIdentityProviderFlowExpired"),
+            ProblemCode::IdentityTaken => t!("problemIdentityTaken"),
+            ProblemCode::LastSignInMethod => t!("problemLastSignInMethod"),
         }
     }
 }
@@ -384,6 +413,22 @@ impl From<app::Error> for ApiError {
             app::Error::PasswordResetExpired => Self::new(ProblemCode::PasswordResetExpired)
                 .with_detail(t!("passwordResetExpiredDetail")),
             app::Error::LastSecondFactor => Self::new(ProblemCode::LastSecondFactor),
+            app::Error::IdentityProviderUnavailable => {
+                Self::new(ProblemCode::IdentityProviderUnavailable)
+                    .with_detail(t!("identityProviderUnavailableDetail"))
+            }
+            app::Error::IdentityProviderUnreachable(detail) => {
+                Self::new(ProblemCode::IdentityProviderUnreachable).with_detail(detail)
+            }
+            app::Error::IdentityProviderFailed(detail) => {
+                Self::new(ProblemCode::IdentityProviderFailed).with_detail(detail)
+            }
+            app::Error::IdentityProviderFlowExpired => {
+                Self::new(ProblemCode::IdentityProviderFlowExpired)
+                    .with_detail(t!("identityProviderFlowExpiredDetail"))
+            }
+            app::Error::IdentityTaken => Self::new(ProblemCode::IdentityTaken),
+            app::Error::LastSignInMethod => Self::new(ProblemCode::LastSignInMethod),
             app::Error::InvalidTicket => Self::new(ProblemCode::InvalidToken),
             app::Error::DeviceLinkExpired => {
                 Self::new(ProblemCode::DeviceLinkExpired).with_detail(t!("deviceLinkExpiredDetail"))

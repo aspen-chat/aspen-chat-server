@@ -44,6 +44,12 @@ pub struct SecuritySettings {
     pub recovery_codes_remaining: i64,
     /// Until when this session may change security settings without verifying again.
     pub verified_until: DateTime<Utc>,
+    /// Whether the account has a password. One made through an identity provider has none until
+    /// it sets one (`PUT /users/{user}/password` without `oldPassword`), and verifies again
+    /// through its provider.
+    pub has_password: bool,
+    /// The identity providers linked to the account.
+    pub identities: Vec<crate::identity_provider::LinkedIdentity>,
 }
 
 #[utoipa::path(
@@ -75,6 +81,8 @@ pub async fn get_security(
         passkey_user_handle: app::passkey::user_handle(session.user.id),
         recovery_codes_remaining: overview.recovery_codes_remaining,
         verified_until: overview.verified_until,
+        has_password: overview.has_password,
+        identities: overview.identities.into_iter().map(Into::into).collect(),
     }))
 }
 
@@ -241,7 +249,7 @@ pub async fn rename_passkey(
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden` or `reauthenticationRequired`", body = Problem),
         (status = NOT_FOUND, body = Problem),
-        (status = CONFLICT, description = "`lastSecondFactor`", body = Problem),
+        (status = CONFLICT, description = "`lastSecondFactor`, or `lastSignInMethod`: it is the account's only way in", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]

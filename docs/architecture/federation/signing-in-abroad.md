@@ -38,7 +38,9 @@ statement has its own `typ`. It holds:
 - two minutes of life;
 - a single-use id;
 - how the sign-in proved who they are (`SignInMethod`: `password`, `secondFactor`, `passkey`, or a
-  bot's `token`), recorded on every `refresh_token`;
+  bot's `token`), recorded on every `refresh_token`. A sign-in through an identity provider is named
+  by its strength, `password` or `secondFactor` (`SignInMethod::carried_abroad`; see
+  [Identity providers](../sign-in-and-security/identity-providers.md#strength));
 - their profile.
 
 ## Verifying it

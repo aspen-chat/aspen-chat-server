@@ -2,7 +2,7 @@
 
 The Administration Dashboard is where holders of deployment permissions run the deployment: its
 figures, fleet, invites, newsletter, directories, reports, moderation log, settings, federation,
-roles, and plugins.
+identity providers, roles, and plugins.
 
 ## Where it lives
 
@@ -44,6 +44,7 @@ The permissions are read at bootstrap from `GET /users/@me/admin` and kept by
 | Moderation log                     | `viewDashboard`                                                                         | See [Moderation log](#moderation-log)             |
 | Deployment profile and policies    | `manageDeploymentSettings`                                                              | See [Deployment settings](#deployment-settings)   |
 | Federation                         | `manageFederation`                                                                      | `Federation.tsx`; see [Federation](#federation)   |
+| Identity providers                 | `manageIdentityProviders`                                                               | See [Identity providers](#identity-providers)     |
 | Deployment roles                   | Everyone; editable with `manageDeploymentRoles`                                         | See [Deployment roles](#deployment-roles)         |
 | File transfer record               | `moderateCommunities`                                                                   |                                                   |
 | Plugins                            | `viewDashboard` or `managePlugins`                                                      | Described in [Plugins](plugins/index.md)          |
@@ -206,6 +207,24 @@ emptied name is saved as none.
 - adding a deployment, which is contacted at once
 - the directory of known deployments. Each can be checked again, put on the lists the gates read,
   have its offered key reviewed and accepted, or be forgotten.
+
+## Identity providers
+
+`IdentityProviders.tsx` reads `GET /admin/identity-providers` and shows:
+
+- the providers, each with its issuer, whether it offers sign-in, and how many accounts are linked
+  to it. The server counts to 1001, and more than 1000 shows as "1000+" (`LINKED_COUNTED`).
+- a form adding one. Adding waits while the server reads the provider's discovery document, a few
+  seconds, and shows the server's detail when it cannot (`identityProviderUnreachable`).
+- each provider's form, sending only what changed as a merge patch (`providerPatch`,
+  `identityProviderDrafts.ts`). The client secret is write-only: the form offers to replace it and
+  never shows it.
+- removing one, after a `ConfirmModal` naming its linked accounts and warning that accounts whose
+  only way in it is can no longer sign in.
+- the redirect URI and the back-channel logout URI, each with a copy button, which administrators
+  register at each provider.
+
+How sign-in through them works on the client: [Identity providers](sign-in.md#identity-providers).
 
 ## Deployment roles
 

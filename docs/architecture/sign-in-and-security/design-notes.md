@@ -226,3 +226,40 @@ See [Device credentials](device-credentials.md).
   or a stub in a test, costs it nothing, and the first refusal costs one round trip more.
 - **A credential survives signing out.** It names the device, not the person, and a person signing
   out and in again would otherwise pay the puzzle each time.
+
+## Identity providers
+
+See [Identity providers](identity-providers.md).
+
+- **Aspen is a relying party only.** Issuing tokens others depend on (an OAuth authorization server,
+  "Sign in with Aspen") waits for an outside security audit.
+- **Identities are matched by provider and `sub`, never by email address.** An address can be
+  reused, changed, or asserted by a provider that does not own it, so matching by it would let one
+  person's provider sign in as someone else.
+- **The claim needs the client's PKCE verifier and a one-time return code, as a passkey hand-off's
+  does.** Whoever starts a flow can send its authorization URL to someone else; the return code
+  reaches only the device whose browser ran the flow, so the effect goes only to whoever started it
+  there. The web client's return page is this deployment's own, at a path the server fixes, so no
+  page a client names can be handed the code.
+- **The server keeps its own PKCE verifier and nonce for the provider.** The provider's code is
+  exchanged with a verifier the client never sees, so a code obtained elsewhere cannot be spent on a
+  flow, and `state` (the flow's id) may pass through the provider's logs.
+- **Nothing takes effect until the claim.** A flow whose browser never comes back, or whose return
+  reaches the wrong device, does nothing.
+- **A provider's sign-in counts as one factor unless it says otherwise.** Its `amr` claim, or the
+  administrators' word (`enforces_two_factor`), decides; a provider that says nothing is treated as
+  a password, so `require_two_factor` and an account's own second factors still apply.
+- **Abroad, a provider's sign-in travels as `password` or `secondFactor`.** Other deployments then
+  read it as any other, and the federation protocol names no provider.
+- **Accounts made through a provider have no password.** They verify again at the provider, asked to
+  sign in afresh (`prompt=login`, `max_age=0`, checked by `auth_time`), and may set a password
+  later. Removing the last way in is refused, so no account is left that no one can sign in to.
+- **Removing a provider keeps its row and leaves its sign-ins.** The sign-ins name it, and deleting
+  a provider's many links is a job. Ending every sign-in it made would be another data-driven job; a
+  provider that should end them sends back-channel logouts.
+- **Logout tokens are verified here, not by `openidconnect`,** which verifies ID tokens only. Only
+  asymmetric signatures from the provider's published keys are taken, a token carrying a `nonce` is
+  refused so an ID token cannot pass for one, and each `jti` is used once.
+- **Providers on private networks need the operator's word.** Holders of Manage identity providers
+  are administrators of the deployment, not of its machines; the terminal's
+  `allow_private_addresses` keeps them from pointing the server at what only it can reach.

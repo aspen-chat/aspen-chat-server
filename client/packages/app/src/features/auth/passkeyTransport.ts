@@ -54,7 +54,7 @@ function desktopHandoff(bridge: AspenDesktopBridge["passkeyHandoff"]): PasskeyHa
 }
 
 /** The browser returns through the app's `aspen:` URL scheme, which the native projects claim. */
-const mobileHandoff: PasskeyHandoff = {
+export const mobileHandoff: PasskeyHandoff = {
   async prepare() {
     const [{ App }, { Browser }] = await Promise.all([
       import("@capacitor/app"),

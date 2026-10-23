@@ -889,18 +889,23 @@ pub async fn reauthenticate(
                     "reauthenticateWithSecondFactor"
                 )));
             }
+            // The connection goes back to the pool before the password work
+            // (`app::login::hash_password`).
+            let hash: String = {
+                let mut conn = state.connection_pool.get().await?;
+                user::table
+                    .select(user::password_hash)
+                    .filter(user::id.eq(user_id))
+                    .filter(user::deleted_at.is_null())
+                    .first(&mut conn)
+                    .await?
+            };
+            // An account made through an identity provider has none until it sets one; it
+            // verifies again there (`app::identity_provider::flow`).
+            if hash.is_empty() {
+                return Err(crate::Error::Validation(t!("reauthenticateNoPassword")));
+            }
             limited(state, user_id, async || {
-                // The connection goes back to the pool before the password work
-                // (`app::login::hash_password`).
-                let hash: String = {
-                    let mut conn = state.connection_pool.get().await?;
-                    user::table
-                        .select(user::password_hash)
-                        .filter(user::id.eq(user_id))
-                        .filter(user::deleted_at.is_null())
-                        .first(&mut conn)
-                        .await?
-                };
                 crate::login::check_password(password, hash).await
             })
             .await?
@@ -931,6 +936,10 @@ pub struct SecurityOverview {
     pub recovery_codes_remaining: i64,
     pub required: bool,
     pub verified_until: DateTime<Utc>,
+    /// Whether the account has a password; one made through an identity provider has none
+    /// until it sets one.
+    pub has_password: bool,
+    pub identities: Vec<crate::identity_provider::identity::IdentitySummary>,
 }
 
 pub async fn overview(
@@ -947,12 +956,20 @@ pub async fn overview(
         .count()
         .get_result::<i64>(&mut conn)
         .await?;
+    let has_password = user::table
+        .select(user::password_hash.ne(""))
+        .filter(user::id.eq(user_id))
+        .first::<bool>(&mut conn)
+        .await?;
+    let identities = crate::identity_provider::identity::list(&mut conn, user_id).await?;
     Ok(SecurityOverview {
         totp: found.totp,
         passkeys,
         recovery_codes_remaining,
         required: state.settings().require_two_factor,
         verified_until: caller.verified_until(&state.config.auth),
+        has_password,
+        identities,
     })
 }
 

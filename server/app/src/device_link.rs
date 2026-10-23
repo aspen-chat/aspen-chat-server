@@ -604,6 +604,7 @@ pub async fn claim(
             giver.user,
             giver.method,
             giver.verified_at,
+            &giver.sign_in,
         )
         .await?,
     ))

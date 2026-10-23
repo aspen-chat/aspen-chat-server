@@ -158,6 +158,11 @@ enum Command {
         #[clap(subcommand)]
         action: operator::VoiceServersCommand,
     },
+    /// Operator commands for the OpenID Connect providers people sign in through.
+    IdentityProviders {
+        #[clap(subcommand)]
+        action: operator::IdentityProvidersCommand,
+    },
     /// Operator commands for plugins: installing, configuring, ordering, and removing them.
     Plugins {
         #[clap(subcommand)]
@@ -277,6 +282,9 @@ async fn run(options: Opt) -> Result<()> {
             Command::Federation { action } => operator::federation(&config, action).await,
             Command::Settings { action } => operator::settings(&config, action).await,
             Command::VoiceServers { action } => operator::voice_servers(&config, action).await,
+            Command::IdentityProviders { action } => {
+                operator::identity_providers(&config, action).await
+            }
             Command::Plugins { action } => operator::plugins(&config, action).await,
         };
         // What the command decided may be a job (a plugin's purge, signing out a blocked

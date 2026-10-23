@@ -25,6 +25,12 @@ import {
 import { ApiProblemError, isProblem, transportProblem, type Problem } from "./problem";
 import { type Session, type SessionStore, sessionTokenExpiresSoon } from "./session";
 import { API_PREFIX, requireSecure } from "./urls";
+import type {
+  IdentityProviderOutcome,
+  IdentityProviderPurpose,
+  PendingAccount,
+} from "./identityProviders";
+import type { PasskeyHandoff } from "./passkeys";
 
 export type Paths = paths;
 export type Schemas = components["schemas"];
@@ -608,6 +614,116 @@ export class AspenClient {
     });
     if (result.error !== undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Starts a flow at an identity provider with a PKCE challenge of this client's. `returnTo` is
+   * an app's return address (a loopback port or an `aspen:` URI, as a passkey hand-off's);
+   * left out, the browser returns to the web client's `/sign-in/provider` page. Returns the flow,
+   * whose `authorizeUrl` the browser is sent to, and the verifier to claim it with. `link` needs
+   * a recent verification (`reauthenticationRequired`).
+   */
+  async startIdentityProviderFlow(
+    provider: string,
+    purpose: IdentityProviderPurpose,
+    returnTo?: string,
+  ): Promise<{ flow: Schemas["IdentityProviderFlow"]; verifier: string }> {
+    const { verifier, challenge } = await pkcePair();
+    const flow = unwrap(
+      await this.api.POST(`${API_PREFIX}/auth/identity-provider-flows`, {
+        body: {
+          provider,
+          purpose,
+          codeChallenge: challenge,
+          ...(returnTo === undefined ? {} : { returnTo }),
+        },
+      }),
+    );
+    return { flow, verifier };
+  }
+
+  /**
+   * Claims what the provider said, with the flow's verifier and the return code the browser
+   * brought back, and stores the session a `signIn` flow made. Throws `ApiProblemError`:
+   * `identityProviderFailed` (its detail says why), `identityProviderFlowExpired`,
+   * `identityProviderUnavailable`, `identityTaken`, or `verificationFailed`.
+   */
+  async claimIdentityProviderFlow(
+    flow: string,
+    verifier: string,
+    code: string,
+  ): Promise<IdentityProviderOutcome> {
+    const claimed = unwrap(
+      await this.api.POST(`${API_PREFIX}/auth/identity-provider-flows/{flow}/claim`, {
+        params: { path: { flow } },
+        body: { codeVerifier: verifier, code },
+      }),
+    );
+    switch (claimed.outcome) {
+      case "signedIn":
+        return claimed.status === "secondFactorRequired"
+          ? { outcome: "secondFactorRequired", ticket: claimed.ticket, methods: claimed.methods }
+          : { outcome: "signedIn", session: this.#adopt(claimed) };
+      case "accountRequired":
+        return { outcome: "accountRequired", offer: claimed, account: { flow, verifier } };
+      case "linked":
+        return { outcome: "linked", identity: claimed.identity };
+      case "reauthenticated":
+        return { outcome: "reauthenticated", verifiedUntil: claimed.verifiedUntil };
+    }
+  }
+
+  /**
+   * Makes the account an `accountRequired` claim offered, linked to the provider's identity, and
+   * stores its session. Throws `ApiProblemError`: `usernameTaken` (another name may be tried
+   * while the offer lasts), `validation`, `registrationInviteRequired` or
+   * `registrationInviteInvalid`, and `identityProviderFlowExpired` once it has lapsed.
+   */
+  async createIdentityProviderAccount(
+    pending: PendingAccount,
+    account: { name: string; inviteCode?: string; email?: string; newsletter?: boolean },
+  ): Promise<Session> {
+    const made = await this.api.POST(`${API_PREFIX}/auth/identity-provider-flows/{flow}/account`, {
+      params: { path: { flow: pending.flow } },
+      body: {
+        codeVerifier: pending.verifier,
+        // Composed (NFC), as the server requires a new name to be, whatever the keyboard sent.
+        name: account.name.normalize("NFC"),
+        ...(account.inviteCode === undefined ? {} : { inviteCode: account.inviteCode }),
+        ...(account.email === undefined ? {} : { email: account.email }),
+        ...(account.newsletter === undefined ? {} : { newsletter: account.newsletter }),
+      },
+    });
+    return this.#adopt(unwrap(made));
+  }
+
+  /**
+   * Runs a flow end to end in the system browser, as the desktop and mobile apps do, through a
+   * passkey hand-off's return address: starts it, opens the provider's sign-in, waits for the
+   * browser to come back, and claims what it brought. Throws `PasskeyCancelledError` when the
+   * browser is closed or the hand-off gives up waiting, and `ApiProblemError` as
+   * `claimIdentityProviderFlow` does.
+   */
+  async runIdentityProviderHandoff(
+    provider: string,
+    purpose: IdentityProviderPurpose,
+    handoff: PasskeyHandoff,
+  ): Promise<IdentityProviderOutcome> {
+    const session = await handoff.prepare();
+    try {
+      const { flow, verifier } = await this.startIdentityProviderFlow(
+        provider,
+        purpose,
+        session.returnTo,
+      );
+      const returned = await session.open(flow.authorizeUrl);
+      if (returned.ceremony !== flow.id || returned.outcome !== "done" || returned.code === null) {
+        throw new PasskeyCancelledError();
+      }
+      return await this.claimIdentityProviderFlow(flow.id, verifier, returned.code);
+    } finally {
+      session.dispose();
     }
   }
 

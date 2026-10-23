@@ -91,3 +91,4 @@ askama = "0.16.1"
 chrono-tz = "0.10.4"
 tempfile = "3.27.0"
 moka = { version = "0.12", features = ["sync"] }
+openidconnect = { version = "4.0.1", default-features = false }

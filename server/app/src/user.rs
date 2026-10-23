@@ -297,7 +297,6 @@ pub async fn create_user(
 ) -> Result<UserId, crate::Error> {
     validate_registration(command)?;
     let email = crate::email::check_registration(&state, command.email.as_deref())?;
-    let newsletter = command.newsletter.unwrap_or(false);
     let invite_required = state.settings().registration_invite_required;
     let invite_code = command
         .invite_code
@@ -311,83 +310,144 @@ pub async fn create_user(
     // The connection is taken once the password is hashed (see `hash_password`).
     let password_hash = hash_password(command.password.to_string()).await?;
     let mut conn = state.connection_pool.get().await?;
+    let state = &state;
+    let account = NewAccount {
+        name: command.name.clone(),
+        password_hash,
+        display_name: command.display_name.clone(),
+        pronouns: command.pronouns.clone(),
+        bio: command.bio.clone(),
+        status: command.status.clone(),
+        email: email.map(|address| NewEmail {
+            address,
+            verified: false,
+            newsletter: command.newsletter.unwrap_or(false),
+        }),
+        invite_code: invite_code.map(str::to_string),
+        invite_required,
+    };
+    let (new_user_id, joined) = conn
+        .transaction(|conn| create_account(state, conn.as_mut(), account).scope_boxed())
+        .await?;
+    after_account_created(state, joined).await;
+    Ok(new_user_id)
+}
+
+/// An account about to be made: by registration, or by a first sign-in through an identity
+/// provider (`app::identity_provider`). Its name and profile are already checked.
+pub struct NewAccount {
+    pub name: String,
+    /// Empty for an account without a password.
+    pub password_hash: String,
+    pub display_name: Option<String>,
+    pub pronouns: Option<String>,
+    pub bio: Option<String>,
+    pub status: Option<aspen_wire::user::CustomStatus>,
+    pub email: Option<NewEmail>,
+    /// A registration invite; with `invite_required`, one that works must be given, and
+    /// otherwise one that no longer works is ignored.
+    pub invite_code: Option<String>,
+    pub invite_required: bool,
+}
+
+/// A new account's email address.
+pub struct NewEmail {
+    pub address: String,
+    /// Already verified by someone this deployment trusts (an identity provider), so no code is
+    /// sent.
+    pub verified: bool,
+    pub newsletter: bool,
+}
+
+/// Makes `account` inside the caller's transaction, using its invite there, so an invite with one
+/// use left makes one account however many register with it at once. Returns the account and
+/// the community a dual invite joined it to; the caller passes that to
+/// [`after_account_created`] once the transaction commits.
+pub async fn create_account(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    account: NewAccount,
+) -> crate::Result<(UserId, Option<crate::CommunityId>)> {
     let new_user_id = UserId::new();
     let now = chrono::Utc::now();
-    let state = &state;
-    let joined = conn
-        .transaction(|conn| {
-            async move {
-                // The invite is used in the transaction that makes the account, so an invite with
-                // one use left makes one account however many register with it at once. Where
-                // invites are optional, one that no longer works is ignored rather than refused.
-                let (registered_with, community_invite) = match invite_code {
-                    Some(code) => match registration_invite::redeem(conn.as_mut(), code).await {
-                        Ok(community_invite) => (Some(code.to_string()), community_invite),
-                        Err(crate::Error::RegistrationInviteInvalid) if !invite_required => {
-                            (None, None)
-                        }
-                        Err(e) => return Err(e),
-                    },
-                    None => (None, None),
-                };
-                diesel::insert_into(user::table)
-                    .values(UserPg {
-                        id: new_user_id,
-                        name: command.name.clone(),
-                        icon: command.icon.map(MaybeLoaded::NotLoaded),
-                        password_hash,
-                        created_at: now,
-                        last_seen_at: now,
-                        deleted_at: None,
-                        display_name: command.display_name.clone(),
-                        pronouns: command.pronouns.clone(),
-                        bio: command.bio.clone(),
-                        status_text: command.status.as_ref().map(|s| s.text.clone()),
-                        status_emoji: command.status.as_ref().and_then(|s| s.emoji.clone()),
-                        name_hue: None,
-                        bot: false,
-                        system: false,
-                        bot_owner: None,
-                        bot_public: false,
-                        home_domain: None,
-                        home_id: None,
-                        home_icon: None,
-                        plugin: None,
-                        public_email: None,
-                    })
-                    .execute(conn.as_mut())
-                    .await?;
-                if let Some(address) = &email {
-                    crate::email::register(state, conn.as_mut(), new_user_id, address, newsletter)
-                        .await?;
-                }
-                if registered_with.is_some() {
-                    diesel::update(user::table.filter(user::id.eq(new_user_id)))
-                        .set(user::registered_with.eq(registered_with))
-                        .execute(conn.as_mut())
-                        .await?;
-                }
-                match community_invite {
-                    Some(community_invite) => {
-                        registration_invite::join_invited(
-                            state,
-                            conn.as_mut(),
-                            new_user_id,
-                            &community_invite,
-                        )
-                        .await
-                    }
-                    None => Ok::<_, crate::Error>(None),
-                }
+    let (registered_with, community_invite) = match account.invite_code.as_deref() {
+        Some(code) => match registration_invite::redeem(conn, code).await {
+            Ok(community_invite) => (Some(code.to_string()), community_invite),
+            Err(crate::Error::RegistrationInviteInvalid) if !account.invite_required => {
+                (None, None)
             }
-            .scope_boxed()
+            Err(e) => return Err(e),
+        },
+        None if account.invite_required => return Err(crate::Error::RegistrationInviteRequired),
+        None => (None, None),
+    };
+    diesel::insert_into(user::table)
+        .values(UserPg {
+            id: new_user_id,
+            name: account.name,
+            icon: None,
+            password_hash: account.password_hash,
+            created_at: now,
+            last_seen_at: now,
+            deleted_at: None,
+            display_name: account.display_name,
+            pronouns: account.pronouns,
+            bio: account.bio,
+            status_text: account.status.as_ref().map(|s| s.text.clone()),
+            status_emoji: account.status.as_ref().and_then(|s| s.emoji.clone()),
+            name_hue: None,
+            bot: false,
+            system: false,
+            bot_owner: None,
+            bot_public: false,
+            home_domain: None,
+            home_id: None,
+            home_icon: None,
+            plugin: None,
+            public_email: None,
         })
+        .execute(conn)
         .await?;
+    if let Some(email) = &account.email {
+        if email.verified {
+            crate::email::register_verified(
+                state,
+                conn,
+                new_user_id,
+                &email.address,
+                email.newsletter,
+            )
+            .await?;
+        } else {
+            crate::email::register(state, conn, new_user_id, &email.address, email.newsletter)
+                .await?;
+        }
+    }
+    if registered_with.is_some() {
+        diesel::update(user::table.filter(user::id.eq(new_user_id)))
+            .set(user::registered_with.eq(registered_with))
+            .execute(conn)
+            .await?;
+    }
+    let joined = match community_invite {
+        Some(community_invite) => {
+            registration_invite::join_invited(state, conn, new_user_id, &community_invite).await?
+        }
+        None => None,
+    };
+    Ok((new_user_id, joined))
+}
+
+/// What follows a new account's commit: the everyone limit of the community a dual invite
+/// joined, and the mail it queued.
+pub async fn after_account_created(
+    state: &GlobalServerContext,
+    joined: Option<crate::CommunityId>,
+) {
     if let Some(community) = joined {
         crate::everyone_limit::after_join(state, community).await;
     }
     crate::email::wake(state).await;
-    Ok(new_user_id)
 }
 
 /// A live user, with their presence as `viewer` may learn it.
@@ -650,6 +710,11 @@ pub async fn retire(
     crate::message::held::drop_held_by(conn, id, crate::message::held::HeldScope::Everywhere)
         .await?;
     crate::two_factor::remove_all(conn, id).await?;
+    // Their identities at providers are let go, so each may make a new account; one account
+    // holds at most one per provider.
+    diesel::delete(schema::user_identity::table.filter(schema::user_identity::user.eq(id)))
+        .execute(conn)
+        .await?;
     crate::bot::orphan_bots_of(state, conn, id).await?;
     // Their address and the mail waiting for it go with them.
     crate::email::outbox::forget_queued(conn, id, false).await?;

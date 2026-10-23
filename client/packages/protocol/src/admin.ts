@@ -72,6 +72,10 @@ export type Report = components["schemas"]["Report"];
 export type Resolution = components["schemas"]["Resolution"];
 export type AdminPlugin = components["schemas"]["AdminPlugin"];
 export type AdminPluginUpdateRequest = components["schemas"]["AdminPluginUpdateRequest"];
+export type IdentityProviderList = components["schemas"]["IdentityProviderList"];
+export type IdentityProviderSettings = components["schemas"]["IdentityProviderSettings"];
+export type IdentityProviderCreateRequest = components["schemas"]["IdentityProviderCreateRequest"];
+export type IdentityProviderUpdateRequest = components["schemas"]["IdentityProviderUpdateRequest"];
 
 /** A page of one of the dashboard's lists. */
 export interface AdminListQuery<S extends string> {
@@ -606,6 +610,49 @@ export class AdminApi {
   async orderPlugins(pluginIds: readonly string[]): Promise<void> {
     const result = await this.#client.api.PUT("/api/v1/admin/plugin-order", {
       body: { plugins: [...pluginIds] },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /** The deployment's identity providers, and the addresses to register at each. */
+  async identityProviders(): Promise<IdentityProviderList> {
+    return adminRead(await this.#client.api.GET("/api/v1/admin/identity-providers"));
+  }
+
+  /**
+   * Adds an identity provider once the server has read its discovery document, which may take
+   * a few seconds; `identityProviderUnreachable`, whose detail says why, when it cannot.
+   */
+  async addIdentityProvider(
+    request: IdentityProviderCreateRequest,
+  ): Promise<IdentityProviderSettings> {
+    return adminRead(
+      await this.#client.api.POST("/api/v1/admin/identity-providers", { body: request }),
+    );
+  }
+
+  /** Changes an identity provider; a field left out is unchanged, and the secret is write-only. */
+  async updateIdentityProvider(
+    providerId: string,
+    patch: IdentityProviderUpdateRequest,
+  ): Promise<IdentityProviderSettings> {
+    return adminRead(
+      await this.#client.api.PATCH("/api/v1/admin/identity-providers/{provider}", {
+        params: { path: { provider: providerId } },
+        body: patch,
+      }),
+    );
+  }
+
+  /**
+   * Removes an identity provider. Its links are deleted in the background, and accounts whose
+   * only way in it was can no longer sign in.
+   */
+  async removeIdentityProvider(providerId: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/admin/identity-providers/{provider}", {
+      params: { path: { provider: providerId } },
     });
     if (result.error !== undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
