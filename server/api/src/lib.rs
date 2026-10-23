@@ -33,6 +33,7 @@ pub mod deployment;
 pub mod deployment_settings;
 pub mod device_credential;
 pub mod device_link;
+pub mod disconnect;
 pub mod dm;
 pub mod email;
 pub mod error;

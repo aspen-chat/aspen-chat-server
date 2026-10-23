@@ -52,7 +52,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use std::borrow::Cow;
-use std::error::Error;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -785,7 +784,7 @@ async fn pump_events(
             },
             _ = ping_interval.tick() => {
                 if unanswered_pings >= MAX_MISSED_PONGS {
-                    warn!("event stream peer stopped answering pings, closing");
+                    debug!("event stream peer stopped answering pings, closing");
                     return;
                 }
                 unanswered_pings += 1;
@@ -847,7 +846,11 @@ async fn pump_events(
                         // frames are not part of this stream's contract.
                     }
                     Some(Err(e)) => {
-                        error!("websocket recv error on event stream {e}");
+                        if crate::disconnect::is_disconnect(&e) {
+                            debug!("event stream peer disconnected: {e}");
+                        } else {
+                            error!("websocket recv error on event stream {e}");
+                        }
                         return;
                     }
                 }
@@ -896,13 +899,10 @@ async fn reject(socket: &mut WebSocket, rejection: impl Into<Rejection>) {
 
 /// A closed connection is the normal end of a stream and is not worth an error log.
 fn log_send_error(e: &axum::Error) {
-    match e
-        .source()
-        .and_then(|e| e.downcast_ref::<tungstenite::Error>())
-    {
-        Some(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {}
-        Some(other) => error!("websocket error on event stream {other}"),
-        None => error!("unexpected error type on websocket send {e}"),
+    if crate::disconnect::is_disconnect(e) {
+        debug!("event stream peer disconnected: {e}");
+    } else {
+        error!("websocket error on event stream {e}");
     }
 }
 

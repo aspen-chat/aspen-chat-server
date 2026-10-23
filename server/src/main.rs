@@ -25,7 +25,7 @@ use rustls::{
 use tokio::{runtime, sync::oneshot};
 use tokio_rustls::TlsAcceptor;
 use tower::Service as _;
-use tracing::{error, info, level_filters::LevelFilter, warn};
+use tracing::{debug, error, info, level_filters::LevelFilter, warn};
 use tracing_subscriber::Layer as _;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
@@ -433,8 +433,12 @@ async fn run(options: Opt) -> Result<()> {
                             connection.await
                         }
                     };
-                    if let Err(e) = served {
-                        error!("failed to serve connection {e}");
+                    match served {
+                        Ok(()) => {}
+                        Err(e) if api::disconnect::is_disconnect(&*e) => {
+                            debug!("{remote_addr} disconnected: {e}");
+                        }
+                        Err(e) => error!("failed to serve connection {e}"),
                     }
                 }};
             }
@@ -445,6 +449,9 @@ async fn run(options: Opt) -> Result<()> {
                     {
                         Ok(Ok(tls_stream)) => {
                             handle_stream!(tls_stream)
+                        }
+                        Ok(Err(e)) if api::disconnect::is_disconnect(&e) => {
+                            debug!("{remote_addr} disconnected during its TLS handshake: {e}");
                         }
                         Ok(Err(e)) => {
                             error!("error establishing TLS {e}");
