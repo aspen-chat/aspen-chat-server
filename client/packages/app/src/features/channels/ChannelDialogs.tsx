@@ -209,7 +209,7 @@ export function ChannelManaDialog({
         placeholder={
           ceiling === undefined ? "" : format(m.channelActions.manaDefault, { value: ceiling })
         }
-        className={inputClass + " sm:max-w-40"}
+        className={inputClass}
       />
     </NumberField>
   );

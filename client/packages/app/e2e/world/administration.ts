@@ -98,9 +98,14 @@ export function administration() {
     return sorted.slice(offset, offset + limit);
   }
   // How the deployment presents itself, as `GET /deployment` answers and its `PATCH` changes.
-  const profile: { displayName: string | null; icon: null } = {
+  const profile: {
+    displayName: string | null;
+    icon: null;
+    mana: { maxRecharge: number; max: number; attachmentCost: number };
+  } = {
     displayName: "Family Server",
     icon: null,
+    mana: { maxRecharge: 200, max: 12000, attachmentCost: 600 },
   };
   // The deployment's policies, as `GET /admin/settings` answers and its `PATCH` changes.
   const settings: Record<string, number | boolean | null> = {
