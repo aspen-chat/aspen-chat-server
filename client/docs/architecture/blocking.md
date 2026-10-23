@@ -58,4 +58,6 @@ A block the other person made is known only from the server's `blocked` refusal.
 - The profile card blocks, after a confirming second press that says what blocking does, and
   unblocks.
 - The member list marks blocked people.
-- Settings lists them with Unblock.
+- Settings says how many there are and opens them in a modal of their own (`BlockedUsersSection`),
+  searched by name or handle, each with Unblock. Its list is a virtualized `GridList`, drawing only
+  the rows in view, since the server allows 10,000 blocks.
