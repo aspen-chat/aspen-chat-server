@@ -53,6 +53,14 @@ See [attachments](attachments.md).
   message as it was sent.
 - **The gallery's shown description is hidden from assistive technology.** It has it already as the
   picture's text alternative.
+- **A text file's preview is read by streaming and cancelling, not by a `Range` request.** `Range`
+  is a CORS-safelisted header only in some browsers; elsewhere it would need a preflight the storage
+  read path need not answer, and the read would fail.
+- **A text file's preview stops at 32 KiB.** A file of one enormous line would otherwise be read
+  whole to find its twentieth line.
+- **A spoiler is a field of the record, not a mark in the file's name.** A name is the uploader's
+  and is shown, and a field can be fixed once sent as a description is.
+- **A spoilered file's chip is covered too.** Its name may give the spoiler away.
 
 ## Cards
 

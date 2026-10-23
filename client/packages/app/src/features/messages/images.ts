@@ -18,6 +18,8 @@ export interface Picture {
    * gallery shows `src`, the original.
    */
   preview?: InlinePreview | undefined;
+  /** Whether its uploader marked it a spoiler, to be covered until the reader reveals it. */
+  spoiler?: boolean;
 }
 
 /** A smaller copy of a picture, for showing it inline, and its size in pixels. */

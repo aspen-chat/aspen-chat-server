@@ -335,6 +335,7 @@ pub(super) async fn attachments(
         Option<i32>,
         Option<i32>,
         Option<String>,
+        bool,
     );
     let rows: Vec<Row> = attachment::table
         .select((
@@ -344,6 +345,7 @@ pub(super) async fn attachments(
             attachment::width,
             attachment::height,
             attachment::description,
+            attachment::spoiler,
         ))
         .filter(attachment::id.eq_any(ids))
         .load(conn)
@@ -352,13 +354,14 @@ pub(super) async fn attachments(
         .iter()
         .filter_map(|id| rows.iter().find(|r| r.0 == *id))
         .map(
-            |(id, file_name, mime_type, width, height, description)| wit::Attachment {
+            |(id, file_name, mime_type, width, height, description, spoiler)| wit::Attachment {
                 id: id.0.to_string(),
                 file_name: file_name.clone(),
                 content_type: mime_type.clone(),
                 width: width.and_then(|w| u32::try_from(w).ok()),
                 height: height.and_then(|h| u32::try_from(h).ok()),
                 description: description.clone(),
+                spoiler: *spoiler,
             },
         )
         .collect())

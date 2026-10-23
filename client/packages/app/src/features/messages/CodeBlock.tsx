@@ -22,9 +22,18 @@ export const MAX_HIGHLIGHT_LENGTH = 4096;
  * A fenced code block. Renders the code as plain text at once and swaps in highlighted markup
  * once the highlighter, and the block's grammar if it is not in the eager set, have loaded.
  * A fence without a language, with one highlight.js does not know, or longer than
- * `MAX_HIGHLIGHT_LENGTH` stays plain.
+ * `MAX_HIGHLIGHT_LENGTH` stays plain. With `label`, the block is a region of that name that
+ * takes focus, so a keyboard can scroll its long lines sideways.
  */
-export function CodeBlock({ code, language }: { code: string; language: string | null }) {
+export function CodeBlock({
+  code,
+  language,
+  label,
+}: {
+  code: string;
+  language: string | null;
+  label?: string;
+}) {
   // The markup made, with the code and language it was made for, so a block whose code
   // changed shows the new code plainly until its own markup is made.
   const [made, setMade] = useState<{ code: string; language: string; html: string } | null>(null);
@@ -56,7 +65,7 @@ export function CodeBlock({ code, language }: { code: string; language: string |
 
   const html = made?.code === code && made.language === language ? made.html : null;
   return (
-    <pre>
+    <pre {...(label === undefined ? {} : { tabIndex: 0, role: "region", "aria-label": label })}>
       {html === null ? (
         <code>{code}</code>
       ) : (

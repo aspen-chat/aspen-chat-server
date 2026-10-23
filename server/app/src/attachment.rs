@@ -21,9 +21,10 @@
 //! someone allowed to remove it).
 //!
 //! An attachment may carry a description of what it shows, in its uploader's words, which
-//! readers' apps give as the picture's or video's text alternative. It is given when the upload
-//! starts or set with [`describe_attachment`] until the attachment is sent; a sent attachment's
-//! description is part of the message it went with and stays as it was sent.
+//! readers' apps give as the picture's or video's text alternative, and may be marked a spoiler,
+//! which readers' apps hide until each reader reveals it. Both are given when the upload starts
+//! or set with [`update_attachment`] until the attachment is sent; a sent attachment's are part
+//! of the message it went with and stay as they were sent.
 //!
 //! Confirming a picture or video queues the making of its preview, a smaller copy for showing it
 //! inline, which the servers that make previews do in the background ([`preview`]).
@@ -81,6 +82,8 @@ pub struct Attachment {
     /// When it became evidence for reviewing reports ([`evidence`]): read only in a review
     /// from then on.
     pub evidence_at: Option<chrono::DateTime<Utc>>,
+    /// Whether readers' apps hide it until revealed. It changes nothing about who may read it.
+    pub spoiler: bool,
 }
 
 pub mod evidence;
@@ -320,6 +323,20 @@ pub fn declared_size(byte_size: Option<u64>) -> crate::Result<u64> {
     byte_size.ok_or_else(|| crate::Error::Validation(t!("uploadSizeRequired")))
 }
 
+/// An attachment as its uploader declares it when reserving it.
+#[derive(Debug)]
+pub struct NewAttachment {
+    pub file_name: String,
+    pub mime_type: String,
+    /// Required; `None` is refused ([`declared_size`]).
+    pub byte_size: Option<u64>,
+    /// A picture's size, checked by [`picture_size`].
+    pub size: Option<(i32, i32)>,
+    /// Checked by [`description`].
+    pub description: Option<String>,
+    pub spoiler: bool,
+}
+
 /// Reserve a row and mint a presigned `PUT` URL, for the type the file is served as
 /// ([`served`]) and for exactly `byte_size` bytes, which the client must declare and which may
 /// be at most `[media] max_attachment_bytes`.
@@ -330,11 +347,14 @@ pub fn declared_size(byte_size: Option<u64>) -> crate::Result<u64> {
 pub async fn init_upload(
     state: &GlobalServerContext,
     caller: UserId,
-    file_name: String,
-    mime_type: String,
-    byte_size: Option<u64>,
-    size: Option<(i32, i32)>,
-    description: Option<String>,
+    NewAttachment {
+        file_name,
+        mime_type,
+        byte_size,
+        size,
+        description,
+        spoiler,
+    }: NewAttachment,
 ) -> crate::Result<AttachmentUpload> {
     let max_bytes = state.config.media.max_attachment_bytes;
     let byte_size = declared_size(byte_size)?;
@@ -372,6 +392,7 @@ pub async fn init_upload(
         preview_width: None,
         preview_height: None,
         evidence_at: None,
+        spoiler,
     };
     let mut conn = state.connection_pool.get().await?;
     crate::upload_quota::reserve(state, conn.as_mut(), caller, byte_size).await?;
@@ -534,15 +555,33 @@ pub async fn read_attachment(
     Err(crate::Error::Diesel(diesel::result::Error::NotFound))
 }
 
-/// Sets or clears the description of an attachment of the caller's that is in no message yet,
-/// confirmed or not, and returns it; `None` leaves the description as it is. One in a message, or
-/// anyone else's, is answered as not found.
-pub async fn describe_attachment(
+/// A change to an attachment not yet sent; each `None` leaves its field as it is.
+#[derive(Debug, Default)]
+pub struct AttachmentChange {
+    /// The description, `Some(None)` clearing it; checked by [`description`].
+    pub description: Option<Option<String>>,
+    pub spoiler: Option<bool>,
+}
+
+#[derive(diesel::AsChangeset)]
+#[diesel(table_name = attachment)]
+struct AttachmentChangeset {
+    description: Option<Option<String>>,
+    spoiler: Option<bool>,
+}
+
+/// Changes an attachment of the caller's that is in no message yet, confirmed or not, and
+/// returns it. One in a message, or anyone else's, is answered as not found.
+pub async fn update_attachment(
     state: &GlobalServerContext,
     caller: UserId,
     id: AttachmentId,
-    description: Option<Option<String>>,
+    change: AttachmentChange,
 ) -> crate::Result<Attachment> {
+    let changeset = AttachmentChangeset {
+        description: change.description.map(self::description).transpose()?,
+        spoiler: change.spoiler,
+    };
     let mut conn = state.connection_pool.get().await?;
     let unsent = attachment::id
         .eq(id)
@@ -550,22 +589,20 @@ pub async fn describe_attachment(
         .and(diesel::dsl::not(diesel::dsl::exists(
             message_attachment::table.filter(message_attachment::attachment_id.eq(attachment::id)),
         )));
-    let row = match description {
-        Some(text) => {
-            diesel::update(attachment::table)
-                .filter(unsent)
-                .set(attachment::description.eq(self::description(text)?))
-                .returning(Attachment::as_returning())
-                .get_result(conn.as_mut())
-                .await?
-        }
-        None => {
-            attachment::table
-                .select(Attachment::as_select())
-                .filter(unsent)
-                .first(conn.as_mut())
-                .await?
-        }
+    // A changeset with nothing in it is no statement Diesel can write.
+    let row = if changeset.description.is_none() && changeset.spoiler.is_none() {
+        attachment::table
+            .select(Attachment::as_select())
+            .filter(unsent)
+            .first(conn.as_mut())
+            .await?
+    } else {
+        diesel::update(attachment::table)
+            .filter(unsent)
+            .set(changeset)
+            .returning(Attachment::as_returning())
+            .get_result(conn.as_mut())
+            .await?
     };
     Ok(row)
 }

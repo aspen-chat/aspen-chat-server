@@ -50,7 +50,13 @@ import type {
   NotificationLevel,
 } from "./storeTypes";
 import { lazyBrowserMedia, pageStorage } from "./platform";
-import { type UploadTarget, describeAttachment, uploadAttachment, uploadIcon } from "./upload";
+import {
+  type AttachmentChange,
+  type UploadTarget,
+  updateAttachment,
+  uploadAttachment,
+  uploadIcon,
+} from "./upload";
 import { eventStreamUrl } from "./urls";
 import { VoiceCall } from "./voice";
 import type { VoiceMedia } from "./voiceMedia";
@@ -873,11 +879,11 @@ export class AspenSync {
   }
 
   /**
-   * Sets or clears (with `null`) what an attachment not yet sent shows, which readers' apps give
-   * as its text alternative, and caches the record as it now is.
+   * Changes an attachment not yet sent: what it shows, which readers' apps give as its text
+   * alternative, and whether they cover it as a spoiler. Caches the record as it now is.
    */
-  describeAttachment(attachmentId: string, description: string | null): Promise<Attachment> {
-    return describeAttachment(this.#uploadTarget(), attachmentId, description);
+  updateAttachment(attachmentId: string, change: AttachmentChange): Promise<Attachment> {
+    return updateAttachment(this.#uploadTarget(), attachmentId, change);
   }
 
   /**

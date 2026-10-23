@@ -78,19 +78,23 @@ export async function uploadAttachment(
 export const ATTACHMENT_DESCRIPTION_MAX_CHARS = 1500;
 
 /**
- * Sets or clears (with `null`, or nothing but space) what an attachment not yet sent shows, in
- * its uploader's words, and caches the record as it now is.
+ * A change to an attachment not yet sent, as a merge patch: what it shows, in its uploader's
+ * words (`null`, or nothing but space, clears it), and whether readers' apps cover it as a
+ * spoiler until revealed.
  */
-export async function describeAttachment(
+export type AttachmentChange = components["schemas"]["AttachmentUpdateRequest"];
+
+/** Changes an attachment not yet sent, and caches the record as it now is. */
+export async function updateAttachment(
   target: UploadTarget,
   attachmentId: string,
-  description: string | null,
+  change: AttachmentChange,
 ): Promise<Attachment> {
   const { data, error, response } = await target.client.api.PATCH(
     "/api/v1/attachments/{attachment}",
     {
       params: { path: { attachment: attachmentId } },
-      body: { description },
+      body: change,
     },
   );
   if (data === undefined) {

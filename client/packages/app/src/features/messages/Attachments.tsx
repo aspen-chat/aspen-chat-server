@@ -34,18 +34,24 @@ import { mediaUrl, webPageUrl } from "@/features/layout/safeUrl";
 import { OnceOpen } from "@/features/layout/OnceOpen";
 import { SliderRail } from "@/features/layout/SliderRail";
 import { formatClock } from "@/features/layout/clock";
+import { SpoilerCover } from "@/features/messages/SpoilerCard";
+import { TextAttachment } from "@/features/messages/TextAttachment";
+import { textLanguage } from "@/features/messages/textPreview";
 
 const imageClass = "block max-h-80 max-w-full rounded-md border border-line object-contain";
 
 /**
  * What a message carries besides its text: uploaded attachments, shown inline when they are
  * images, as their posters when they are videos the server took one of, in a small player when
- * they are sounds, and as download chips otherwise, then the pictures the server found behind links in the text, each from its copy
- * in storage. An attachment whose address is not one a deployment may serve (`mediaUrl`) is
- * unavailable. Up to three pictures show inline; with more, a button in their place
- * opens the whole set in a gallery, and so does any picture. Inline, a picture shows the
+ * they are sounds, as their first lines when they are text or code (`TextAttachment`), and as
+ * download chips otherwise, then the pictures the server found behind links in the text, each
+ * from its copy in storage. An attachment whose address is not one a deployment may serve
+ * (`mediaUrl`) is unavailable. Up to three pictures show inline; with more, a button in their
+ * place opens the whole set in a gallery, and so does any picture. Inline, a picture shows the
  * smaller copy the server made of it where there is one; the gallery shows the original. With
- * `onRemove`, each attachment shown carries a control that takes it off the message.
+ * `onRemove`, each attachment shown carries a control that takes it off the message. An
+ * attachment its uploader marked a spoiler is covered (`SpoilerCover`), whatever it is, until the
+ * reader reveals it, its own controls left usable over the cover.
  */
 export function MessageMedia({
   attachmentIds,
@@ -62,11 +68,20 @@ export function MessageMedia({
   const attachments = useAttachments(attachmentIds);
   const store = useStore();
   const [gallery, setGallery] = useState<number | null>(null);
+  // The spoilers the reader has revealed here, by attachment, which stay revealed while the
+  // message is shown, in the gallery too.
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
   if (attachmentIds.length === 0 && previewImages.length === 0) {
     return null;
   }
+  const covered = (id: string | undefined, spoiler: boolean | undefined) =>
+    spoiler === true && id !== undefined && !revealed.has(id);
+  const reveal = (id: string) => {
+    setRevealed((before) => new Set(before).add(id));
+  };
   const pictures: Picture[] = [];
   const files: Attachment[] = [];
+  const texts: { attachment: Attachment; language: string | null }[] = [];
   const videos: Attachment[] = [];
   const sounds: Attachment[] = [];
   const unavailable: string[] = [];
@@ -93,17 +108,68 @@ export function MessageMedia({
         height: attachment.height,
         description: attachment.description,
         preview: inlinePreview(attachment.preview),
+        spoiler: attachment.spoiler === true,
       });
     } else if (isVideoType(attachment.mimeType) && attachment.preview != null) {
       videos.push(attachment);
     } else if (isAudioType(attachment.mimeType)) {
       sounds.push(attachment);
     } else {
-      files.push(attachment);
+      const language = textLanguage(attachment.fileName, attachment.mimeType);
+      if (language === undefined) {
+        files.push(attachment);
+      } else {
+        texts.push({ attachment, language });
+      }
     }
   });
   pictures.push(...previewImages);
   const { shown, hidden } = splitInline(pictures);
+  // An attachment's own controls, which stay usable over its spoiler's cover; `overlay` draws
+  // them over a picture or card rather than beside a chip.
+  const controls = (id: string, name: string, overlay: boolean) => (
+    <>
+      {onRemove !== undefined && (
+        <RemoveButton
+          name={name}
+          onPress={() => {
+            onRemove(id);
+          }}
+        />
+      )}
+      <CopyIdButton
+        id={id}
+        thing="attachment"
+        {...(overlay ? { className: "bg-surface-raised/90 shadow-sm" } : {})}
+      />
+    </>
+  );
+  const chip = (attachment: Attachment) =>
+    covered(attachment.id, attachment.spoiler) ? (
+      <SpoilerCover
+        compact
+        onReveal={() => {
+          reveal(attachment.id);
+        }}
+      >
+        <FileChip attachment={attachment} />
+      </SpoilerCover>
+    ) : (
+      <FileChip attachment={attachment} />
+    );
+  const sound = (attachment: Attachment) =>
+    covered(attachment.id, attachment.spoiler) ? (
+      <SpoilerCover
+        onReveal={() => {
+          reveal(attachment.id);
+        }}
+        className="max-w-full"
+      >
+        <InlineAudio attachment={attachment} />
+      </SpoilerCover>
+    ) : (
+      <InlineAudio attachment={attachment} />
+    );
   return (
     <ul aria-label={m.attachmentsLabel} className="mt-1 flex flex-wrap items-start gap-2">
       {coming.map((id) => (
@@ -125,20 +191,29 @@ export function MessageMedia({
           data-attachment-id={attachment.id}
           className="flex min-w-0 max-w-full items-center gap-1"
         >
-          {isAudioType(attachment.mimeType) ? (
-            <InlineAudio attachment={attachment} />
-          ) : (
-            <FileChip attachment={attachment} />
-          )}
-          {onRemove !== undefined && (
-            <RemoveButton
-              name={attachment.fileName}
-              onPress={() => {
-                onRemove(attachment.id);
-              }}
-            />
-          )}
-          <CopyIdButton id={attachment.id} thing="attachment" />
+          {isAudioType(attachment.mimeType) ? sound(attachment) : chip(attachment)}
+          {controls(attachment.id, attachment.fileName, false)}
+        </li>
+      ))}
+      {texts.map(({ attachment, language }) => (
+        <li
+          key={attachment.id}
+          data-attachment-id={attachment.id}
+          className="relative w-full min-w-0 max-w-3xl"
+        >
+          <TextAttachment
+            attachment={attachment}
+            language={language}
+            chip={chip(attachment)}
+            controls={controls(attachment.id, attachment.fileName, false)}
+            {...(covered(attachment.id, attachment.spoiler)
+              ? {
+                  onReveal: () => {
+                    reveal(attachment.id);
+                  },
+                }
+              : {})}
+          />
         </li>
       ))}
       {videos.map((attachment) => (
@@ -147,49 +222,47 @@ export function MessageMedia({
           data-attachment-id={attachment.id}
           className="relative min-w-0 max-w-full"
         >
-          <InlineVideo attachment={attachment} />
+          {covered(attachment.id, attachment.spoiler) ? (
+            <SpoilerCover
+              onReveal={() => {
+                reveal(attachment.id);
+              }}
+              className="max-w-full"
+            >
+              <InlineVideo attachment={attachment} />
+            </SpoilerCover>
+          ) : (
+            <InlineVideo attachment={attachment} />
+          )}
           <span className="absolute top-1 end-1 flex gap-1">
-            {onRemove !== undefined && (
-              <RemoveButton
-                name={attachment.fileName}
-                onPress={() => {
-                  onRemove(attachment.id);
-                }}
-              />
-            )}
-            <CopyIdButton
-              id={attachment.id}
-              thing="attachment"
-              className="bg-surface-raised/90 shadow-sm"
-            />
+            {controls(attachment.id, attachment.fileName, true)}
           </span>
         </li>
       ))}
       {shown.map((picture, i) => (
         <li key={picture.src + String(i)} className="relative min-w-0 max-w-full">
-          <InlineImage
-            picture={picture}
-            onOpen={() => {
-              setGallery(i);
-            }}
-          />
+          {covered(picture.attachmentId, picture.spoiler) ? (
+            <SpoilerCover
+              onReveal={() => {
+                if (picture.attachmentId !== undefined) {
+                  reveal(picture.attachmentId);
+                }
+              }}
+              className="max-w-full"
+            >
+              <InlineImage picture={picture} onOpen={() => undefined} />
+            </SpoilerCover>
+          ) : (
+            <InlineImage
+              picture={picture}
+              onOpen={() => {
+                setGallery(i);
+              }}
+            />
+          )}
           {picture.attachmentId !== undefined && (
             <span className="absolute top-1 end-1 flex gap-1">
-              {onRemove !== undefined && (
-                <RemoveButton
-                  name={picture.name}
-                  onPress={() => {
-                    if (picture.attachmentId !== undefined) {
-                      onRemove(picture.attachmentId);
-                    }
-                  }}
-                />
-              )}
-              <CopyIdButton
-                id={picture.attachmentId}
-                thing="attachment"
-                className="bg-surface-raised/90 shadow-sm"
-              />
+              {controls(picture.attachmentId, picture.name, true)}
             </span>
           )}
         </li>
@@ -215,6 +288,8 @@ export function MessageMedia({
           onClose={() => {
             setGallery(null);
           }}
+          isCovered={(picture) => covered(picture.attachmentId, picture.spoiler)}
+          onReveal={reveal}
         />
       </OnceOpen>
     </ul>

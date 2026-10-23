@@ -29,6 +29,7 @@ diesel::table! {
         sent -> Bool,
         evidence_at -> Nullable<Timestamptz>,
         removed_from -> Nullable<Uuid>,
+        spoiler -> Bool,
     }
 }
 

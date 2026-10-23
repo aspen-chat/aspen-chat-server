@@ -1376,6 +1376,8 @@
   "attachFile": "Attach a file",
   "composerMore": "Add a file or a poll",
   "attachmentsLabel": "Attachments",
+  "textAttachmentLabel": "Contents of {name}",
+  "downloadToSeeMore": "Download to see more",
   "pendingAttachmentsLabel": "Files to send",
   "uploadingFile": "Uploading {name}",
   "uploadFailed": "Upload failed",
@@ -1386,6 +1388,8 @@
   "attachmentDescriptionHint": "Say what it shows, for people who can't see it. Screen readers read this in its place, and the gallery shows it beneath.",
   "attachmentDescribed": "Described",
   "describeFailed": "The description could not be saved: {reason}",
+  "markSpoiler": "Mark {name} as a spoiler",
+  "spoilerFailed": "The spoiler mark could not be saved: {reason}",
   "pastedTextFileName": "message.txt",
   "tooManyAttachments": "A message may carry at most {max, plural, one {# attachment} other {# attachments}}. Send the rest in another message.",
   "imageAlt": "Image: {name}",
@@ -1397,7 +1401,8 @@
     "previous": "Previous image",
     "next": "Next image",
     "close": "Close gallery",
-    "open": "Open image in a new tab"
+    "open": "Open image in a new tab",
+    "spoiler": "Spoiler image"
   },
   "mana": {
     "label": "Channel Mana",
