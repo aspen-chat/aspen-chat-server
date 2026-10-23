@@ -517,6 +517,15 @@ body,
   }
 }
 
+/* The part of a `forced-fill` mark that is filled in (a slider's track up to its thumb), in the
+   system's highlight so it shows against the rest. */
+@utility forced-fill-highlight {
+  @media (forced-colors: active) {
+    forced-color-adjust: none;
+    background-color: Highlight;
+  }
+}
+
 /* A mark drawn only as a ring (someone speaking, a picture chosen, what a report is about),
    drawn as an outline under forced colours, which drop rings. */
 @utility forced-outline {

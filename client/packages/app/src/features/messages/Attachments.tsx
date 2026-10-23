@@ -1,13 +1,22 @@
 import { plainFileName, type Attachment } from "@aspen/protocol";
-import { PaperclipIcon, PlayIcon, XIcon } from "@phosphor-icons/react";
-import { useLayoutEffect, useState } from "react";
+import {
+  PauseIcon,
+  PaperclipIcon,
+  PlayIcon,
+  SpeakerHighIcon,
+  SpeakerLowIcon,
+  SpeakerSlashIcon,
+  XIcon,
+} from "@phosphor-icons/react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Button } from "react-aria-components";
+import { Button, Slider } from "react-aria-components";
 import { useAttachments, useStore } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { ImageGallery } from "@/features/messages/ImageGallery";
 import {
   inlinePreview,
+  isAudioType,
   isImageType,
   isVideoType,
   keptRoom,
@@ -23,13 +32,15 @@ import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { CopyIdButton } from "@/features/layout/CopyId";
 import { mediaUrl, webPageUrl } from "@/features/layout/safeUrl";
 import { OnceOpen } from "@/features/layout/OnceOpen";
+import { SliderRail } from "@/features/layout/SliderRail";
+import { formatClock } from "@/features/layout/clock";
 
 const imageClass = "block max-h-80 max-w-full rounded-md border border-line object-contain";
 
 /**
  * What a message carries besides its text: uploaded attachments, shown inline when they are
- * images, as their posters when they are videos the server took one of, and as download chips
- * otherwise, then the pictures the server found behind links in the text, each from its copy
+ * images, as their posters when they are videos the server took one of, in a small player when
+ * they are sounds, and as download chips otherwise, then the pictures the server found behind links in the text, each from its copy
  * in storage. An attachment whose address is not one a deployment may serve (`mediaUrl`) is
  * unavailable. Up to three pictures show inline; with more, a button in their place
  * opens the whole set in a gallery, and so does any picture. Inline, a picture shows the
@@ -57,6 +68,7 @@ export function MessageMedia({
   const pictures: Picture[] = [];
   const files: Attachment[] = [];
   const videos: Attachment[] = [];
+  const sounds: Attachment[] = [];
   const unavailable: string[] = [];
   const coming: string[] = [];
   attachments.forEach((record, i) => {
@@ -84,6 +96,8 @@ export function MessageMedia({
       });
     } else if (isVideoType(attachment.mimeType) && attachment.preview != null) {
       videos.push(attachment);
+    } else if (isAudioType(attachment.mimeType)) {
+      sounds.push(attachment);
     } else {
       files.push(attachment);
     }
@@ -105,13 +119,17 @@ export function MessageMedia({
           {m.attachmentUnavailable}
         </li>
       ))}
-      {files.map((attachment) => (
+      {[...files, ...sounds].map((attachment) => (
         <li
           key={attachment.id}
           data-attachment-id={attachment.id}
-          className="flex items-center gap-1"
+          className="flex min-w-0 max-w-full items-center gap-1"
         >
-          <FileChip attachment={attachment} />
+          {isAudioType(attachment.mimeType) ? (
+            <InlineAudio attachment={attachment} />
+          ) : (
+            <FileChip attachment={attachment} />
+          )}
           {onRemove !== undefined && (
             <RemoveButton
               name={attachment.fileName}
@@ -355,6 +373,230 @@ function InlineVideo({ attachment }: { attachment: Attachment }) {
         <PlayIcon size={28} weight="fill" aria-hidden="true" />
       </span>
     </Button>
+  );
+}
+
+/**
+ * Seconds one press of an arrow key moves a sound's position, and where the thumb comes to rest
+ * as it is dragged: a second, or a tenth of one in a sound too short for whole seconds to scrub
+ * through.
+ */
+function scrubStep(duration: number): number {
+  return duration < 10 ? 0.1 : 1;
+}
+
+/**
+ * The volume the reader last chose in any sound's player, which each player starts at, so a
+ * reader who turned one down need not turn down the next. It lasts as long as the page.
+ */
+let chosenVolume = 1;
+
+let canSetVolume: boolean | undefined;
+
+/**
+ * Whether the page may set a sound's volume. iOS keeps every element at full volume, leaving it
+ * to the device's buttons, and reads back 1 whatever was set; muting still works there.
+ */
+function volumeSettable(): boolean {
+  if (canSetVolume === undefined) {
+    const probe = new Audio();
+    probe.volume = 0.5;
+    canSetVolume = probe.volume === 0.5;
+  }
+  return canSetVolume;
+}
+
+/**
+ * A sound in a small player: its name, which downloads it, a mute control and a volume, a play
+ * and pause control, a position to scrub, and the time played against its length. Only the sound's length and the start of its
+ * file are fetched until it is played. The player is one size whatever it plays, so its room is
+ * kept from the first. A sound the browser cannot play is offered for download instead, and one
+ * whose length the file does not give (a recording streamed as it was made) plays without a
+ * position to scrub until the browser has found its end.
+ */
+function InlineAudio({ attachment }: { attachment: Attachment }) {
+  const m = useMessages();
+  const keepStill = useKeepStill();
+  const audio = useRef<HTMLAudioElement>(null);
+  const position = useRef<HTMLInputElement>(null);
+  const [failed, setFailed] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [time, setTime] = useState(0);
+  const [duration, setDuration] = useState<number | null>(null);
+  // Where the thumb is while it is dragged; the sound moves there when it is let go.
+  const [scrubbing, setScrubbing] = useState<number | null>(null);
+  const [volume, setVolume] = useState(chosenVolume);
+  const [muted, setMuted] = useState(false);
+  const silent = muted || volume === 0;
+  const shown = scrubbing ?? time;
+  const elapsed = formatClock(shown, duration ?? shown);
+  const total = duration === null ? null : formatClock(duration);
+  const valueText = total === null ? elapsed : format(m.audio.position, { elapsed, total });
+  useLayoutEffect(() => {
+    keepStill();
+  }, [failed, keepStill]);
+  // React Aria words a slider's value as a number, which would read out seconds; as in
+  // `StepSlider`, the input's value text is set once React Aria has written its own.
+  useLayoutEffect(() => {
+    position.current?.setAttribute("aria-valuetext", valueText);
+  });
+  useLayoutEffect(() => {
+    const element = audio.current;
+    if (element !== null) {
+      element.volume = volume;
+      element.muted = muted;
+    }
+  }, [volume, muted, failed]);
+  if (failed) {
+    return <FileChip attachment={attachment} />;
+  }
+  const label = attachment.description ?? attachment.fileName;
+  const learnDuration = () => {
+    const length = audio.current?.duration;
+    setDuration(length !== undefined && Number.isFinite(length) ? length : null);
+  };
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      {...(attachment.description == null ? {} : { "aria-description": attachment.description })}
+      data-media-url={attachment.downloadUrl}
+      data-media-name={attachment.fileName}
+      className="flex w-80 max-w-full flex-col gap-1 rounded-md border border-line bg-surface-sunken px-2 py-1.5"
+    >
+      <audio
+        ref={audio}
+        src={attachment.downloadUrl}
+        preload="metadata"
+        onLoadedMetadata={learnDuration}
+        onDurationChange={learnDuration}
+        onTimeUpdate={(event) => {
+          setTime(event.currentTarget.currentTime);
+        }}
+        onPlay={() => {
+          setPlaying(true);
+        }}
+        onPause={() => {
+          setPlaying(false);
+        }}
+        onError={() => {
+          flushSync(() => {
+            setFailed(true);
+          });
+        }}
+      />
+      <div className="flex items-center gap-1">
+        <a
+          href={attachment.downloadUrl}
+          target="_blank"
+          rel="noreferrer noopener"
+          download={attachment.fileName}
+          className="flex min-w-0 flex-1 items-center gap-1 text-sm text-accent hover:underline"
+        >
+          <PaperclipIcon size={14} className="shrink-0" aria-hidden="true" />
+          <span className="truncate">{attachment.fileName}</span>
+        </a>
+        <Tooltip text={silent ? m.audio.unmute : m.audio.mute}>
+          <Button
+            aria-label={format(silent ? m.audio.unmuteTitle : m.audio.muteTitle, { title: label })}
+            onPress={() => {
+              if (silent) {
+                setMuted(false);
+                // Unmuting a sound turned all the way down brings it back to be heard.
+                if (volume === 0) {
+                  setVolume(1);
+                  chosenVolume = 1;
+                }
+              } else {
+                setMuted(true);
+              }
+            }}
+            className="tap-target shrink-0 rounded-md p-1 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
+          >
+            {silent ? (
+              <SpeakerSlashIcon size={16} aria-hidden="true" />
+            ) : volume < 0.5 ? (
+              <SpeakerLowIcon size={16} aria-hidden="true" />
+            ) : (
+              <SpeakerHighIcon size={16} aria-hidden="true" />
+            )}
+          </Button>
+        </Tooltip>
+        {volumeSettable() && (
+          <Slider
+            aria-label={format(m.audio.volume, { title: label })}
+            value={muted ? 0 : volume}
+            minValue={0}
+            maxValue={1}
+            step={0.05}
+            formatOptions={{ style: "percent" }}
+            onChange={(value) => {
+              if (typeof value === "number") {
+                setVolume(value);
+                setMuted(false);
+                chosenVolume = value;
+              }
+            }}
+            className="w-20 shrink-0"
+          >
+            <SliderRail filled />
+          </Slider>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <Button
+          aria-label={format(playing ? m.audio.pause : m.audio.play, { title: label })}
+          onPress={() => {
+            const element = audio.current;
+            if (element === null) {
+              return;
+            }
+            if (element.paused) {
+              // A refusal (no interaction with the page yet, the file gone) leaves it paused,
+              // as its control shows; an unplayable file is answered by `onError`.
+              element.play().catch(() => undefined);
+            } else {
+              element.pause();
+            }
+          }}
+          className="tap-target flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-contrast outline-none hover:bg-accent-strong pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
+        >
+          {playing ? (
+            <PauseIcon size={16} weight="fill" aria-hidden="true" />
+          ) : (
+            <PlayIcon size={16} weight="fill" aria-hidden="true" />
+          )}
+        </Button>
+        <Slider
+          aria-label={format(m.audio.seek, { title: label })}
+          value={Math.min(shown, duration ?? 0)}
+          minValue={0}
+          maxValue={duration ?? 0}
+          step={scrubStep(duration ?? 0)}
+          isDisabled={duration === null || duration === 0}
+          onChange={(value) => {
+            if (typeof value === "number") {
+              setScrubbing(value);
+            }
+          }}
+          onChangeEnd={(value) => {
+            if (typeof value === "number") {
+              if (audio.current !== null) {
+                audio.current.currentTime = value;
+              }
+              setTime(value);
+              setScrubbing(null);
+            }
+          }}
+          className="min-w-0 flex-1 disabled:opacity-60"
+        >
+          <SliderRail inputRef={position} filled />
+        </Slider>
+        <span aria-hidden="true" className="shrink-0 text-xs tabular-nums text-ink-muted">
+          {total === null ? elapsed : `${elapsed} / ${total}`}
+        </span>
+      </div>
+    </div>
   );
 }
 
