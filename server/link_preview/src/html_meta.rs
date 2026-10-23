@@ -159,12 +159,18 @@ impl MetaState {
             .map(|(_, v)| v.as_str())
     }
 
-    fn insert_meta(&mut self, key: &str, value: String) {
+    /// A blank `value` is no value: a page that writes `<meta property="og:title" content="">`
+    /// leaves the title to the next source rather than giving the card an empty one.
+    fn insert_meta(&mut self, key: &str, value: &str) {
         let Some(known) = KNOWN_KEYS.iter().find(|known| **known == key) else {
             return;
         };
+        let value = value.trim();
+        if value.is_empty() {
+            return;
+        }
         if !self.meta.iter().any(|(k, _)| k == known) {
-            self.meta.push((known, value));
+            self.meta.push((known, value.to_owned()));
         }
     }
 
@@ -308,7 +314,7 @@ impl TokenSink for MetaSink {
                                 state.theme_colors.push((media_attr, content));
                             }
                         } else {
-                            state.insert_meta(&key, content);
+                            state.insert_meta(&key, &content);
                         }
                     }
                     _ => {}
@@ -372,6 +378,28 @@ mod tests {
         // Prefer dark when available.
         assert_eq!(meta.theme_color.as_deref(), Some("#000000"));
         assert!(meta.has_content());
+    }
+
+    /// rust-lang.org's home page has this head: empty card titles over a real `<title>`.
+    #[test]
+    fn blank_meta_falls_through_to_the_next_source() {
+        let html = r#"
+<html><head>
+  <title>
+          Rust Programming Language
+      </title>
+  <meta name="twitter:title" content="">
+  <meta property="og:title" content="" />
+  <meta property="og:site_name" content="  ">
+  <meta name="description" content="  Plain description ">
+  <meta property="og:description" content="">
+  <meta property="og:description" content="Later description">
+</head></html>
+"#;
+        let meta = parse_html_metadata(html);
+        assert_eq!(meta.title.as_deref(), Some("Rust Programming Language"));
+        assert_eq!(meta.site_name, None);
+        assert_eq!(meta.description.as_deref(), Some("Later description"));
     }
 
     #[test]
