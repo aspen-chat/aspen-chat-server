@@ -29,12 +29,12 @@ Aspen is only the client. How it works is in
 
 ### Options
 
-| Flag (terminal)         | Dashboard               | Off by default | What it does                                                                                                                                                           |
-| ----------------------- | ----------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--skip-invite`         | Skips invites           | yes            | A first sign-in makes an account without a registration invite where `registration-invite-required` is on. Use it when the provider decides who belongs.             |
-| `--enforces-two-factor` | Enforces two factors    | yes            | Every sign-in there counts as two factors. Without it, one counts as two only when the provider's `amr` claim names a second factor.                                   |
-| `--distrust-email`      | Trusts email addresses  | no (trusted)   | Without it, an address the provider reports as verified becomes a new account's verified address.                                                                      |
-| `--disabled`            | Enabled                 | no (enabled)   | A disabled provider offers no sign-in, and keeps its links.                                                                                                            |
+| Flag (terminal)         | Dashboard              | Off by default | What it does                                                                                                                                             |
+| ----------------------- | ---------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--skip-invite`         | Skips invites          | yes            | A first sign-in makes an account without a registration invite where `registration-invite-required` is on. Use it when the provider decides who belongs. |
+| `--enforces-two-factor` | Enforces two factors   | yes            | Every sign-in there counts as two factors. Without it, one counts as two only when the provider's `amr` claim names a second factor.                     |
+| `--distrust-email`      | Trusts email addresses | no (trusted)   | Without it, an address the provider reports as verified becomes a new account's verified address.                                                        |
+| `--disabled`            | Enabled                | no (enabled)   | A disabled provider offers no sign-in, and keeps its links.                                                                                              |
 
 `identity-providers set <name or id>` changes any of them, and `--client-secret-file` replaces the
 secret.
@@ -47,14 +47,14 @@ provider can no longer sign in**: ask their people to set a password or add a pa
 
 ## `[identity_providers]`
 
-| Setting                   | Default |                                                                                                                                         |
-| ------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Setting                   | Default |                                                                                                                                        |
+| ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `allow_private_addresses` | `false` | Whether a provider may be on a private or local network. Off, the server calls providers only on the public internet.                  |
 | `ca_file`                 | none    | Certificate authorities, in PEM, trusted for providers besides the system's: your organisation's own, if it issued the provider's one. |
 
 Turn `allow_private_addresses` on for a provider on your LAN. While it is on, anyone holding Manage
-identity providers can make the server fetch a discovery document from any address it can reach,
-so grant that permission accordingly.
+identity providers can make the server fetch a discovery document from any address it can reach, so
+grant that permission accordingly.
 
 ## What must be reachable
 
