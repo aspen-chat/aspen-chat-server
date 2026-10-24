@@ -1,16 +1,18 @@
 import {
   ApiProblemError,
   PasskeyCancelledError,
+  type LinkedIdentity,
   type Passkey,
   type PasskeyTransport,
 } from "@aspen/protocol";
-import { KeyIcon, PencilSimpleIcon, TrashIcon } from "@phosphor-icons/react";
+import { KeyIcon, LinkBreakIcon, PencilSimpleIcon, TrashIcon } from "@phosphor-icons/react";
 import { useCallback, useState } from "react";
 import { Button, FieldError, Form, Input, Label, Text, TextField } from "react-aria-components";
 import { useAspenClient } from "@/api/context";
 import { useMe } from "@/api/hooks";
 import { PASSWORD_MIN_LENGTH } from "@/features/auth/password";
 import { OtherDeviceSignIn } from "@/features/auth/OtherDeviceSignIn";
+import { useSignalAcceptedPasskeys } from "@/features/auth/passkeySignals";
 import { detectShell } from "@/config";
 import {
   alertClass,
@@ -32,6 +34,9 @@ import { ReauthProvider } from "./reauth";
 import { useReauth } from "./reauthContext";
 import { useSecuritySettings } from "./useSecuritySettings";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
+import { useIdentityProviders, useProviderFlow } from "@/features/auth/identityProviders";
+import { toast } from "@/features/layout/toast";
+import { Tooltip } from "@/features/layout/Tooltip";
 
 function errorText(e: unknown): string | null {
   if (e instanceof PasskeyCancelledError) {
@@ -43,8 +48,9 @@ function errorText(e: unknown): string | null {
 const DATE: Intl.DateTimeFormatOptions = { dateStyle: "medium" };
 
 /**
- * The password, authenticator app, passkeys, recovery codes, signing in other devices by a QR
- * code, and signing out everywhere else. Changes that need a fresh verification ask for one first.
+ * The password, authenticator app, passkeys, identity providers, recovery codes, signing in
+ * other devices by a QR code, and signing out everywhere else. Changes that need a fresh
+ * verification ask for one first.
  */
 export function SecurityPanel({ transport }: { transport: PasskeyTransport | null }) {
   const m = useMessages();
@@ -83,6 +89,7 @@ function Sections({
   const me = useMe();
   const [codes, setCodes] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useSignalAcceptedPasskeys(settings, transport);
   /** Runs a change, shows any new recovery codes, and reloads the settings. */
   const change = useCallback(
     async (run: () => Promise<string[] | null | undefined>) => {
@@ -111,9 +118,18 @@ function Sections({
         </p>
       )}
       {/* A user of another deployment has no password here: their home holds it. */}
-      {me?.homeDomain == null && <PasswordSection />}
+      {me?.homeDomain == null && (
+        <PasswordSection
+          hasPassword={api.hasPassword(settings)}
+          onSet={() => {
+            void reload();
+          }}
+        />
+      )}
       <AuthenticatorSection settings={settings} change={change} />
       <PasskeySection settings={settings} transport={transport} change={change} />
+      {/* A user of another deployment signs in through their home's providers. */}
+      {me?.homeDomain == null && <IdentitySection settings={settings} change={change} />}
       <RecoverySection settings={settings} change={change} />
       {/* A user of another deployment signs devices in at home; an account still owing a
           second factor has no sign-in to give. */}
@@ -151,16 +167,19 @@ function SectionHeading({ id, children }: { id: string; children: string }) {
 /**
  * Changing the password: the current one, then the new one twice, which the browser's password
  * manager can fill and save. Wrong or too short, the field at fault says so; changed, the
- * section says where the user is still signed in.
+ * section says where the user is still signed in. An account without a password (one made
+ * through an identity provider) sets its first the same way, without a current one, after
+ * verifying again; `onSet` reloads the settings, which then say it has one.
  */
-function PasswordSection() {
+function PasswordSection({ hasPassword, onSet }: { hasPassword: boolean; onSet: () => void }) {
   const m = useMessages();
   const client = useAspenClient();
   const withReauth = useReauth();
   const me = useMe();
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
-  const [changed, setChanged] = useState(false);
+  /** What was last done, as the section then says: a password changed, or a first one set. */
+  const [changed, setChanged] = useState<"changed" | "set" | null>(null);
   const [errors, setErrors] = useState<{
     current?: string | undefined;
     password?: string | undefined;
@@ -176,7 +195,7 @@ function PasswordSection() {
 
   async function submit(form: HTMLFormElement) {
     const data = new FormData(form);
-    const current = formString(data, "currentPassword");
+    const current = hasPassword ? formString(data, "currentPassword") : null;
     const password = formString(data, "newPassword");
     const confirm = formString(data, "confirmPassword");
     setErrors({});
@@ -198,7 +217,10 @@ function PasswordSection() {
       });
       if (done === true) {
         setOpen(false);
-        setChanged(true);
+        setChanged(hasPassword ? "changed" : "set");
+        if (!hasPassword) {
+          onSet();
+        }
       }
     } catch (e) {
       if (e instanceof ApiProblemError && e.code === "oldPasswordIncorrect") {
@@ -220,17 +242,23 @@ function PasswordSection() {
       {!open ? (
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm">
-            {changed ? m.security.passwordChanged : m.security.passwordHint}
+            {changed === "changed"
+              ? m.security.passwordChanged
+              : changed === "set"
+                ? m.security.passwordSet
+                : hasPassword
+                  ? m.security.passwordHint
+                  : m.security.passwordNone}
           </p>
           <Button
             onPress={() => {
               setErrors({});
-              setChanged(false);
+              setChanged(null);
               setOpen(true);
             }}
             className={secondaryButtonClass + " shrink-0"}
           >
-            {m.security.changePassword}
+            {hasPassword ? m.security.changePassword : m.security.setPassword}
           </Button>
         </div>
       ) : (
@@ -250,22 +278,24 @@ function PasswordSection() {
             readOnly
             hidden
           />
-          <TextField
-            name="currentPassword"
-            type="password"
-            onChange={() => {
-              clearError("current");
-            }}
-            isRequired
-            autoFocus
-            autoComplete="current-password"
-            isInvalid={errors.current !== undefined}
-            className={fieldClass}
-          >
-            <Label className={labelClass}>{m.security.currentPassword}</Label>
-            <Input className={inputClass} />
-            <FieldError className="text-sm text-danger">{errors.current}</FieldError>
-          </TextField>
+          {hasPassword && (
+            <TextField
+              name="currentPassword"
+              type="password"
+              onChange={() => {
+                clearError("current");
+              }}
+              isRequired
+              autoFocus
+              autoComplete="current-password"
+              isInvalid={errors.current !== undefined}
+              className={fieldClass}
+            >
+              <Label className={labelClass}>{m.security.currentPassword}</Label>
+              <Input className={inputClass} />
+              <FieldError className="text-sm text-danger">{errors.current}</FieldError>
+            </TextField>
+          )}
           <TextField
             name="newPassword"
             type="password"
@@ -273,6 +303,7 @@ function PasswordSection() {
               clearError("password");
             }}
             isRequired
+            autoFocus={!hasPassword}
             autoComplete="new-password"
             isInvalid={errors.password !== undefined}
             className={fieldClass}
@@ -317,7 +348,13 @@ function PasswordSection() {
               {m.security.cancel}
             </Button>
             <Button type="submit" isDisabled={pending} className={primaryButtonClass}>
-              {pending ? m.security.changingPassword : m.security.changePassword}
+              {pending
+                ? hasPassword
+                  ? m.security.changingPassword
+                  : m.security.settingPassword
+                : hasPassword
+                  ? m.security.changePassword
+                  : m.security.setPassword}
             </Button>
           </div>
         </Form>
@@ -611,6 +648,110 @@ function PasskeyRow({ passkey, change }: { passkey: Passkey; change: Change }) {
           <TrashIcon size={14} aria-hidden="true" />
         </Button>
       </div>
+    </li>
+  );
+}
+
+/**
+ * The identity providers linked to the account, each unlinked after verifying again (refused
+ * when it is the account's only way in), and a way to link each other the server offers. A link
+ * is made in the system browser in the apps, which then say so here; the web client goes to the
+ * provider in this tab and says so where it returns (`ProviderReturn`).
+ */
+function IdentitySection({ settings, change }: { settings: api.SecuritySettings; change: Change }) {
+  const m = useMessages();
+  const withReauth = useReauth();
+  const runProvider = useProviderFlow();
+  const offered = useIdentityProviders();
+  const linked = api.linkedIdentities(settings);
+  const [pending, setPending] = useState<string | null>(null);
+  const unlinked = offered.filter((p) => !linked.some((identity) => identity.provider === p.id));
+  if (linked.length === 0 && offered.length === 0) {
+    return null;
+  }
+  return (
+    <section aria-labelledby="security-identities" className={planeClass}>
+      <SectionHeading id="security-identities">{m.security.identitiesHeading}</SectionHeading>
+      <p className={hintClass}>{m.security.identitiesHint}</p>
+      {linked.length === 0 ? (
+        <p className="text-sm">{m.security.noIdentities}</p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {linked.map((identity) => (
+            <IdentityRow key={identity.id} identity={identity} change={change} />
+          ))}
+        </ul>
+      )}
+      {unlinked.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {unlinked.map((provider) => (
+            <Button
+              key={provider.id}
+              isDisabled={pending !== null}
+              onPress={() => {
+                setPending(provider.id);
+                void change(async () => {
+                  const done = await withReauth(() => runProvider(provider, "link"));
+                  if (done?.outcome === "linked") {
+                    toast(
+                      format(m.identityProviders.linked, {
+                        provider: done.identity.providerName,
+                      }),
+                    );
+                  }
+                  return null;
+                }).finally(() => {
+                  setPending(null);
+                });
+              }}
+              className={secondaryButtonClass}
+            >
+              {pending === provider.id
+                ? m.passkeyWaitingBrowser
+                : format(m.security.link, { provider: provider.name })}
+            </Button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function IdentityRow({ identity, change }: { identity: LinkedIdentity; change: Change }) {
+  const dateFormat = useDateFormat(DATE);
+  const m = useMessages();
+  const client = useAspenClient();
+  const withReauth = useReauth();
+  const added = format(m.security.identityLinked, {
+    date: dateFormat.format(new Date(identity.createdAt)),
+  });
+  const used =
+    identity.lastUsedAt == null
+      ? null
+      : format(m.security.identityLastUsed, {
+          date: dateFormat.format(new Date(identity.lastUsedAt)),
+        });
+  const unlink = format(m.security.unlinkLabel, { provider: identity.providerName });
+  return (
+    <li className="flex items-center justify-between gap-2 rounded-md bg-surface px-3 py-2">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium">{identity.providerName}</p>
+        <p className="text-xs text-ink-muted">{used === null ? added : `${added}, ${used}`}</p>
+      </div>
+      <Tooltip text={unlink}>
+        <Button
+          aria-label={unlink}
+          onPress={() => {
+            void change(async () => {
+              await withReauth(() => api.unlinkIdentity(client, identity.id));
+              return null;
+            });
+          }}
+          className={secondaryButtonClass + " shrink-0 text-danger"}
+        >
+          <LinkBreakIcon size={14} aria-hidden="true" />
+        </Button>
+      </Tooltip>
     </li>
   );
 }

@@ -68,6 +68,11 @@ pub enum SignInMethod {
     Passkey,
     /// A bot's token.
     Token,
+    /// An identity provider's sign-in that reported no second factor (`app::identity_provider`).
+    IdentityProvider,
+    /// An identity provider's sign-in that counts as two factors: its `amr` claim names a second
+    /// factor, or the provider is trusted to enforce one.
+    IdentityProviderTwoFactor,
 }
 
 crate::wire_name_traits!(SignInMethod);
@@ -77,8 +82,31 @@ impl SignInMethod {
     /// Whether it proved more than a password does, as a deployment that requires two factors
     /// asks of everyone.
     pub fn strong(self) -> bool {
-        matches!(self, Self::SecondFactor | Self::Passkey)
+        matches!(
+            self,
+            Self::SecondFactor | Self::Passkey | Self::IdentityProviderTwoFactor
+        )
     }
+
+    /// What an assertion to another deployment says of it (`app::federation::abroad`): an
+    /// identity provider's sign-in by its strength, as a password or a second factor, so that
+    /// deployments read it as any other and the protocol names no provider.
+    pub fn carried_abroad(self) -> Self {
+        match self {
+            Self::IdentityProvider => Self::Password,
+            Self::IdentityProviderTwoFactor => Self::SecondFactor,
+            other => other,
+        }
+    }
+}
+
+/// The identity provider a sign-in was made through (`app::identity_provider`), and the
+/// provider's own session id for it (`sid`) when it sent one, which its back-channel logout
+/// names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderSignIn {
+    pub provider: crate::IdentityProviderId,
+    pub session: Option<String>,
 }
 
 /// Credentials issued by a completed sign-in.
@@ -107,6 +135,10 @@ pub enum LoginOutcome {
 #[derive(Serialize, Deserialize)]
 struct Ticket {
     user: UserId,
+    /// Set when the first factor was an identity provider's sign-in, which the finished sign-in
+    /// records so the provider's logout ends it too.
+    #[serde(default)]
+    provider: Option<ProviderSignIn>,
 }
 
 const TICKET_PREFIX: &str = "auth:ticket";
@@ -204,7 +236,16 @@ pub async fn hash_password(password: String) -> crate::Result<String> {
 /// Whether `password` matches `entry_password_hash`. Like `hash_password`, callers hold no
 /// database connection across it.
 pub async fn check_password(password: String, entry_password_hash: String) -> crate::Result<bool> {
-    password_work(move || {
+    // An account without a password (a bot's, or one made through an identity provider) keeps
+    // an empty hash. It is checked against one no password matches, so the answer takes as long
+    // as a wrong password and tells nothing of which accounts have one.
+    let has_password = !entry_password_hash.is_empty();
+    let entry_password_hash = if has_password {
+        entry_password_hash
+    } else {
+        UNMATCHABLE_PASSWORD_HASH.to_string()
+    };
+    let matched = password_work(move || {
         let argon2 = argon2::Argon2::default();
         let entry_hash = match PasswordHash::try_from(entry_password_hash.as_str()) {
             Ok(v) => v,
@@ -217,7 +258,8 @@ pub async fn check_password(password: String, entry_password_hash: String) -> cr
             .verify_password(password.as_bytes(), &entry_hash)
             .is_ok()
     })
-    .await
+    .await?;
+    Ok(matched && has_password)
 }
 
 fn make_token() -> String {
@@ -262,24 +304,35 @@ pub async fn try_login(
     };
     let mut conn = state.connection_pool.get().await?;
     let conn = conn.as_mut();
-    // A banned account learns so once its password is right, before a second factor is asked
-    // for that could not be used.
-    crate::user_ban::check_not_banned(conn, u.id).await?;
-    let methods = two_factor::methods(conn, u.id).await?;
-    if methods.any_factor() {
+    first_factor_proved(state, conn, u.id, SignInMethod::Password, None).await
+}
+
+/// Finishes a sign-in whose first factor, `method`, is proved: asks for a second factor when it
+/// counts as one factor and the account holds one, and otherwise issues the session. A banned
+/// account learns so here, before a second factor is asked for that could not be used.
+pub async fn first_factor_proved(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    method: SignInMethod,
+    provider: Option<ProviderSignIn>,
+) -> crate::Result<LoginOutcome> {
+    crate::user_ban::check_not_banned(conn, user).await?;
+    let methods = two_factor::methods(conn, user).await?;
+    if methods.any_factor() && !method.strong() {
         let ticket = make_token();
         ephemeral_token::put_token(
             state,
             TICKET_PREFIX,
             &ticket,
-            &Ticket { user: u.id },
+            &Ticket { user, provider },
             TICKET_LIFETIME_SECONDS,
         )
         .await?;
         return Ok(LoginOutcome::SecondFactorRequired { ticket, methods });
     }
     Ok(LoginOutcome::SignedIn(
-        issue_session(state, conn, u.id, SignInMethod::Password, false).await?,
+        issue(state, conn, user, method, false, Utc::now(), provider).await?,
     ))
 }
 
@@ -294,21 +347,41 @@ pub async fn issue_session(
     method: SignInMethod,
     foreign: bool,
 ) -> crate::Result<Session> {
-    issue(state, conn, user_id, method, foreign, Utc::now()).await
+    issue(state, conn, user_id, method, foreign, Utc::now(), None).await
 }
 
-/// Starts a sign-in given by another of the user's sign-ins (`app::device_link`): it proved what
-/// that one did, `method`, and was last verified when that one was, so a device signed in this
-/// way is no stronger than the one that gave it and makes no security change without verifying
-/// again.
+/// Starts a sign-in given by another of the user's sign-ins (`app::device_link`), the one named
+/// `giver` (`sign_in_id`): it proved what that one did, `method`, was last verified when that one
+/// was, and was made through the same identity provider, if any, so a device signed in this way
+/// is no stronger than the one that gave it, makes no security change without verifying again,
+/// and ends with the provider's logout as the giver does.
 pub async fn issue_linked_session(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     user_id: UserId,
     method: SignInMethod,
     verified_at: DateTime<Utc>,
+    giver: &str,
 ) -> crate::Result<Session> {
-    issue(state, conn, user_id, method, false, verified_at).await
+    use schema::refresh_token;
+    let provider: Option<(Option<crate::IdentityProviderId>, Option<String>)> =
+        refresh_token::table
+            .select((
+                refresh_token::identity_provider,
+                refresh_token::identity_provider_session,
+            ))
+            .filter(refresh_token::user.eq(user_id))
+            .filter(
+                diesel::dsl::sql::<diesel::sql_types::Bool>(SIGN_IN_ID_IS_SQL)
+                    .bind::<diesel::sql_types::Text, _>(giver),
+            )
+            .first(conn)
+            .await
+            .optional()?;
+    let provider = provider.and_then(|(provider, session)| {
+        provider.map(|provider| ProviderSignIn { provider, session })
+    });
+    issue(state, conn, user_id, method, false, verified_at, provider).await
 }
 
 async fn issue(
@@ -318,6 +391,7 @@ async fn issue(
     method: SignInMethod,
     foreign: bool,
     verified_at: DateTime<Utc>,
+    provider: Option<ProviderSignIn>,
 ) -> crate::Result<Session> {
     use aspen_schema::{refresh_token, session};
     let now = Utc::now();
@@ -328,6 +402,9 @@ async fn issue(
     conn.transaction(|conn| {
         let (refresh_token, session_token) =
             (token_digest(&refresh_token), token_digest(&session_token));
+        let (provider, provider_session) = provider
+            .map(|p| (Some(p.provider), p.session))
+            .unwrap_or_default();
         async move {
             diesel::insert_into(refresh_token::table)
                 .values((
@@ -336,6 +413,8 @@ async fn issue(
                     refresh_token::dsl::expires.eq((now + REFRESH_TOKEN_LIFETIME).naive_utc()),
                     refresh_token::dsl::verified_at.eq(verified_at),
                     refresh_token::dsl::method.eq(method),
+                    refresh_token::dsl::identity_provider.eq(provider),
+                    refresh_token::dsl::identity_provider_session.eq(provider_session),
                 ))
                 .execute(conn)
                 .await?;
@@ -358,7 +437,8 @@ async fn issue(
         session_token,
         session_token_expires,
         enrollment_required: state.settings().require_two_factor
-            && method == SignInMethod::Password
+            && !method.strong()
+            && method != SignInMethod::Token
             && !foreign,
     })
 }
@@ -423,12 +503,14 @@ pub async fn finish_ticket(
     }
     let mut conn = state.connection_pool.get().await?;
     Ok(Some(
-        issue_session(
+        issue(
             state,
             &mut conn,
             waiting.user,
             SignInMethod::SecondFactor,
             false,
+            Utc::now(),
+            waiting.provider,
         )
         .await?,
     ))
@@ -605,15 +687,17 @@ pub enum ChangePasswordOutcome {
 /// Changes the caller's password and expires every other session and refresh token belonging
 /// to them, and every plugin capability URL of theirs (`app::plugin::capability::revoke_all`), so
 /// a stolen credential stops working the moment the owner rotates their password, and tells the
-/// account's verified address. The session performing the change stays valid. The old password proves who the caller is
-/// for an account without two-factor sign-in; one with it also needs a recent verification. A
-/// wrong old password counts toward the user's failure limit (`two_factor::limited`), as one
-/// given to re-verify does, so a stolen session cannot guess it.
+/// account's verified address. The session performing the change stays valid. The old password
+/// proves who the caller is for an account without two-factor sign-in; one with it also needs a
+/// recent verification. A wrong old password counts toward the user's failure limit
+/// (`two_factor::limited`), as one given to re-verify does, so a stolen session cannot guess it.
+/// An account without a password (one made through an identity provider) sets its first with a
+/// recent verification alone, and `old_password` is not looked at.
 pub async fn try_change_password(
     state: &GlobalServerContext,
     caller: &two_factor::Caller,
     config: &crate::aspen_config::AuthConfig,
-    old_password: &str,
+    old_password: Option<&str>,
     new_password: &str,
 ) -> Result<ChangePasswordOutcome, crate::Error> {
     caller.ensure_person()?;
@@ -641,13 +725,19 @@ pub async fn try_change_password(
             .first(conn.as_mut())
             .await?
     };
-    let old_password = old_password.to_string();
-    let right = two_factor::limited(state, user_id, async || {
-        check_password(old_password, entry_password_hash).await
-    })
-    .await?;
-    if !right {
-        return Ok(ChangePasswordOutcome::OldPasswordIncorrect);
+    if entry_password_hash.is_empty() {
+        caller.ensure_recently_verified(config)?;
+    } else {
+        let Some(old_password) = old_password.map(str::to_string) else {
+            return Ok(ChangePasswordOutcome::OldPasswordIncorrect);
+        };
+        let right = two_factor::limited(state, user_id, async || {
+            check_password(old_password, entry_password_hash).await
+        })
+        .await?;
+        if !right {
+            return Ok(ChangePasswordOutcome::OldPasswordIncorrect);
+        }
     }
     let new_password_hash = hash_password(new_password.to_string()).await?;
     let current_session = current_session.to_string();
@@ -720,6 +810,64 @@ pub async fn end_other_sign_ins(
         .scope_boxed()
     })
     .await
+}
+
+/// Which of an identity provider's sign-ins its logout ends.
+pub enum ProviderSignIns {
+    /// Those it made with its session id `sid`, and of `user` when the logout named one too.
+    Session { sid: String, user: Option<UserId> },
+    /// Every one it made of `user`.
+    User(UserId),
+}
+
+/// Expires the sign-ins `provider` made that `which` names, and their sessions, closing their
+/// event streams; returns how many ended. Sign-ins made another way stay. A device link copies
+/// its giver's provider and session id (`issue_linked_session`), so those go with it.
+pub async fn end_provider_sign_ins(
+    state: &impl Publishing,
+    conn: &mut AsyncPgConnection,
+    provider: crate::IdentityProviderId,
+    which: ProviderSignIns,
+) -> crate::Result<usize> {
+    use schema::{refresh_token, session};
+    let live = refresh_token::table
+        .filter(refresh_token::identity_provider.eq(Some(provider)))
+        .filter(refresh_token::expires.gt(diesel::dsl::now))
+        .into_boxed();
+    let live = match &which {
+        ProviderSignIns::Session { sid, user } => {
+            let live = live.filter(refresh_token::identity_provider_session.eq(Some(sid.clone())));
+            match user {
+                Some(user) => live.filter(refresh_token::user.eq(*user)),
+                None => live,
+            }
+        }
+        ProviderSignIns::User(user) => live.filter(refresh_token::user.eq(*user)),
+    };
+    let ended: Vec<(String, UserId)> = live
+        .select((refresh_token::token, refresh_token::user))
+        .load(conn)
+        .await?;
+    if ended.is_empty() {
+        return Ok(0);
+    }
+    let tokens: Vec<&String> = ended.iter().map(|(token, _)| token).collect();
+    diesel::update(refresh_token::table.filter(refresh_token::token.eq_any(&tokens)))
+        .set(refresh_token::expires.eq(diesel::dsl::now))
+        .execute(conn)
+        .await?;
+    diesel::update(
+        session::table
+            .filter(session::refresh_token.eq_any(&tokens))
+            .filter(session::expires.gt(diesel::dsl::now)),
+    )
+    .set(session::expires.eq(diesel::dsl::now))
+    .execute(conn)
+    .await?;
+    for (token, user) in &ended {
+        announce_ended(state, conn, *user, Some(sign_in_id(token)), None).await?;
+    }
+    Ok(ended.len())
 }
 
 /// Expires every sign-in of `user_id` and its sessions except the sign-in named `kept`

@@ -85,12 +85,20 @@ pub enum ProblemCode {
     LastSecondFactor,
     /// The authenticator's response to a passkey ceremony did not verify.
     PasskeyRejected,
+    /// A passkey sign-in named a credential no account on this deployment holds: it was
+    /// removed, its account deleted, or it was never registered here. A web client tells the
+    /// browser (`PublicKeyCredential.signalUnknownCredential`) so it stops offering it.
+    PasskeyUnknown,
     /// A sign-in code (`/auth/device-links`) is unknown, has expired, or was already used to
     /// sign in. Make a new one.
     DeviceLinkExpired,
     /// A sign-in code was already scanned by another device. Whoever scanned it may be
     /// waiting for the signed-in device to confirm them, which it should not.
     DeviceLinkUsed,
+    /// A typed sign-in code (`/auth/device-link-entries`) matches no code waiting for this
+    /// device: mistyped, expired, cancelled, or shown for a device on the other side (signed in
+    /// or out). Check the code on the other device, or make a new one.
+    DeviceLinkCodeUnknown,
     /// Passkeys are not configured on this server.
     PasskeysUnavailable,
     /// Registration: the requested username is already in use.
@@ -144,6 +152,23 @@ pub enum ProblemCode {
     PluginUnavailable,
     /// `GET /health/ready`: this server cannot reach a service it needs. `detail` names which.
     NotReady,
+    /// The identity provider is unknown, removed, or turned off. Read `GET /auth/methods` again
+    /// for those offered.
+    IdentityProviderUnavailable,
+    /// An identity provider could not be reached, or did not answer as one does. `detail` says
+    /// which, and who can fix it.
+    IdentityProviderUnreachable,
+    /// Signing in at the identity provider did not succeed, or what it said did not verify.
+    /// `detail` says why.
+    IdentityProviderFailed,
+    /// The identity provider flow is unknown, expired, or already used. Start again.
+    IdentityProviderFlowExpired,
+    /// The identity at the provider is linked to another account. Sign in to that one, or unlink
+    /// it there first.
+    IdentityTaken,
+    /// Removing this would leave the account no way to sign in: add a password, a passkey, or
+    /// another identity provider first.
+    LastSignInMethod,
     /// Something failed on the server. Retrying later may succeed.
     Internal,
 }
@@ -172,15 +197,16 @@ impl ProblemCode {
             | ProblemCode::RateLimited
             | ProblemCode::UploadQuotaExceeded
             | ProblemCode::ChannelBusy => StatusCode::TOO_MANY_REQUESTS,
-            ProblemCode::PasskeyRejected | ProblemCode::DeviceChallengeInvalid => {
-                StatusCode::BAD_REQUEST
-            }
+            ProblemCode::PasskeyRejected
+            | ProblemCode::PasskeyUnknown
+            | ProblemCode::DeviceChallengeInvalid => StatusCode::BAD_REQUEST,
             ProblemCode::PasskeysUnavailable => StatusCode::NOT_FOUND,
             ProblemCode::PasswordResetUnavailable | ProblemCode::PasswordResetExpired => {
                 StatusCode::NOT_FOUND
             }
             ProblemCode::DeviceLinkExpired => StatusCode::NOT_FOUND,
             ProblemCode::DeviceLinkUsed => StatusCode::CONFLICT,
+            ProblemCode::DeviceLinkCodeUnknown => StatusCode::NOT_FOUND,
             ProblemCode::NotFound => StatusCode::NOT_FOUND,
             ProblemCode::Conflict
             | ProblemCode::PollClosed
@@ -201,6 +227,12 @@ impl ProblemCode {
                 StatusCode::SERVICE_UNAVAILABLE
             }
             ProblemCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            ProblemCode::IdentityProviderUnavailable | ProblemCode::IdentityProviderFlowExpired => {
+                StatusCode::NOT_FOUND
+            }
+            ProblemCode::IdentityProviderUnreachable => StatusCode::BAD_GATEWAY,
+            ProblemCode::IdentityProviderFailed => StatusCode::UNAUTHORIZED,
+            ProblemCode::IdentityTaken | ProblemCode::LastSignInMethod => StatusCode::CONFLICT,
         }
     }
 
@@ -229,9 +261,11 @@ impl ProblemCode {
             ProblemCode::UploadQuotaExceeded => t!("problemUploadQuotaExceeded"),
             ProblemCode::LastSecondFactor => t!("problemLastSecondFactor"),
             ProblemCode::PasskeyRejected => t!("problemPasskeyRejected"),
+            ProblemCode::PasskeyUnknown => t!("problemPasskeyUnknown"),
             ProblemCode::PasskeysUnavailable => t!("problemPasskeysUnavailable"),
             ProblemCode::DeviceLinkExpired => t!("problemDeviceLinkExpired"),
             ProblemCode::DeviceLinkUsed => t!("problemDeviceLinkUsed"),
+            ProblemCode::DeviceLinkCodeUnknown => t!("problemDeviceLinkCodeUnknown"),
             ProblemCode::UsernameTaken => t!("usernameAlreadyTaken"),
             ProblemCode::CustomEmojiNameTaken => t!("customEmojiNameTaken"),
             ProblemCode::InviteCodeTaken => t!("problemInviteCodeTaken"),
@@ -253,6 +287,12 @@ impl ProblemCode {
             ProblemCode::PluginUnavailable => t!("problemPluginUnavailable"),
             ProblemCode::NotReady => t!("problemNotReady"),
             ProblemCode::Internal => t!("tryAgainLater"),
+            ProblemCode::IdentityProviderUnavailable => t!("problemIdentityProviderUnavailable"),
+            ProblemCode::IdentityProviderUnreachable => t!("problemIdentityProviderUnreachable"),
+            ProblemCode::IdentityProviderFailed => t!("problemIdentityProviderFailed"),
+            ProblemCode::IdentityProviderFlowExpired => t!("problemIdentityProviderFlowExpired"),
+            ProblemCode::IdentityTaken => t!("problemIdentityTaken"),
+            ProblemCode::LastSignInMethod => t!("problemLastSignInMethod"),
         }
     }
 }
@@ -373,6 +413,22 @@ impl From<app::Error> for ApiError {
             app::Error::PasswordResetExpired => Self::new(ProblemCode::PasswordResetExpired)
                 .with_detail(t!("passwordResetExpiredDetail")),
             app::Error::LastSecondFactor => Self::new(ProblemCode::LastSecondFactor),
+            app::Error::IdentityProviderUnavailable => {
+                Self::new(ProblemCode::IdentityProviderUnavailable)
+                    .with_detail(t!("identityProviderUnavailableDetail"))
+            }
+            app::Error::IdentityProviderUnreachable(detail) => {
+                Self::new(ProblemCode::IdentityProviderUnreachable).with_detail(detail)
+            }
+            app::Error::IdentityProviderFailed(detail) => {
+                Self::new(ProblemCode::IdentityProviderFailed).with_detail(detail)
+            }
+            app::Error::IdentityProviderFlowExpired => {
+                Self::new(ProblemCode::IdentityProviderFlowExpired)
+                    .with_detail(t!("identityProviderFlowExpiredDetail"))
+            }
+            app::Error::IdentityTaken => Self::new(ProblemCode::IdentityTaken),
+            app::Error::LastSignInMethod => Self::new(ProblemCode::LastSignInMethod),
             app::Error::InvalidTicket => Self::new(ProblemCode::InvalidToken),
             app::Error::DeviceLinkExpired => {
                 Self::new(ProblemCode::DeviceLinkExpired).with_detail(t!("deviceLinkExpiredDetail"))
@@ -380,10 +436,15 @@ impl From<app::Error> for ApiError {
             app::Error::DeviceLinkUsed => {
                 Self::new(ProblemCode::DeviceLinkUsed).with_detail(t!("deviceLinkUsedDetail"))
             }
+            app::Error::DeviceLinkCodeUnknown => Self::new(ProblemCode::DeviceLinkCodeUnknown)
+                .with_detail(t!("deviceLinkCodeUnknownDetail")),
             app::Error::PasskeysUnavailable => Self::new(ProblemCode::PasskeysUnavailable),
             app::Error::PasskeyRejected(reason) => {
                 tracing::debug!(reason, "passkey rejected");
                 Self::new(ProblemCode::PasskeyRejected)
+            }
+            app::Error::PasskeyUnknown => {
+                Self::new(ProblemCode::PasskeyUnknown).with_detail(t!("passkeyUnknownDetail"))
             }
             app::Error::PollClosed => Self::new(ProblemCode::PollClosed),
             app::Error::RegistrationInviteRequired => {

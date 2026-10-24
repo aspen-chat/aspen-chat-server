@@ -15,6 +15,7 @@ import { AttributionsScreen } from "@/features/about/AttributionsScreen";
 import { DeploymentWelcome } from "@/features/auth/DeploymentWelcome";
 import { DeviceLinkRoute } from "@/features/auth/DeviceLinkScreen";
 import { LoginForm } from "@/features/auth/LoginForm";
+import { ProviderReturn } from "@/features/auth/ProviderReturn";
 import { RegisterForm } from "@/features/auth/RegisterForm";
 import { useServerChoice } from "@/features/auth/serverChoice";
 import { NewRelease } from "@/features/layout/NewRelease";
@@ -51,8 +52,8 @@ export function RootLayout() {
  * Signed out: the deployment's welcome above the sign-in or create-account form. An invite link
  * naming another deployment says the user's account may be on any deployment. A registration link (`/register`, with `?invite=` from the Administration
  * Dashboard) opens on the create-account screen with the invite filled in. A sign-in code
- * (`/device-link`) opens its own screen instead, as does Open Source Attributions
- * (`/attributions`), which anyone may read.
+ * (`/device-link`) opens its own screen instead, as does the return from an identity provider
+ * (`/sign-in/provider`) and Open Source Attributions (`/attributions`), which anyone may read.
  */
 function SignedOut() {
   const { serverUrl, changeServer } = useServerChoice();
@@ -85,6 +86,10 @@ function SignedOut() {
         <DeviceLinkRoute />
       </main>
     );
+  }
+  // The browser back from an identity provider: the flow is claimed and finished there.
+  if (pathname === "/sign-in/provider") {
+    return <ProviderReturn />;
   }
   if (pathname === "/attributions") {
     return <AttributionsScreen signedOut />;

@@ -8,9 +8,12 @@
 | The welcome                    | `DeploymentWelcome` (`src/features/auth/DeploymentWelcome.tsx`)                                                                                                        |
 | Which server                   | `defaultServerUrl` (`src/config.ts`), `ServerChoice`, `ServerForm`, `normalizeServerUrl`, `detectShell`                                                                |
 | Passkeys                       | `runPasskeyCeremony`, `PasskeyTransport` (`packages/protocol/src/passkeys.ts`), `src/features/auth/passkeyTransport.ts`, `packages/desktop/src/main/passkeyHandoff.ts` |
+| Passkey autofill and signals   | `useConditionalPasskey`, `passkeySignals.ts` (`src/features/auth`), `runConditionalPasskeySignIn`                                                                      |
+| Android's own passkeys         | `nativePasskeys.ts` (`src/features/auth`), `AspenPasskeysPlugin` (`packages/mobile/android`)                                                                           |
 | Signing in from another device | `OtherDeviceSignIn`, `DeviceLinkCode`, `DeviceLinkScreen`, `thisDeviceName`                                                                                            |
 | Email                          | `src/features/email`: `useEmailPolicy`, `PasswordReset`, `VerificationScreen`, `EmailDialog`, `EmailPanel`                                                             |
 | Device credentials             | `AspenClient` and `device.ts` (`packages/protocol/src`), `src/api/devices.ts`, `src/api/devicePuzzle.worker.ts`                                                        |
+| Identity providers             | `identityProviders.ts` (`packages/protocol/src`), `src/features/auth`: `identityProviders.ts`, `IdentityProviderButtons`, `ProviderReturn`, `ProviderAccountStep`      |
 
 ## Device credentials
 
@@ -84,6 +87,7 @@ chosen in `src/features/auth/passkeyTransport.ts`:
 | Web client served under the server's `rpId` | Runs the ceremony in its own page                                                                        |
 | Web client served elsewhere                 | Offers no passkeys                                                                                       |
 | Desktop and mobile                          | Hands it to the server's `/auth/passkey` page in the system browser, never running one in their own page |
+| Android, where the deployment names the app | Runs it through Credential Manager, falling back to the system browser                                   |
 
 On the desktop (`packages/desktop/src/main/passkeyHandoff.ts`):
 
@@ -101,6 +105,55 @@ On mobile:
   Capacitor (`SceneDelegateProxy`).
 - This path has not yet run on a device.
 
+### Android's own passkeys
+
+A deployment that names the Android app in its `/.well-known/assetlinks.json` lets the app use its
+passkeys through Credential Manager, as a page at its domain would (see the server's
+`docs/architecture/sign-in-and-security/passkeys.md`). `resolvePasskeyTransport` picks the `native`
+transport when:
+
+- the shell is the Android app with `AspenPasskeysPlugin`, on Android 9 or later;
+- `GET /auth/methods` lists the app's package with a certificate it is signed with
+  (`passkeys.androidApps`; a deployment that predates the list names none).
+
+The plugin hands Credential Manager the ceremony's `publicKey` options as the server gave them, and
+the credential back as the JSON the server reads. It asks only for passkeys and providers at hand on
+the phone (`preferImmediatelyAvailableCredentials`): otherwise, with none for the deployment,
+Google's sheet waits to be dismissed, which reads as cancelled, where the browser could still have
+reached a security key or another phone. `PasskeyPlatformTest` (a device test) holds that a
+deployment that does not name the app fails at once as `unavailable`. The ceremony starts and
+completes as one in a page does, by the sign-in that started it. When Credential Manager is missing,
+no provider answers, or Android refuses the app for the domain (`unavailable`), the ceremony is left
+to expire and another goes to the system browser (`fallback`). A dismissed prompt (`cancelled`) ends
+it.
+
+### Autofill
+
+The web client's sign-in form offers passkeys among the username field's suggestions
+(`autocomplete="username webauthn"`), where it runs ceremonies in its own page and the browser has
+conditional mediation. `useConditionalPasskey` starts a `signIn` ceremony as the form opens
+(`runConditionalPasskeySignIn`, `mediation: "conditional"`), and the one picked signs in.
+
+- Signing in with a password, pressing the passkey button, or leaving the form aborts it first.
+- It ends 15 seconds before its ceremony expires.
+- Another starts only when the person returns to the username field with none waiting, never on a
+  timer: each start counts toward the sign-in rate limits.
+- A refused start is silent. A passkey the server refuses shows its Problem, as the button's does.
+
+### Signals
+
+Where the page runs ceremonies itself (`inPage`), it tells the browser's passkey managers what the
+server holds, through WebAuthn's Signals API (`signalUnknownCredential`,
+`signalAllAcceptedCredentials`, `signalCurrentUserDetails` in `packages/protocol/src/passkeys.ts`),
+feature-detected and silent where missing:
+
+- a passkey the server answers `passkeyUnknown` for, from the ceremony that used it;
+- every passkey of the account, each time Sign-in and security reads its settings
+  (`useSignalAcceptedPasskeys`), so after every change there too;
+- the username and display name after the profile's display name changes (`signalProfileToPasskeys`,
+  which reads the account's user handle from its security settings only where the browser has the
+  signal, and sends nothing for an account without passkeys).
+
 ## Signing in from another device
 
 `OtherDeviceSignIn` is on the sign-in screen, and as Other devices in Sign-in and security.
@@ -109,6 +162,8 @@ On mobile:
 - A phone scans it.
 - Either of the two may be the one signed in.
 - Phones never show a code, and computers never scan.
+- Beside the QR code is a user code (`BCDF-GHJK`). Any device, a computer included, may type it
+  instead of scanning (`TypeDeviceLinkCode`, Type a code instead).
 
 ### The computer's code
 
@@ -119,22 +174,42 @@ On mobile:
 
 - A device names itself from its user agent alone (`thisDeviceName`: "Firefox on Linux", "Aspen on
   Android"), never a place.
-- The code warns that it is a secret and counts down its minute. Then it blurs, with a button for a
-  new one.
+- The code warns that it is a secret and counts down its five minutes. Then it blurs, with a button
+  for a new one.
 - A code still waiting when its screen closes is cancelled.
 - The code holds `/device-link?server={origin}#{id}` under the deployment's web client (see
   [qr-codes.md](qr-codes.md)). So a phone's own camera opens it in a browser too.
 - The phone app's scanner reads it and opens the same route with the id as `link`.
 
+### Confirming a typed request's account
+
+A signed-in device that typed a computer's code may have guessed it. So when the computer's claim
+answers `confirmAccount`, it shows the account it would be signed in to (picture, display name, and
+username) and a warning, and claims it (`claimDeviceLink` with `account`) only on This is my
+account. Don't sign in cancels the code.
+
 ### The phone's screen
 
 `DeviceLinkScreen` scans the code once. A scan uses the code up, so a second render reuses the
-first's.
+first's (`takenLinks.ts`).
 
 | Phone is   | Shows                                                                | Then                               |
 | ---------- | -------------------------------------------------------------------- | ---------------------------------- |
 | Signed in  | The computer's name, with a warning that a stranger's code is a trap | Signs it in only on Sign it in     |
 | Signed out | Which account the phone will be signed in to                         | Claims until the computer confirms |
+
+### Typing a code
+
+`TypeDeviceLinkCode` is a button beside the scanner on a phone, and beside the code's button on a
+computer. It opens a dialog with one field.
+
+- The code is read as the server reads it (`normalizeUserCode`: any case, hyphens and spaces
+  dropped, full-width letters as letters). Input that cannot be a code is refused at the field and
+  not sent, since the server counts every code that matches nothing against whoever typed it.
+- A signed-in device verifies again first when the server asks (`useOptionalReauth`).
+- Once taken, the dialog shows `DeviceLinkScreen` for the link, as a scanned code's route does, but
+  is left by closing the dialog rather than for `/`. A signed-in giver is then told that the other
+  device confirms the account to finish.
 
 ### A code for another server
 
@@ -157,6 +232,92 @@ The server form offers to scan a code instead of typing an address, since the co
 
 - Signed out, the root layout shows the screen in place of the sign-in forms (`/device-link`).
 - Signed in, the router has it as a route.
+
+## Identity providers
+
+People may sign in through the OpenID Connect providers the deployment's administrators chose (the
+server's `docs/architecture/sign-in-and-security/identity-providers.md`). `GET /auth/methods` lists
+them (`offeredProviders`; a deployment that predates them lists none), and the sign-in screen has a
+"Continue with {name}" button for each (`IdentityProviderButtons`), below the passkey button.
+
+Every exchange with a provider is a flow, of a purpose: `signIn`, `link`, or `reauthenticate`.
+`useProviderFlow` runs one. The client starts it with a PKCE challenge of its own
+(`AspenClient.startIdentityProviderFlow`), the browser signs in at the provider and comes back with
+the flow's id and a one-time return code, and the client claims what the provider said with its
+verifier and that code (`claimIdentityProviderFlow`).
+
+### Where the browser goes
+
+| Shell              | The provider's sign-in                                                                      | The return                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Web client         | This tab. The verifier is kept in `sessionStorage` by the flow's id (`keepFlow`)            | `/sign-in/provider#flow={id}&code={code}`, a route of its own (`ProviderReturn`)                                  |
+| Desktop and mobile | The system browser, through the passkey hand-off's machinery (`runIdentityProviderHandoff`) | The hand-off's return address, with `flow` and `code` in the query, read as a finished ceremony named by the flow |
+
+In the web client:
+
+- The tab remembers where it was (`returnPath`), and lands there when the flow is done.
+- A flow is taken from storage once (`takeFlow`), and flows older than the server keeps them are
+  dropped as another starts (`FLOW_KEPT_MS`).
+- The return page takes the fragment off the address before claiming, and claims each flow once
+  however often it is drawn. Signed out, the root layout shows it in place of the sign-in forms.
+- A return this tab did not start says so, with the way back to signing in.
+
+In the apps (`providerHandoff`):
+
+- The desktop prepares a passkey hand-off's loopback listener and opens the provider instead of the
+  passkey page (`passkey:open-provider`, `openProvider` in
+  `packages/desktop/src/main/passkeyHandoff.ts`), which takes only HTTPS (or this machine's own
+  addresses in an unpackaged build). The listener reads the return (`flow` and `code`) and sends the
+  tab on to the server's passkey page to say it is done.
+- A phone uses the passkey hand-off as it is: `aspen://auth/passkey`, read by `parseHandoffReturn`.
+- Closing the browser, or the hand-off giving up, is backing out (`PasskeyCancelledError`), which
+  shows nothing.
+
+### What a claim does
+
+| Outcome                | Then                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `signedIn`             | The session is stored, and the signed-in app opens                                                                 |
+| `secondFactorRequired` | `SecondFactorStep`, as after a password                                                                            |
+| `accountRequired`      | `ProviderAccountStep`, below                                                                                       |
+| `linked`               | Said in a toast. The apps reload the security settings; the web client returns to where it was                     |
+| `reauthenticated`      | The apps finish the change that asked; the web client returns to where it was and asks in a toast to make it again |
+| A Problem              | Its text, as the server gave it: `identityProviderFailed`'s detail says why the provider did not sign them in      |
+
+### A new account
+
+`ProviderAccountStep` asks for a username, prefilled with the provider's (`suggestedName`), and
+makes the account with the same verifier (`createIdentityProviderAccount`).
+
+- It asks for a registration invite only where the offer says one is needed (`inviteRequired`).
+- It names the display name and the address the account will have, when the provider gave them.
+- Without an address from the provider, it asks for one as registration does: required where the
+  offer says (`emailRequired`), and optional where the deployment sends mail.
+- The newsletter is offered as registration offers it.
+- A username someone holds (`usernameTaken`) shows at the field, and another may be tried.
+- "Sign in another way" goes back to signing in.
+
+### Security settings
+
+Sign-in and security (`SecurityPanel`) shows, for a person of this deployment:
+
+- the identity providers linked to the account, each with when it was linked and last used, and an
+  unlink button. Unlinking needs a recent verification, and the server refuses the account's only
+  way in (`lastSignInMethod`), which shows as the section's error;
+- a "Link {name}" button for each provider the server offers that is not linked, running a `link`
+  flow, which needs a recent verification before it starts;
+- for an account without a password (`hasPassword` false), "Set a password" in place of changing it,
+  without the current one, after verifying again.
+
+A server that predates providers leaves out `hasPassword` and `identities`, read as a password and
+none (`hasPassword`, `linkedIdentities` in `src/features/security/api.ts`).
+
+### Verifying again
+
+The verify-again dialog (`ReauthProvider`) offers "Confirm with {name}" for each linked provider, a
+`reauthenticate` flow. For an account without a password it asks for no password: a passkey or a
+provider confirms it. In the web client the tab goes to the provider, so the change that asked is
+made again on returning; in the apps it finishes in place.
 
 ## Email
 

@@ -9,6 +9,7 @@ export {
   type AuthMethods,
   type DeploymentProfile,
   type DeviceLink,
+  type DeviceLinkAccount,
   type DeviceLinkClaim,
   type DeviceLinkProgress,
   type DeviceLinkScan,
@@ -25,20 +26,29 @@ export {
 } from "./http";
 export {
   PasskeyCancelledError,
+  PasskeyUnavailableError,
   canRunInPage,
+  conditionalMediationAvailable,
   creationOptions,
   encodeCredential,
   fromBase64url,
   handoffPageUrl,
   parseHandoffReturn,
+  passkeySignalAvailable,
   pkcePair,
   requestOptions,
+  signalAllAcceptedCredentials,
+  signalCurrentUserDetails,
+  signalUnknownCredential,
   toBase64url,
   type HandoffReturn,
   type HandoffSession,
+  type InPageRequest,
+  type NativePasskeys,
   type Passkey,
   type PasskeyHandoff,
   type PasskeyPurpose,
+  type PasskeySignals,
   type PasskeyTransport,
 } from "./passkeys";
 export {
@@ -199,6 +209,10 @@ export {
   type Resolution,
   type AdminPlugin,
   type AdminPluginUpdateRequest,
+  type IdentityProviderList,
+  type IdentityProviderSettings,
+  type IdentityProviderCreateRequest,
+  type IdentityProviderUpdateRequest,
 } from "./admin";
 export {
   ACTIVITY_INTERVAL_MS,
@@ -430,3 +444,14 @@ export {
 } from "./deployments";
 export { CLIENT_PROTOCOL, commonVersion, supports, type Protocol } from "./protocol";
 export { ATTACHMENT_DESCRIPTION_MAX_CHARS, type AttachmentChange } from "./upload";
+export {
+  offeredProviders,
+  parseProviderFragment,
+  type AccountOffer,
+  type IdentityProviderOutcome,
+  type IdentityProviderPurpose,
+  type LinkedIdentity,
+  type OfferedIdentityProvider,
+  type PendingAccount,
+  type ProviderReturn,
+} from "./identityProviders";

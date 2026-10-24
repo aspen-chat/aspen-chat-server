@@ -15,6 +15,7 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
           "manageDeploymentRoles",
           "manageFederation",
           "manageDeploymentSettings",
+          "manageIdentityProviders",
         ],
         roles: [deploymentAdministrator],
         inclusions: [{ permission: "moderateCommunities", includes: ["removeContent"] }],
@@ -35,11 +36,36 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
             "manageDeploymentRoles",
             "manageFederation",
             "manageDeploymentSettings",
+            "manageIdentityProviders",
           ],
         },
       ],
     ],
     ["GET", /^\/admin\/moderation-log$/, () => []],
+    // One identity provider, turned off, which people have signed in with.
+    [
+      "GET",
+      /^\/admin\/identity-providers$/,
+      () => ({
+        providers: [
+          {
+            id: "0190f0a0-0000-7000-8000-0000000000aa",
+            name: "Example Corp",
+            issuer: "https://idp.example.org/realms/staff",
+            clientId: "aspen",
+            enabled: false,
+            skipInvite: false,
+            enforcesTwoFactor: true,
+            trustEmail: true,
+            createdAt: "2026-09-01T12:00:00Z",
+            linkedAccounts: 12,
+          },
+        ],
+        redirectUri: "https://chat.example.org/auth/oidc/callback",
+        backChannelLogoutUri: "https://chat.example.org/auth/oidc/back-channel-logout",
+        maxProviders: 20,
+      }),
+    ],
     // One installed plugin, which the caller, without Manage plugins, may only look at.
     [
       "GET",

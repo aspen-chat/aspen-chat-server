@@ -66,9 +66,21 @@ pub const PASSKEY_PAGE: (&str, &str) = ("GET", "/auth/passkey");
 /// This deployment's federation document, served outside `API_PREFIX` at the path every
 /// deployment uses, and not in the OpenAPI document.
 pub const WELL_KNOWN: (&str, &str) = ("GET", "/.well-known/aspen");
+/// This deployment's Digital Asset Links (`api::asset_links`), served outside `API_PREFIX` at
+/// the path Android reads, and not in the OpenAPI document.
+pub const ASSET_LINKS: (&str, &str) = ("GET", "/.well-known/assetlinks.json");
 /// The page unsubscribe links in mail open, served outside `API_PREFIX` and not in the OpenAPI
 /// document; posting to it unsubscribes, under the same limits.
 pub const UNSUBSCRIBE_PAGE: (&str, &str) = ("GET", "/email/unsubscribe");
+
+/// Where identity providers send the browser back, and post their back-channel logouts
+/// (`api::identity_provider`), served outside `API_PREFIX` and not in the OpenAPI document, at
+/// the paths `app::identity_provider` names.
+pub const OIDC_CALLBACK: (&str, &str) = ("GET", aspen_app::identity_provider::CALLBACK_PATH);
+pub const OIDC_BACK_CHANNEL_LOGOUT: (&str, &str) = (
+    "POST",
+    aspen_app::identity_provider::BACK_CHANNEL_LOGOUT_PATH,
+);
 
 /// The web client's pages (`api::web_client`), served outside `API_PREFIX` and not in the
 /// OpenAPI document: an invite's, and every other. Each checks its own limits, and over them is
@@ -86,8 +98,8 @@ pub const PLUGIN_CAPABILITY: &str = "/plugins/{plugin}/capabilities/{secret}";
 const PLUGIN_ROUTE_METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
 /// Every route the limits can name: the OpenAPI document's operations, the event stream, the
-/// passkey page, the federation document, the unsubscribe page, the web client's pages, and
-/// plugins' routes.
+/// passkey page, the federation document, the Digital Asset Links, the unsubscribe page, the
+/// identity provider callback and back-channel logout, the web client's pages, and plugins' routes.
 pub fn routes() -> Vec<Route> {
     let openapi = crate::openapi();
     let mut routes = Vec::new();
@@ -105,8 +117,11 @@ pub fn routes() -> Vec<Route> {
     for (method, template) in [
         PASSKEY_PAGE,
         WELL_KNOWN,
+        ASSET_LINKS,
         UNSUBSCRIBE_PAGE,
         ("POST", UNSUBSCRIBE_PAGE.1),
+        OIDC_CALLBACK,
+        OIDC_BACK_CHANNEL_LOGOUT,
         WEB_CLIENT_INVITE,
         WEB_CLIENT_PAGE,
     ] {
@@ -328,32 +343,73 @@ const RATE_LIMITS_UNAVAILABLE_RETRY_AFTER: std::time::Duration = std::time::Dura
 #[derive(Clone)]
 pub struct ResolvedSession(pub Option<(UserPg, Caller)>);
 
-/// Counts a request's failure toward its address's `ip_failures` limits, put on every request
-/// that has no valid session by `limit_requests` for the handlers that can tell one: a wrong
-/// password or code, an unknown invite or refresh token.
+/// Counts a request's failure toward its route's failure limits, put on every request by
+/// `limit_requests` for the handlers that can tell one (a wrong password or code, an unknown
+/// invite or refresh token): its user's `user_failures` when it has a valid session, its
+/// address's `ip_failures` when it has none, and everyone's `global_failures` either way.
 #[derive(Clone)]
 pub struct Failures {
     route: String,
     ip: Option<IpAddr>,
+    user: Option<UserId>,
 }
 
 impl Failures {
     /// Counts one failure. Answers nothing: the request is answered as wrong, and the next one
-    /// from the address is refused once its failures are spent.
+    /// is refused once its failures are spent.
     pub async fn note(&self, state: &GlobalServerContext) {
-        let identity = Identity {
-            ip: self.ip,
-            ..Identity::default()
-        };
         let _ = state
             .rate_limiter
-            .check(&state.valkey, &self.route, Stage::Failures, &identity)
+            .check(
+                &state.valkey,
+                &self.route,
+                Stage::Failures,
+                &self.identity(),
+            )
+            .await;
+    }
+
+    fn identity(&self) -> Identity<'static> {
+        Identity {
+            ip: self.ip,
+            user: self.user,
+            ..Identity::default()
+        }
+    }
+
+    /// Counts a try before it is checked, refusing it when its failures are spent, for a
+    /// handler whose wrong tries must stay within their limits however many arrive at once:
+    /// tries counted only once they prove wrong (`note`) all pass the look `limit_requests`
+    /// takes while none has yet. A try that proves right is given back with `forgive`.
+    pub async fn take(&self, state: &GlobalServerContext) -> ApiResult<()> {
+        refuse(
+            state
+                .rate_limiter
+                .check(
+                    &state.valkey,
+                    &self.route,
+                    Stage::Failures,
+                    &self.identity(),
+                )
+                .await,
+        )
+    }
+
+    /// Gives back a try `take` counted that proved right.
+    pub async fn forgive(&self, state: &GlobalServerContext) {
+        state
+            .rate_limiter
+            .refund(
+                &state.valkey,
+                &self.route,
+                Stage::Failures,
+                &self.identity(),
+            )
             .await;
     }
 }
 
-/// Counts a failure of the request `failures` came with, when it came without a valid session
-/// (the only requests `limit_requests` gives one).
+/// Counts a failure of the request `failures` came with, when `limit_requests` saw it.
 pub async fn note_failure(state: &GlobalServerContext, failures: &Option<Extension<Failures>>) {
     if let Some(Extension(failures)) = failures {
         failures.note(state).await;
@@ -464,12 +520,27 @@ async fn admit(
             }
         }
     }
-    if identity.user.is_some() {
+    if let Some(user) = identity.user {
         refuse(
             limiter
                 .check(&state.valkey, route, Stage::Session, &identity)
                 .await,
         )?;
+        // A signed-in request's failures are its user's, never its address's.
+        let failing = Identity {
+            user: Some(user),
+            ..Identity::default()
+        };
+        refuse(
+            limiter
+                .peek(&state.valkey, route, Stage::Failures, &failing)
+                .await,
+        )?;
+        parts.extensions.insert(Failures {
+            route: route.to_string(),
+            ip: None,
+            user: Some(user),
+        });
         return Ok(None);
     }
     let presented = parts
@@ -496,6 +567,7 @@ async fn admit(
     parts.extensions.insert(Failures {
         route: route.to_string(),
         ip,
+        user: None,
     });
     Ok(presented.and_then(|presented| presented.renewal))
 }

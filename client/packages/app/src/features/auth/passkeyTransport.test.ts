@@ -6,6 +6,7 @@ const server = {
   registrationInviteRequired: false,
   protocol: { version: 1, minimum: 1 },
   software: { name: "aspen", version: "0.1.0" },
+  identityProviders: [],
 };
 const withPasskeys = { ...server, passkeys: { rpId: "localhost" } };
 const withoutPasskeys = { ...server, passkeys: null };
@@ -23,7 +24,7 @@ describe("passkeyTransport", () => {
   it("runs in the page when the web client is under the relying party's domain", () => {
     // jsdom serves the page from localhost.
     vi.stubGlobal("PublicKeyCredential", {});
-    expect(passkeyTransport("web", withPasskeys)).toEqual({ kind: "inPage" });
+    expect(passkeyTransport("web", withPasskeys)).toEqual({ kind: "inPage", rpId: "localhost" });
     expect(
       passkeyTransport("web", { ...server, passkeys: { rpId: "chat.example.org" } }),
     ).toBeNull();

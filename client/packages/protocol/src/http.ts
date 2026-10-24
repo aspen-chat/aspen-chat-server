@@ -15,7 +15,9 @@ import {
   handoffPageUrl,
   pkcePair,
   PasskeyCancelledError,
+  PasskeyUnavailableError,
   runInPage,
+  signalUnknownCredential,
   type Passkey,
   type PasskeyPurpose,
   type PasskeyTransport,
@@ -23,6 +25,12 @@ import {
 import { ApiProblemError, isProblem, transportProblem, type Problem } from "./problem";
 import { type Session, type SessionStore, sessionTokenExpiresSoon } from "./session";
 import { API_PREFIX, requireSecure } from "./urls";
+import type {
+  IdentityProviderOutcome,
+  IdentityProviderPurpose,
+  PendingAccount,
+} from "./identityProviders";
+import type { PasskeyHandoff } from "./passkeys";
 
 export type Paths = paths;
 export type Schemas = components["schemas"];
@@ -73,18 +81,27 @@ export type DeploymentProfile = Schemas["DeploymentProfile"];
 export type DeviceLink = Schemas["DeviceLink"];
 export type DeviceLinkScan = Schemas["DeviceLinkScan"];
 export type DeviceLinkProgress = Schemas["DeviceLinkProgress"];
+export type DeviceLinkAccount = Schemas["DeviceLinkAccount"];
 export type RegistrationInviteRead = Schemas["Sideloaded_RegistrationInvitePreview"];
 
 /** Where a sign-in code stands, for the device it signs in. A `signedIn` session is stored. */
 export type DeviceLinkClaim =
   | { status: "waiting" }
   | { status: "scanned"; deviceName: string }
+  /** The signed-in device typed the code: claim again naming this account once it is confirmed. */
+  | { status: "confirmAccount"; account: DeviceLinkAccount }
   | { status: "signedIn"; session: Session };
 
 /** How a password sign-in ended. */
 export type LoginOutcome =
   | { status: "signedIn"; session: Session }
   | { status: "secondFactorRequired"; ticket: string; methods: SecondFactorMethod[] };
+
+/**
+ * How long before its ceremony expires a conditional sign-in stops offering passkeys, so that a
+ * pick never reaches the server after it.
+ */
+const CONDITIONAL_EXPIRY_MARGIN_MS = 15_000;
 
 /** What a passkey ceremony asks for. */
 export interface PasskeyRequest {
@@ -238,23 +255,30 @@ export class AspenClient {
   }
 
   /**
-   * Starts a sign-in code (`/auth/device-links`). Signed in, it offers this account to a phone
-   * that scans it; signed out, it asks a signed-in phone for a sign-in, naming this device
-   * `deviceName`, and `verifier` is what to claim it with (`claimDeviceLink`).
+   * Starts a sign-in code (`/auth/device-links`), with a user code (`link.code`) to type where
+   * the QR code cannot be scanned. Signed in, it offers this account to a device that takes it;
+   * signed out, it asks a signed-in device for a sign-in, naming this device `deviceName`, and
+   * `verifier` is what to claim it with (`claimDeviceLink`).
    */
   async startDeviceLink(
     deviceName?: string,
   ): Promise<{ link: DeviceLink; verifier: string | null }> {
     if (this.session !== null) {
       return {
-        link: unwrap(await this.api.POST(`${API_PREFIX}/auth/device-links`, { body: {} })),
+        link: unwrap(
+          await this.api.POST(`${API_PREFIX}/auth/device-links`, { body: { withCode: true } }),
+        ),
         verifier: null,
       };
     }
     const { verifier, challenge } = await pkcePair();
     const link = unwrap(
       await this.api.POST(`${API_PREFIX}/auth/device-links`, {
-        body: { codeChallenge: challenge, ...(deviceName === undefined ? {} : { deviceName }) },
+        body: {
+          codeChallenge: challenge,
+          withCode: true,
+          ...(deviceName === undefined ? {} : { deviceName }),
+        },
       }),
     );
     return { link, verifier };
@@ -288,6 +312,32 @@ export class AspenClient {
     return { scan, verifier };
   }
 
+  /**
+   * Takes a sign-in code by typing the user code another device shows, as scanning its QR code
+   * would, and returns the link's id with what a scan returns. Signed in, the code must be one
+   * asking for a sign-in; signed out, one offering an account, and this device is named
+   * `deviceName`. Throws `ApiProblemError` (`deviceLinkCodeUnknown`) for a code that matches
+   * nothing waiting for this device.
+   */
+  async enterDeviceLinkCode(
+    code: string,
+    deviceName: string,
+  ): Promise<{ id: string; scan: DeviceLinkScan; verifier: string | null }> {
+    if (this.session !== null) {
+      const { id, ...scan } = unwrap(
+        await this.api.POST(`${API_PREFIX}/auth/device-link-entries`, { body: { code } }),
+      );
+      return { id, scan, verifier: null };
+    }
+    const { verifier, challenge } = await pkcePair();
+    const { id, ...scan } = unwrap(
+      await this.api.POST(`${API_PREFIX}/auth/device-link-entries`, {
+        body: { code, deviceName, codeChallenge: challenge },
+      }),
+    );
+    return { id, scan, verifier };
+  }
+
   /** Where a sign-in code this signed-in device shows stands. */
   async deviceLinkProgress(id: string): Promise<DeviceLinkProgress> {
     return unwrap(
@@ -319,13 +369,14 @@ export class AspenClient {
 
   /**
    * Asks for the sign-in a code promises this device, with the verifier it was started or
-   * scanned with; once the other device confirms, the session is stored.
+   * scanned with; once the other device confirms, the session is stored. `account` is the
+   * account this device's person confirmed after a `confirmAccount` answer.
    */
-  async claimDeviceLink(id: string, verifier: string): Promise<DeviceLinkClaim> {
+  async claimDeviceLink(id: string, verifier: string, account?: string): Promise<DeviceLinkClaim> {
     const claimed = unwrap(
       await this.api.POST(`${API_PREFIX}/auth/device-links/{link}/claim`, {
         params: { path: { link: id } },
-        body: { codeVerifier: verifier },
+        body: { codeVerifier: verifier, ...(account === undefined ? {} : { account }) },
       }),
     );
     switch (claimed.status) {
@@ -333,6 +384,8 @@ export class AspenClient {
         return { status: "signedIn", session: this.#adopt(claimed) };
       case "scanned":
         return { status: "scanned", deviceName: claimed.deviceName };
+      case "confirmAccount":
+        return { status: "confirmAccount", account: claimed };
       case "waiting":
         return { status: "waiting" };
     }
@@ -363,13 +416,39 @@ export class AspenClient {
         await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies`, { body: request }),
       );
       const credential = await runInPage(started.purpose, started.options);
-      const completed = unwrap(
-        await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies/{ceremony}/credential`, {
-          params: { path: { ceremony: started.id } },
-          body: { credential },
-        }),
+      return this.#completeInPage(transport.rpId, started.id, credential);
+    }
+    if (transport.kind === "native") {
+      // Run like one in this page: started and completed by this sign-in, so it stays bound
+      // to it. A ceremony the platform cannot run is left to expire, and another goes to the
+      // system browser.
+      const started = unwrap(
+        await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies`, { body: request }),
       );
-      return this.#passkeyOutcome(completed);
+      const publicKey = (started.options as { publicKey?: unknown }).publicKey;
+      let credential: Record<string, unknown>;
+      try {
+        credential =
+          started.purpose === "register"
+            ? await transport.native.create(publicKey)
+            : await transport.native.get(publicKey);
+      } catch (e) {
+        if (e instanceof PasskeyUnavailableError) {
+          return this.runPasskeyCeremony(request, {
+            kind: "handoff",
+            handoff: transport.fallback,
+          });
+        }
+        throw e;
+      }
+      return this.#passkeyOutcome(
+        unwrap(
+          await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies/{ceremony}/credential`, {
+            params: { path: { ceremony: started.id } },
+            body: { credential },
+          }),
+        ),
+      );
     }
     const handoff = await transport.handoff.prepare();
     try {
@@ -393,6 +472,69 @@ export class AspenClient {
     } finally {
       handoff.dispose();
     }
+  }
+
+  /**
+   * Signs in with a passkey offered among the username field's autofill suggestions
+   * (`mediation: "conditional"`), in a page under the relying party's domain. It waits until
+   * the user picks one, `signal` aborts it, or the ceremony is about to expire, which ends it
+   * as cancelled: the server would refuse a pick after that. Throws `PasskeyCancelledError`
+   * for all three, `PasskeyUnavailableError` when the server refuses to start it (nothing the
+   * person asked for failed), and `ApiProblemError` when it refuses the passkey picked.
+   */
+  async runConditionalPasskeySignIn(rpId: string, signal: AbortSignal): Promise<PasskeyOutcome> {
+    const start = await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies`, {
+      body: { purpose: "signIn" },
+    });
+    if (start.data === undefined) {
+      throw new PasskeyUnavailableError(problemOf(start.error, start.response).code);
+    }
+    const started = start.data;
+    const ending = new AbortController();
+    const end = () => {
+      ending.abort();
+    };
+    signal.addEventListener("abort", end);
+    const lifetime = Date.parse(started.expiresAt) - Date.now() - CONDITIONAL_EXPIRY_MARGIN_MS;
+    const expiry = setTimeout(end, Math.max(0, lifetime));
+    let credential: Record<string, unknown>;
+    try {
+      if (signal.aborted) {
+        throw new PasskeyCancelledError();
+      }
+      credential = await runInPage("signIn", started.options, {
+        mediation: "conditional",
+        signal: ending.signal,
+      });
+    } catch (e) {
+      if (ending.signal.aborted) {
+        throw new PasskeyCancelledError();
+      }
+      throw e;
+    } finally {
+      clearTimeout(expiry);
+      signal.removeEventListener("abort", end);
+    }
+    return this.#completeInPage(rpId, started.id, credential);
+  }
+
+  /**
+   * Completes a ceremony this page ran. A passkey the server holds no longer is named to the
+   * browser (`signalUnknownCredential`), so its passkey managers may stop offering it.
+   */
+  async #completeInPage(
+    rpId: string,
+    ceremony: string,
+    credential: Record<string, unknown>,
+  ): Promise<PasskeyOutcome> {
+    const completed = await this.api.POST(
+      `${API_PREFIX}/auth/passkey-ceremonies/{ceremony}/credential`,
+      { params: { path: { ceremony } }, body: { credential } },
+    );
+    if (completed.error?.code === "passkeyUnknown" && typeof credential.id === "string") {
+      signalUnknownCredential(rpId, credential.id);
+    }
+    return this.#passkeyOutcome(unwrap(completed));
   }
 
   #passkeyOutcome(result: Schemas["PasskeyCeremonyOutcome"]): PasskeyOutcome {
@@ -472,6 +614,116 @@ export class AspenClient {
     });
     if (result.error !== undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Starts a flow at an identity provider with a PKCE challenge of this client's. `returnTo` is
+   * an app's return address (a loopback port or an `aspen:` URI, as a passkey hand-off's);
+   * left out, the browser returns to the web client's `/sign-in/provider` page. Returns the flow,
+   * whose `authorizeUrl` the browser is sent to, and the verifier to claim it with. `link` needs
+   * a recent verification (`reauthenticationRequired`).
+   */
+  async startIdentityProviderFlow(
+    provider: string,
+    purpose: IdentityProviderPurpose,
+    returnTo?: string,
+  ): Promise<{ flow: Schemas["IdentityProviderFlow"]; verifier: string }> {
+    const { verifier, challenge } = await pkcePair();
+    const flow = unwrap(
+      await this.api.POST(`${API_PREFIX}/auth/identity-provider-flows`, {
+        body: {
+          provider,
+          purpose,
+          codeChallenge: challenge,
+          ...(returnTo === undefined ? {} : { returnTo }),
+        },
+      }),
+    );
+    return { flow, verifier };
+  }
+
+  /**
+   * Claims what the provider said, with the flow's verifier and the return code the browser
+   * brought back, and stores the session a `signIn` flow made. Throws `ApiProblemError`:
+   * `identityProviderFailed` (its detail says why), `identityProviderFlowExpired`,
+   * `identityProviderUnavailable`, `identityTaken`, or `verificationFailed`.
+   */
+  async claimIdentityProviderFlow(
+    flow: string,
+    verifier: string,
+    code: string,
+  ): Promise<IdentityProviderOutcome> {
+    const claimed = unwrap(
+      await this.api.POST(`${API_PREFIX}/auth/identity-provider-flows/{flow}/claim`, {
+        params: { path: { flow } },
+        body: { codeVerifier: verifier, code },
+      }),
+    );
+    switch (claimed.outcome) {
+      case "signedIn":
+        return claimed.status === "secondFactorRequired"
+          ? { outcome: "secondFactorRequired", ticket: claimed.ticket, methods: claimed.methods }
+          : { outcome: "signedIn", session: this.#adopt(claimed) };
+      case "accountRequired":
+        return { outcome: "accountRequired", offer: claimed, account: { flow, verifier } };
+      case "linked":
+        return { outcome: "linked", identity: claimed.identity };
+      case "reauthenticated":
+        return { outcome: "reauthenticated", verifiedUntil: claimed.verifiedUntil };
+    }
+  }
+
+  /**
+   * Makes the account an `accountRequired` claim offered, linked to the provider's identity, and
+   * stores its session. Throws `ApiProblemError`: `usernameTaken` (another name may be tried
+   * while the offer lasts), `validation`, `registrationInviteRequired` or
+   * `registrationInviteInvalid`, and `identityProviderFlowExpired` once it has lapsed.
+   */
+  async createIdentityProviderAccount(
+    pending: PendingAccount,
+    account: { name: string; inviteCode?: string; email?: string; newsletter?: boolean },
+  ): Promise<Session> {
+    const made = await this.api.POST(`${API_PREFIX}/auth/identity-provider-flows/{flow}/account`, {
+      params: { path: { flow: pending.flow } },
+      body: {
+        codeVerifier: pending.verifier,
+        // Composed (NFC), as the server requires a new name to be, whatever the keyboard sent.
+        name: account.name.normalize("NFC"),
+        ...(account.inviteCode === undefined ? {} : { inviteCode: account.inviteCode }),
+        ...(account.email === undefined ? {} : { email: account.email }),
+        ...(account.newsletter === undefined ? {} : { newsletter: account.newsletter }),
+      },
+    });
+    return this.#adopt(unwrap(made));
+  }
+
+  /**
+   * Runs a flow end to end in the system browser, as the desktop and mobile apps do, through a
+   * passkey hand-off's return address: starts it, opens the provider's sign-in, waits for the
+   * browser to come back, and claims what it brought. Throws `PasskeyCancelledError` when the
+   * browser is closed or the hand-off gives up waiting, and `ApiProblemError` as
+   * `claimIdentityProviderFlow` does.
+   */
+  async runIdentityProviderHandoff(
+    provider: string,
+    purpose: IdentityProviderPurpose,
+    handoff: PasskeyHandoff,
+  ): Promise<IdentityProviderOutcome> {
+    const session = await handoff.prepare();
+    try {
+      const { flow, verifier } = await this.startIdentityProviderFlow(
+        provider,
+        purpose,
+        session.returnTo,
+      );
+      const returned = await session.open(flow.authorizeUrl);
+      if (returned.ceremony !== flow.id || returned.outcome !== "done" || returned.code === null) {
+        throw new PasskeyCancelledError();
+      }
+      return await this.claimIdentityProviderFlow(flow.id, verifier, returned.code);
+    } finally {
+      session.dispose();
     }
   }
 

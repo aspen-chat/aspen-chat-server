@@ -52,7 +52,13 @@ function devHttps(env: Record<string, string>): { cert: Buffer; key: Buffer } | 
 }
 
 /** The paths the server answers itself rather than with the web client (`api::start`). */
-const serverPaths = ["/api", "/auth/passkey", "/.well-known/aspen", "/email/unsubscribe"];
+const serverPaths = [
+  "/api",
+  "/auth/passkey",
+  "/auth/oidc",
+  "/.well-known/aspen",
+  "/email/unsubscribe",
+];
 
 /**
  * The Content Security Policy of the desktop and mobile apps' page, written into it by

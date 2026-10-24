@@ -15,4 +15,5 @@ ext {
     cordovaAndroidVersion = '14.0.1'
     // The version the push plugin uses, which the app's own messaging service compiles against.
     firebaseMessagingVersion = '25.0.1'
+    androidxCredentialsVersion = '1.6.0'
 }

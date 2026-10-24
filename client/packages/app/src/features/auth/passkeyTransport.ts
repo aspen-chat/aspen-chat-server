@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { useAspenClient } from "@/api/context";
 import { detectShell, type Shell } from "@/config";
 import { authMethods } from "@/features/auth/authMethods";
+import { nativePasskeys } from "@/features/auth/nativePasskeys";
 
 /**
  * The web client runs passkey ceremonies in its own page when it is served under the relying
@@ -31,7 +32,7 @@ export function passkeyTransport(shell: Shell, methods: AuthMethods): PasskeyTra
       return { kind: "handoff", handoff: mobileHandoff };
     case "web":
       return canRunInPage(rpId, window.location.hostname, "PublicKeyCredential" in window)
-        ? { kind: "inPage" }
+        ? { kind: "inPage", rpId }
         : null;
   }
 }
@@ -53,7 +54,7 @@ function desktopHandoff(bridge: AspenDesktopBridge["passkeyHandoff"]): PasskeyHa
 }
 
 /** The browser returns through the app's `aspen:` URL scheme, which the native projects claim. */
-const mobileHandoff: PasskeyHandoff = {
+export const mobileHandoff: PasskeyHandoff = {
   async prepare() {
     const [{ App }, { Browser }] = await Promise.all([
       import("@capacitor/app"),
@@ -89,6 +90,22 @@ const mobileHandoff: PasskeyHandoff = {
 };
 
 /**
+ * `passkeyTransport`, with the Android app's own Credential Manager in place of the system
+ * browser where the deployment names the app (`nativePasskeys`); the browser stays its fallback.
+ */
+export async function resolvePasskeyTransport(
+  shell: Shell,
+  methods: AuthMethods,
+): Promise<PasskeyTransport | null> {
+  const transport = passkeyTransport(shell, methods);
+  if (shell !== "mobile" || transport?.kind !== "handoff") {
+    return transport;
+  }
+  const native = await nativePasskeys(methods);
+  return native === null ? transport : { kind: "native", native, fallback: transport.handoff };
+}
+
+/**
  * How this shell reaches passkeys on the current server; `null` while unknown or when passkeys
  * are unavailable, in which case nothing passkey-related is offered.
  */
@@ -101,9 +118,10 @@ export function usePasskeyTransport(): PasskeyTransport | null {
   useEffect(() => {
     let live = true;
     authMethods(client)
-      .then((methods) => {
+      .then((methods) => resolvePasskeyTransport(detectShell(), methods))
+      .then((value) => {
         if (live) {
-          setTransport({ server: client.baseUrl, value: passkeyTransport(detectShell(), methods) });
+          setTransport({ server: client.baseUrl, value });
         }
       })
       .catch(() => undefined);

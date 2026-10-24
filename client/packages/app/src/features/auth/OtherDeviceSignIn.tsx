@@ -8,11 +8,14 @@ import { ScanCodeButton } from "@/features/qr/ScanCode";
 import { useOpenAspenLink } from "@/features/qr/openLink";
 import { useMessages } from "@/i18n/context";
 import { DeviceLinkCode } from "./DeviceLinkCode";
+import { TypeDeviceLinkCode } from "./TypeDeviceLinkCode";
 
 /**
- * Signing in one device from another by a QR code. A computer (the desktop app or a browser)
- * shows a code: signed out, to be signed in by a phone; signed in, to sign a phone in. A phone
- * scans one, whichever way round. Phones do not show codes, and computers do not scan them.
+ * Signing in one device from another by a QR code, or the user code beside it. A computer (the
+ * desktop app or a browser) shows a code: signed out, to be signed in by a phone; signed in, to
+ * sign a phone in. A phone scans one, whichever way round. Phones do not show codes, and
+ * computers do not scan them, but either may type the user code another device shows instead
+ * (`TypeDeviceLinkCode`), as a device that cannot scan does: a television, another computer.
  */
 export function OtherDeviceSignIn({ className }: { className: string }) {
   const m = useMessages();
@@ -21,35 +24,41 @@ export function OtherDeviceSignIn({ className }: { className: string }) {
   const signedIn = client.session !== null;
   if (detectShell() === "mobile") {
     return (
-      <ScanCodeButton
-        label={m.deviceLink.scan}
-        hint={signedIn ? m.deviceLink.scanHintSignedIn : m.deviceLink.scanHintSignedOut}
-        accept={(link) => {
-          if (link.kind !== "deviceLink") {
-            return m.deviceLink.notSignInCode;
-          }
-          open(link);
-          return null;
-        }}
-        className={className}
-      />
+      <>
+        <ScanCodeButton
+          label={m.deviceLink.scan}
+          hint={signedIn ? m.deviceLink.scanHintSignedIn : m.deviceLink.scanHintSignedOut}
+          accept={(link) => {
+            if (link.kind !== "deviceLink") {
+              return m.deviceLink.notSignInCode;
+            }
+            open(link);
+            return null;
+          }}
+          className={className}
+        />
+        <TypeDeviceLinkCode className={className} />
+      </>
     );
   }
   const label = signedIn ? m.deviceLink.offer : m.deviceLink.request;
   return (
-    <DialogTrigger>
-      <Button className={className}>
-        <DeviceMobileIcon size={18} aria-hidden="true" />
-        {label}
-      </Button>
-      <ModalOverlay className={overlayClass} isDismissable>
-        <Modal className={modalClass}>
-          <Dialog className={dialogClass}>
-            <DialogHeading>{label}</DialogHeading>
-            <DeviceLinkCode />
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
-    </DialogTrigger>
+    <>
+      <DialogTrigger>
+        <Button className={className}>
+          <DeviceMobileIcon size={18} aria-hidden="true" />
+          {label}
+        </Button>
+        <ModalOverlay className={overlayClass} isDismissable>
+          <Modal className={modalClass}>
+            <Dialog className={dialogClass}>
+              <DialogHeading>{label}</DialogHeading>
+              <DeviceLinkCode />
+            </Dialog>
+          </Modal>
+        </ModalOverlay>
+      </DialogTrigger>
+      <TypeDeviceLinkCode className={className} />
+    </>
   );
 }

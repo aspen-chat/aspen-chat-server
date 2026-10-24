@@ -20,6 +20,8 @@ use aspen_app::user::UserPg;
 use axum::Extension;
 use axum::extract::{FromRequestParts, OptionalFromRequestParts, State};
 use axum::http::request::Parts;
+use base64::Engine as _;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use hyper::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
@@ -113,7 +115,20 @@ pub async fn login(
     let ip = client.and_then(|Extension(ClientIp(ip))| ip);
     crate::rate_limit::limit_sign_in(&state, &request.username, ip).await?;
     match app::login::try_login(&state, &request.username, &request.password).await? {
-        LoginOutcome::SignedIn(session) => Ok(Json(LoginResult::SignedIn(session.into()))),
+        LoginOutcome::InvalidCredentials => {
+            crate::rate_limit::note_wrong_password(&state, &request.username, ip).await;
+            crate::rate_limit::note_failure(&state, &failures).await;
+            Err(ApiError::new(ProblemCode::InvalidCredentials))
+        }
+        outcome => Ok(Json(login_result(&state, outcome)?)),
+    }
+}
+
+/// A first factor's outcome as the client reads it: the session, or the second factors the
+/// account can finish with. `invalidCredentials` for a wrong password.
+pub fn login_result(state: &GlobalServerContext, outcome: LoginOutcome) -> ApiResult<LoginResult> {
+    match outcome {
+        LoginOutcome::SignedIn(session) => Ok(LoginResult::SignedIn(session.into())),
         LoginOutcome::SecondFactorRequired { ticket, methods } => {
             let mut offered = Vec::new();
             if methods.totp {
@@ -125,18 +140,12 @@ pub async fn login(
             if methods.recovery_code {
                 offered.push(SecondFactorMethod::RecoveryCode);
             }
-            Ok(Json(LoginResult::SecondFactorRequired(
-                SecondFactorChallenge {
-                    ticket,
-                    methods: offered,
-                },
-            )))
+            Ok(LoginResult::SecondFactorRequired(SecondFactorChallenge {
+                ticket,
+                methods: offered,
+            }))
         }
-        LoginOutcome::InvalidCredentials => {
-            crate::rate_limit::note_wrong_password(&state, &request.username, ip).await;
-            crate::rate_limit::note_failure(&state, &failures).await;
-            Err(ApiError::new(ProblemCode::InvalidCredentials))
-        }
+        LoginOutcome::InvalidCredentials => Err(ApiError::new(ProblemCode::InvalidCredentials)),
     }
 }
 
@@ -219,6 +228,9 @@ pub struct AuthMethods {
     pub software: aspen_app::federation::protocol::Software,
     /// Present when the deployment wakes phones (`POST /users/@me/push-subscriptions`).
     pub push: Option<crate::push::PushSupport>,
+    /// The identity providers people may sign in through
+    /// (`POST /auth/identity-provider-flows`), by name.
+    pub identity_providers: Vec<crate::identity_provider::OfferedIdentityProvider>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -228,6 +240,30 @@ pub struct PasskeySupport {
     /// runs ceremonies in its own page; anything else hands them to the page at
     /// `/auth/passkey` on this server, opened in the system browser.
     pub rp_id: String,
+    /// The Android apps this deployment names in `/.well-known/assetlinks.json`, which may run
+    /// ceremonies themselves through Credential Manager. An app not listed, or a deployment
+    /// that leaves this out, hands them to the page instead.
+    #[schema(required = false)]
+    pub android_apps: Vec<AndroidPasskeyApp>,
+}
+
+/// An Android app that may use this deployment's passkeys.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidPasskeyApp {
+    pub package_name: String,
+    /// The SHA-256 fingerprint of a certificate the app is signed with, as upper-case hex pairs
+    /// joined by colons.
+    pub sha256_cert_fingerprint: String,
+}
+
+impl From<app::passkey::AndroidApp> for AndroidPasskeyApp {
+    fn from(app: app::passkey::AndroidApp) -> Self {
+        Self {
+            sha256_cert_fingerprint: app.fingerprint_hex(),
+            package_name: app.package,
+        }
+    }
 }
 
 /// How this server lets people sign in and register. Unauthenticated.
@@ -235,13 +271,32 @@ pub struct PasskeySupport {
     get,
     path = "/auth/methods",
     tag = TAG_AUTH,
-    responses((status = OK, body = AuthMethods))
+    responses(
+        (status = OK, body = AuthMethods),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
 )]
-pub async fn auth_methods(State(state): State<GlobalServerContext>) -> Json<AuthMethods> {
+pub async fn auth_methods(
+    State(state): State<GlobalServerContext>,
+) -> ApiResult<Json<AuthMethods>> {
     let auth = &state.config.auth;
+    let identity_providers = {
+        let mut conn = state
+            .connection_pool
+            .get()
+            .await
+            .map_err(app::Error::from)?;
+        app::identity_provider::offered(&mut conn).await?
+    };
     let settings = state.settings();
-    Json(AuthMethods {
-        passkeys: auth.rp_id.clone().map(|rp_id| PasskeySupport { rp_id }),
+    Ok(Json(AuthMethods {
+        passkeys: auth.rp_id.clone().map(|rp_id| PasskeySupport {
+            rp_id,
+            android_apps: app::passkey::android_apps(&state.config)
+                .into_iter()
+                .map(AndroidPasskeyApp::from)
+                .collect(),
+        }),
         two_factor_required: settings.require_two_factor,
         registration_invite_required: settings.registration_invite_required,
         federation_domain: app::federation::own_domain(&state.config.federation).map(String::from),
@@ -252,7 +307,8 @@ pub async fn auth_methods(State(state): State<GlobalServerContext>) -> Json<Auth
         }),
         protocol: app::federation::protocol::Protocol::with_plugins(&state.plugins),
         software: app::federation::protocol::Software::ours(),
-    })
+        identity_providers: identity_providers.into_iter().map(Into::into).collect(),
+    }))
 }
 
 /// How the caller proves who they are again.
@@ -319,6 +375,10 @@ pub async fn reauthenticate(
 #[serde(rename_all = "camelCase")]
 pub struct Passkey {
     pub id: app::PasskeyId,
+    /// The WebAuthn credential id, in base64url: what the browser's passkey managers know the
+    /// passkey by, which the Signals API names it by
+    /// (`PublicKeyCredential.signalAllAcceptedCredentials`).
+    pub credential_id: String,
     pub name: String,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
@@ -328,6 +388,7 @@ impl From<PasskeySummary> for Passkey {
     fn from(summary: PasskeySummary) -> Self {
         Self {
             id: summary.id,
+            credential_id: BASE64_URL_SAFE_NO_PAD.encode(summary.credential_id),
             name: summary.name,
             created_at: summary.created_at,
             last_used_at: summary.last_used_at,

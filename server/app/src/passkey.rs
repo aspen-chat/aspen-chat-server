@@ -58,24 +58,141 @@ const CLAIM_LIFETIME_SECONDS: i64 = 2 * 60;
 /// The longest passkey name kept.
 pub const MAX_NAME_CHARS: usize = 64;
 
+/// The package of the official Android app.
+pub const OFFICIAL_ANDROID_PACKAGE: &str = "com.aspen_chat.client";
+
+/// The SHA-256 fingerprints of the certificates the official Android app's releases are signed
+/// with, which every deployment names in its `assetlinks.json`. None is listed: no release key
+/// exists yet, and every debug build is signed with its builder's own key, which an operator
+/// names in `[auth] android_apps`.
+pub const OFFICIAL_ANDROID_FINGERPRINTS: &[&str] = &[];
+
+/// An Android app that may use this deployment's passkeys itself, through Credential Manager,
+/// rather than handing ceremonies to the system browser. Written `<package>=<fingerprint>`, the
+/// fingerprint being the SHA-256 of the app's signing certificate in hex, with or without
+/// colons, as `keytool -list -v` and `apksigner verify --print-certs` print it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AndroidApp {
+    pub package: String,
+    pub fingerprint: [u8; 32],
+}
+
+impl AndroidApp {
+    /// The origin Android's Credential Manager writes into `clientDataJSON` for this app
+    /// (`android:apk-key-hash:` and the fingerprint in base64url), which ceremonies accept.
+    pub fn origin(&self) -> String {
+        format!(
+            "android:apk-key-hash:{}",
+            BASE64_URL_SAFE_NO_PAD.encode(self.fingerprint)
+        )
+    }
+
+    /// The fingerprint as Digital Asset Links write it: upper-case hex pairs joined by colons.
+    pub fn fingerprint_hex(&self) -> String {
+        self.fingerprint
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<_>>()
+            .join(":")
+    }
+}
+
+impl std::str::FromStr for AndroidApp {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let (package, fingerprint) = text
+            .split_once('=')
+            .ok_or("is not <package>=<SHA-256 fingerprint>")?;
+        let package = package.trim();
+        // Android's rule: two or more segments, each a letter followed by letters, digits, and
+        // underscores.
+        let segments: Vec<&str> = package.split('.').collect();
+        let valid_segment = |segment: &&str| {
+            segment
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        };
+        if segments.len() < 2 || !segments.iter().all(valid_segment) {
+            return Err(format!("{package:?} is not an Android package name"));
+        }
+        let hex: String = fingerprint.trim().chars().filter(|c| *c != ':').collect();
+        let fingerprint = data_encoding::HEXLOWER_PERMISSIVE
+            .decode(hex.as_bytes())
+            .ok()
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            .ok_or("the fingerprint is not a SHA-256 digest in hex")?;
+        Ok(Self {
+            package: package.to_string(),
+            fingerprint,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for AndroidApp {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Every Android app that may use this deployment's passkeys: the official app's releases and
+/// those `[auth] android_apps` names, each once. None where passkeys cannot work.
+pub fn android_apps(config: &AspenConfig) -> Vec<AndroidApp> {
+    if config.auth.rp_id.is_none() {
+        return Vec::new();
+    }
+    let mut apps: Vec<AndroidApp> = OFFICIAL_ANDROID_FINGERPRINTS
+        .iter()
+        .map(|fingerprint| {
+            format!("{OFFICIAL_ANDROID_PACKAGE}={fingerprint}")
+                .parse()
+                .expect("the official fingerprints are SHA-256 digests in hex")
+        })
+        .collect();
+    for app in &config.auth.android_apps {
+        if !apps.contains(app) {
+            apps.push(app.clone());
+        }
+    }
+    apps
+}
+
+/// The WebAuthn user handle of `user`'s passkeys: the account's id, its 16 bytes in base64url,
+/// as registration gives it (`start_passkey_registration`). Password managers know an
+/// account's passkeys by it, so the Signals API names the account by it too.
+pub fn user_handle(user: UserId) -> String {
+    BASE64_URL_SAFE_NO_PAD.encode(user.0.as_bytes())
+}
+
 /// The relying party, called `name` in passkey prompts, or `None` where passkeys cannot work
-/// (`AuthConfig::rp_id`). Its one origin is `public_url`, where every page that runs a ceremony
-/// is: the web client's and the handoff page the apps open.
+/// (`AuthConfig::rp_id`). Its origins are `public_url`, where every page that runs a ceremony
+/// is (the web client's and the handoff page the apps open), and those of the Android apps
+/// that run ceremonies themselves (`android_apps`).
 pub fn relying_party(config: &AspenConfig, name: &str) -> crate::Result<Option<Webauthn>> {
     let Some(rp_id) = &config.auth.rp_id else {
         return Ok(None);
     };
-    let origin = Url::parse(&config.public_url).map_err(|e| {
+    let not_a_url = |what: &str, e: url::ParseError| {
         crate::Error::Config(config::ConfigError::Message(format!(
-            "public_url {} is not a URL: {e}",
-            config.public_url
+            "{what} is not a URL: {e}"
         )))
-    })?;
-    Ok(Some(
-        WebauthnBuilder::new(rp_id, &origin)?
-            .rp_name(name)
-            .build()?,
-    ))
+    };
+    let origin = Url::parse(&config.public_url)
+        .map_err(|e| not_a_url(&format!("public_url {}", config.public_url), e))?;
+    let mut builder = WebauthnBuilder::new(rp_id, &origin)?.rp_name(name);
+    for app in android_apps(config) {
+        let origin = app.origin();
+        // An opaque URL, which webauthn-rs accepts only when `clientDataJSON` names it exactly.
+        builder =
+            builder.append_allowed_origin(&Url::parse(&origin).map_err(|e| not_a_url(&origin, e))?);
+    }
+    Ok(Some(builder.build()?))
 }
 
 /// The relying party for a ceremony, called what the deployment is called now. Building one
@@ -262,7 +379,8 @@ pub fn validate_return_to(return_to: &str) -> crate::Result<Url> {
     }
 }
 
-fn validate_code_challenge(challenge: &str) -> crate::Result<()> {
+/// Checks a PKCE `S256` challenge: 32 bytes in base64url.
+pub fn validate_code_challenge(challenge: &str) -> crate::Result<()> {
     let decoded = BASE64_URL_SAFE_NO_PAD
         .decode(challenge)
         .map_err(|_| crate::Error::Validation(t!("invalidCodeChallenge")))?;
@@ -442,7 +560,9 @@ fn ensure_starter(starter: Option<&str>, caller: Option<&Caller>) -> crate::Resu
     }
 }
 
-fn digest(secret: &str) -> String {
+/// A secret's SHA-256 in base64url: the form a PKCE `S256` challenge takes (RFC 7636), and that
+/// return codes are kept and compared in.
+pub fn digest(secret: &str) -> String {
     BASE64_URL_SAFE_NO_PAD.encode(Sha256::digest(secret.as_bytes()))
 }
 
@@ -479,6 +599,17 @@ pub async fn complete(
                 .identify_discoverable_authentication(&credential)
                 .map_err(rejected)?;
             let user_id = UserId(user_uuid);
+            let stored = credentials(&mut conn, user_id).await?;
+            // Told apart before anything else, so that only a credential no account holds is
+            // reported unknown, never one of another account's than the ticket's: the client
+            // has the browser forget what is reported unknown.
+            let raw_id = credential.get_credential_id();
+            if !stored
+                .iter()
+                .any(|(_, key)| AsRef::<[u8]>::as_ref(key.cred_id()) == raw_id)
+            {
+                return Err(crate::Error::PasskeyUnknown);
+            }
             if let Some(ticket) = &ticket
                 && login::ticket_user(state, ticket).await? != Some(user_id)
             {
@@ -486,7 +617,6 @@ pub async fn complete(
                     "the passkey belongs to another account".to_string(),
                 ));
             }
-            let stored = credentials(&mut conn, user_id).await?;
             let keys: Vec<DiscoverableKey> = stored.iter().map(|(_, key)| key.into()).collect();
             let result = webauthn
                 .finish_discoverable_authentication(&credential, auth_state, &keys)
@@ -646,6 +776,7 @@ async fn take_effect(
                         let first = !two_factor::methods(conn, user_id).await?.any_factor();
                         let summary = PasskeySummary {
                             id: PasskeyId::new(),
+                            credential_id: AsRef::<[u8]>::as_ref(key.cred_id()).to_vec(),
                             name,
                             created_at: Utc::now(),
                             last_used_at: None,
@@ -737,11 +868,18 @@ async fn record_use(
 }
 
 /// The columns a `PasskeySummary` is read from.
-type SummaryRow = (PasskeyId, String, DateTime<Utc>, Option<DateTime<Utc>>);
+type SummaryRow = (
+    PasskeyId,
+    Vec<u8>,
+    String,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+);
 
-fn summary((id, name, created_at, last_used_at): SummaryRow) -> PasskeySummary {
+fn summary((id, credential_id, name, created_at, last_used_at): SummaryRow) -> PasskeySummary {
     PasskeySummary {
         id,
+        credential_id,
         name,
         created_at,
         last_used_at,
@@ -755,6 +893,7 @@ pub async fn list(
     let rows: Vec<SummaryRow> = passkey::table
         .select((
             passkey::id,
+            passkey::credential_id,
             passkey::name,
             passkey::created_at,
             passkey::last_used_at,
@@ -783,6 +922,7 @@ pub async fn rename(
     .set(passkey::name.eq(name))
     .returning((
         passkey::id,
+        passkey::credential_id,
         passkey::name,
         passkey::created_at,
         passkey::last_used_at,
@@ -811,6 +951,9 @@ pub async fn remove(
             .returning(passkey::name)
             .get_result(conn)
             .await?;
+            if !crate::identity_provider::has_way_in(conn, user_id).await? {
+                return Err(crate::Error::LastSignInMethod);
+            }
             two_factor::factor_removed(state, conn, user_id, Factor::Passkey { name }).await
         }
         .scope_boxed()
@@ -854,6 +997,57 @@ mod tests {
         assert!(validate_code_challenge(&challenge).is_ok());
         assert!(validate_code_challenge("short").is_err());
         assert!(validate_code_challenge("not base64url!").is_err());
+    }
+
+    #[test]
+    fn android_apps_are_a_package_and_a_certificate_digest() {
+        let hex = ["0a"; 32].join(":");
+        let app: AndroidApp = format!(" com.aspen_chat.client = {hex} ").parse().unwrap();
+        assert_eq!(app.package, "com.aspen_chat.client");
+        assert_eq!(app.fingerprint, [0x0a; 32]);
+        assert_eq!(app.fingerprint_hex(), ["0A"; 32].join(":"));
+        assert_eq!(
+            app.origin(),
+            format!(
+                "android:apk-key-hash:{}",
+                BASE64_URL_SAFE_NO_PAD.encode([0x0a; 32])
+            )
+        );
+        let bare: AndroidApp = format!("a.b={}", "0A".repeat(32)).parse().unwrap();
+        assert_eq!(bare.fingerprint, [0x0a; 32]);
+        for bad in [
+            format!("client={hex}"),
+            format!("com.1aspen.client={hex}"),
+            format!("com..client={hex}"),
+            "com.aspen_chat.client=0A:0B".to_string(),
+            "com.aspen_chat.client".to_string(),
+            format!("com.aspen_chat.client={}", "zz".repeat(32)),
+        ] {
+            assert!(bad.parse::<AndroidApp>().is_err(), "{bad}");
+        }
+        for fingerprint in OFFICIAL_ANDROID_FINGERPRINTS {
+            assert!(
+                format!("{OFFICIAL_ANDROID_PACKAGE}={fingerprint}")
+                    .parse::<AndroidApp>()
+                    .is_ok()
+            );
+        }
+    }
+
+    /// The user handle the Signals API names an account by is the one its passkeys hold.
+    #[test]
+    fn the_user_handle_is_the_one_registration_gives() {
+        let origin = Url::parse("https://chat.example.org").unwrap();
+        let webauthn = WebauthnBuilder::new("chat.example.org", &origin)
+            .unwrap()
+            .build()
+            .unwrap();
+        let user = UserId::new();
+        let (challenge, _) = webauthn
+            .start_passkey_registration(user.0, "kate", "Kate", None)
+            .unwrap();
+        let options = serde_json::to_value(&challenge).unwrap();
+        assert_eq!(options["publicKey"]["user"]["id"], user_handle(user));
     }
 
     #[test]

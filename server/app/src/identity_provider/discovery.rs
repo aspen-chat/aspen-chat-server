@@ -1,0 +1,267 @@
+//! Calling identity providers: HTTPS only, no redirects, a short timeout, answers of bounded size,
+//! and only public addresses (`app::outbound`) unless `[identity_providers]
+//! allow_private_addresses` says otherwise. Each provider's discovery document, with its keys, is
+//! cached for [`CACHED_FOR`], and fetched afresh when a token names a key the cache lacks.
+
+use crate::aspen_config::AspenConfig;
+use crate::outbound::{CertificateFailure as Certificate, Failure, PublicResolver};
+use crate::t;
+use futures_util::StreamExt;
+use openidconnect::core::CoreProviderMetadata;
+use openidconnect::{HttpRequest, HttpResponse, IssuerUrl};
+use std::borrow::Cow;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+
+/// How long one call to a provider may take, connecting included.
+const TIMEOUT: Duration = Duration::from_secs(10);
+/// The largest answer read from a provider: a discovery document, its keys, or a token.
+const MAX_ANSWER_BYTES: usize = 1024 * 1024;
+/// How long a provider's discovery document and keys are used before they are fetched again.
+const CACHED_FOR: Duration = Duration::from_secs(60 * 60);
+/// How many issuers' documents one server keeps: every provider a deployment has, and room for
+/// those changed or removed lately.
+const MAX_CACHED: u64 = 64;
+
+/// The client every call to a provider is made with, and the documents fetched with it.
+struct Outbound {
+    client: reqwest::Client,
+    documents: moka::sync::Cache<String, Arc<CoreProviderMetadata>>,
+}
+
+static OUTBOUND: OnceLock<Outbound> = OnceLock::new();
+
+/// Builds the client from `[identity_providers]`, once per process; the server calls it as it
+/// starts, so an unreadable `ca_file` stops it there rather than at the first sign-in.
+pub fn prepare(config: &AspenConfig) -> crate::Result<()> {
+    outbound(config).map(|_| ())
+}
+
+fn outbound(config: &AspenConfig) -> crate::Result<&'static Outbound> {
+    if let Some(outbound) = OUTBOUND.get() {
+        return Ok(outbound);
+    }
+    let settings = &config.identity_providers;
+    if settings.allow_private_addresses {
+        tracing::warn!("identity providers may be called at private network addresses");
+    }
+    let mut roots = Vec::new();
+    if let Some(path) = &settings.ca_file {
+        let unreadable = |e: &dyn std::fmt::Display| {
+            crate::Error::Config(config::ConfigError::Message(format!(
+                "identity_providers.ca_file: {}: {e}",
+                path.display()
+            )))
+        };
+        let pem = std::fs::read(path).map_err(|e| unreadable(&e))?;
+        roots.extend(reqwest::Certificate::from_pem_bundle(&pem).map_err(|e| unreadable(&e))?);
+    }
+    let client = reqwest::Client::builder()
+        // A proxy would resolve names itself, past `PublicResolver`.
+        .no_proxy()
+        .https_only(true)
+        // A provider's endpoints are named in its document; one that redirects is refused rather
+        // than followed to wherever it points.
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(TIMEOUT)
+        .connect_timeout(TIMEOUT)
+        .dns_resolver(PublicResolver {
+            allow_private: settings.allow_private_addresses,
+            allow_loopback: false,
+        })
+        .tls_certs_merge(roots)
+        .user_agent(concat!(
+            "Aspen/",
+            env!("CARGO_PKG_VERSION"),
+            " (identity providers)"
+        ))
+        .build()
+        .map_err(|e| {
+            crate::Error::Config(config::ConfigError::Message(format!(
+                "building the identity provider client: {e}"
+            )))
+        })?;
+    // Two first calls at once each build one; the first stored is kept.
+    Ok(OUTBOUND.get_or_init(|| Outbound {
+        client,
+        documents: moka::sync::Cache::builder()
+            .max_capacity(MAX_CACHED)
+            .time_to_live(CACHED_FOR)
+            .build(),
+    }))
+}
+
+/// Why a call to a provider failed, beyond what `reqwest` says.
+#[derive(Debug, thiserror::Error)]
+pub enum HttpError {
+    #[error(transparent)]
+    Request(#[from] reqwest::Error),
+    #[error("the answer was larger than {MAX_ANSWER_BYTES} bytes")]
+    TooLarge,
+}
+
+/// Makes one call `openidconnect` asks for, with the providers' client.
+async fn call(client: &reqwest::Client, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+    let (parts, body) = request.into_parts();
+    let response = client
+        .request(parts.method, parts.uri.to_string())
+        .headers(parts.headers)
+        .body(body)
+        .send()
+        .await?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if body.len() + chunk.len() > MAX_ANSWER_BYTES {
+            return Err(HttpError::TooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let mut answer = HttpResponse::new(body);
+    *answer.status_mut() = status;
+    *answer.headers_mut() = headers;
+    Ok(answer)
+}
+
+/// The function `openidconnect` makes its calls to providers through.
+pub fn http(
+    config: &AspenConfig,
+) -> crate::Result<
+    impl Fn(HttpRequest) -> futures_util::future::BoxFuture<'static, Result<HttpResponse, HttpError>>,
+> {
+    let client = outbound(config)?.client.clone();
+    Ok(move |request: HttpRequest| {
+        let client = client.clone();
+        Box::pin(async move { call(&client, request).await })
+            as futures_util::future::BoxFuture<'static, Result<HttpResponse, HttpError>>
+    })
+}
+
+/// Checks an issuer as administrators give it: an `https` URL with a host, no query or fragment,
+/// and, unless private addresses are allowed, not naming one outright (a name is checked as it
+/// resolves).
+pub fn issuer_url(config: &AspenConfig, issuer: &str) -> crate::Result<IssuerUrl> {
+    let invalid = || crate::Error::Validation(t!("identityProviderIssuerInvalid", issuer = issuer));
+    let url = url::Url::parse(issuer).map_err(|_| invalid())?;
+    if url.scheme() != "https"
+        || !url.has_host()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(invalid());
+    }
+    if !config.identity_providers.allow_private_addresses
+        && crate::outbound::names_inside_address(&url)
+    {
+        return Err(crate::Error::IdentityProviderUnreachable(t!(
+            "identityProviderPrivateAddress",
+            issuer = issuer
+        )));
+    }
+    IssuerUrl::new(issuer.to_string()).map_err(|_| invalid())
+}
+
+/// `issuer`'s discovery document and keys: the cached copy, unless `fresh` asks for them
+/// afresh, as adding a provider and a token signed with an unknown key do.
+pub async fn document(
+    config: &AspenConfig,
+    issuer: &str,
+    fresh: bool,
+) -> crate::Result<Arc<CoreProviderMetadata>> {
+    let outbound = outbound(config)?;
+    if !fresh && let Some(document) = outbound.documents.get(issuer) {
+        return Ok(document);
+    }
+    let issuer_url = issuer_url(config, issuer)?;
+    let client = http(config)?;
+    let document = CoreProviderMetadata::discover_async(issuer_url, &client)
+        .await
+        .map_err(|error| discovery_failure(issuer, error))?;
+    let document = Arc::new(document);
+    outbound
+        .documents
+        .insert(issuer.to_string(), document.clone());
+    Ok(document)
+}
+
+fn unreachable(detail: Cow<'static, str>) -> crate::Error {
+    crate::Error::IdentityProviderUnreachable(detail)
+}
+
+/// Why fetching `issuer`'s discovery document failed, as the person who asked can act on.
+fn discovery_failure(
+    issuer: &str,
+    error: openidconnect::DiscoveryError<HttpError>,
+) -> crate::Error {
+    use openidconnect::DiscoveryError;
+    tracing::info!(
+        issuer,
+        error = %crate::outbound::error_chain(&error),
+        "could not read an identity provider's discovery document"
+    );
+    match error {
+        DiscoveryError::Request(error) => request_failure(issuer, &error),
+        DiscoveryError::Response(status, _, _) => unreachable(t!(
+            "identityProviderDiscoveryStatus",
+            issuer = issuer,
+            status = status.as_u16()
+        )),
+        DiscoveryError::Parse(error) => unreachable(t!(
+            "identityProviderDiscoveryUnreadable",
+            issuer = issuer,
+            detail = error.to_string()
+        )),
+        DiscoveryError::Validation(detail) => unreachable(t!(
+            "identityProviderDiscoveryInvalid",
+            issuer = issuer,
+            detail = detail
+        )),
+        DiscoveryError::UrlParse(_) | DiscoveryError::Other(_) => {
+            crate::Error::Validation(t!("identityProviderIssuerInvalid", issuer = issuer))
+        }
+        _ => unreachable(t!("identityProviderNoAnswer", issuer = issuer)),
+    }
+}
+
+/// Why a call to `issuer`'s provider failed, by which of the ways a call can fail it was.
+pub fn request_failure(issuer: &str, error: &HttpError) -> crate::Error {
+    let reqwest_error = match error {
+        HttpError::Request(error) => error,
+        HttpError::TooLarge => {
+            return unreachable(t!(
+                "identityProviderAnswerTooLarge",
+                issuer = issuer,
+                max = MAX_ANSWER_BYTES / 1024
+            ));
+        }
+    };
+    if reqwest_error.is_redirect() {
+        return unreachable(t!("identityProviderRedirected", issuer = issuer));
+    }
+    unreachable(match crate::outbound::classify(reqwest_error) {
+        Failure::NotFound => t!("identityProviderNotFound", issuer = issuer),
+        Failure::NoPublicAddress => t!("identityProviderPrivateAddress", issuer = issuer),
+        Failure::Certificate(Certificate::Expired) => {
+            t!("identityProviderCertificateExpired", issuer = issuer)
+        }
+        Failure::Certificate(Certificate::Untrusted) => {
+            t!("identityProviderCertificateUntrusted", issuer = issuer)
+        }
+        Failure::Certificate(
+            Certificate::NotYetValid | Certificate::WrongName | Certificate::Invalid,
+        )
+        | Failure::Tls => t!("identityProviderCertificateInvalid", issuer = issuer),
+        Failure::ConnectionRefused => t!("identityProviderConnectionRefused", issuer = issuer),
+        Failure::TimedOut => t!(
+            "identityProviderTimedOut",
+            issuer = issuer,
+            seconds = TIMEOUT.as_secs()
+        ),
+        Failure::NoAnswer => t!("identityProviderNoAnswer", issuer = issuer),
+    })
+}

@@ -71,6 +71,24 @@ See [Passkeys](passkeys.md).
   runs ceremonies in its own page, and a web page that forwarded its query would hand the return
   code on.
 - **The ceremony id travels in the URL fragment.** So it reaches no server log.
+- **A credential is reported unknown only when the user handle's account does not hold it.** The
+  client has the browser forget what is reported unknown, so another account's passkey, offered for
+  the wrong ticket, must never be. Reporting it tells a caller only whether a credential id it
+  already holds belongs to an account, and credential ids are random.
+- **The server states the user handle rather than leaving the client to derive it.** It is the
+  account id's bytes because registration made it so (`start_passkey_registration`), which a test
+  holds; the client need not know that.
+- **`signalAllAcceptedCredentials` is sent with the list just read, after every change.** A manager
+  hides what is missing from it, so it is only ever sent whole. A passkey added elsewhere meanwhile
+  may be hidden until the panel next reads, which shows it again.
+- **The hand-off page sends only `signalUnknownCredential`.** Anyone holding its link can open it,
+  so it is given nothing about the account, and it does not take the account's list from what a
+  ceremony's options happen to hold.
+- **Autofill starts follow what the person does.** Each start is counted toward the sign-in limits
+  and stores state in Valkey for five minutes. Restarting on a timer would spend a device's budget,
+  and everyone's, on pages nobody is looking at.
+- **Autofill ends before its ceremony expires rather than restarting by itself.** A pick after
+  expiry would fail, and starting another would be a start nobody asked for.
 
 ### The return code
 
@@ -83,6 +101,26 @@ See [Passkeys](passkeys.md).
   ceremony is claimed only where it was run.
 - The page also tells whoever opens it to continue only for a request they made in the app on that
   device.
+
+### Android apps
+
+- **The app runs ceremonies through Credential Manager where the deployment names it, and hands them
+  to the browser otherwise.** One app build serves every deployment. A deployment names it in its
+  own `assetlinks.json`, which Android checks; the app's manifest names no domain, so nothing in the
+  build limits which deployments it reaches.
+- **The browser stays the fallback.** Credential Manager may be missing, find no provider, or refuse
+  the app while Google has not read the deployment's file; each of those hands the ceremony to the
+  system browser rather than failing it.
+- **The app asks Credential Manager only for passkeys at hand on the phone.** With none for the
+  deployment, Google's sheet would wait to be dismissed, which reads as cancelled. Asked so, it
+  fails at once, and the browser, which also reaches security keys and other phones, takes over.
+- **Only `get_login_creds`.** App Links' `handle_all_urls` would claim the deployment's web
+  addresses for the app, which it does not open.
+- **No release certificate is built in yet.** The official app has no release signing key. Debug
+  builds are each signed with their builder's own key, so an operator names those they trust.
+- **iOS cannot do the same.** An iOS app may use a domain's passkeys only if its entitlements list
+  the domain (`webcredentials:`), and they are signed into the build. One build cannot list every
+  deployment, so the iOS app keeps the hand-off.
 
 ## Device links
 
@@ -102,7 +140,46 @@ See [Device links](device-links.md).
   of its own on another device, outliving the stolen one.
 - **Starts are limited globally as well as per address.** Each start keeps state in Valkey until it
   expires.
-- **Nothing is announced; both sides poll.** A link lives for a minute and has no event.
+- **Nothing is announced; both sides poll.** A link lives for a few minutes at most and has no
+  event.
+
+### User codes
+
+- **Every link a current app starts has a user code, of both kinds.** Whoever would have scanned may
+  type instead, so a television, a console, a desktop, or a command line can take either side.
+- **A link has a code only when its starter asks (`withCode`).** An app that predates codes shows
+  none, and a code nobody shows is only something to guess.
+- **RFC 8628's base-20 alphabet, eight letters.** It has no vowels, so no words, and no letter
+  mistaken for a digit. Eight letters are about 34.5 bits, short enough to type on a remote.
+- **Kept under its digest, reserved with `SET NX`.** As the link's id is kept, and no two live links
+  share a code.
+- **Five minutes rather than one.** Typing takes longer than scanning: reading eight letters,
+  perhaps with a remote, perhaps after the giver confirms it's them with a password and a code. The
+  QR code lasts as long, since a photograph of the screen shows the letters too. Links without a
+  code keep their minute.
+- **Wrong codes are failures, of the address, the account, and everyone.** A code can be guessed
+  where an id cannot, so what bounds guessing is how many may prove wrong. The global ceiling is
+  what a crowd of addresses cannot widen.
+- **Each entry is counted before its code is looked at, and given back if right.** Counted only
+  after proving wrong, entries sent at once would all pass the look taken before any had failed, and
+  a guesser could send a thousand for each one the ceiling allows.
+- **The global ceiling refuses everyone's typed codes once spent.** That lets a guesser stop typed
+  codes for a while, which is better than letting them keep guessing. QR codes still work.
+- **Every miss answers alike.** An unknown, expired, or cancelled code, and one of the other side's
+  kind, are all `deviceLinkCodeUnknown`. Telling them apart would tell a guesser which codes are
+  live.
+- **A request taken by a typed code waits for its receiver to confirm the giver's account.** A
+  signed-in guesser who matched a stranger's code could otherwise sign the stranger's device in to
+  the guesser's account, which the stranger would then use as their own. The receiver sees the name
+  and picture, and declines an account that is not theirs.
+- **The confirmation is a field of the claim, not a step of its own.** The receiver already proves
+  itself to the claim with its verifier, so naming the account there adds no endpoint and no state.
+- **A QR request asks for no confirmation.** Its id cannot be guessed, so its giver saw the
+  receiver's screen, as the receiver meant. Asking would add a tap to the common path and guard
+  against nothing new.
+- **A typed offer asks for nothing more than a scanned one.** A guesser who matched an offer's code
+  becomes a receiver the giver must approve by its name, as a photographed QR code's thief does, and
+  the person who meant to type it is told `deviceLinkUsed`.
 
 ## Device credentials
 
@@ -149,3 +226,40 @@ See [Device credentials](device-credentials.md).
   or a stub in a test, costs it nothing, and the first refusal costs one round trip more.
 - **A credential survives signing out.** It names the device, not the person, and a person signing
   out and in again would otherwise pay the puzzle each time.
+
+## Identity providers
+
+See [Identity providers](identity-providers.md).
+
+- **Aspen is a relying party only.** Issuing tokens others depend on (an OAuth authorization server,
+  "Sign in with Aspen") waits for an outside security audit.
+- **Identities are matched by provider and `sub`, never by email address.** An address can be
+  reused, changed, or asserted by a provider that does not own it, so matching by it would let one
+  person's provider sign in as someone else.
+- **The claim needs the client's PKCE verifier and a one-time return code, as a passkey hand-off's
+  does.** Whoever starts a flow can send its authorization URL to someone else; the return code
+  reaches only the device whose browser ran the flow, so the effect goes only to whoever started it
+  there. The web client's return page is this deployment's own, at a path the server fixes, so no
+  page a client names can be handed the code.
+- **The server keeps its own PKCE verifier and nonce for the provider.** The provider's code is
+  exchanged with a verifier the client never sees, so a code obtained elsewhere cannot be spent on a
+  flow, and `state` (the flow's id) may pass through the provider's logs.
+- **Nothing takes effect until the claim.** A flow whose browser never comes back, or whose return
+  reaches the wrong device, does nothing.
+- **A provider's sign-in counts as one factor unless it says otherwise.** Its `amr` claim, or the
+  administrators' word (`enforces_two_factor`), decides; a provider that says nothing is treated as
+  a password, so `require_two_factor` and an account's own second factors still apply.
+- **Abroad, a provider's sign-in travels as `password` or `secondFactor`.** Other deployments then
+  read it as any other, and the federation protocol names no provider.
+- **Accounts made through a provider have no password.** They verify again at the provider, asked to
+  sign in afresh (`prompt=login`, `max_age=0`, checked by `auth_time`), and may set a password
+  later. Removing the last way in is refused, so no account is left that no one can sign in to.
+- **Removing a provider keeps its row and leaves its sign-ins.** The sign-ins name it, and deleting
+  a provider's many links is a job. Ending every sign-in it made would be another data-driven job; a
+  provider that should end them sends back-channel logouts.
+- **Logout tokens are verified here, not by `openidconnect`,** which verifies ID tokens only. Only
+  asymmetric signatures from the provider's published keys are taken, a token carrying a `nonce` is
+  refused so an ID token cannot pass for one, and each `jti` is used once.
+- **Providers on private networks need the operator's word.** Holders of Manage identity providers
+  are administrators of the deployment, not of its machines; the terminal's
+  `allow_private_addresses` keeps them from pointing the server at what only it can reach.

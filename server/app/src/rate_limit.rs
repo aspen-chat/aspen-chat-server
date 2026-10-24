@@ -4,13 +4,14 @@
 //! requests together (`global`), one client address's (`ip`), one device's (`device`), one
 //! user's (`user`), one username's at sign-in from one network (`username`), one username's
 //! wrong passwords from anywhere (`username_failures`), one address's failures, such as wrong
-//! passwords and codes (`ip_failures`), one address's bot tokens from before tokens were signed
-//! that no bot holds (`ip_rejected_tokens`), or any of `global`, `user`, and `ip` per value of a
-//! path parameter (`per_channel`, `user_per_channel`, `ip_per_channel`, ...). A request passes
-//! only if every rule of its endpoint allows it. An endpoint's rules are the configured
-//! defaults, which apply to every endpoint, plus those of the groups that list it, with the
-//! endpoint's own settings replacing its groups' dimension by dimension; setting a dimension to
-//! `false` on a group or endpoint removes it there, defaults included.
+//! passwords and codes (`ip_failures`), one signed-in user's failures (`user_failures`),
+//! everyone's failures together (`global_failures`), one address's bot tokens from before
+//! tokens were signed that no bot holds (`ip_rejected_tokens`), or any of `global`, `user`, and
+//! `ip` per value of a path parameter (`per_channel`, `user_per_channel`, `ip_per_channel`,
+//! ...). A request passes only if every rule of its endpoint allows it. An endpoint's rules are
+//! the configured defaults, which apply to every endpoint, plus those of the groups that list
+//! it, with the endpoint's own settings replacing its groups' dimension by dimension; setting a
+//! dimension to `false` on a group or endpoint removes it there, defaults included.
 //! `aspen_config::RateLimitConfig` describes the configuration and `rate_limits.toml` holds the
 //! built-in values. The rules are compiled and checked against the real routes at startup, so a
 //! typo in an endpoint name, a parameter the path lacks, or a per-user limit on an endpoint
@@ -46,9 +47,10 @@
 //! made-up tokens are refused by their signature, `app::signed_token`), then `Stage::Session`
 //! (user rules) for a valid session or `Stage::Anonymous` (address and device rules) for
 //! anything else, with `Stage::Failures` looked at too and counted by the handler when the
-//! request proves wrong. `Stage::Username` is checked inside the sign-in handler, which alone
-//! knows the username; it also looks at `Stage::UsernameFailures` before checking the password
-//! and counts it only once a password proves wrong. Failures are counted only once they happen,
+//! request proves wrong (the user's failures for a valid session, the address's for anything
+//! else, and everyone's either way). `Stage::Username` is checked inside the sign-in handler,
+//! which alone knows the username; it also looks at `Stage::UsernameFailures` before checking
+//! the password and counts it only once a password proves wrong. Failures are counted only once they happen,
 //! so the people behind one address, who mostly get their passwords right, can make many
 //! attempts while a machine guessing wrong is soon held.
 
@@ -108,6 +110,25 @@ end
 local allow_at = tat - tolerance
 if now < allow_at then
   return allow_at - now
+end
+return 0
+";
+
+/// Gives back one request [`GCRA`] counted, as if it had not been made: `KEYS[1]` is the bucket
+/// and `ARGV[1]` the emission interval. Requests counted since are kept, since each moved the
+/// bucket by its own interval.
+const GCRA_REFUND: &str = r"
+local time = redis.call('TIME')
+local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+local tat = tonumber(redis.call('GET', KEYS[1]))
+if not tat then
+  return 0
+end
+local next_tat = tat - tonumber(ARGV[1])
+if next_tat <= now then
+  redis.call('DEL', KEYS[1])
+else
+  redis.call('SET', KEYS[1], next_tat, 'PX', next_tat - now)
 end
 return 0
 ";
@@ -196,6 +217,8 @@ pub enum Dimension {
     Username,
     UsernameFailures,
     IpFailures,
+    UserFailures,
+    GlobalFailures,
     IpRejectedTokens,
     Per(String),
     UserPer(String),
@@ -212,6 +235,8 @@ impl Dimension {
             "username" => Dimension::Username,
             "username_failures" => Dimension::UsernameFailures,
             "ip_failures" => Dimension::IpFailures,
+            "user_failures" => Dimension::UserFailures,
+            "global_failures" => Dimension::GlobalFailures,
             "ip_rejected_tokens" => Dimension::IpRejectedTokens,
             _ => {
                 if let Some(param) = name.strip_prefix("user_per_") {
@@ -235,6 +260,8 @@ impl Dimension {
             Dimension::Username => "username".into(),
             Dimension::UsernameFailures => "username_failures".into(),
             Dimension::IpFailures => "ip_failures".into(),
+            Dimension::UserFailures => "user_failures".into(),
+            Dimension::GlobalFailures => "global_failures".into(),
             Dimension::IpRejectedTokens => "ip_rejected_tokens".into(),
             Dimension::Per(param) => format!("per_{param}"),
             Dimension::UserPer(param) => format!("user_per_{param}"),
@@ -249,7 +276,9 @@ impl Dimension {
             Dimension::User | Dimension::UserPer(_) => Stage::Session,
             Dimension::Username => Stage::Username,
             Dimension::UsernameFailures => Stage::UsernameFailures,
-            Dimension::IpFailures => Stage::Failures,
+            Dimension::IpFailures | Dimension::UserFailures | Dimension::GlobalFailures => {
+                Stage::Failures
+            }
             Dimension::IpRejectedTokens => Stage::RejectedTokens,
         }
     }
@@ -277,7 +306,10 @@ impl Dimension {
     }
 
     fn needs_user(&self) -> bool {
-        matches!(self, Dimension::User | Dimension::UserPer(_))
+        matches!(
+            self,
+            Dimension::User | Dimension::UserPer(_) | Dimension::UserFailures
+        )
     }
 }
 
@@ -291,8 +323,9 @@ pub enum Stage {
     RejectedTokens,
     /// The address's and the device's, for a request without a valid session.
     Anonymous,
-    /// What the endpoint's handler reports as wrong (`ip_failures`): looked at with
-    /// `Anonymous`, counted by the handler.
+    /// What the endpoint's handler reports as wrong (`ip_failures` without a valid session,
+    /// `user_failures` with one, and `global_failures` either way): looked at with `Anonymous`
+    /// or `Session`, counted by the handler.
     Failures,
     /// The user's, for a request with a valid session.
     Session,
@@ -552,6 +585,19 @@ impl RateLimiter {
         self.run(valkey, route, stage, identity, GCRA_PEEK).await
     }
 
+    /// Gives back a request [`check`](Self::check) counted against the rules of `route` that
+    /// belong to `stage`, for one that is counted before it is known to count (a try that may
+    /// prove wrong) and then proves not to.
+    pub async fn refund(
+        &self,
+        valkey: &Client,
+        route: &str,
+        stage: Stage,
+        identity: &Identity<'_>,
+    ) {
+        let _ = self.run(valkey, route, stage, identity, GCRA_REFUND).await;
+    }
+
     async fn run(
         &self,
         valkey: &Client,
@@ -641,10 +687,10 @@ impl RateLimiter {
         let ip = || identity.ip.map(|ip| self.addresses.key(ip));
         let user = || identity.user.map(|user| user.0.to_string());
         let value = match &rule.dimension {
-            Dimension::Global => "all".to_string(),
+            Dimension::Global | Dimension::GlobalFailures => "all".to_string(),
             Dimension::Ip | Dimension::IpFailures | Dimension::IpRejectedTokens => ip()?,
             Dimension::Device => identity.device?.to_string(),
-            Dimension::User => user()?,
+            Dimension::User | Dimension::UserFailures => user()?,
             // One account answers to its name in any case, so every case of it shares a bucket;
             // each network counts apart, so guesses from one cannot lock the name out from
             // every other.
@@ -707,7 +753,7 @@ fn key_part(value: &str) -> String {
 fn parse_dimension(name: &str, source: &str) -> Result<Dimension, String> {
     Dimension::parse(name).ok_or_else(|| {
         format!(
-            "rate_limits.{source}: {name:?} is not a dimension (global, ip, device, user, username, username_failures, ip_failures, ip_rejected_tokens, per_<param>, user_per_<param>, ip_per_<param>)"
+            "rate_limits.{source}: {name:?} is not a dimension (global, ip, device, user, username, username_failures, ip_failures, user_failures, global_failures, ip_rejected_tokens, per_<param>, user_per_<param>, ip_per_<param>)"
         )
     })
 }
@@ -1162,6 +1208,60 @@ mod tests {
             limiter
                 .key(&rule(Dimension::Device), &Identity::default())
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn a_user_s_and_everyone_s_failures_count_apart_from_an_address_s() {
+        let limiter = RateLimiter::compile(&config(), &routes()).unwrap();
+        let rule = |dimension: Dimension| Rule {
+            dimension,
+            bucket: "b".into(),
+            emission_ms: 1,
+            tolerance_ms: 0,
+        };
+        let user = UserId(uuid::Uuid::nil());
+        let signed_in = Identity {
+            user: Some(user),
+            ..Identity::default()
+        };
+        let anonymous = Identity {
+            ip: Some("192.0.2.77".parse().unwrap()),
+            ..Identity::default()
+        };
+        assert_eq!(
+            limiter
+                .key(&rule(Dimension::UserFailures), &signed_in)
+                .unwrap(),
+            format!("rl:b:user_failures:{}", user.0)
+        );
+        assert!(
+            limiter
+                .key(&rule(Dimension::UserFailures), &anonymous)
+                .is_none()
+        );
+        assert!(
+            limiter
+                .key(&rule(Dimension::IpFailures), &signed_in)
+                .is_none()
+        );
+        for identity in [&signed_in, &anonymous] {
+            assert_eq!(
+                limiter
+                    .key(&rule(Dimension::GlobalFailures), identity)
+                    .unwrap(),
+                "rl:b:global_failures:all"
+            );
+        }
+        let mut config = config();
+        config.endpoints.insert(
+            "POST /users".into(),
+            RuleTable::from([("user_failures".into(), limit(5, 60.0))]),
+        );
+        assert!(
+            RateLimiter::compile(&config, &routes())
+                .unwrap_err()
+                .contains("nobody signs in")
         );
     }
 

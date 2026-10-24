@@ -14,6 +14,9 @@ import {
   TextField,
 } from "react-aria-components";
 import { useSync } from "@/api/hooks";
+import { useAspenClient } from "@/api/context";
+import { signalProfileToPasskeys } from "@/features/auth/passkeySignals";
+import { usePasskeyTransport } from "@/features/auth/passkeyTransport";
 import {
   alertClass,
   fieldClass,
@@ -75,6 +78,8 @@ export function EditProfileDialog({
 function ProfileEditor({ user, close }: { user: User; close: () => void }) {
   const m = useMessages();
   const sync = useSync();
+  const client = useAspenClient();
+  const transport = usePasskeyTransport();
   const [form, setForm] = useState<ProfileForm>(() => profileForm(user));
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -92,7 +97,10 @@ function ProfileEditor({ user, close }: { user: User; close: () => void }) {
     setPending(true);
     setError(null);
     try {
-      await sync.updateProfile(patch);
+      const updated = await sync.updateProfile(patch);
+      if ("displayName" in patch) {
+        void signalProfileToPasskeys(client, transport, updated);
+      }
       close();
     } catch (e) {
       setError(e instanceof ApiProblemError ? e.message : String(e));

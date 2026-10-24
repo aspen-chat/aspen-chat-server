@@ -121,6 +121,11 @@ pub enum Error {
     PasskeysUnavailable,
     #[error("the passkey was not accepted: {0}")]
     PasskeyRejected(String),
+    /// A sign-in named a credential no account here holds: removed, its account deleted, or
+    /// never registered here. The client tells the browser so (WebAuthn's
+    /// `signalUnknownCredential`), which may then stop offering it.
+    #[error("the passkey is not registered here")]
+    PasskeyUnknown,
     #[error("the sign-in ticket is unknown, expired, or used")]
     InvalidTicket,
     /// A device link (`app::device_link`) is unknown, expired, already claimed, or not the
@@ -130,6 +135,10 @@ pub enum Error {
     /// A device link was already scanned by another device.
     #[error("the sign-in code was already scanned")]
     DeviceLinkUsed,
+    /// A typed device link user code matches no link this caller could take: unknown,
+    /// expired, cancelled, or of the other side's kind, alike.
+    #[error("no sign-in code matches what was typed")]
+    DeviceLinkCodeUnknown,
     #[error("the request needs a session")]
     Unauthenticated,
     #[error("webauthn error {0}")]
@@ -190,6 +199,26 @@ pub enum Error {
     /// Mail could not be written or handed to the SMTP server (`app::email`).
     #[error("mail could not be written or sent: {0}")]
     Email(String),
+    /// The identity provider is unknown, removed, or turned off (`app::identity_provider`).
+    #[error("the identity provider is not available")]
+    IdentityProviderUnavailable,
+    /// An identity provider could not be reached, or did not answer as one does; the reason is
+    /// localized for the person who asked.
+    #[error("an identity provider could not be reached: {0}")]
+    IdentityProviderUnreachable(Cow<'static, str>),
+    /// Signing in at an identity provider did not succeed, or what it said did not verify; the
+    /// reason is localized for the person signing in.
+    #[error("signing in at the identity provider failed: {0}")]
+    IdentityProviderFailed(Cow<'static, str>),
+    /// An identity provider flow is unknown, expired, or already used.
+    #[error("the identity provider flow is unknown or expired")]
+    IdentityProviderFlowExpired,
+    /// The identity at the provider is linked to another account.
+    #[error("the identity is linked to another account")]
+    IdentityTaken,
+    /// Removing this would leave the account no way to sign in.
+    #[error("the account would be left no way to sign in")]
+    LastSignInMethod,
     #[error("tokio join error {0}")]
     TokioJoin(#[from] tokio::task::JoinError),
 }

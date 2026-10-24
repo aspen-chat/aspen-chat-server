@@ -69,6 +69,15 @@ interface AspenDesktopBridge {
       id: string,
       url: string,
     ): Promise<{ ceremony: string; outcome: "done" | "cancelled"; code: string | null }>;
+    /**
+     * Opens an identity provider's sign-in instead of the passkey page; the browser's return,
+     * read as a finished ceremony named by the flow, sends the tab to `server`'s passkey page.
+     */
+    openProvider(
+      id: string,
+      authorizeUrl: string,
+      server: string,
+    ): Promise<{ ceremony: string; outcome: "done" | "cancelled"; code: string | null }>;
     dispose(id: string): void;
   };
   /**

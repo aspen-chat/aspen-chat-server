@@ -102,6 +102,15 @@ function encodeCredential(credential) {
   return encoded;
 }
 
+// The server holds no such passkey (it was removed, or its account deleted), so the browser's
+// passkey managers are told to stop offering it, where they can be (WebAuthn's Signals API).
+// This is the one signal the page sends: it never learns the account's whole list or its names.
+function forgetUnknown(credentialId) {
+  if (typeof PublicKeyCredential.signalUnknownCredential !== "function") return;
+  const rpId = description.options.publicKey.rpId ?? location.hostname;
+  PublicKeyCredential.signalUnknownCredential({ rpId, credentialId }).catch(() => undefined);
+}
+
 function returnTo(outcome) {
   const target = new URL(description.returnTo);
   target.searchParams.set("ceremony", ceremony);
@@ -131,6 +140,7 @@ async function run() {
     }
     const body = await response.json();
     if (!response.ok) {
+      if (body.code === "passkeyUnknown") forgetUnknown(credential.id);
       // The ceremony is used up; the app has to start another.
       show(body.detail ?? body.title ?? T.passkeyPageFailed, true);
       return;

@@ -16,6 +16,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 pub mod activity;
 pub mod admin;
+pub mod asset_links;
 pub mod attachment;
 pub mod auth;
 pub mod ban;
@@ -48,6 +49,7 @@ pub mod jobs;
 pub mod link_preview;
 pub mod message;
 pub use aspen_wire::message_enum;
+pub mod identity_provider;
 pub mod metrics;
 pub mod notification_setting;
 pub mod passkey_page;
@@ -219,6 +221,18 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(auth::get_passkey_ceremony))
         .routes(routes!(auth::complete_passkey_ceremony))
         .routes(routes!(auth::claim_passkey_ceremony))
+        .routes(routes!(identity_provider::start_flow))
+        .routes(routes!(identity_provider::claim_flow))
+        .routes(routes!(identity_provider::create_account))
+        .routes(routes!(identity_provider::unlink_identity))
+        .routes(routes!(
+            identity_provider::list_providers,
+            identity_provider::create_provider
+        ))
+        .routes(routes!(
+            identity_provider::update_provider,
+            identity_provider::remove_provider
+        ))
         .routes(routes!(device_link::start_device_link))
         .routes(routes!(
             device_link::get_device_link,
@@ -227,6 +241,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(device_link::scan_device_link))
         .routes(routes!(device_link::approve_device_link))
         .routes(routes!(device_link::claim_device_link))
+        .routes(routes!(device_link::enter_device_link_code))
         .routes(routes!(auth::logout))
         .routes(routes!(auth::token_refresh))
         .routes(routes!(device_credential::challenge))
@@ -722,6 +737,33 @@ pub async fn start(write_schema: bool, role: Role) -> Result<Option<Serving>, ap
             rate_limit::limit_requests,
         ))
         .route_layer(axum::middleware::from_fn(metrics::observe));
+    // Android reads which apps may use this deployment's passkeys here (`api::asset_links`).
+    let asset_links = OpenApiRouter::<GlobalServerContext>::new()
+        .route(
+            rate_limit::ASSET_LINKS.1,
+            axum::routing::get(asset_links::asset_links),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            context.clone(),
+            rate_limit::limit_requests,
+        ))
+        .route_layer(axum::middleware::from_fn(metrics::observe));
+    // Where identity providers send the browser back, and post their logouts
+    // (`api::identity_provider`). Paths of their own outside the API, registered at each provider.
+    let oidc = OpenApiRouter::<GlobalServerContext>::new()
+        .route(
+            rate_limit::OIDC_CALLBACK.1,
+            axum::routing::get(identity_provider::callback),
+        )
+        .route(
+            rate_limit::OIDC_BACK_CHANNEL_LOGOUT.1,
+            axum::routing::post(identity_provider::back_channel_logout),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            context.clone(),
+            rate_limit::limit_requests,
+        ))
+        .route_layer(axum::middleware::from_fn(metrics::observe));
     // An invite's page, which checks its own limits (`api::web_client`). A path under `/api/`
     // that no route has, such as a newer version's, is not found rather than a page.
     let web = OpenApiRouter::<GlobalServerContext>::new()
@@ -739,6 +781,8 @@ pub async fn start(write_schema: bool, role: Role) -> Result<Option<Serving>, ap
         .merge(page)
         .merge(unsubscribe)
         .merge(well_known)
+        .merge(asset_links)
+        .merge(oidc)
         .merge(web);
     // Every other path is the web client's: a file of it, or its page.
     let files = web_client::files(context.clone());

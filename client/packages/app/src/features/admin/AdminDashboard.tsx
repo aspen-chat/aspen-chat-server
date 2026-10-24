@@ -11,6 +11,7 @@ import {
   PlugIcon,
   QueueIcon,
   ScrollIcon,
+  SignInIcon,
   TicketIcon,
   UsersIcon,
   UsersThreeIcon,
@@ -29,6 +30,7 @@ import { DeploymentProfileSection } from "@/features/admin/DeploymentProfile";
 import { DeploymentSettingsSection } from "@/features/admin/DeploymentSettings";
 import { DeploymentRolesSection } from "@/features/admin/DeploymentRoles";
 import { FederationSection } from "@/features/admin/Federation";
+import { IdentityProvidersSection } from "@/features/admin/IdentityProviders";
 import { PluginsSection } from "@/features/admin/Plugins";
 import { NewsletterSection } from "@/features/admin/Newsletter";
 import { useDeploymentRoles } from "@/features/admin/deploymentRoleRecords";
@@ -71,6 +73,7 @@ function useAllowedTabs(): AdminTab[] {
     settings: permissions.has("manageDeploymentSettings"),
     newsletter: permissions.has("sendNewsletters"),
     federation: permissions.has("manageFederation"),
+    identityProviders: permissions.has("manageIdentityProviders"),
     plugins: view || permissions.has("managePlugins"),
     moderation: view,
     transfers: permissions.has("moderateCommunities"),
@@ -91,6 +94,7 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
   settings: GearSixIcon,
   newsletter: EnvelopeSimpleIcon,
   federation: GlobeIcon,
+  identityProviders: SignInIcon,
   plugins: PlugIcon,
   moderation: ScrollIcon,
   transfers: FileArrowUpIcon,
@@ -102,11 +106,11 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
  * the one open. The tabs are the deployment's totals and their growth, the health of its servers,
  * registration invites, its roles, the reports people made and the categories they make them
  * in, searchable lists of its users and communities, the name and icon it welcomes people with
- * and its policies, its email newsletter, federation with other deployments, its plugins, the
- * moderation log, the record of file transfers, and a preview of the background jobs. Each shows only to those with the
- * deployment permission it needs; the server refuses everyone else whatever this page shows.
- * `/admin`, or a tab the caller may not
- * open, goes to the first they may.
+ * and its policies, its email newsletter, federation with other deployments, the identity
+ * providers people may sign in with, its plugins, the moderation log, the record of file
+ * transfers, and a preview of the background jobs. Each shows only to those with the deployment
+ * permission it needs; the server refuses everyone else whatever this page shows. `/admin`, or
+ * a tab the caller may not open, goes to the first they may.
  */
 export function AdminDashboard({ tab }: { tab: string | undefined }) {
   const m = useMessages();
@@ -212,6 +216,8 @@ function TabContent({ tab }: { tab: AdminTab }) {
       return <NewsletterSection />;
     case "federation":
       return <FederationSection />;
+    case "identityProviders":
+      return <IdentityProvidersSection />;
     case "plugins":
       return <PluginsSection />;
     case "moderation":

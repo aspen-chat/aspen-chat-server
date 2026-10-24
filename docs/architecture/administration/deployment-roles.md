@@ -15,23 +15,24 @@ like a community's roles, and each holds deployment permissions.
 
 ## Permissions
 
-| Permission                  | What it allows                                                                                                                                                                      |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `viewDashboard`             | The totals, growth, fleet, directories, and moderation log                                                                                                                          |
-| `manageRegistrationInvites` | Making and revoking [registration invites](registration-invites.md)                                                                                                                 |
-| `manageVoiceServers`        | The `/voice-servers` registry                                                                                                                                                       |
-| `manageDeploymentRoles`     | Creating, editing, ordering, giving, and taking deployment roles                                                                                                                    |
-| `moderateCommunities`       | Moderate any community; see [Moderation](moderation.md)                                                                                                                             |
-| `manageFederation`          | The gates and the directory of other deployments; see [Federation](../federation/index.md)                                                                                          |
-| `reviewReports`             | Reading report cases, dismissing them, and resolving them with a warning; see [Reports](../reports/index.md)                                                                        |
-| `removeContent`             | Deleting a reported message, clearing a reported nickname, resetting a reported profile, and deleting a banned person's recent messages. It acts only on what a case or a ban names |
-| `manageReportCategories`    | See [Reports](../reports/index.md)                                                                                                                                                  |
-| `banUsers`                  | [Bans from the deployment](deployment-bans.md)                                                                                                                                      |
-| `messageAnyUser`            | A DM with anyone, past shared communities and blocks; see [Threads and DMs](../threads-and-dms/index.md)                                                                            |
-| `manageDeploymentSettings`  | The deployment's profile and policies ([Deployment settings](deployment-settings.md)), and deleting bots whose owners are gone; see [Bots](../bots/index.md)                        |
-| `managePlugins`             | Installed plugins' settings, mode, order, and whether they run. Installing them is the terminal's; see [Plugins](../plugins/index.md)                                               |
-| `sendNewsletters`           | See [Email](../email/index.md)                                                                                                                                                      |
-| `viewJobs`                  | The preview of background jobs (`GET /admin/jobs`); see [Jobs](../jobs/index.md). The migration that made it gave it to every role holding Manage deployment settings               |
+| Permission                  | What it allows                                                                                                                                                                                                    |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `viewDashboard`             | The totals, growth, fleet, directories, and moderation log                                                                                                                                                        |
+| `manageRegistrationInvites` | Making and revoking [registration invites](registration-invites.md)                                                                                                                                               |
+| `manageVoiceServers`        | The `/voice-servers` registry                                                                                                                                                                                     |
+| `manageDeploymentRoles`     | Creating, editing, ordering, giving, and taking deployment roles                                                                                                                                                  |
+| `moderateCommunities`       | Moderate any community; see [Moderation](moderation.md)                                                                                                                                                           |
+| `manageFederation`          | The gates and the directory of other deployments; see [Federation](../federation/index.md)                                                                                                                        |
+| `reviewReports`             | Reading report cases, dismissing them, and resolving them with a warning; see [Reports](../reports/index.md)                                                                                                      |
+| `removeContent`             | Deleting a reported message, clearing a reported nickname, resetting a reported profile, and deleting a banned person's recent messages. It acts only on what a case or a ban names                               |
+| `manageReportCategories`    | See [Reports](../reports/index.md)                                                                                                                                                                                |
+| `banUsers`                  | [Bans from the deployment](deployment-bans.md)                                                                                                                                                                    |
+| `messageAnyUser`            | A DM with anyone, past shared communities and blocks; see [Threads and DMs](../threads-and-dms/index.md)                                                                                                          |
+| `manageDeploymentSettings`  | The deployment's profile and policies ([Deployment settings](deployment-settings.md)), and deleting bots whose owners are gone; see [Bots](../bots/index.md)                                                      |
+| `managePlugins`             | Installed plugins' settings, mode, order, and whether they run. Installing them is the terminal's; see [Plugins](../plugins/index.md)                                                                             |
+| `sendNewsletters`           | See [Email](../email/index.md)                                                                                                                                                                                    |
+| `viewJobs`                  | The preview of background jobs (`GET /admin/jobs`); see [Jobs](../jobs/index.md). The migration that made it gave it to every role holding Manage deployment settings                                             |
+| `manageIdentityProviders`   | The OpenID Connect providers people sign in through; see [Identity providers](../sign-in-and-security/identity-providers.md). The migration that made it gave it to every role holding Manage deployment settings |
 
 Rules:
 

@@ -179,7 +179,14 @@ or what an operator must open, route, or back up updates it in the same commit.
      `retryAfterSeconds`
    - `[auth]` — `reverify_seconds` (how recent a verification security changes need, ten minutes by
      default), `password_hashing_threads` (one per logical CPU by default) and
-     `password_hashing_wait_seconds` (ten) bound password work; see Sign-in and security.
+     `password_hashing_wait_seconds` (ten) bound password work, and `android_apps` names Android
+     apps besides the official one that may use the deployment's passkeys through Credential Manager
+     (`<package>=<certificate SHA-256>`, served in `/.well-known/assetlinks.json`); see Sign-in and
+     security.
+   - `[identity_providers]` — `allow_private_addresses` (whether an OpenID Connect provider people
+     sign in through may be on a private network) and `ca_file` (authorities trusted for providers);
+     the providers themselves are rows of `identity_provider`, kept from the dashboard or with
+     `aspen-chat-server identity-providers` (see Identity providers)
    - `[presence] away_after_seconds` — how long a connected user may go without using Aspen before
      showing as away (600 by default)
    - `[search]` — `deep_concurrency` (2), how many searches that found nothing near the present read
@@ -499,7 +506,8 @@ Operator subcommands read the same configuration, log to stderr, and exit:
 `admin grant|revoke|list|allow|deny`, `invites create|list|revoke`, and `settings show|set`,
 described under Administration, `communities unowned|set-owner`, under Roles and permissions,
 `jobs list|retry|cancel`, under Jobs, `attachments purge --message|--attachment`, under Reports,
-`voice-servers list|add|set|remove`, under Voice,
+`voice-servers list|add|set|remove`, under Voice, `identity-providers list|add|set|remove`, under
+Identity providers,
 `federation status|list|add|remove|contact|accept-key|list-add|list-remove|rotate-key --planned|--compromised`,
 under Federation, and `plugins install|list|show|settings|mode|order|enable|disable|remove|purge`,
 under Plugins.
@@ -591,20 +599,23 @@ HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the s
   (the deployment's display name and icon, which the sign-in screen shows; see Administration), the
   passkey ceremony endpoints (starting a `signIn` ceremony, reading, completing, and claiming one),
   the device link endpoints a device that is not signed in uses (starting a `request`, scanning an
-  `offer`, claiming, and cancelling; see Sign-in and security), `GET /registration-invites/{code}`
-  (see Administration), `POST /auth/federated-sign-in` and `GET /federation/icons/{icon}` (see
-  Federation), the three steps of a password reset under `/auth/password-resets` (see Email),
-  earning a device credential (`POST /auth/device-challenges` and `/auth/device-credentials`; see
-  Sign-in and security), and the event stream. A request to any of these without a session presents
-  a device credential as `Aspen-Device` unless `[rate_limits] device_exempt` lists the endpoint, and
-  is otherwise refused with `401` `deviceCredentialRequired`;
-  `api::rate_limit::document_rate_limits` declares the header and that answer on each, so handlers
-  do not. Mark authenticated handlers with `security(("bearerAuth" = []))` so generated clients know
-  to send the header, and optionally authenticated ones with `security((), ("bearerAuth" = []))`. A
-  session whose account still owes the server a second factor (see Sign-in and security) is refused
-  by `SessionUser` with `twoFactorEnrollmentRequired`, and one whose email address the deployment
-  requires verified with `emailVerificationRequired` (see Email); the few handlers such a session
-  may reach take `EnrollingSessionUser` instead.
+  `offer` or typing its code at `POST /auth/device-link-entries`, claiming, and cancelling; see
+  Sign-in and security), `GET /registration-invites/{code}` (see Administration),
+  `POST /auth/federated-sign-in` and `GET /federation/icons/{icon}` (see Federation), the three
+  steps of a password reset under `/auth/password-resets` (see Email), earning a device credential
+  (`POST /auth/device-challenges` and `/auth/device-credentials`; see Sign-in and security),
+  starting, claiming, and making the account of a `signIn` flow through an identity provider
+  (`/auth/identity-provider-flows`; see Identity providers), and the event stream. A request to any
+  of these without a session presents a device credential as `Aspen-Device` unless
+  `[rate_limits] device_exempt` lists the endpoint, and is otherwise refused with `401`
+  `deviceCredentialRequired`; `api::rate_limit::document_rate_limits` declares the header and that
+  answer on each, so handlers do not. Mark authenticated handlers with
+  `security(("bearerAuth" = []))` so generated clients know to send the header, and optionally
+  authenticated ones with `security((), ("bearerAuth" = []))`. A session whose account still owes
+  the server a second factor (see Sign-in and security) is refused by `SessionUser` with
+  `twoFactorEnrollmentRequired`, and one whose email address the deployment requires verified with
+  `emailVerificationRequired` (see Email); the few handlers such a session may reach take
+  `EnrollingSessionUser` instead.
 - **Documentation:** every handler carries a `#[utoipa::path]` with a `tag` (the `api::TAG_*`
   constants), explicit `params` for path and query inputs, and one `responses` entry per status code
   it can return, each error status with `body = Problem`. The generated client's typed error
@@ -614,44 +625,48 @@ HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the s
   username and client network: an IPv4 /24, an IPv6 /48), `username_failures` (sign-in only, a
   username's wrong passwords from anywhere, looked at before the password is checked and counted
   only after a wrong one), `ip_failures` (an address's requests whose handler says they proved
-  wrong: a wrong password or code, an unknown invite or refresh token), `ip_rejected_tokens` (an
-  address's bot tokens from before tokens were signed that no bot holds, looked at before one is
-  looked up; a made-up session or bot token of the signed kind is refused by its signature with no
-  lookup, `app::signed_token`), and `per_<param>`, `user_per_<param>`, `ip_per_<param>` for any path
-  parameter. A request with a valid session counts as its user and never as its address or device;
-  one without counts as its address and its device credential, which it must present
-  (`Aspen-Device`) on every endpoint someone may call without signing in but those `device_exempt`
-  lists, and earns by solving a puzzle (see Sign-in and security). Many people behind one address
-  are so each counted on their own, and the address keeps only a ceiling over them. It gets the
-  `default` limits wherever they apply, plus its groups' limits, with its own entry replacing its
-  groups' dimension by dimension; `false` removes a dimension there, the default's included. The
-  built-in limits are `server/app/src/rate_limits.toml`; `[rate_limits]` in `aspen.toml` is laid
-  over them in code, a limit given there replacing the built-in one whole. Besides the OpenAPI
-  operations, `GET /events` (the event stream), `GET /auth/passkey` (the passkey page, outside
-  `/api/v1`), `GET /.well-known/aspen` (the federation document, also outside it), `GET` and
-  `POST /email/unsubscribe` (the page unsubscribe links open, also outside it), and
-  `GET /invite/{code}` and `GET /{*path}` (the web client's pages, also outside it) can be named. A
-  request with a method its path lacks counts toward the `default` limits that need no session or
-  parameter, and a method that is not a standard one is named `OTHER` in route keys and metrics, so
-  made-up methods make no new buckets or series. The rules are compiled against the real routes at
-  startup, so an unknown endpoint, a parameter the path lacks, or a user limit on an anonymous
-  endpoint stops the server with a config error. Buckets are GCRA timestamps in Valkey, shared by
-  every API server, and a Valkey outage lets requests through with a logged error, except on the
-  endpoints `fail_closed` lists (those that guess a password, a code, or an invite) and for the
-  username limits, which it refuses with `503` `serverBusy`. Global, parameter, address, device, and
-  user limits are checked by a route layer before the handler (`api::rate_limit::limit_requests`),
-  which looks up a presented session token once and leaves it for the session extractors; the
-  username limits in the sign-in handler; failures by the handlers that can tell one
-  (`api::rate_limit::Failures`); the web client's pages check their own in their handler, and over
-  them serve the page without reading what it previews as rather than refusing it. A refusal is
-  `429` `rateLimited` with `Retry-After`, and `api::rate_limit::document_rate_limits` adds that
-  response to every operation in the OpenAPI document, so handlers do not declare it. The client
-  address is the TCP peer, or, when the peer is listed in `trusted_proxies`, the right-most
-  `X-Forwarded-For` entry that is not itself a trusted proxy (read with or without a port; an entry
-  that is not an address ends the reading, and the client is the trusted proxy that passed it on);
-  IPv6 clients count by their `/ipv6_prefix` (64) network. When adding an endpoint that writes, fans
-  out, fetches from elsewhere, or can be used to guess something, give it its own limits in
-  `rate_limits.toml`.
+  wrong: a wrong password or code, an unknown invite or refresh token), `user_failures` and
+  `global_failures` (a signed-in user's, and everyone's, requests that proved wrong, counted as
+  `ip_failures` are), `ip_rejected_tokens` (an address's bot tokens from before tokens were signed
+  that no bot holds, looked at before one is looked up; a made-up session or bot token of the signed
+  kind is refused by its signature with no lookup, `app::signed_token`), and `per_<param>`,
+  `user_per_<param>`, `ip_per_<param>` for any path parameter. A request with a valid session counts
+  as its user and never as its address or device; one without counts as its address and its device
+  credential, which it must present (`Aspen-Device`) on every endpoint someone may call without
+  signing in but those `device_exempt` lists, and earns by solving a puzzle (see Sign-in and
+  security). Many people behind one address are so each counted on their own, and the address keeps
+  only a ceiling over them. It gets the `default` limits wherever they apply, plus its groups'
+  limits, with its own entry replacing its groups' dimension by dimension; `false` removes a
+  dimension there, the default's included. The built-in limits are
+  `server/app/src/rate_limits.toml`; `[rate_limits]` in `aspen.toml` is laid over them in code, a
+  limit given there replacing the built-in one whole. Besides the OpenAPI operations, `GET /events`
+  (the event stream), `GET /auth/passkey` (the passkey page, outside `/api/v1`),
+  `GET /.well-known/aspen` (the federation document, also outside it),
+  `GET /.well-known/assetlinks.json` (the Android apps that may use its passkeys, also outside it),
+  `GET` and `POST /email/unsubscribe` (the page unsubscribe links open, also outside it),
+  `GET /auth/oidc/callback` and `POST /auth/oidc/back-channel-logout` (where identity providers send
+  the browser back and post their logouts, also outside it), and `GET /invite/{code}` and
+  `GET /{*path}` (the web client's pages, also outside it) can be named. A request with a method its
+  path lacks counts toward the `default` limits that need no session or parameter, and a method that
+  is not a standard one is named `OTHER` in route keys and metrics, so made-up methods make no new
+  buckets or series. The rules are compiled against the real routes at startup, so an unknown
+  endpoint, a parameter the path lacks, or a user limit on an anonymous endpoint stops the server
+  with a config error. Buckets are GCRA timestamps in Valkey, shared by every API server, and a
+  Valkey outage lets requests through with a logged error, except on the endpoints `fail_closed`
+  lists (those that guess a password, a code, or an invite) and for the username limits, which it
+  refuses with `503` `serverBusy`. Global, parameter, address, device, and user limits are checked
+  by a route layer before the handler (`api::rate_limit::limit_requests`), which looks up a
+  presented session token once and leaves it for the session extractors; the username limits in the
+  sign-in handler; failures by the handlers that can tell one (`api::rate_limit::Failures`); the web
+  client's pages check their own in their handler, and over them serve the page without reading what
+  it previews as rather than refusing it. A refusal is `429` `rateLimited` with `Retry-After`, and
+  `api::rate_limit::document_rate_limits` adds that response to every operation in the OpenAPI
+  document, so handlers do not declare it. The client address is the TCP peer, or, when the peer is
+  listed in `trusted_proxies`, the right-most `X-Forwarded-For` entry that is not itself a trusted
+  proxy (read with or without a port; an entry that is not an address ends the reading, and the
+  client is the trusted proxy that passed it on); IPv6 clients count by their `/ipv6_prefix` (64)
+  network. When adding an endpoint that writes, fans out, fetches from elsewhere, or can be used to
+  guess something, give it its own limits in `rate_limits.toml`.
 - **Caching:** every answer under `/api/v1` carries `nosniff` and `Cache-Control: no-store`
   (`api_response_headers`); a handler whose answer may be kept (a federation icon) sets its own
   `Cache-Control`, which the layer leaves alone.
@@ -775,8 +790,9 @@ a NATS stream or subject, or a client package updates them in the same commit.
 - `docs/architecture/threads-and-dms/index.md` — threads, following them, echoes, DMs and group DMs,
   their calls and rings, and the system account
 - `docs/architecture/sign-in-and-security/index.md` — password sign-in, second factors, recovery
-  codes, reverification, password hashing limits, passkeys, signing in from another device by a QR
-  code, and device credentials, which a request without a session is counted by
+  codes, reverification, password hashing limits, passkeys (their signals, autofill, and Android's
+  own), signing in from another device by a QR code, signing in through OpenID Connect identity
+  providers, and device credentials, which a request without a session is counted by
 - `docs/architecture/user-preferences.md` — account-scoped preferences stored as one JSON object
 - `docs/architecture/read-positions.md` — read positions, threads' among them, unread, and unread
   tag counts

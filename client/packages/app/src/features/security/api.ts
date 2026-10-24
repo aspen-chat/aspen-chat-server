@@ -69,17 +69,19 @@ export async function regenerateRecoveryCodes(client: AspenClient): Promise<stri
 }
 
 /**
- * Replaces the password. The server signs out every other session of the account and keeps
- * this one; an account with two-factor sign-in also needs a recent verification.
+ * Replaces the password, or with `oldPassword` `null` sets the first one of an account that has
+ * none (one made through an identity provider), which needs a recent verification instead. The
+ * server signs out every other session of the account and keeps this one; an account with
+ * two-factor sign-in also needs a recent verification.
  */
 export async function changePassword(
   client: AspenClient,
-  oldPassword: string,
+  oldPassword: string | null,
   newPassword: string,
 ): Promise<void> {
   const result = await client.api.PUT(`${API_PREFIX}/users/{user}/password`, {
     ...me,
-    body: { oldPassword, newPassword },
+    body: oldPassword === null ? { newPassword } : { oldPassword, newPassword },
   });
   if (result.error !== undefined) {
     throw new ApiProblemError(problemOf(result.error, result.response));
@@ -95,4 +97,27 @@ export async function endOtherSignIns(client: AspenClient): Promise<void> {
   if (result.error !== undefined) {
     throw new ApiProblemError(problemOf(result.error, result.response));
   }
+}
+
+/**
+ * Unlinks an identity provider from the account. Needs a recent verification; refused with
+ * `lastSignInMethod` when it is the account's only way in.
+ */
+export async function unlinkIdentity(client: AspenClient, identity: string): Promise<void> {
+  const result = await client.api.DELETE(`${API_PREFIX}/users/{user}/identities/{identity}`, {
+    params: { path: { user: "@me", identity } },
+  });
+  if (result.error !== undefined) {
+    throw new ApiProblemError(problemOf(result.error, result.response));
+  }
+}
+
+/** Whether the account has a password; a server that predates accounts without one says nothing. */
+export function hasPassword(settings: SecuritySettings): boolean {
+  return (settings as Partial<SecuritySettings>).hasPassword ?? true;
+}
+
+/** The identity providers linked to the account; none from a server that predates them. */
+export function linkedIdentities(settings: SecuritySettings): Schemas["LinkedIdentity"][] {
+  return (settings as Partial<SecuritySettings>).identities ?? [];
 }

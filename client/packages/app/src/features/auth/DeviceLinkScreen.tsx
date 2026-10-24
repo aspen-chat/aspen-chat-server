@@ -1,6 +1,6 @@
-import { ApiProblemError, type AspenClient, type DeviceLinkScan } from "@aspen/protocol";
+import { ApiProblemError } from "@aspen/protocol";
 import { Link, useLocation } from "@tanstack/react-router";
-import { type ReactNode, useEffect, useState } from "react";
+import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 import { Button } from "react-aria-components";
 import { useAspenClient } from "@/api/context";
 import { primaryButtonClass } from "@/features/auth/styles";
@@ -11,6 +11,7 @@ import { format } from "@/i18n/messages";
 import { Caution } from "./DeviceLinkCode";
 import { thisDeviceName } from "./deviceName";
 import { useServerChoice } from "./serverChoice";
+import { scanOnce } from "./takenLinks";
 import { deviceLinkOf } from "@/features/qr/aspenLinks";
 import { usePasskeyTransport } from "@/features/auth/passkeyTransport";
 import { ReauthProvider } from "@/features/security/reauth";
@@ -21,35 +22,19 @@ import { useSecuritySettings } from "@/features/security/useSecuritySettings";
 const POLL_MS = 2_000;
 
 /**
- * Each code scanned by this page, by id: scanning uses a code up, so a screen that mounts twice
- * (React's development double render, or the route rendering again once signed in) reuses the
- * one scan rather than meeting `deviceLinkUsed` from its own first.
+ * How the screen is left when it is shown inside a dialog (`TypeDeviceLinkCode`), which has a
+ * heading of its own; `null` on the `/device-link` route, which is left for `/`.
  */
-const scans = new Map<string, Promise<{ scan: DeviceLinkScan; verifier: string | null }>>();
+const LeaveContext = createContext<(() => void) | null>(null);
+
 /** Codes this page was signed in with, so the signed-in route does not take them for new ones. */
 const claimed = new Set<string>();
-
-function scanOnce(client: AspenClient, id: string, deviceName: string) {
-  let scan = scans.get(id);
-  if (scan === undefined) {
-    scan = client.scanDeviceLink(id, deviceName);
-    scans.set(id, scan);
-    // A scan refused before it used the code (a sign-in to verify again first) may be tried
-    // again, so it is not kept.
-    scan.catch((e: unknown) => {
-      if (e instanceof ApiProblemError && e.code === "reauthenticationRequired") {
-        scans.delete(id);
-      }
-    });
-  }
-  return scan;
-}
 
 type Phase =
   | { kind: "scanning" }
   /** Signed in: a computer asks to be signed in as this account. */
-  | { kind: "confirm"; deviceName: string }
-  | { kind: "approved"; deviceName: string }
+  | { kind: "confirm"; deviceName: string; typed: boolean }
+  | { kind: "approved"; deviceName: string; typed: boolean }
   /** Signed out: waiting for the computer to confirm this phone. */
   | { kind: "waiting"; account: string; verifier: string }
   | { kind: "failed"; message: string };
@@ -59,7 +44,7 @@ function messageOf(e: unknown): string {
 }
 
 /**
- * What a scanned sign-in code (`/device-link`) does on the phone. Signed in, it is a computer
+ * What a scanned or typed sign-in code (`/device-link`) does on the device that took it. Signed in, it is a computer
  * asking for this account: the phone names it, warns that a stranger's code is a trap, and signs
  * it in only when confirmed. Signed out, it is a computer offering its account: the phone waits
  * for the computer to confirm it, then is signed in. A code for another server is refused when
@@ -67,7 +52,24 @@ function messageOf(e: unknown): string {
  * moves only when the person agrees. Giving a sign-in takes a recent verification, which it asks
  * for first when the server wants one.
  */
-export function DeviceLinkScreen({ server, id }: { server: string; id: string }) {
+export function DeviceLinkScreen({
+  server,
+  id,
+  onLeave = null,
+}: {
+  server: string;
+  id: string;
+  /** Shown inside a dialog: how to close it. */
+  onLeave?: (() => void) | null;
+}) {
+  return (
+    <LeaveContext.Provider value={onLeave}>
+      <DeviceLinkSteps server={server} id={id} />
+    </LeaveContext.Provider>
+  );
+}
+
+function DeviceLinkSteps({ server, id }: { server: string; id: string }) {
   const m = useMessages();
   const client = useAspenClient();
   const { switchServer } = useServerChoice();
@@ -93,9 +95,9 @@ export function DeviceLinkScreen({ server, id }: { server: string; id: string })
           setPhase({ kind: "failed", message: m.deviceLink.notVerified });
           return;
         }
-        const { scan, verifier } = scanned;
+        const { scan, verifier, typed = false } = scanned;
         if (scan.kind === "request" && signedIn) {
-          setPhase({ kind: "confirm", deviceName: scan.deviceName ?? "" });
+          setPhase({ kind: "confirm", deviceName: scan.deviceName ?? "", typed });
         } else if (scan.kind === "offer" && verifier !== null) {
           setPhase({
             kind: "waiting",
@@ -177,9 +179,7 @@ export function DeviceLinkScreen({ server, id }: { server: string; id: string })
         </p>
         <Caution text={m.deviceLink.switchServerWarning} />
         <div className="flex flex-wrap justify-end gap-2">
-          <Link to="/" className={secondaryButtonClass}>
-            {m.deviceLink.back}
-          </Link>
+          <Leave className={secondaryButtonClass}>{m.deviceLink.back}</Leave>
           <Button
             onPress={() => {
               move(server);
@@ -211,20 +211,23 @@ export function DeviceLinkScreen({ server, id }: { server: string; id: string })
           </p>
           <Caution text={m.deviceLink.confirmRequestWarning} />
           <div className="flex flex-wrap justify-end gap-2">
-            <Link
-              to="/"
-              onClick={() => {
+            <Leave
+              onLeaving={() => {
                 void client.cancelDeviceLink(id).catch(() => undefined);
               }}
               className={secondaryButtonClass}
             >
               {m.deviceLink.decline}
-            </Link>
+            </Leave>
             <Button
               onPress={() => {
                 client.approveDeviceLink(id).then(
                   () => {
-                    setPhase({ kind: "approved", deviceName: phase.deviceName });
+                    setPhase({
+                      kind: "approved",
+                      deviceName: phase.deviceName,
+                      typed: phase.typed,
+                    });
                   },
                   (e: unknown) => {
                     setPhase({ kind: "failed", message: messageOf(e) });
@@ -239,7 +242,15 @@ export function DeviceLinkScreen({ server, id }: { server: string; id: string })
         </Frame>
       );
     case "approved":
-      return <Finished text={format(m.deviceLink.approvedRequest, { device: phase.deviceName })} />;
+      return (
+        <Finished
+          text={format(
+            // A device asking by a typed code confirms this account before it is signed in.
+            phase.typed ? m.deviceLink.approvedTypedRequest : m.deviceLink.approvedRequest,
+            { device: phase.deviceName },
+          )}
+        />
+      );
     case "waiting":
       return (
         <Frame>
@@ -298,8 +309,42 @@ function hostOf(url: string): string {
   }
 }
 
+/** Leaves the screen: for `/` on the route, or by closing the dialog it is shown in. */
+function Leave({
+  className,
+  onLeaving,
+  children,
+}: {
+  className: string;
+  onLeaving?: () => void;
+  children: ReactNode;
+}) {
+  const leave = useContext(LeaveContext);
+  if (leave !== null) {
+    return (
+      <Button
+        onPress={() => {
+          onLeaving?.();
+          leave();
+        }}
+        className={className}
+      >
+        {children}
+      </Button>
+    );
+  }
+  return (
+    <Link to="/" onClick={onLeaving} className={className}>
+      {children}
+    </Link>
+  );
+}
+
 function Frame({ children }: { children: React.ReactNode }) {
   const m = useMessages();
+  if (useContext(LeaveContext) !== null) {
+    return <div className="flex flex-col gap-4">{children}</div>;
+  }
   return (
     <section
       aria-labelledby="device-link-heading"
@@ -320,9 +365,7 @@ function Finished({ text }: { text: string }) {
       <p role="status" className="text-base">
         {text}
       </p>
-      <Link to="/" className={primaryButtonClass + " self-end"}>
-        {m.deviceLink.done}
-      </Link>
+      <Leave className={primaryButtonClass + " self-end"}>{m.deviceLink.done}</Leave>
     </Frame>
   );
 }
@@ -334,9 +377,7 @@ function Failed({ text }: { text: string }) {
       <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
         {text}
       </p>
-      <Link to="/" className={secondaryButtonClass + " self-end"}>
-        {m.deviceLink.back}
-      </Link>
+      <Leave className={secondaryButtonClass + " self-end"}>{m.deviceLink.back}</Leave>
     </Frame>
   );
 }

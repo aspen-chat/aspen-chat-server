@@ -143,6 +143,8 @@ pub enum JobKind {
     PurgeEvidence,
     /// Sizing the NATS streams to their settings and the memory NATS has.
     FitStreams,
+    /// Deleting a removed identity provider's links to accounts.
+    ForgetIdentityProvider,
 }
 
 crate::wire_name_traits!(JobKind);

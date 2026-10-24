@@ -9,6 +9,38 @@ Sign-in work, per-account limits, and when people show as away.
 | `reverify_seconds`              | `600`       | Changing security settings needs a password or code given within this long.                             |
 | `password_hashing_threads`      | one per CPU | How many passwords may be hashed or checked at once. Each takes 19 MiB and most of a core for a moment. |
 | `password_hashing_wait_seconds` | `10`        | How long a sign-in waits for one of those threads before it is refused with `serverBusy`.               |
+| `android_apps`                  | none        | Android apps, besides the official one, that may use the deployment's passkeys. See below.              |
+
+### Android apps and passkeys
+
+The Android app uses a deployment's passkeys itself, through Android's Credential Manager, when the
+deployment names it in `/.well-known/assetlinks.json`. Otherwise it hands each passkey prompt to the
+phone's browser. The deployment names the official app's release signing certificates on its own.
+None exists yet, so today every build is one you name yourself: a fork, or a build signed with your
+own key, debug builds included.
+
+Name each as its package and the SHA-256 fingerprint of the certificate it is signed with:
+
+```toml
+[auth]
+android_apps = ["com.aspen_chat.client=FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C"]
+```
+
+or in the environment, separated by commas:
+`ASPEN_AUTH__ANDROID_APPS="com.aspen_chat.client=FA:C6:…,org.example.fork=12:34:…"`.
+
+- Read the fingerprint with `apksigner verify --print-certs app.apk` or
+  `keytool -list -v -keystore <keystore>`; colons are optional, and case does not matter. A debug
+  build's key is `~/.android/debug.keystore`
+  (`keytool -list -v -keystore ~/.android/debug.keystore -storepass android`).
+- A package may be named several times, once per certificate.
+- Nothing is named where the deployment offers no passkeys (an `http` `public_url` at another host
+  than `localhost`).
+- Google reads `https://<public_url's host>/.well-known/assetlinks.json` from the internet, at port
+  443, before a phone lets the app use the deployment's passkeys. So a deployment whose `public_url`
+  names another port, or that Google cannot reach (one on a private network), is never confirmed,
+  and the app hands its prompts to the browser. Google keeps what it read for a while, so a change
+  can take a day to reach phones.
 
 ## `[limits]`
 

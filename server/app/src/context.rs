@@ -175,6 +175,7 @@ impl GlobalServerContext {
         // it starts.
         crate::passkey::relying_party(&config, crate::deployment_settings::DEFAULT_NAME)?;
         let federation_client = crate::federation::fetch::client(&config.federation)?;
+        crate::identity_provider::discovery::prepare(&config)?;
         let push_client = crate::push::client(&config.federation)?;
         let mailer = config
             .email

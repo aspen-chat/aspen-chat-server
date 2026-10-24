@@ -46,8 +46,36 @@ export interface PasskeyHandoff {
   prepare(): Promise<HandoffSession>;
 }
 
-/** How a ceremony reaches an authenticator. */
-export type PasskeyTransport = { kind: "inPage" } | { kind: "handoff"; handoff: PasskeyHandoff };
+/**
+ * How a ceremony reaches an authenticator: this page, under the relying party's domain `rpId`;
+ * the system browser; or the Android app's own Credential Manager (`NativePasskeys`).
+ */
+export type PasskeyTransport =
+  | { kind: "inPage"; rpId: string }
+  | { kind: "handoff"; handoff: PasskeyHandoff }
+  | { kind: "native"; native: NativePasskeys; fallback: PasskeyHandoff };
+
+/**
+ * A platform's own passkey API, which a deployment that names the app lets it use
+ * (`AuthMethods.passkeys.androidApps`). Each call takes the ceremony's `publicKey` options as
+ * the server gave them and resolves to the credential as the JSON the server reads.
+ */
+export interface NativePasskeys {
+  create(publicKey: unknown): Promise<Record<string, unknown>>;
+  get(publicKey: unknown): Promise<Record<string, unknown>>;
+}
+
+/**
+ * The platform could not run the ceremony: no provider answered, none is set up, or the
+ * platform refused this app for the deployment. The ceremony goes to the system browser
+ * instead.
+ */
+export class PasskeyUnavailableError extends Error {
+  constructor(reason: string) {
+    super(`native passkeys unavailable: ${reason}`);
+    this.name = "PasskeyUnavailableError";
+  }
+}
 
 /** The user dismissed the passkey prompt or the handoff page. */
 export class PasskeyCancelledError extends Error {
@@ -153,17 +181,28 @@ export function encodeCredential(credential: PublicKeyCredential): Record<string
   return encoded;
 }
 
+/**
+ * How a sign-in ceremony asks the browser: `conditional` offers the passkeys among the username
+ * field's autofill suggestions rather than in a prompt, and waits until one is chosen or
+ * `signal` aborts it.
+ */
+export interface InPageRequest {
+  mediation?: CredentialMediationRequirement;
+  signal?: AbortSignal;
+}
+
 /** Runs a ceremony against the browser's own authenticators. */
 export async function runInPage(
   purpose: PasskeyPurpose,
   options: unknown,
+  request: InPageRequest = {},
 ): Promise<Record<string, unknown>> {
   let credential: Credential | null;
   try {
     credential =
       purpose === "register"
         ? await navigator.credentials.create({ publicKey: creationOptions(options) })
-        : await navigator.credentials.get({ publicKey: requestOptions(options) });
+        : await navigator.credentials.get({ publicKey: requestOptions(options), ...request });
   } catch (e) {
     // The browser reports a dismissed prompt, a timeout, and "no credential here" alike.
     if (e instanceof DOMException && e.name === "NotAllowedError") {
@@ -192,6 +231,10 @@ export function handoffPageUrl(baseUrl: string, ceremony: string): string {
 /**
  * Reads the browser's return from a return address: the `ceremony`, `outcome`, and `code` the
  * handoff page added to its query. `null` when the URL is not such a return.
+ *
+ * An identity provider's flow, handed to the system browser on the same return addresses,
+ * comes back with `flow` and `code` alone; it is read as a finished ceremony whose id is the
+ * flow's (`AspenClient.runIdentityProviderHandoff`).
  */
 export function parseHandoffReturn(url: string): HandoffReturn | null {
   let parsed: URL;
@@ -200,10 +243,110 @@ export function parseHandoffReturn(url: string): HandoffReturn | null {
   } catch {
     return null;
   }
+  const flow = parsed.searchParams.get("flow");
+  const flowCode = parsed.searchParams.get("code");
+  if (flow !== null && flowCode !== null && !parsed.searchParams.has("ceremony")) {
+    return { ceremony: flow, outcome: "done", code: flowCode };
+  }
   const ceremony = parsed.searchParams.get("ceremony");
   const outcome = parsed.searchParams.get("outcome");
   if (ceremony === null || (outcome !== "done" && outcome !== "cancelled")) {
     return null;
   }
   return { ceremony, outcome, code: parsed.searchParams.get("code") };
+}
+
+/**
+ * Whether this browser offers passkeys among a field's autofill suggestions
+ * (`mediation: "conditional"`).
+ */
+export async function conditionalMediationAvailable(): Promise<boolean> {
+  if (typeof PublicKeyCredential === "undefined") {
+    return false;
+  }
+  const probe = (
+    PublicKeyCredential as unknown as { isConditionalMediationAvailable?: () => Promise<boolean> }
+  ).isConditionalMediationAvailable;
+  return typeof probe === "function" ? probe.call(PublicKeyCredential).catch(() => false) : false;
+}
+
+/**
+ * WebAuthn Level 3's Signals API, which tells the browser's passkey managers what the server
+ * holds, so they drop or rename passkeys rather than offer ones that no longer work. Browsers
+ * without it lack the methods, and TypeScript's DOM types do not declare them yet.
+ */
+export interface PasskeySignals {
+  signalUnknownCredential?(options: { rpId: string; credentialId: string }): Promise<void>;
+  signalAllAcceptedCredentials?(options: {
+    rpId: string;
+    userId: string;
+    allAcceptedCredentialIds: string[];
+  }): Promise<void>;
+  signalCurrentUserDetails?(options: {
+    rpId: string;
+    userId: string;
+    name: string;
+    displayName: string;
+  }): Promise<void>;
+}
+
+/** Whether this browser has the signal `name`, so a page need not gather what it would send. */
+export function passkeySignalAvailable(name: keyof PasskeySignals): boolean {
+  return (
+    typeof PublicKeyCredential !== "undefined" &&
+    typeof (PublicKeyCredential as unknown as PasskeySignals)[name] === "function"
+  );
+}
+
+/**
+ * Sends one signal where the browser has it. A signal is advice the page can do nothing about
+ * if it is refused, so every failure, thrown or rejected, is dropped.
+ */
+function signal<K extends keyof PasskeySignals>(
+  name: K,
+  options: Parameters<NonNullable<PasskeySignals[K]>>[0],
+): void {
+  if (typeof PublicKeyCredential === "undefined") {
+    return;
+  }
+  const signals = PublicKeyCredential as unknown as PasskeySignals;
+  const method = signals[name] as ((options: unknown) => Promise<void>) | undefined;
+  if (typeof method !== "function") {
+    return;
+  }
+  try {
+    method.call(PublicKeyCredential, options).catch(() => undefined);
+  } catch {
+    // Refused at once, as a browser does for a relying party the page is not under.
+  }
+}
+
+/**
+ * The server holds no passkey `credentialId` (base64url): it was removed, or its account
+ * deleted. Passkey managers may then stop offering it.
+ */
+export function signalUnknownCredential(rpId: string, credentialId: string): void {
+  signal("signalUnknownCredential", { rpId, credentialId });
+}
+
+/**
+ * Every passkey the account `userId` (its user handle, base64url) holds; passkey managers may
+ * hide its others. Send only a complete list.
+ */
+export function signalAllAcceptedCredentials(
+  rpId: string,
+  userId: string,
+  allAcceptedCredentialIds: string[],
+): void {
+  signal("signalAllAcceptedCredentials", { rpId, userId, allAcceptedCredentialIds });
+}
+
+/** The account `userId`'s username and the name shown, which passkey managers show beside it. */
+export function signalCurrentUserDetails(
+  rpId: string,
+  userId: string,
+  name: string,
+  displayName: string,
+): void {
+  signal("signalCurrentUserDetails", { rpId, userId, name, displayName });
 }
