@@ -35,7 +35,11 @@ const heldReply = {
   content: "Count me in",
   attachments: ["0190f0a0-0000-7000-8000-0000000000f3"],
   echoToParent: false,
+  replyTo: null,
   heldAt: firstReply.timestamp,
+  waiting: "preview",
+  kind: "message",
+  target: null,
 };
 
 /** What the app asked of the server about the thread, as the stand-in answered it. */
