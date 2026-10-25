@@ -1263,6 +1263,7 @@ impl Call {
         self.require(PluginPermission::Timers)?;
         let mut conn = self.conn().await?;
         super::timer::set(
+            &self.server,
             conn.as_mut(),
             &self.plugin.id,
             &key,
@@ -1283,7 +1284,16 @@ impl Call {
         self.require(PluginPermission::Timers)?;
         let scope = self.scope(scope).await?;
         let mut conn = self.conn().await?;
-        super::timer::set(conn.as_mut(), &self.plugin.id, &key, &due, &payload, &scope).await
+        super::timer::set(
+            &self.server,
+            conn.as_mut(),
+            &self.plugin.id,
+            &key,
+            &due,
+            &payload,
+            &scope,
+        )
+        .await
     }
 
     async fn cancel_timer(&mut self, key: String) -> Result<(), wit::Error> {

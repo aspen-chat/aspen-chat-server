@@ -333,5 +333,9 @@ Deletes everything a removed plugin kept, a thousand rows of each table a step
 Hands a plugin one of its timers when it falls due (`plugin::timer::fire_step`), keyed `plugin/key`.
 
 - A timer set again replaces the job under a new id.
+- A timer set for a time already past is due when it is set, so it waits behind the jobs already
+  due.
+- At most half the shared places (`[jobs] concurrency`) run timers at once on each server
+  (`jobs::bounded`).
 - A timer of a plugin that is off waits until it is turned on.
 - Three failures give it up.

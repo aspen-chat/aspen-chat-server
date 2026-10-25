@@ -52,6 +52,14 @@ Every round, a runner claims each class in the order above, into the places it h
 Urgent work is never queued behind a newsletter, and upkeep, holding its own place, is never
 starved.
 
+Some kinds share a bound of their own on how many run at once on each server (`jobs::bounded`), so
+they never take every place their class can use:
+
+| Kinds                                   | At most                                    |
+| --------------------------------------- | ------------------------------------------ |
+| `makePicturePreview`, `makeVideoPoster` | `[media.previews] concurrency`             |
+| `firePluginTimer`                       | Half of `[jobs] concurrency`, at least one |
+
 ## When a runner looks
 
 A runner looks for jobs:

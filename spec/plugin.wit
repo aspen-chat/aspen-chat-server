@@ -353,7 +353,9 @@ interface host {
     caller-may: func(channel: id, permission: string) -> result<bool, error>;
 
     /// Sets the timer `key` to fall due at `due` (RFC 3339) with `payload`, replacing one of the
-    /// same key (`timers`).
+    /// same key (`timers`). A time already past makes it due now, behind whatever else is due.
+    /// A plugin keeps at most 1,000 timers for each community, DM, or user (and for the
+    /// deployment), and 100,000 in all; past either, setting a new key fails with `limit`.
     set-timer: func(key: string, due: string, payload: string) -> result<_, error>;
     cancel-timer: func(key: string) -> result<_, error>;
     /// As `set-timer`, for a timer that goes with `scope`: deleting the community, channel, or
