@@ -1,6 +1,7 @@
 import {
   canRunInPage,
   parseHandoffReturn,
+  requireSecure,
   type AuthMethods,
   type HandoffReturn,
   type PasskeyHandoff,
@@ -78,7 +79,9 @@ export const mobileHandoff: PasskeyHandoff = {
     return {
       returnTo: "aspen://auth/passkey",
       open: async (url) => {
-        await Browser.open({ url });
+        // A passkey page or a provider's sign-in page, as a deployment named it: opened over
+        // HTTPS only, as the desktop app's main process opens it.
+        await Browser.open({ url: requireSecure(url) });
         return returned;
       },
       dispose: () => {

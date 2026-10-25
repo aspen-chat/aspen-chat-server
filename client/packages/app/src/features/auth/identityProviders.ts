@@ -1,5 +1,6 @@
 import {
   offeredProviders,
+  requireSecure,
   type AspenClient,
   type IdentityProviderOutcome,
   type IdentityProviderPurpose,
@@ -163,6 +164,9 @@ async function runProviderFlow(
     return client.runIdentityProviderHandoff(provider.id, purpose, handoff);
   }
   const { flow, verifier } = await client.startIdentityProviderFlow(provider.id, purpose);
+  // The deployment names the provider's page; this tab goes there only over HTTPS, whatever
+  // scheme it names.
+  const authorizeUrl = requireSecure(flow.authorizeUrl);
   const { pathname, search, hash } = window.location;
   const kept = keepFlow(flow.id, {
     verifier,
@@ -174,6 +178,6 @@ async function runProviderFlow(
   if (!kept) {
     throw new Error(noStorage);
   }
-  window.location.assign(flow.authorizeUrl);
+  window.location.assign(authorizeUrl);
   return new Promise<never>(() => undefined);
 }

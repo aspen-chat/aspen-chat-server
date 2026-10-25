@@ -9,12 +9,21 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 /**
  * The Android app's own side of passkeys (`AspenPasskeysPlugin`): Credential Manager, which runs
  * a deployment's ceremonies in the app itself once the deployment names the app in its
- * `assetlinks.json`. A failure rejects with one of `PasskeyFailure`'s codes.
+ * `assetlinks.json`. Each call names the host of the deployment whose ceremony it runs, and the
+ * plugin refuses options whose relying party is not that host or a parent of it, as
+ * `AspenClient.runPasskeyCeremony` does first. A failure rejects with one of `PasskeyFailure`'s
+ * codes.
  */
 interface AspenPasskeysPlugin {
   identity(): Promise<{ packageName: string; available: boolean; fingerprints: string[] }>;
-  create(options: { publicKey: unknown }): Promise<{ credential: Record<string, unknown> }>;
-  get(options: { publicKey: unknown }): Promise<{ credential: Record<string, unknown> }>;
+  create(options: {
+    publicKey: unknown;
+    host: string;
+  }): Promise<{ credential: Record<string, unknown> }>;
+  get(options: {
+    publicKey: unknown;
+    host: string;
+  }): Promise<{ credential: Record<string, unknown> }>;
 }
 
 const AspenPasskeys = registerPlugin<AspenPasskeysPlugin>("AspenPasskeys");
@@ -32,16 +41,16 @@ function failure(e: unknown): Error {
 }
 
 const native: NativePasskeys = {
-  async create(publicKey) {
+  async create(publicKey, host) {
     try {
-      return (await AspenPasskeys.create({ publicKey })).credential;
+      return (await AspenPasskeys.create({ publicKey, host })).credential;
     } catch (e) {
       throw failure(e);
     }
   },
-  async get(publicKey) {
+  async get(publicKey, host) {
     try {
-      return (await AspenPasskeys.get({ publicKey })).credential;
+      return (await AspenPasskeys.get({ publicKey, host })).credential;
     } catch (e) {
       throw failure(e);
     }

@@ -51,9 +51,10 @@ describe("links to a deployment the user uses", () => {
     });
     expect(parse("https://chat.example/attributions")?.route).toEqual({ kind: "attributions" });
     const id = "a".repeat(43);
+    // A sign-in code opens as any other link, never the approval screen in place.
     expect(
-      parse(`https://chat.example/device-link?server=https%3A%2F%2Fchat.example#${id}`)?.route,
-    ).toEqual({ kind: "deviceLink", server: "https://chat.example", id });
+      parse(`https://chat.example/device-link?server=https%3A%2F%2Fchat.example#${id}`),
+    ).toBeNull();
   });
 
   it("name another deployment's routes, on its address or the home's", () => {

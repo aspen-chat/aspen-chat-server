@@ -26,6 +26,10 @@ own.
 - Earning one means solving a puzzle of about a million SHA-256 hashes, a second or two on a phone.
   `solveInWorker` runs it in a worker so the screen does not freeze, and on the page's thread, a
   slice at a time, where workers cannot run.
+- A deployment cannot make it work without end. A puzzle harder than `MAX_PUZZLE_BITS` (28) is not
+  started, and one not solved in `PUZZLE_TIME_LIMIT_MS` (a minute) is stopped, ending the worker.
+  The requests waiting on it then fail with `DevicePuzzleRefusedError`, as if the deployment could
+  not be reached, so the earning always settles.
 - The first request a new install makes waits for it: the welcome's read of `GET /deployment`, or
   `GET /auth/methods`.
 - It is kept per deployment in `localStorage` (`aspen.device.<host>`), outlives signing out, and is
@@ -117,15 +121,20 @@ transport when:
   (`passkeys.androidApps`; a deployment that predates the list names none).
 
 The plugin hands Credential Manager the ceremony's `publicKey` options as the server gave them, and
-the credential back as the JSON the server reads. It asks only for passkeys and providers at hand on
-the phone (`preferImmediatelyAvailableCredentials`): otherwise, with none for the deployment,
-Google's sheet waits to be dismissed, which reads as cancelled, where the browser could still have
-reached a security key or another phone. `PasskeyPlatformTest` (a device test) holds that a
-deployment that does not name the app fails at once as `unavailable`. The ceremony starts and
-completes as one in a page does, by the sign-in that started it. When Credential Manager is missing,
-no provider answers, or Android refuses the app for the domain (`unavailable`), the ceremony is left
-to expire and another goes to the system browser (`fallback`). A dismissed prompt (`cancelled`) ends
-it.
+the credential back as the JSON the server reads, but only when the options' relying party (`rpId`
+to sign in, `rp.id` to register) is the deployment's host or a parent of it (`rpIdFits`, the rule
+`canRunInPage` holds a page to). `AspenClient.runPasskeyCeremony` checks it before calling the
+plugin, which is told the host and checks it again; anything else goes to the system browser, as
+`unavailable` does. Credential Manager checks only that the relying party's domain names the app,
+and the app's origin is the same for every deployment, so without it a deployment could relay
+another's ceremony and have the app sign it. It asks only for passkeys and providers at hand on the
+phone (`preferImmediatelyAvailableCredentials`): otherwise, with none for the deployment, Google's
+sheet waits to be dismissed, which reads as cancelled, where the browser could still have reached a
+security key or another phone. `PasskeyPlatformTest` (a device test) holds that a deployment that
+does not name the app fails at once as `unavailable`. The ceremony starts and completes as one in a
+page does, by the sign-in that started it. When Credential Manager is missing, no provider answers,
+or Android refuses the app for the domain (`unavailable`), the ceremony is left to expire and
+another goes to the system browser (`fallback`). A dismissed prompt (`cancelled`) ends it.
 
 ### Autofill
 
@@ -255,6 +264,8 @@ verifier and that code (`claimIdentityProviderFlow`).
 
 In the web client:
 
+- The tab goes to the provider's page only over HTTPS (`requireSecure`, which allows this machine's
+  own addresses in a development build), whatever address the deployment named.
 - The tab remembers where it was (`returnPath`), and lands there when the flow is done.
 - A flow is taken from storage once (`takeFlow`), and flows older than the server keeps them are
   dropped as another starts (`FLOW_KEPT_MS`).
@@ -270,6 +281,7 @@ In the apps (`providerHandoff`):
   addresses in an unpackaged build). The listener reads the return (`flow` and `code`) and sends the
   tab on to the server's passkey page to say it is done.
 - A phone uses the passkey hand-off as it is: `aspen://auth/passkey`, read by `parseHandoffReturn`.
+  Its in-app browser opens a passkey page or a provider's page only over HTTPS (`requireSecure`).
 - Closing the browser, or the hand-off giving up, is backing out (`PasskeyCancelledError`), which
   shows nothing.
 

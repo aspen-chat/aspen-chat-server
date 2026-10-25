@@ -578,11 +578,8 @@ pub async fn claim(
     ) {
         return Err(crate::Error::VerificationFailed);
     }
-    if let Some(unconfirmed) = unaccepted_giver(&link, account) {
-        return Ok(Claim::ConfirmAccount(unconfirmed));
-    }
-    if !link.approved {
-        return Ok(Claim::Pending(progress_of(&link)));
+    if let Some(answer) = before_taking(&link, account) {
+        return Ok(answer);
     }
     let taken: Option<String> = state.valkey.getdel(token_key(LINK_PREFIX, id)).await?;
     let link: Link = taken
@@ -608,6 +605,17 @@ pub async fn claim(
         )
         .await?,
     ))
+}
+
+/// What the receiver's claim answers while the link cannot yet be taken: its progress until the
+/// giver approves, and only then, for a link whose giver the receiver must confirm, the giver's
+/// account. Whoever typed a request's code learns nothing of it, and the receiver nothing of who
+/// typed it, before that person has approved the receiver by its name.
+fn before_taking(link: &Link, account: Option<UserId>) -> Option<Claim> {
+    if !link.approved {
+        return Some(Claim::Pending(progress_of(link)));
+    }
+    unaccepted_giver(link, account).map(Claim::ConfirmAccount)
 }
 
 /// The giver's account, when the receiver must confirm it and `account` does not name it.
@@ -742,6 +750,17 @@ mod tests {
         let stranger = UserId(uuid::Uuid::now_v7());
         assert_eq!(unaccepted_giver(&link, Some(stranger)), Some(giver));
         assert_eq!(unaccepted_giver(&link, Some(giver)), None);
+        link.approved = false;
+        assert!(
+            matches!(before_taking(&link, None), Some(Claim::Pending(_))),
+            "the giver's account is not shown before they approve"
+        );
+        link.approved = true;
+        assert!(matches!(
+            before_taking(&link, None),
+            Some(Claim::ConfirmAccount(shown)) if shown == giver
+        ));
+        assert!(before_taking(&link, Some(giver)).is_none());
         link.kind = Kind::Offer;
         assert_eq!(
             unaccepted_giver(&link, None),

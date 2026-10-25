@@ -99,10 +99,10 @@ aspen-chat-server limits suspend --for 2h [--scope networks --network CIDR…|--
 
 with `resume` and `status`.
 
-| Scope      | Effect                                                                                                                                                                                                                                                                            |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `networks` | Exempts those networks from the limits that count by address or device (`ip`, `ip_per_<param>`, `device`, `ip_failures`, `ip_rejected_tokens`, the API listener's `[connections]` address and network caps, and the voice server's pending socket cap), keeping every other limit |
-| `all`      | Lifts them all                                                                                                                                                                                                                                                                    |
+| Scope      | Effect                                                                                                                                                                                                                                                                                                           |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `networks` | Exempts those networks from the limits that count by address or device (`ip`, `network`, `ip_per_<param>`, `device`, `ip_failures`, `network_failures`, `ip_rejected_tokens`, the API listener's `[connections]` address and network caps, and the voice server's pending socket cap), keeping every other limit |
+| `all`      | Lifts them all                                                                                                                                                                                                                                                                                                   |
 
 - The suspension is one record in the NATS KV bucket `aspen_rate_limits`
   (`aspen_limits::suspension`), watched by every API and voice server.

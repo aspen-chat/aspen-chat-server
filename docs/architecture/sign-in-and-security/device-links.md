@@ -77,8 +77,9 @@ A user code can be guessed, where the id cannot. So:
 A giver who typed a request's code may have guessed it. Approving would then sign the stranger's
 device in to the guesser's account. So, for a request taken by a typed code:
 
-- The receiver's claim answers `confirmAccount` with the giver's account: id, username, display
-  name, and icon.
+- The receiver's claim answers `pending` until the giver approves, and only then `confirmAccount`
+  with the giver's account: id, username, display name, and icon. Whoever typed the code is not
+  shown to the receiver before approving it by its name (`device_link::before_taking`).
 - The receiver shows it and asks its person whether that is the account they mean to sign in to.
 - Agreeing, the receiver claims again naming it (`account`). Declining, it cancels the link.
 - The claim issues nothing until the giver has approved and the claim names the giver's account.

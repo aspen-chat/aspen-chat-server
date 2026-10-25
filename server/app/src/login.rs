@@ -274,25 +274,33 @@ pub enum TokenRefreshOutcome {
     InvalidToken,
 }
 
-pub async fn try_login(
+/// The account a password sign-in names: the user of this deployment `username` answers to in
+/// any case (`user::named`), unless it is a bot.
+pub async fn password_account(
     state: &GlobalServerContext,
     username: &str,
-    password: &str,
-) -> Result<LoginOutcome, crate::Error> {
+) -> crate::Result<Option<UserPg>> {
     use schema::user::dsl::*;
 
-    let user_entry: Option<UserPg> = {
-        let mut conn = state.connection_pool.get().await?;
-        user.select(UserPg::as_select())
-            .filter(crate::user::named(username.to_owned()))
-            .first(conn.as_mut())
-            .await
-            .optional()?
-    };
-    // A bot has no password; it signs in only with its token. An unknown name or a bot's is
-    // checked against a hash no password matches, so the answer takes as long as a wrong
-    // password for a real account and does not tell which names exist.
-    let account = user_entry.filter(|u| !u.bot);
+    let mut conn = state.connection_pool.get().await?;
+    // A bot has no password; it signs in only with its token.
+    Ok(user
+        .select(UserPg::as_select())
+        .filter(crate::user::named(username.to_owned()))
+        .first(conn.as_mut())
+        .await
+        .optional()?
+        .filter(|u: &UserPg| !u.bot))
+}
+
+/// Checks `password` against `account`, as `password_account` found it. No account is checked
+/// against a hash no password matches, so the answer takes as long as a wrong password for a
+/// real account and does not tell which names exist.
+pub async fn try_password(
+    state: &GlobalServerContext,
+    account: Option<UserPg>,
+    password: &str,
+) -> Result<LoginOutcome, crate::Error> {
     let hash = account.as_ref().map_or_else(
         || UNMATCHABLE_PASSWORD_HASH.to_string(),
         |u| u.password_hash.clone(),
@@ -451,7 +459,7 @@ pub enum SecondFactorOutcome {
     Rejected,
 }
 
-/// Finishes a sign-in that `try_login` left waiting for a second factor.
+/// Finishes a sign-in that `try_password` left waiting for a second factor.
 pub async fn complete_second_factor(
     state: &GlobalServerContext,
     ticket: &str,

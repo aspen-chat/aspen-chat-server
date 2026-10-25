@@ -58,11 +58,13 @@ export type PasskeyTransport =
 /**
  * A platform's own passkey API, which a deployment that names the app lets it use
  * (`AuthMethods.passkeys.androidApps`). Each call takes the ceremony's `publicKey` options as
- * the server gave them and resolves to the credential as the JSON the server reads.
+ * the server gave them and the host of the deployment that gave them, and resolves to the
+ * credential as the JSON the server reads. It refuses (`PasskeyUnavailableError`) options whose
+ * relying party is not that host or a parent of it (`rpIdFits`), as a browser would.
  */
 export interface NativePasskeys {
-  create(publicKey: unknown): Promise<Record<string, unknown>>;
-  get(publicKey: unknown): Promise<Record<string, unknown>>;
+  create(publicKey: unknown, host: string): Promise<Record<string, unknown>>;
+  get(publicKey: unknown, host: string): Promise<Record<string, unknown>>;
 }
 
 /**
@@ -85,9 +87,27 @@ export class PasskeyCancelledError extends Error {
   }
 }
 
+/**
+ * Whether `hostname` may run ceremonies for the relying party `rpId`: it is that domain or under
+ * it, the rule a browser applies to a page's origin.
+ */
+export function rpIdFits(rpId: string, hostname: string): boolean {
+  return rpId !== "" && (hostname === rpId || hostname.endsWith(`.${rpId}`));
+}
+
 /** Whether a page at `hostname` can run ceremonies for `rpId` itself. */
 export function canRunInPage(rpId: string, hostname: string, hasWebAuthn: boolean): boolean {
-  return hasWebAuthn && (hostname === rpId || hostname.endsWith(`.${rpId}`));
+  return hasWebAuthn && rpIdFits(rpId, hostname);
+}
+
+/**
+ * The relying party a ceremony's `publicKey` options name: `rp.id` to register a passkey,
+ * `rpId` for any other purpose; `null` when they name none.
+ */
+export function rpIdOf(purpose: PasskeyPurpose, publicKey: unknown): string | null {
+  const options = publicKey as { rp?: { id?: unknown }; rpId?: unknown } | null | undefined;
+  const named = purpose === "register" ? options?.rp?.id : options?.rpId;
+  return typeof named === "string" ? named : null;
 }
 
 export function fromBase64url(text: string): Uint8Array<ArrayBuffer> {
