@@ -880,9 +880,9 @@ pub async fn shut_out(conn: &mut AsyncPgConnection, home: Option<Domain>) -> cra
 const SHUT_OUT_BATCH: i64 = 100;
 
 /// One step of signing out users from elsewhere: the homes not admitted are decided afresh, per
-/// home rather than per user, from the gates as they stand (`settings().federation`) and the
-/// lists, and a batch of those homes' users who still have a session here are signed out, each in
-/// a transaction of its own. Those signed out have no session left, so each step reads only who
+/// home rather than per user, from the gates as the settings' row holds them and the lists, and
+/// a batch of those homes' users who still have a session here are signed out, each in a
+/// transaction of its own. Those signed out have no session left, so each step reads only who
 /// remains, and a second run finds nothing to do.
 pub async fn shut_out_step(
     state: &GlobalServerContext,
@@ -903,7 +903,11 @@ pub async fn shut_out_step(
                 .load(conn.as_mut())
                 .await?;
             let lists = lists_of(conn.as_mut(), &homes).await?;
-            let policy = state.settings().federation;
+            // The gates as the row holds them, not this server's copy of them, which may not
+            // yet have followed the change that queued this job.
+            let policy = crate::deployment_settings::load(conn.as_mut())
+                .await?
+                .federation;
             homes
                 .into_iter()
                 .flat_map(|home| {
