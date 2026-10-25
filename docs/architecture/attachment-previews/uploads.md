@@ -51,8 +51,10 @@ The record keeps the declared type. Apps show it, and it decides whether a previ
 Each person may upload at most the deployment setting `upload_quota_gib` (25 GiB; 0 sets no limit)
 in any 24 hours, attachments and icons together (`app::upload_quota`).
 
-- Starting an upload records the bytes its URL is signed for in `upload_usage`, under a lock on the
-  uploader's row.
+- A bot's uploads count toward its owner's quota (`upload_quota::charged_account`), so an owner with
+  many bots has one quota rather than one for each.
+- Starting an upload records the bytes its URL is signed for in `upload_usage`, under the account it
+  is charged to, under a lock on that account's row.
 - The record stands whatever then becomes of the upload (confirmed, sent, deleted, or swept). So
   deleting files does not make room.
 - An upload that would pass the quota is refused with `429` `uploadQuotaExceeded`.

@@ -60,7 +60,8 @@ people who post most there a role with Bypass channel mana.
 ## `uploadQuotaExceeded`
 
 **Means:** someone has uploaded the deployment setting `upload-quota-gib` (25 GiB by default) within
-the last 24 hours. `detail` and `Retry-After` say when there is room again.
+the last 24 hours, their bots' uploads included. `detail` and `Retry-After` say when there is room
+again.
 
 **What to do:** if those uploads are legitimate, raise or clear the limit, in the dashboard or with:
 
