@@ -8,7 +8,13 @@ Confirming an upload whose MIME type is a picture's or a video's queues its prev
 - The job is `makePicturePreview` or `makeVideoPoster`, keyed by the attachment.
 - It is written in the transaction that confirms the upload (`preview::queue`).
 - Its payload holds `holdUntil`: until when messages holding the attachment wait for it (see
-  [Held messages](held-messages.md)).
+  [Held messages](held-messages.md)), and `account`: the account the upload is charged to, a bot's
+  owner for a bot (`upload_quota::charged_account`).
+- An account has at most `preview::MAX_PENDING_PER_ACCOUNT` (20) previews of each kind waiting,
+  counted through the index `job_preview_account` under a lock on the account's row. An upload past
+  that gets no preview and is shown as its original, so someone uploading many pictures that are
+  slow to decode cannot keep everyone else's previews waiting behind theirs. Posters are counted
+  apart from pictures, since they may wait days for a server that can run `ffmpeg`.
 - What was just uploaded is interactive. What the migration queued for the pictures and videos
   uploaded before previews were made is bulk.
 

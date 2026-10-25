@@ -10,10 +10,18 @@
 //! when it ends, so no server's stopping can strand one. Each server also lets only that many
 //! of its own searches try at once, in the order they asked, so the rest wait holding no
 //! connection. Between servers a place goes to whichever asks first once it is free.
+//!
+//! One user goes deep in one search at a time on each server ([`DeepSearches::turn`]): a
+//! search going deep for someone already going deep in another stops that one at its next step,
+//! which answers with how far it got. So the places are shared among the people searching, not
+//! among their requests, and no one asking many searches at once takes everyone else's turns.
 
+use crate::UserId;
 use diesel::sql_types::Integer;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
@@ -30,6 +38,35 @@ const SLOT_LOCK_CLASS: i32 = 0x5345_4152;
 pub struct DeepSearches {
     trying: Arc<Semaphore>,
     slots: i32,
+    /// Each user going deep, with their search's flag for being superseded. An entry lives as
+    /// long as its search's round, so there are no more than there are requests in flight.
+    going: Arc<Mutex<HashMap<UserId, Arc<AtomicBool>>>>,
+}
+
+/// One user's search going deep, until it is dropped or another of theirs supersedes it.
+pub struct Turn {
+    going: Arc<Mutex<HashMap<UserId, Arc<AtomicBool>>>>,
+    user: UserId,
+    superseded: Arc<AtomicBool>,
+}
+
+impl Turn {
+    /// Whether the same user has since started another search going deep, so this one stops.
+    pub fn superseded(&self) -> bool {
+        AtomicBool::load(&self.superseded, Ordering::Relaxed)
+    }
+}
+
+impl Drop for Turn {
+    fn drop(&mut self) {
+        let mut going = self.going.lock().unwrap_or_else(|e| e.into_inner());
+        if going
+            .get(&self.user)
+            .is_some_and(|flag| Arc::ptr_eq(flag, &self.superseded))
+        {
+            going.remove(&self.user);
+        }
+    }
 }
 
 impl DeepSearches {
@@ -42,6 +79,21 @@ impl DeepSearches {
                     .min(Semaphore::MAX_PERMITS),
             )),
             slots,
+            going: Arc::default(),
+        }
+    }
+
+    /// `user`'s turn to go deep, superseding any search of theirs already going deep here.
+    pub fn turn(&self, user: UserId) -> Turn {
+        let superseded = Arc::new(AtomicBool::new(false));
+        let mut going = self.going.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(earlier) = going.insert(user, superseded.clone()) {
+            AtomicBool::store(&earlier, true, Ordering::Relaxed);
+        }
+        Turn {
+            going: self.going.clone(),
+            user,
+            superseded,
         }
     }
 
@@ -94,4 +146,28 @@ pub async fn wait_for_slot(deadline: Instant) -> bool {
     }
     tokio::time::sleep_until(until).await;
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_users_second_search_supersedes_their_first_and_no_one_elses() {
+        let searches = DeepSearches::new(2);
+        let (ann, ben) = (UserId(uuid::Uuid::now_v7()), UserId(uuid::Uuid::now_v7()));
+        let first = searches.turn(ann);
+        let other = searches.turn(ben);
+        assert!(!first.superseded());
+        let second = searches.turn(ann);
+        assert!(first.superseded());
+        assert!(!second.superseded());
+        assert!(!other.superseded());
+        // The first ending leaves the second's entry in place.
+        drop(first);
+        assert_eq!(searches.going.lock().unwrap().len(), 2);
+        drop(second);
+        drop(other);
+        assert!(searches.going.lock().unwrap().is_empty());
+    }
 }

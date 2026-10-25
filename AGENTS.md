@@ -210,8 +210,12 @@ or what an operator must open, route, or back up updates it in the same commit.
      or IPv6 /48 (trusted proxies count only toward `max`), `max_per_user` (64), what a connection
      counts toward instead once someone signs in on it, `handshake_seconds` and
      `header_read_seconds` (10 and 30), how long a client has for its TLS handshake and an HTTP/1.1
-     request's headers, and `idle_seconds` (120), how long a connection stays open with no request
-     in it (`connections`)
+     request's headers, `idle_seconds` (120), how long a connection stays open with nothing
+     happening on it (a response waiting on a client that does not read counts as nothing),
+     `request_seconds` (60), how long a request may take before it is answered `requestTimedOut`
+     (`api::deadline`), `shutdown_seconds` (30), how long a connection asked to close has before it
+     is dropped, and `max_streams` (64), the requests one HTTP/2 connection may have open
+     (`connections`)
    - `event_queue_size` — how many events one event stream connection may have waiting to be written
      (512 by default); a connection that falls that far behind is dropped and resumes
    - `event_feed_shards` — how many tasks route events to this server's event stream connections

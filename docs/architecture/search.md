@@ -38,6 +38,10 @@ The trigger `message_inserted` fills it when the message is inserted. A thread's
 changes, so it needs no updating. A place and its threads are then one condition,
 `home_channel = ANY(places)`.
 
+A search of one thread (`filter[channel]` naming a thread) reads its replies by the channel they are
+in instead (`Sought::in_thread`), through `message_channel_id_idx (channel, id)`, and skips the
+probe: the thread's matches are among its parent's, which may be many more.
+
 ## Parameters
 
 `filter[community]` or `filter[channel]` narrows where. At least one of the "what" filters must be
@@ -108,11 +112,17 @@ A deep step is a core of the database for a moment, so the deployment runs only
   again 25 ms later.
 - A search whose client has gone away stops at its next step (`app::search::Abandoned`). Requests
   otherwise run to their end whoever is listening.
+- One user goes deep in one search at a time on each server (`DeepSearches::turn`). A second search
+  of theirs going deep stops the first at its next step, which answers with how far it got. So the
+  places are shared among the people searching rather than their requests, and no one sending many
+  searches at once takes everyone else's turns.
+- A round reads for seconds, in which the caller may lose some of the places. Before its page is
+  built, where they may read is worked out again, and what was found elsewhere is left out.
 
-| Metric                                    | Counts                                                                |
-| ----------------------------------------- | --------------------------------------------------------------------- |
-| `aspen_deep_search_rounds_total`          | Rounds, by `outcome`: `found`, `exhausted`, `unfinished`, `abandoned` |
-| `aspen_deep_search_step_duration_seconds` | One step, its wait for a place included                               |
+| Metric                                    | Counts                                                                              |
+| ----------------------------------------- | ----------------------------------------------------------------------------------- |
+| `aspen_deep_search_rounds_total`          | Rounds, by `outcome`: `found`, `exhausted`, `unfinished`, `abandoned`, `superseded` |
+| `aspen_deep_search_step_duration_seconds` | One step, its wait for a place included                                             |
 
 ## Words
 
@@ -132,6 +142,7 @@ would stop it matching.
 | Index                                        | Serves                       |
 | -------------------------------------------- | ---------------------------- |
 | `message_by_home_channel (home_channel, id)` | A place's window of the walk |
+| `message_channel_id_idx (channel, id)`       | A thread's window            |
 | `message_by_author (author, id)`             | An author's window           |
 | `mention_user_recent (target_user, message)` | A tagged user's window       |
 

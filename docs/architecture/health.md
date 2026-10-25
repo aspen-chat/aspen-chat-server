@@ -14,10 +14,10 @@ balancers, reverse proxies, and deployment tools.
 
 ## The endpoints
 
-| Endpoint            | Answers                                                                                                                                 | Asks                                                                                                                                                |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /health`       | `204` whenever the server is taking requests.                                                                                           | Nothing.                                                                                                                                            |
-| `GET /health/ready` | `204` when the server reaches its database, NATS, and Valkey. Otherwise `503` `notReady`, whose `detail` names those it does not reach. | The database for `SELECT 1` and Valkey for a `PING`, each given two seconds. NATS is not asked: the client's own account of its connection is read. |
+| Endpoint            | Answers                                                                                                                                                                   | Asks                                                                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`       | `204` whenever the server is taking requests.                                                                                                                             | Nothing.                                                                                                                                            |
+| `GET /health/ready` | `204` when the server reaches its database, NATS, and Valkey. Otherwise `503` `notReady`. Its `detail` names those it does not reach only on a private worker's listener. | The database for `SELECT 1` and Valkey for a `PING`, each given two seconds. NATS is not asked: the client's own account of its connection is read. |
 
 Both are under `/api/v1`, in the OpenAPI document, and need no session.
 
@@ -28,7 +28,8 @@ Both are under `/api/v1`, in the OpenAPI document, and need no session.
   then send people its own error instead of the server's, which says what is wrong and when to try
   again.
 - **What starts or replaces a server asks `GET /health/ready`**, before it stops the one being
-  replaced. So does anyone finding out what is wrong with a server.
+  replaced. Someone finding out what is wrong with a server reads its log, which names the services
+  it cannot reach.
 
 A server listens only once it has connected to everything, so both answer from the first moment
 either can. Readiness matters afterwards, when a service goes away.
@@ -48,11 +49,14 @@ So neither may cost more for being asked more:
 
 ## What it shows, and to whom
 
-Anyone can learn that a server is up, and which of three services it cannot reach. Nothing about the
-deployment's people or contents, and no address, credential, or error text: those are in the
-server's log, which says once when readiness changes (`this server is not ready`, with the services,
-and `this server is ready again`).
+Anyone can learn that a server is up, and whether it reaches the services it needs. Not which it
+cannot reach, which would tell someone attacking the deployment which of its parts is failing, and
+nothing about the deployment's people or contents, and no address, credential, or error text: those
+are in the server's log, which says once when readiness changes (`this server is not ready`, with
+the services, and `this server is ready again`).
 
 A private worker (`--private-worker`) takes no requests, and answers both on a listener of its own
 instead, `[health] listen_addr` (`api::health::serve_for_private_worker`), loopback by default,
-where a container's own health check asks. The images hold `curl` for asking it.
+where a container's own health check asks. Only the machine it runs on reaches that listener by
+default, so its `GET /health/ready` names the services it cannot reach. The images hold `curl` for
+asking it.

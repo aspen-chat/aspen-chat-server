@@ -351,6 +351,7 @@ async fn run(options: Opt) -> Result<()> {
     let gate = connections::Gate::new(limits, addresses, suspension);
     let handshake_timeout = Duration::from_secs(limits.handshake_seconds);
     let idle_timeout = Duration::from_secs(limits.idle_seconds);
+    let shutdown_timeout = Duration::from_secs(limits.shutdown_seconds);
     // Without a timer hyper keeps no time at all: a client could take forever over its headers.
     // HTTP/2 connections are pinged while idle, and closed when a ping goes unanswered.
     let mut http = server::conn::auto::Builder::new(TokioExecutor::new());
@@ -360,7 +361,8 @@ async fn run(options: Opt) -> Result<()> {
     http.http2()
         .timer(TokioTimer::new())
         .keep_alive_interval(Some(HTTP2_PING_INTERVAL))
-        .keep_alive_timeout(HTTP2_PING_TIMEOUT);
+        .keep_alive_timeout(HTTP2_PING_TIMEOUT)
+        .max_concurrent_streams(limits.max_streams);
     let http = Arc::new(http);
     let mut accept_backoff = ACCEPT_BACKOFF_MIN;
 
@@ -419,9 +421,10 @@ async fn run(options: Opt) -> Result<()> {
                     let busy = activity.begin();
                     let response = service.clone().call(request);
                     async move {
-                        response
-                            .await
-                            .map(|r| r.map(|body| connections::Tracked::new(body, busy)))
+                        response.await.map(|r| {
+                            let progress = busy.responded();
+                            r.map(|body| connections::Tracked::new(body, progress))
+                        })
                     }
                 })
             };
@@ -432,13 +435,20 @@ async fn run(options: Opt) -> Result<()> {
                     let socket = TokioIo::new($stream);
                     let connection = http.serve_connection_with_upgrades(socket, hyper_service);
                     tokio::pin!(connection);
-                    // A connection with no request open for the idle time is asked to close:
-                    // HTTP/2 sends GOAWAY and finishes what is in flight.
+                    // A connection with nothing happening on it for the idle time is asked to
+                    // close: HTTP/2 sends GOAWAY and finishes what is in flight, for at most
+                    // the shutdown time, after which it is dropped with whatever is left.
                     let served = tokio::select! {
                         served = connection.as_mut() => served,
                         () = activity.idle(idle_timeout) => {
                             connection.as_mut().graceful_shutdown();
-                            connection.await
+                            match tokio::time::timeout(shutdown_timeout, connection).await {
+                                Ok(served) => served,
+                                Err(_) => {
+                                    debug!("{remote_addr} did not finish closing in time");
+                                    Ok(())
+                                }
+                            }
                         }
                     };
                     match served {

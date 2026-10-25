@@ -473,9 +473,8 @@ pub async fn confirm_upload(
         Promotion::TooLarge => return Err(too_large(max_bytes)),
     }
     let confirmed = Utc::now();
-    let wants_preview = preview::wanted(&row.mime_type);
     let mime_type = &row.mime_type;
-    let updated: usize = conn
+    let (updated, queued): (usize, bool) = conn
         .transaction::<_, crate::Error, _>(|conn| {
             async move {
                 let updated = diesel::update(attachment::table)
@@ -483,10 +482,8 @@ pub async fn confirm_upload(
                     .set(attachment::ready_at.eq(confirmed))
                     .execute(conn)
                     .await?;
-                if updated > 0 && wants_preview {
-                    preview::queue(conn, id, mime_type).await?;
-                }
-                Ok(updated)
+                let queued = updated > 0 && preview::queue(conn, id, caller, mime_type).await?;
+                Ok((updated, queued))
             }
             .scope_boxed()
         })
@@ -496,7 +493,7 @@ pub async fn confirm_upload(
         // a no-op error rather than re-confirming.
         return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
     }
-    if wants_preview {
+    if queued {
         crate::jobs::wake(state).await;
     }
     Ok(Attachment {
