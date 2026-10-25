@@ -2,6 +2,7 @@ package com.aspen_chat.client;
 
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
+import com.aspen_chat.client.age.AspenAgePlugin;
 import com.aspen_chat.client.files.AspenFilesPlugin;
 import com.aspen_chat.client.navigation.AspenNavigationPlugin;
 import com.aspen_chat.client.passkeys.AspenPasskeysPlugin;
@@ -16,6 +17,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(AspenFilesPlugin.class);
         registerPlugin(AspenNavigationPlugin.class);
         registerPlugin(AspenPasskeysPlugin.class);
+        registerPlugin(AspenAgePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

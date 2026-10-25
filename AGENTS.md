@@ -503,11 +503,11 @@ the newest dmgs `main` built, it staples their tickets and keeps them as an arti
 
 Operator subcommands read the same configuration, log to stderr, and exit:
 `limits suspend|resume|status` and `bench seed|purge`, both described under Benchmarking,
-`admin grant|revoke|list|allow|deny`, `invites create|list|revoke`, and `settings show|set`,
-described under Administration, `communities unowned|set-owner`, under Roles and permissions,
-`jobs list|retry|cancel`, under Jobs, `attachments purge --message|--attachment`, under Reports,
-`voice-servers list|add|set|remove`, under Voice, `identity-providers list|add|set|remove`, under
-Identity providers,
+`admin grant|revoke|list|allow|deny`, `invites create|list|revoke`, `settings show|set`, and
+`documents show|set|withdraw`, described under Administration, `communities unowned|set-owner`,
+under Roles and permissions, `jobs list|retry|cancel`, under Jobs,
+`attachments purge --message|--attachment`, under Reports, `voice-servers list|add|set|remove`,
+under Voice, `identity-providers list|add|set|remove`, under Identity providers,
 `federation status|list|add|remove|contact|accept-key|list-add|list-remove|rotate-key --planned|--compromised`,
 under Federation, and `plugins install|list|show|settings|mode|order|enable|disable|remove|purge`,
 under Plugins.
@@ -596,11 +596,12 @@ HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the s
   OpenAPI as the `bearerAuth` scheme. Every endpoint requires it except `GET /health` and
   `GET /health/ready` (see Health), registration (`POST /users`), `POST /auth/login` and
   `/auth/login/second-factor`, `POST /auth/token-refresh`, `GET /auth/methods`, `GET /deployment`
-  (the deployment's display name and icon, which the sign-in screen shows; see Administration), the
-  passkey ceremony endpoints (starting a `signIn` ceremony, reading, completing, and claiming one),
-  the device link endpoints a device that is not signed in uses (starting a `request`, scanning an
-  `offer` or typing its code at `POST /auth/device-link-entries`, claiming, and cancelling; see
-  Sign-in and security), `GET /registration-invites/{code}` (see Administration),
+  (the deployment's display name and icon, which the sign-in screen shows; see Administration) and
+  `GET /deployment/documents/{document}` (its Privacy Policy and Terms of Use, which it links to),
+  the passkey ceremony endpoints (starting a `signIn` ceremony, reading, completing, and claiming
+  one), the device link endpoints a device that is not signed in uses (starting a `request`,
+  scanning an `offer` or typing its code at `POST /auth/device-link-entries`, claiming, and
+  cancelling; see Sign-in and security), `GET /registration-invites/{code}` (see Administration),
   `POST /auth/federated-sign-in` and `GET /federation/icons/{icon}` (see Federation), the three
   steps of a password reset under `/auth/password-resets` (see Email), earning a device credential
   (`POST /auth/device-challenges` and `/auth/device-credentials`; see Sign-in and security),
@@ -812,8 +813,8 @@ a NATS stream or subject, or a client package updates them in the same commit.
 - `docs/architecture/custom-emoji.md` — a community's own emoji in text and reactions
 - `docs/architecture/blocking.md` — what a block does on the server
 - `docs/architecture/administration/index.md` — deployment roles, deployment moderation and its log,
-  bans from the deployment, registration invites and dual invites, the deployment settings, and
-  fleet health
+  bans from the deployment, registration invites and dual invites, the deployment settings, its
+  Privacy Policy and Terms of Use, and fleet health
 - `docs/architecture/voice/index.md` — voice servers, sessions, reports, the reaper, and the voice
   server's media, signalling, and limits
 - `docs/architecture/file-transfers.md` — file transfers in calls, the STUN and TURN relay, and

@@ -107,6 +107,14 @@ export function administration() {
     icon: null,
     mana: { maxRecharge: 200, max: 12000, attachmentCost: 600 },
   };
+  // Its Privacy Policy and Terms of Use, as `/deployment/documents/{document}` reads and writes
+  // them; neither published to begin with.
+  const documents = new Map<string, { body: string; updatedAt: string }>();
+  const document = (kind: string) => ({
+    kind,
+    body: documents.get(kind)?.body ?? null,
+    updatedAt: documents.get(kind)?.updatedAt ?? null,
+  });
   // The deployment's policies, as `GET /admin/settings` answers and its `PATCH` changes.
   const settings: Record<string, number | boolean | null> = {
     registrationInviteRequired: true,
@@ -125,6 +133,15 @@ export function administration() {
     settings: () => settings,
     updateSettings: (change: Record<string, number | boolean | null>) =>
       Object.assign(settings, change),
+    document,
+    publishDocument: (kind: string, body: string) => {
+      documents.set(kind, { body, updatedAt: new Date().toISOString() });
+      return document(kind);
+    },
+    withdrawDocument: (kind: string) => {
+      documents.delete(kind);
+      return reply(null, 204);
+    },
     updateProfile: (change: { displayName?: string | null }) => {
       if (change.displayName !== undefined) {
         profile.displayName = change.displayName;

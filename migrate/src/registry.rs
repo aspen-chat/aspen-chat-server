@@ -124,4 +124,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261018_224440_channel_mana::M,
     &migrations::m20261023_120000_attachment_spoilers::M,
     &migrations::m20261023_191323_identity_providers::M,
+    &migrations::m20261025_060007_deployment_documents::M,
 ];

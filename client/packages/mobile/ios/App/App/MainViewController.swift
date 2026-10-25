@@ -9,6 +9,7 @@ class MainViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(AspenFilesPlugin())
         bridge?.registerPluginInstance(AspenPushPlugin())
         bridge?.registerPluginInstance(AspenNavigationPlugin())
+        bridge?.registerPluginInstance(AspenAgePlugin())
     }
 }
 

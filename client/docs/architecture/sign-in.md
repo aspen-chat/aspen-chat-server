@@ -5,6 +5,7 @@
 | Part                           | Where                                                                                                                                                                  |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Signed-out screens             | `SignedOut` in `src/features/layout/RootLayout.tsx`                                                                                                                    |
+| Deleting the account           | `DeleteAccountSection` in `src/features/security/SecurityPanel.tsx`, `deleteAccount` (`src/features/security/api.ts`)                                                  |
 | The welcome                    | `DeploymentWelcome` (`src/features/auth/DeploymentWelcome.tsx`)                                                                                                        |
 | Which server                   | `defaultServerUrl` (`src/config.ts`), `ServerChoice`, `ServerForm`, `normalizeServerUrl`, `detectShell`                                                                |
 | Passkeys                       | `runPasskeyCeremony`, `PasskeyTransport` (`packages/protocol/src/passkeys.ts`), `src/features/auth/passkeyTransport.ts`, `packages/desktop/src/main/passkeyHandoff.ts` |
@@ -37,7 +38,8 @@ at the repository's root.
 
 ## The signed-out screens
 
-The signed-out screens open with `DeploymentWelcome` above the sign-in or create-account form.
+The signed-out screens open with `DeploymentWelcome` above the sign-in or create-account form, and
+end with links to the deployment's Privacy Policy and Terms of Use (`documents.md`).
 
 ### The welcome
 
@@ -311,6 +313,18 @@ Sign-in and security (`SecurityPanel`) shows, for a person of this deployment:
 
 A server that predates providers leaves out `hasPassword` and `identities`, read as a password and
 none (`hasPassword`, `linkedIdentities` in `src/features/security/api.ts`).
+
+### Deleting the account
+
+Sign-in and security ends with Delete your account, for a person of this deployment (a user of
+another deletes their account at home, which tells the deployments they used):
+
+- It asks first, saying what deleting does: every sign-in ends; the email address, password,
+  passkeys, and second factors go with the account; owned communities pass to their highest-ranked
+  members; messages stay where they were posted.
+- It deletes with `DELETE /users/@me`, which needs a recent verification (`useReauth`).
+- Once deleted, the app signs out at home and everywhere it signed in from there (`useSignOut`). The
+  server has already ended those sign-ins, and tells the other deployments the account used.
 
 ### Verifying again
 

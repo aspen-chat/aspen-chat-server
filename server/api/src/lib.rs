@@ -31,6 +31,7 @@ pub mod channel_mute;
 pub mod community;
 pub mod custom_emoji;
 pub mod deployment;
+pub mod deployment_document;
 pub mod deployment_settings;
 pub mod device_credential;
 pub mod device_link;
@@ -211,6 +212,11 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(
             deployment_settings::get_deployment_profile,
             deployment_settings::update_deployment_profile
+        ))
+        .routes(routes!(
+            deployment_document::get_document,
+            deployment_document::publish_document,
+            deployment_document::withdraw_document
         ))
         .routes(routes!(
             deployment_settings::get_settings,

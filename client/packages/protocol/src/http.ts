@@ -78,6 +78,8 @@ export type TypedSecondFactor = Schemas["TypedSecondFactor"];
 export type ReauthenticationMethod = Schemas["ReauthenticationMethod"];
 export type AuthMethods = Schemas["AuthMethods"];
 export type DeploymentProfile = Schemas["DeploymentProfile"];
+export type PublishedDocument = Schemas["PublishedDocument"];
+export type DocumentKind = Schemas["DocumentKind"];
 export type DeviceLink = Schemas["DeviceLink"];
 export type DeviceLinkScan = Schemas["DeviceLinkScan"];
 export type DeviceLinkProgress = Schemas["DeviceLinkProgress"];
@@ -240,6 +242,18 @@ export class AspenClient {
   /** How the deployment presents itself: its display name and icon. Needs no session. */
   async deploymentProfile(): Promise<DeploymentProfile> {
     return unwrap(await this.api.GET(`${API_PREFIX}/deployment`));
+  }
+
+  /**
+   * The deployment's Privacy Policy or Terms of Use, with `body` `null` where it has published
+   * none. Needs no session.
+   */
+  async deploymentDocument(kind: DocumentKind): Promise<PublishedDocument> {
+    return unwrap(
+      await this.api.GET(`${API_PREFIX}/deployment/documents/{document}`, {
+        params: { path: { document: kind } },
+      }),
+    );
   }
 
   /**

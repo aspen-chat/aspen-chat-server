@@ -2,6 +2,7 @@ import { allowLoopbackPlainText } from "@aspen/protocol";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { AgeGate } from "./features/layout/AgeGate";
 import { FollowDocumentTitle } from "./features/layout/documentTitle";
 import { TitleBar } from "./features/layout/TitleBar";
 import { reloadForNewRelease } from "./features/layout/releaseReload";
@@ -59,7 +60,9 @@ createRoot(root).render(
     <I18nProvider>
       <FollowDocumentTitle />
       <TitleBar />
-      <App />
+      <AgeGate>
+        <App />
+      </AgeGate>
     </I18nProvider>
   </StrictMode>,
 );

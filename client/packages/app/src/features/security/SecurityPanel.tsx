@@ -9,6 +9,7 @@ import { KeyIcon, LinkBreakIcon, PencilSimpleIcon, TrashIcon } from "@phosphor-i
 import { useCallback, useState } from "react";
 import { Button, FieldError, Form, Input, Label, Text, TextField } from "react-aria-components";
 import { useAspenClient } from "@/api/context";
+import { useSignOut } from "@/api/deploymentsContext";
 import { useMe } from "@/api/hooks";
 import { PASSWORD_MIN_LENGTH } from "@/features/auth/password";
 import { OtherDeviceSignIn } from "@/features/auth/OtherDeviceSignIn";
@@ -36,6 +37,7 @@ import { useSecuritySettings } from "./useSecuritySettings";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 import { useIdentityProviders, useProviderFlow } from "@/features/auth/identityProviders";
 import { toast } from "@/features/layout/toast";
+import { ConfirmModal } from "@/features/layout/ConfirmModal";
 import { Tooltip } from "@/features/layout/Tooltip";
 
 function errorText(e: unknown): string | null {
@@ -141,6 +143,9 @@ function Sections({
       {me?.homeDomain == null && client.session?.twoFactorEnrollmentRequired !== true && (
         <SignOutEverywhereSection />
       )}
+      {/* A user of another deployment deletes their account at home, which tells the
+          deployments they use. */}
+      {me?.homeDomain == null && <DeleteAccountSection />}
       <RecoveryCodesDialog
         codes={codes}
         onClose={() => {
@@ -817,6 +822,54 @@ function SignOutEverywhereSection() {
           {error}
         </p>
       )}
+    </section>
+  );
+}
+
+/**
+ * Deleting the account, last and in the danger colour, after saying what it does. It takes a
+ * recent verification, and once it is done the app signs out everywhere it was signed in from
+ * here, as the server has ended every sign-in.
+ */
+function DeleteAccountSection() {
+  const m = useMessages();
+  const client = useAspenClient();
+  const withReauth = useReauth();
+  const signOut = useSignOut();
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <section aria-labelledby="security-delete-account" className={planeClass}>
+      <SectionHeading id="security-delete-account">
+        {m.security.deleteAccountHeading}
+      </SectionHeading>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm">{m.security.deleteAccountHint}</p>
+        <Button
+          onPress={() => {
+            setConfirming(true);
+          }}
+          className={secondaryButtonClass + " shrink-0 text-danger"}
+        >
+          {m.security.deleteAccount}
+        </Button>
+      </div>
+      <ConfirmModal
+        isOpen={confirming}
+        onOpenChange={setConfirming}
+        heading={m.security.deleteAccountConfirmHeading}
+        explanation={m.security.deleteAccountExplanation}
+        action={m.security.deleteAccountAction}
+        run={async () => {
+          // `withReauth` answers `undefined` when the user declines to verify.
+          const deleted = await withReauth(async () => {
+            await api.deleteAccount(client);
+            return true;
+          });
+          if (deleted === true) {
+            await signOut();
+          }
+        }}
+      />
     </section>
   );
 }

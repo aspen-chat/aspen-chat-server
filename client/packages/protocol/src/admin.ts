@@ -306,6 +306,29 @@ export class AdminApi {
     return adminRead(await this.#client.api.PATCH("/api/v1/deployment", { body: change }));
   }
 
+  /** Publishes the deployment's Privacy Policy or Terms of Use, in place of the one before. */
+  async publishDeploymentDocument(
+    kind: components["schemas"]["DocumentKind"],
+    body: string,
+  ): Promise<components["schemas"]["PublishedDocument"]> {
+    return adminRead(
+      await this.#client.api.PUT("/api/v1/deployment/documents/{document}", {
+        params: { path: { document: kind } },
+        body: { body },
+      }),
+    );
+  }
+
+  /** Withdraws the deployment's Privacy Policy or Terms of Use, leaving it without one. */
+  async withdrawDeploymentDocument(kind: components["schemas"]["DocumentKind"]): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/deployment/documents/{document}", {
+      params: { path: { document: kind } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
   /** The policies the deployment's administrators set. */
   async deploymentSettings(): Promise<DeploymentSettings> {
     return adminRead(await this.#client.api.GET("/api/v1/admin/settings"));

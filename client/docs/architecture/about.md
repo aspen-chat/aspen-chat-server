@@ -19,7 +19,7 @@ with its licence.
 ## About Aspen
 
 A button beside Sign out at the foot of Settings opens About Aspen. It is a modal over Settings with
-two planes.
+three planes.
 
 ### The first plane: versions
 
@@ -38,7 +38,12 @@ It then lists the versions of everything this copy of Aspen is made of:
 
 Its link opens the attributions page. That closes Settings, and About Aspen with it.
 
-### The second plane: Your rights
+### The second plane: the deployment's policies
+
+Links to the deployment's Privacy Policy and Terms of Use (`DocumentLinks`, `documents.md`), under
+its name. Following one closes Settings, as the attributions link does.
+
+### The third plane: Your rights
 
 A short summary of the Mozilla Public License 2.0:
 

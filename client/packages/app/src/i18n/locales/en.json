@@ -153,7 +153,13 @@
     "link": "Link {provider}",
     "unlinkLabel": "Unlink {provider}",
     "reauthProvider": "Confirm with {provider}",
-    "reauthNoPassword": "Confirm it's you with a passkey or an identity provider linked to your account to change security settings."
+    "reauthNoPassword": "Confirm it's you with a passkey or an identity provider linked to your account to change security settings.",
+    "deleteAccountHeading": "Delete your account",
+    "deleteAccountHint": "Delete this account for good, from this deployment and every one you use with it.",
+    "deleteAccount": "Delete account…",
+    "deleteAccountConfirmHeading": "Delete your account?",
+    "deleteAccountExplanation": "This can't be undone. You'll be signed out everywhere, and your email address, password, passkeys, and second factors are deleted with the account. Communities you own pass to their highest-ranked members. Messages you posted stay where they are.",
+    "deleteAccountAction": "Delete my account"
   },
   "email": {
     "open": "Email",
@@ -1277,7 +1283,16 @@
     "fileTransfersAllowedHint": "Off, no one may, whatever a channel's permissions say. Calls in progress follow at once.",
     "saveSettings": "Save",
     "savingSettings": "Saving…",
-    "settingsSaved": "Saved."
+    "settingsSaved": "Saved.",
+    "documentsTitle": "Privacy Policy and Terms of Use",
+    "documentsHint": "What anyone may read at this deployment, signed in or not, linked from the sign-in screen and About Aspen. Aspen gives no default: until you publish one, its page says this deployment has not published it.",
+    "documentMarkdownHint": "Markdown. Headings, lists, tables, and links show as written; pictures are not shown.",
+    "documentUnpublished": "Not published. Markdown: headings, lists, tables, and links show as written; pictures are not shown.",
+    "publishDocument": "Publish",
+    "withdrawDocument": "Withdraw",
+    "viewDocument": "Open its page",
+    "documentPublished": "Published.",
+    "documentWithdrawn": "Withdrawn. Its page now says this deployment has not published it."
   },
   "mute": {
     "options": "Options for {name}",
@@ -2560,5 +2575,19 @@
     "remove": "Remove from community",
     "removeHeading": "Remove {name}?",
     "ban": "Ban from community"
+  },
+  "documents": {
+    "privacyPolicy": "Privacy Policy",
+    "termsOfUse": "Terms of Use",
+    "noPrivacyPolicy": "This deployment has not published a Privacy Policy.",
+    "noTermsOfUse": "This deployment has not published Terms of Use.",
+    "updated": "Last updated {date}",
+    "loadFailed": "Couldn't load this. Check your connection, then try again.",
+    "linksLabel": "The deployment's policies",
+    "heading": "This deployment's policies",
+    "headingNamed": "{name}'s policies"
+  },
+  "ageGate": {
+    "underage": "Your device has indicated you are not old enough to use this app. We do not store your age in any location. This determination is made by your operating system and legal jurisdiction."
   }
 }

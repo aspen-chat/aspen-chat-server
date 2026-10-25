@@ -12,6 +12,8 @@ import { PlaySounds } from "@/features/notifications/PlaySounds";
 import { SyncProvider } from "@/api/sync";
 import { CommunityRail } from "@/features/communities/CommunityRail";
 import { AttributionsScreen } from "@/features/about/AttributionsScreen";
+import { DocumentLinks } from "@/features/documents/DocumentLinks";
+import { DocumentScreen } from "@/features/documents/DocumentScreen";
 import { DeploymentWelcome } from "@/features/auth/DeploymentWelcome";
 import { DeviceLinkRoute } from "@/features/auth/DeviceLinkScreen";
 import { LoginForm } from "@/features/auth/LoginForm";
@@ -53,7 +55,9 @@ export function RootLayout() {
  * naming another deployment says the user's account may be on any deployment. A registration link (`/register`, with `?invite=` from the Administration
  * Dashboard) opens on the create-account screen with the invite filled in. A sign-in code
  * (`/device-link`) opens its own screen instead, as does the return from an identity provider
- * (`/sign-in/provider`) and Open Source Attributions (`/attributions`), which anyone may read.
+ * (`/sign-in/provider`) and Open Source Attributions (`/attributions`), which anyone may read, as
+ * do the deployment's Privacy Policy (`/privacy`) and Terms of Use (`/terms`), which the sign-in
+ * and create-account screens link to at their foot.
  */
 function SignedOut() {
   const { serverUrl, changeServer } = useServerChoice();
@@ -94,30 +98,40 @@ function SignedOut() {
   if (pathname === "/attributions") {
     return <AttributionsScreen signedOut />;
   }
+  if (pathname === "/privacy" || pathname === "/terms") {
+    return (
+      <DocumentScreen kind={pathname === "/privacy" ? "privacyPolicy" : "termsOfUse"} signedOut />
+    );
+  }
   return (
-    <main className="flex min-h-full flex-col items-center justify-center gap-4 p-6">
-      {inviteAt !== null && (
-        <p className="max-w-sm text-center text-sm text-ink-muted">
-          {format(m.inviteOnDomain, { domain: inviteAt })}
-        </p>
-      )}
-      <DeploymentWelcome serverUrl={serverUrl} onChangeServer={changeServer} />
-      {screen === "register" ? (
-        <RegisterForm
-          // A new link's code fills the form afresh.
-          key={invite ?? ""}
-          initialInvite={invite}
-          onSwitchToLogin={() => {
-            setScreen("login");
-          }}
-        />
-      ) : (
-        <LoginForm
-          onSwitchToRegister={() => {
-            setScreen("register");
-          }}
-        />
-      )}
+    <main className="flex min-h-full flex-col items-center gap-4 p-6">
+      <div className="flex w-full flex-1 flex-col items-center justify-center gap-4">
+        {inviteAt !== null && (
+          <p className="max-w-sm text-center text-sm text-ink-muted">
+            {format(m.inviteOnDomain, { domain: inviteAt })}
+          </p>
+        )}
+        <DeploymentWelcome serverUrl={serverUrl} onChangeServer={changeServer} />
+        {screen === "register" ? (
+          <RegisterForm
+            // A new link's code fills the form afresh.
+            key={invite ?? ""}
+            initialInvite={invite}
+            onSwitchToLogin={() => {
+              setScreen("login");
+            }}
+          />
+        ) : (
+          <LoginForm
+            onSwitchToRegister={() => {
+              setScreen("register");
+            }}
+          />
+        )}
+      </div>
+      <footer>
+        <DocumentLinks />
+      </footer>
     </main>
   );
 }

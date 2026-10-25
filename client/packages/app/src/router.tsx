@@ -11,6 +11,7 @@ import { ActivityScreen } from "@/features/activity/ActivityScreen";
 import { SavedScreen } from "@/features/activity/SavedScreen";
 import { AdminDashboard } from "@/features/admin/AdminDashboard";
 import { AttributionsScreen } from "@/features/about/AttributionsScreen";
+import { DocumentScreen } from "@/features/documents/DocumentScreen";
 import { ChannelSidebarLayout, CommunityIndex } from "@/features/channels/CommunityScreen";
 import { DmIndex, DmLayout } from "@/features/dms/DmLayout";
 import { ForeignIndex, Home } from "@/features/home/Home";
@@ -61,6 +62,8 @@ import { ProviderReturn } from "@/features/auth/ProviderReturn";
  *                                                       community, with the permissions named
  *   /attributions                                       Open Source Attributions, signed in or
  *                                                       out
+ *   /privacy, /terms                                    the deployment's Privacy Policy and
+ *                                                       Terms of Use, signed in or out
  *   /at/{domain}/communities/…, /at/{domain}/dms/…, /at/{domain}/invite/{code}
  *                                                       the same on another deployment the user
  *                                                       signs in to from home, named by its
@@ -143,6 +146,18 @@ export const attributionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/attributions",
   component: () => <AttributionsScreen />,
+});
+
+export const privacyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/privacy",
+  component: () => <DocumentScreen kind="privacyPolicy" />,
+});
+
+export const termsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/terms",
+  component: () => <DocumentScreen kind="termsOfUse" />,
 });
 
 export const botAddRoute = createRoute({
@@ -351,6 +366,8 @@ const routeTree = rootRoute.addChildren([
   adminRoute,
   adminTabRoute,
   attributionsRoute,
+  privacyRoute,
+  termsRoute,
   botAddRoute,
   inviteRoute,
   communityRoute.addChildren([

@@ -26,6 +26,7 @@ import { useDeploymentPermissions, useIsAdmin, useOpenReports, useSync } from "@
 import { ReportCategoriesSection } from "@/features/admin/ReportCategories";
 import { ReportsSection } from "@/features/admin/Reports";
 import { MentionBadge } from "@/features/mentions/MentionBadge";
+import { DeploymentDocumentsSection } from "@/features/admin/DeploymentDocuments";
 import { DeploymentProfileSection } from "@/features/admin/DeploymentProfile";
 import { DeploymentSettingsSection } from "@/features/admin/DeploymentSettings";
 import { DeploymentRolesSection } from "@/features/admin/DeploymentRoles";
@@ -209,6 +210,7 @@ function TabContent({ tab }: { tab: AdminTab }) {
       return (
         <>
           <DeploymentProfileSection />
+          <DeploymentDocumentsSection />
           <DeploymentSettingsSection />
         </>
       );

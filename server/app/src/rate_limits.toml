@@ -258,6 +258,8 @@ endpoints = [
   "PUT /admin/federation/deployments/{domain}/lists/{list}",
   "DELETE /admin/federation/deployments/{domain}/lists/{list}",
   "PATCH /deployment",
+  "PUT /deployment/documents/{document}",
+  "DELETE /deployment/documents/{document}",
   "GET /admin/plugins",
   "PATCH /admin/plugins/{plugin}",
   "PUT /admin/plugin-order",

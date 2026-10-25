@@ -250,6 +250,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    deployment_document (kind) {
+        kind -> Text,
+        body -> Text,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     deployment_role (id) {
         id -> Uuid,
         name -> Text,
@@ -1194,6 +1202,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     community_user,
     custom_emoji,
     database_latency,
+    deployment_document,
     deployment_role,
     deployment_settings,
     deployment_stats,

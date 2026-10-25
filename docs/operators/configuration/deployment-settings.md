@@ -40,6 +40,24 @@ An invite made in the dashboard may also name a community.
 - Revoking a dual invite revokes its community invite too.
 - Revoking that community invite from the community leaves a plain registration invite.
 
+## Privacy Policy and Terms of Use
+
+A deployment may publish a Privacy Policy and Terms of Use, which anyone may read, signed in or not,
+at `/privacy` and `/terms` on `public_url`. The sign-in screen and the apps' About Aspen link to
+them.
+
+- Aspen gives no default for either. Until one is published, its page says "This deployment has not
+  published a Privacy Policy." or "This deployment has not published Terms of Use."
+- Each is written in Markdown, at most 65,536 characters. Pictures in it are not shown.
+- In the Administration Dashboard: holders of Manage deployment settings publish or withdraw each
+  under **Settings**.
+- From the terminal:
+  - `aspen-chat-server documents set privacyPolicy policy.md` publishes a file (`-` reads standard
+    input), in place of the one before. `termsOfUse` names the other.
+  - `aspen-chat-server documents show privacyPolicy` prints what is published.
+  - `aspen-chat-server documents withdraw termsOfUse` withdraws one.
+  - A reader sees a change the next time they open the page; it needs no restart and no NATS.
+
 ## Bots, communities, and uploads
 
 | Setting                   | Default |                                                                                                                                                                                                                                                                            |

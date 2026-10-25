@@ -124,3 +124,4 @@ pub mod m20261022_231920_message_replies;
 pub mod m20261022_232808_join_messages;
 pub mod m20261023_120000_attachment_spoilers;
 pub mod m20261023_191323_identity_providers;
+pub mod m20261025_060007_deployment_documents;

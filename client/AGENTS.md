@@ -62,6 +62,8 @@ same commit, as with comments.
 - [`about.md`](docs/architecture/about.md): About Aspen, opened from Settings (the deployment, every
   version, and the license), and the Open Source Attributions page and the build-time list of every
   package each part ships.
+- [`age-gate.md`](docs/architecture/age-gate.md): asking the phone whether its user is under 18, and
+  the message that is all the app shows when it is.
 - [`android-builds.md`](docs/architecture/android-builds.md): the Android app's build in CI, the APK
   it keeps, installing it, and its version.
 - [`apple-builds.md`](docs/architecture/apple-builds.md): the iOS and macOS builds in CI, signing
@@ -84,6 +86,8 @@ same commit, as with comments.
 - [`deployments.md`](docs/architecture/deployments.md): the home and other deployments,
   `Deployments`, scopes, invites across deployments, protocol versions, blocks across deployments,
   and file transfers in calls.
+- [`documents.md`](docs/architecture/documents.md): the deployment's Privacy Policy and Terms of
+  Use: their pages, the links to them, rendering their Markdown, and the dashboard's editor.
 - [`flatpak.md`](docs/architecture/flatpak.md): the desktop app's Flatpak: its manifest and
   permissions, building and signing it, the base app, and the desktop entry.
 - [`fonts.md`](docs/architecture/fonts.md): Inclusive Sans and Intel One Mono, the bundled Noto
