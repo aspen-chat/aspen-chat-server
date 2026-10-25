@@ -10,8 +10,8 @@ parties besides Apple and Google:
 - **The deployment**: an Aspen API server. It decides who should be notified of what.
 - **The relay**: a service holding the credentials of one published build of the Aspen app, through
   which alone that build's phones can be reached: Apple's push service (APNs) for iOS, Google's
-  (FCM) for Android builds from the Play Store. The Aspen Chat Foundation runs the relay for the app
-  it publishes; anyone who publishes their own build runs their own. A relay is the only holder of
+  (FCM) for Android builds from the Play Store. Bitcrafters LLC runs the relay for the app it
+  publishes; anyone who publishes their own build runs their own. A relay is the only holder of
   those credentials because they cannot be shared: an APNs key sends to every user of every app of
   its team, and an FCM service account to every user of its project.
 - **The app**: the Aspen app on one phone, signed in to one or more deployments.
@@ -141,9 +141,9 @@ placeholder must read sensibly on its own. `Topic` becomes `apns-collapse-id`, `
 `apns-expiration`, and `Urgency: high` priority 10 (otherwise 5).
 
 A pointer that should show nothing (a `read` or `deleted`, below) needs Apple's notification
-filtering entitlement, which lets the extension drop a notification; the Foundation must request it
-for the published app. A relay whose iOS app lacks it answers `201` to a `low` push for an iOS phone
-and delivers nothing, so deployments need not know which phones are which.
+filtering entitlement, which lets the extension drop a notification; Bitcrafters must request it for
+the published app. A relay whose iOS app lacks it answers `201` to a `low` push for an iOS phone and
+delivers nothing, so deployments need not know which phones are which.
 
 **Android (FCM)**: a data message carrying the same `s` and `c`, high priority for `Urgency: high`
 and normal otherwise; the app decrypts, fetches, and posts the notification itself. Android lowers
@@ -305,11 +305,11 @@ channel moved back to, which takes down nothing still shown but carries the new 
 
 ## Decisions
 
-1. **The relay** is its own repository (`aspen-push-relay`), run by the Foundation for the apps it
+1. **The relay** is its own repository (`aspen-push-relay`), run by Bitcrafters LLC for the apps it
    publishes; deployments never run one.
 2. **The free tier** needs no registration: each deployment key may send a fixed number of pushes a
-   month (200,000 at the Foundation's relay, which costs it little more than bandwidth), and a
-   relay's operators give a key a tier of its own when it needs more.
+   month (200,000 at Bitcrafters' relay, which costs it little more than bandwidth), and a relay's
+   operators give a key a tier of its own when it needs more.
 3. **Calls** will ring phones with a later kind, `call`, once calls ring anywhere; it needs Apple's
    VoIP push and CallKit, with rules of their own.
 4. **The relay trusts any app that registers**, without App Attest or Play Integrity: a registered

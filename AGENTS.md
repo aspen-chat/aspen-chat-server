@@ -486,6 +486,10 @@ the repository has an `EMOJI_FONT_TOKEN` secret; the workflow file says why.
 the newest dmgs `main` built, it staples their tickets and keeps them as an artifact
 (`client/docs/architecture/apple-builds.md`).
 
+`docs/development/distribution.md` is how each build reaches people and updates: the channels on
+every platform, the desktop app's updater, hosting, signing, and which of it is built. A change to
+how a build is packaged, signed, or published updates it in the same commit.
+
 ### CLI Flags
 
 - `--gen-openapi-schema` — Generate schema files and exit; it reads no configuration
