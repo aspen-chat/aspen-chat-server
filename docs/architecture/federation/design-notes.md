@@ -107,8 +107,12 @@ Why federation works as it does. The how is in the [Federation pages](index.md).
 - **One server runs a pass: the one that claims the recurring `confirmStanding` job.** See
   [Jobs](../jobs/index.md).
 - **A pass is bounded: at most `MAX_DUE_PER_PASS` (5000) users and four minutes
-  (`CONFIRM_BUDGET`).** Those never confirmed go first, then those confirmed longest ago. Chunks not
-  asked within the budget stay due for the next pass rather than counting against their home.
+  (`CONFIRM_BUDGET`).** Chunks not asked within the budget stay due for the next pass rather than
+  counting against their home.
+- **Each home gets an even share of a pass, and a minute of it (`HOME_BUDGET`).** Users due longest
+  go first only within their home. Ordering every foreign user by how long they were due let one
+  home whose users stay due (it leaves them out of answers, or answers slowly) fill every pass, so
+  that no other home's users were ever asked about again.
 - **No pooled connection is held while waiting on a home.**
 - **A failing home is backed off, but the grace still applies.** Its users lose their sessions at
   `standing_grace_seconds` however long the back-off.
@@ -116,6 +120,15 @@ Why federation works as it does. The how is in the [Federation pages](index.md).
   may be. See [Standing](standing.md#limits).
 - **A home answers only for users who signed in at the asker, and `refused` for any other id.** So
   an answer reveals nothing of accounts the asker was never given.
+
+### A user left out of an answer is no news
+
+- **A user a valid answer leaves out is treated as when their home is not reached.** They stay due,
+  and their sessions end once unconfirmed for `standing_grace_seconds`. Ending their sessions at
+  once, as for an unknown standing, would sign out everyone a home leaves out by mistake or under a
+  smaller cap of a newer version; treating them as confirmed would let a home keep its users here
+  however it answers. The protocol says an answer may leave users out (`spec/federation.md`), and
+  the grace is what a home that never answers gets, so leaving users out buys nothing.
 
 ### `accountDeleted` is taken from any pinned home
 
