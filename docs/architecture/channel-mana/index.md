@@ -57,6 +57,10 @@ mana.
 
 - **A glyph is a grapheme cluster** (`mana::glyphs`, with `unicode-segmentation`): what a reader
   sees as one character. `é`, `中`, `👍🏽`, `👨‍👩‍👧` and `🇯🇵` cost 1 each, in every script alike.
+- **A stacked cluster** of more than ten scalars (`GLYPH_SCALARS`) costs one more for each scalar
+  past ten: a chain of emoji joined by zero-width joiners, or a letter under a heap of combining
+  marks, costs about what its characters would apart. The longest emoji sequence Unicode recommends
+  is ten scalars, so every emoji, and every script's letters, still cost 1.
 - **Tokens:** a tag (`<@id>`, `<@&id>`), a custom emoji (`<:id>`), and `@everyone` cost 1 each,
   however long their stored form.
 - **Markdown markers** cost what they are, a glyph each.

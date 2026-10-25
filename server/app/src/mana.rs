@@ -88,11 +88,17 @@ pub fn check_channel_settings(
 }
 
 /// A message's text as glyphs: grapheme clusters, what a reader sees as one character, in
-/// every script alike. A tag (`<@id>`, `<@&id>`), a custom emoji (`<:id>`), and `@everyone`
-/// are one glyph each however long their stored form; each is ASCII, one cluster a byte, so
-/// counting it whole and taking back the rest is exact.
+/// every script alike. A cluster longer than [`GLYPH_SCALARS`] scalars costs one more for each
+/// scalar past them, so text stacked into a few clusters (a chain of emoji joined by ZWJ,
+/// combining marks heaped on one letter) costs what its characters would apart. A tag
+/// (`<@id>`, `<@&id>`), a custom emoji (`<:id>`), and `@everyone` are one glyph each however
+/// long their stored form; each is ASCII, one cluster a byte, so counting it whole and taking
+/// back the rest is exact.
 pub fn glyphs(content: &str) -> u32 {
-    let mut count = content.graphemes(true).count();
+    let mut count: usize = content
+        .graphemes(true)
+        .map(|cluster| 1 + cluster.chars().count().saturating_sub(GLYPH_SCALARS))
+        .sum();
     let mut rest = content;
     while let Some(at) = rest.find('<') {
         rest = &rest[at..];
@@ -112,6 +118,11 @@ pub fn glyphs(content: &str) -> u32 {
     count = count.saturating_sub(content.matches(EVERYONE).count() * (EVERYONE.len() - 1));
     u32::try_from(count).unwrap_or(u32::MAX)
 }
+
+/// The most scalars one glyph holds at the cost of one: the longest emoji sequence Unicode
+/// recommends (a kiss of two people with skin tones, 👩🏻‍❤️‍💋‍👨🏼) is ten, and no script's
+/// letter with its marks comes near it.
+pub const GLYPH_SCALARS: usize = 10;
 
 /// `<:` and a hyphenated UUID and `>`.
 const EMOJI_TOKEN_LEN: usize = 2 + 36 + 1;
@@ -535,6 +546,33 @@ mod tests {
         assert_eq!(glyphs("🇯🇵"), 1);
         // A line break of CR and LF is one.
         assert_eq!(glyphs("a\r\nb"), 3);
+        // Every emoji sequence Unicode recommends is one, the longest included, and so is
+        // England's flag, a tag sequence.
+        assert_eq!(glyphs("👩🏻‍❤️‍💋‍👨🏼"), 1);
+        assert_eq!(glyphs("👨‍👩‍👧‍👦"), 1);
+        assert_eq!(
+            glyphs("🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}"),
+            1
+        );
+        // Indic conjuncts and Hangul, composed or as jamo, cost a glyph each.
+        assert_eq!(glyphs("क्षत्रिय"), 3);
+        assert_eq!(glyphs("नमस्ते"), 3);
+        assert_eq!(glyphs("한국어"), 3);
+        assert_eq!(glyphs("\u{1112}\u{1161}\u{11ab}"), 1);
+        assert_eq!(glyphs("ཧྐྵྨླྺྼྻྂ"), 1);
+    }
+
+    #[test]
+    fn a_stacked_cluster_costs_its_scalars_past_the_first_ten() {
+        // A hundred emoji in one ZWJ chain: 199 scalars.
+        let chain = vec!["😀"; 100].join("\u{200d}");
+        assert_eq!(glyphs(&chain), 1 + 199 - 10);
+        // A letter under a thousand combining marks.
+        let zalgo = format!("a{}", "\u{0301}".repeat(1000));
+        assert_eq!(glyphs(&zalgo), 1 + 1001 - 10);
+        // Ten scalars are one glyph; eleven are two.
+        assert_eq!(glyphs(&format!("a{}", "\u{0301}".repeat(9))), 1);
+        assert_eq!(glyphs(&format!("a{}", "\u{0301}".repeat(10))), 2);
     }
 
     #[test]

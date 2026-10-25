@@ -12,6 +12,13 @@ Why channel mana works as it does. The how is in the [main page](index.md).
   Chinese, accented, and emoji text cost what English does. Counting code points or bytes would
   charge some scripts several times more. There is one path for every script; counting is cheap
   enough (a full 10,000-character message in about 0.15 ms) to need none faster for ASCII.
+- **Past ten scalars a cluster costs by its length.** A grapheme cluster has no length limit: a ZWJ
+  chain of a thousand emoji, or one letter under thousands of combining marks, is one cluster, and
+  counted as one would let a full message cost a single glyph. Ten scalars hold the longest
+  recommended emoji sequence and far more than any script's letter with its marks, so charging each
+  scalar past ten leaves real text at its cost while stacked text pays nearly what it holds.
+  Refusing long clusters instead would have to draw a line no script crosses, which is less sure
+  than charging for them.
 - **Tokens cost one.** A tag or a custom emoji is one thing to a reader, however long its stored
   form.
 - **Counted on the text as sent.** The gates decide before the posting runs the channel's plugins,
