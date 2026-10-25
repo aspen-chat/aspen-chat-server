@@ -28,6 +28,11 @@ One plugin may notify one person at most:
 The turns are counted in Valkey across servers (`notice::take_turn`), and let through while Valkey
 cannot be reached.
 
+### Its text
+
+A notice's text is checked as an annotation's is (`annotation::check_text`): a key of 1 to 64 bytes
+and at most 16 arguments of at most 500 characters each.
+
 ### What happens
 
 1. The notice is kept in `plugin_notice` for a week (`notice::KEPT`). Reads leave out older ones,
@@ -49,6 +54,16 @@ Code: `card::Card`, `card::press`.
   and carried as the message's `card`, naming its plugin.
 - `update-card` changes or removes the card of a message the principal posted, announced as the
   message's update.
+
+### Limits
+
+`card::from_wit` checks what the plugin gives:
+
+- at most 25 fields and 5 buttons;
+- a plain value of at most 1,000 characters;
+- every text (the title, each label, a link's text) checked as an annotation's is
+  (`annotation::check_text`);
+- a link an `https` URL of at most 2,000 bytes (`annotation::MAX_LINK`).
 
 ### Pressing a button
 

@@ -5,6 +5,7 @@
 //! person who pressed it, who must be able to read the message.
 
 use super::PluginText;
+use super::annotation::{MAX_LINK, check_text};
 use super::host::wit;
 use super::route::{self, Answer};
 use crate::context::GlobalServerContext;
@@ -38,6 +39,13 @@ fn name_ok(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
+/// A plugin's text on a card, checked as an annotation's is (`annotation::check_text`).
+fn text(text: wit::Text) -> Result<PluginText, wit::Error> {
+    let text = PluginText::from(text);
+    check_text(&text)?;
+    Ok(text)
+}
+
 /// `card` as the plugin `plugin` gave it, checked.
 pub fn from_wit(plugin: &str, card: wit::Card) -> Result<Card, wit::Error> {
     if card.fields.len() > MAX_FIELDS || card.buttons.len() > MAX_BUTTONS {
@@ -45,6 +53,7 @@ pub fn from_wit(plugin: &str, card: wit::Card) -> Result<Card, wit::Error> {
             "a card has at most {MAX_FIELDS} fields and {MAX_BUTTONS} buttons"
         )));
     }
+    let title = card.title.map(text).transpose()?;
     let fields = card
         .fields
         .into_iter()
@@ -69,18 +78,22 @@ pub fn from_wit(plugin: &str, card: wit::Card) -> Result<Card, wit::Error> {
                         uuid::Uuid::parse_str(&user).map_err(|_| invalid("not a person"))?,
                     ),
                 },
-                wit::CardValue::Link((url, text)) => {
-                    if !url::Url::parse(&url).is_ok_and(|u| u.scheme() == "https") {
-                        return Err(invalid("a card's link is an https URL"));
+                wit::CardValue::Link((url, shown)) => {
+                    if url.len() > MAX_LINK
+                        || !url::Url::parse(&url).is_ok_and(|u| u.scheme() == "https")
+                    {
+                        return Err(invalid(&format!(
+                            "a card's link is an https URL of at most {MAX_LINK} bytes"
+                        )));
                     }
                     CardValue::Link {
                         url,
-                        text: text.into(),
+                        text: text(shown)?,
                     }
                 }
             };
             Ok(CardField {
-                label: field.label.into(),
+                label: text(field.label)?,
                 value,
             })
         })
@@ -95,7 +108,7 @@ pub fn from_wit(plugin: &str, card: wit::Card) -> Result<Card, wit::Error> {
         }
         buttons.push(CardButton {
             id: button.id,
-            label: button.label.into(),
+            label: text(button.label)?,
             style: match button.style {
                 wit::ButtonStyle::Primary => ButtonStyle::Primary,
                 wit::ButtonStyle::Secondary => ButtonStyle::Secondary,
@@ -105,7 +118,7 @@ pub fn from_wit(plugin: &str, card: wit::Card) -> Result<Card, wit::Error> {
     }
     Ok(Card {
         plugin: plugin.to_string(),
-        title: card.title.map(PluginText::from),
+        title,
         fields,
         buttons,
     })

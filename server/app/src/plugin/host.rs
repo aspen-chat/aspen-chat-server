@@ -1343,9 +1343,7 @@ impl Call {
             .map(|m| parse_id(&m).map(MessageId))
             .transpose()?;
         let text = PluginText::from(text);
-        if text.key.is_empty() || text.key.len() > 64 {
-            return Err(wit::Error::Invalid("a text's key is 1 to 64 bytes".into()));
-        }
+        annotation::check_text(&text)?;
         {
             let mut conn = self.conn().await?;
             self.running_at(conn.as_mut(), channel_id).await?;

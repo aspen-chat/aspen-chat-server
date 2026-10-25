@@ -24,8 +24,8 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 const MAX_ARGS: usize = 16;
 /// The longest an argument may be, in characters.
 const MAX_ARG_CHARS: usize = 500;
-/// The longest a link may be, in bytes.
-const MAX_LINK: usize = 2000;
+/// The longest a link may be, in bytes: an annotation's, or a card's.
+pub(super) const MAX_LINK: usize = 2000;
 
 /// An annotation a plugin set, checked.
 #[derive(Debug, Clone)]
@@ -37,7 +37,10 @@ pub struct Annotation {
     pub link: Option<String>,
 }
 
-fn check_text(text: &PluginText) -> Result<(), wit::Error> {
+/// Checks a plugin's text: an annotation's, a notice's, or a card's. Clients and the server
+/// render it from the plugin's catalogue with its arguments filled in, so its size is bounded by
+/// its arguments'.
+pub(super) fn check_text(text: &PluginText) -> Result<(), wit::Error> {
     if text.key.is_empty() || text.key.len() > 64 {
         return Err(wit::Error::Invalid("a text's key is 1 to 64 bytes".into()));
     }
