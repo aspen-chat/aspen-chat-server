@@ -31,6 +31,9 @@ Each plugin sees the text the one before left.
 - A call that fails counts as allowing or refusing (`pluginUnavailable`), as its manifest's
   `failure` says.
 - A rewrite or refusal without its permission counts as a failure.
+- A refusal whose reason exceeds the bounds of every plugin text (`annotation::check_text`: a key of
+  1 to 64 bytes, at most 16 arguments of at most 500 characters) still refuses, with the server's
+  own reason (`pluginRefusedUnexplained`) in place of the plugin's.
 
 ## Commands
 

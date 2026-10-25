@@ -213,6 +213,15 @@ pub async fn decide(
                     continue;
                 }
                 let reason = PluginText::from(reason);
+                // A reason past the bounds every plugin text keeps still refuses, but in words of
+                // the server's own rather than the plugin's.
+                if super::annotation::check_text(&reason).is_err() {
+                    tracing::warn!(plugin = plugin.id, "a refusal's reason is too long");
+                    return Err(crate::Error::PluginRefused(t!(
+                        "pluginRefusedUnexplained",
+                        plugin = plugin.name(locale)
+                    )));
+                }
                 return Err(crate::Error::PluginRefused(
                     plugin.render(locale, &reason).into(),
                 ));
