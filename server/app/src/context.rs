@@ -83,6 +83,8 @@ pub struct GlobalServerContext {
     pub device_key: crate::server_secret::HmacKey,
     /// What session and bot tokens are signed with (`app::signed_token`).
     pub token_key: crate::server_secret::HmacKey,
+    /// What orders equals in a channel's mana queue (`app::mana::queue`).
+    pub mana_order_key: crate::server_secret::HmacKey,
     /// Signed tokens the database rejected, so presenting one again costs no lookup.
     pub rejected_tokens: crate::signed_token::Rejected,
     /// This server's copy of the deployment's settings (`app::deployment_settings`).
@@ -194,7 +196,7 @@ impl GlobalServerContext {
                 Some(Duration::from_secs(config.database_pool_wait_seconds)),
             )?
         };
-        let (settings, code_key, join_token_key, device_key, token_key) = {
+        let (settings, code_key, join_token_key, device_key, token_key, mana_order_key) = {
             let mut conn = connection_pool.get().await?;
             crate::deployment_settings::pin_domain(
                 conn.as_mut(),
@@ -211,6 +213,11 @@ impl GlobalServerContext {
                     .await?,
                 crate::server_secret::HmacKey::load(conn.as_mut(), crate::server_secret::TOKENS)
                     .await?,
+                crate::server_secret::HmacKey::load(
+                    conn.as_mut(),
+                    crate::server_secret::MANA_ORDER,
+                )
+                .await?,
             )
         };
 
@@ -265,6 +272,7 @@ impl GlobalServerContext {
             join_token_key,
             device_key,
             token_key,
+            mana_order_key,
             rejected_tokens: crate::signed_token::Rejected::default(),
             settings: crate::deployment_settings::SettingsCache::new(settings),
             nats_monitor,

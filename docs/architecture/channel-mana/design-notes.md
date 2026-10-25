@@ -55,14 +55,39 @@ Why channel mana works as it does. The how is in the [main page](index.md).
 - **Rank, then tenure.** A raid is many new accounts holding no roles. Serving the higher ranked
   first, then those who have belonged longer, puts every regular ahead of it, and it delays only
   itself.
-- **Tenure in whole days, then random.** A raid's accounts join seconds apart; in exact join order
-  the first of them would take everything the pool earns. Counted in days they are equals, and
-  drawing among equals for each message shares the channel between them in expectation.
-- **No one displaces a higher rank or an equal.** A full queue drops the lowest author waiting only
+- **Tenure in whole days, then a keyed hash.** A raid's accounts join seconds apart; in exact join
+  order the first of them would take everything the pool earns. Counted in days they are equals, and
+  among equals the order is an HMAC of the channel, the author, and their username under a secret
+  only the servers hold.
+- **Why not random.** A fresh draw for each message shares the channel between equals in
+  expectation, but the drawn author has to be remembered until their row is paid for, or the cheap
+  messages of equals would always post first and a costly one never; that memory is state to carry
+  between ticks and servers. A fixed order needs none: every server and every tick agree on it.
+- **Why not a plain hash.** A hash of the username anyone can compute lets raiders grind names
+  offline until theirs sort first among equals, and they choose their names. Keyed with the
+  deployment's secret, no one outside the servers can tell which name wins, so there is nothing to
+  grind. The channel is in it so no account sorts first everywhere; the user id, so two accounts
+  never tie.
+- **Thirds, not the whole pool to the first.** Under strict priority the first author's row would
+  have to be paid in full before anyone below posted: one costly row from a moderator or regular
+  would hold back everyone else, and a long first row could stall a channel until it was dropped.
+  Splitting what the pool earns among the first three keeps rank decisive (the first is credited at
+  least a third of everything, and all of it when alone) while the second and third keep moving, so
+  one row never blocks a channel. Three, because one place is strict priority again, while many
+  places dilute the head of the queue towards equal shares, which a raid of many accounts wins; with
+  three, regulars waiting fill every place, and a raid gets at most two while one regular waits.
+- **Credit returns when it is not needed.** An author pushed out of the first three, or with nothing
+  left to post, gives back what they held, so mana is never parked with someone who will not spend
+  it.
+- **Credit lives beside the pool.** It is the pool's mana, reserved, so it must change in the same
+  atomic step as the level: in Valkey, by script, with the pool. The pool's own script counts it, so
+  a spend by someone with Bypass cannot spend what is credited, and the bar shows it as mana the
+  channel has.
+- **No one displaces a higher rank or an equal.** A full queue drops the last author waiting only
   for someone strictly above them, so a raid larger than the queue cannot keep regulars out, and no
   one can push out someone of higher rank.
-- **An author's waiting rows are one item.** Someone who sends dozens of short lines is drawn as
-  often as someone who wrote one long message.
+- **An author's waiting rows are one item.** Someone who sends dozens of short lines has one place
+  in the queue, as someone who wrote one long message does.
 
 ## Moderators and bots
 
