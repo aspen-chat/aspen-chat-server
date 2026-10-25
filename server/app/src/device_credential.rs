@@ -34,8 +34,10 @@ pub const LIFETIME: TimeDelta = TimeDelta::days(90);
 pub const CHALLENGE_LIFETIME: TimeDelta = TimeDelta::minutes(5);
 
 /// The most zero bits a challenge can ask for, which `[rate_limits] device_puzzle_bits` is
-/// clamped to: past it the puzzle would take a phone hours.
-pub const MAX_PUZZLE_BITS: u8 = 32;
+/// clamped to: the most clients solve (`MAX_PUZZLE_BITS` in `@aspen/protocol`'s `device.ts`),
+/// which treat a deployment asking for more as unreachable, since past it a puzzle takes a phone
+/// many minutes.
+pub const MAX_PUZZLE_BITS: u8 = 28;
 
 const RANDOM_BYTES: usize = 16;
 /// What each kind of token is signed as, so a challenge can never be presented as a credential.

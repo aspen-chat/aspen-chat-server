@@ -62,8 +62,36 @@ export class WebStorageDeviceCredentialStore implements DeviceCredentialStore {
   }
 }
 
-/** Finds a nonce solving a challenge, given as its decoded bytes. */
-export type PuzzleSolver = (challenge: Uint8Array, difficulty: number) => Promise<number>;
+/**
+ * Finds a nonce solving a challenge, given as its decoded bytes. Stops, rejecting, once `signal`
+ * aborts.
+ */
+export type PuzzleSolver = (
+  challenge: Uint8Array,
+  difficulty: number,
+  signal?: AbortSignal,
+) => Promise<number>;
+
+/**
+ * The hardest puzzle a client solves: 256 times the usual twenty bits' work, minutes on a phone.
+ * A deployment asking for more is treated as unreachable rather than let keep a core busy.
+ */
+export const MAX_PUZZLE_BITS = 28;
+
+/** How long a client works on one puzzle before giving the deployment up as unreachable. */
+export const PUZZLE_TIME_LIMIT_MS = 60_000;
+
+/**
+ * A deployment asked for a device credential the client will not earn: a puzzle harder than
+ * `MAX_PUZZLE_BITS`, or one not solved within `PUZZLE_TIME_LIMIT_MS`. Requests that needed it
+ * fail with this, as if the deployment could not be reached.
+ */
+export class DevicePuzzleRefusedError extends Error {
+  constructor(reason: string) {
+    super(`device credential not earned: ${reason}`);
+    this.name = "DevicePuzzleRefusedError";
+  }
+}
 
 const K = Uint32Array.from([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -204,8 +232,9 @@ const SLICE = 1 << 15;
  * Solves a puzzle on the calling thread, a slice of nonces at a time with a pause between, so a
  * page without a worker stays responsive, if slower.
  */
-export const solvePuzzle: PuzzleSolver = async (challenge, difficulty) => {
+export const solvePuzzle: PuzzleSolver = async (challenge, difficulty, signal) => {
   for (let from = 0; ; from += SLICE) {
+    signal?.throwIfAborted();
     const found = solvePuzzleRange(challenge, difficulty, from, from + SLICE);
     if (found !== null) {
       return found;

@@ -26,6 +26,10 @@ own.
 - Earning one means solving a puzzle of about a million SHA-256 hashes, a second or two on a phone.
   `solveInWorker` runs it in a worker so the screen does not freeze, and on the page's thread, a
   slice at a time, where workers cannot run.
+- A deployment cannot make it work without end. A puzzle harder than `MAX_PUZZLE_BITS` (28) is not
+  started, and one not solved in `PUZZLE_TIME_LIMIT_MS` (a minute) is stopped, ending the worker.
+  The requests waiting on it then fail with `DevicePuzzleRefusedError`, as if the deployment could
+  not be reached, so the earning always settles.
 - The first request a new install makes waits for it: the welcome's read of `GET /deployment`, or
   `GET /auth/methods`.
 - It is kept per deployment in `localStorage` (`aspen.device.<host>`), outlives signing out, and is

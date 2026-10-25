@@ -3,7 +3,10 @@ import {
   decodeChallenge,
   DEVICE_HEADER,
   type DeviceCredentialStore,
+  DevicePuzzleRefusedError,
+  MAX_PUZZLE_BITS,
   MemoryDeviceCredentialStore,
+  PUZZLE_TIME_LIMIT_MS,
   type PuzzleSolver,
   RENEWAL_HEADER,
   solvePuzzle,
@@ -35,6 +38,9 @@ import type {
 import type { PasskeyHandoff } from "./passkeys";
 
 export type Paths = paths;
+
+/** How earning a device credential ended: refused, the puzzle being one this client won't solve. */
+type Earning = "earned" | "failed" | DevicePuzzleRefusedError;
 export type Schemas = components["schemas"];
 
 /** The openapi-fetch client for the Aspen REST API. Every call is typed by path and method. */
@@ -148,7 +154,7 @@ export class AspenClient {
   readonly #deviceStore: DeviceCredentialStore;
   readonly #solvePuzzle: PuzzleSolver;
   /** Earning a device credential, shared so concurrent refusals solve one puzzle. */
-  #earning: Promise<boolean> | null = null;
+  #earning: Promise<Earning> | null = null;
 
   /** Throws `InsecureAddressError` for a deployment not reached over HTTPS (`requireSecure`). */
   constructor(options: AspenClientOptions) {
@@ -1027,7 +1033,8 @@ export class AspenClient {
 
   /**
    * A request without a session, which presents this server's device credential. Refused for
-   * lacking one, it earns one and is sent once more.
+   * lacking one, it earns one and is sent once more. Throws `DevicePuzzleRefusedError` when the
+   * server's puzzle is one this client will not solve.
    */
   async #anonymousFetch(request: Request): Promise<Response> {
     const retry = request.clone();
@@ -1038,7 +1045,11 @@ export class AspenClient {
     this.#earning ??= this.#earnDevice().finally(() => {
       this.#earning = null;
     });
-    if (!(await this.#earning)) {
+    const earning = await this.#earning;
+    if (earning instanceof DevicePuzzleRefusedError) {
+      throw earning;
+    }
+    if (earning !== "earned") {
       return response;
     }
     return this.#fetchAsDevice(retry);
@@ -1058,31 +1069,64 @@ export class AspenClient {
 
   /**
    * Earns a device credential: asks for a challenge, solves it, and redeems the solution. A
-   * challenge that expired while a slow device solved it is asked for once more. `false` when
-   * the server gave none.
+   * challenge that expired while a slow device solved it is asked for once more. Settles
+   * whatever the server asks: a puzzle harder than `MAX_PUZZLE_BITS`, or not solved within
+   * `PUZZLE_TIME_LIMIT_MS`, is refused.
    */
-  async #earnDevice(): Promise<boolean> {
+  async #earnDevice(): Promise<Earning> {
     const raw = (request: Request) => this.#fetch(request);
     for (let attempt = 0; attempt < 2; attempt++) {
       const asked = await this.api.POST("/api/v1/auth/device-challenges", { fetch: raw });
       if (asked.data === undefined) {
-        return false;
+        return "failed";
       }
       const { challenge, difficulty } = asked.data;
-      const nonce = await this.#solvePuzzle(decodeChallenge(challenge), difficulty);
+      if (!Number.isInteger(difficulty) || difficulty < 0 || difficulty > MAX_PUZZLE_BITS) {
+        return new DevicePuzzleRefusedError(
+          `${this.baseUrl} asks for ${String(difficulty)} bits, more than ${String(MAX_PUZZLE_BITS)}`,
+        );
+      }
+      const nonce = await this.#solveInTime(decodeChallenge(challenge), difficulty);
+      if (nonce === null) {
+        return new DevicePuzzleRefusedError(
+          `${this.baseUrl}'s puzzle was not solved within ${String(PUZZLE_TIME_LIMIT_MS / 1000)} seconds`,
+        );
+      }
       const earned = await this.api.POST("/api/v1/auth/device-credentials", {
         body: { challenge, nonce },
         fetch: raw,
       });
       if (earned.data !== undefined) {
         this.#deviceStore.save(earned.data.credential);
-        return true;
+        return "earned";
       }
       if (problemOf(earned.error, earned.response).code !== "deviceChallengeInvalid") {
-        return false;
+        return "failed";
       }
     }
-    return false;
+    return "failed";
+  }
+
+  /**
+   * The solver's nonce, or `null` when it fails or `PUZZLE_TIME_LIMIT_MS` passes first, after
+   * which it is told to stop. Settles at the limit even if a solver ignores being told.
+   */
+  async #solveInTime(challenge: Uint8Array, difficulty: number): Promise<number | null> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.#solvePuzzle(challenge, difficulty, controller.signal).catch(() => null),
+        new Promise<null>((resolve) => {
+          timer = globalThis.setTimeout(() => {
+            resolve(null);
+          }, PUZZLE_TIME_LIMIT_MS);
+        }),
+      ]);
+    } finally {
+      globalThis.clearTimeout(timer);
+      controller.abort();
+    }
   }
 
   /**

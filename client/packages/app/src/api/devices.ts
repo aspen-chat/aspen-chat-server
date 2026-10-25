@@ -18,27 +18,44 @@ export function deviceStore(baseUrl: string): DeviceCredentialStore {
 
 /**
  * Solves a device credential's puzzle in a worker (`devicePuzzle.worker.ts`), or on the page's
- * thread, a slice at a time, where workers cannot run.
+ * thread, a slice at a time, where workers cannot run. Aborting `signal` ends the worker.
  */
-export const solveInWorker: PuzzleSolver = (challenge, difficulty) => {
+export const solveInWorker: PuzzleSolver = (challenge, difficulty, signal) => {
   if (typeof Worker === "undefined") {
-    return solvePuzzle(challenge, difficulty);
+    return solvePuzzle(challenge, difficulty, signal);
   }
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./devicePuzzle.worker.ts", import.meta.url), {
       type: "module",
     });
-    const onThisThread = () => {
+    const stop = () => {
       worker.terminate();
-      resolve(solvePuzzle(challenge, difficulty));
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("puzzle abandoned"));
+    };
+    if (signal?.aborted === true) {
+      stop();
+      return;
+    }
+    signal?.addEventListener("abort", stop, { once: true });
+    const settle = (settled: () => void) => {
+      signal?.removeEventListener("abort", stop);
+      worker.terminate();
+      settled();
+    };
+    const onThisThread = () => {
+      settle(() => {
+        resolve(solvePuzzle(challenge, difficulty, signal));
+      });
     };
     worker.onmessage = (event: MessageEvent<number | null>) => {
       if (event.data === null) {
         onThisThread();
         return;
       }
-      worker.terminate();
-      resolve(event.data);
+      const nonce = event.data;
+      settle(() => {
+        resolve(nonce);
+      });
     };
     worker.onerror = onThisThread;
     worker.postMessage({ challenge, difficulty });

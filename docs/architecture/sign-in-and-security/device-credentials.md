@@ -27,7 +27,7 @@ be.
 
 |                     |                                                                                                                      |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Difficulty          | `[rate_limits] device_puzzle_bits`, 20 by default (about a million hashes), at most 32                               |
+| Difficulty          | `[rate_limits] device_puzzle_bits`, 20 by default (about a million hashes), at most 28                               |
 | Challenge lifetime  | Five minutes (`CHALLENGE_LIFETIME`)                                                                                  |
 | Credential lifetime | Ninety days (`LIFETIME`)                                                                                             |
 | Uses of a challenge | One credential. Its use is remembered in Valkey (`device-challenge:*`) until it expires.                             |
@@ -123,6 +123,10 @@ A suspension of the address limits (`limits suspend`) also skips `device`, `ip_f
 - **Storage:** the credential is kept per deployment in `localStorage` (`aspen.device.<host>`) and
   survives signing out. It says which device this is, not who uses it.
 - **Native code:** the phones' push handlers make only token refreshes, which are exempt.
+- **A ceiling:** the client solves at most 28 bits (`MAX_PUZZLE_BITS`) and works at most a minute on
+  one puzzle (`PUZZLE_TIME_LIMIT_MS`). Past either it treats the deployment as unreachable, so a
+  hostile deployment cannot keep a core busy. The server clamps `device_puzzle_bits` to the same 28
+  (`device_credential::MAX_PUZZLE_BITS`).
 
 ## Scripts and the benchmark
 

@@ -54,7 +54,10 @@ export {
 } from "./passkeys";
 export {
   DEVICE_HEADER,
+  DevicePuzzleRefusedError,
+  MAX_PUZZLE_BITS,
   MemoryDeviceCredentialStore,
+  PUZZLE_TIME_LIMIT_MS,
   RENEWAL_HEADER,
   WebStorageDeviceCredentialStore,
   decodeChallenge,
