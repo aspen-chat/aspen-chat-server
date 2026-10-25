@@ -59,8 +59,12 @@ linked (counted up to 1000).
 ### Discovery, keys, and outbound calls
 
 Each API server caches each provider's discovery document and keys for an hour
-(`discovery::document`). A token signed with a key the cache lacks fetches them again once, so a
-provider's key rotation needs no restart.
+(`discovery::document`). A token signed with a key the cache lacks (its `kid` is not among them, or
+it names none and none verifies it) fetches them again, so a provider's key rotation needs no
+restart: at most once a minute per issuer on each server, the one fetch shared by every token that
+arrives while it is made (`discovery::document_for_unknown_key`). Anyone may post a logout token
+naming any key, and without that bound each would cost the provider two calls. A token whose `kid`
+is among the cached keys and does not verify is refused without fetching anything.
 
 Calls to providers are HTTPS only, follow no redirects, take at most ten seconds each, and read
 answers of at most 1 MiB. Why one failed is classified (`aspen_outbound::classify`, as calls to
@@ -197,8 +201,8 @@ they read any other (see [Signing in abroad](../federation/signing-in-abroad.md)
 
 A provider that supports OpenID Connect Back-Channel Logout posts a logout token to
 `POST /auth/oidc/back-channel-logout` when someone signs out there or is removed. The server
-verifies it (signature, issuer, audience, `iat`, the logout event, no `nonce`, used once by `jti`)
-and ends:
+verifies it (a `typ` of `logout+jwt` when it has one, an asymmetric signature by the one provider of
+its issuer, issuer, audience, `iat`, the logout event, no `nonce`, used once by `jti`) and ends:
 
 - the sign-ins made through that provider with its session id (`sid`), when the token names one;
 - otherwise every sign-in made through that provider by the account its `sub` is linked to.
@@ -221,7 +225,7 @@ All in `rate_limits.toml`:
 | `POST …/claim`                               | The `sign_in` group; wrong verifiers and codes count as failures                  |
 | `POST …/account`                             | As `POST /users`, and sharing its global bucket (`registration`)                  |
 | `GET /auth/oidc/callback`                    | Per address, in the `sign_in` bucket. Device-exempt: the browser opens it         |
-| `POST /auth/oidc/back-channel-logout`        | Per address, and globally. Device-exempt: the provider's server posts it          |
+| `POST /auth/oidc/back-channel-logout`        | Per address, and refused tokens per address. Device-exempt: the provider posts it |
 | `DELETE /users/{user}/identities/{identity}` | The `security` group                                                              |
 | `/admin/identity-providers`                  | The `admin` group                                                                 |
 

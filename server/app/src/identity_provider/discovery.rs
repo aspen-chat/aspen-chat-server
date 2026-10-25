@@ -1,7 +1,8 @@
 //! Calling identity providers: HTTPS only, no redirects, a short timeout, answers of bounded size,
 //! and only public addresses (`app::outbound`) unless `[identity_providers]
 //! allow_private_addresses` says otherwise. Each provider's discovery document, with its keys, is
-//! cached for [`CACHED_FOR`], and fetched afresh when a token names a key the cache lacks.
+//! cached for [`CACHED_FOR`], and fetched afresh when a token is signed with a key the cache lacks,
+//! at most once per [`REFRESH_AT_MOST_EVERY`] per issuer ([`document_for_unknown_key`]).
 
 use crate::aspen_config::AspenConfig;
 use crate::outbound::{CertificateFailure as Certificate, Failure, PublicResolver};
@@ -11,7 +12,7 @@ use openidconnect::core::CoreProviderMetadata;
 use openidconnect::{HttpRequest, HttpResponse, IssuerUrl};
 use std::borrow::Cow;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How long one call to a provider may take, connecting included.
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -22,6 +23,10 @@ const CACHED_FOR: Duration = Duration::from_secs(60 * 60);
 /// How many issuers' documents one server keeps: every provider a deployment has, and room for
 /// those changed or removed lately.
 const MAX_CACHED: u64 = 64;
+/// How often one server reads a provider's document afresh because a token was signed with a key
+/// its cached copy lacks. Anyone may post a logout token naming any key, so without this bound
+/// each would cost the provider two calls.
+const REFRESH_AT_MOST_EVERY: Duration = Duration::from_secs(60);
 
 /// The client every call to a provider is made with, and the documents fetched with it.
 struct Outbound {
@@ -30,6 +35,10 @@ struct Outbound {
     /// the resolver never sees.
     allow_private: bool,
     documents: moka::sync::Cache<String, Arc<CoreProviderMetadata>>,
+    /// Per issuer, when its document was last read afresh for an unknown key. Its lock is held
+    /// while that read is made, so tokens arriving meanwhile wait for it rather than each making
+    /// their own.
+    refreshes: moka::sync::Cache<String, Arc<tokio::sync::Mutex<Option<Instant>>>>,
 }
 
 static OUTBOUND: OnceLock<Outbound> = OnceLock::new();
@@ -91,6 +100,9 @@ fn outbound(config: &AspenConfig) -> crate::Result<&'static Outbound> {
         documents: moka::sync::Cache::builder()
             .max_capacity(MAX_CACHED)
             .time_to_live(CACHED_FOR)
+            .build(),
+        refreshes: moka::sync::Cache::builder()
+            .max_capacity(MAX_CACHED)
             .build(),
     }))
 }
@@ -225,6 +237,32 @@ pub async fn document(
         .documents
         .insert(issuer.to_string(), document.clone());
     Ok(document)
+}
+
+/// `issuer`'s document, read afresh for a token signed with a key the cached copy lacks, unless
+/// this server did so in the last [`REFRESH_AT_MOST_EVERY`]: then the copy that read left (which
+/// a token naming a key the provider has since published is checked against in a minute at most),
+/// or none.
+pub async fn document_for_unknown_key(
+    config: &AspenConfig,
+    issuer: &str,
+) -> crate::Result<Arc<CoreProviderMetadata>> {
+    let outbound = outbound(config)?;
+    let gate = outbound
+        .refreshes
+        .get_with(issuer.to_string(), Default::default);
+    let mut last = gate.lock().await;
+    if last.is_some_and(|at| at.elapsed() < REFRESH_AT_MOST_EVERY) {
+        drop(last);
+        return outbound
+            .documents
+            .get(issuer)
+            .ok_or_else(|| unreachable(t!("identityProviderNoAnswer", issuer = issuer)));
+    }
+    // Stamped whether or not the read succeeds, so a provider that is down is not called for
+    // every token either.
+    *last = Some(Instant::now());
+    document(config, issuer, true).await
 }
 
 fn unreachable(detail: Cow<'static, str>) -> crate::Error {

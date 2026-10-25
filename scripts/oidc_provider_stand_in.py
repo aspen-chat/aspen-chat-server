@@ -122,8 +122,10 @@ class Provider:
             self.next = {"sub": sub, "amr": amr, "sid": sid, "email": email, "email_verified": email_verified,
                          "preferred_username": preferred_username, "name": name, "error": error}
 
-    def logout_token(self, sub: str | None = None, sid: str | None = None, **changes) -> str:
-        """A back-channel logout token naming `sid` or `sub`, with `changes` laid over its claims."""
+    def logout_token(self, sub: str | None = None, sid: str | None = None, typ: str = "logout+jwt",
+                     **changes) -> str:
+        """A back-channel logout token naming `sid` or `sub`, typed `typ`, with `changes` laid over its
+        claims."""
         claims = {"iss": self.issuer, "aud": self.client_id, "iat": int(time.time()), "jti": secrets.token_hex(12),
                   "events": {LOGOUT_EVENT: {}}}
         if sub is not None:
@@ -131,7 +133,7 @@ class Provider:
         if sid is not None:
             claims["sid"] = sid
         claims.update(changes)
-        return self.signer.sign(claims, typ="logout+jwt")
+        return self.signer.sign(claims, typ=typ)
 
     def document(self) -> dict:
         return {

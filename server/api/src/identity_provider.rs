@@ -682,9 +682,11 @@ pub struct LogoutForm {
 /// `POST /auth/oidc/back-channel-logout`: a provider ends the sign-ins it made of someone
 /// (OpenID Connect Back-Channel Logout 1.0). It answers `200` once they have ended, or `400`
 /// with an OAuth error body when the token is refused, saying no more than the specification
-/// asks; why goes to the log.
+/// asks; why goes to the log. A refused token counts toward its address's failures, apart from
+/// the limits valid tokens are counted by, so a stranger posting bad ones spends only their own.
 pub async fn back_channel_logout(
     State(state): State<GlobalServerContext>,
+    failures: Option<Extension<Failures>>,
     form: axum::Form<LogoutForm>,
 ) -> Response {
     let no_store = [(CACHE_CONTROL, "no-store")];
@@ -698,6 +700,7 @@ pub async fn back_channel_logout(
         }
         Err(providers::logout::LogoutError::Refused(reason)) => {
             tracing::info!(reason, "refused a back-channel logout");
+            crate::rate_limit::note_failure(&state, &failures).await;
             (
                 StatusCode::BAD_REQUEST,
                 no_store,

@@ -382,10 +382,11 @@ async fn identify(
     match id_token.claims(&verifier, &nonce) {
         Ok(claims) => Ok(identified(&provider, claims, &id_token.to_string())),
         // A key the cached document lacks may be one the provider has rotated to, so its
-        // document is read afresh once. The code is spent by now, so only the verification is
-        // tried again.
+        // document is read afresh, at most once a minute per issuer. The code is spent by now, so
+        // only the verification is tried again.
         Err(openidconnect::ClaimsVerificationError::SignatureVerification(_)) => {
-            let document = discovery::document(&state.config, &provider.issuer, true).await?;
+            let document =
+                discovery::document_for_unknown_key(&state.config, &provider.issuer).await?;
             let client = client_of(state, &provider, &document)?;
             let verifier = client.id_token_verifier();
             let claims = id_token

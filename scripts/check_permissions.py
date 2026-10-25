@@ -1738,6 +1738,8 @@ def identity_providers(world: World, check: Checks) -> None:
         check("as is one from an issuer the server does not know", back_channel_logout(stack, forged) == 400)
         nonce = idp.logout_token(sid="second", nonce="n")
         check("and an ID token passed off as one", back_channel_logout(stack, nonce) == 400)
+        typed = idp.logout_token(sid="second", typ="JWT")
+        check("and a token typed as something other than a logout", back_channel_logout(stack, typed) == 400)
         header, _, signature = idp.logout_token(sid="first").split(".")
         payload = base64.urlsafe_b64encode(json.dumps(
             {"iss": idp.issuer, "aud": idp.client_id, "iat": int(time.time()), "jti": "tampered",
