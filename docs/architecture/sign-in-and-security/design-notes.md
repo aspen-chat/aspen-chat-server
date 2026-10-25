@@ -257,6 +257,12 @@ See [Identity providers](identity-providers.md).
 - **A provider's sign-in counts as one factor unless it says otherwise.** Its `amr` claim, or the
   administrators' word (`enforces_two_factor`), decides; a provider that says nothing is treated as
   a password, so `require_two_factor` and an account's own second factors still apply.
+- **`amr` counts kinds of factor, not methods.** Two factors are two of knowledge, possession, and
+  inherence, as RFC 8176 groups its values; counting distinct values instead would take a password
+  with a PIN, or a fingerprint with a face, as two. A method alone is one factor even when it is a
+  one-time code or a key, since providers send `otp` or `sms` alone for a code that replaces the
+  password, and `hwk` alone for a key used without its PIN. A provider whose every sign-in is
+  stronger than its `amr` says is marked `enforces_two_factor`.
 - **Abroad, a provider's sign-in travels as `password` or `secondFactor`.** Other deployments then
   read it as any other, and the federation protocol names no provider.
 - **Accounts made through a provider have no password.** They verify again at the provider, asked to

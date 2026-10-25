@@ -191,9 +191,19 @@ provider's sign-in [counts as two factors](#strength), as a password alone does 
 ## Strength
 
 A provider's sign-in counts as two factors (`SignInMethod::IdentityProviderTwoFactor`) when the
-provider has `enforces_two_factor`, or its ID token's `amr` claim names a second factor (`mfa`,
-`otp`, `hwk`, `swk` with another method, `sms`, or `fpt`, `face`, `iris`, `retina`, or `vbm` with
-another method; RFC 8176). Otherwise it counts as one (`SignInMethod::IdentityProvider`):
+provider has `enforces_two_factor`, or its ID token's `amr` claim (RFC 8176) says `mfa` or names
+methods of two different kinds (`flow::factor_kind`):
+
+| Kind                    | `amr` values                            |
+| ----------------------- | --------------------------------------- |
+| Something known         | `pwd`, `pin`, `kba`                     |
+| Something held          | `otp`, `hwk`, `swk`, `sms`, `tel`, `sc` |
+| Something the person is | `fpt`, `face`, `iris`, `retina`, `vbm`  |
+
+Two methods of one kind are one factor: `pwd` with `pin`, `fpt` with `face`, or `otp` with `sms`. A
+method held alone is one too, whatever it is: `otp` or `sms` alone may be a code sent in place of a
+password, and `hwk` alone a security key used without its PIN. Other values (`user`, `geo`, `rba`,
+and the like) are no factor. Otherwise it counts as one (`SignInMethod::IdentityProvider`):
 
 - `require_two_factor` holds it like a password sign-in: such a session must add a second factor of
   Aspen's own before anything else.

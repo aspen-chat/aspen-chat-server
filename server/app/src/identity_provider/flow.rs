@@ -444,29 +444,40 @@ fn exchange_failure(
     }
 }
 
-/// The `amr` values (RFC 8176) that show a second factor on their own.
-const SECOND_FACTOR_METHODS: [&str; 4] = ["mfa", "otp", "hwk", "sms"];
-/// The `amr` values that count as a factor of their own, so that two of them, or one and a
-/// password, are two factors.
-const FACTOR_METHODS: [&str; 13] = [
-    "pwd", "pin", "otp", "hwk", "swk", "sms", "tel", "fpt", "face", "iris", "retina", "vbm", "sc",
-];
+/// The kind of factor an `amr` value (RFC 8176) proves. Two factors are two of different kinds:
+/// a password and a PIN are both something known, and a fingerprint and a face both something
+/// the person is.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum FactorKind {
+    Knowledge,
+    Possession,
+    Inherence,
+}
 
-/// Whether an `amr` claim names two factors: a method that is one on its own, or two methods of
+/// The kind of factor `method` proves, or `None` for a value that proves none on its own
+/// (`user` presence, `geo`, `rba`, and the like) or that this server does not know.
+fn factor_kind(method: &str) -> Option<FactorKind> {
+    Some(match method {
+        "pwd" | "pin" | "kba" => FactorKind::Knowledge,
+        // `otp` and `sms` alone may be a code mailed or texted in place of a password, and
+        // `hwk` and `swk` a key used without its PIN: something held, once.
+        "otp" | "hwk" | "swk" | "sms" | "tel" | "sc" => FactorKind::Possession,
+        "fpt" | "face" | "iris" | "retina" | "vbm" => FactorKind::Inherence,
+        _ => return None,
+    })
+}
+
+/// Whether an `amr` claim names two factors: `mfa`, which says so outright, or methods of two
 /// different kinds.
 fn two_factors(amr: &[String]) -> bool {
-    if amr
-        .iter()
-        .any(|method| SECOND_FACTOR_METHODS.contains(&method.as_str()))
-    {
+    if amr.iter().any(|method| method == "mfa") {
         return true;
     }
-    let factors: std::collections::HashSet<&str> = amr
+    let kinds: std::collections::HashSet<FactorKind> = amr
         .iter()
-        .map(String::as_str)
-        .filter(|method| FACTOR_METHODS.contains(method))
+        .filter_map(|method| factor_kind(method))
         .collect();
-    factors.len() >= 2
+    kinds.len() >= 2
 }
 
 /// The `sid` claim, which `openidconnect`'s standard claims leave out, read from the token whose
@@ -861,13 +872,21 @@ mod tests {
     fn two_factors_from_amr() {
         assert!(two_factors(&amr(&["mfa"])));
         assert!(two_factors(&amr(&["pwd", "otp"])));
-        assert!(two_factors(&amr(&["hwk"])));
         assert!(two_factors(&amr(&["pwd", "fpt"])));
         assert!(two_factors(&amr(&["swk", "pin"])));
+        assert!(two_factors(&amr(&["hwk", "pin", "user"])));
+        assert!(two_factors(&amr(&["hwk", "face"])));
+        assert!(two_factors(&amr(&["sms", "pwd"])));
         assert!(!two_factors(&amr(&["pwd"])));
-        assert!(!two_factors(&amr(&["swk"])));
-        assert!(!two_factors(&amr(&["fpt", "fpt"])));
+        assert!(!two_factors(&amr(&["otp"])));
+        assert!(!two_factors(&amr(&["sms"])));
+        assert!(!two_factors(&amr(&["hwk"])));
+        assert!(!two_factors(&amr(&["swk", "user"])));
+        assert!(!two_factors(&amr(&["otp", "sms"])));
+        assert!(!two_factors(&amr(&["pwd", "pin"])));
+        assert!(!two_factors(&amr(&["fpt", "face"])));
         assert!(!two_factors(&amr(&["kba", "pwd"])));
+        assert!(!two_factors(&amr(&["geo", "rba", "pwd"])));
         assert!(!two_factors(&[]));
     }
 

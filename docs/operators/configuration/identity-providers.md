@@ -29,12 +29,12 @@ Aspen is only the client. How it works is in
 
 ### Options
 
-| Flag (terminal)         | Dashboard              | Off by default | What it does                                                                                                                                             |
-| ----------------------- | ---------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--skip-invite`         | Skips invites          | yes            | A first sign-in makes an account without a registration invite where `registration-invite-required` is on. Use it when the provider decides who belongs. |
-| `--enforces-two-factor` | Enforces two factors   | yes            | Every sign-in there counts as two factors. Without it, one counts as two only when the provider's `amr` claim names a second factor.                     |
-| `--distrust-email`      | Trusts email addresses | no (trusted)   | Without it, an address the provider reports as verified becomes a new account's verified address.                                                        |
-| `--disabled`            | Enabled                | no (enabled)   | A disabled provider offers no sign-in, and keeps its links.                                                                                              |
+| Flag (terminal)         | Dashboard              | Off by default | What it does                                                                                                                                                                                            |
+| ----------------------- | ---------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--skip-invite`         | Skips invites          | yes            | A first sign-in makes an account without a registration invite where `registration-invite-required` is on. Use it when the provider decides who belongs.                                                |
+| `--enforces-two-factor` | Enforces two factors   | yes            | Every sign-in there counts as two factors. Without it, one counts as two only when the provider's `amr` claim says `mfa`, or names two different kinds of factor (a password and a one-time code, say). |
+| `--distrust-email`      | Trusts email addresses | no (trusted)   | Without it, an address the provider reports as verified becomes a new account's verified address.                                                                                                       |
+| `--disabled`            | Enabled                | no (enabled)   | A disabled provider offers no sign-in, and keeps its links.                                                                                                                                             |
 
 `identity-providers set <name or id>` changes any of them, `--name` renames it, and
 `--client-secret-file` replaces the secret. A provider's issuer and client ID are fixed once it is
