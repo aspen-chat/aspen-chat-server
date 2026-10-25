@@ -17,15 +17,17 @@
 //!   list are told only of changes: its client reads them whole over REST once the list is taken
 //!   up, a read the request path can refuse when busy, where telling them would put every
 //!   reconnecting connection's whole list on the router at once. Users a later list adds are
-//!   told as they are. Each list taken up is answered with `presenceWatching`, which the client
-//!   waits for before that read, so every change is in the read or told after it.
+//!   told as they are, as far as the connection's budget allows ([`ADDED_PER_MINUTE`]). Each list
+//!   taken up is answered with `presenceWatching`, which the client waits for before that read,
+//!   so every change is in the read or told after it.
 //! - **Telling.** The router gathers the hints for users watched here, and newly watched users,
 //!   for up to [`PRESENCE_WINDOW_MILLIS`] from the first, then reads all their presence in one
-//!   batched read, decides in one query which watchers may learn it (as
+//!   batched read in a task of its own, decides in one query which watchers may learn it (as
 //!   `user_status::presence_visible` does: the user themself, those sharing a community or DM
-//!   with them, a bot's owner, and never anyone they block), and sends each connection one
-//!   `presence` frame holding what differs from what it was last told. Someone a watcher may no
-//!   longer learn the presence of is told to them as offline.
+//!   with them, a bot's owner, and never anyone they block; [`Decisions`] keeps the answers a
+//!   little while), and sends each connection one `presence` frame holding what differs from
+//!   what it was last told. Someone a watcher may no longer learn the presence of is told to them
+//!   as offline.
 //!
 //! A hint lost (a full queue, a server that stopped with timers pending, NATS dropping a core
 //! message) leaves a watcher behind until the next change or its client's slower full read.
@@ -38,10 +40,10 @@ pub use aspen_wire::ephemeral::{MAX_WATCHED_PRESENCE, PRESENCE_WINDOW_MILLIS};
 use aspen_wire::user::{UserOnlineStatus, UserStatusRecord};
 use futures_util::StreamExt;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 use tracing::{error, warn};
 
@@ -62,9 +64,17 @@ const HINT_BATCH: usize = 4_096;
 /// How many expiries may wait for the timer task; more are dropped.
 const EXPIRY_QUEUE: usize = 65_536;
 
-/// How many watch lists may wait for the router; more are dropped, and the client's next change
-/// says it again.
-const WATCH_QUEUE: usize = 4_096;
+/// How many users a connection's watch lists after its first may add in a burst, and how many it
+/// earns back each minute. Past it the rest of a list are taken up as the budget allows, a
+/// telling at a time, so a client changing lists fast costs the router no more than one changing
+/// them as a person scrolls.
+const ADDED_BURST: f64 = MAX_WATCHED_PRESENCE as f64;
+const ADDED_PER_MINUTE: f64 = 1_000.0;
+
+/// How long a decision of whether a viewer may learn someone's presence is kept, and how many
+/// are ([`Decisions`]).
+const DECIDED_FOR: Duration = Duration::from_secs(10);
+const DECISIONS_KEPT: u64 = 200_000;
 
 /// How many `presence` frames may wait for one connection; past it the connection is told again
 /// at the next change.
@@ -75,10 +85,15 @@ const PAIR_BATCH: usize = 5_000;
 
 /// The most connection and user pairs one telling decides, ten visibility queries' worth; the
 /// rest wait for the next window, so a burst (a popular user's change watched by thousands here,
-/// many connections changing their watch lists) never holds the router, and a database
-/// connection, for long while hints and watch lists queue behind it. Changes are told before
-/// pairs carried over or newly watched.
+/// many connections changing their watch lists) never holds a database connection for long.
+/// Changes are told before pairs carried over or newly watched.
 const MAX_PAIRS_PER_TELLING: usize = 10 * PAIR_BATCH;
+
+/// A viewer and a user whose presence they watch.
+type ViewerPair = (UserId, UserId);
+
+/// What a telling reads: each user's presence, and the viewer pairs that may learn it.
+type Read = (HashMap<UserId, UserOnlineStatus>, HashSet<ViewerPair>);
 
 /// A little after a key's expiry, so the hint finds it gone.
 const EXPIRY_SLACK: Duration = Duration::from_secs(1);
@@ -106,7 +121,12 @@ pub struct PresenceFeed {
 #[derive(Clone)]
 struct RouterHandle {
     registrations: mpsc::UnboundedSender<Registration>,
-    watches: mpsc::Sender<(u64, Vec<UserId>)>,
+    /// Each connection's latest watch list not yet taken by the router, one slot per connection,
+    /// so however fast connections send lists the router holds one each, and none crowds out
+    /// another's.
+    lists: Arc<Mutex<HashMap<u64, Vec<UserId>>>>,
+    /// Woken when a list is put in `lists`.
+    listed: Arc<Notify>,
     next_id: Arc<AtomicU64>,
 }
 
@@ -140,14 +160,23 @@ impl PresenceFeed {
         let (expiries, asked) = mpsc::channel(EXPIRY_QUEUE);
         tokio::spawn(keep_expiries(asked, hints.clone()));
         let (registrations, registered) = mpsc::unbounded_channel();
-        let (watches, watched) = mpsc::channel(WATCH_QUEUE);
-        tokio::spawn(route_presence(nats, valkey, pool, registered, watched));
+        let lists = Arc::new(Mutex::new(HashMap::new()));
+        let listed = Arc::new(Notify::new());
+        tokio::spawn(route_presence(
+            nats,
+            valkey,
+            pool,
+            registered,
+            lists.clone(),
+            listed.clone(),
+        ));
         PresenceFeed {
             hints,
             expiries: Some(expiries),
             router: Some(RouterHandle {
                 registrations,
-                watches,
+                lists,
+                listed,
                 next_id: Arc::new(AtomicU64::new(0)),
             }),
         }
@@ -199,12 +228,17 @@ pub struct PresenceWatch {
 
 impl PresenceWatch {
     /// The users the connection shows, replacing those it named before; beyond
-    /// [`MAX_WATCHED_PRESENCE`] the rest are left out. Best effort: when the router is too busy
-    /// to hear it, the client's next change says it again.
+    /// [`MAX_WATCHED_PRESENCE`] the rest are left out. A list the router has not taken yet is
+    /// replaced by this one.
     pub fn set(&self, mut users: Vec<UserId>) {
         users.truncate(MAX_WATCHED_PRESENCE);
         if let Some(router) = &self.router {
-            let _ = router.watches.try_send((self.id, users));
+            router
+                .lists
+                .lock()
+                .expect("the presence watch lists' lock")
+                .insert(self.id, users);
+            router.listed.notify_one();
         }
     }
 
@@ -329,6 +363,80 @@ struct Watcher {
     /// changes, since its client reads them whole once the list is taken up; those added by later
     /// lists are told as they are.
     watching: bool,
+    /// How many users its later lists may still add ([`ADDED_BURST`]), as of `budget_at`.
+    budget: f64,
+    budget_at: Instant,
+}
+
+impl Watcher {
+    /// How many users its lists may add now, whole.
+    fn may_add(&mut self, now: Instant) -> usize {
+        let earned = now.duration_since(self.budget_at).as_secs_f64() * ADDED_PER_MINUTE / 60.0;
+        self.budget = (self.budget + earned).min(ADDED_BURST);
+        self.budget_at = now;
+        self.budget as usize
+    }
+}
+
+/// Recent decisions of whether a viewer may learn someone's presence, so a connection naming
+/// users it named a moment ago does not have them decided again. A decision is used only when it
+/// was made after the last hint for the user (`hinted`): whatever changes who may learn it and is
+/// hinted (a block, a change of presence) is decided afresh at once. What changes it unhinted
+/// (joining or leaving a community, a DM) reaches a user named again within [`DECIDED_FOR`].
+struct Decisions {
+    decided: moka::sync::Cache<(UserId, UserId), (bool, Instant)>,
+    hinted: moka::sync::Cache<UserId, Instant>,
+}
+
+impl Default for Decisions {
+    fn default() -> Self {
+        fn cache<K, V>() -> moka::sync::Cache<K, V>
+        where
+            K: std::hash::Hash + Eq + Send + Sync + 'static,
+            V: Clone + Send + Sync + 'static,
+        {
+            moka::sync::Cache::builder()
+                .max_capacity(DECISIONS_KEPT)
+                .time_to_live(DECIDED_FOR)
+                .build()
+        }
+        Decisions {
+            decided: cache(),
+            hinted: cache(),
+        }
+    }
+}
+
+impl Decisions {
+    fn hinted(&self, user: UserId, at: Instant) {
+        self.hinted.insert(user, at);
+    }
+
+    /// Splits `pairs` into those decided since their user's last hint, with the ones visible, and
+    /// those to decide.
+    fn split(&self, pairs: Vec<(UserId, UserId)>) -> (HashSet<ViewerPair>, Vec<ViewerPair>) {
+        let mut visible = HashSet::new();
+        let mut undecided = Vec::new();
+        for pair in pairs {
+            let hinted = self.hinted.get(&pair.1);
+            match self.decided.get(&pair) {
+                Some((seen, at)) if hinted.is_none_or(|hinted| at > hinted) => {
+                    if seen {
+                        visible.insert(pair);
+                    }
+                }
+                _ => undecided.push(pair),
+            }
+        }
+        (visible, undecided)
+    }
+
+    /// Keeps the decisions of `pairs` begun `at`, `visible` holding those that may.
+    fn note(&self, pairs: &[(UserId, UserId)], visible: &HashSet<(UserId, UserId)>, at: Instant) {
+        for pair in pairs {
+            self.decided.insert(*pair, (visible.contains(pair), at));
+        }
+    }
 }
 
 /// Who watches whom on this server, and what is waiting to be told.
@@ -346,6 +454,7 @@ struct Router {
     unacknowledged: HashSet<u64>,
     /// When the gathered changes are told; `None` with none waiting.
     tell_at: Option<Instant>,
+    decisions: Decisions,
 }
 
 impl Router {
@@ -362,6 +471,8 @@ impl Router {
                 told: HashMap::new(),
                 next: None,
                 watching: false,
+                budget: ADDED_BURST,
+                budget_at: Instant::now(),
             },
         );
     }
@@ -392,7 +503,9 @@ impl Router {
     }
 
     fn hinted(&mut self, users: Vec<UserId>) {
+        let now = Instant::now();
         for user in users {
+            self.decisions.hinted(user, now);
             if self.by_user.contains_key(&user) {
                 self.changed.insert(user);
                 self.due();
@@ -402,15 +515,20 @@ impl Router {
 
     /// Takes up each connection's latest watch list, one per telling however many it sent. The
     /// users a list adds are told as they are, except those of a connection's first, which its
-    /// client reads whole.
+    /// client reads whole. A later list adds users as far as its connection's budget allows
+    /// ([`ADDED_PER_MINUTE`]), in the order it names them; the rest wait for the next telling,
+    /// and the list is acknowledged once it is taken up whole.
     fn take_up_watches(&mut self) {
+        let now = Instant::now();
         let named: Vec<(u64, Vec<UserId>)> = self
             .watchers
             .iter_mut()
             .filter_map(|(id, watcher)| watcher.next.take().map(|users| (*id, users)))
             .collect();
-        for (id, users) in named {
-            let wanted: HashSet<UserId> = users.into_iter().take(MAX_WATCHED_PRESENCE).collect();
+        let mut waiting = false;
+        for (id, mut users) in named {
+            users.truncate(MAX_WATCHED_PRESENCE);
+            let wanted: HashSet<UserId> = users.iter().copied().collect();
             let Some(watcher) = self.watchers.get_mut(&id) else {
                 continue;
             };
@@ -423,14 +541,31 @@ impl Router {
             for user in &dropped {
                 watcher.told.remove(user);
             }
-            let added: Vec<UserId> = wanted
-                .into_iter()
-                .filter(|user| !watcher.told.contains_key(user))
+            let mut seen = HashSet::new();
+            let mut added: Vec<UserId> = users
+                .iter()
+                .copied()
+                .filter(|user| !watcher.told.contains_key(user) && seen.insert(*user))
                 .collect();
+            let tell_added = watcher.watching;
+            let whole = if tell_added {
+                let may = watcher.may_add(now);
+                let whole = added.len() <= may;
+                added.truncate(may);
+                watcher.budget -= added.len() as f64;
+                whole
+            } else {
+                true
+            };
             for user in &added {
                 watcher.told.insert(*user, None);
             }
-            let tell_added = std::mem::replace(&mut watcher.watching, true);
+            watcher.watching = true;
+            if !whole {
+                // A list named since replaces this one in `named`.
+                watcher.next = Some(users);
+                waiting = true;
+            }
             for user in dropped {
                 self.unwatch(id, user);
             }
@@ -440,7 +575,12 @@ impl Router {
                     self.fresh.insert((id, user));
                 }
             }
-            self.unacknowledged.insert(id);
+            if whole {
+                self.unacknowledged.insert(id);
+            }
+        }
+        if waiting {
+            self.due();
         }
         self.acknowledge();
     }
@@ -571,7 +711,7 @@ async fn read(
     pool: &Pool,
     users: Vec<UserId>,
     viewer_pairs: Vec<(UserId, UserId)>,
-) -> crate::Result<(HashMap<UserId, UserOnlineStatus>, HashSet<(UserId, UserId)>)> {
+) -> crate::Result<Read> {
     let statuses = raw_statuses(valkey, users).await?;
     let mut visible = HashSet::new();
     if !viewer_pairs.is_empty() {
@@ -598,28 +738,94 @@ async fn subscribe_hints(nats: &async_nats::Client) -> async_nats::Subscriber {
     }
 }
 
+/// A telling's read, done by a task of its own so the router goes on taking hints, lists, and
+/// connections meanwhile.
+struct Reading {
+    pairs: HashSet<(u64, UserId)>,
+    /// The viewer and user pairs [`Decisions`] knew to be visible.
+    known: HashSet<(UserId, UserId)>,
+    /// Those it decided, and when it began.
+    decided: Vec<(UserId, UserId)>,
+    began: Instant,
+    read: crate::Result<Read>,
+}
+
+/// Applies a connection's registration, answering `false` when the feed is gone.
+fn register(router: &mut Router, registration: Option<Registration>) -> bool {
+    match registration {
+        Some(Registration::Add {
+            id,
+            viewer,
+            deliveries,
+        }) => router.add(id, viewer, deliveries),
+        Some(Registration::Remove(id)) => router.remove(id),
+        None => return false,
+    }
+    true
+}
+
 /// This server's router: keeps who watches whom, gathers hints, and tells.
 async fn route_presence(
     nats: async_nats::Client,
     valkey: fred::clients::Client,
     pool: Pool,
     mut registrations: mpsc::UnboundedReceiver<Registration>,
-    mut watches: mpsc::Receiver<(u64, Vec<UserId>)>,
+    lists: Arc<Mutex<HashMap<u64, Vec<UserId>>>>,
+    listed: Arc<Notify>,
 ) {
     let mut hints = subscribe_hints(&nats).await;
     let mut router = Router::default();
+    let mut reading: Option<tokio::task::JoinHandle<Reading>> = None;
     loop {
-        let tell_at = router.tell_at;
+        // One telling at a time: the next waits for this one's read.
+        let tell_at = router.tell_at.filter(|_| reading.is_none());
         tokio::select! {
-            registration = registrations.recv() => match registration {
-                Some(Registration::Add { id, viewer, deliveries }) => {
-                    router.add(id, viewer, deliveries);
-                }
-                Some(Registration::Remove(id)) => router.remove(id),
+            registration = registrations.recv() => {
                 // The feed is gone: the server is stopping.
-                None => return,
+                if !register(&mut router, registration) {
+                    return;
+                }
             },
-            Some((id, users)) = watches.recv() => router.named(id, users),
+            () = listed.notified() => {
+                // A connection is registered before it names a list, so taking the
+                // registrations first finds every list's connection.
+                while let Ok(registration) = registrations.try_recv() {
+                    register(&mut router, Some(registration));
+                }
+                let named = std::mem::take(
+                    &mut *lists.lock().expect("the presence watch lists' lock"),
+                );
+                for (id, users) in named {
+                    router.named(id, users);
+                }
+            },
+            done = async {
+                match &mut reading {
+                    Some(task) => task.await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                reading = None;
+                let Reading { pairs, mut known, decided, began, read } = match done {
+                    Ok(done) => done,
+                    Err(e) => {
+                        error!("reading presence for its watchers failed: {e}");
+                        continue;
+                    }
+                };
+                match read {
+                    Ok((statuses, visible)) => {
+                        router.decisions.note(&decided, &visible, began);
+                        known.extend(visible);
+                        router.tell(pairs, &statuses, &known);
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "presence could not be read to tell its watchers");
+                        router.fresh.extend(pairs);
+                        router.due();
+                    }
+                }
+            },
             message = hints.next() => {
                 let Some(message) = message else {
                     error!("the presence hint subscription ended, subscribing again");
@@ -647,15 +853,13 @@ async fn route_presence(
                     .collect::<HashSet<_>>()
                     .into_iter()
                     .collect();
-                let viewer_pairs = router.viewer_pairs(&pairs);
-                match read(&valkey, &pool, users, viewer_pairs).await {
-                    Ok((statuses, visible)) => router.tell(pairs, &statuses, &visible),
-                    Err(e) => {
-                        warn!(error = %e, "presence could not be read to tell its watchers");
-                        router.fresh.extend(pairs);
-                        router.due();
-                    }
-                }
+                let (known, decided) = router.decisions.split(router.viewer_pairs(&pairs));
+                let (valkey, pool) = (valkey.clone(), pool.clone());
+                reading = Some(tokio::spawn(async move {
+                    let began = Instant::now();
+                    let read = read(&valkey, &pool, users, decided.clone()).await;
+                    Reading { pairs, known, decided, began, read }
+                }));
             }
         }
     }
@@ -879,6 +1083,57 @@ mod tests {
                 online_status: UserOnlineStatus::Online
             }]
         );
+    }
+
+    #[test]
+    fn later_lists_add_users_within_the_budget() {
+        let (mut router, mut received) = router_with(&[(0, user(1))]);
+        router.named(0, vec![]);
+        let _ = router.gathered();
+        while received[0].try_recv().is_ok() {}
+        let first: Vec<UserId> = (100..100 + MAX_WATCHED_PRESENCE as u128)
+            .map(user)
+            .collect();
+        router.named(0, first);
+        assert_eq!(router.gathered().len(), MAX_WATCHED_PRESENCE);
+        assert_eq!(
+            received[0].try_recv().unwrap(),
+            EphemeralEvent::PresenceWatching
+        );
+        // Another whole list at once: the budget is spent, so it waits, unanswered.
+        let second: Vec<UserId> = (10_000..10_000 + MAX_WATCHED_PRESENCE as u128)
+            .map(user)
+            .collect();
+        router.named(0, second.clone());
+        let pairs = router.gathered();
+        assert!(pairs.len() < 10, "{} added", pairs.len());
+        assert!(received[0].try_recv().is_err());
+        assert!(router.watchers[&0].next.is_some());
+        assert!(router.tell_at.is_some());
+        // The users it kept are those it names first.
+        for (_, added) in &pairs {
+            assert!(second[..10].contains(added));
+        }
+    }
+
+    #[test]
+    fn a_decision_kept_is_used_until_its_user_is_hinted() {
+        let decisions = Decisions::default();
+        let (alice, bob, carol) = (user(1), user(2), user(3));
+        let began = Instant::now();
+        decisions.note(
+            &[(alice, bob), (alice, carol)],
+            &HashSet::from([(alice, bob)]),
+            began,
+        );
+        let (visible, undecided) =
+            decisions.split(vec![(alice, bob), (alice, carol), (bob, alice)]);
+        assert_eq!(visible, HashSet::from([(alice, bob)]));
+        assert_eq!(undecided, vec![(bob, alice)]);
+        decisions.hinted(bob, began + Duration::from_millis(1));
+        let (visible, undecided) = decisions.split(vec![(alice, bob), (alice, carol)]);
+        assert!(visible.is_empty());
+        assert_eq!(undecided, vec![(alice, bob)]);
     }
 
     #[test]

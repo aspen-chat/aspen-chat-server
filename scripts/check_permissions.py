@@ -1123,17 +1123,26 @@ def presence(world: World, check: Checks) -> None:
     def online_in(channel: str) -> int:
         return world.stack.api("GET", f"/channels/{channel}/presence", token=world.member["token"])["online"]
 
+    def in_sample(token: str, user: str) -> bool:
+        read = world.stack.api("GET", "/users/@me/communities?include=members", token=token)
+        return any(m["user"] == user and m["community"] == world.community
+                   for m in read["included"].get("userCommunities", []))
+
     world.as_owner("GET", "/users/@me")
     owner_counted = 1 if status_of(world.member["token"], world.owner["id"]) == "online" else 0
     in_channel, in_dm = online_in(counted), online_in(dm)
+    check("a member finds the owner in the member sample", in_sample(world.member["token"], world.owner["id"]))
     world.as_owner("PUT", f"/users/@me/blocks/{world.member['id']}")
     check("once the owner blocks the member, the member sees them offline",
           status_of(world.member["token"], world.owner["id"]) == "offline")
     check("and counted in no channel's presence",
           online_in(counted) == in_channel - owner_counted and online_in(dm) == in_dm - owner_counted,
           (in_channel, in_dm, owner_counted, online_in(counted), online_in(dm)))
+    check("nor in the member sample, whose order would say when they were last seen",
+          not in_sample(world.member["token"], world.owner["id"]))
     world.as_owner("DELETE", f"/users/@me/blocks/{world.member['id']}")
     check("and unblocked, connected again", status_of(world.member["token"], world.owner["id"]) != "offline")
+    check("and in the member sample again", in_sample(world.member["token"], world.owner["id"]))
     # A DM between them shares their presence whatever their communities; the database stands in
     # for one they never had, so that the community alone is what the removal takes away.
     psql(f"DELETE FROM dm_recipient WHERE channel = '{dm}'", world.stack.database)
@@ -1333,12 +1342,13 @@ def typing(world: World, check: Checks) -> None:
     check("the other person of a DM hears the owner typing there", heard(world.stream, dm, world.owner["id"]) == [True])
     type_in(owner, dm, False)
     world.as_owner("PUT", f"/users/@me/blocks/{world.member['id']}")
-    world.stream.gather(0.3)
+    # A typist uses what it found of a channel for two seconds, blocks among it.
+    world.stream.gather(2.0)
     type_in(owner, general)
     check("someone the owner blocks does not hear them typing", heard(world.stream, general, world.owner["id"]) == [])
     type_in(owner, general, False)
     world.as_owner("DELETE", f"/users/@me/blocks/{world.member['id']}")
-    owner.gather(0.3)
+    owner.gather(2.0)
     type_in(owner, general)
     world.stream.gather(0.5)
     owner.close()
@@ -1389,7 +1399,9 @@ def channel_mana(world: World, check: Checks) -> None:
     spend(busy)
     check("a member viewing a channel is told its mana as it is spent", bool(levels(busy)))
     view(hidden)
-    world.stream.gather(0.3)
+    # A connection looks a channel up again only five seconds after it last did
+    # (`mana::live::LOOKED_UP_FOR`), and takes one viewing list a second.
+    world.stream.gather(4.0)
     view(busy, hidden)
     check("and told it again on starting to view it while it is below full", bool(levels(busy)))
 

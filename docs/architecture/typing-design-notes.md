@@ -18,6 +18,21 @@ Why [Typing](typing.md) works as it does.
 - The client forgets everyone shown when its connection drops, since nobody can then tell it they
   stopped.
 
+## Budget
+
+- Each frame a client sends costs the server a check (a pooled database connection and a few reads)
+  and each word published costs every API server a routing pass, so frames are budgeted per
+  connection, by checks and publishes rather than by frames. A client alternating `typing` and
+  `stoppedTyping`, or naming channels it cannot post in, gets no more work out of the server than
+  one typing steadily.
+- What a check found is remembered through stops and refusals, since a budget that forgot a channel
+  at a stop or a refusal would let the next frame check it again at once.
+- The check locks no row: holding the channel, as posting does, is for a transaction that writes
+  after it, and a lock taken for every word would let typing frames write to the database.
+- A stop goes only to an audience read in the last two seconds, or read again for it. One left to
+  run out by the expiry costs a few seconds of a typing indicator; one told to a stale audience
+  tells someone who just lost the channel that the typist was there.
+
 ## Blocks
 
 - A typist's words never reach anyone they block. A block keeps the blocked from knowing when the
