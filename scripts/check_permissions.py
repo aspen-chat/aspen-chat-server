@@ -1414,8 +1414,8 @@ def channel_mana(world: World, check: Checks) -> None:
     check("a member who loses the channel is no longer told its mana", not levels(hidden, 1.5))
     check("nor may read who spent it",
           world.stack.status("GET", f"/channels/{hidden}/mana/top-senders", token=world.member["token"]) == 404)
-    # Dropped before the pool could pay for it (about six seconds): the drainer checks first.
-    gone = dropped(held, 3)
+    # Dropped, unpaid, when its author's credit would pay for it: the drainer checks before paying.
+    gone = dropped(held, 20)
     read = world.as_owner("GET", f"/channels/{hidden}/messages?limit=10")
     posted = [m["content"] for m in (read["data"] if isinstance(read, dict) else read)]
     check("and what they had waiting there is dropped, not posted", gone and "waiting my turn" not in posted)
@@ -1822,12 +1822,14 @@ def identity_providers(world: World, check: Checks) -> None:
         status, claimed, _, _ = provider_flow(stack, provider, "signIn")
         check("and that identity then signs the member in",
               claimed.get("userId") == world.member["id"], claimed)
+        stack.command("admin", "grant", world.owner["name"])
         refused = stack.request("PATCH", f"/admin/identity-providers/{provider}",
                                 {"issuer": "https://elsewhere.localhost"}, world.owner["token"])
         check("a provider's issuer cannot be changed from the dashboard", refused[0] == 400, refused)
         refused = stack.request("PATCH", f"/admin/identity-providers/{provider}",
                                 {"clientId": "other"}, world.owner["token"])
         check("nor its client id", refused[0] == 400, refused)
+        stack.command("admin", "revoke", world.owner["name"])
         psql(f"UPDATE user_identity SET issuer = 'https://elsewhere.localhost' "
              f"WHERE provider = '{provider}' AND \"user\" = '{world.member['id']}'", stack.database)
         idp.sign_in_next(sub=f"member-{world.run}", amr=["pwd"])
