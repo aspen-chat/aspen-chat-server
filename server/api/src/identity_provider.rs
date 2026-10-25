@@ -5,7 +5,7 @@
 
 use crate::admin::AdminUser;
 use crate::auth::{EnrollingSessionUser, LoginResponse, LoginResult, SessionUser, login_result};
-use crate::error::{ApiError, ApiResult, Problem};
+use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::extract::{Created, Json, NoContent, Path, Query};
 use crate::rate_limit::Failures;
 use crate::user::{UserRef, not_your_account};
@@ -95,8 +95,8 @@ pub struct IdentityProviderFlow {
 }
 
 /// Starts signing in at a provider, linking one, or verifying again through one. `signIn` needs
-/// no session; `link` needs a recently verified one, and `reauthenticate` one of an account
-/// linked to the provider.
+/// no session; `link` needs a recently verified one that owes the server neither a second factor
+/// nor a verified email address, and `reauthenticate` one of an account linked to the provider.
 #[utoipa::path(
     post,
     path = "/auth/identity-provider-flows",
@@ -106,7 +106,7 @@ pub struct IdentityProviderFlow {
         (status = CREATED, body = IdentityProviderFlow, headers(("Location" = String, description = "URL of the flow"))),
         (status = BAD_REQUEST, description = "`badRequest` or `validation`", body = Problem),
         (status = UNAUTHORIZED, description = "`unauthorized`: no session for `link` or `reauthenticate`", body = Problem),
-        (status = FORBIDDEN, description = "`reauthenticationRequired`, or `forbidden` for a bot or a user of another deployment", body = Problem),
+        (status = FORBIDDEN, description = "`reauthenticationRequired`; `twoFactorEnrollmentRequired` or `emailVerificationRequired` for `link` from a session that owes them; or `forbidden` for a bot or a user of another deployment", body = Problem),
         (status = NOT_FOUND, description = "`identityProviderUnavailable`", body = Problem),
         (status = CONFLICT, description = "`conflict`: the account is linked to that provider already", body = Problem),
         (status = BAD_GATEWAY, description = "`identityProviderUnreachable`", body = Problem),
@@ -118,6 +118,19 @@ pub async fn start_flow(
     session: Option<EnrollingSessionUser>,
     Json(request): Json<IdentityProviderFlowRequest>,
 ) -> ApiResult<Created<IdentityProviderFlow>> {
+    // Such a session may sign out and verify again, as `EnrollingSessionUser` allows, but adds
+    // nothing to its account until it has done what it owes.
+    if request.purpose == IdentityProviderPurpose::Link
+        && let Some(EnrollingSessionUser(session)) = &session
+    {
+        let settings = state.settings();
+        if session.caller.enrollment_required(&settings) {
+            return Err(ApiError::new(ProblemCode::TwoFactorEnrollmentRequired));
+        }
+        if session.caller.verification_required(&settings) {
+            return Err(ApiError::new(ProblemCode::EmailVerificationRequired));
+        }
+    }
     let started = flow::start(
         &state,
         session.as_ref().map(|EnrollingSessionUser(s)| &s.caller),
@@ -452,7 +465,10 @@ pub struct IdentityProviderCreateRequest {
     pub skip_invite: bool,
     #[serde(default)]
     pub enforces_two_factor: bool,
-    #[serde(default = "enabled_by_default")]
+    /// Whether an address it reports as verified becomes a new account's verified address. Off
+    /// unless given: a provider that marks any address verified would have mail sent to
+    /// addresses its users merely typed.
+    #[serde(default)]
     pub trust_email: bool,
 }
 

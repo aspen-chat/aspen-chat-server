@@ -33,7 +33,7 @@ Aspen is only the client. How it works is in
 | ----------------------- | ---------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--skip-invite`         | Skips invites          | yes            | A first sign-in makes an account without a registration invite where `registration-invite-required` is on. Use it when the provider decides who belongs.                                                |
 | `--enforces-two-factor` | Enforces two factors   | yes            | Every sign-in there counts as two factors. Without it, one counts as two only when the provider's `amr` claim says `mfa`, or names two different kinds of factor (a password and a one-time code, say). |
-| `--distrust-email`      | Trusts email addresses | no (trusted)   | Without it, an address the provider reports as verified becomes a new account's verified address.                                                                                                       |
+| `--trust-email`         | Trusts email addresses | yes            | An address the provider reports as verified becomes a new account's verified address. Use it only for a provider that verifies every address it reports so.                                             |
 | `--disabled`            | Enabled                | no (enabled)   | A disabled provider offers no sign-in, and keeps its links.                                                                                                                                             |
 
 `identity-providers set <name or id>` changes any of them, `--name` renames it, and

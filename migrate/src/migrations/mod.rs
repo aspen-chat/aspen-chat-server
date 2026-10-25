@@ -125,3 +125,4 @@ pub mod m20261022_232808_join_messages;
 pub mod m20261023_120000_attachment_spoilers;
 pub mod m20261023_191323_identity_providers;
 pub mod m20261025_044332_user_identity_issuer;
+pub mod m20261025_051906_identity_provider_distrust_email;

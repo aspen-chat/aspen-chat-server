@@ -467,7 +467,7 @@ test.describe("the dashboard's identity providers", () => {
       enabled: true,
       skipInvite: false,
       enforcesTwoFactor: false,
-      trustEmail: true,
+      trustEmail: false,
     });
 
     await section.getByRole("button", { name: "Remove Big Corp" }).click();

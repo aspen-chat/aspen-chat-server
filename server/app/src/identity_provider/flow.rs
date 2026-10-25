@@ -388,7 +388,7 @@ async fn identify(
     let client = client_of(state, &provider, &document)?;
     let verifier = client.id_token_verifier();
     match id_token.claims(&verifier, &nonce) {
-        Ok(claims) => Ok(identified(&provider, claims, &id_token.to_string())),
+        Ok(claims) => identified(&provider, claims, &id_token.to_string()),
         // A key the cached document lacks may be one the provider has rotated to, so its
         // document is read afresh, at most once a minute per issuer. The code is spent by now, so
         // only the verification is tried again.
@@ -400,7 +400,7 @@ async fn identify(
             let claims = id_token
                 .claims(&verifier, &nonce)
                 .map_err(|error| token_invalid(name, error))?;
-            Ok(identified(&provider, claims, &id_token.to_string()))
+            identified(&provider, claims, &id_token.to_string())
         }
         Err(error) => Err(token_invalid(name, error)),
     }
@@ -493,18 +493,30 @@ fn session_id(id_token: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The longest `sub` kept, matching `user_identity`'s check. OIDC Core §2 caps it at 255 ASCII
+/// characters; a provider that sends a longer one is refused, saying so.
+const MAX_SUBJECT_CHARS: usize = 255;
+
 fn identified(
     provider: &Provider,
     claims: &openidconnect::core::CoreIdTokenClaims,
     id_token: &str,
-) -> Identified {
+) -> crate::Result<Identified> {
+    let subject = claims.subject().as_str();
+    if subject.is_empty() || subject.chars().count() > MAX_SUBJECT_CHARS {
+        return Err(crate::Error::IdentityProviderFailed(t!(
+            "identityProviderSubjectLength",
+            provider = provider.name.as_str(),
+            max = MAX_SUBJECT_CHARS
+        )));
+    }
     let amr: Vec<String> = claims
         .auth_method_refs()
         .map(|methods| methods.iter().map(|m| m.to_string()).collect())
         .unwrap_or_default();
-    Identified {
+    Ok(Identified {
         issuer: provider.issuer.clone(),
-        subject: claims.subject().to_string(),
+        subject: subject.to_string(),
         session: session_id(id_token),
         two_factor: provider.enforces_two_factor || two_factors(&amr),
         auth_time: claims.auth_time(),
@@ -517,7 +529,7 @@ fn identified(
             .name()
             .and_then(|name| name.get(None))
             .map(|name| name.to_string()),
-    }
+    })
 }
 
 /// A new account the claim of a `signIn` flow offers, when the provider's identity is linked to

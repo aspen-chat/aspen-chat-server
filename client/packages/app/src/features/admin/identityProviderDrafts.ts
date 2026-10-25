@@ -26,7 +26,7 @@ export const NEW_PROVIDER: Draft = {
   enabled: true,
   skipInvite: false,
   enforcesTwoFactor: false,
-  trustEmail: true,
+  trustEmail: false,
 };
 
 export function draftOf(provider: IdentityProviderSettings): Draft {

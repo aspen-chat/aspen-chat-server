@@ -65,7 +65,7 @@ describe("identity provider drafts", () => {
       enabled: true,
       skipInvite: false,
       enforcesTwoFactor: false,
-      trustEmail: true,
+      trustEmail: false,
     });
   });
 });

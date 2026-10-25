@@ -37,9 +37,10 @@ pub enum IdentityProvidersCommand {
         /// Every sign-in there counts as two factors, whatever it reports.
         #[clap(long)]
         enforces_two_factor: bool,
-        /// Do not take the addresses it reports as verified.
+        /// Take the addresses it reports as verified as new accounts' verified addresses. Only
+        /// for a provider that verifies every address it reports so.
         #[clap(long)]
-        distrust_email: bool,
+        trust_email: bool,
     },
     /// Change a provider, named by its name or id. Its issuer and client id are fixed once it is
     /// added: to change either, add another provider and have its people link it.
@@ -156,7 +157,7 @@ pub async fn identity_providers(
             disabled,
             skip_invite,
             enforces_two_factor,
-            distrust_email,
+            trust_email,
         } => {
             let added = providers::add_in(
                 config,
@@ -169,7 +170,7 @@ pub async fn identity_providers(
                     enabled: !disabled,
                     skip_invite,
                     enforces_two_factor,
-                    trust_email: !distrust_email,
+                    trust_email,
                 },
             )
             .await

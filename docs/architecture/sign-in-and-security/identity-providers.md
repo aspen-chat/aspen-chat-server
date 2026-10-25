@@ -33,6 +33,8 @@ A provider is a row of `identity_provider`:
 - `enforces_two_factor`: whether every sign-in there counts as two factors whatever its `amr` claim
   says (see [Strength](#strength)).
 - `trust_email`: whether an address it reports as verified becomes the account's verified address.
+  Off unless the administrators turn it on: a provider that marks any address verified would
+  otherwise have mail sent to addresses its users merely typed.
 
 The client is registered at the provider with one redirect URI, `{public_url}/auth/oidc/callback`,
 and, for [back-channel logout](#back-channel-logout), `{public_url}/auth/oidc/back-channel-logout`.
@@ -83,11 +85,15 @@ for a provider whose certificate an organisation issued itself.
 Every exchange with a provider is a flow: the authorization code flow with PKCE (RFC 7636) and a
 nonce, the provider's code exchanged with the client secret. A flow has a purpose:
 
-| Purpose          | Needs                                   | Takes effect                                                        |
-| ---------------- | --------------------------------------- | ------------------------------------------------------------------- |
-| `signIn`         | No session                              | Signs into the linked account, or offers to make one                |
-| `link`           | A recently verified session of a person | Links the provider's identity to the caller's account               |
-| `reauthenticate` | A session of a person                   | Marks the sign-in verified, when the provider signed them in afresh |
+| Purpose          | Needs                                    | Takes effect                                                        |
+| ---------------- | ---------------------------------------- | ------------------------------------------------------------------- |
+| `signIn`         | No session                               | Signs into the linked account, or offers to make one                |
+| `link`           | A recently verified session of a person¹ | Links the provider's identity to the caller's account               |
+| `reauthenticate` | A session of a person                    | Marks the sign-in verified, when the provider signed them in afresh |
+
+¹ And one that owes the deployment neither a second factor (`twoFactorEnrollmentRequired`) nor a
+verified email address (`emailVerificationRequired`): such a session may sign out and verify again,
+but adds no way in until it has done what it owes.
 
 1. The client starts a flow: `POST /auth/identity-provider-flows` with the provider, the purpose, a
    PKCE `S256` challenge of its own, and for the desktop and mobile apps a return address. It
@@ -96,7 +102,9 @@ nonce, the provider's code exchanged with the client secret. A flow has a purpos
 3. The provider sends the browser to `GET /auth/oidc/callback` with `state` (the flow's id) and a
    code. The server exchanges the code with the provider (with its own PKCE verifier, which the
    client never sees), verifies the ID token (signature, issuer, audience, expiry, nonce), and keeps
-   the outcome, or the reason it failed.
+   the outcome, or the reason it failed. A `sub` that is empty or longer than 255 characters (OIDC
+   Core's limit, and `user_identity`'s) fails the flow with `identityProviderSubjectLength`, which
+   names the provider whose administrators must fix it.
 4. The server sends the browser to the return address with a one-time return code: the app's
    (loopback or `aspen:`, as for [passkeys](passkeys.md#hand-off-to-the-system-browser)), or the web
    client's page `/sign-in/provider`, with the flow and the code in the URL fragment.
