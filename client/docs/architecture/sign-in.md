@@ -264,6 +264,8 @@ verifier and that code (`claimIdentityProviderFlow`).
 
 In the web client:
 
+- The tab goes to the provider's page only over HTTPS (`requireSecure`, which allows this machine's
+  own addresses in a development build), whatever address the deployment named.
 - The tab remembers where it was (`returnPath`), and lands there when the flow is done.
 - A flow is taken from storage once (`takeFlow`), and flows older than the server keeps them are
   dropped as another starts (`FLOW_KEPT_MS`).
@@ -279,6 +281,7 @@ In the apps (`providerHandoff`):
   addresses in an unpackaged build). The listener reads the return (`flow` and `code`) and sends the
   tab on to the server's passkey page to say it is done.
 - A phone uses the passkey hand-off as it is: `aspen://auth/passkey`, read by `parseHandoffReturn`.
+  Its in-app browser opens a passkey page or a provider's page only over HTTPS (`requireSecure`).
 - Closing the browser, or the hand-off giving up, is backing out (`PasskeyCancelledError`), which
   shows nothing.
 
