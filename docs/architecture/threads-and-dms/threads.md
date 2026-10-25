@@ -46,8 +46,10 @@ These cannot start a thread:
 ## When the first reply is dropped
 
 A thread whose first reply is dropped goes with it (`thread::remove_if_unreplied`), in the
-transaction that drops it, when both hold:
+transaction that drops it, when all of these hold:
 
+- The dropped row made the thread: its `made_thread` was set as the held first reply made it
+  (`held::post`). A held message in a thread someone else made never removes it, however empty.
 - Nothing was ever posted in the thread (no message, deleted ones included).
 - Nothing else waits there. Waiting messages are found by `held_message_by_channel`.
 

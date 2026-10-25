@@ -145,9 +145,20 @@ pub async fn post(
             let held = conn
                 .transaction::<_, crate::Error, _>(|conn| {
                     async move {
-                        let channel =
-                            super::made(state, conn.as_mut(), author, channel, unmade.as_ref())
+                        let (channel, made_thread) = match unmade.as_ref() {
+                            Some(unmade) => {
+                                let (thread, made) = crate::thread::open_in(
+                                    state,
+                                    conn.as_mut(),
+                                    author,
+                                    unmade.starter,
+                                    unmade.id,
+                                )
                                 .await?;
+                                (thread.id, made)
+                            }
+                            None => (channel, false),
+                        };
                         super::check_posting(
                             state,
                             conn.as_mut(),
@@ -194,6 +205,7 @@ pub async fn post(
                                 held_message::tags_replied.eq(held.tags_replied),
                                 held_message::locale.eq(&held.locale),
                                 held_message::held_at.eq(held.held_at),
+                                held_message::made_thread.eq(made_thread),
                             ))
                             .execute(conn.as_mut())
                             .await?;
@@ -420,8 +432,9 @@ pub(super) async fn take(conn: &mut AsyncPgConnection, id: HeldMessageId) -> cra
 }
 
 /// Cancels a held message of `author`'s that has not been posted, whatever it waits for, and
-/// tells their apps. A first reply that made its thread as it was held takes the thread with
-/// it, as a dropped one does. Not found when it is not theirs, or already posted.
+/// tells their apps. A first reply that made its thread as it was held (`made_thread`) takes
+/// the thread with it, as a dropped one does. Not found when it is not theirs, or already
+/// posted.
 pub async fn cancel(
     state: &GlobalServerContext,
     author: UserId,
@@ -430,11 +443,11 @@ pub async fn cancel(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction::<_, crate::Error, _>(|conn| {
         async move {
-            let channel: ChannelId = diesel::delete(
+            let (channel, made_thread): (ChannelId, bool) = diesel::delete(
                 held_message::table
                     .filter(held_message::id.eq(id).and(held_message::author.eq(author))),
             )
-            .returning(held_message::channel)
+            .returning((held_message::channel, held_message::made_thread))
             .get_result(conn)
             .await?;
             crate::publish_event(
@@ -444,7 +457,9 @@ pub async fn cancel(
                 &ServerEvent::HeldMessageCancelled { held: id, channel },
             )
             .await?;
-            crate::thread::remove_if_unreplied(state, conn, channel).await?;
+            if made_thread {
+                crate::thread::remove_if_unreplied(state, conn, channel).await?;
+            }
             Ok(())
         }
         .scope_boxed()
@@ -911,9 +926,9 @@ pub async fn drop_held_by_step(
 }
 
 /// Drops a held message that will not be posted and tells its author's apps why. When it was the
-/// first reply of a thread, which it made as it was held (`post`), and nothing else was posted
-/// or waits there, the thread goes with it (`thread::remove_if_unreplied`), in the same
-/// transaction.
+/// first reply of a thread, which it made as it was held (`post`, `made_thread`), and nothing
+/// else was posted or waits there, the thread goes with it (`thread::remove_if_unreplied`), in
+/// the same transaction.
 pub(crate) async fn drop_held(
     state: &GlobalServerContext,
     id: HeldMessageId,
@@ -924,9 +939,15 @@ pub(crate) async fn drop_held(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction::<_, crate::Error, _>(|conn| {
         async move {
-            if take(conn, id).await.is_err() {
+            let made_thread: Option<bool> = diesel::delete(held_message::table)
+                .filter(held_message::id.eq(id))
+                .returning(held_message::made_thread)
+                .get_result(conn)
+                .await
+                .optional()?;
+            let Some(made_thread) = made_thread else {
                 return Ok(());
-            }
+            };
             crate::publish_event(
                 state,
                 conn,
@@ -938,7 +959,9 @@ pub(crate) async fn drop_held(
                 },
             )
             .await?;
-            crate::thread::remove_if_unreplied(state, conn, channel).await?;
+            if made_thread {
+                crate::thread::remove_if_unreplied(state, conn, channel).await?;
+            }
             Ok(())
         }
         .scope_boxed()
