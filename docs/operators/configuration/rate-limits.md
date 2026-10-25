@@ -20,7 +20,15 @@ them: a limit you give replaces the built-in one whole.
 ## Who a request counts as
 
 - **Signed in:** a request with a valid session counts toward its user's limits only. People signed
-  in behind one address (an office, a school, a carrier-grade NAT) never share a budget.
+  in behind one address (an office, a school, a carrier-grade NAT) never share a budget. On an
+  endpoint nobody signs in to (password sign-in, registration, token refresh, password resets), a
+  request counts as not signed in, toward its address and its failures, whatever session it
+  presents; a valid session spares it only presenting a device credential.
+- **Endpoints a session is optional for** (starting a passkey ceremony, a device link, or an
+  identity provider's flow) hold a signed-in caller by the user limits they set. A limit you set
+  there on `ip`, `network`, `ip_per_<param>` or `device` needs a `user` or `user_per_<param>` limit
+  beside it, and `ip_failures` or `network_failures` needs `user_failures`; without them the server
+  refuses to start, naming the endpoint.
 - **Not signed in:** a request without one counts toward its address's limits (`ip`) and its
   device's (`device`). Every endpoint callable without signing in, except those `device_exempt`
   lists, asks for a device credential, which an Aspen app earns by solving a small puzzle once per
@@ -30,6 +38,10 @@ them: a limit you give replaces the built-in one whole.
   proves wrong from one address (`ip_failures`): wrong passwords and codes, unknown refresh tokens
   and invites. A crowd mostly gets these right, so the address's attempts can be generous while a
   machine guessing is soon held.
+- **Networks:** one party often holds many neighbouring addresses: an IPv6 /48 holds 65536 of the
+  /64s `ip` counts by, and IPv4 neighbours share a /24. Where hopping between them would multiply an
+  address's limits, `network` and `network_failures` count the whole network as one: the sign-in
+  endpoints and earning a device credential, at four addresses' worth each.
 - **Failures of users and of everyone:** where someone signed in can guess, what proves wrong counts
   toward their account (`user_failures`) instead, and where guesses from many addresses together
   must be held, toward everyone's (`global_failures`). Typed sign-in codes use both.
@@ -70,9 +82,10 @@ Password sign-in (`POST /auth/login`) has two limits by username:
 | `username`          | Every attempt at a name from one network: an IPv4 /24, an IPv6 /48, or the coarser `ipv6_prefix`. |
 | `username_failures` | Only wrong passwords for the name, from every network together.                                   |
 
-While `username_failures` is spent, password sign-in for that name is refused (`rateLimited`) until
-it refills. The owner can still sign in with a passkey or from another device, or reset the password
-by email.
+Both count by the account the name finds, so every spelling of one account's name shares them; a
+name no account has counts by itself. While `username_failures` is spent, password sign-in for that
+account is refused (`rateLimited`) until it refills. The owner can still sign in with a passkey or
+from another device, or reset the password by email.
 
 ## Registration
 

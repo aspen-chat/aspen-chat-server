@@ -113,10 +113,13 @@ pub async fn login(
     Json(request): Json<LoginRequest>,
 ) -> ApiResult<Json<LoginResult>> {
     let ip = client.and_then(|Extension(ClientIp(ip))| ip);
-    crate::rate_limit::limit_sign_in(&state, &request.username, ip).await?;
-    match app::login::try_login(&state, &request.username, &request.password).await? {
+    let account = app::login::password_account(&state, &request.username).await?;
+    let subject =
+        app::rate_limit::sign_in_subject(account.as_ref().map(|u| u.id), &request.username);
+    crate::rate_limit::limit_sign_in(&state, &subject, ip).await?;
+    match app::login::try_password(&state, account, &request.password).await? {
         LoginOutcome::InvalidCredentials => {
-            crate::rate_limit::note_wrong_password(&state, &request.username, ip).await;
+            crate::rate_limit::note_wrong_password(&state, &subject, ip).await;
             crate::rate_limit::note_failure(&state, &failures).await;
             Err(ApiError::new(ProblemCode::InvalidCredentials))
         }

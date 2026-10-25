@@ -14,22 +14,28 @@
 # on its own.
 #
 # Dimensions say whose requests count together. A request with a valid session counts as its
-# user and never as its address or device; one without, as its address and its device:
+# user and never as its address or device; one without, as its address and its device. On an
+# endpoint nobody signs in to, a request counts as its address and its device whatever session
+# it presents (a valid one spares it only presenting a device credential):
 #   global             everyone's
 #   ip                 one client address's requests without a valid session (an IPv6
 #                      address's /ipv6_prefix network)
+#   network            as ip, by the address's network: an IPv4 /24, an IPv6 /48 (or the
+#                      coarser ipv6_prefix). A ceiling over the addresses one party can hop
+#                      between, where moving within its network would multiply `ip`
 #   device             one device credential's (`app::device_credential`), on endpoints that
 #                      ask for one: every one callable without a session but `device_exempt`
-#   user               one signed-in user (authenticated endpoints only)
-#   username           one username given to `POST /auth/login`, from one network (an IPv4
-#                      /24, an IPv6 /48 or the coarser ipv6_prefix)
-#   username_failures  one username's wrong passwords at `POST /auth/login`, from anywhere:
+#   user               one signed-in user (endpoints someone may sign in to)
+#   username           one account (or unknown name) `POST /auth/login` names, from one network
+#                      (an IPv4 /24, an IPv6 /48 or the coarser ipv6_prefix)
+#   username_failures  one account's wrong passwords at `POST /auth/login`, from anywhere:
 #                      looked at before the password is checked, counted after a wrong one
 #   ip_failures        one address's requests that proved wrong (a wrong password or code, an
 #                      unknown invite or refresh token): looked at before the request is
 #                      handled, counted when its handler says it failed
+#   network_failures   as ip_failures, by the address's network, as `network` counts it
 #   user_failures      one signed-in user's requests that proved wrong, looked at and counted
-#                      as ip_failures are (authenticated endpoints only)
+#                      as ip_failures are (endpoints someone may sign in to)
 #   global_failures    everyone's requests that proved wrong, signed in or not, looked at and
 #                      counted as ip_failures are
 #   ip_rejected_tokens one address's bot tokens from before tokens were signed that no bot
@@ -146,7 +152,10 @@ ip_rejected_tokens = { requests = 600, per_seconds = 600, burst = 300 }
 # and per address, how many of them may prove wrong (`ip_failures`: wrong passwords and codes),
 # which a crowd that mostly knows its passwords rarely reaches and a machine guessing soon does.
 # Guessing at one account is held besides by the per-username limits of `POST /auth/login` and
-# by `app::two_factor`'s count of wrong codes, neither of which an address can widen.
+# by `app::two_factor`'s count of wrong codes, neither of which an address can widen. Per
+# network (an IPv4 /24, an IPv6 /48), four addresses' worth of each: one party holds a /48 of
+# IPv6 /64s, or several IPv4 neighbours, and hopping between them would otherwise multiply the
+# address's limits.
 [rate_limits.groups.sign_in]
 endpoints = [
   "POST /auth/login",
@@ -162,7 +171,24 @@ endpoints = [
   "POST /auth/identity-provider-flows",
   "POST /auth/identity-provider-flows/{flow}/claim",
 ]
-limits = { device = { requests = 30, per_seconds = 60, burst = 10, bucket = "sign_in" }, ip = { requests = 3000, per_seconds = 60, burst = 1000, bucket = "sign_in" }, ip_failures = { requests = 200, per_seconds = 600, burst = 100, bucket = "sign_in_failures" } }
+limits = { device = { requests = 30, per_seconds = 60, burst = 10, bucket = "sign_in" }, ip = { requests = 3000, per_seconds = 60, burst = 1000, bucket = "sign_in" }, network = { requests = 12000, per_seconds = 60, burst = 4000, bucket = "sign_in" }, ip_failures = { requests = 200, per_seconds = 600, burst = 100, bucket = "sign_in_failures" }, network_failures = { requests = 800, per_seconds = 600, burst = 400, bucket = "sign_in_failures" } }
+
+# The sign-in endpoints a signed-in caller may use too: re-verifying with a passkey, linking an
+# identity provider, giving a device a sign-in. A request with a session counts as its user and
+# never as its address or device, so each of these holds a user as the `sign_in` and
+# `passkey_page` groups hold a device, and counts a user's failures as they count an address's
+# (the server refuses to start with address limits on such an endpoint and no user limit).
+[rate_limits.groups.sign_in_signed_in]
+endpoints = [
+  "POST /auth/passkey-ceremonies",
+  "POST /auth/passkey-ceremonies/{ceremony}/credential",
+  "POST /auth/passkey-ceremonies/{ceremony}/claim",
+  "POST /auth/device-links",
+  "POST /auth/device-links/{link}/scan",
+  "POST /auth/identity-provider-flows",
+  "POST /auth/identity-provider-flows/{flow}/claim",
+]
+limits = { user = { requests = 30, per_seconds = 60, burst = 10, bucket = "sign_in" }, user_failures = { requests = 50, per_seconds = 600, burst = 20, bucket = "sign_in_failures" } }
 
 # The passkey page and the two calls its own script makes, which present no device credential
 # (`device_exempt`): it is a page the system browser opens, not an Aspen client. Each call names
@@ -483,14 +509,22 @@ ip = { requests = 3000, per_seconds = 60, burst = 1000 }
 
 # Asking for a device credential's puzzle and redeeming its solution: at most once per device
 # and deployment in `device_credential::LIFETIME`, so an address's limits are those of a large
-# event's crowd arriving together. Each redemption is remembered in Valkey until its challenge
-# expires, so everyone's together are limited too.
+# event's crowd arriving together, and a network's (an IPv4 /24, an IPv6 /48) four addresses'
+# worth, so that hopping between the addresses of one network does not multiply them.
+#
+# Each redemption is remembered in Valkey until its challenge expires (five minutes), so
+# everyone's together are limited too, but only to bound that memory (at most about 660000
+# entries, some tens of MiB): every new install must redeem one before it can sign in, so a
+# lower limit would let anyone with enough networks spend it and hold every new install out.
+# Spending this one takes solving two thousand puzzles a second, steadily.
 [rate_limits.endpoints."POST /auth/device-challenges"]
 ip = { requests = 2000, per_seconds = 3600, burst = 1000 }
+network = { requests = 8000, per_seconds = 3600, burst = 4000 }
 
 [rate_limits.endpoints."POST /auth/device-credentials"]
 ip = { requests = 1000, per_seconds = 3600 }
-global = { requests = 6000, per_seconds = 60, burst = 3000 }
+network = { requests = 4000, per_seconds = 3600, burst = 2000 }
+global = { requests = 120000, per_seconds = 60, burst = 60000 }
 
 # Load balancers, proxies, and deployment tools ask these from one address, many times a
 # minute, and a limit reached would read as the server being down. Neither costs more for

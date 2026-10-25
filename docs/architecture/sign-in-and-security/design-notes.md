@@ -200,11 +200,28 @@ See [Device credentials](device-credentials.md).
 - **Challenges and credentials are stateless.** Every API server checks them with the shared key and
   asks no one, so presenting a credential adds no lookup to a request. Only a challenge's use is
   remembered, until it expires, so that one solution earns one credential.
+- **Networks have a ceiling of their own, everyone a high one.** An address is cheap to change
+  within a network one holds (an IPv6 /48 is 65536 of the /64s an address counts as), so the sign-in
+  endpoints and redeeming a credential also count by network, at four addresses' worth. Everyone's
+  redemptions together are limited only to bound what Valkey keeps of used challenges: a limit low
+  enough to matter would let anyone with enough networks spend it, and every new install needs a
+  credential before it can sign in. A difficulty that rises under load would raise the cost of
+  spending it further; the fixed difficulty and the high ceiling are what there is.
 - **Ninety days, renewed past half its life.** A device in use never solves the puzzle again, and
   one hoarded or copied ages out.
 - **Signed-in requests count by user alone.** A session already says who is asking, and it is
   something an address's people each hold. Counting their requests against their address too would
   hold everyone behind a NAT to one budget as soon as many were signed in.
+- **Except where nobody signs in.** On password sign-in, second factors, registration, token
+  refresh, and resets, a session gives nothing the handler uses, so counting by it would only let
+  anyone holding a token (their own, or a bot's they made) skip the address's, the device's, and the
+  failure limits that hold guessing there, and spray passwords across names with the hashing pool as
+  the only limit. On those routes a request counts as its address whatever session it presents; a
+  valid session spares it only the device credential, since signed-in apps (this version's and
+  others') read `GET /auth/methods` and `GET /deployment` with their session and hold none. Where a
+  session is optional, it does count, so each address limit set there needs a user limit beside it,
+  which the limiter checks when it compiles the configuration rather than leaving to whoever writes
+  it.
 - **Session and bot tokens are signed, so a made-up one is refused without the database.** Looking
   up a token takes the database, and signed-in requests are not counted by their address before
   their token is read. A limit on an address's rejected tokens, checked before each lookup, would

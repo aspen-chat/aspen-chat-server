@@ -75,6 +75,12 @@ be.
 1. **`global` and `per_<param>`.**
 2. **A presented session token** is looked up once, and the result is left on the request
    (`ResolvedSession`) for the session extractors.
+   - On a route nobody signs in to (`Access::Anonymous`: password sign-in, second factors,
+     registration, token refresh, resets, `GET /auth/methods`) a valid session does not count
+     (`counts_as_user`, `RateLimiter::access`). The request counts as its address and device, and
+     its failures as its address's, whoever's token it carries. The session spares it only
+     presenting a device credential, which a signed-in app reading `GET /auth/methods` or
+     `GET /deployment` does not hold.
    - A made-up or expired session token, or bot token of the signed kind, is refused by its
      signature with no lookup (see [Sessions](sessions.md#tokens)).
    - Only a bot token from before tokens were signed can be told from a made-up one by a lookup
@@ -82,7 +88,11 @@ be.
      when the token is rejected, so they cannot keep the database busy.
 3. **A valid session counts toward its user's limits** (`user`, `user_per_<param>`) and none of its
    address's.
-4. **Anything else counts toward `ip`, `ip_per_<param>` and `device`.**
+   - On a route a session is optional for (`Access::Optional`), every address or device limit set
+     for it must have a user limit beside it, and `ip_failures` must have `user_failures`.
+     `RateLimiter::compile` refuses the configuration otherwise, so a signed-in caller is never held
+     only by the user's limits across the whole API.
+4. **Anything else counts toward `ip`, `network`, `ip_per_<param>` and `device`.**
    - It must present a credential where the route asks for one.
    - It is refused when the route's `ip_failures` are spent (peeked at).
    - Its handler can count a failure through the `Failures` it is given.
@@ -138,9 +148,15 @@ budget a request without a session spends.
 
 ## Rate limits
 
-| Endpoint                        | Limits                                                                                         |
-| ------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `POST /auth/device-challenges`  | 2000 an hour per address, 1000 at once                                                         |
-| `POST /auth/device-credentials` | 1000 an hour per address, all at once; 6000 a minute from everyone, 3000 at once; fails closed |
+| Endpoint                        | Limits                                                                                                                                    |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/device-challenges`  | 2000 an hour per address, 1000 at once; 8000 an hour per network, 4000 at once                                                            |
+| `POST /auth/device-credentials` | 1000 an hour per address, all at once; 4000 an hour per network, 2000 at once; 120000 a minute from everyone, 60000 at once; fails closed |
+
+A network is an IPv4 /24 or an IPv6 /48 (`network`), so hopping between the addresses of one does
+not multiply the address's limit. Everyone's redemptions are limited only to bound what Valkey
+remembers of used challenges (some tens of MiB at the ceiling). Every new install must redeem a
+credential before it can sign in, so a low global limit would let anyone with many networks hold
+every new install out; spending this one takes solving two thousand puzzles a second.
 
 Why it is built this way: [design notes](design-notes.md#device-credentials).

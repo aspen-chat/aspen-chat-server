@@ -1,15 +1,16 @@
 //! Rate limits.
 //!
 //! Every endpoint has a set of rules, each a limit counted along one dimension: everyone's
-//! requests together (`global`), one client address's (`ip`), one device's (`device`), one
-//! user's (`user`), one username's at sign-in from one network (`username`), one username's
-//! wrong passwords from anywhere (`username_failures`), one address's failures, such as wrong
-//! passwords and codes (`ip_failures`), one signed-in user's failures (`user_failures`),
-//! everyone's failures together (`global_failures`), one address's bot tokens from before
-//! tokens were signed that no bot holds (`ip_rejected_tokens`), or any of `global`, `user`, and
-//! `ip` per value of a path parameter (`per_channel`, `user_per_channel`, `ip_per_channel`,
-//! ...). A request passes only if every rule of its endpoint allows it. An endpoint's rules are
-//! the configured defaults, which apply to every endpoint, plus those of the groups that list
+//! requests together (`global`), one client address's (`ip`), its network's, an IPv4 /24 or an
+//! IPv6 /48 (`network`), one device's (`device`), one user's (`user`), one account's at sign-in
+//! from one network (`username`), one account's wrong passwords from anywhere
+//! (`username_failures`), one address's failures, such as wrong passwords and codes
+//! (`ip_failures`), one network's (`network_failures`), one signed-in user's failures
+//! (`user_failures`), everyone's failures together (`global_failures`), one address's bot
+//! tokens from before tokens were signed that no bot holds (`ip_rejected_tokens`), or any of
+//! `global`, `user`, and `ip` per value of a path parameter (`per_channel`, `user_per_channel`,
+//! `ip_per_channel`, ...). A request passes only if every rule of its endpoint allows it. An
+//! endpoint's rules are the configured defaults, which apply to every endpoint, plus those of the groups that list
 //! it, with the endpoint's own settings replacing its groups' dimension by dimension; setting a
 //! dimension to `false` on a group or endpoint removes it there, defaults included.
 //! `aspen_config::RateLimitConfig` describes the configuration and `rate_limits.toml` holds the
@@ -22,7 +23,11 @@
 //! NAT, an office, an event's network) are each held to their own. One without counts toward
 //! its address's and its device's (`app::device_credential`), which it must present on every
 //! endpoint that does not exempt it (`[rate_limits] device_exempt`), so that a crowd at one
-//! address is many devices while one machine is one, or pays a puzzle for each device more.
+//! address is many devices while one machine is one, or pays a puzzle for each device more. On
+//! a route nobody signs in to (`Access::Anonymous`) every request counts as one without a
+//! session, though a valid session spares it the device credential; on a route a session is
+//! optional for, each address or device
+//! limit needs a user limit beside it (`check_signed_in_counterparts`).
 //!
 //! Each rule counts in a bucket, a Valkey key shared by every API server, with GCRA (the
 //! generic cell rate algorithm): the key holds the time at which the bucket will be empty
@@ -212,11 +217,16 @@ pub fn route_key(method: &str, template: &str) -> String {
 pub enum Dimension {
     Global,
     Ip,
+    /// The client address's network, an IPv4 /24 or IPv6 /48: a ceiling over the addresses one
+    /// party can hop between, where `ip` alone could be multiplied by moving within its network.
+    Network,
     Device,
     User,
     Username,
     UsernameFailures,
     IpFailures,
+    /// As `IpFailures`, by the address's network.
+    NetworkFailures,
     UserFailures,
     GlobalFailures,
     IpRejectedTokens,
@@ -230,11 +240,13 @@ impl Dimension {
         Some(match name {
             "global" => Dimension::Global,
             "ip" => Dimension::Ip,
+            "network" => Dimension::Network,
             "device" => Dimension::Device,
             "user" => Dimension::User,
             "username" => Dimension::Username,
             "username_failures" => Dimension::UsernameFailures,
             "ip_failures" => Dimension::IpFailures,
+            "network_failures" => Dimension::NetworkFailures,
             "user_failures" => Dimension::UserFailures,
             "global_failures" => Dimension::GlobalFailures,
             "ip_rejected_tokens" => Dimension::IpRejectedTokens,
@@ -255,11 +267,13 @@ impl Dimension {
         match self {
             Dimension::Global => "global".into(),
             Dimension::Ip => "ip".into(),
+            Dimension::Network => "network".into(),
             Dimension::Device => "device".into(),
             Dimension::User => "user".into(),
             Dimension::Username => "username".into(),
             Dimension::UsernameFailures => "username_failures".into(),
             Dimension::IpFailures => "ip_failures".into(),
+            Dimension::NetworkFailures => "network_failures".into(),
             Dimension::UserFailures => "user_failures".into(),
             Dimension::GlobalFailures => "global_failures".into(),
             Dimension::IpRejectedTokens => "ip_rejected_tokens".into(),
@@ -272,13 +286,16 @@ impl Dimension {
     fn stage(&self) -> Stage {
         match self {
             Dimension::Global | Dimension::Per(_) => Stage::Request,
-            Dimension::Ip | Dimension::IpPer(_) | Dimension::Device => Stage::Anonymous,
+            Dimension::Ip | Dimension::Network | Dimension::IpPer(_) | Dimension::Device => {
+                Stage::Anonymous
+            }
             Dimension::User | Dimension::UserPer(_) => Stage::Session,
             Dimension::Username => Stage::Username,
             Dimension::UsernameFailures => Stage::UsernameFailures,
-            Dimension::IpFailures | Dimension::UserFailures | Dimension::GlobalFailures => {
-                Stage::Failures
-            }
+            Dimension::IpFailures
+            | Dimension::NetworkFailures
+            | Dimension::UserFailures
+            | Dimension::GlobalFailures => Stage::Failures,
             Dimension::IpRejectedTokens => Stage::RejectedTokens,
         }
     }
@@ -289,9 +306,11 @@ impl Dimension {
         matches!(
             self,
             Dimension::Ip
+                | Dimension::Network
                 | Dimension::IpPer(_)
                 | Dimension::Device
                 | Dimension::IpFailures
+                | Dimension::NetworkFailures
                 | Dimension::IpRejectedTokens
         )
     }
@@ -351,7 +370,8 @@ pub struct Identity<'a> {
     pub user: Option<UserId>,
     /// `user` is a bot, whose own limits are `bot_multiplier` times a person's.
     pub bot: bool,
-    pub username: Option<&'a str>,
+    /// The account a password sign-in names, as [`sign_in_subject`] gives it.
+    pub sign_in_subject: Option<&'a str>,
     pub params: Vec<(&'a str, &'a str)>,
 }
 
@@ -380,6 +400,8 @@ pub struct RateLimiter {
     fail_closed: HashSet<String>,
     /// The routes a request without a valid session must present a device credential to.
     requires_device: HashSet<String>,
+    /// Who may call each route.
+    access: HashMap<String, Access>,
     /// How many times a person's limits a bot's own are (`[rate_limits] bot_multiplier`).
     bot_multiplier: u64,
     /// Unix milliseconds of the last "Valkey unreachable" log line, so an outage logs twice a
@@ -414,6 +436,14 @@ impl RateLimiter {
     /// ones a credential is earned at.
     pub fn requires_device(&self, route: &str) -> bool {
         self.requires_device.contains(route)
+    }
+
+    /// Who may call `route`: `Anonymous` for a route the limits do not know (a method its path
+    /// lacks), which no session reaches. A request to an `Anonymous` route counts as its address
+    /// and device whatever session it presents, so a token cannot spare its holder the limits of
+    /// a route nobody signs in to; a valid one spares it only presenting a device credential.
+    pub fn access(&self, route: &str) -> Access {
+        self.access.get(route).copied().unwrap_or(Access::Anonymous)
     }
 
     /// Whether a suspension of the limits in force lets a request from `ip` go without a device
@@ -519,6 +549,9 @@ impl RateLimiter {
                     merged.insert(parsed, limit_of(setting, &source, dimension)?);
                 }
             }
+            if route.access == Access::Optional {
+                check_signed_in_counterparts(route, &merged)?;
+            }
             let mut compiled: Vec<Rule> = defaults
                 .into_iter()
                 .filter(|(dimension, _)| !matches!(merged.get(dimension), Some(None)))
@@ -546,6 +579,7 @@ impl RateLimiter {
             unknown,
             fail_closed,
             requires_device,
+            access: routes.iter().map(|r| (r.key.clone(), r.access)).collect(),
             bot_multiplier: u64::from(config.bot_multiplier),
             last_failure_log: AtomicU64::new(0),
         })
@@ -689,20 +723,22 @@ impl RateLimiter {
         let value = match &rule.dimension {
             Dimension::Global | Dimension::GlobalFailures => "all".to_string(),
             Dimension::Ip | Dimension::IpFailures | Dimension::IpRejectedTokens => ip()?,
+            Dimension::Network | Dimension::NetworkFailures => {
+                self.addresses.network_key(identity.ip?)
+            }
             Dimension::Device => identity.device?.to_string(),
             Dimension::User | Dimension::UserFailures => user()?,
-            // One account answers to its name in any case, so every case of it shares a bucket;
-            // each network counts apart, so guesses from one cannot lock the name out from
-            // every other.
+            // Each network counts apart, so guesses from one cannot lock the name out from every
+            // other.
             Dimension::Username => format!(
                 "{}:{}",
-                key_part(&identity.username?.to_lowercase()),
+                key_part(identity.sign_in_subject?),
                 identity.ip.map_or_else(
                     || "unknown".to_string(),
                     |ip| self.addresses.network_key(ip)
                 )
             ),
-            Dimension::UsernameFailures => key_part(&identity.username?.to_lowercase()),
+            Dimension::UsernameFailures => key_part(identity.sign_in_subject?),
             Dimension::Per(name) => param(name)?,
             Dimension::UserPer(name) => format!("{}:{}", user()?, param(name)?),
             Dimension::IpPer(name) => format!("{}:{}", ip()?, param(name)?),
@@ -733,6 +769,17 @@ impl RateLimiter {
     }
 }
 
+/// Who the username given to a password sign-in names, as its username limits count it: the
+/// account, by id, which every spelling the database matches to it (`user::named`, by
+/// PostgreSQL's `lower`) shares; a name no account answers to, by the name in Rust's lower case,
+/// so that unknown names are limited as known ones are and the limits do not tell which exist.
+pub fn sign_in_subject(account: Option<UserId>, username: &str) -> String {
+    match account {
+        Some(account) => format!("account:{}", account.0),
+        None => format!("name:{}", username.to_lowercase()),
+    }
+}
+
 /// A path parameter as its endpoint reads it: a UUID in its one hyphenated lowercase spelling,
 /// since the id extractors accept several (braced, `urn:uuid:`, without hyphens, any case) and
 /// each would otherwise count in a bucket of its own; anything else as given.
@@ -753,7 +800,7 @@ fn key_part(value: &str) -> String {
 fn parse_dimension(name: &str, source: &str) -> Result<Dimension, String> {
     Dimension::parse(name).ok_or_else(|| {
         format!(
-            "rate_limits.{source}: {name:?} is not a dimension (global, ip, device, user, username, username_failures, ip_failures, user_failures, global_failures, ip_rejected_tokens, per_<param>, user_per_<param>, ip_per_<param>)"
+            "rate_limits.{source}: {name:?} is not a dimension (global, ip, network, device, user, username, username_failures, ip_failures, network_failures, user_failures, global_failures, ip_rejected_tokens, per_<param>, user_per_<param>, ip_per_<param>)"
         )
     })
 }
@@ -821,6 +868,36 @@ fn check_applicable(
     } else {
         format!("{origin}, but only {SIGN_IN_ROUTE:?} knows a username")
     })
+}
+
+/// On a route a session is optional for, a signed-in request counts only toward its user's
+/// limits, so each limit set there on the address or device needs a user limit beside it, and an
+/// address's failures need the user's: without them a signed-in caller would be held by nothing
+/// but the user's limits across the whole API.
+fn check_signed_in_counterparts(
+    route: &Route,
+    merged: &HashMap<Dimension, Option<Limit>>,
+) -> Result<(), String> {
+    let set = |wanted: &dyn Fn(&Dimension) -> bool| {
+        merged
+            .iter()
+            .any(|(dimension, limit)| limit.is_some() && wanted(dimension))
+    };
+    if set(&|d| d.stage() == Stage::Anonymous) && !set(&|d| d.stage() == Stage::Session) {
+        return Err(format!(
+            "rate_limits sets address or device limits for {:?}, which a signed-in caller may also call, but no user or user_per_<param> limit to hold signed-in callers to",
+            route.key
+        ));
+    }
+    if set(&|d| matches!(d, Dimension::IpFailures | Dimension::NetworkFailures))
+        && !set(&|d| *d == Dimension::UserFailures)
+    {
+        return Err(format!(
+            "rate_limits sets ip_failures or network_failures for {:?}, which a signed-in caller may also call, but no user_failures to count signed-in callers' failures",
+            route.key
+        ));
+    }
+    Ok(())
 }
 
 fn compile_rule(dimension: Dimension, limit: &Limit, route: &str) -> Rule {
@@ -1180,6 +1257,56 @@ mod tests {
     }
 
     #[test]
+    fn a_route_a_session_is_optional_for_holds_signed_in_callers_too() {
+        let route = "POST /auth/passkey-ceremonies";
+        let with = |table: RuleTable| {
+            let mut config = config();
+            config.endpoints.insert(route.into(), table);
+            RateLimiter::compile(&config, &routes())
+        };
+        assert!(
+            with(RuleTable::from([("ip".into(), limit(10, 60.0))]))
+                .unwrap_err()
+                .contains("no user")
+        );
+        assert!(
+            with(RuleTable::from([
+                ("ip".into(), limit(10, 60.0)),
+                ("user".into(), limit(10, 60.0)),
+                ("ip_failures".into(), limit(10, 60.0)),
+            ]))
+            .unwrap_err()
+            .contains("no user_failures")
+        );
+        assert!(
+            with(RuleTable::from([
+                ("device".into(), limit(10, 60.0)),
+                ("user".into(), limit(10, 60.0)),
+                ("ip_failures".into(), limit(10, 60.0)),
+                ("user_failures".into(), limit(10, 60.0)),
+            ]))
+            .is_ok()
+        );
+        // Only the defaults: they apply to signed-in callers as they do everywhere.
+        assert!(with(RuleTable::new()).is_ok());
+    }
+
+    #[test]
+    fn routes_say_who_may_call_them() {
+        let limiter = RateLimiter::compile(&config(), &routes()).unwrap();
+        assert_eq!(limiter.access("POST /auth/login"), Access::Anonymous);
+        assert_eq!(
+            limiter.access("POST /auth/passkey-ceremonies"),
+            Access::Optional
+        );
+        assert_eq!(
+            limiter.access("GET /channels/{channel}"),
+            Access::Authenticated
+        );
+        assert_eq!(limiter.access("OTHER /users"), Access::Anonymous);
+    }
+
+    #[test]
     fn devices_and_an_address_s_failures_have_keys_of_their_own() {
         let limiter = RateLimiter::compile(&config(), &routes()).unwrap();
         let rule = |dimension: Dimension| Rule {
@@ -1314,7 +1441,7 @@ mod tests {
             device: None,
             user: Some(user),
             bot: false,
-            username: None,
+            sign_in_subject: None,
             params: vec![("channel", "c1")],
         };
         assert_eq!(
@@ -1328,24 +1455,32 @@ mod tests {
             format!("rl:b:user_per_channel:{}:{}", user.0, key_part("c1"))
         );
         assert!(limiter.key(&rule(Dimension::Username), &identity).is_none());
+        let account = UserId(uuid::Uuid::from_u128(7));
+        let subject = sign_in_subject(Some(account), "Alice");
         let signing_in = Identity {
             ip: Some("192.0.2.77".parse().unwrap()),
-            username: Some("Alice"),
+            sign_in_subject: Some(&subject),
             ..Identity::default()
         };
-        // Every case of a name and every address of a network share the username bucket.
+        // Every address of a network shares the account's username bucket.
         assert_eq!(
             limiter
                 .key(&rule(Dimension::Username), &signing_in)
                 .unwrap(),
-            format!("rl:b:username:{}:192.0.2.0/24", key_part("alice"))
+            format!(
+                "rl:b:username:{}:192.0.2.0/24",
+                key_part(&format!("account:{}", account.0))
+            )
         );
-        // Wrong passwords count by the name alone, from wherever they come.
+        // Wrong passwords count by the account alone, from wherever they come.
         assert_eq!(
             limiter
                 .key(&rule(Dimension::UsernameFailures), &signing_in)
                 .unwrap(),
-            format!("rl:b:username_failures:{}", key_part("alice"))
+            format!(
+                "rl:b:username_failures:{}",
+                key_part(&format!("account:{}", account.0))
+            )
         );
         // A secret in a path never reaches Valkey as it is.
         let secret = Identity {
@@ -1363,6 +1498,25 @@ mod tests {
         assert_eq!(
             limiter.key(&rule(Dimension::Ip), &mapped).unwrap(),
             "rl:b:ip:192.0.2.7"
+        );
+    }
+
+    #[test]
+    fn a_sign_in_counts_against_the_account_it_names() {
+        let account = UserId(uuid::Uuid::from_u128(7));
+        // Whatever spelling found the account, it is the one subject.
+        assert_eq!(
+            sign_in_subject(Some(account), "ALICE"),
+            sign_in_subject(Some(account), "alice")
+        );
+        // A name no account answers to counts by itself, in any case, and never as an account.
+        assert_eq!(
+            sign_in_subject(None, "Nobody"),
+            sign_in_subject(None, "NOBODY")
+        );
+        assert_ne!(
+            sign_in_subject(None, &account.0.to_string()),
+            sign_in_subject(Some(account), "x")
         );
     }
 

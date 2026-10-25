@@ -432,7 +432,7 @@ pub async fn note_failed<T, E>(
 
 /// Middleware on every API route: resolves the client address and any session the request
 /// presents, then checks the rules for who the request is. A valid session counts toward its
-/// user's limits; anything else toward its address's and its device's, and must present a
+/// user's limits, except on a route nobody signs in to (`counts_as_user`); anything else toward its address's and its device's, and must present a
 /// device credential where the route asks for one (`RateLimiter::requires_device`).
 pub async fn limit_requests(
     State(state): State<GlobalServerContext>,
@@ -520,7 +520,11 @@ async fn admit(
             }
         }
     }
-    if let Some(user) = identity.user {
+    let signed_in = identity.user.is_some();
+    if let Some(user) = identity
+        .user
+        .filter(|_| counts_as_user(limiter.access(route)))
+    {
         refuse(
             limiter
                 .check(&state.valkey, route, Stage::Session, &identity)
@@ -550,10 +554,18 @@ async fn admit(
         .and_then(|token| {
             aspen_app::device_credential::verify(&state.device_key, token, chrono::Utc::now())
         });
-    if presented.is_none() && limiter.requires_device(route) && !limiter.waives_device(ip) {
+    // A valid session spares a request on a route nobody signs in to only the device
+    // credential, which a signed-in app does not hold; it still counts as its address.
+    if presented.is_none()
+        && !signed_in
+        && limiter.requires_device(route)
+        && !limiter.waives_device(ip)
+    {
         return Err(ApiError::new(ProblemCode::DeviceCredentialRequired));
     }
     identity.device = presented.as_ref().map(|presented| presented.device);
+    identity.user = None;
+    identity.bot = false;
     refuse(
         limiter
             .check(&state.valkey, route, Stage::Anonymous, &identity)
@@ -570,6 +582,14 @@ async fn admit(
         user: None,
     });
     Ok(presented.and_then(|presented| presented.renewal))
+}
+
+/// Whether a valid session makes a request to a route of `access` count as its user. Never on a
+/// route nobody signs in to (`Access::Anonymous`): there a request counts as its address and its
+/// device, and its failures as its address's, whatever session it presents, so a token, anyone's,
+/// cannot spare it the limits that hold guessing there.
+fn counts_as_user(access: Access) -> bool {
+    access != Access::Anonymous
 }
 
 /// Checks the rules that count by user, once the session has said who the caller is, for a
@@ -650,18 +670,18 @@ pub async fn within_limits(
     true
 }
 
-/// Checks the rules that count by the username given to `POST /auth/login`, before its
-/// password is checked: counts the attempt against the name from the client's network
-/// (`username`), and refuses without counting when the name's wrong passwords from anywhere
-/// (`username_failures`) are spent.
+/// Checks the rules that count by who `POST /auth/login` names (`subject`, from
+/// `app::rate_limit::sign_in_subject`), before its password is checked: counts the attempt
+/// against them from the client's network (`username`), and refuses without counting when their
+/// wrong passwords from anywhere (`username_failures`) are spent.
 pub async fn limit_sign_in(
     state: &GlobalServerContext,
-    username: &str,
+    subject: &str,
     ip: Option<IpAddr>,
 ) -> ApiResult<()> {
     let identity = Identity {
         ip,
-        username: Some(username),
+        sign_in_subject: Some(subject),
         ..Identity::default()
     };
     refuse(
@@ -683,13 +703,13 @@ pub async fn limit_sign_in(
     )
 }
 
-/// Counts a wrong password given for `username` at `POST /auth/login` against its
-/// `username_failures` limit. Answers nothing: the wrong password is answered as such, and the
-/// next attempt is refused when the limit is spent.
-pub async fn note_wrong_password(state: &GlobalServerContext, username: &str, ip: Option<IpAddr>) {
+/// Counts a wrong password given at `POST /auth/login` for `subject` (as `limit_sign_in` takes
+/// it) against its `username_failures` limit. Answers nothing: the wrong password is answered as
+/// such, and the next attempt is refused when the limit is spent.
+pub async fn note_wrong_password(state: &GlobalServerContext, subject: &str, ip: Option<IpAddr>) {
     let identity = Identity {
         ip,
-        username: Some(username),
+        sign_in_subject: Some(subject),
         ..Identity::default()
     };
     let _ = state
@@ -779,6 +799,27 @@ mod tests {
             ip("192.0.2.1")
         );
         assert_eq!(client_ip(&limiter, None, &headers), None);
+    }
+
+    #[test]
+    fn a_session_counts_only_where_someone_may_sign_in() {
+        assert!(!counts_as_user(Access::Anonymous));
+        assert!(counts_as_user(Access::Optional));
+        assert!(counts_as_user(Access::Authenticated));
+        let built_in = aspen_app::aspen_config::RateLimitConfig::built_in().unwrap();
+        let limiter = RateLimiter::compile(&built_in, &routes()).unwrap();
+        for anonymous in [
+            SIGN_IN_ROUTE,
+            "POST /auth/login/second-factor",
+            "POST /users",
+            "POST /auth/token-refresh",
+            "POST /auth/password-resets",
+        ] {
+            assert!(
+                !counts_as_user(limiter.access(anonymous)),
+                "{anonymous} counts a session"
+            );
+        }
     }
 
     #[test]
