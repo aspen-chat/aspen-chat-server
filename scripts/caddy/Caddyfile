@@ -35,8 +35,20 @@ https://s3.{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTPS_PORT:443} {
 	reverse_proxy 127.0.0.1:8333
 }
 
-# `[media.s3] public_base_url`, the filer's `/buckets/<bucket>`.
+# `[media.s3] public_base_url`, the filer's `/buckets/<bucket>`. The filer lists directories and
+# takes uploads and deletes without credentials, so only reads of single files under the four
+# prefixes clients read reach it (docs/operators/installing/storage-read-path.md), as
+# deploy/box/caddy/media.tmpl allows; everything else, the files of deleted messages under
+# `evidence/` among them, answers 404.
 https://media.{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTPS_PORT:443} {
 	import dev_tls
-	reverse_proxy 127.0.0.1:8888
+	@public {
+		method GET HEAD
+		path_regexp ^/buckets/aspen-media/(attachments|attachment-previews|icons|link-preview-images)/[^/]+$
+	}
+	handle @public {
+		header X-Content-Type-Options nosniff
+		reverse_proxy 127.0.0.1:8888
+	}
+	respond 404
 }
