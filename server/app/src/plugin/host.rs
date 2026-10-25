@@ -1119,6 +1119,10 @@ impl Call {
                         "a route publishes to its caller alone among users".into(),
                     ));
                 }
+                // Elsewhere, only to someone the plugin reaches.
+                if !self.reaches(conn.as_mut(), user).await? {
+                    return Err(wit::Error::NotFound);
+                }
                 super::Target::User(user)
             }
         };

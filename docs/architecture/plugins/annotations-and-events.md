@@ -21,7 +21,8 @@
 `pluginEvent` carries the plugin's kind and JSON payload.
 
 - The payload is 16 KiB at most, measured both as given and as written out again for publishing.
-- It goes to a channel's viewers, a community, or one user.
+- It goes to a channel's viewers, a community, or one user. One user is, in a route, only its
+  caller, and otherwise someone the plugin reaches (`host::Call::reaches`).
 - `expected_kind` routes it by which of `channel` and `community` it names.
 
 ## `communityPlugin`

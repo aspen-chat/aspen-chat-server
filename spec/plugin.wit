@@ -226,7 +226,9 @@ interface types {
         channel(id),
         /// The community's members.
         community(id),
-        /// That user alone.
+        /// That user alone: while answering a route, only its caller; otherwise someone the
+        /// plugin reaches (a member of a community where it runs, or anyone for a plugin that
+        /// runs everywhere or in DMs), and `not-found` for anyone else.
         user(id),
     }
 
