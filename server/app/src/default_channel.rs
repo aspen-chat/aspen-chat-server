@@ -1,9 +1,9 @@
 //! A community's default channel: the text channel new members are shown first and their join
 //! messages are posted in.
 //!
-//! A community has one whenever it has a live text channel. Its first text channel becomes it,
-//! a holder of Manage community may name another, and when it is deleted `choose` picks the
-//! next, which is announced as the community's `update`. Every change to it holds the
+//! Its first text channel becomes it, a holder of Manage community may name another, and when
+//! it is deleted `choose` picks the next that everyone's role may view, or none, which is
+//! announced as the community's `update`. Every change to it holds the
 //! community's row (`hold_community`), so two channels deleted at once cannot each pick the
 //! other.
 
@@ -20,9 +20,9 @@ use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
 /// The channel `community` should default to, of its live text channels: the oldest that
-/// everyone's role may view, or the oldest of all when everyone's role may view none. `None`
-/// without a text channel. A community holds at most `app::community::MAX_CHANNELS_AND_CATEGORIES`
-/// channels.
+/// everyone's role may view. `None` when everyone's role may view none, so new members are never
+/// shown, nor joins announced in, a channel not everyone sees. A community holds at most
+/// `app::community::MAX_CHANNELS_AND_CATEGORIES` channels.
 pub async fn choose(
     conn: &mut AsyncPgConnection,
     community: CommunityId,
@@ -40,18 +40,16 @@ pub async fn choose(
         .order_by(channel::id)
         .load(conn)
         .await?;
-    if channels.len() <= 1 {
-        return Ok(channels.into_iter().next());
+    if channels.is_empty() {
+        return Ok(None);
     }
     let model = CommunityModel::load(conn, &[community])
         .await?
         .remove(&community)
         .unwrap_or_else(|| CommunityModel::new(community));
     Ok(channels
-        .iter()
-        .find(|channel| model.everyone_views(**channel))
-        .or(<[ChannelId]>::first(&channels))
-        .copied())
+        .into_iter()
+        .find(|channel| model.everyone_views(*channel)))
 }
 
 /// Holds `community`'s row until the caller's transaction ends, for reading and changing its
@@ -244,7 +242,7 @@ mod tests {
     /// `choose` against the database `DATABASE_URL` names, inside a transaction that is never
     /// committed; without one it checks nothing.
     #[tokio::test]
-    async fn a_default_is_seen_by_everyone_then_oldest() {
+    async fn a_default_is_the_oldest_seen_by_everyone() {
         let Ok(url) = std::env::var("DATABASE_URL") else {
             eprintln!("DATABASE_URL is not set; skipped");
             return;
@@ -300,8 +298,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             choose(&mut conn, community).await.unwrap(),
-            id(HIDDEN),
-            "none is seen by everyone, so the oldest"
+            None,
+            "none is seen by everyone, so none"
         );
         conn.batch_execute(&format!(
             "UPDATE category_override SET allow = {view}, deny = 0 WHERE category = '{CATEGORY}'"
