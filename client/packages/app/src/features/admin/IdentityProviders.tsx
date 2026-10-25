@@ -38,9 +38,10 @@ const DATE: Intl.DateTimeFormatOptions = { dateStyle: "medium" };
 /**
  * The deployment's OpenID Connect identity providers, for holders of Manage identity
  * providers: the two addresses to register at each, the providers with how many accounts are
- * linked to each, and adding, changing, and removing them. Adding one, or changing its issuer or
- * client, waits while the server reads the provider's discovery document, and says what went
- * wrong when it cannot. The client secret is write-only: an edit may replace it, never show it.
+ * linked to each, and adding, changing, and removing them. Adding one waits while the server
+ * reads the provider's discovery document, and says what went wrong when it cannot. A provider's
+ * issuer and client ID are fixed once it is added, so an edit shows them without letting them
+ * change. The client secret is write-only: an edit may replace it, never show it.
  */
 export function IdentityProvidersSection() {
   const m = useMessages();
@@ -275,6 +276,7 @@ function ProviderForm({
         set(key, value);
       }}
       isRequired
+      isReadOnly={editing && key !== "name"}
       {...(key === "issuer" ? { type: "url" as const } : {})}
       autoComplete="off"
       className={fieldClass}
@@ -317,8 +319,8 @@ function ProviderForm({
     >
       <div className="grid gap-3 sm:grid-cols-2">
         {text("name", a.name, a.nameHint)}
-        {text("issuer", a.issuer, a.issuerHint)}
-        {text("clientId", a.clientId)}
+        {text("issuer", a.issuer, editing ? a.fixedHint : a.issuerHint)}
+        {text("clientId", a.clientId, editing ? a.fixedHint : undefined)}
         {replaceSecret ? (
           <TextField
             value={draft.clientSecret}

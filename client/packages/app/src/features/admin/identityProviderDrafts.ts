@@ -42,7 +42,10 @@ export function draftOf(provider: IdentityProviderSettings): Draft {
   };
 }
 
-/** What an edit changed, as a merge patch: a field left as it was is left out. */
+/**
+ * What an edit changed, as a merge patch: a field left as it was is left out. The issuer and client
+ * ID are fixed once a provider is added, so an edit never sends them.
+ */
 export function providerPatch(
   saved: IdentityProviderSettings,
   draft: Draft,
@@ -50,10 +53,8 @@ export function providerPatch(
 ): IdentityProviderUpdateRequest {
   const was = draftOf(saved);
   const patch: IdentityProviderUpdateRequest = {};
-  for (const key of ["name", "issuer", "clientId"] as const) {
-    if (draft[key].trim() !== was[key]) {
-      patch[key] = draft[key].trim();
-    }
+  if (draft.name.trim() !== was.name) {
+    patch.name = draft.name.trim();
   }
   for (const key of ["enabled", "skipInvite", "enforcesTwoFactor", "trustEmail"] as const) {
     if (draft[key] !== was[key]) {

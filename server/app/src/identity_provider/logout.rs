@@ -145,12 +145,12 @@ pub async fn back_channel_logout(
     let which = match which {
         Which::Session(sid) => {
             let user = match &claims.sub {
-                Some(sub) => identity::account_of(&mut conn, provider.id, sub).await?,
+                Some(sub) => identity::account_of(&mut conn, &provider, sub).await?,
                 None => None,
             };
             ProviderSignIns::Session { sid, user }
         }
-        Which::Subject(sub) => match identity::account_of(&mut conn, provider.id, &sub).await? {
+        Which::Subject(sub) => match identity::account_of(&mut conn, &provider, &sub).await? {
             Some(user) => ProviderSignIns::User(user),
             None => return Ok(0),
         },

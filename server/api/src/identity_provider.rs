@@ -508,8 +508,6 @@ pub async fn create_provider(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdentityProviderUpdateRequest {
     pub name: Option<String>,
-    pub issuer: Option<String>,
-    pub client_id: Option<String>,
     /// A new secret; the old is never shown.
     pub client_secret: Option<String>,
     pub enabled: Option<bool>,
@@ -518,8 +516,8 @@ pub struct IdentityProviderUpdateRequest {
     pub trust_email: Option<bool>,
 }
 
-/// Changes a provider. A changed issuer is checked against its discovery document first. Needs
-/// Manage identity providers.
+/// Changes a provider's name, secret, or choices. Its issuer and client id are fixed once it is
+/// added; changing either is adding another provider. Needs Manage identity providers.
 #[utoipa::path(
     patch,
     path = "/admin/identity-providers/{provider}",
@@ -532,8 +530,6 @@ pub struct IdentityProviderUpdateRequest {
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Manage identity providers", body = Problem),
         (status = NOT_FOUND, body = Problem),
-        (status = CONFLICT, description = "`conflict`: a provider of that issuer exists", body = Problem),
-        (status = BAD_GATEWAY, description = "`identityProviderUnreachable`", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -549,8 +545,6 @@ pub async fn update_provider(
         provider,
         providers::ProviderChanges {
             name: request.name,
-            issuer: request.issuer,
-            client_id: request.client_id,
             client_secret: request.client_secret,
             enabled: request.enabled,
             skip_invite: request.skip_invite,

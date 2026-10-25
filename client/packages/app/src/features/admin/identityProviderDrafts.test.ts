@@ -38,6 +38,16 @@ describe("identity provider drafts", () => {
     ).toEqual({ name: "Example Staff", enabled: false, clientSecret: "new secret" });
   });
 
+  it("never patch the issuer or client ID, which are fixed once added", () => {
+    expect(
+      providerPatch(
+        saved,
+        { ...draftOf(saved), issuer: "https://idp.attacker.example", clientId: "other" },
+        false,
+      ),
+    ).toEqual({});
+  });
+
   it("make a new provider with the server's defaults for its choices", () => {
     expect(
       createRequest({

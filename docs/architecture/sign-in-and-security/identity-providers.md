@@ -23,9 +23,10 @@ A provider is a row of `identity_provider`:
 
 - `name`: what the sign-in screen's button says ("Continue with Example Corp").
 - `issuer`: the issuer URL. Its discovery document is `{issuer}/.well-known/openid-configuration`,
-  and the document must name the same issuer.
+  and the document must name the same issuer. Fixed once the provider is added.
 - `client_id` and `client_secret`: the client the provider's administrators registered for this
-  deployment. The secret is never shown again once saved.
+  deployment. The client id is fixed once the provider is added. The secret may be replaced, and is
+  never shown again once saved.
 - `enabled`: whether it offers sign-in now. A disabled provider keeps its links.
 - `skip_invite`: whether a first sign-in makes an account without a registration invite where one is
   required (see [New accounts](#new-accounts)).
@@ -39,9 +40,13 @@ The dashboard shows both.
 
 A deployment has at most `MAX_PROVIDERS` (20). Holders of the deployment permission Manage identity
 providers add, change, and remove them in the dashboard (`/admin/identity-providers`), and the
-terminal does the same (`aspen-chat-server identity-providers list|add|set|remove`). Adding one, or
-changing its issuer or client, fetches its discovery document first, so a mistyped issuer is refused
-with what went wrong.
+terminal does the same (`aspen-chat-server identity-providers list|add|set|remove`). Adding one
+fetches its discovery document first, so a mistyped issuer is refused with what went wrong. A
+provider's name, secret, and choices may change later; its issuer and client id may not. A `sub` is
+unique only within one issuer, and a provider may give each client its own subjects, so an issuer or
+client changed under existing links would sign whoever holds those subjects at the new one into the
+linked accounts. Moving to another issuer or client is adding a provider and having its people link
+it.
 
 ### Removing a provider
 
@@ -110,9 +115,9 @@ spent on this flow.
 
 The claim of a `signIn` flow:
 
-- **A linked account:** the identity (`user_identity`, by provider and `sub`) names it. The account
-  is signed in. If the sign-in counts as one factor and the account holds a second factor, it is
-  asked for, as after a password (`secondFactorRequired`, with a ticket).
+- **A linked account:** the identity (`user_identity`, by provider, issuer, and `sub`) names it. The
+  account is signed in. If the sign-in counts as one factor and the account holds a second factor,
+  it is asked for, as after a password (`secondFactorRequired`, with a ticket).
 - **No linked account:** the answer is `accountRequired`, with a suggested username (the provider's
   `preferred_username`, when it is one an account could take), its display name, whether an invite
   is needed, and the address the account will have or whether one must be given. The person chooses
@@ -121,8 +126,13 @@ The claim of a `signIn` flow:
   (`usernameTaken`) leaves the offer standing for another try. A flow makes at most one account, and
   only within the five minutes after its claim.
 
-An identity is matched by provider and `sub` alone, never by email address. An address can be
-reused, renamed, or asserted by a provider that does not own it, so matching by it would let one
+An identity is matched by provider, issuer, and `sub`, never by email address. Each link keeps the
+issuer it was made at (`user_identity.issuer`), and every lookup (signing in, verifying again,
+back-channel logout, the security settings' list, `has_way_in`, the dashboard's count) asks for the
+provider's current issuer, so a provider row that came to name another issuer by any route finds
+none of the accounts linked before. A flow's outcome records the issuer its ID token was verified
+against, and a claim made after the provider's issuer changed is refused as expired. An address can
+be reused, renamed, or asserted by a provider that does not own it, so matching by it would let one
 person's provider sign in as someone else.
 
 ### New accounts

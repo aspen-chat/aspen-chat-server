@@ -1803,6 +1803,20 @@ def identity_providers(world: World, check: Checks) -> None:
         status, claimed, _, _ = provider_flow(stack, provider, "signIn")
         check("and that identity then signs the member in",
               claimed.get("userId") == world.member["id"], claimed)
+        refused = stack.request("PATCH", f"/admin/identity-providers/{provider}",
+                                {"issuer": "https://elsewhere.localhost"}, world.owner["token"])
+        check("a provider's issuer cannot be changed from the dashboard", refused[0] == 400, refused)
+        refused = stack.request("PATCH", f"/admin/identity-providers/{provider}",
+                                {"clientId": "other"}, world.owner["token"])
+        check("nor its client id", refused[0] == 400, refused)
+        psql(f"UPDATE user_identity SET issuer = 'https://elsewhere.localhost' "
+             f"WHERE provider = '{provider}' AND \"user\" = '{world.member['id']}'", stack.database)
+        idp.sign_in_next(sub=f"member-{world.run}", amr=["pwd"])
+        status, claimed, _, _ = provider_flow(stack, provider, "signIn")
+        check("a link made at another issuer than the provider's signs no one in",
+              claimed.get("outcome") == "accountRequired", claimed)
+        psql(f"UPDATE user_identity SET issuer = '{idp.issuer}' "
+             f"WHERE provider = '{provider}' AND \"user\" = '{world.member['id']}'", stack.database)
 
         stack.command("identity-providers", "set", name, "--enabled", "false")
         check("a disabled provider is offered no more",

@@ -236,6 +236,14 @@ See [Identity providers](identity-providers.md).
 - **Identities are matched by provider and `sub`, never by email address.** An address can be
   reused, changed, or asserted by a provider that does not own it, so matching by it would let one
   person's provider sign in as someone else.
+- **A provider's issuer and client id are fixed once it is added, and links keep their issuer.** A
+  `sub` is unique only within one issuer (OIDC Core §2), and pairwise subjects differ by client.
+  Were either editable, a holder of Manage identity providers who outranks no one could point a
+  provider at an issuer they run and sign in as any account linked to it, its owner's included, with
+  the provider's strength skipping that account's own second factor. Wiping the links on a change
+  was the other choice; it would leave everyone linked without a way in, and adding a provider and
+  relinking says plainly that the accounts move. Matching links by the issuer they were made at
+  keeps a row changed in the database directly from reaching them either.
 - **The claim needs the client's PKCE verifier and a one-time return code, as a passkey hand-off's
   does.** Whoever starts a flow can send its authorization URL to someone else; the return code
   reaches only the device whose browser ran the flow, so the effect goes only to whoever started it

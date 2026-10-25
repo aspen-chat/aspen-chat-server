@@ -41,15 +41,12 @@ pub enum IdentityProvidersCommand {
         #[clap(long)]
         distrust_email: bool,
     },
-    /// Change a provider, named by its name or id.
+    /// Change a provider, named by its name or id. Its issuer and client id are fixed once it is
+    /// added: to change either, add another provider and have its people link it.
     Set {
         provider: String,
         #[clap(long)]
         name: Option<String>,
-        #[clap(long)]
-        issuer: Option<String>,
-        #[clap(long)]
-        client_id: Option<String>,
         /// A file holding a new client secret, or `-` for standard input.
         #[clap(long)]
         client_secret_file: Option<PathBuf>,
@@ -187,8 +184,6 @@ pub async fn identity_providers(
         IdentityProvidersCommand::Set {
             provider,
             name,
-            issuer,
-            client_id,
             client_secret_file,
             enabled,
             skip_invite,
@@ -198,15 +193,13 @@ pub async fn identity_providers(
             let id = named(&listed, &provider)?.id;
             let changes = ProviderChanges {
                 name,
-                issuer,
-                client_id,
                 client_secret: client_secret_file.as_ref().map(read_secret).transpose()?,
                 enabled,
                 skip_invite,
                 enforces_two_factor,
                 trust_email,
             };
-            let changed = providers::update_in(config, &mut conn, id, changes)
+            let changed = providers::update_in(&mut conn, id, changes)
                 .await
                 .map_err(fail)?;
             tracing::info!(name = changed.name, "changed an identity provider");

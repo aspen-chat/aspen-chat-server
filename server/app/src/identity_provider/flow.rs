@@ -109,6 +109,10 @@ enum Outcome {
 /// What a provider's verified ID token said.
 #[derive(Clone, Serialize, Deserialize)]
 struct Identified {
+    /// The issuer the ID token was verified against. A claim made after the provider came to name
+    /// another is refused, since a `sub` means something only at its own issuer.
+    #[serde(default)]
+    issuer: String,
     subject: String,
     /// The provider's session id (`sid`), which its back-channel logout names.
     session: Option<String>,
@@ -197,7 +201,7 @@ pub async fn start(
         let mut conn = state.connection_pool.get().await?;
         let provider = super::usable(&mut conn, request.provider).await?;
         if let Some(starter) = &starter {
-            let linked = identity::of(&mut conn, starter.user, provider.id).await?;
+            let linked = identity::of(&mut conn, starter.user, &provider).await?;
             match (request.purpose, linked) {
                 (Purpose::Link, Some(_)) => {
                     return Err(crate::Error::Conflict(t!(
@@ -479,6 +483,7 @@ fn identified(
         .map(|methods| methods.iter().map(|m| m.to_string()).collect())
         .unwrap_or_default();
     Identified {
+        issuer: provider.issuer.clone(),
         subject: claims.subject().to_string(),
         session: session_id(id_token),
         two_factor: provider.enforces_two_factor || two_factors(&amr),
@@ -592,13 +597,17 @@ pub async fn claim(
     };
     let mut conn = state.connection_pool.get().await?;
     let provider = super::usable(&mut conn, flow.provider).await?;
+    if identified.issuer != provider.issuer {
+        forget(state, id).await?;
+        return Err(expired());
+    }
     match flow.purpose {
         Purpose::SignIn => {
-            let linked = identity::account_of(&mut conn, provider.id, &identified.subject).await?;
+            let linked = identity::account_of(&mut conn, &provider, &identified.subject).await?;
             match linked {
                 Some(user) => {
                     forget(state, id).await?;
-                    identity::used(&mut conn, provider.id, &identified.subject).await?;
+                    identity::used(&mut conn, &provider, &identified.subject).await?;
                     let outcome = login::first_factor_proved(
                         state,
                         &mut conn,
@@ -652,8 +661,7 @@ pub async fn claim(
                 )));
             }
             let mut conn = state.connection_pool.get().await?;
-            if identity::account_of(&mut conn, provider.id, &identified.subject).await?
-                != Some(user)
+            if identity::account_of(&mut conn, &provider, &identified.subject).await? != Some(user)
             {
                 return Err(crate::Error::IdentityProviderFailed(t!(
                     "identityProviderOtherAccount",
@@ -757,6 +765,9 @@ pub async fn create_account(
     crate::user::validate_new_username(&request.name)?;
     let mut conn = state.connection_pool.get().await?;
     let provider = super::usable(&mut conn, flow.provider).await?;
+    if identified.issuer != provider.issuer {
+        return Err(expired());
+    }
     let invite_required = invite_required(state, &provider);
     let invite_code = request
         .invite_code
@@ -794,11 +805,12 @@ pub async fn create_account(
     };
     let subject = identified.subject.clone();
     let provider_id = provider.id;
+    let linked_at = provider.clone();
     let (user, joined) = conn
         .transaction(|conn| {
             async move {
                 let (user, joined) = crate::user::create_account(state, conn, account).await?;
-                identity::insert(conn, user, provider_id, &subject).await?;
+                identity::insert(conn, user, &linked_at, &subject).await?;
                 Ok::<_, crate::Error>((user, joined))
             }
             .scope_boxed()

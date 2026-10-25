@@ -36,8 +36,10 @@ Aspen is only the client. How it works is in
 | `--distrust-email`      | Trusts email addresses | no (trusted)   | Without it, an address the provider reports as verified becomes a new account's verified address.                                                        |
 | `--disabled`            | Enabled                | no (enabled)   | A disabled provider offers no sign-in, and keeps its links.                                                                                              |
 
-`identity-providers set <name or id>` changes any of them, and `--client-secret-file` replaces the
-secret.
+`identity-providers set <name or id>` changes any of them, `--name` renames it, and
+`--client-secret-file` replaces the secret. A provider's issuer and client ID are fixed once it is
+added. To move to another issuer or client, add a new provider, have its people link it from their
+security settings, and then remove the old one.
 
 ### Removing a provider
 
