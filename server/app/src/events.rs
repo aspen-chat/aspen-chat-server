@@ -95,6 +95,13 @@ pub enum EventScope {
     User(UserId),
     /// About the user, for everyone who shares a community with them and for themself.
     UserEverywhere(UserId),
+    /// About the user, for themself and for those who share one of `communities` with them: a
+    /// plugin's note on a person, shown only where the plugin runs. `communities` are the
+    /// user's own, at most `[limits] max_communities_per_user`.
+    UserIn {
+        user: UserId,
+        communities: Vec<CommunityId>,
+    },
 }
 
 /// The kinds of scope, which `expected_kind` pairs with events. `Community` covers a
@@ -120,7 +127,7 @@ impl EventScope {
             | EventScope::CommunityOfInvite(_) => ScopeKind::Community,
             EventScope::Membership { .. } => ScopeKind::Membership,
             EventScope::User(_) => ScopeKind::User,
-            EventScope::UserEverywhere(_) => ScopeKind::UserEverywhere,
+            EventScope::UserEverywhere(_) | EventScope::UserIn { .. } => ScopeKind::UserEverywhere,
         }
     }
 }
@@ -587,6 +594,11 @@ async fn subjects(
             all.push(user_subject(user));
             all
         }
+        EventScope::UserIn { user, communities } => communities
+            .into_iter()
+            .map(community_subject)
+            .chain([user_subject(user)])
+            .collect(),
     })
 }
 
@@ -600,7 +612,9 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         UserCommunityEvent, UserEvent,
     };
     let scoped_user = match scope {
-        EventScope::User(user) | EventScope::UserEverywhere(user) => Some(*user),
+        EventScope::User(user)
+        | EventScope::UserEverywhere(user)
+        | EventScope::UserIn { user, .. } => Some(*user),
         _ => None,
     };
     let scoped_community = match scope {

@@ -2489,24 +2489,38 @@ def plugins(world: World, check: Checks) -> None:
 
 
 def profile_annotations(world: World, check: Checks) -> None:
-    say("a plugin's annotation of a person reaches only those who share a community with them")
+    say("a plugin's annotation of a person is shown only where the plugin runs, to those who share it")
     stack, member = world.stack, world.member
     if psql(f"SELECT count(*) FROM plugin WHERE id = '{WORD_FILTER_ID}'", stack.database) != "1":
         check("the word filter is installed, to annotate with", False, "the plugins scenario installs it")
         return
+    stack.command("plugins", "enable", WORD_FILTER_ID)
+    running(world, WORD_FILTER_ID)
     # No example plugin annotates people, so the row is written as a plugin's would be.
     psql("INSERT INTO user_annotation (id, plugin, \"user\", kind, severity, label) "
          f"VALUES (gen_random_uuid(), '{WORD_FILTER_ID}', '{member['id']}', 'checked', 'info', "
          "'{\"key\": \"checked\"}')", stack.database)
     outsider = world.account("outsider")
     path = f"/users/{member['id']}/annotations"
-    check("the person reads their own", len(stack.api("GET", path, token=member["token"])) == 1)
-    check("and so does someone who shares a community with them",
+    plugin_here = f"/communities/{world.community}/plugins/{WORD_FILTER_ID}"
+    check("while no community they share runs the plugin, nobody reads it",
+          stack.api("GET", path, token=world.owner["token"]) == []
+          and stack.api("GET", path, token=member["token"]) == [])
+    world.as_owner("PUT", plugin_here, {"settings": {"watchWords": [], "words": []}, "grant": []})
+    check("once the community runs it, the person reads their own", len(stack.api("GET", path, token=member["token"])) == 1)
+    check("and so does someone who shares that community with them",
           len(stack.api("GET", path, token=world.owner["token"])) == 1)
     check("but nobody else", stack.api("GET", path, token=outsider["token"]) == [])
+    world.as_owner("DELETE", plugin_here)
+    check("once the community turns the plugin off, it is shown there no more",
+          stack.api("GET", path, token=world.owner["token"]) == []
+          and stack.api("GET", path, token=member["token"]) == [])
+    world.as_owner("PUT", plugin_here, {"settings": {"watchWords": [], "words": []}, "grant": []})
     world.as_owner("DELETE", f"/communities/{world.community}/members/{member['id']}")
-    check("nor anyone they no longer share a community with",
+    check("nor to anyone they no longer share a community with",
           stack.api("GET", path, token=world.owner["token"]) == [])
+    world.as_owner("DELETE", plugin_here)
+    stack.command("plugins", "disable", WORD_FILTER_ID)
     psql(f"DELETE FROM user_annotation WHERE \"user\" = '{member['id']}'", stack.database)
 
 

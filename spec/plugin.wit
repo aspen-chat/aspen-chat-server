@@ -317,7 +317,10 @@ interface host {
     annotate-message: func(message: id, annotation: annotation) -> result<_, error>;
     clear-message-annotation: func(message: id, kind: string) -> result<_, error>;
 
-    /// Sets the plugin's annotation of this kind on a person (`users.annotate`).
+    /// Sets the plugin's annotation of this kind on a person (`users.annotate`). It is shown
+    /// only in the communities of theirs where the plugin runs, to them and to whoever shares
+    /// one of those with them; `not-found` when there are none, or, in a route, when the caller
+    /// shares none of them with the person.
     annotate-user: func(user: id, annotation: annotation) -> result<_, error>;
     clear-user-annotation: func(user: id, kind: string) -> result<_, error>;
 
