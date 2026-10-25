@@ -190,9 +190,14 @@ jobs:
           pnpm --filter @aspen/app exec playwright install --with-deps chromium
           pnpm --filter @aspen/app exec playwright test --project=chromium --project=phone-chromium --shard=${{ matrix.shard }}/3
 
+  # The installer is signed for pushes to `main` alone, whatever is signed carrying the
+  # publisher's name: the Azure credentials are in the `windows-signing` environment, which only
+  # `main` may use. Every other run (a pull request, a dispatch on any branch) takes no
+  # environment and builds an unsigned installer.
   desktop-windows:
     name: Desktop (Windows) — installer with libobs
     needs: schemas
+    environment: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'windows-signing' || '' }}
     runs-on: windows-latest
     timeout-minutes: 60
     defaults:
@@ -224,18 +229,16 @@ jobs:
       - run: pnpm codegen
       # The OBS Project's own signed release files, pinned by checksum (`scripts/fetch-libobs.mjs`).
       - run: pnpm --filter @aspen/desktop fetch:libobs
-      # A pull request's installer is unsigned: it is built from code no one has reviewed, and
-      # whatever is signed carries the publisher's name.
-      - if: github.event_name == 'pull_request'
+      - if: github.event_name != 'push' || github.ref != 'refs/heads/main'
         run: pnpm --filter @aspen/desktop package
-      - if: github.event_name != 'pull_request'
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: pnpm --filter @aspen/desktop package:signed
         env:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       - name: Check that our files carry our signature, and the OBS Project's theirs
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
         working-directory: client/packages/desktop/release
         run: |
