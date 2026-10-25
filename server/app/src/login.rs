@@ -87,17 +87,6 @@ impl SignInMethod {
             Self::SecondFactor | Self::Passkey | Self::IdentityProviderTwoFactor
         )
     }
-
-    /// What an assertion to another deployment says of it (`app::federation::abroad`): an
-    /// identity provider's sign-in by its strength, as a password or a second factor, so that
-    /// deployments read it as any other and the protocol names no provider.
-    pub fn carried_abroad(self) -> Self {
-        match self {
-            Self::IdentityProvider => Self::Password,
-            Self::IdentityProviderTwoFactor => Self::SecondFactor,
-            other => other,
-        }
-    }
 }
 
 /// The identity provider a sign-in was made through (`app::identity_provider`), and the
