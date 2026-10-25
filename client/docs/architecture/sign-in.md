@@ -96,7 +96,9 @@ chosen in `src/features/auth/passkeyTransport.ts`:
 On the desktop (`packages/desktop/src/main/passkeyHandoff.ts`):
 
 1. The main process opens that page.
-2. It listens on a one-shot loopback port for the browser's return.
+2. It listens on a one-shot loopback port for the browser's return, answering only a return that
+   names the ceremony the page was opened for (the `ceremony` in its fragment) and refusing any
+   other request, so a local page or process that finds the port cannot settle the hand-off first.
 3. It sends the tab back to the page to say it is done.
 
 On mobile:
@@ -278,8 +280,9 @@ In the apps (`providerHandoff`):
 - The desktop prepares a passkey hand-off's loopback listener and opens the provider instead of the
   passkey page (`passkey:open-provider`, `openProvider` in
   `packages/desktop/src/main/passkeyHandoff.ts`), which takes only HTTPS (or this machine's own
-  addresses in an unpackaged build). The listener reads the return (`flow` and `code`) and sends the
-  tab on to the server's passkey page to say it is done.
+  addresses in an unpackaged build). The listener answers only a return whose `flow` is the flow's
+  id (the authorization URL's `state`), reads its `code`, and sends the tab on to the server's
+  passkey page to say it is done.
 - A phone uses the passkey hand-off as it is: `aspen://auth/passkey`, read by `parseHandoffReturn`.
   Its in-app browser opens a passkey page or a provider's page only over HTTPS (`requireSecure`).
 - Closing the browser, or the hand-off giving up, is backing out (`PasskeyCancelledError`), which

@@ -609,6 +609,7 @@ identityProviderCodeRefused: "%{provider} refused to finish the sign-in (it said
 identityProviderTokenUnreadable: "%{provider}'s answer couldn't be read. This server's administrators need to check its settings."
 identityProviderNoIdToken: "%{provider} didn't say who you are (it sent no ID token). This server's administrators need to check that it offers OpenID Connect."
 identityProviderTokenInvalid: "%{provider}'s answer didn't verify (%{detail}). Try again; if it keeps happening, this server's administrators need to check its settings."
+identityProviderSubjectLength: "%{provider} identified you by an id that is empty or longer than %{max} characters, which OpenID Connect does not allow, so it can't be linked to an account here. %{provider}'s administrators need to fix the subject it sends."
 identityProviderIssuer: "issuer"
 identityProviderClientId: "client ID"
 identityProviderClientSecret: "client secret"

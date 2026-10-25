@@ -109,6 +109,10 @@ enum Outcome {
 /// What a provider's verified ID token said.
 #[derive(Clone, Serialize, Deserialize)]
 struct Identified {
+    /// The issuer the ID token was verified against. A claim made after the provider came to name
+    /// another is refused, since a `sub` means something only at its own issuer.
+    #[serde(default)]
+    issuer: String,
     subject: String,
     /// The provider's session id (`sid`), which its back-channel logout names.
     session: Option<String>,
@@ -127,6 +131,14 @@ impl Identified {
         } else {
             SignInMethod::IdentityProvider
         }
+    }
+
+    /// When the person last proved who they are at the provider: its `auth_time`, no later than
+    /// now, or never when it sent none. A provider may sign someone in from a session it has held
+    /// for days without asking anything, so the sign-in it makes is no recent verification.
+    fn verified_at(&self) -> DateTime<Utc> {
+        self.auth_time
+            .map_or(DateTime::UNIX_EPOCH, |at| at.min(Utc::now()))
     }
 }
 
@@ -197,7 +209,7 @@ pub async fn start(
         let mut conn = state.connection_pool.get().await?;
         let provider = super::usable(&mut conn, request.provider).await?;
         if let Some(starter) = &starter {
-            let linked = identity::of(&mut conn, starter.user, provider.id).await?;
+            let linked = identity::of(&mut conn, starter.user, &provider).await?;
             match (request.purpose, linked) {
                 (Purpose::Link, Some(_)) => {
                     return Err(crate::Error::Conflict(t!(
@@ -376,18 +388,19 @@ async fn identify(
     let client = client_of(state, &provider, &document)?;
     let verifier = client.id_token_verifier();
     match id_token.claims(&verifier, &nonce) {
-        Ok(claims) => Ok(identified(&provider, claims, &id_token.to_string())),
+        Ok(claims) => identified(&provider, claims, &id_token.to_string()),
         // A key the cached document lacks may be one the provider has rotated to, so its
-        // document is read afresh once. The code is spent by now, so only the verification is
-        // tried again.
+        // document is read afresh, at most once a minute per issuer. The code is spent by now, so
+        // only the verification is tried again.
         Err(openidconnect::ClaimsVerificationError::SignatureVerification(_)) => {
-            let document = discovery::document(&state.config, &provider.issuer, true).await?;
+            let document =
+                discovery::document_for_unknown_key(&state.config, &provider.issuer).await?;
             let client = client_of(state, &provider, &document)?;
             let verifier = client.id_token_verifier();
             let claims = id_token
                 .claims(&verifier, &nonce)
                 .map_err(|error| token_invalid(name, error))?;
-            Ok(identified(&provider, claims, &id_token.to_string()))
+            identified(&provider, claims, &id_token.to_string())
         }
         Err(error) => Err(token_invalid(name, error)),
     }
@@ -431,29 +444,40 @@ fn exchange_failure(
     }
 }
 
-/// The `amr` values (RFC 8176) that show a second factor on their own.
-const SECOND_FACTOR_METHODS: [&str; 4] = ["mfa", "otp", "hwk", "sms"];
-/// The `amr` values that count as a factor of their own, so that two of them, or one and a
-/// password, are two factors.
-const FACTOR_METHODS: [&str; 13] = [
-    "pwd", "pin", "otp", "hwk", "swk", "sms", "tel", "fpt", "face", "iris", "retina", "vbm", "sc",
-];
+/// The kind of factor an `amr` value (RFC 8176) proves. Two factors are two of different kinds:
+/// a password and a PIN are both something known, and a fingerprint and a face both something
+/// the person is.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum FactorKind {
+    Knowledge,
+    Possession,
+    Inherence,
+}
 
-/// Whether an `amr` claim names two factors: a method that is one on its own, or two methods of
+/// The kind of factor `method` proves, or `None` for a value that proves none on its own
+/// (`user` presence, `geo`, `rba`, and the like) or that this server does not know.
+fn factor_kind(method: &str) -> Option<FactorKind> {
+    Some(match method {
+        "pwd" | "pin" | "kba" => FactorKind::Knowledge,
+        // `otp` and `sms` alone may be a code mailed or texted in place of a password, and
+        // `hwk` and `swk` a key used without its PIN: something held, once.
+        "otp" | "hwk" | "swk" | "sms" | "tel" | "sc" => FactorKind::Possession,
+        "fpt" | "face" | "iris" | "retina" | "vbm" => FactorKind::Inherence,
+        _ => return None,
+    })
+}
+
+/// Whether an `amr` claim names two factors: `mfa`, which says so outright, or methods of two
 /// different kinds.
 fn two_factors(amr: &[String]) -> bool {
-    if amr
-        .iter()
-        .any(|method| SECOND_FACTOR_METHODS.contains(&method.as_str()))
-    {
+    if amr.iter().any(|method| method == "mfa") {
         return true;
     }
-    let factors: std::collections::HashSet<&str> = amr
+    let kinds: std::collections::HashSet<FactorKind> = amr
         .iter()
-        .map(String::as_str)
-        .filter(|method| FACTOR_METHODS.contains(method))
+        .filter_map(|method| factor_kind(method))
         .collect();
-    factors.len() >= 2
+    kinds.len() >= 2
 }
 
 /// The `sid` claim, which `openidconnect`'s standard claims leave out, read from the token whose
@@ -469,17 +493,30 @@ fn session_id(id_token: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The longest `sub` kept, matching `user_identity`'s check. OIDC Core §2 caps it at 255 ASCII
+/// characters; a provider that sends a longer one is refused, saying so.
+const MAX_SUBJECT_CHARS: usize = 255;
+
 fn identified(
     provider: &Provider,
     claims: &openidconnect::core::CoreIdTokenClaims,
     id_token: &str,
-) -> Identified {
+) -> crate::Result<Identified> {
+    let subject = claims.subject().as_str();
+    if subject.is_empty() || subject.chars().count() > MAX_SUBJECT_CHARS {
+        return Err(crate::Error::IdentityProviderFailed(t!(
+            "identityProviderSubjectLength",
+            provider = provider.name.as_str(),
+            max = MAX_SUBJECT_CHARS
+        )));
+    }
     let amr: Vec<String> = claims
         .auth_method_refs()
         .map(|methods| methods.iter().map(|m| m.to_string()).collect())
         .unwrap_or_default();
-    Identified {
-        subject: claims.subject().to_string(),
+    Ok(Identified {
+        issuer: provider.issuer.clone(),
+        subject: subject.to_string(),
         session: session_id(id_token),
         two_factor: provider.enforces_two_factor || two_factors(&amr),
         auth_time: claims.auth_time(),
@@ -492,7 +529,7 @@ fn identified(
             .name()
             .and_then(|name| name.get(None))
             .map(|name| name.to_string()),
-    }
+    })
 }
 
 /// A new account the claim of a `signIn` flow offers, when the provider's identity is linked to
@@ -592,18 +629,23 @@ pub async fn claim(
     };
     let mut conn = state.connection_pool.get().await?;
     let provider = super::usable(&mut conn, flow.provider).await?;
+    if identified.issuer != provider.issuer {
+        forget(state, id).await?;
+        return Err(expired());
+    }
     match flow.purpose {
         Purpose::SignIn => {
-            let linked = identity::account_of(&mut conn, provider.id, &identified.subject).await?;
+            let linked = identity::account_of(&mut conn, &provider, &identified.subject).await?;
             match linked {
                 Some(user) => {
                     forget(state, id).await?;
-                    identity::used(&mut conn, provider.id, &identified.subject).await?;
+                    identity::used(&mut conn, &provider, &identified.subject).await?;
                     let outcome = login::first_factor_proved(
                         state,
                         &mut conn,
                         user,
                         identified.method(),
+                        identified.verified_at(),
                         Some(ProviderSignIn {
                             provider: provider.id,
                             session: identified.session.clone(),
@@ -652,8 +694,7 @@ pub async fn claim(
                 )));
             }
             let mut conn = state.connection_pool.get().await?;
-            if identity::account_of(&mut conn, provider.id, &identified.subject).await?
-                != Some(user)
+            if identity::account_of(&mut conn, &provider, &identified.subject).await? != Some(user)
             {
                 return Err(crate::Error::IdentityProviderFailed(t!(
                     "identityProviderOtherAccount",
@@ -757,6 +798,9 @@ pub async fn create_account(
     crate::user::validate_new_username(&request.name)?;
     let mut conn = state.connection_pool.get().await?;
     let provider = super::usable(&mut conn, flow.provider).await?;
+    if identified.issuer != provider.issuer {
+        return Err(expired());
+    }
     let invite_required = invite_required(state, &provider);
     let invite_code = request
         .invite_code
@@ -794,11 +838,12 @@ pub async fn create_account(
     };
     let subject = identified.subject.clone();
     let provider_id = provider.id;
+    let linked_at = provider.clone();
     let (user, joined) = conn
         .transaction(|conn| {
             async move {
                 let (user, joined) = crate::user::create_account(state, conn, account).await?;
-                identity::insert(conn, user, provider_id, &subject).await?;
+                identity::insert(conn, user, &linked_at, &subject).await?;
                 Ok::<_, crate::Error>((user, joined))
             }
             .scope_boxed()
@@ -811,6 +856,7 @@ pub async fn create_account(
         &mut conn,
         user,
         identified.method(),
+        identified.verified_at(),
         Some(ProviderSignIn {
             provider: provider_id,
             session: identified.session.clone(),
@@ -838,13 +884,21 @@ mod tests {
     fn two_factors_from_amr() {
         assert!(two_factors(&amr(&["mfa"])));
         assert!(two_factors(&amr(&["pwd", "otp"])));
-        assert!(two_factors(&amr(&["hwk"])));
         assert!(two_factors(&amr(&["pwd", "fpt"])));
         assert!(two_factors(&amr(&["swk", "pin"])));
+        assert!(two_factors(&amr(&["hwk", "pin", "user"])));
+        assert!(two_factors(&amr(&["hwk", "face"])));
+        assert!(two_factors(&amr(&["sms", "pwd"])));
         assert!(!two_factors(&amr(&["pwd"])));
-        assert!(!two_factors(&amr(&["swk"])));
-        assert!(!two_factors(&amr(&["fpt", "fpt"])));
+        assert!(!two_factors(&amr(&["otp"])));
+        assert!(!two_factors(&amr(&["sms"])));
+        assert!(!two_factors(&amr(&["hwk"])));
+        assert!(!two_factors(&amr(&["swk", "user"])));
+        assert!(!two_factors(&amr(&["otp", "sms"])));
+        assert!(!two_factors(&amr(&["pwd", "pin"])));
+        assert!(!two_factors(&amr(&["fpt", "face"])));
         assert!(!two_factors(&amr(&["kba", "pwd"])));
+        assert!(!two_factors(&amr(&["geo", "rba", "pwd"])));
         assert!(!two_factors(&[]));
     }
 

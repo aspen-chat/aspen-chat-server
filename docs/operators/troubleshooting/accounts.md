@@ -62,7 +62,12 @@ works meanwhile.
   it.
 
 Back-channel logouts the server refuses are answered `400` and logged with the reason
-(`refused a back-channel logout`).
+(`refused a back-channel logout`). Each refusal counts against the sending address, which is
+answered `429` after 30 in quick succession (and one every ten seconds after that): a provider whose
+logouts are all refused (a wrong client id, a token typed as something other than `logout+jwt`)
+stops being heard until what it sends is fixed. Within a minute of a provider rotating its signing
+key, a logout signed with the new key may be refused once while this server's copy of the keys
+catches up; the provider's retry is taken.
 
 ## Email
 

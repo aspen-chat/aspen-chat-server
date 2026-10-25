@@ -9,8 +9,11 @@ import { createServer, type Server } from "node:http";
  * back to a one-shot listener on the loopback interface (RFC 8252 §7.3), which answers by
  * sending the tab back to the server's page to say it is done, and tells the renderer.
  *
- * Any local process can reach the listener, which is harmless: the renderer claims the result
- * with a PKCE secret that never leaves it, along with the return code the browser brought here.
+ * Any local process can reach the listener. It answers only a return naming the ceremony or
+ * flow it was opened for, so a request made to it first, by a page or a process guessing its
+ * port, cannot settle the handoff as cancelled or with a made-up code. What it is given is
+ * harmless anyway: the renderer claims the result with a PKCE secret that never leaves it, along
+ * with the return code the browser brought here.
  */
 
 export const PASSKEY_PREPARE_CHANNEL = "passkey:prepare";
@@ -34,6 +37,11 @@ interface Pending {
   returned: Promise<HandoffReturn>;
   /** Where the tab is sent once it has returned: the handoff page, told the outcome. */
   pageOrigin: string | null;
+  /**
+   * The passkey ceremony or provider flow the browser was sent to, which the return must name;
+   * `null` until one is opened, when every return is refused.
+   */
+  expected: string | null;
 }
 
 const pending = new Map<string, Pending>();
@@ -67,11 +75,11 @@ async function prepare(): Promise<{ id: string; returnTo: string }> {
   const returned = new Promise<HandoffReturn>((resolve) => {
     settle = resolve;
   });
-  const entry: Pending = { server: createServer(), returned, pageOrigin: null };
+  const entry: Pending = { server: createServer(), returned, pageOrigin: null, expected: null };
   entry.server.on("request", (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     const result = parseReturn(url);
-    if (result === null) {
+    if (result === null || entry.expected === null || result.ceremony !== entry.expected) {
       response.writeHead(404).end();
       return;
     }
@@ -121,6 +129,12 @@ async function open(id: string, url: string): Promise<HandoffReturn> {
   if (!securePage(page) || page.pathname !== "/auth/passkey") {
     throw new Error("refusing to open a handoff page that is not /auth/passkey over HTTPS");
   }
+  // The page names its ceremony in the fragment (`handoffPageUrl` in `@aspen/protocol`).
+  const ceremony = new URLSearchParams(page.hash.slice(1)).get("ceremony");
+  if (ceremony === null || ceremony === "") {
+    throw new Error("refusing to open a handoff page that names no ceremony");
+  }
+  entry.expected = ceremony;
   entry.pageOrigin = page.origin;
   await shell.openExternal(page.toString());
   return entry.returned;
@@ -145,6 +159,12 @@ async function openProvider(
   if (!securePage(provider) || !securePage(home)) {
     throw new Error("refusing to open an identity provider or a server not reached over HTTPS");
   }
+  // A flow's id is its OAuth `state`, which the server returns to the listener as `flow`.
+  const flow = provider.searchParams.get("state");
+  if (flow === null || flow === "") {
+    throw new Error("refusing to open an identity provider's sign-in that names no flow");
+  }
+  entry.expected = flow;
   entry.pageOrigin = home.origin;
   await shell.openExternal(provider.toString());
   return entry.returned;

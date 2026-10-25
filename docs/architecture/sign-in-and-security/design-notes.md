@@ -253,6 +253,14 @@ See [Identity providers](identity-providers.md).
 - **Identities are matched by provider and `sub`, never by email address.** An address can be
   reused, changed, or asserted by a provider that does not own it, so matching by it would let one
   person's provider sign in as someone else.
+- **A provider's issuer and client id are fixed once it is added, and links keep their issuer.** A
+  `sub` is unique only within one issuer (OIDC Core §2), and pairwise subjects differ by client.
+  Were either editable, a holder of Manage identity providers who outranks no one could point a
+  provider at an issuer they run and sign in as any account linked to it, its owner's included, with
+  the provider's strength skipping that account's own second factor. Wiping the links on a change
+  was the other choice; it would leave everyone linked without a way in, and adding a provider and
+  relinking says plainly that the accounts move. Matching links by the issuer they were made at
+  keeps a row changed in the database directly from reaching them either.
 - **The claim needs the client's PKCE verifier and a one-time return code, as a passkey hand-off's
   does.** Whoever starts a flow can send its authorization URL to someone else; the return code
   reaches only the device whose browser ran the flow, so the effect goes only to whoever started it
@@ -266,6 +274,12 @@ See [Identity providers](identity-providers.md).
 - **A provider's sign-in counts as one factor unless it says otherwise.** Its `amr` claim, or the
   administrators' word (`enforces_two_factor`), decides; a provider that says nothing is treated as
   a password, so `require_two_factor` and an account's own second factors still apply.
+- **`amr` counts kinds of factor, not methods.** Two factors are two of knowledge, possession, and
+  inherence, as RFC 8176 groups its values; counting distinct values instead would take a password
+  with a PIN, or a fingerprint with a face, as two. A method alone is one factor even when it is a
+  one-time code or a key, since providers send `otp` or `sms` alone for a code that replaces the
+  password, and `hwk` alone for a key used without its PIN. A provider whose every sign-in is
+  stronger than its `amr` says is marked `enforces_two_factor`.
 - **Abroad, a provider's sign-in travels as `password` or `secondFactor`.** Other deployments then
   read it as any other, and the federation protocol names no provider.
 - **Accounts made through a provider have no password.** They verify again at the provider, asked to

@@ -301,17 +301,22 @@ pub async fn try_password(
     };
     let mut conn = state.connection_pool.get().await?;
     let conn = conn.as_mut();
-    first_factor_proved(state, conn, u.id, SignInMethod::Password, None).await
+    first_factor_proved(state, conn, u.id, SignInMethod::Password, Utc::now(), None).await
 }
 
 /// Finishes a sign-in whose first factor, `method`, is proved: asks for a second factor when it
-/// counts as one factor and the account holds one, and otherwise issues the session. A banned
-/// account learns so here, before a second factor is asked for that could not be used.
+/// counts as one factor and the account holds one, and otherwise issues the session, counted as
+/// verified at `verified_at` (when the person last proved who they are: now for a password, the
+/// provider's `auth_time` for a provider's sign-in, which may have been made silently from an old
+/// session there). A second factor asked for is proved now, so the session it gives is verified
+/// now. A banned account learns so here, before a second factor is asked for that could not be
+/// used.
 pub async fn first_factor_proved(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     user: UserId,
     method: SignInMethod,
+    verified_at: DateTime<Utc>,
     provider: Option<ProviderSignIn>,
 ) -> crate::Result<LoginOutcome> {
     crate::user_ban::check_not_banned(conn, user).await?;
@@ -329,7 +334,7 @@ pub async fn first_factor_proved(
         return Ok(LoginOutcome::SecondFactorRequired { ticket, methods });
     }
     Ok(LoginOutcome::SignedIn(
-        issue(state, conn, user, method, false, Utc::now(), provider).await?,
+        issue(state, conn, user, method, false, verified_at, provider).await?,
     ))
 }
 

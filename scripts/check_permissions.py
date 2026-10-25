@@ -1750,6 +1750,8 @@ def identity_providers(world: World, check: Checks) -> None:
         check("as is one from an issuer the server does not know", back_channel_logout(stack, forged) == 400)
         nonce = idp.logout_token(sid="second", nonce="n")
         check("and an ID token passed off as one", back_channel_logout(stack, nonce) == 400)
+        typed = idp.logout_token(sid="second", typ="JWT")
+        check("and a token typed as something other than a logout", back_channel_logout(stack, typed) == 400)
         header, _, signature = idp.logout_token(sid="first").split(".")
         payload = base64.urlsafe_b64encode(json.dumps(
             {"iss": idp.issuer, "aud": idp.client_id, "iat": int(time.time()), "jti": "tampered",
@@ -1765,6 +1767,11 @@ def identity_providers(world: World, check: Checks) -> None:
         status, text = stack.request("DELETE", f"/users/@me/identities/{identity}", token=second["token"])
         check("its only way in cannot be unlinked", status == 409 and "lastSignInMethod" in text, (status, text))
         stack.api("PUT", "/users/@me/password", {"newPassword": PASSWORD}, second["token"])
+        idp.sign_in_next(sub=sub, amr=["pwd"], sid="silent", auth_age=86400)
+        status, claimed, _, _ = provider_flow(stack, provider, "signIn")
+        refused = stack.status("DELETE", f"/users/@me/identities/{identity}", token=claimed.get("sessionToken"))
+        check("a provider's silent sign-in from an old session there is no recent verification",
+              status == 200 and refused == 403, (status, claimed, refused))
         password = world.sign_in(username)
         password_stream = stack.events(password["token"])
         idp.sign_in_next(sub=sub, amr=["pwd", "otp"], sid="third")
@@ -1815,6 +1822,20 @@ def identity_providers(world: World, check: Checks) -> None:
         status, claimed, _, _ = provider_flow(stack, provider, "signIn")
         check("and that identity then signs the member in",
               claimed.get("userId") == world.member["id"], claimed)
+        refused = stack.request("PATCH", f"/admin/identity-providers/{provider}",
+                                {"issuer": "https://elsewhere.localhost"}, world.owner["token"])
+        check("a provider's issuer cannot be changed from the dashboard", refused[0] == 400, refused)
+        refused = stack.request("PATCH", f"/admin/identity-providers/{provider}",
+                                {"clientId": "other"}, world.owner["token"])
+        check("nor its client id", refused[0] == 400, refused)
+        psql(f"UPDATE user_identity SET issuer = 'https://elsewhere.localhost' "
+             f"WHERE provider = '{provider}' AND \"user\" = '{world.member['id']}'", stack.database)
+        idp.sign_in_next(sub=f"member-{world.run}", amr=["pwd"])
+        status, claimed, _, _ = provider_flow(stack, provider, "signIn")
+        check("a link made at another issuer than the provider's signs no one in",
+              claimed.get("outcome") == "accountRequired", claimed)
+        psql(f"UPDATE user_identity SET issuer = '{idp.issuer}' "
+             f"WHERE provider = '{provider}' AND \"user\" = '{world.member['id']}'", stack.database)
 
         stack.command("identity-providers", "set", name, "--enabled", "false")
         check("a disabled provider is offered no more",

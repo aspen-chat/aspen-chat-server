@@ -463,12 +463,15 @@ global = { requests = 1200, per_seconds = 60, burst = 600, bucket = "registratio
 [rate_limits.endpoints."GET /auth/oidc/callback"]
 ip = { requests = 3000, per_seconds = 60, burst = 1000, bucket = "sign_in" }
 
-# Providers post logouts from their own servers, for everyone they sign out at once. A token
-# whose signature fails makes this server read the provider's keys again, so everyone's are
-# limited too.
+# Providers post logouts from their own servers, for everyone they sign out at once. A refused
+# token (unknown issuer, bad signature, used before) counts toward its address's failures, so a
+# stranger posting made-up tokens is stopped without touching the provider's own address. There
+# is no global limit, which strangers could spend for everyone: a token naming a key this server
+# lacks reads the provider's keys again at most once a minute per issuer
+# (`identity_provider::discovery::document_for_unknown_key`), whoever sends it.
 [rate_limits.endpoints."POST /auth/oidc/back-channel-logout"]
 ip = { requests = 600, per_seconds = 60, burst = 200 }
-global = { requests = 3000, per_seconds = 60, burst = 1000 }
+ip_failures = { requests = 60, per_seconds = 600, burst = 30 }
 
 # Each mails the reset code again, to an address its asker answered with; the account's mail
 # is also limited where it is queued (`app::email::reset`).

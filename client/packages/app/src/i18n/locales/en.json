@@ -357,6 +357,7 @@
       "issuer": "Issuer URL",
       "issuerHint": "The address the provider's discovery document names as its issuer.",
       "clientId": "Client ID",
+      "fixedHint": "Fixed once the provider is added. To change it, add another provider and have its people link it from their security settings.",
       "clientSecret": "Client secret",
       "clientSecretHint": "Kept on this server and never shown again.",
       "name": "Name",
