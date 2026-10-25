@@ -316,7 +316,47 @@ pub struct ConnectionsConfig {
     /// when it opens, so this does not close it.
     #[default = 120]
     pub idle_seconds: u64,
+    /// How long a request may take, from when it arrives until its response's headers are
+    /// ready, its body read included; one that takes longer is answered `requestTimedOut`
+    /// (`api::deadline`). It must leave a search's `[search] round_seconds` ten seconds to
+    /// spare. A response's body, once under way, is bounded by `idle_seconds` instead: it keeps
+    /// its connection open only while it makes progress.
+    #[default = 60]
+    pub request_seconds: u64,
+    /// How long a connection asked to close (idle, or the server shutting down) has to finish
+    /// what is in flight before it is dropped, so a client that never reads its responses
+    /// cannot hold it open.
+    #[default = 30]
+    pub shutdown_seconds: u64,
+    /// The most requests one HTTP/2 connection may have open at once.
+    #[default = 64]
+    pub max_streams: u32,
 }
+
+impl ConnectionsConfig {
+    /// Refuses a request deadline that would cut off a search's round, and limits of none.
+    fn check(&self, search: &SearchConfig) -> Result<(), config::ConfigError> {
+        let message = |text: String| config::ConfigError::Message(text);
+        if self.request_seconds < search.round_seconds + REQUEST_SPARE_SECONDS {
+            return Err(message(format!(
+                "connections.request_seconds ({}) must be at least search.round_seconds ({}) \
+                 plus {REQUEST_SPARE_SECONDS}, or searches through history are cut off",
+                self.request_seconds, search.round_seconds
+            )));
+        }
+        if self.shutdown_seconds == 0 || self.max_streams == 0 {
+            return Err(message(
+                "connections.shutdown_seconds and connections.max_streams must be at least 1"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// How much longer than a search's round a request may take: the round's last step, and
+/// building its page, run past it.
+const REQUEST_SPARE_SECONDS: u64 = 10;
 
 /// Whether people show as online, away, or offline (`app::user_status`).
 #[derive(Clone, Debug, Deserialize, SmartDefault)]
@@ -1086,6 +1126,7 @@ fn load_from(
     loaded.media.s3.check_credentials()?;
     loaded.check_development_credentials()?;
     loaded.check_federation_development()?;
+    loaded.connections.check(&loaded.search)?;
     if let Some(email) = &loaded.email {
         email.validate()?;
     }

@@ -231,21 +231,31 @@ impl CountedConnection for Place {
     }
 }
 
-/// Whether one connection has a request open, and since when it has had none, so a connection
-/// that stays open with nothing in it is closed after `[connections] idle_seconds`. HTTP/2
-/// keeps a connection open between requests for as long as the client likes, answering pings,
-/// and each one takes a place within the limits. A request counts as open from when it reaches
-/// the service until its response's body is dropped, sent or abandoned. An HTTP/1.1 connection
-/// upgraded to a WebSocket is no longer the HTTP connection's, so it is not closed by this.
+/// Whether one connection is doing anything, and since when it has done nothing, so a
+/// connection that stays open with nothing happening on it is closed after `[connections]
+/// idle_seconds`. HTTP/2 keeps a connection open between requests for as long as the client
+/// likes, answering pings, and each one takes a place within the limits.
+///
+/// A request counts as open from when it reaches the service until its response is ready,
+/// which `[connections] request_seconds` bounds (`api::deadline`). Its response's body then
+/// counts only while it makes progress: each frame it gives up, and its end, count as activity,
+/// but a body waiting on a client that does not read (an HTTP/2 window that never opens) does
+/// not, so such a client cannot hold its connection open by asking and never reading. An
+/// HTTP/1.1 connection upgraded to a WebSocket is no longer the HTTP connection's, so it is not
+/// closed by this.
 pub struct Activity {
+    /// Requests whose responses are not yet ready.
     open: AtomicUsize,
-    /// Milliseconds after `since` when a request last opened or closed.
+    /// Milliseconds after `since` when anything last happened.
     last_ms: AtomicU64,
     since: Instant,
 }
 
-/// One open request's place in its connection's `Activity`.
+/// One request's place in its connection's `Activity` until its response is ready.
 pub struct Busy(Arc<Activity>);
+
+/// A response body's link to its connection's `Activity`, which it touches as it progresses.
+pub struct Progress(Arc<Activity>);
 
 impl Activity {
     pub fn new() -> Arc<Self> {
@@ -261,14 +271,15 @@ impl Activity {
         self.last_ms.store(elapsed, Ordering::SeqCst);
     }
 
-    /// Marks a request open until the returned `Busy` is dropped.
+    /// Marks a request open until the returned `Busy` is dropped or its response is ready.
     pub fn begin(self: &Arc<Self>) -> Busy {
         self.open.fetch_add(1, Ordering::SeqCst);
         self.touch();
         Busy(self.clone())
     }
 
-    /// Finishes once the connection has had no request open for `after`.
+    /// Finishes once the connection has had no request open, and no response progress, for
+    /// `after`.
     pub async fn idle(&self, after: Duration) {
         loop {
             let last = self.since + Duration::from_millis(self.last_ms.load(Ordering::SeqCst));
@@ -278,10 +289,18 @@ impl Activity {
             } else if self.open.load(Ordering::SeqCst) == 0 {
                 return;
             } else {
-                // A request is open; when it closes it moves the deadline on.
+                // A request is open; when its response is ready it moves the deadline on.
                 tokio::time::sleep(after).await;
             }
         }
+    }
+}
+
+impl Busy {
+    /// The request's response is ready: it no longer counts as open, and its body counts as
+    /// activity only as it progresses.
+    pub fn responded(self) -> Progress {
+        Progress(self.0.clone())
     }
 }
 
@@ -292,15 +311,21 @@ impl Drop for Busy {
     }
 }
 
-/// A response body that keeps its request counted as open (`Busy`) until it is dropped.
+impl Drop for Progress {
+    fn drop(&mut self) {
+        self.0.touch();
+    }
+}
+
+/// A response body that counts as its connection's activity each time it gives up a frame.
 pub struct Tracked<B> {
     inner: B,
-    _busy: Busy,
+    progress: Progress,
 }
 
 impl<B> Tracked<B> {
-    pub fn new(inner: B, busy: Busy) -> Self {
-        Self { inner, _busy: busy }
+    pub fn new(inner: B, progress: Progress) -> Self {
+        Self { inner, progress }
     }
 }
 
@@ -312,7 +337,11 @@ impl<B: Body + Unpin> Body for Tracked<B> {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        Pin::new(&mut self.inner).poll_frame(cx)
+        let polled = Pin::new(&mut self.inner).poll_frame(cx);
+        if polled.is_ready() {
+            self.progress.0.touch();
+        }
+        polled
     }
 
     fn is_end_stream(&self) -> bool {
@@ -555,5 +584,29 @@ mod tests {
         let start = Instant::now();
         activity.idle(after).await;
         assert!(start.elapsed() >= after);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_response_body_that_makes_no_progress_does_not_keep_the_connection() {
+        let activity = Activity::new();
+        let after = Duration::from_secs(120);
+        /// A body whose client never reads it: it stays open, and nothing polls it.
+        struct Unread;
+        impl Body for Unread {
+            type Data = std::io::Cursor<Vec<u8>>;
+            type Error = std::convert::Infallible;
+            fn poll_frame(
+                self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+            ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+                Poll::Pending
+            }
+        }
+        let body = Tracked::new(Unread, activity.begin().responded());
+        let start = Instant::now();
+        activity.idle(after).await;
+        assert!(start.elapsed() >= after);
+        assert!(start.elapsed() < after * 2);
+        drop(body);
     }
 }

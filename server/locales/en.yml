@@ -190,6 +190,7 @@ deviceChallengeUnsolved: "This nonce doesn't solve the challenge: its hash needs
 deviceChallengeUsed: "This challenge has already earned a device credential. Ask for a new one."
 problemUploadQuotaExceeded: "You have uploaded as much as you may for now."
 problemServerBusy: "The server is busy right now. Wait a moment and try again."
+problemRequestTimedOut: "The server took too long to answer. What you asked for may still happen, so check before trying again; if this keeps happening, tell the deployment's administrators."
 rateLimitsUnavailable: "This server cannot count its rate limits right now, so it refuses sign-ins, codes, and invites until it can. Try again in a moment; if it lasts, tell the deployment's administrators that the server cannot reach Valkey."
 problemDeploymentUnreachable: "The other deployment could not be reached."
 problemFederationRefused: "Federation does not allow this."

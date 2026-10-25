@@ -30,6 +30,7 @@ pub mod channel;
 pub mod channel_mute;
 pub mod community;
 pub mod custom_emoji;
+pub mod deadline;
 pub mod deployment;
 pub mod deployment_settings;
 pub mod device_credential;
@@ -787,10 +788,15 @@ pub async fn start(write_schema: bool, role: Role) -> Result<Option<Serving>, ap
     // Every other path is the web client's: a file of it, or its page.
     let files = web_client::files(context.clone());
     let config = context.config.clone();
+    let request_deadline = Duration::from_secs(config.connections.request_seconds);
     let suspension = context.rate_limiter.suspension().clone();
     Ok(Some(Serving {
         router: axum::Router::from(router.with_state(context))
             .fallback_service(files)
+            .layer(axum::middleware::from_fn_with_state(
+                request_deadline,
+                deadline::layer,
+            ))
             .layer(axum::middleware::from_fn(app::locale::layer))
             .layer(cors_layer()),
         config,
