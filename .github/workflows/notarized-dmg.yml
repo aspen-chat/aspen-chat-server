@@ -6,7 +6,9 @@
 #
 # Each CI run's dmgs end in one artifact of this workflow's: `desktop-macos-notarized-<run id>`,
 # the stapled dmgs, or `desktop-macos-notary-refused-<run id>`, the service's logs, with a failed
-# run. Either one ends the asking for that CI run. Only the newest CI run's dmgs are looked at;
+# run. Either one ends the asking for that CI run. Only the newest CI run that a push to `main`
+# made is looked at, only the dmgs its submissions.json names are stapled, and only once they
+# and their apps carry our Developer ID Application identity;
 # an older run's still waiting are left once a newer one is built.
 
 name: Notarized dmg
@@ -33,11 +35,22 @@ jobs:
     outputs:
       run: ${{ steps.find.outputs.run }}
     steps:
+      # A pull request's run uses the pull request's own ci.yml, which can upload an artifact of
+      # this name, and a fork's `main` has the same head branch as ours; so a run counts only when
+      # it was a push to this repository's `main` running its own ci.yml.
       - id: find
         run: |
-          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=desktop-macos-unstapled&per_page=100" \
-            --jq '[.artifacts[] | select(.expired | not) | select(.workflow_run.head_branch == "main")]
-              | sort_by(.created_at) | last | .workflow_run.id // empty')"
+          run=""
+          for candidate in $(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=desktop-macos-unstapled&per_page=100" \
+            --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | reverse | .[].workflow_run.id'); do
+            if [ "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate" \
+              --jq '.event == "push" and .head_branch == "main" and .path == ".github/workflows/ci.yml"
+                and .head_repository.full_name == $ENV.GITHUB_REPOSITORY
+                and .repository.full_name == $ENV.GITHUB_REPOSITORY')" = true ]; then
+              run="$candidate"
+              break
+            fi
+          done
           if [ -z "$run" ]; then
             echo "No dmgs from main are kept unstapled."
             exit 0
@@ -70,6 +83,33 @@ jobs:
           path: dmgs
           run-id: ${{ needs.pending.outputs.run }}
           github-token: ${{ github.token }}
+      # Only the dmgs submissions.json names go further, and only when they and the apps inside
+      # them carry our Developer ID Application identity: a ticket is found by the signature, so
+      # a dmg someone else signed and notarized would otherwise be stapled and kept as ours.
+      - name: Check that each dmg submissions.json names is signed by us
+        run: |
+          requirement='anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = "L2GS25U79G"'
+          signed_by_us() {
+            codesign --verify --strict --verbose=2 --test-requirement="=$requirement" "$@"
+            details="$(codesign -dvv "${@: -1}" 2>&1)"
+            echo "$details" | grep -q '^Authority=Developer ID Application: Jacob Kiesel (L2GS25U79G)$' \
+              || { echo "${*: -1} is not signed with the Developer ID Application identity"; exit 1; }
+            echo "$details" | grep -q '^TeamIdentifier=L2GS25U79G$' \
+              || { echo "${*: -1} is not signed by team L2GS25U79G"; exit 1; }
+          }
+          mkdir ../stapled
+          names="$(jq -r '.[].dmg' submissions.json)"
+          [ -n "$names" ] || { echo "submissions.json names no dmgs"; exit 1; }
+          while read -r dmg; do
+            [[ "$dmg" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*\.dmg$ ]] || { echo "submissions.json names $dmg, not a dmg here"; exit 1; }
+            [ -f "$dmg" ] || { echo "submissions.json names $dmg, which the artifact lacks"; exit 1; }
+            signed_by_us "$dmg"
+            mount="$(mktemp -d)"
+            hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$dmg" > /dev/null
+            signed_by_us --deep "$mount/Aspen.app"
+            hdiutil detach "$mount" > /dev/null
+            cp "$dmg" ../stapled/
+          done <<< "$names"
       - id: notary
         name: Ask the notary service about each submission
         run: |
@@ -111,6 +151,7 @@ jobs:
       - if: steps.notary.outputs.verdict == 'accepted'
         name: Staple each dmg and check it
         run: |
+          cd ../stapled
           for dmg in *.dmg; do
             xcrun stapler staple "$dmg"
             xcrun stapler validate "$dmg"
@@ -124,4 +165,4 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: desktop-macos-notarized-${{ needs.pending.outputs.run }}
-          path: dmgs/*.dmg
+          path: stapled/*.dmg

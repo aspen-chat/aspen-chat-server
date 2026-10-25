@@ -42,7 +42,12 @@ dmg asks for none), because the service finds a dmg's ticket by its signature. I
 with `notarytool submit` and keeps the dmgs with `submissions.json`, their submission ids.
 
 `notarized-dmg.yml` runs every half hour, and can be started by hand. It looks only at the newest
-`desktop-macos-unstapled` from `main`, and asks the service about each submission:
+`desktop-macos-unstapled` made by a `push` to this repository's `main` running its own `ci.yml`: a
+pull request's run uses the pull request's `ci.yml`, which can upload an artifact of that name, and
+a fork's `main` has the same branch name. It takes only the dmgs `submissions.json` names, and only
+once each, and the app inside it, carries the Developer ID Application identity of team
+`L2GS25U79G`, since a dmg someone else signed and notarized would staple and pass Gatekeeper just
+the same. Then it asks the service about each submission:
 
 - **Accepted:** it staples each dmg, checks the ticket and what Gatekeeper says of the dmg and of
   the app inside it, and keeps the dmgs as `desktop-macos-notarized-<CI run id>`.
