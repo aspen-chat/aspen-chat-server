@@ -206,6 +206,12 @@ def check_main(images: dict) -> Box:
     expect("the S3 API refuses an unsigned read", box.status(f"{media}/aspen-media/evidence/x", resolve=resolve), 403)
     allowed = box.curl("-D", "-", "-o", "/dev/null", "-H", f"Origin: https://{DOMAIN}", f"{media}/attachments/x", resolve=resolve)
     expect("the read path lets any origin read", "access-control-allow-origin: *" in allowed.lower(), True)
+    # Every container shares loopback, the voice server, which faces the internet, among them.
+    expect("Caddy's admin API is not on loopback", box.status("http://127.0.0.1:2019/config/"), 0)
+    unauthenticated = box.compose("exec", "-T", "valkey", "valkey-cli", "ping", check=False).stdout
+    expect("Valkey refuses a client without its password", "NOAUTH" in unauthenticated, True)
+    expect("the voice server runs as a user of its own", box.compose("exec", "-T", "voice", "id", "-u").stdout.strip(), "10002")
+    expect("data/ is the box's user's alone", oct((box.dir / "data").stat().st_mode & 0o777), "0o700")
     token = sign_in(box, "boxer")
     page = box.curl(f"https://{DOMAIN}/")
     build = page.split('name="aspen-web-client-build" content="', 1)[1].split('"', 1)[0]

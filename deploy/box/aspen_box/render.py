@@ -81,7 +81,11 @@ def render(store: Box, box: dict) -> set:
     """Writes `config/` and `.env` from `box`, and answers which of its files changed."""
     (store.dir / "config").mkdir(mode=0o700, parents=True, exist_ok=True)
     (store.dir / "backups").mkdir(mode=0o700, exist_ok=True)
-    (store.dir / "data" / "caddy").mkdir(parents=True, exist_ok=True)
+    # The database, the storage's objects, and Caddy's keys, which no other user of the machine
+    # may read whatever their own modes are.
+    (store.dir / "data").mkdir(mode=0o700, exist_ok=True)
+    (store.dir / "data").chmod(0o700)
+    (store.dir / "data" / "caddy").mkdir(exist_ok=True)
     (store.dir / "config" / "nats-tls").mkdir(mode=0o700, exist_ok=True)
     if box.get("role") == "voice":
         return render_voice_only(store, box)
@@ -161,7 +165,7 @@ def render_main(store: Box, box: dict) -> set:
             **encoded(dict(
                 public_url=f"https://{domain}",
                 database_url=database_url(box),
-                valkey_url="redis://127.0.0.1:6379",
+                valkey_url=f"redis://:{secret['valkey']}@127.0.0.1:6379",
                 nats_url=nats_url(box),
                 nats_password=secret["nats_server"],
                 nats_monitor_url="http://127.0.0.1:8222",
@@ -186,6 +190,7 @@ def render_main(store: Box, box: dict) -> set:
         )),
         "nats-ca.pem": nats_authority,
         "Caddyfile": caddyfile(box, sites),
+        "valkey.conf": f'requirepass "{secret["valkey"]}"\n',
         "postgres.env": f"POSTGRES_USER=aspen\nPOSTGRES_DB=aspen\nPOSTGRES_PASSWORD={secret['database']}\n",
         # Always there, empty when unused: the servers' containers mount it either way.
         "database-ca.pem": authorities,
@@ -200,7 +205,11 @@ def render_main(store: Box, box: dict) -> set:
             id=here["id"], name=here["name"], nats=nats_url(box), password=here["password"],
             announced=addresses(box), box=box, tls=open_,
         )  # fmt: skip
-    return write_files(store.dir / "config", files)
+    changed = write_files(store.dir / "config", files)
+    # Valkey reads it as a user of its own, whatever the machine's umask; config/ itself is the
+    # box's user's alone.
+    (store.dir / "config" / "valkey.conf").chmod(0o644)
+    return changed
 
 
 def voice_urls(box: dict) -> dict:

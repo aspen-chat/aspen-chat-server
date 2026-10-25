@@ -17,12 +17,13 @@ account, so expect to fix things the first time.
 | NATS                                                    | One Fargate task, with a user for the API servers and one for each voice server                                         |
 | Object storage                                          | A private S3 bucket, which the servers reach as their task role; uploads go to it directly                              |
 | The storage's read path                                 | CloudFront at `media.<domain>`, which may read the four public prefixes only                                            |
-| `aspen.toml`, `voice_server.toml`, NATS's configuration | Written from [`templates/`](templates) into Secrets Manager                                                             |
+| `aspen.toml`, `voice_server.toml`, NATS's configuration | Written from [`templates/`](templates) into Secrets Manager, each readable by its own kind of task alone                |
 | Migrations, registering voice servers                   | A task run during each `tofu apply`, before servers are replaced                                                        |
 
 Nothing but the load balancer (80 and 443) and the voice servers' media and file transfer ports is
 open to the internet. All of them, and the read path, answer over IPv4 and IPv6, and the servers
-reach the internet over both.
+reach the internet over both. Each voice server's machine refuses the voice server its instance
+metadata service ([`voice-imds.service`](../aws-single/machine/voice-imds.service)).
 
 The servers run the published images, `ghcr.io/aspen-chat/aspen-api` and `aspen-voice`, built for
 x86-64 and 64-bit ARM. To run images of your own, build them from

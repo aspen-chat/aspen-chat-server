@@ -32,8 +32,9 @@ output "log_configuration" {
   }
 }
 
-output "execution_role_arn" {
+output "execution_role_arns" {
+  description = "Each kind of task's execution role, by the keys of `execution_secrets`."
   # Read through the policies, so whatever starts a task waits for the role to be able to.
-  value      = aws_iam_role.execution.arn
+  value      = { for kind, role in aws_iam_role.execution : kind => role.arn }
   depends_on = [aws_iam_role_policy_attachment.execution, aws_iam_role_policy.execution_config]
 }

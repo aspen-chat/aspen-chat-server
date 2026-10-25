@@ -45,6 +45,10 @@ through) or sign-ins in progress, at random.
 - Half a gigabyte is plenty for most deployments. Aspen limits how fast strangers can start what it
   stores there (password resets, passkey ceremonies, device links), for everyone together.
 - Watch `used_memory` in `INFO memory`, and raise the limit if it approaches it.
+- Give it a password (`requirepass`), even on loopback, wherever another program on the machine (a
+  voice server, which takes traffic from the internet) shares that loopback, and name it in
+  `valkey_url` as `redis://:<password>@127.0.0.1:6379`. Off this machine, the password needs TLS
+  (`rediss://`).
 
 ## Object storage
 

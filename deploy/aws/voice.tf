@@ -73,13 +73,17 @@ resource "aws_instance" "voice" {
   iam_instance_profile   = aws_iam_instance_profile.voice.name
   tags                   = { Name = "${var.name}-${each.key}" }
 
-  # The attribute is what its service places its one task by.
+  # The attribute is what its service places its one task by. The voice server shares the
+  # machine's network, so its user is refused the instance metadata service at every boot
+  # (voice-imds.service says why).
   user_data = <<-EOT
     #!/bin/bash
     cat >> /etc/ecs/ecs.config <<'CONFIG'
     ECS_CLUSTER=${module.cluster.name}
     ECS_INSTANCE_ATTRIBUTES={"aspen.voice":"${each.key}"}
     CONFIG
+    echo '${filebase64("${path.module}/../aws-single/machine/voice-imds.service")}' | base64 -d > /etc/systemd/system/aspen-voice-imds.service
+    systemctl enable --now aspen-voice-imds.service
   EOT
 
   metadata_options {
@@ -110,7 +114,7 @@ resource "aws_ecs_task_definition" "voice" {
   requires_compatibilities = ["EC2"]
   # The host's own network: the media ports are a range, taken as calls need them.
   network_mode       = "host"
-  execution_role_arn = module.cluster.execution_role_arn
+  execution_role_arn = module.cluster.execution_role_arns["voice-${each.key}"]
 
   container_definitions = jsonencode([{
     name              = "voice"

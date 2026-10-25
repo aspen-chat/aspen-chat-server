@@ -82,7 +82,7 @@ x86-64 and 64-bit ARM, and `--tag` names a release of both. To run images of you
 | To                                                                             | Run                                                                                                                                                                                                                                     |
 | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Move to a new release                                                          | `aspen-box upgrade --tag TAG`. The API does not stop: the new server starts beside the old one, which stops once the new one answers. Calls in progress end and rejoin. If the new release does not start, the old one goes on serving. |
-| Back up the database                                                           | `aspen-box backup`, daily, from cron. It keeps the last seven in `~/aspen/backups`. **Copy them off the machine.**                                                                                                                      |
+| Back up the database                                                           | `aspen-box backup`, daily, from cron. It keeps the last seven in `~/aspen/backups`. **Copy them off the machine**, encrypted ([Backups are not encrypted](#backups-are-not-encrypted)).                                                 |
 | Restore it                                                                     | `aspen-box restore FILE`. Everything since that backup is lost.                                                                                                                                                                         |
 | Change a setting                                                               | Edit `~/aspen/box.json`, then `aspen-box up`, which restarts only what the change touches.                                                                                                                                              |
 | Run an operator command                                                        | `aspen-box run -- aspen-chat-server …`                                                                                                                                                                                                  |
@@ -91,6 +91,13 @@ x86-64 and 64-bit ARM, and `--tag` names a release of both. To run images of you
 
 People's files are not in the database's backups. Kept on the machine, they are in
 `~/aspen/data/garage`: copy that directory too, with the deployment stopped (`aspen-box down`).
+
+### Backups are not encrypted
+
+A backup, and an export's `DIR`, hold everything the deployment knows: every account, message, and
+sign-in. On the machine they are readable by its user alone, but a copy is as safe as wherever it
+lands. Encrypt each before it leaves the machine, for instance with `age` or `gpg --symmetric`, and
+keep the key somewhere other than the copies.
 
 ## DNS records
 
@@ -173,6 +180,26 @@ calls than one machine can. Each is a box of its own, holding the voice server a
 of the registry once it holds no calls, its NATS user goes, and NATS keeps to the machine again when
 it was the last. Upgrade each voice server's box with `aspen-box upgrade --tag` on its own machine,
 after the deployment's.
+
+## What the voice server shares the machine with
+
+The voice server takes media from the internet, and every container on the box shares the machine's
+loopback. So nothing there trusts a caller for being on it: Valkey asks for a password (`valkey`
+under `secrets` in `box.json`, made for a box that lacks one the next time the tool runs), Caddy's
+admin API is a socket inside Caddy's own container, and PostgreSQL, NATS, and Garage each ask for
+their own credentials. `data/` is readable by the machine's user alone.
+
+The voice server runs as a user of its own, 10002. On a cloud machine whose metadata service hands
+out credentials (AWS, Google Cloud, Azure, and others), refuse that user the metadata address from
+every boot on, as [`aws-single`](../aws-single/README.md) does with
+[`voice-imds.service`](../aws-single/machine/voice-imds.service):
+
+```
+sudo cp voice-imds.service /etc/systemd/system/aspen-voice-imds.service
+sudo systemctl enable --now aspen-voice-imds.service
+```
+
+Its address is `169.254.169.254` on all three, and also `fd00:ec2::254` on AWS.
 
 ## At home
 

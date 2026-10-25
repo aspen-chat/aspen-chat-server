@@ -78,6 +78,7 @@ def init(store: Box, opt: argparse.Namespace) -> None:
         "secrets": {
             "database": secrets.token_hex(20),
             "nats_server": secrets.token_hex(20),
+            "valkey": secrets.token_hex(20),
             "garage_rpc": secrets.token_hex(32),
             # The forms Garage's own key pairs have.
             "s3_access_key": "GK" + secrets.token_hex(12),

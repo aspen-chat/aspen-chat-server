@@ -76,17 +76,23 @@ RUN apt-get update \
         curl \
     && rm -rf /var/lib/apt/lists/* \
     && dpkg --compare-versions "$(dpkg-query -Wf '${Version}' ca-certificates)" \
-        ge "$MIN_CA_CERTIFICATES" \
-    && useradd --system --uid 10001 --home-dir /etc/aspen --shell /usr/sbin/nologin aspen \
-    && install -d -o aspen -g aspen -m 0700 /etc/aspen
-WORKDIR /etc/aspen
+        ge "$MIN_CA_CERTIFICATES"
 
+# A user of its own, 10002, not the API server's: a machine running both tells them apart by
+# it, and refuses this one the cloud's instance metadata service
+# (deploy/aws-single/machine/voice-imds.service).
 FROM runtime AS voice
+RUN useradd --system --uid 10002 --home-dir /etc/aspen --shell /usr/sbin/nologin aspen-voice \
+    && install -d -o aspen-voice -g aspen-voice -m 0700 /etc/aspen
+WORKDIR /etc/aspen
 COPY --from=build /out/bin/voice_server /usr/local/bin/
-USER aspen
+USER aspen-voice
 CMD ["voice_server"]
 
 FROM runtime AS api
+RUN useradd --system --uid 10001 --home-dir /etc/aspen --shell /usr/sbin/nologin aspen \
+    && install -d -o aspen -g aspen -m 0700 /etc/aspen
+WORKDIR /etc/aspen
 # openssl makes the certificates a box opens NATS with to voice servers elsewhere
 # (deploy/box/aspen_box/nats_tls.py).
 RUN apt-get update \

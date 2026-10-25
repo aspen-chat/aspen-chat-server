@@ -26,7 +26,7 @@ variable "log_roles" {
   type        = list(string)
 }
 
-variable "config_secret_arns" {
-  description = "The secrets holding the configuration files tasks are started with."
-  type        = list(string)
+variable "execution_secrets" {
+  description = "The secrets holding the configuration files tasks are started with, by the kind of task that alone may read them, each kind given an execution role of its own (`execution_role_arns`). A kind's name and the deployment's together are at most 58 characters."
+  type        = map(list(string))
 }

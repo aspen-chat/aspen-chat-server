@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import subprocess
 import urllib.request
 
@@ -40,7 +41,13 @@ class Box:
     def load(self) -> dict:
         if not self.file.exists():
             raise Failed(f"{self.dir} holds no deployment yet: run `aspen-box init`")
-        return json.loads(self.file.read_text())
+        box = json.loads(self.file.read_text())
+        # A box made before Valkey had a password is given one, which the next `up` or
+        # `upgrade` hands Valkey and the API server.
+        if box.get("role") != "voice" and "valkey" not in box["secrets"]:
+            box["secrets"]["valkey"] = secrets.token_hex(20)
+            self.save(box)
+        return box
 
     def save(self, box: dict) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)

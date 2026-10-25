@@ -182,6 +182,20 @@ run "release" {
     error_message = "A voice server takes its own instance type, or the architecture's default."
   }
 
+  assert {
+    condition = alltrue([
+      for kind, keys in local.execution_secrets : kind == "server" ? keys == ["aspen-toml"] : !contains(keys, "aspen-toml")
+      ]) && alltrue([
+      for name in keys(var.voice_servers) : local.execution_secrets["voice-${name}"] == ["voice-${name}"]
+    ])
+    error_message = "Only the servers' execution role may read aspen.toml, and each voice server's reads its own file alone."
+  }
+
+  assert {
+    condition     = alltrue([for voice in aws_instance.voice : strcontains(voice.user_data, "systemctl enable --now aspen-voice-imds.service")])
+    error_message = "Every voice server's machine refuses the voice server the instance metadata service."
+  }
+
 }
 
 run "beside_the_deployment_it_replaces" {

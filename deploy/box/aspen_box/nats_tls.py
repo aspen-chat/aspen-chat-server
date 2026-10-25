@@ -4,8 +4,11 @@ name and for this machine's loopback, where its own servers reach NATS.
 
 The authority's key stays in `data/nats-authority/`, which no container mounts; the server's
 certificate and key are in `config/nats-tls/`, which NATS mounts. Every voice server and this
-machine's servers trust the authority alone for NATS (`[nats.tls] ca_file`). The certificates
-are made with `openssl` in the `api` image, and left this machine's user's.
+machine's servers trust the authority for NATS (`[nats.tls] ca_file`), which adds to the system's
+public authorities rather than replacing them (`aspen_tls`): a certificate for the deployment's
+domain from a public authority would be taken too, but such an authority issues one only to
+whoever shows it controls the domain. The certificates are made with `openssl` in the `api`
+image, and left this machine's user's.
 """
 
 from __future__ import annotations
