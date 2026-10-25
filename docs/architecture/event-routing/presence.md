@@ -128,22 +128,29 @@ A hint says only that someone's presence may have changed. It is made:
 
 ### Watching and telling
 
-1. A connection names the users it shows with `watchPresence`. Each replaces the last; the router
-   takes up at most one per window.
+1. A connection names the users it shows with `watchPresence`. Each replaces the last, in a slot of
+   the connection's own that the router empties (`RouterHandle::lists`), so no connection's lists
+   crowd out another's; the router takes up at most one per window.
 2. One router per API server keeps who watches whom. It reads every hint and keeps those for users
    watched here.
-3. From the first hint or watch list kept, it waits one window, then:
+3. From the first hint or watch list kept, it waits one window, then, in a task of its own while the
+   router goes on taking hints, lists, and connections (one telling at a time):
    1. reads the presence of every user to tell of in batched `MGET`s (`user_status::raw_statuses`);
    2. decides in one query per 5000 pairs which watchers may learn each
-      (`user_status::presence_visible_pairs`, the same rule as below);
+      (`user_status::presence_visible_pairs`, the same rule as below), but for pairs it decided in
+      the last ten seconds (`DECIDED_FOR`) and has heard no hint for the user since
+      (`presence_feed::Decisions`, at most 200,000 kept);
    3. sends each connection one frame holding only what differs from what it was last told of each.
 4. A user that a connection's watch list adds is told to it whatever they are, except the users of
    its first list, which its client reads whole over REST once the list is taken up (see
    [Design notes](design-notes.md#presence)). From the take-up on, every change is told.
-5. Each list taken up is answered with a `presenceWatching` frame, at the telling that takes it up,
-   or the next one when the connection's queue is full. A list dropped from a full queue is never
-   answered, and its client sends it again.
-6. Someone a watcher may no longer learn the presence of is told to them as `offline`.
+5. A connection's lists after its first add at most 500 users at once (`ADDED_BURST`) and 1,000 a
+   minute (`ADDED_PER_MINUTE`), in the order the list names them. The rest of a list wait, taken up
+   a telling at a time as the budget allows, unless a newer list replaces it.
+6. Each list taken up whole is answered with a `presenceWatching` frame, at the telling that takes
+   it up, or the next one when the connection's queue is full. A list replaced before it was taken
+   up is never answered.
+7. Someone a watcher may no longer learn the presence of is told to them as `offline`.
 
 A lost hint (a full queue, a server that stopped with timers pending, a core NATS message dropped)
 leaves a watcher behind until the next change or the client's next whole read.
@@ -154,8 +161,10 @@ leaves a watcher behind until the next change or the client's next whole read.
 - A telling costs one batched read and one query per 5,000 pairs, per window per server.
 - One telling decides at most `MAX_PAIRS_PER_TELLING` (50,000) connection and user pairs, so at most
   ten queries, changes first; the rest wait for the next window.
-- Memory is one entry per connection per user watched, at most 500 per connection, and one timer per
-  user and kind marked on this server.
+- A client changing its lists fast gets no more users decided than its budget, and lists it named in
+  the last ten seconds are decided from what the router kept.
+- Memory is one entry per connection per user watched, at most 500 per connection, one timer per
+  user and kind marked on this server, and the kept decisions.
 
 ## Who may see it
 
@@ -225,11 +234,13 @@ invisible. Each server keeps a community's for ten seconds the same way.
    `statuses_for`, and for frames by `presence_visible_pairs` at each telling, never when a
    connection names whom it watches.
 3. **When the deciding permission is lost, what happens to what is already open?** A block hints the
-   blocker, so the blocked watcher is told `offline` within a window. Leaving a community, a
-   removal, a ban, or a DM ending takes effect at the next change to that person, which the watcher
-   is told as `offline`; meanwhile the watcher's client drops the member with the community's
-   events, and so stops watching them. A sign-out, a password change, a ban from the deployment, or
-   an account deleted closes the watcher's streams, which ends their watches.
+   blocker, so the blocked watcher is told `offline` within a window, and no decision kept from
+   before the hint is used. Leaving a community, a removal, a ban, or a DM ending takes effect at
+   the next change to that person, which the watcher is told as `offline` (a user the watcher names
+   again within ten seconds may be told by a decision kept from before); meanwhile the watcher's
+   client drops the member with the community's events, and so stops watching them. A sign-out, a
+   password change, a ban from the deployment, or an account deleted closes the watcher's streams,
+   which ends their watches.
 4. **When it is gained, how does a client already open find out without a reload?** It watches whom
    it now shows, and is told each of them at the next telling, as a user its watch list adds is; on
    a new connection, it reads them whole.
