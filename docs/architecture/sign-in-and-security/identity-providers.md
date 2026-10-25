@@ -124,7 +124,13 @@ The claim of a `signIn` flow:
 
 - **A linked account:** the identity (`user_identity`, by provider, issuer, and `sub`) names it. The
   account is signed in. If the sign-in counts as one factor and the account holds a second factor,
-  it is asked for, as after a password (`secondFactorRequired`, with a ticket).
+  it is asked for, as after a password (`secondFactorRequired`, with a ticket). The sign-in counts
+  as verified (`verified_at`, see [Reverification](reverification.md#recent-verification)) when the
+  ID token's `auth_time` says the person last signed in at the provider, or never when it says
+  nothing. A provider signs someone in silently from a session it has held for days, so whoever
+  finds that session open in a browser gets a sign-in that must still verify again (a
+  `reauthenticate` flow, which makes the provider ask) before any security change. A second factor
+  asked for here is proved now, and the sign-in it finishes is verified now.
 - **No linked account:** the answer is `accountRequired`, with a suggested username (the provider's
   `preferred_username`, when it is one an account could take), its display name, whether an invite
   is needed, and the address the account will have or whether one must be given. The person chooses

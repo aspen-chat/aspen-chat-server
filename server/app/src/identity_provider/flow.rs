@@ -132,6 +132,14 @@ impl Identified {
             SignInMethod::IdentityProvider
         }
     }
+
+    /// When the person last proved who they are at the provider: its `auth_time`, no later than
+    /// now, or never when it sent none. A provider may sign someone in from a session it has held
+    /// for days without asking anything, so the sign-in it makes is no recent verification.
+    fn verified_at(&self) -> DateTime<Utc> {
+        self.auth_time
+            .map_or(DateTime::UNIX_EPOCH, |at| at.min(Utc::now()))
+    }
 }
 
 fn new_secret() -> String {
@@ -614,6 +622,7 @@ pub async fn claim(
                         &mut conn,
                         user,
                         identified.method(),
+                        identified.verified_at(),
                         Some(ProviderSignIn {
                             provider: provider.id,
                             session: identified.session.clone(),
@@ -824,6 +833,7 @@ pub async fn create_account(
         &mut conn,
         user,
         identified.method(),
+        identified.verified_at(),
         Some(ProviderSignIn {
             provider: provider_id,
             session: identified.session.clone(),

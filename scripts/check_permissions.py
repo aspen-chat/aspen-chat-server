@@ -1755,6 +1755,11 @@ def identity_providers(world: World, check: Checks) -> None:
         status, text = stack.request("DELETE", f"/users/@me/identities/{identity}", token=second["token"])
         check("its only way in cannot be unlinked", status == 409 and "lastSignInMethod" in text, (status, text))
         stack.api("PUT", "/users/@me/password", {"newPassword": PASSWORD}, second["token"])
+        idp.sign_in_next(sub=sub, amr=["pwd"], sid="silent", auth_age=86400)
+        status, claimed, _, _ = provider_flow(stack, provider, "signIn")
+        refused = stack.status("DELETE", f"/users/@me/identities/{identity}", token=claimed.get("sessionToken"))
+        check("a provider's silent sign-in from an old session there is no recent verification",
+              status == 200 and refused == 403, (status, claimed, refused))
         password = world.sign_in(username)
         password_stream = stack.events(password["token"])
         idp.sign_in_next(sub=sub, amr=["pwd", "otp"], sid="third")

@@ -116,11 +116,14 @@ class Provider:
 
     def sign_in_next(self, sub: str, amr: list[str] | None = None, sid: str | None = None,
                      email: str | None = None, email_verified: bool = True, preferred_username: str | None = None,
-                     name: str | None = None, error: str | None = None) -> None:
-        """Whom the next authorization signs in, or the OAuth `error` it answers with instead."""
+                     name: str | None = None, error: str | None = None, auth_age: int = 0) -> None:
+        """Whom the next authorization signs in, or the OAuth `error` it answers with instead.
+        `auth_age` is how many seconds before the authorization the person last signed in here, as
+        when the provider signs them in silently from a session it already holds."""
         with self.lock:
             self.next = {"sub": sub, "amr": amr, "sid": sid, "email": email, "email_verified": email_verified,
-                         "preferred_username": preferred_username, "name": name, "error": error}
+                         "preferred_username": preferred_username, "name": name, "error": error,
+                         "auth_age": auth_age}
 
     def logout_token(self, sub: str | None = None, sid: str | None = None, typ: str = "logout+jwt",
                      **changes) -> str:
@@ -183,7 +186,8 @@ class Provider:
             code = secrets.token_urlsafe(24)
             with self.lock:
                 self.codes[code] = {"identity": identity, "nonce": query.get("nonce"), "redirect": redirect,
-                                    "challenge": query.get("code_challenge"), "auth_time": int(time.time())}
+                                    "challenge": query.get("code_challenge"),
+                                    "auth_time": int(time.time()) - identity.get("auth_age", 0)}
             back["code"] = code
         self.send(handler, 302, headers={"location": f"{redirect}?{urllib.parse.urlencode(back)}"})
 
