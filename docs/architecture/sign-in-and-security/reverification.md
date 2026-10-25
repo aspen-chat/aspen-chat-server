@@ -2,7 +2,10 @@
 
 ## Recent verification
 
-A sign-in records when it last proved who its user is, in `refresh_token.verified_at`.
+A sign-in records when it last proved who its user is, in `refresh_token.verified_at`: the moment it
+was made for a password, a passkey, or a second factor, and for a sign-in through an
+[identity provider](identity-providers.md#signing-in) the provider's `auth_time` (never later than
+now), or never when it sent none.
 
 These changes need that to be within `[auth] reverify_seconds`, or they answer
 `reauthenticationRequired`:
@@ -23,7 +26,9 @@ Other features ask for it too: giving a sign-in by a
 - With the password.
 - With a code, when two-factor sign-in is on.
 
-A passkey `reauthenticate` ceremony does the same (see [Passkeys](passkeys.md)).
+A passkey `reauthenticate` ceremony does the same (see [Passkeys](passkeys.md)). So does a
+`reauthenticate` flow through a linked identity provider (see
+[Identity providers](identity-providers.md#verifying-again)).
 
 ## Security settings endpoints
 

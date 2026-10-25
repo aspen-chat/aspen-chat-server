@@ -37,8 +37,15 @@ import org.json.JSONException;
  * Android then lets the app use the deployment's passkeys as a page at its domain would, writing
  * the app's own origin (`android:apk-key-hash:` and its signing certificate's digest) into what
  * the authenticator signs, which the deployment accepts for the apps it names. Each call takes
- * the ceremony's `publicKey` options as the server gave them and answers the credential as the
- * JSON the server reads; a failure rejects with a code of `PasskeyFailure`.
+ * the ceremony's `publicKey` options as the server gave them and the `host` of the deployment
+ * that gave them, and answers the credential as the JSON the server reads; a failure rejects with
+ * a code of `PasskeyFailure`.
+ *
+ * <p>Android checks only that the relying party's domain names this app, and the origin it
+ * writes is the same for every deployment, so options one deployment relayed from another's
+ * ceremony would be signed for the other. Each call is refused, `unavailable`, unless the options'
+ * relying party is the host or a parent of it ({@link #rpIdFits}), the rule a browser holds a page
+ * to; the page then hands the ceremony to that deployment's own page in the system browser.
  */
 @CapacitorPlugin(name = "AspenPasskeys")
 public class AspenPasskeysPlugin extends Plugin {
@@ -73,6 +80,11 @@ public class AspenPasskeysPlugin extends Plugin {
         JSObject publicKey = call.getObject("publicKey");
         if (activity == null || publicKey == null || Build.VERSION.SDK_INT < FIRST_SDK) {
             call.reject("Credential Manager cannot run here", PasskeyFailure.UNAVAILABLE);
+            return;
+        }
+        JSObject rp = publicKey.getJSObject("rp");
+        if (!rpIdFits(rp == null ? null : rp.getString("id"), call.getString("host"))) {
+            call.reject("the relying party is not the deployment's", PasskeyFailure.UNAVAILABLE);
             return;
         }
         CredentialManager.create(activity)
@@ -110,6 +122,10 @@ public class AspenPasskeysPlugin extends Plugin {
             call.reject("Credential Manager cannot run here", PasskeyFailure.UNAVAILABLE);
             return;
         }
+        if (!rpIdFits(publicKey.getString("rpId"), call.getString("host"))) {
+            call.reject("the relying party is not the deployment's", PasskeyFailure.UNAVAILABLE);
+            return;
+        }
         CredentialManager.create(activity)
                 .getCredentialAsync(
                         activity,
@@ -136,6 +152,19 @@ public class AspenPasskeysPlugin extends Plugin {
                                 call.reject(e.getMessage(), PasskeyFailure.of(e));
                             }
                         });
+    }
+
+    /**
+     * Whether a ceremony for the relying party {@code rpId} may run for the deployment at
+     * {@code host}: the host is that domain or under it. Either missing is a refusal.
+     */
+    static boolean rpIdFits(String rpId, String host) {
+        if (rpId == null || host == null || rpId.isEmpty()) {
+            return false;
+        }
+        String id = rpId.toLowerCase(Locale.ROOT);
+        String at = host.toLowerCase(Locale.ROOT);
+        return at.equals(id) || at.endsWith("." + id);
     }
 
     /*

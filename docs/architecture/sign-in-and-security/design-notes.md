@@ -200,11 +200,28 @@ See [Device credentials](device-credentials.md).
 - **Challenges and credentials are stateless.** Every API server checks them with the shared key and
   asks no one, so presenting a credential adds no lookup to a request. Only a challenge's use is
   remembered, until it expires, so that one solution earns one credential.
+- **Networks have a ceiling of their own, everyone a high one.** An address is cheap to change
+  within a network one holds (an IPv6 /48 is 65536 of the /64s an address counts as), so the sign-in
+  endpoints and redeeming a credential also count by network, at four addresses' worth. Everyone's
+  redemptions together are limited only to bound what Valkey keeps of used challenges: a limit low
+  enough to matter would let anyone with enough networks spend it, and every new install needs a
+  credential before it can sign in. A difficulty that rises under load would raise the cost of
+  spending it further; the fixed difficulty and the high ceiling are what there is.
 - **Ninety days, renewed past half its life.** A device in use never solves the puzzle again, and
   one hoarded or copied ages out.
 - **Signed-in requests count by user alone.** A session already says who is asking, and it is
   something an address's people each hold. Counting their requests against their address too would
   hold everyone behind a NAT to one budget as soon as many were signed in.
+- **Except where nobody signs in.** On password sign-in, second factors, registration, token
+  refresh, and resets, a session gives nothing the handler uses, so counting by it would only let
+  anyone holding a token (their own, or a bot's they made) skip the address's, the device's, and the
+  failure limits that hold guessing there, and spray passwords across names with the hashing pool as
+  the only limit. On those routes a request counts as its address whatever session it presents; a
+  valid session spares it only the device credential, since signed-in apps (this version's and
+  others') read `GET /auth/methods` and `GET /deployment` with their session and hold none. Where a
+  session is optional, it does count, so each address limit set there needs a user limit beside it,
+  which the limiter checks when it compiles the configuration rather than leaving to whoever writes
+  it.
 - **Session and bot tokens are signed, so a made-up one is refused without the database.** Looking
   up a token takes the database, and signed-in requests are not counted by their address before
   their token is read. A limit on an address's rejected tokens, checked before each lookup, would
@@ -236,6 +253,14 @@ See [Identity providers](identity-providers.md).
 - **Identities are matched by provider and `sub`, never by email address.** An address can be
   reused, changed, or asserted by a provider that does not own it, so matching by it would let one
   person's provider sign in as someone else.
+- **A provider's issuer and client id are fixed once it is added, and links keep their issuer.** A
+  `sub` is unique only within one issuer (OIDC Core §2), and pairwise subjects differ by client.
+  Were either editable, a holder of Manage identity providers who outranks no one could point a
+  provider at an issuer they run and sign in as any account linked to it, its owner's included, with
+  the provider's strength skipping that account's own second factor. Wiping the links on a change
+  was the other choice; it would leave everyone linked without a way in, and adding a provider and
+  relinking says plainly that the accounts move. Matching links by the issuer they were made at
+  keeps a row changed in the database directly from reaching them either.
 - **The claim needs the client's PKCE verifier and a one-time return code, as a passkey hand-off's
   does.** Whoever starts a flow can send its authorization URL to someone else; the return code
   reaches only the device whose browser ran the flow, so the effect goes only to whoever started it
@@ -249,6 +274,12 @@ See [Identity providers](identity-providers.md).
 - **A provider's sign-in counts as one factor unless it says otherwise.** Its `amr` claim, or the
   administrators' word (`enforces_two_factor`), decides; a provider that says nothing is treated as
   a password, so `require_two_factor` and an account's own second factors still apply.
+- **`amr` counts kinds of factor, not methods.** Two factors are two of knowledge, possession, and
+  inherence, as RFC 8176 groups its values; counting distinct values instead would take a password
+  with a PIN, or a fingerprint with a face, as two. A method alone is one factor even when it is a
+  one-time code or a key, since providers send `otp` or `sms` alone for a code that replaces the
+  password, and `hwk` alone for a key used without its PIN. A provider whose every sign-in is
+  stronger than its `amr` says is marked `enforces_two_factor`.
 - **Abroad, a provider's sign-in travels as `password` or `secondFactor`.** Other deployments then
   read it as any other, and the federation protocol names no provider.
 - **Accounts made through a provider have no password.** They verify again at the provider, asked to

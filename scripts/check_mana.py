@@ -9,8 +9,8 @@ checks that:
 - a message the pool can pay posts at once, and the next waits (`202`), behind anything waiting;
 - a holder of Bypass channel mana posts at once;
 - a viewer of the channel is told its level, maximum, and rate, and can read who spent it;
-- what waits is posted as mana recharges, a member of higher rank before anything of a lower
-  one's;
+- what waits is posted as mana recharges, the queue's first author credited two thirds of what the
+  pool earns while one other waits, so a member of higher rank posts before a lower one's flood;
 - an edit that lengthens waits and is then made, and one changing nothing is answered at once;
 - a poll waits and is posted, and a thread reply posts while its echo waits in the parent;
 - what waits two minutes is dropped, its author told why, and a viewer hears the priority queue
@@ -131,8 +131,9 @@ def run(stack: Stack) -> None:
     check("the drainer posts what waited as mana recharges", bool(got), posted_texts()[-4:])
     check("nothing is left waiting", not held(m1) and not held(m2), (held(m1), held(m2)))
 
-    # Priority: one floods; another, given a role above everyone's, sends one after it, which
-    # posts before any of the flood.
+    # Priority: one floods; another, given a role above everyone's, sends one after it. First in
+    # the queue, it is credited two thirds of what the pool earns and the flood one third, so its
+    # row, costing what one of the flood's does, posts before any of the flood.
     regular = stack.api("POST", f"/communities/{community}/roles", {"name": "Regular", "permissions": []},
                         owner["token"])["id"]
     stack.api("PUT", f"/communities/{community}/members/{m2['id']}/roles/{regular}", token=owner["token"])
@@ -143,7 +144,7 @@ def run(stack: Stack) -> None:
     got = until("the ranked one posts", lambda: ("ranked" + "g" * 24) in posted_texts(), 60)
     texts = posted_texts()
     floods_before = sum(1 for t in texts[: texts.index("ranked" + "g" * 24)] if t.startswith("flood")) if got else -1
-    check("a member of higher rank posts before anything of a lower one's waiting", got and floods_before == 0,
+    check("a member of higher rank, credited two thirds, posts before a lower one's flood", got and floods_before == 0,
           floods_before)
     until("the flood drains", lambda: not held(m1), 60)
 

@@ -146,6 +146,9 @@ pub struct SearchPage {
 struct Sought<'a> {
     caller: Uuid,
     places: &'a [Uuid],
+    /// Whether the one place is a thread, whose replies are found by the channel they are in
+    /// rather than by their home channel, which is the thread's parent.
+    in_thread: bool,
     text: Option<&'a str>,
     author: Option<Uuid>,
     mentions: Option<Uuid>,
@@ -159,7 +162,8 @@ struct Sought<'a> {
 /// search is of, so a window holds as little as it can that the search is not of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Source {
-    /// Each place's messages, through `message_by_home_channel`.
+    /// Each place's messages, through `message_by_home_channel`, or a thread's through
+    /// `message_channel_id_idx`.
     Places,
     /// One author's messages, through `message_by_author`.
     Author,
@@ -235,41 +239,45 @@ const PROBE_SETTINGS: &str = "SET LOCAL jit = off; \
 /// comparison for a tenth of the table where the user wrote a tenth of it, and reads every
 /// message of the places instead. The places are asked of what the window read (`OFFSET 0`
 /// keeps them out of the read) for the same reason.
-fn window_of(source: Source) -> &'static str {
+///
+/// The places are home channels, which hold their threads' replies too, or, `in_thread`, one
+/// thread, whose replies are read by the channel they are in.
+fn window_of(source: Source, in_thread: bool) -> String {
+    let place = if in_thread { "channel" } else { "home_channel" };
     match source {
-        Source::Places => {
+        Source::Places => format!(
             r#"unnest($2::uuid[]) AS p(channel)
             CROSS JOIN LATERAL (
                 SELECT r.* FROM message r
-                WHERE (r.home_channel, r.id) >= (p.channel, $3)
-                  AND (r.home_channel, r.id) < (p.channel, $4)
+                WHERE (r.{place}, r.id) >= (p.channel, $3)
+                  AND (r.{place}, r.id) < (p.channel, $4)
                   AND r.deleted_at IS NULL
             ) m"#
-        }
-        Source::Author => {
+        ),
+        Source::Author => format!(
             r#"(
                 SELECT r.* FROM message r
                 WHERE r.author = $7 AND r.id >= $3 AND r.id < $4 AND r.deleted_at IS NULL
                 OFFSET 0
             ) m
-            WHERE m.home_channel = ANY($2)"#
-        }
-        Source::Tagged => {
+            WHERE m.{place} = ANY($2)"#
+        ),
+        Source::Tagged => format!(
             r#"(
-                SELECT t.message, t.home_channel FROM mention t
+                SELECT t.message, t.{place} AS place FROM mention t
                 WHERE t.target_user = $8 AND t.message >= $3 AND t.message < $4
                 OFFSET 0
             ) mn
             JOIN message m ON m.id = mn.message
-            WHERE mn.home_channel = ANY($2) AND m.deleted_at IS NULL"#
-        }
+            WHERE mn.place = ANY($2) AND m.deleted_at IS NULL"#
+        ),
     }
 }
 
 /// Reads one window: how many messages it held, and the newest `limit` of them that pass.
 /// With `capped`, it reads at most one more than [`STEP_ROWS_MAX`], in no order, so a count
 /// past the cap says the window was not read whole and what it found is not to be used.
-fn window_sql(source: Source, limit: usize, capped: bool) -> String {
+fn window_sql(source: Source, in_thread: bool, limit: usize, capped: bool) -> String {
     let cap = if capped {
         format!("LIMIT {}", STEP_ROWS_MAX + 1)
     } else {
@@ -284,7 +292,7 @@ fn window_sql(source: Source, limit: usize, capped: bool) -> String {
                ) AS found
         FROM (SELECT m.id, ({PASSES}) AS hit FROM {window} {cap}) w
         "#,
-        window = window_of(source),
+        window = window_of(source, in_thread),
     )
 }
 
@@ -470,7 +478,12 @@ async fn step(
     slots: Option<i32>,
 ) -> crate::Result<Option<Window>> {
     let query = bound(
-        window_sql(sought.source(), sought.limit, walk.capped()),
+        window_sql(
+            sought.source(),
+            sought.in_thread,
+            sought.limit,
+            walk.capped(),
+        ),
         sought,
         sought.text,
         (lower, walk.upper),
@@ -519,18 +532,15 @@ pub async fn search_messages(
         )));
     }
     let started = Instant::now();
-    let places: Vec<Uuid> = readable_channels(state, caller, search.scope)
-        .await?
-        .into_iter()
-        .map(|channel| channel.0)
-        .collect();
+    let Readable { places, in_thread } = readable_channels(state, caller, search.scope).await?;
     if places.is_empty() {
-        return page(state, Vec::new(), None).await;
+        return page(state, Vec::new(), None, &places, in_thread).await;
     }
     let limit = usize::try_from(search.limit.clamp(1, MAX_RESULTS)).unwrap_or(1);
     let sought = Sought {
         caller: caller.0,
         places: &places,
+        in_thread,
         text,
         author: search.author.map(|author| author.0),
         mentions: search.mentions.map(|tagged| tagged.0),
@@ -541,7 +551,9 @@ pub async fn search_messages(
     };
     let before = search.before.map(|before| before.0);
 
-    if text.is_some() {
+    // A thread's replies are among its parent's matches, which may be many more than the
+    // thread's; the walk reads the thread's alone.
+    if text.is_some() && !in_thread {
         let mut conn = state.connection_pool.get().await?;
         let matched = probe(conn.as_mut(), &sought).await?;
         if matched.len() <= PROBE_CAP {
@@ -551,7 +563,7 @@ pub async fn search_messages(
             let more = newest.len() > limit;
             newest.truncate(limit);
             let searched_to = newest.last().copied().filter(|_| more);
-            return page(state, newest, searched_to).await;
+            return page(state, newest, searched_to, &places, in_thread).await;
         }
     }
 
@@ -567,20 +579,34 @@ pub async fn search_messages(
             walk.absorb(window, lower, &mut found, limit);
         }
     }
+    let searched_to;
     if found.is_empty() && !walk.done {
         let deadline = started + Duration::from_secs(state.config.search.round_seconds.max(1));
-        let outcome = go_deep(state, &sought, &mut walk, &mut found, deadline, abandoned).await?;
+        let turn = state.deep_searches.turn(caller);
+        let outcome = go_deep(
+            state, &sought, &mut walk, &mut found, deadline, abandoned, &turn,
+        )
+        .await?;
+        drop(turn);
         metrics::counter!(aspen_metrics::api::DEEP_SEARCH_ROUNDS, "outcome" => outcome)
             .increment(1);
+        searched_to = (!walk.done).then_some(walk.upper);
+        // A round reads for seconds, in which the caller may have lost some of the places: what
+        // was found is kept only where they may still read.
+        if !found.is_empty() {
+            let still = readable_channels(state, caller, search.scope).await?;
+            return page(state, found, searched_to, &still.places, still.in_thread).await;
+        }
+    } else {
+        searched_to = (!walk.done).then_some(walk.upper);
     }
-    let searched_to = (!walk.done).then_some(walk.upper);
-    page(state, found, searched_to).await
+    page(state, found, searched_to, &places, in_thread).await
 }
 
-/// Walks on until something is found, the walk reaches the beginning, `deadline` comes, or the
-/// client goes away,
-/// each step in one of the deployment's places (`app::deep_search`). Says how the round ended,
-/// for its metric.
+/// Walks on until something is found, the walk reaches the beginning, `deadline` comes, the
+/// client goes away, or the same caller starts another search going deep (`turn`), each step
+/// in one of the deployment's places (`app::deep_search`). Says how the round ended, for its
+/// metric.
 async fn go_deep(
     state: &GlobalServerContext,
     sought: &Sought<'_>,
@@ -588,11 +614,15 @@ async fn go_deep(
     found: &mut Vec<Uuid>,
     deadline: Instant,
     abandoned: &Abandoned,
+    turn: &crate::deep_search::Turn,
 ) -> crate::Result<&'static str> {
     let slots = state.deep_searches.slots();
     while found.is_empty() && !walk.done {
         if abandoned.is_so() {
             return Ok("abandoned");
+        }
+        if turn.superseded() {
+            return Ok("superseded");
         }
         let asked = Instant::now();
         if asked >= deadline {
@@ -613,6 +643,7 @@ async fn go_deep(
             match read {
                 Some(window) => break window,
                 None if abandoned.is_so() => return Ok("abandoned"),
+                None if turn.superseded() => return Ok("superseded"),
                 None if crate::deep_search::wait_for_slot(deadline).await => {}
                 None => return Ok("unfinished"),
             }
@@ -669,20 +700,28 @@ async fn newest_among(
     .found)
 }
 
-/// The page of the messages `ids`, newest first, read back to `searched_to` with more beyond
-/// it, or with nothing left when `None`.
+/// The page of the messages `ids` that lie in `places` (home channels, or one thread
+/// `in_thread`), newest first, read back to `searched_to` with more beyond it, or with nothing
+/// left when `None`.
 async fn page(
     state: &GlobalServerContext,
     ids: Vec<Uuid>,
     searched_to: Option<Uuid>,
+    places: &[Uuid],
+    in_thread: bool,
 ) -> crate::Result<SearchPage> {
     let mut conn = state.connection_pool.get().await?;
-    let messages: Vec<Message> = message::table
+    let query = message::table
         .select(Message::as_select())
         .filter(message::id.eq_any(ids))
         .order_by(message::id.desc())
-        .load(conn.as_mut())
-        .await?;
+        .into_boxed();
+    let query = if in_thread {
+        query.filter(message::channel.eq_any(places))
+    } else {
+        query.filter(message::home_channel.eq_any(places))
+    };
+    let messages: Vec<Message> = query.load(conn.as_mut()).await?;
     Ok(SearchPage {
         messages: crate::channel::with_relations(state, conn.as_mut(), messages).await?,
         searched_to: searched_to.map(MessageId),
@@ -690,18 +729,33 @@ async fn page(
     })
 }
 
+/// Where a search may read.
+struct Readable {
+    places: Vec<Uuid>,
+    /// Whether the one place is a thread (`Sought::in_thread`).
+    in_thread: bool,
+}
+
 async fn readable_channels(
     state: &GlobalServerContext,
     caller: UserId,
     scope: SearchScope,
-) -> crate::Result<Vec<ChannelId>> {
+) -> crate::Result<Readable> {
+    let homes = |channels: Vec<ChannelId>| Readable {
+        places: channels.into_iter().map(|channel| channel.0).collect(),
+        in_thread: false,
+    };
     match scope {
         SearchScope::Channel(channel) => {
             let mut conn = state.connection_pool.get().await?;
             // Searching is reading; a deployment moderator reads DMs they are not in only by
             // opening them, where the reading is logged, so `channel_access` finds none here.
-            crate::permissions::channel_access(state, conn.as_mut(), caller, channel).await?;
-            Ok(vec![channel])
+            let access =
+                crate::permissions::channel_access(state, conn.as_mut(), caller, channel).await?;
+            Ok(Readable {
+                places: vec![channel.0],
+                in_thread: access.thread,
+            })
         }
         SearchScope::Community(community) => {
             let mut conn = state.connection_pool.get().await?;
@@ -719,11 +773,13 @@ async fn readable_channels(
                 return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
             }
             drop(conn);
-            Ok(Visibility::load(state, caller, &[community])
-                .await?
-                .visible_channels())
+            Ok(homes(
+                Visibility::load(state, caller, &[community])
+                    .await?
+                    .visible_channels(),
+            ))
         }
-        SearchScope::Everywhere => readable_everywhere(state, caller).await,
+        SearchScope::Everywhere => Ok(homes(readable_everywhere(state, caller).await?)),
     }
 }
 
@@ -913,6 +969,7 @@ mod tests {
             |text: Option<&'static str>, author: Option<&str>, tagged: Option<&str>| Sought {
                 caller: id(READER),
                 places: &places,
+                in_thread: false,
                 text,
                 author: author.map(id),
                 mentions: tagged.map(id),
@@ -989,5 +1046,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(read.unwrap().found, apples);
+
+        // A thread is searched by the channel its replies are in, each way a window is read.
+        let thread = [id(THREAD)];
+        for (author, tagged) in [(None, None), (Some(ANN), None)] {
+            let in_thread = Sought {
+                places: &thread,
+                in_thread: true,
+                ..sought(Some("apples"), author, tagged)
+            };
+            let read = step(&mut conn, &in_thread, &whole, Uuid::nil(), None)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(read.found, [said(4)]);
+        }
     }
 }

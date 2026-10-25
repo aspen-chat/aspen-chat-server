@@ -23,15 +23,18 @@ A provider is a row of `identity_provider`:
 
 - `name`: what the sign-in screen's button says ("Continue with Example Corp").
 - `issuer`: the issuer URL. Its discovery document is `{issuer}/.well-known/openid-configuration`,
-  and the document must name the same issuer.
+  and the document must name the same issuer. Fixed once the provider is added.
 - `client_id` and `client_secret`: the client the provider's administrators registered for this
-  deployment. The secret is never shown again once saved.
+  deployment. The client id is fixed once the provider is added. The secret may be replaced, and is
+  never shown again once saved.
 - `enabled`: whether it offers sign-in now. A disabled provider keeps its links.
 - `skip_invite`: whether a first sign-in makes an account without a registration invite where one is
   required (see [New accounts](#new-accounts)).
 - `enforces_two_factor`: whether every sign-in there counts as two factors whatever its `amr` claim
   says (see [Strength](#strength)).
 - `trust_email`: whether an address it reports as verified becomes the account's verified address.
+  Off unless the administrators turn it on: a provider that marks any address verified would
+  otherwise have mail sent to addresses its users merely typed.
 
 The client is registered at the provider with one redirect URI, `{public_url}/auth/oidc/callback`,
 and, for [back-channel logout](#back-channel-logout), `{public_url}/auth/oidc/back-channel-logout`.
@@ -39,9 +42,13 @@ The dashboard shows both.
 
 A deployment has at most `MAX_PROVIDERS` (20). Holders of the deployment permission Manage identity
 providers add, change, and remove them in the dashboard (`/admin/identity-providers`), and the
-terminal does the same (`aspen-chat-server identity-providers list|add|set|remove`). Adding one, or
-changing its issuer or client, fetches its discovery document first, so a mistyped issuer is refused
-with what went wrong.
+terminal does the same (`aspen-chat-server identity-providers list|add|set|remove`). Adding one
+fetches its discovery document first, so a mistyped issuer is refused with what went wrong. A
+provider's name, secret, and choices may change later; its issuer and client id may not. A `sub` is
+unique only within one issuer, and a provider may give each client its own subjects, so an issuer or
+client changed under existing links would sign whoever holds those subjects at the new one into the
+linked accounts. Moving to another issuer or client is adding a provider and having its people link
+it.
 
 ### Removing a provider
 
@@ -54,28 +61,39 @@ linked (counted up to 1000).
 ### Discovery, keys, and outbound calls
 
 Each API server caches each provider's discovery document and keys for an hour
-(`discovery::document`). A token signed with a key the cache lacks fetches them again once, so a
-provider's key rotation needs no restart.
+(`discovery::document`). A token signed with a key the cache lacks (its `kid` is not among them, or
+it names none and none verifies it) fetches them again, so a provider's key rotation needs no
+restart: at most once a minute per issuer on each server, the one fetch shared by every token that
+arrives while it is made (`discovery::document_for_unknown_key`). Anyone may post a logout token
+naming any key, and without that bound each would cost the provider two calls. A token whose `kid`
+is among the cached keys and does not verify is refused without fetching anything.
 
 Calls to providers are HTTPS only, follow no redirects, take at most ten seconds each, and read
 answers of at most 1 MiB. Why one failed is classified (`aspen_outbound::classify`, as calls to
 other deployments are) into a message the administrator can act on. An issuer that resolves to an
 address inside a network (a LAN Keycloak) is refused unless
 `[identity_providers] allow_private_addresses` is set in `aspen.toml`: otherwise anyone holding
-Manage identity providers could make the server call services only it can reach.
-`[identity_providers] ca_file` adds authorities to trust, for a provider whose certificate an
-organisation issued itself.
+Manage identity providers could make the server call services only it can reach. Names are checked
+as they resolve (`PublicResolver`); a URL naming an address outright is never resolved, so every
+call (`discovery::call`, for the issuer and for each endpoint its document names: keys, token)
+checks it first, refusing one inside a network unless private addresses are allowed, and a loopback
+or unspecified one (this machine) always. `[identity_providers] ca_file` adds authorities to trust,
+for a provider whose certificate an organisation issued itself.
 
 ## Flows
 
 Every exchange with a provider is a flow: the authorization code flow with PKCE (RFC 7636) and a
 nonce, the provider's code exchanged with the client secret. A flow has a purpose:
 
-| Purpose          | Needs                                   | Takes effect                                                        |
-| ---------------- | --------------------------------------- | ------------------------------------------------------------------- |
-| `signIn`         | No session                              | Signs into the linked account, or offers to make one                |
-| `link`           | A recently verified session of a person | Links the provider's identity to the caller's account               |
-| `reauthenticate` | A session of a person                   | Marks the sign-in verified, when the provider signed them in afresh |
+| Purpose          | Needs                                    | Takes effect                                                        |
+| ---------------- | ---------------------------------------- | ------------------------------------------------------------------- |
+| `signIn`         | No session                               | Signs into the linked account, or offers to make one                |
+| `link`           | A recently verified session of a person¹ | Links the provider's identity to the caller's account               |
+| `reauthenticate` | A session of a person                    | Marks the sign-in verified, when the provider signed them in afresh |
+
+¹ And one that owes the deployment neither a second factor (`twoFactorEnrollmentRequired`) nor a
+verified email address (`emailVerificationRequired`): such a session may sign out and verify again,
+but adds no way in until it has done what it owes.
 
 1. The client starts a flow: `POST /auth/identity-provider-flows` with the provider, the purpose, a
    PKCE `S256` challenge of its own, and for the desktop and mobile apps a return address. It
@@ -84,7 +102,9 @@ nonce, the provider's code exchanged with the client secret. A flow has a purpos
 3. The provider sends the browser to `GET /auth/oidc/callback` with `state` (the flow's id) and a
    code. The server exchanges the code with the provider (with its own PKCE verifier, which the
    client never sees), verifies the ID token (signature, issuer, audience, expiry, nonce), and keeps
-   the outcome, or the reason it failed.
+   the outcome, or the reason it failed. A `sub` that is empty or longer than 255 characters (OIDC
+   Core's limit, and `user_identity`'s) fails the flow with `identityProviderSubjectLength`, which
+   names the provider whose administrators must fix it.
 4. The server sends the browser to the return address with a one-time return code: the app's
    (loopback or `aspen:`, as for [passkeys](passkeys.md#hand-off-to-the-system-browser)), or the web
    client's page `/sign-in/provider`, with the flow and the code in the URL fragment.
@@ -110,9 +130,15 @@ spent on this flow.
 
 The claim of a `signIn` flow:
 
-- **A linked account:** the identity (`user_identity`, by provider and `sub`) names it. The account
-  is signed in. If the sign-in counts as one factor and the account holds a second factor, it is
-  asked for, as after a password (`secondFactorRequired`, with a ticket).
+- **A linked account:** the identity (`user_identity`, by provider, issuer, and `sub`) names it. The
+  account is signed in. If the sign-in counts as one factor and the account holds a second factor,
+  it is asked for, as after a password (`secondFactorRequired`, with a ticket). The sign-in counts
+  as verified (`verified_at`, see [Reverification](reverification.md#recent-verification)) when the
+  ID token's `auth_time` says the person last signed in at the provider, or never when it says
+  nothing. A provider signs someone in silently from a session it has held for days, so whoever
+  finds that session open in a browser gets a sign-in that must still verify again (a
+  `reauthenticate` flow, which makes the provider ask) before any security change. A second factor
+  asked for here is proved now, and the sign-in it finishes is verified now.
 - **No linked account:** the answer is `accountRequired`, with a suggested username (the provider's
   `preferred_username`, when it is one an account could take), its display name, whether an invite
   is needed, and the address the account will have or whether one must be given. The person chooses
@@ -121,8 +147,13 @@ The claim of a `signIn` flow:
   (`usernameTaken`) leaves the offer standing for another try. A flow makes at most one account, and
   only within the five minutes after its claim.
 
-An identity is matched by provider and `sub` alone, never by email address. An address can be
-reused, renamed, or asserted by a provider that does not own it, so matching by it would let one
+An identity is matched by provider, issuer, and `sub`, never by email address. Each link keeps the
+issuer it was made at (`user_identity.issuer`), and every lookup (signing in, verifying again,
+back-channel logout, the security settings' list, `has_way_in`, the dashboard's count) asks for the
+provider's current issuer, so a provider row that came to name another issuer by any route finds
+none of the accounts linked before. A flow's outcome records the issuer its ID token was verified
+against, and a claim made after the provider's issuer changed is refused as expired. An address can
+be reused, renamed, or asserted by a provider that does not own it, so matching by it would let one
 person's provider sign in as someone else.
 
 ### New accounts
@@ -168,9 +199,19 @@ provider's sign-in [counts as two factors](#strength), as a password alone does 
 ## Strength
 
 A provider's sign-in counts as two factors (`SignInMethod::IdentityProviderTwoFactor`) when the
-provider has `enforces_two_factor`, or its ID token's `amr` claim names a second factor (`mfa`,
-`otp`, `hwk`, `swk` with another method, `sms`, or `fpt`, `face`, `iris`, `retina`, or `vbm` with
-another method; RFC 8176). Otherwise it counts as one (`SignInMethod::IdentityProvider`):
+provider has `enforces_two_factor`, or its ID token's `amr` claim (RFC 8176) says `mfa` or names
+methods of two different kinds (`flow::factor_kind`):
+
+| Kind                    | `amr` values                            |
+| ----------------------- | --------------------------------------- |
+| Something known         | `pwd`, `pin`, `kba`                     |
+| Something held          | `otp`, `hwk`, `swk`, `sms`, `tel`, `sc` |
+| Something the person is | `fpt`, `face`, `iris`, `retina`, `vbm`  |
+
+Two methods of one kind are one factor: `pwd` with `pin`, `fpt` with `face`, or `otp` with `sms`. A
+method held alone is one too, whatever it is: `otp` or `sms` alone may be a code sent in place of a
+password, and `hwk` alone a security key used without its PIN. Other values (`user`, `geo`, `rba`,
+and the like) are no factor. Otherwise it counts as one (`SignInMethod::IdentityProvider`):
 
 - `require_two_factor` holds it like a password sign-in: such a session must add a second factor of
   Aspen's own before anything else.
@@ -184,8 +225,8 @@ they read any other (see [Signing in abroad](../federation/signing-in-abroad.md)
 
 A provider that supports OpenID Connect Back-Channel Logout posts a logout token to
 `POST /auth/oidc/back-channel-logout` when someone signs out there or is removed. The server
-verifies it (signature, issuer, audience, `iat`, the logout event, no `nonce`, used once by `jti`)
-and ends:
+verifies it (a `typ` of `logout+jwt` when it has one, an asymmetric signature by the one provider of
+its issuer, issuer, audience, `iat`, the logout event, no `nonce`, used once by `jti`) and ends:
 
 - the sign-ins made through that provider with its session id (`sid`), when the token names one;
 - otherwise every sign-in made through that provider by the account its `sub` is linked to.
@@ -208,7 +249,7 @@ All in `rate_limits.toml`:
 | `POST …/claim`                               | The `sign_in` group; wrong verifiers and codes count as failures                  |
 | `POST …/account`                             | As `POST /users`, and sharing its global bucket (`registration`)                  |
 | `GET /auth/oidc/callback`                    | Per address, in the `sign_in` bucket. Device-exempt: the browser opens it         |
-| `POST /auth/oidc/back-channel-logout`        | Per address, and globally. Device-exempt: the provider's server posts it          |
+| `POST /auth/oidc/back-channel-logout`        | Per address, and refused tokens per address. Device-exempt: the provider posts it |
 | `DELETE /users/{user}/identities/{identity}` | The `security` group                                                              |
 | `/admin/identity-providers`                  | The `admin` group                                                                 |
 

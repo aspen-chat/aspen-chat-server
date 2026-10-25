@@ -224,7 +224,7 @@ pub struct Handoff {
 
 pub struct StartRequest {
     pub purpose: Purpose,
-    /// For `SignIn` as a second factor: the ticket `login::try_login` issued. The passkey must
+    /// For `SignIn` as a second factor: the ticket `login::try_password` issued. The passkey must
     /// then be the ticket's user's.
     pub ticket: Option<String>,
     /// For `Register`: what to call the passkey.

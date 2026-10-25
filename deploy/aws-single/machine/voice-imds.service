@@ -1,0 +1,18 @@
+# The voice server takes media from the internet and shares the machine's network, so the
+# instance metadata service would hand it the machine role's credentials (and, on an ECS
+# machine, the agent's for other tasks). Its user, 10002, the voice image's own
+# (deploy/docker/Dockerfile), is refused that address from every boot on, before Docker starts.
+# Written onto the machine by aws-single (machine.tf) and by the fleet's voice servers
+# (../../aws/voice.tf).
+[Unit]
+Description=Refuse the voice server the instance metadata service
+Before=docker.service ecs.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/iptables -w -I OUTPUT -m owner --uid-owner 10002 -d 169.254.169.254 -j REJECT
+ExecStart=/usr/sbin/ip6tables -w -I OUTPUT -m owner --uid-owner 10002 -d fd00:ec2::254 -j REJECT
+
+[Install]
+WantedBy=multi-user.target

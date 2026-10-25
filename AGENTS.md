@@ -210,8 +210,12 @@ or what an operator must open, route, or back up updates it in the same commit.
      or IPv6 /48 (trusted proxies count only toward `max`), `max_per_user` (64), what a connection
      counts toward instead once someone signs in on it, `handshake_seconds` and
      `header_read_seconds` (10 and 30), how long a client has for its TLS handshake and an HTTP/1.1
-     request's headers, and `idle_seconds` (120), how long a connection stays open with no request
-     in it (`connections`)
+     request's headers, `idle_seconds` (120), how long a connection stays open with nothing
+     happening on it (a response waiting on a client that does not read counts as nothing),
+     `request_seconds` (60), how long a request may take before it is answered `requestTimedOut`
+     (`api::deadline`), `shutdown_seconds` (30), how long a connection asked to close has before it
+     is dropped, and `max_streams` (64), the requests one HTTP/2 connection may have open
+     (`connections`)
    - `event_queue_size` — how many events one event stream connection may have waiting to be written
      (512 by default); a connection that falls that far behind is dropped and resumes
    - `event_feed_shards` — how many tasks route events to this server's event stream connections
@@ -470,7 +474,11 @@ newest release, and `runs.using` in that tag's `action.yml` the Node.js it runs 
 majors several times a year and GitHub retires the Node.js runtimes under the old ones, so a version
 written from memory is usually behind and soon warns on every run. Read the release notes of each
 major version a bump crosses for what it breaks, and prefer a step the repository's own scripts can
-do to an action that has stopped being released.
+do to an action that has stopped being released. An action from anyone but GitHub (not under
+`actions/`) is pinned by the commit its release tag names, with the tag beside it as a comment
+(`uses: pnpm/action-setup@<commit> # v6.1.0`), since its owner can move a tag to other code that
+then runs with the job's secrets: `gh api repos/<owner>/<action>/git/ref/tags/<tag>` names the
+commit, or an annotated tag to follow to it with `git/tags/<sha>`.
 
 `.github/workflows/images.yml` publishes both images to the GitHub Container Registry
 (`ghcr.io/aspen-chat/aspen-api` and `aspen-voice`) for x86-64 and 64-bit ARM, each built on a runner
@@ -621,27 +629,29 @@ HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the s
   it can return, each error status with `body = Problem`. The generated client's typed error
   handling is only as good as these declarations.
 - **Rate limits** apply to every endpoint (`app::rate_limit`, `api::rate_limit`). Each endpoint's
-  limits count along dimensions: `global`, `ip`, `device`, `user`, `username` (sign-in only, per
-  username and client network: an IPv4 /24, an IPv6 /48), `username_failures` (sign-in only, a
-  username's wrong passwords from anywhere, looked at before the password is checked and counted
-  only after a wrong one), `ip_failures` (an address's requests whose handler says they proved
-  wrong: a wrong password or code, an unknown invite or refresh token), `user_failures` and
-  `global_failures` (a signed-in user's, and everyone's, requests that proved wrong, counted as
-  `ip_failures` are), `ip_rejected_tokens` (an address's bot tokens from before tokens were signed
-  that no bot holds, looked at before one is looked up; a made-up session or bot token of the signed
-  kind is refused by its signature with no lookup, `app::signed_token`), and `per_<param>`,
-  `user_per_<param>`, `ip_per_<param>` for any path parameter. A request with a valid session counts
-  as its user and never as its address or device; one without counts as its address and its device
-  credential, which it must present (`Aspen-Device`) on every endpoint someone may call without
-  signing in but those `device_exempt` lists, and earns by solving a puzzle (see Sign-in and
-  security). Many people behind one address are so each counted on their own, and the address keeps
-  only a ceiling over them. It gets the `default` limits wherever they apply, plus its groups'
-  limits, with its own entry replacing its groups' dimension by dimension; `false` removes a
-  dimension there, the default's included. The built-in limits are
-  `server/app/src/rate_limits.toml`; `[rate_limits]` in `aspen.toml` is laid over them in code, a
-  limit given there replacing the built-in one whole. Besides the OpenAPI operations, `GET /events`
-  (the event stream), `GET /auth/passkey` (the passkey page, outside `/api/v1`),
-  `GET /.well-known/aspen` (the federation document, also outside it),
+  limits count along dimensions: `global`, `ip`, `network` (as `ip`, by the address's IPv4 /24 or
+  IPv6 /48, so hopping within one network does not multiply `ip`), `device`, `user`, `username`
+  (sign-in only, per account the username finds and client network), `username_failures` (sign-in
+  only, an account's wrong passwords from anywhere, looked at before the password is checked and
+  counted only after a wrong one), `ip_failures` (an address's requests whose handler says they
+  proved wrong: a wrong password or code, an unknown invite or refresh token), `network_failures`
+  (as `ip_failures`, by network), `user_failures` and `global_failures` (a signed-in user's, and
+  everyone's, requests that proved wrong, counted as `ip_failures` are), `ip_rejected_tokens` (an
+  address's bot tokens from before tokens were signed that no bot holds, looked at before one is
+  looked up; a made-up session or bot token of the signed kind is refused by its signature with no
+  lookup, `app::signed_token`), and `per_<param>`, `user_per_<param>`, `ip_per_<param>` for any path
+  parameter. A request with a valid session counts as its user and never as its address or device,
+  except on an endpoint nobody signs in to, where it counts as its address and only skips the device
+  credential; one without counts as its address and its device credential, which it must present
+  (`Aspen-Device`) on every endpoint someone may call without signing in but those `device_exempt`
+  lists, and earns by solving a puzzle (see Sign-in and security). Many people behind one address
+  are so each counted on their own, and the address keeps only a ceiling over them. It gets the
+  `default` limits wherever they apply, plus its groups' limits, with its own entry replacing its
+  groups' dimension by dimension; `false` removes a dimension there, the default's included. The
+  built-in limits are `server/app/src/rate_limits.toml`; `[rate_limits]` in `aspen.toml` is laid
+  over them in code, a limit given there replacing the built-in one whole. Besides the OpenAPI
+  operations, `GET /events` (the event stream), `GET /auth/passkey` (the passkey page, outside
+  `/api/v1`), `GET /.well-known/aspen` (the federation document, also outside it),
   `GET /.well-known/assetlinks.json` (the Android apps that may use its passkeys, also outside it),
   `GET` and `POST /email/unsubscribe` (the page unsubscribe links open, also outside it),
   `GET /auth/oidc/callback` and `POST /auth/oidc/back-channel-logout` (where identity providers send

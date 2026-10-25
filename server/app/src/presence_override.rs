@@ -43,7 +43,7 @@ pub struct ChosenPresence {
 
 impl ChosenPresence {
     /// The override held by a row's two columns, if it is still in force at `now`.
-    fn in_force(
+    pub(crate) fn in_force(
         presence_override: Option<PresenceOverride>,
         until: Option<DateTime<Utc>>,
         now: DateTime<Utc>,

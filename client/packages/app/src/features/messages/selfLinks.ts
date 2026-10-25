@@ -1,5 +1,4 @@
 import { linkOptions } from "@tanstack/react-router";
-import { deviceLinkOf } from "@/features/qr/aspenLinks";
 import {
   channelLink,
   communityLink,
@@ -22,7 +21,6 @@ export type SelfRoute =
   | { readonly kind: "dms" }
   | { readonly kind: "invite"; readonly code: string }
   | { readonly kind: "registration"; readonly code: string }
-  | { readonly kind: "deviceLink"; readonly server: string; readonly id: string }
   | { readonly kind: "admin"; readonly tab: string | null }
   | { readonly kind: "botAdd"; readonly bot: string; readonly permissions: string | null }
   | { readonly kind: "attributions" };
@@ -64,7 +62,9 @@ const ABROAD = /^\/at\/([^/]+)(\/.*)?$/;
  * app (`router.tsx`): a deployment's own routes on its address, or on the home's under
  * `/at/{domain}`, and the home's other pages (the dashboard, adding a bot, and the rest) on
  * the home's address. `null` for any other link, the deployment's API and files included, and
- * for an invite whose `?at=` names a deployment the user does not use.
+ * for an invite whose `?at=` names a deployment the user does not use. A sign-in code's page
+ * (`/device-link`) is never one: a link in a message must not open, in place, the screen that
+ * signs someone else's device in to the reader's account, so it opens as any other link does.
  */
 export function parseSelfLink(href: string, hosts: KnownHosts): SelfLinkTarget | null {
   let url: URL;
@@ -94,8 +94,7 @@ export function parseSelfLink(href: string, hosts: KnownHosts): SelfLinkTarget |
     const route = deploymentRoute(abroad[2] ?? "/");
     return route === null ? null : withInviteDomain({ domain: there, route }, url, domainOf);
   }
-  const route =
-    deploymentRoute(path) ?? (domain === null ? homeRoute(path, url.search, url.hash) : null);
+  const route = deploymentRoute(path) ?? (domain === null ? homeRoute(path, url.search) : null);
   return route === null ? null : withInviteDomain({ domain, route }, url, domainOf);
 }
 
@@ -137,15 +136,11 @@ function placeRoute(place: Place, sub: string | undefined, id: string | undefine
 }
 
 /** A route only the home has, at its root. */
-function homeRoute(path: string, query: string, fragment: string): SelfRoute | null {
+function homeRoute(path: string, query: string): SelfRoute | null {
   const search = new URLSearchParams(query);
   if (path === "/register") {
     const code = search.get("invite") ?? "";
     return new RegExp(`^${CODE}$`).test(code) ? { kind: "registration", code } : null;
-  }
-  if (path === "/device-link") {
-    const link = deviceLinkOf(query.replace(/^\?/, ""), fragment.replace(/^#/, ""));
-    return link === null ? null : { kind: "deviceLink", ...link };
   }
   if (path === "/attributions") {
     return { kind: "attributions" };
@@ -208,8 +203,6 @@ export function selfLinkRoute({ domain, route }: SelfLinkTarget) {
       return inviteLink(domain, route.code);
     case "registration":
       return linkOptions({ to: "/register", search: { invite: route.code } });
-    case "deviceLink":
-      return linkOptions({ to: "/device-link", search: { server: route.server, link: route.id } });
     case "admin":
       return route.tab === null
         ? linkOptions({ to: "/admin" })

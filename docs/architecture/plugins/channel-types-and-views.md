@@ -20,7 +20,7 @@ Every server holds them in memory with the plugin.
 - A channel of a kind has `ty` `plugin` and `plugin_type` naming it (`org.example.forums:board`).
 - `POST /channels` makes one where a plugin that declares the kind runs (`channel_type::check`),
   with Manage channels as any channel.
-- Posting a message to one is refused (`pluginChannelHasNoMessages`).
+- Posting a message or a poll to one is refused (`pluginChannelHasNoMessages`).
 - Its contents are the plugin's storage scoped to the channel. View channel, overrides, and its
   deletion govern them as they govern a channel's messages.
 

@@ -1140,10 +1140,13 @@ impl Routes {
             {
                 let model = event.access.get().map(Arc::as_ref);
                 let roles = connection.roles.get(&community);
+                // Sorted, so the same roles held in another order share a decision.
+                let mut held = roles.cloned().unwrap_or_default();
+                held.sort_unstable();
                 let key = (
                     connection.moderator || model.is_some_and(|m| m.is_owner(connection.user)),
                     event.creator == Some(connection.user),
-                    roles.cloned().unwrap_or_default(),
+                    held,
                 );
                 let visible = *decided.entry(key).or_insert_with(|| {
                     may_read(event, model, connection.user, roles, connection.moderator)
@@ -1251,6 +1254,18 @@ enum ShardCommand {
 /// shutting down.
 async fn tell(shard: &mpsc::Sender<ShardCommand>, command: ShardCommand) {
     let _ = shard.send(command).await;
+}
+
+/// Hands each shard what a relay (`app::typing::Relay`) carries. A relay is ephemeral, so a
+/// shard whose queue is full goes without it rather than holding up the dispatcher, and with it
+/// the stream's events, behind relays.
+fn route_relays(payload: &[u8], models: &Models, shards: &[mpsc::Sender<ShardCommand>]) {
+    for event in relayed_events(payload, models) {
+        let event = Arc::new(event);
+        for to in shards {
+            let _ = to.try_send(ShardCommand::Route(event.clone()));
+        }
+    }
 }
 
 /// One routing shard: the connections whose id falls to it, and the events they read. A
@@ -1799,12 +1814,7 @@ async fn dispatch(
                     typing = subscribe_relays(&context, TYPING_SUBJECT).await;
                     continue;
                 };
-                for event in relayed_events(&message.payload, &models) {
-                    let event = Arc::new(event);
-                    for to in &shards {
-                        tell(to, ShardCommand::Route(event.clone())).await;
-                    }
-                }
+                route_relays(&message.payload, &models, &shards);
             }
             message = mana.next() => {
                 let Some(message) = message else {
@@ -1812,12 +1822,7 @@ async fn dispatch(
                     mana = subscribe_relays(&context, MANA_SUBJECT).await;
                     continue;
                 };
-                for event in relayed_events(&message.payload, &models) {
-                    let event = Arc::new(event);
-                    for to in &shards {
-                        tell(to, ShardCommand::Route(event.clone())).await;
-                    }
-                }
+                route_relays(&message.payload, &models, &shards);
             }
             message = messages.next() => {
                 let message = match message {

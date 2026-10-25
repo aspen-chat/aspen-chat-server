@@ -37,19 +37,17 @@ pub enum IdentityProvidersCommand {
         /// Every sign-in there counts as two factors, whatever it reports.
         #[clap(long)]
         enforces_two_factor: bool,
-        /// Do not take the addresses it reports as verified.
+        /// Take the addresses it reports as verified as new accounts' verified addresses. Only
+        /// for a provider that verifies every address it reports so.
         #[clap(long)]
-        distrust_email: bool,
+        trust_email: bool,
     },
-    /// Change a provider, named by its name or id.
+    /// Change a provider, named by its name or id. Its issuer and client id are fixed once it is
+    /// added: to change either, add another provider and have its people link it.
     Set {
         provider: String,
         #[clap(long)]
         name: Option<String>,
-        #[clap(long)]
-        issuer: Option<String>,
-        #[clap(long)]
-        client_id: Option<String>,
         /// A file holding a new client secret, or `-` for standard input.
         #[clap(long)]
         client_secret_file: Option<PathBuf>,
@@ -159,7 +157,7 @@ pub async fn identity_providers(
             disabled,
             skip_invite,
             enforces_two_factor,
-            distrust_email,
+            trust_email,
         } => {
             let added = providers::add_in(
                 config,
@@ -172,7 +170,7 @@ pub async fn identity_providers(
                     enabled: !disabled,
                     skip_invite,
                     enforces_two_factor,
-                    trust_email: !distrust_email,
+                    trust_email,
                 },
             )
             .await
@@ -187,8 +185,6 @@ pub async fn identity_providers(
         IdentityProvidersCommand::Set {
             provider,
             name,
-            issuer,
-            client_id,
             client_secret_file,
             enabled,
             skip_invite,
@@ -198,15 +194,13 @@ pub async fn identity_providers(
             let id = named(&listed, &provider)?.id;
             let changes = ProviderChanges {
                 name,
-                issuer,
-                client_id,
                 client_secret: client_secret_file.as_ref().map(read_secret).transpose()?,
                 enabled,
                 skip_invite,
                 enforces_two_factor,
                 trust_email,
             };
-            let changed = providers::update_in(config, &mut conn, id, changes)
+            let changed = providers::update_in(&mut conn, id, changes)
                 .await
                 .map_err(fail)?;
             tracing::info!(name = changed.name, "changed an identity provider");

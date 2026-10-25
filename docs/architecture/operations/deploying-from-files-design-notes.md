@@ -32,6 +32,11 @@ and writes it into its working directory before starting the server.
   was deployed with rather than whatever is newest.
 - An operator command run in place of a task's command starts through the same entry point, which is
   how `admin grant` finds the deployment's `aspen.toml` with nothing copied by hand.
+- **Each kind of task has an execution role of its own**, allowed to read only its own secret: the
+  servers `aspen.toml`, NATS its configuration, the restore the database's password, and each voice
+  server its own file. A voice server faces the internet on a machine of its own, where whoever
+  takes it over can reach the ECS agent's credentials; with one role for every task, that would hand
+  them `aspen.toml`, the database's and NATS's passwords among it.
 
 ## OpenTofu on AWS
 
@@ -43,6 +48,9 @@ and writes it into its working directory before starting the server.
 - **A machine each for the voice servers.** People's devices send media to a voice server's own
   address, over a thousand UDP ports. No load balancer carries that, so each has an Elastic IP and
   the host's network. ECS still runs its container, so it is released the way the API servers are.
+  On the host's network the instance metadata service would answer the voice server with the machine
+  role's credentials, so the voice image runs as a user of its own (10002), which every machine
+  running it refuses that address from boot (`deploy/aws-single/machine/voice-imds.service`).
 - **Signalling goes through the load balancer**, which already holds a certificate for every name
   under the domain. A voice server then needs no certificate of its own to renew.
 - **The servers are in public subnets.** The API servers must reach the internet directly (link
@@ -164,6 +172,11 @@ most wants to reach: a small rented server, or a small computer at home.
   is a range of UDP ports, which Docker publishes one process a port. With everything beside it, no
   service is reachable from another machine whatever the firewall says, which matters most where
   there is no firewall but a home router.
+- **Nothing on loopback trusts a caller for being there.** Loopback is shared with the voice server,
+  which takes media from the internet through a large C++ library, so a flaw there must not reach
+  the rest: Valkey asks for a password, Caddy's admin API, which could rewrite the whole proxy, is a
+  socket inside Caddy's own container that `caddy reload` run there reaches, and PostgreSQL, NATS,
+  and Garage each ask for credentials of their own.
 - **Two places for the API server, one running.** An upgrade, or a changed `aspen.toml`, starts the
   server in the other place and stops the first once the second answers; Caddy gives a request that
   finds one gone to the other. A small deployment then has no outage for a release, and a release

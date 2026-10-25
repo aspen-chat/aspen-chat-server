@@ -262,8 +262,6 @@ function unnamed(m: Messages, route: SelfRoute): ReactNode[] {
       return [m.selfLinks.invite, route.code];
     case "registration":
       return [m.selfLinks.registrationInvite, route.code];
-    case "deviceLink":
-      return [m.selfLinks.signInCode];
     case "admin":
       return route.tab !== null && isAdminTab(route.tab)
         ? [m.admin.title, adminTabLabel(m, route.tab)]

@@ -25,7 +25,8 @@ use std::time::{Duration, Instant};
 const COMMUNITY_TTL: Duration = Duration::from_secs(60);
 /// The most communities whose plugins one server remembers; the least used go first.
 const COMMUNITIES_CACHED: u64 = 10_000;
-/// How long a server trusts its sum of what one plugin keeps (`storage::has_room_in_total`).
+/// How long a server trusts its sum of what one plugin keeps (`storage::total_full`), and its
+/// count of the timers one plugin keeps (`timer::total_full`).
 const TOTAL_TTL: Duration = Duration::from_secs(10);
 
 /// An installed plugin this server runs.
@@ -102,6 +103,9 @@ pub struct Plugins {
     communities: moka::sync::Cache<CommunityId, Arc<CommunityUse>>,
     /// What each plugin keeps in all, every owner's share together, for [`TOTAL_TTL`].
     pub(super) storage_totals: moka::sync::Cache<String, i64>,
+    /// How many timers each plugin keeps in all, counted no further than
+    /// `timer::MAX_TIMERS_PER_PLUGIN`, for [`TOTAL_TTL`].
+    pub(super) timer_totals: moka::sync::Cache<String, i64>,
     /// Each observing plugin's consumer task, by id, with the revision it runs.
     observers: Mutex<HashMap<String, (DateTime<Utc>, tokio::task::AbortHandle)>>,
     /// Serializes reloads, so two announcements close together load in order.
@@ -206,6 +210,10 @@ impl Plugins {
                 .time_to_live(COMMUNITY_TTL)
                 .build(),
             storage_totals: moka::sync::Cache::builder()
+                .max_capacity(1_000)
+                .time_to_live(TOTAL_TTL)
+                .build(),
+            timer_totals: moka::sync::Cache::builder()
                 .max_capacity(1_000)
                 .time_to_live(TOTAL_TTL)
                 .build(),

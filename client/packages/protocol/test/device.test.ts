@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AspenClient,
+  DevicePuzzleRefusedError,
+  MAX_PUZZLE_BITS,
   MemoryDeviceCredentialStore,
   MemorySessionStore,
   decodeChallenge,
@@ -78,6 +80,12 @@ describe("the device puzzle", () => {
     for (let earlier = 0; earlier < nonce; earlier++) {
       expect(puzzleWork(challenge, earlier)).toBeLessThan(10);
     }
+  });
+
+  it("stops once told to", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(solvePuzzle(new Uint8Array([1]), 32, controller.signal)).rejects.toBeDefined();
   });
 });
 
@@ -167,6 +175,71 @@ describe("AspenClient's device credential", () => {
     const answer = await client.api.GET("/api/v1/auth/methods");
     expect(answer.response.status).toBe(200);
     expect(calls).toHaveLength(6);
+  });
+
+  it("gives up on a deployment asking for a puzzle harder than it solves", async () => {
+    const { fetch, calls } = scripted([
+      () => problem(401, "deviceCredentialRequired"),
+      () =>
+        json(200, {
+          challenge: "Y2hhbGxlbmdl",
+          difficulty: MAX_PUZZLE_BITS + 1,
+          expiresAt: new Date().toISOString(),
+        }),
+    ]);
+    let asked = false;
+    const client = new AspenClient({
+      baseUrl,
+      sessionStore: new MemorySessionStore(),
+      fetch,
+      solvePuzzle: () => {
+        asked = true;
+        return Promise.resolve(0);
+      },
+    });
+    await expect(client.api.GET("/api/v1/auth/methods")).rejects.toBeInstanceOf(
+      DevicePuzzleRefusedError,
+    );
+    expect(asked).toBe(false);
+    expect(calls).toHaveLength(2);
+  });
+
+  describe("with a puzzle that takes too long", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("stops solving and gives the deployment up", async () => {
+      vi.useFakeTimers();
+      const { fetch, calls } = scripted([
+        () => problem(401, "deviceCredentialRequired"),
+        () =>
+          json(200, {
+            challenge: "Y2hhbGxlbmdl",
+            difficulty: 20,
+            expiresAt: new Date().toISOString(),
+          }),
+      ]);
+      let stopped = false;
+      const client = new AspenClient({
+        baseUrl,
+        sessionStore: new MemorySessionStore(),
+        fetch,
+        // A solver that never finishes, and notices when it is told to stop.
+        solvePuzzle: (_challenge, _difficulty, signal) =>
+          new Promise<number>(() => {
+            signal?.addEventListener("abort", () => {
+              stopped = true;
+            });
+          }),
+      });
+      const request = client.api.GET("/api/v1/auth/methods");
+      const settled = expect(request).rejects.toBeInstanceOf(DevicePuzzleRefusedError);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await settled;
+      expect(stopped).toBe(true);
+      expect(calls).toHaveLength(2);
+    });
   });
 
   it("earns one credential for requests refused together", async () => {

@@ -1123,17 +1123,26 @@ def presence(world: World, check: Checks) -> None:
     def online_in(channel: str) -> int:
         return world.stack.api("GET", f"/channels/{channel}/presence", token=world.member["token"])["online"]
 
+    def in_sample(token: str, user: str) -> bool:
+        read = world.stack.api("GET", "/users/@me/communities?include=members", token=token)
+        return any(m["user"] == user and m["community"] == world.community
+                   for m in read["included"].get("userCommunities", []))
+
     world.as_owner("GET", "/users/@me")
     owner_counted = 1 if status_of(world.member["token"], world.owner["id"]) == "online" else 0
     in_channel, in_dm = online_in(counted), online_in(dm)
+    check("a member finds the owner in the member sample", in_sample(world.member["token"], world.owner["id"]))
     world.as_owner("PUT", f"/users/@me/blocks/{world.member['id']}")
     check("once the owner blocks the member, the member sees them offline",
           status_of(world.member["token"], world.owner["id"]) == "offline")
     check("and counted in no channel's presence",
           online_in(counted) == in_channel - owner_counted and online_in(dm) == in_dm - owner_counted,
           (in_channel, in_dm, owner_counted, online_in(counted), online_in(dm)))
+    check("nor in the member sample, whose order would say when they were last seen",
+          not in_sample(world.member["token"], world.owner["id"]))
     world.as_owner("DELETE", f"/users/@me/blocks/{world.member['id']}")
     check("and unblocked, connected again", status_of(world.member["token"], world.owner["id"]) != "offline")
+    check("and in the member sample again", in_sample(world.member["token"], world.owner["id"]))
     # A DM between them shares their presence whatever their communities; the database stands in
     # for one they never had, so that the community alone is what the removal takes away.
     psql(f"DELETE FROM dm_recipient WHERE channel = '{dm}'", world.stack.database)
@@ -1333,12 +1342,13 @@ def typing(world: World, check: Checks) -> None:
     check("the other person of a DM hears the owner typing there", heard(world.stream, dm, world.owner["id"]) == [True])
     type_in(owner, dm, False)
     world.as_owner("PUT", f"/users/@me/blocks/{world.member['id']}")
-    world.stream.gather(0.3)
+    # A typist uses what it found of a channel for two seconds, blocks among it.
+    world.stream.gather(2.0)
     type_in(owner, general)
     check("someone the owner blocks does not hear them typing", heard(world.stream, general, world.owner["id"]) == [])
     type_in(owner, general, False)
     world.as_owner("DELETE", f"/users/@me/blocks/{world.member['id']}")
-    owner.gather(0.3)
+    owner.gather(2.0)
     type_in(owner, general)
     world.stream.gather(0.5)
     owner.close()
@@ -1389,7 +1399,9 @@ def channel_mana(world: World, check: Checks) -> None:
     spend(busy)
     check("a member viewing a channel is told its mana as it is spent", bool(levels(busy)))
     view(hidden)
-    world.stream.gather(0.3)
+    # A connection looks a channel up again only five seconds after it last did
+    # (`mana::live::LOOKED_UP_FOR`), and takes one viewing list a second.
+    world.stream.gather(4.0)
     view(busy, hidden)
     check("and told it again on starting to view it while it is below full", bool(levels(busy)))
 
@@ -1402,8 +1414,8 @@ def channel_mana(world: World, check: Checks) -> None:
     check("a member who loses the channel is no longer told its mana", not levels(hidden, 1.5))
     check("nor may read who spent it",
           world.stack.status("GET", f"/channels/{hidden}/mana/top-senders", token=world.member["token"]) == 404)
-    # Dropped before the pool could pay for it (about six seconds): the drainer checks first.
-    gone = dropped(held, 3)
+    # Dropped, unpaid, when its author's credit would pay for it: the drainer checks before paying.
+    gone = dropped(held, 20)
     read = world.as_owner("GET", f"/channels/{hidden}/messages?limit=10")
     posted = [m["content"] for m in (read["data"] if isinstance(read, dict) else read)]
     check("and what they had waiting there is dropped, not posted", gone and "waiting my turn" not in posted)
@@ -1738,6 +1750,8 @@ def identity_providers(world: World, check: Checks) -> None:
         check("as is one from an issuer the server does not know", back_channel_logout(stack, forged) == 400)
         nonce = idp.logout_token(sid="second", nonce="n")
         check("and an ID token passed off as one", back_channel_logout(stack, nonce) == 400)
+        typed = idp.logout_token(sid="second", typ="JWT")
+        check("and a token typed as something other than a logout", back_channel_logout(stack, typed) == 400)
         header, _, signature = idp.logout_token(sid="first").split(".")
         payload = base64.urlsafe_b64encode(json.dumps(
             {"iss": idp.issuer, "aud": idp.client_id, "iat": int(time.time()), "jti": "tampered",
@@ -1753,6 +1767,11 @@ def identity_providers(world: World, check: Checks) -> None:
         status, text = stack.request("DELETE", f"/users/@me/identities/{identity}", token=second["token"])
         check("its only way in cannot be unlinked", status == 409 and "lastSignInMethod" in text, (status, text))
         stack.api("PUT", "/users/@me/password", {"newPassword": PASSWORD}, second["token"])
+        idp.sign_in_next(sub=sub, amr=["pwd"], sid="silent", auth_age=86400)
+        status, claimed, _, _ = provider_flow(stack, provider, "signIn")
+        refused = stack.status("DELETE", f"/users/@me/identities/{identity}", token=claimed.get("sessionToken"))
+        check("a provider's silent sign-in from an old session there is no recent verification",
+              status == 200 and refused == 403, (status, claimed, refused))
         password = world.sign_in(username)
         password_stream = stack.events(password["token"])
         idp.sign_in_next(sub=sub, amr=["pwd", "otp"], sid="third")
@@ -1803,6 +1822,22 @@ def identity_providers(world: World, check: Checks) -> None:
         status, claimed, _, _ = provider_flow(stack, provider, "signIn")
         check("and that identity then signs the member in",
               claimed.get("userId") == world.member["id"], claimed)
+        stack.command("admin", "grant", world.owner["name"])
+        refused = stack.request("PATCH", f"/admin/identity-providers/{provider}",
+                                {"issuer": "https://elsewhere.localhost"}, world.owner["token"])
+        check("a provider's issuer cannot be changed from the dashboard", refused[0] == 400, refused)
+        refused = stack.request("PATCH", f"/admin/identity-providers/{provider}",
+                                {"clientId": "other"}, world.owner["token"])
+        check("nor its client id", refused[0] == 400, refused)
+        stack.command("admin", "revoke", world.owner["name"])
+        psql(f"UPDATE user_identity SET issuer = 'https://elsewhere.localhost' "
+             f"WHERE provider = '{provider}' AND \"user\" = '{world.member['id']}'", stack.database)
+        idp.sign_in_next(sub=f"member-{world.run}", amr=["pwd"])
+        status, claimed, _, _ = provider_flow(stack, provider, "signIn")
+        check("a link made at another issuer than the provider's signs no one in",
+              claimed.get("outcome") == "accountRequired", claimed)
+        psql(f"UPDATE user_identity SET issuer = '{idp.issuer}' "
+             f"WHERE provider = '{provider}' AND \"user\" = '{world.member['id']}'", stack.database)
 
         stack.command("identity-providers", "set", name, "--enabled", "false")
         check("a disabled provider is offered no more",
@@ -2489,24 +2524,38 @@ def plugins(world: World, check: Checks) -> None:
 
 
 def profile_annotations(world: World, check: Checks) -> None:
-    say("a plugin's annotation of a person reaches only those who share a community with them")
+    say("a plugin's annotation of a person is shown only where the plugin runs, to those who share it")
     stack, member = world.stack, world.member
     if psql(f"SELECT count(*) FROM plugin WHERE id = '{WORD_FILTER_ID}'", stack.database) != "1":
         check("the word filter is installed, to annotate with", False, "the plugins scenario installs it")
         return
+    stack.command("plugins", "enable", WORD_FILTER_ID)
+    running(world, WORD_FILTER_ID)
     # No example plugin annotates people, so the row is written as a plugin's would be.
     psql("INSERT INTO user_annotation (id, plugin, \"user\", kind, severity, label) "
          f"VALUES (gen_random_uuid(), '{WORD_FILTER_ID}', '{member['id']}', 'checked', 'info', "
          "'{\"key\": \"checked\"}')", stack.database)
     outsider = world.account("outsider")
     path = f"/users/{member['id']}/annotations"
-    check("the person reads their own", len(stack.api("GET", path, token=member["token"])) == 1)
-    check("and so does someone who shares a community with them",
+    plugin_here = f"/communities/{world.community}/plugins/{WORD_FILTER_ID}"
+    check("while no community they share runs the plugin, nobody reads it",
+          stack.api("GET", path, token=world.owner["token"]) == []
+          and stack.api("GET", path, token=member["token"]) == [])
+    world.as_owner("PUT", plugin_here, {"settings": {"watchWords": [], "words": []}, "grant": []})
+    check("once the community runs it, the person reads their own", len(stack.api("GET", path, token=member["token"])) == 1)
+    check("and so does someone who shares that community with them",
           len(stack.api("GET", path, token=world.owner["token"])) == 1)
     check("but nobody else", stack.api("GET", path, token=outsider["token"]) == [])
+    world.as_owner("DELETE", plugin_here)
+    check("once the community turns the plugin off, it is shown there no more",
+          stack.api("GET", path, token=world.owner["token"]) == []
+          and stack.api("GET", path, token=member["token"]) == [])
+    world.as_owner("PUT", plugin_here, {"settings": {"watchWords": [], "words": []}, "grant": []})
     world.as_owner("DELETE", f"/communities/{world.community}/members/{member['id']}")
-    check("nor anyone they no longer share a community with",
+    check("nor to anyone they no longer share a community with",
           stack.api("GET", path, token=world.owner["token"]) == [])
+    world.as_owner("DELETE", plugin_here)
+    stack.command("plugins", "disable", WORD_FILTER_ID)
     psql(f"DELETE FROM user_annotation WHERE \"user\" = '{member['id']}'", stack.database)
 
 

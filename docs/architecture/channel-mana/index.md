@@ -57,6 +57,10 @@ mana.
 
 - **A glyph is a grapheme cluster** (`mana::glyphs`, with `unicode-segmentation`): what a reader
   sees as one character. `é`, `中`, `👍🏽`, `👨‍👩‍👧` and `🇯🇵` cost 1 each, in every script alike.
+- **A stacked cluster** of more than ten scalars (`GLYPH_SCALARS`) costs one more for each scalar
+  past ten: a chain of emoji joined by zero-width joiners, or a letter under a heap of combining
+  marks, costs about what its characters would apart. The longest emoji sequence Unicode recommends
+  is ten scalars, so every emoji, and every script's letters, still cost 1.
 - **Tokens:** a tag (`<@id>`, `<@&id>`), a custom emoji (`<:id>`), and `@everyone` cost 1 each,
   however long their stored form.
 - **Markdown markers** cost what they are, a glyph each.
@@ -92,8 +96,9 @@ mana.
 
 ## Deciding
 
-Every gate first checks that the author may post there as posting would (`check_posting`, or the
-endpoint's own checks), so only someone who could post spends a channel's mana. Then
+Every gate first checks that the author may post there as posting would (`check_posting`, or
+`check_first_reply` for a reply that makes its thread, or the endpoint's own checks), with its
+attachments and what it replies to, so only what could be posted spends a channel's mana. Then
 `mana::decide_for` answers:
 
 1. **No pool, or nothing to pay:** go ahead.
@@ -110,15 +115,16 @@ refused after spending (by a plugin, say) has spent for nothing, which the next 
 waits is answered `202 Accepted` with the held row.
 
 - **A thread's first reply always goes ahead:** the thread it makes has a new, full pool.
-- **An echo made with its reply** spends the parent's pool too. When the parent cannot pay, the
-  reply is posted alone, from the thread's pool, and its echo waits in the parent's queue as an item
-  of its author's (`held::post_now`). An echo the parent's queue cannot take then is not made, and
-  its author may echo the reply later.
+- **An echo made with its reply** spends the parent's pool too, decided only once the author is
+  known to hold Send messages in the parent, as posting the echo takes. When the parent cannot pay,
+  the reply is posted alone, from the thread's pool, and its echo waits in the parent's queue as an
+  item of its author's (`held::post_now`). An echo the parent's queue cannot take then is not made,
+  and its author may echo the reply later.
 - **An echo asked for later** (`PUT /messages/{message}/echo`) waits in the parent's queue the same
   way.
 - **A message released from its preview's hold** asks the channel too. When the channel is busy, its
-  row becomes one waiting for mana (`queue::wait_held`), without the bounds below, since it was
-  accepted when sent.
+  row becomes one waiting for mana (`queue::wait_held`), within the bounds below as anything that
+  waits; one past them is dropped, its author told the channel is too busy.
 
 ## Waiting rows
 
@@ -148,16 +154,16 @@ What waits is a held message ([Held messages](../attachment-previews/held-messag
 
 An author's waiting rows in one pool are one item. Its rows post in the order sent.
 
-| Bound                | Value                                                                                                  | Past it                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| An item              | 50 rows (`MAX_ITEM_MESSAGES`), or 2,000 mana in all (`MAX_ITEM_MANA`), its first row whatever it costs | `429` `channelBusy`, `Retry-After` 10 seconds (`BUSY_RETRY`)                           |
-| A pool's items       | 1,000 (`MAX_ITEMS`)                                                                                    | Room is made for an author above the lowest one waiting (below); anyone else, the same |
-| How long a row waits | 2 minutes (`MAX_WAIT`)                                                                                 | Dropped, its author told the channel was too busy                                      |
+| Bound                | Value                                                                                                  | Past it                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| An item              | 50 rows (`MAX_ITEM_MESSAGES`), or 2,000 mana in all (`MAX_ITEM_MANA`), its first row whatever it costs | `429` `channelBusy`, `Retry-After` 10 seconds (`BUSY_RETRY`)                         |
+| A pool's items       | 1,000 (`MAX_ITEMS`)                                                                                    | Room is made for an author above the last one waiting (below); anyone else, the same |
+| How long a row waits | 2 minutes (`MAX_WAIT`)                                                                                 | Dropped, its author told the channel was too busy                                    |
 
-### Priority
+### Queue order
 
-Items go by their authors' `Priority` (`queue::priorities_of`, one query for every author asked of),
-higher first:
+Items go by their authors' `Standing` (`queue::standings_of`, one query for every author asked of).
+First by `Priority`, higher first:
 
 1. **Rank** in the channel's community, as everywhere else it is ranked
    (`CommunityAccess::role_rank`): the owner above every role, otherwise their highest role's
@@ -165,18 +171,56 @@ higher first:
    group DM is 0.
 2. **Tenure**, in whole days since they joined the community (`community_user.joined_at`), or were
    added to the group DM (`dm_recipient.joined_at`).
-3. **Random** among those equal in both, drawn for each message.
 
-An author who no longer belongs there is lowest. Holders of Bypass channel mana never wait, so they
-are never in the queue.
+Then, among those equal in both, by their **tie**, lowest first: HMAC-SHA256 of the channel's id,
+the author's id, and their username, keyed with the deployment's `manaOrder` secret
+(`server_secret::MANA_ORDER`, made by the first server to start, as its other secrets are). The
+order is arbitrary but the same on every server and every tick, so it needs no checkpoint, and no
+one outside the servers can work it out.
+
+An author who no longer belongs there has the lowest priority. Holders of Bypass channel mana never
+wait, so they are never in the queue.
 
 - **A full queue:** when 1,000 authors wait and someone else sends, `queue::make_room` reads the
-  priorities of them all. If the sender is strictly above the lowest of them (one drawn at random
-  among equals), every waiting row of that author is dropped, each told the channel made room for
+  standings of them all. If the sender's priority is strictly above that of the last of them in
+  queue order, every waiting row of that author is dropped, each told the channel made room for
   someone of higher rank or longer here (`manaMadeRoom`), and the sender waits. Otherwise the sender
-  is refused with `channelBusy`. No one is ever dropped for someone of lower rank, or for an equal.
-  It is checked before the row is saved, apart from its transaction, since dropping announces each
-  row; two senders at once may both find room, and the queue holds a few more.
+  is refused with `channelBusy`. No one is ever dropped for someone of lower priority, or for an
+  equal. It is checked before the row is saved, apart from its transaction, since dropping announces
+  each row; two senders at once may both find room, and the queue holds a few more.
+
+### Thirds
+
+While anything waits, what the pool holds is not spent by whoever asks first but credited to the
+first three authors in queue order (`mana::share`, the `SHARE` script):
+
+| Waiting       | First            | Second    | Third     |
+| ------------- | ---------------- | --------- | --------- |
+| One           | All three thirds |           |           |
+| Two           | Two thirds       | One third |           |
+| Three or more | One third        | One third | One third |
+
+- **What is split:** whatever the pool holds above zero when the queue forms, and each recharge
+  after, split into three equal portions (`mana::WEIGHTS`), the rounding's remainder to the first.
+  The fourth and later earn nothing until they move up. A pool in debt pays its debt back first.
+- **Paying:** an author's oldest row is posted once their credit covers its cost (`mana::pay_turn`),
+  the cost coming out of their credit. Credit left over stays theirs while they still have rows
+  waiting.
+- **Credit goes back to the pool** when its holder is no longer among the first three: their last
+  row posted, cancelled, or dropped (at `MAX_WAIT`, or when they could no longer post), or pushed
+  down by someone of higher priority arriving. It is shared out again at the same tick.
+- **A row larger than a share:** once an author's credit reaches their share of the capacity (a
+  third of it for each third they are credited) while the pool is not in debt, their row posts
+  however much it costs, with all their credit and the rest from the pool, into debt down to the
+  floor. With one waiting this is the full pool's rule; a row costing more than the author can ever
+  be credited would otherwise never post.
+- **Where credit lives:** beside the pool in Valkey, a hash `mana:{channel}:credit` of user ids to
+  thousandths. The pool's scripts treat it as the pool's own: the level never rises above the
+  capacity less what is credited, and the level told to viewers includes it, so the bar rises and
+  falls as it would without the queue. One script call shares and another pays, each atomically on
+  Valkey's clock, and only the pool's one drainer calls them, so credit is consistent whichever
+  server runs the drainer. It expires a minute after the drainer last touched it, and a pool whose
+  credit is lost has that mana back no sooner than its recharge returns it.
 
 ## Draining
 
@@ -184,46 +228,48 @@ One job drains a pool while anything waits there: `drainManaQueue`, keyed by the
 runner holds it anywhere in the fleet (`queue::drain_step`). It is saved with the first row to wait
 there.
 
-- **Ticking:** a step ticks at 5 Hz (`TICK`) for ten seconds, then hands the job back with the
-  author it drew as its progress (`Outcome::Progress`), so its lease renews and any runner may take
-  it up. A drainer takes a place of the `interactive` class like any job, so many busy channels at
-  once wait their turns for places.
-- **Priorities** are read as each author is first seen waiting in a step, and kept for the step, so
-  a role given or taken counts within ten seconds.
-- **Each tick** first drops what has waited `MAX_WAIT`, a hundred at a time, telling each author.
-  Then it reads each item's oldest row and, while the pool can pay (`mana::pay_waiting`):
-  - draws an author among the highest waiting, unless the one drawn before is still among them;
-  - posts that author's oldest row, once the pool can pay for it, and draws again.
-- **The draw is kept until its row is paid for**, across ticks and steps: drawn afresh each tick,
-  the cheap messages of equals would post whenever the pool could pay for them, and a costly one
-  never would.
-- **Strict:** while anyone of higher priority waits, no one lower posts. A raid of new accounts
-  waits behind every regular, and is mostly dropped at `MAX_WAIT`.
+- **Ticking:** a step ticks at 5 Hz (`TICK`) for ten seconds, then hands the job back
+  (`Outcome::Progress`), so its lease renews and any runner may take it up. It carries nothing from
+  step to step, since the credit lives in Valkey. A drainer takes a place of the `interactive` class
+  like any job, so many busy channels at once wait their turns for places.
+- **Standings** are read as each author is first seen waiting in a step, and kept for the step, so a
+  role given or taken counts within ten seconds.
+- **Each tick** first drops what has waited `MAX_WAIT`, a hundred at a time, oldest first
+  (`held_message_mana_by_age`), telling each author. Then it reads each item's oldest row, one row
+  for each author however many they have waiting (skipping from author to author through
+  `held_message_mana_queue`, then a `LATERAL` read of each one's oldest), puts them in queue order,
+  and, up to ten times (`ROUNDS_PER_TICK`): shares what the pool has earned among the first three,
+  and posts the oldest row of each whose credit can pay for it.
+- **Higher priority earns more, not everything:** the first in the queue is credited at least a
+  third of all the pool earns, and two thirds or all of it when fewer wait. A raid of new accounts
+  holds at most two of the three places while one regular waits, and none while three do, so it is
+  mostly dropped at `MAX_WAIT`; and one regular's costly row does not hold back everyone below them
+  while it is paid for.
 - **Posting a row** is posting as its kind would be (`held::post_waiting`): a message or a command
   by `message::post`, an edit by `update_message`, a poll by `create_poll`, each taking the row in
   its own transaction; an echo by `echo_reply`, its row going after, since echoing twice makes one
   echo. Permissions, blocks, and plugins decide it then; one that can no longer be posted is
   dropped, its author told why, and one that fails for a reason that may pass is left to wait.
-- **Checked before paying:** before the pool pays for a row, the drainer checks that its author may
-  still post there (`held::drop_if_unpostable`: `may_post`, or for an edit their access to the
-  channel). One they no longer may is dropped unpaid, so what will be refused spends nothing of the
-  channel's mana.
-- **Finishing:** a drainer that finds nothing waiting deletes its own job, in one statement, only
-  while nothing waits (`finish_if_empty`), so a row saved at that moment sees the job gone and saves
-  another (`ensure_drainer`).
+- **Checked before paying:** before a row is paid for, the drainer checks that its author may still
+  post there (`held::drop_if_unpostable`: `may_post`, or for an edit their access to the channel).
+  One they no longer may is dropped unpaid, so what will be refused spends nothing of the channel's
+  mana.
+- **Finishing:** a drainer that finds nothing waiting gives every credit back to the pool, then
+  deletes its own job, in one statement, only while nothing waits (`finish_if_empty`), so a row
+  saved at that moment sees the job gone and saves another (`ensure_drainer`).
 - **A channel that can no longer have a pool** (made something else, or gone) has what waits there
   posted without paying.
 - **Capacity bounds a long queue:** a thousand items of 100 mana each is 100,000 mana, over half an
-  hour at 50 a second, so most are dropped at `MAX_WAIT`, the lowest first.
+  hour at 50 a second, so most are dropped at `MAX_WAIT`, the last in queue order first.
 
 ## The bar
 
 - **Telling viewers:** a spend publishes the pool's level as a relay on core NATS `aspen.mana`
   (`live::changed`), routed exactly as typing is (`event_feed::relayed_events`): to connections
   viewing the channel (`viewing`) that may read it, as an `ephemeral` frame, never replayed. The
-  frame (`EphemeralEvent::Mana`) holds `channelId`, `level` (thousandths, below zero in debt),
-  `max`, `recharge`, `at`, and `queued`, whether anything waits there, so its priority queue is in
-  force (read as the frame is told).
+  frame (`EphemeralEvent::Mana`) holds `channelId`, `level` (thousandths, what the queue's authors
+  are credited included, below zero in debt), `max`, `recharge`, `at`, and `queued`, whether
+  anything waits there, so its priority queue is in force (read as the frame is told).
 - **Twice a second at most:** the first spend in each half second (`live::EVERY`) sets
   `mana:{channel}:told` and is told; a server whose spend fell inside the window tells the level as
   it is when the window ends, so the last spend of a burst always reaches viewers.
@@ -232,7 +278,9 @@ there.
   pool to recharge enough to pay for it.
 - **Starting to view:** each event stream connection's task (`live::Viewer`) tells it the level of
   each channel it starts to view whose pool is below full and that it may read, so a bar already
-  showing appears at once.
+  showing appears at once. A channel it looked up in the last five seconds (`live::LOOKED_UP_FOR`)
+  is not looked up again, and the connection takes at most one `viewing` list a second, so a client
+  switching lists bounds its own lookups.
 - **In the app:** the store keeps the latest level of up to 32 channels (`RecordStore.mana`), and
   the bar draws the level between frames from `at` and `recharge`, rising steadily at 15 frames a
   second (`manaDrawnAt`). It shows once the level falls below 60% of `max` (`MANA_SHOW_BELOW`), or
@@ -310,7 +358,8 @@ too.
      deleting an account drop what the person has waiting there at once, by a `dropHeldBy` job saved
      in the same transaction
      ([Held messages](../attachment-previews/held-messages.md#when-posting-fails)). They then rank
-     lowest and spend nothing meanwhile.
+     lowest and spend nothing meanwhile, and what they were credited goes back to the pool at the
+     drainer's next tick once their last row there is gone.
    - Any other loss of the right to post there (a role or override changed, a role taken or deleted,
      a move, a category deleted, the channel deleted) is found as the drainer reaches the row,
      before it pays: dropped unpaid, with `heldMessageFailed`. A row reached only later is checked
@@ -332,9 +381,10 @@ dropped, and that a member who loses the channel stops hearing its level.
 
 ## Testing
 
-- **Unit tests:** glyph counting and costs, settings and their ceilings (`app::mana`); the app's
-  recharge arithmetic, store, and held edits (`client/packages/protocol/test/mana.test.ts`,
-  `sync.test.ts`).
+- **Unit tests:** glyph counting and costs, settings and their ceilings, and the thirds' sharing,
+  paying, and debt against the Valkey of `docker-compose.yaml` (or `VALKEY_URL`) (`app::mana`); the
+  queue's order and its keyed ties (`app::mana::queue`); the app's recharge arithmetic, store, and
+  held edits (`client/packages/protocol/test/mana.test.ts`, `sync.test.ts`).
 - **The `raid` benchmark scenario** (`aspen-bench`, see [Benchmarking](../benchmarking.md)) has a
   tenth of a 2,000-member community flood one channel, measuring how long everyone else's messages
   there wait and how many of either side's are held, refused, or dropped.

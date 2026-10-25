@@ -1,5 +1,7 @@
-//! Identities at providers linked to accounts: one account per identity, matched by the provider
-//! and its `sub` alone, and at most one identity of each provider per account.
+//! Identities at providers linked to accounts: one account per identity, matched by the provider,
+//! its issuer, and its `sub`, and at most one identity of each provider per account. A link keeps
+//! the issuer it was made at, and is found only while the provider still names that issuer, since
+//! a `sub` is unique only within one issuer.
 
 use super::Provider;
 use crate::context::GlobalServerContext;
@@ -42,13 +44,14 @@ fn summary((id, provider, provider_name, created_at, last_used_at): SummaryRow) 
 /// The account `subject` at `provider` is linked to, if it is live.
 pub async fn account_of(
     conn: &mut AsyncPgConnection,
-    provider: IdentityProviderId,
+    provider: &Provider,
     subject: &str,
 ) -> crate::Result<Option<UserId>> {
     Ok(user_identity::table
         .inner_join(user::table)
         .select(user_identity::user)
-        .filter(user_identity::provider.eq(provider))
+        .filter(user_identity::provider.eq(provider.id))
+        .filter(user_identity::issuer.eq(&provider.issuer))
         .filter(user_identity::subject.eq(subject))
         .filter(user::deleted_at.is_null())
         .first(conn)
@@ -60,12 +63,13 @@ pub async fn account_of(
 pub async fn of(
     conn: &mut AsyncPgConnection,
     user_id: UserId,
-    provider: IdentityProviderId,
+    provider: &Provider,
 ) -> crate::Result<Option<UserIdentityId>> {
     Ok(user_identity::table
         .select(user_identity::id)
         .filter(user_identity::user.eq(user_id))
-        .filter(user_identity::provider.eq(provider))
+        .filter(user_identity::provider.eq(provider.id))
+        .filter(user_identity::issuer.eq(&provider.issuer))
         .first(conn)
         .await
         .optional()?)
@@ -74,12 +78,13 @@ pub async fn of(
 /// Records that `subject` at `provider` signed in.
 pub async fn used(
     conn: &mut AsyncPgConnection,
-    provider: IdentityProviderId,
+    provider: &Provider,
     subject: &str,
 ) -> crate::Result<()> {
     diesel::update(
         user_identity::table
-            .filter(user_identity::provider.eq(provider))
+            .filter(user_identity::provider.eq(provider.id))
+            .filter(user_identity::issuer.eq(&provider.issuer))
             .filter(user_identity::subject.eq(subject)),
     )
     .set(user_identity::last_used_at.eq(diesel::dsl::now))
@@ -88,12 +93,12 @@ pub async fn used(
     Ok(())
 }
 
-/// Links `subject` at `provider` to `user_id`, refusing an identity another account holds and a
-/// second identity of one provider.
+/// Links `subject` at `provider`'s issuer to `user_id`, refusing an identity another account
+/// holds and a second identity of one provider.
 pub async fn insert(
     conn: &mut AsyncPgConnection,
     user_id: UserId,
-    provider: IdentityProviderId,
+    provider: &Provider,
     subject: &str,
 ) -> crate::Result<UserIdentityId> {
     let id = UserIdentityId::new();
@@ -101,7 +106,8 @@ pub async fn insert(
         .values((
             user_identity::id.eq(id),
             user_identity::user.eq(user_id),
-            user_identity::provider.eq(provider),
+            user_identity::provider.eq(provider.id),
+            user_identity::issuer.eq(&provider.issuer),
             user_identity::subject.eq(subject),
             user_identity::last_used_at.eq(diesel::dsl::now),
         ))
@@ -130,7 +136,7 @@ pub async fn link(
     provider: &Provider,
     subject: &str,
 ) -> crate::Result<IdentitySummary> {
-    let id = insert(conn, user_id, provider.id, subject).await?;
+    let id = insert(conn, user_id, provider, subject).await?;
     Ok(IdentitySummary {
         id,
         provider: provider.id,
@@ -140,8 +146,9 @@ pub async fn link(
     })
 }
 
-/// `user_id`'s linked identities at providers that are not removed. An account holds at most
-/// one per provider, and a deployment at most `MAX_PROVIDERS`, so the list is short.
+/// `user_id`'s linked identities at providers that are not removed and still name the issuer each
+/// was linked at. An account holds at most one per provider, and a deployment at most
+/// `MAX_PROVIDERS`, so the list is short.
 pub async fn list(
     conn: &mut AsyncPgConnection,
     user_id: UserId,
@@ -157,6 +164,7 @@ pub async fn list(
         ))
         .filter(user_identity::user.eq(user_id))
         .filter(identity_provider::removed_at.is_null())
+        .filter(user_identity::issuer.eq(identity_provider::issuer))
         .order(user_identity::created_at.asc())
         .limit(super::MAX_PROVIDERS)
         .load(conn)

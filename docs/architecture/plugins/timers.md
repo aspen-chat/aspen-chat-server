@@ -22,8 +22,20 @@ Timers are set and cancelled by key (`timer::set`, `timer::cancel`).
 | `set-timer-in` | As storage's for the scope. | Recorded (`scopeKind`, `scope`), checked as storage's by `host::Call::scope`. |
 
 - At most `timer::MAX_TIMERS_PER_OWNER` (1000) per owner, counted when a new key is set, through
-  `job_plugin_timer_owner`.
-- Two set at once may each find room, so an owner may hold a few more.
+  `job_plugin_timer_owner`. Timers of one owner's share are set one at a time, under an advisory
+  lock held for the transaction, so two set at once cannot both take the last place.
+- At most `timer::MAX_TIMERS_PER_PLUGIN` (100,000) per plugin, every owner's share together, counted
+  no further than that and kept by each server for ten seconds (`Plugins::timer_totals`), so servers
+  setting timers at once may pass it by what they set in that time.
+- A time already past makes the timer due when it is set: the job's `not_before` is the later of the
+  two, while the plugin is handed the time it gave. A plugin cannot put its timers ahead of jobs
+  already due, since the runner takes the longest due first.
+
+## Running
+
+Timers' jobs are a group of their own (`jobs::bounded`): each server runs at most half its shared
+places (`[jobs] concurrency`) of them at once, so a plugin with many timers due leaves the rest of
+the normal class places to run in.
 
 ## Firing
 

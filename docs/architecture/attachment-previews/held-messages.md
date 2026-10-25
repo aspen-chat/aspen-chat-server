@@ -72,7 +72,8 @@ posted, whatever it waits for (`held::cancel`).
 
 - The row goes in one transaction with `heldMessageCancelled`, user-scoped, which tells the author's
   other apps.
-- A first reply that made its thread as it was held takes the thread with it, as a dropped one does.
+- A first reply that made its thread as it was held (`made_thread`) takes the thread with it, as a
+  dropped one does; any other held message leaves its thread alone.
 - It is not found when it was never the caller's, or has been posted.
 
 ## Listing

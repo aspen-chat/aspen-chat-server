@@ -29,15 +29,17 @@ Aspen is only the client. How it works is in
 
 ### Options
 
-| Flag (terminal)         | Dashboard              | Off by default | What it does                                                                                                                                             |
-| ----------------------- | ---------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--skip-invite`         | Skips invites          | yes            | A first sign-in makes an account without a registration invite where `registration-invite-required` is on. Use it when the provider decides who belongs. |
-| `--enforces-two-factor` | Enforces two factors   | yes            | Every sign-in there counts as two factors. Without it, one counts as two only when the provider's `amr` claim names a second factor.                     |
-| `--distrust-email`      | Trusts email addresses | no (trusted)   | Without it, an address the provider reports as verified becomes a new account's verified address.                                                        |
-| `--disabled`            | Enabled                | no (enabled)   | A disabled provider offers no sign-in, and keeps its links.                                                                                              |
+| Flag (terminal)         | Dashboard              | Off by default | What it does                                                                                                                                                                                            |
+| ----------------------- | ---------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--skip-invite`         | Skips invites          | yes            | A first sign-in makes an account without a registration invite where `registration-invite-required` is on. Use it when the provider decides who belongs.                                                |
+| `--enforces-two-factor` | Enforces two factors   | yes            | Every sign-in there counts as two factors. Without it, one counts as two only when the provider's `amr` claim says `mfa`, or names two different kinds of factor (a password and a one-time code, say). |
+| `--trust-email`         | Trusts email addresses | yes            | An address the provider reports as verified becomes a new account's verified address. Use it only for a provider that verifies every address it reports so.                                             |
+| `--disabled`            | Enabled                | no (enabled)   | A disabled provider offers no sign-in, and keeps its links.                                                                                                                                             |
 
-`identity-providers set <name or id>` changes any of them, and `--client-secret-file` replaces the
-secret.
+`identity-providers set <name or id>` changes any of them, `--name` renames it, and
+`--client-secret-file` replaces the secret. A provider's issuer and client ID are fixed once it is
+added. To move to another issuer or client, add a new provider, have its people link it from their
+security settings, and then remove the old one.
 
 ### Removing a provider
 
@@ -54,7 +56,9 @@ provider can no longer sign in**: ask their people to set a password or add a pa
 
 Turn `allow_private_addresses` on for a provider on your LAN. While it is on, anyone holding Manage
 identity providers can make the server fetch a discovery document from any address it can reach, so
-grant that permission accordingly.
+grant that permission accordingly. Off or on, a provider's issuer and the endpoints its discovery
+document names may not be loopback or unspecified addresses written as numbers (`127.0.0.1`,
+`[::1]`, `0.0.0.0`); a provider on the same machine is named by a host name instead.
 
 ## What must be reachable
 

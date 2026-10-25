@@ -10,6 +10,7 @@ let identity = {
   fingerprints: [FINGERPRINT],
 };
 let rejection: Error | null = null;
+const asked: string[] = [];
 
 vi.mock("@capacitor/core", () => ({
   Capacitor: {
@@ -18,8 +19,12 @@ vi.mock("@capacitor/core", () => ({
   },
   registerPlugin: () => ({
     identity: () => Promise.resolve(identity),
-    get: () =>
-      rejection === null ? Promise.resolve({ credential: { id: "c" } }) : Promise.reject(rejection),
+    get: (options: { host: string }) => {
+      asked.push(options.host);
+      return rejection === null
+        ? Promise.resolve({ credential: { id: "c" } })
+        : Promise.reject(rejection);
+    },
     create: () => Promise.reject(rejection ?? new Error("not asked")),
   }),
 }));
@@ -83,12 +88,16 @@ describe("nativePasskeys", () => {
   it("read the plugin's failures as the ceremony needs them", async () => {
     const native = await nativePasskeys(methods(named));
     rejection = Object.assign(new Error("dismissed"), { code: "cancelled" });
-    await expect(native?.get({})).rejects.toBeInstanceOf(PasskeyCancelledError);
+    await expect(native?.get({}, "chat.example.org")).rejects.toBeInstanceOf(PasskeyCancelledError);
     rejection = Object.assign(new Error("no provider"), { code: "unavailable" });
-    await expect(native?.create({})).rejects.toBeInstanceOf(PasskeyUnavailableError);
+    await expect(native?.create({}, "chat.example.org")).rejects.toBeInstanceOf(
+      PasskeyUnavailableError,
+    );
     rejection = Object.assign(new Error("broken"), { code: "failed" });
-    await expect(native?.get({})).rejects.toThrow("broken");
+    await expect(native?.get({}, "chat.example.org")).rejects.toThrow("broken");
     rejection = null;
-    await expect(native?.get({})).resolves.toEqual({ id: "c" });
+    await expect(native?.get({}, "chat.example.org")).resolves.toEqual({ id: "c" });
+    // The plugin is told whose ceremony it runs, and checks the relying party against it.
+    expect(asked.at(-1)).toBe("chat.example.org");
   });
 });

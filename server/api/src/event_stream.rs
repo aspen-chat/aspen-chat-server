@@ -75,6 +75,11 @@ const MAX_WRITE_BUFFER_BYTES: usize = 1024 * 1024;
 /// The largest frame a client may send.
 const MAX_CLIENT_MESSAGE_BYTES: usize = 64 * 1024;
 
+/// The least time between two `viewing` lists a connection takes up. One sent sooner waits until
+/// then, replaced by any sent after it, so the last list a client sends is always taken, and a
+/// client changing lists faster costs its shard and its mana viewer nothing more.
+const VIEWING_EVERY: Duration = Duration::from_secs(1);
+
 /// Frames the client may send.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -699,8 +704,21 @@ async fn pump_events(
     let mut presence = state.presence_feed.watch(user);
     // Dropped with the connection, which ends its task.
     let (viewer, mut mana_levels) = app::mana::live::Viewer::spawn(state.clone(), user);
+    let mut viewing_taken: Option<tokio::time::Instant> = None;
+    let mut viewing_waiting: Option<Vec<ChannelId>> = None;
     loop {
         tokio::select! {
+            () = async {
+                match (&viewing_waiting, viewing_taken) {
+                    (Some(_), Some(at)) => tokio::time::sleep_until(at + VIEWING_EVERY).await,
+                    _ => std::future::pending().await,
+                }
+            } => {
+                if let Some(channel_ids) = viewing_waiting.take() {
+                    viewing_taken = Some(tokio::time::Instant::now());
+                    take_viewing(&viewer, &subscription, channel_ids);
+                }
+            },
             Some(level) = mana_levels.recv() => {
                 if let Err(e) = send_presence(&mut socket, &level).await {
                     log_send_error(&e);
@@ -827,14 +845,16 @@ async fn pump_events(
                         Ok(ClientMessage::StoppedTyping { channel_id }) => {
                             typist.stopped(channel_id);
                         }
-                        Ok(ClientMessage::Viewing { channel_ids }) => {
-                            let cut: Vec<ChannelId> = channel_ids
-                                .iter()
-                                .copied()
-                                .take(app::event_feed::MAX_VIEWING)
-                                .collect();
-                            viewer.viewing(cut);
-                            subscription.viewing(channel_ids);
+                        Ok(ClientMessage::Viewing { mut channel_ids }) => {
+                            channel_ids.truncate(app::event_feed::MAX_VIEWING);
+                            let now = tokio::time::Instant::now();
+                            if viewing_taken.is_none_or(|at| now.duration_since(at) >= VIEWING_EVERY) {
+                                viewing_taken = Some(now);
+                                viewing_waiting = None;
+                                take_viewing(&viewer, &subscription, channel_ids);
+                            } else {
+                                viewing_waiting = Some(channel_ids);
+                            }
                         }
                         Ok(ClientMessage::WatchPresence { user_ids }) => presence.set(user_ids),
                         // Anything else (a second `identify`, an unknown frame) is dropped
@@ -857,6 +877,17 @@ async fn pump_events(
             },
         }
     }
+}
+
+/// Hands a `viewing` list, cut to `event_feed::MAX_VIEWING`, to the connection's shard and mana
+/// viewer.
+fn take_viewing(
+    viewer: &app::mana::live::Viewer,
+    subscription: &Subscription,
+    channel_ids: Vec<ChannelId>,
+) {
+    viewer.viewing(channel_ids.clone());
+    subscription.viewing(channel_ids);
 }
 
 /// Writes an ephemeral frame the connection was told of directly: the presence router's

@@ -1,5 +1,9 @@
 {
-${acme_email}	# No HTTP/3: UDP 443 is not asked to be open, so it is not offered.
+${acme_email}	# The admin API rewrites the whole proxy, so it is not on loopback, which every container
+	# here shares (the voice server among them), but on a socket inside Caddy's own container,
+	# where `caddy reload` run there reaches it.
+	admin unix//run/caddy-admin.sock
+	# No HTTP/3: UDP 443 is not asked to be open, so it is not offered.
 	servers {
 		protocols h1 h2
 	}

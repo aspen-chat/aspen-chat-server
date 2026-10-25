@@ -157,3 +157,10 @@ signing certificate.
 The app's side is in the client's
 [sign-in page](../../../client/docs/architecture/sign-in.md#passkeys). Its ceremonies start and
 complete as a page's do, by the sign-in that started them, with no hand-off.
+
+The app's origin is the same for every deployment that names it, so this server cannot tell an
+assertion the app made for it from one made for options another deployment relayed from one of its
+ceremonies. The app holds the line a browser holds for a page: it runs a ceremony natively only when
+the options' relying party (`rpId`, or `rp.id` to register) is the deployment's own host or a parent
+of it, and otherwise hands it to that deployment's page in the system browser. Shipping a release
+certificate in `OFFICIAL_ANDROID_FINGERPRINTS` relies on that check.

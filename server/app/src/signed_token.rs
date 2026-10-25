@@ -44,9 +44,12 @@ pub(crate) fn seal(key: &HmacKey, context: &[u8], body: &[u8]) -> String {
 }
 
 /// The body of `token` when it is `len` bytes long, begins with `VERSION`, and its tag is
-/// `key`'s for `context`.
+/// `key`'s for `context`. `token` is taken exactly as given, with no whitespace stripped, so the
+/// one string that opens is the one whose digest is looked up and remembered
+/// (`login::token_digest`, `RejectedTokens`): a token spelled with spaces around it is refused,
+/// not another key.
 pub(crate) fn open(key: &HmacKey, context: &[u8], token: &str, len: usize) -> Option<Vec<u8>> {
-    let mut sealed = BASE64_URL_SAFE_NO_PAD.decode(token.trim()).ok()?;
+    let mut sealed = BASE64_URL_SAFE_NO_PAD.decode(token).ok()?;
     if sealed.len() != len + TAG_BYTES || sealed[0] != VERSION {
         return None;
     }
@@ -112,7 +115,7 @@ pub fn check_bot_token(key: &HmacKey, token: &str) -> BotToken {
     if open(key, BOT_CONTEXT, token, BOT_BODY).is_some() {
         BotToken::Signed
     } else if BASE64_URL_SAFE_NO_PAD
-        .decode(token.trim())
+        .decode(token)
         .is_ok_and(|bytes| bytes.len() == RANDOM_BYTES)
     {
         BotToken::Unsigned
@@ -217,5 +220,28 @@ mod tests {
         let older = BASE64_URL_SAFE_NO_PAD.encode([9u8; 32]);
         assert_eq!(check_bot_token(&key(), &older), BotToken::Unsigned);
         assert_eq!(check_bot_token(&key(), "made-up"), BotToken::Refused);
+        assert_eq!(
+            check_bot_token(&key(), &format!(" {older}")),
+            BotToken::Refused
+        );
+    }
+
+    #[test]
+    fn a_token_opens_only_as_it_was_made() {
+        let now = Utc::now();
+        let token = session_token(&key(), now + TimeDelta::hours(1));
+        assert!(session_token_checks_out(&key(), &token, now));
+        for spelled in [
+            format!(" {token}"),
+            format!("{token} "),
+            format!("{token}\n"),
+        ] {
+            assert!(!session_token_checks_out(&key(), &spelled, now));
+        }
+        let bot = bot_token(&key());
+        assert_eq!(
+            check_bot_token(&key(), &format!("{bot} ")),
+            BotToken::Refused
+        );
     }
 }

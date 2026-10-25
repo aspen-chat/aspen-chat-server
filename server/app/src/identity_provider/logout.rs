@@ -26,11 +26,27 @@ const SKEW_SECONDS: i64 = 60;
 const USED_FOR_SECONDS: i64 = MAX_AGE_SECONDS + SKEW_SECONDS;
 /// The longest logout token read.
 pub const MAX_TOKEN_BYTES: usize = 16 * 1024;
+/// The media type a logout token declares itself (Back-Channel Logout 1.0 §2.4), when it
+/// declares one.
+const LOGOUT_TYPE: &str = "logout+jwt";
 
 #[derive(Deserialize)]
 struct Header {
     alg: CoreJwsSigningAlgorithm,
     kid: Option<String>,
+    typ: Option<String>,
+}
+
+impl Header {
+    /// Whether the token's `typ`, when it has one, is a logout token's. The specification asks
+    /// providers to type their logout tokens explicitly but lets them leave `typ` out, so only a
+    /// token typed as something else (an ID token's `JWT`) is refused.
+    fn typed_as_logout(&self) -> bool {
+        self.typ.as_deref().is_none_or(|typ| {
+            let typ = typ.to_ascii_lowercase();
+            typ == LOGOUT_TYPE || typ.strip_prefix("application/") == Some(LOGOUT_TYPE)
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -107,6 +123,14 @@ pub async fn back_channel_logout(
         return Err(refused("the token is malformed"));
     };
     let header: Header = decode(header)?;
+    if !header.typed_as_logout() {
+        return Err(refused(
+            "it is typed as something other than a logout token",
+        ));
+    }
+    if !accepted_algorithm(&header.alg) {
+        return Err(refused("it is not signed with a provider's published key"));
+    }
     // Only the issuer is read before the signature is checked, to find whose keys check it.
     let claims: Claims = decode(payload)?;
     let signature = BASE64_URL_SAFE_NO_PAD
@@ -118,19 +142,37 @@ pub async fn back_channel_logout(
             .get()
             .await
             .map_err(crate::Error::from)?;
-        identity_provider::table
+        // `identity_provider_issuer` makes the issuer of providers not removed unique; two rows
+        // are read so that, were it ever not, the token is refused rather than checked against
+        // whichever came first.
+        let mut found: Vec<Provider> = identity_provider::table
             .select(Provider::as_select())
             .filter(identity_provider::issuer.eq(&claims.iss))
             .filter(identity_provider::removed_at.is_null())
-            .first(&mut conn)
-            .await
-            .optional()?
-            .ok_or_else(|| refused("its issuer is no identity provider of this server"))?
+            .limit(2)
+            .load(&mut conn)
+            .await?;
+        match (found.pop(), found.is_empty()) {
+            (Some(provider), true) => provider,
+            (Some(_), false) => return Err(refused("more than one provider has its issuer")),
+            (None, _) => return Err(refused("its issuer is no identity provider of this server")),
+        }
     };
     let signed = &token[..header_and_payload_len(token)];
-    if !signature_matches(state, &provider, &header, signed, &signature, false).await?
-        && !signature_matches(state, &provider, &header, signed, &signature, true).await?
-    {
+    let cached = discovery::document(&state.config, &provider.issuer, false).await?;
+    let verified = match verify(&cached, &header, signed, &signature) {
+        Verdict::Verified => true,
+        Verdict::Failed => false,
+        // The provider may have rotated to a key the cached copy predates. Reading its keys
+        // again is bounded per issuer (`document_for_unknown_key`), so tokens naming made-up
+        // keys cost the provider nothing more.
+        Verdict::UnknownKey => {
+            let fresh =
+                discovery::document_for_unknown_key(&state.config, &provider.issuer).await?;
+            verify(&fresh, &header, signed, &signature) == Verdict::Verified
+        }
+    };
+    if !verified {
         return Err(refused(
             "its signature does not verify against the provider's keys",
         ));
@@ -145,12 +187,12 @@ pub async fn back_channel_logout(
     let which = match which {
         Which::Session(sid) => {
             let user = match &claims.sub {
-                Some(sub) => identity::account_of(&mut conn, provider.id, sub).await?,
+                Some(sub) => identity::account_of(&mut conn, &provider, sub).await?,
                 None => None,
             };
             ProviderSignIns::Session { sid, user }
         }
-        Which::Subject(sub) => match identity::account_of(&mut conn, provider.id, &sub).await? {
+        Which::Subject(sub) => match identity::account_of(&mut conn, &provider, &sub).await? {
             Some(user) => ProviderSignIns::User(user),
             None => return Ok(0),
         },
@@ -168,24 +210,34 @@ fn header_and_payload_len(token: &str) -> usize {
     token.rfind('.').unwrap_or(0)
 }
 
-/// Whether one of the provider's keys, from its cached document or `fresh`ly read, signed
-/// `signed` with `header`'s algorithm. Symmetric algorithms and `none` are never accepted.
-async fn signature_matches(
-    state: &GlobalServerContext,
-    provider: &Provider,
+/// Whether `alg` is one a provider's published key can sign with: symmetric algorithms, which
+/// would take the client secret as the key, and `none` never are.
+fn accepted_algorithm(alg: &CoreJwsSigningAlgorithm) -> bool {
+    use CoreJwsSigningAlgorithm as Alg;
+    !matches!(
+        alg,
+        Alg::None | Alg::HmacSha256 | Alg::HmacSha384 | Alg::HmacSha512
+    )
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    Verified,
+    /// The key the token names is there, or it names none, and no key verifies it.
+    Failed,
+    /// No key the document holds verifies it, and the key it names, or any key when it names
+    /// none, may be one the document predates.
+    UnknownKey,
+}
+
+/// Checks `signature` over `signed` against the keys in `document`: the one `header` names by
+/// `kid`, or every key when it names none.
+fn verify(
+    document: &openidconnect::core::CoreProviderMetadata,
     header: &Header,
     signed: &str,
     signature: &[u8],
-    fresh: bool,
-) -> crate::Result<bool> {
-    use CoreJwsSigningAlgorithm as Alg;
-    if matches!(
-        header.alg,
-        Alg::None | Alg::HmacSha256 | Alg::HmacSha384 | Alg::HmacSha512
-    ) {
-        return Ok(false);
-    }
-    let document = discovery::document(&state.config, &provider.issuer, fresh).await?;
+) -> Verdict {
     let keys: Vec<&CoreJsonWebKey> = document
         .jwks()
         .keys()
@@ -195,10 +247,16 @@ async fn signature_matches(
             None => true,
         })
         .collect();
-    Ok(keys.iter().any(|key| {
+    if keys.iter().any(|key| {
         key.verify_signature(&header.alg, signed.as_bytes(), signature)
             .is_ok()
-    }))
+    }) {
+        Verdict::Verified
+    } else if header.kid.is_none() || keys.is_empty() {
+        Verdict::UnknownKey
+    } else {
+        Verdict::Failed
+    }
 }
 
 enum Which {
@@ -309,6 +367,32 @@ mod tests {
             check_claims(&provider(), &claims(json)),
             Ok(Which::Subject(sub)) if sub == "u-1"
         ));
+    }
+
+    fn header(typ: Option<&str>) -> Header {
+        Header {
+            alg: CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+            kid: None,
+            typ: typ.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_token_typed_as_anything_but_a_logout_is_refused() {
+        assert!(header(None).typed_as_logout());
+        assert!(header(Some("logout+jwt")).typed_as_logout());
+        assert!(header(Some("application/logout+JWT")).typed_as_logout());
+        assert!(!header(Some("JWT")).typed_as_logout());
+        assert!(!header(Some("at+jwt")).typed_as_logout());
+    }
+
+    #[test]
+    fn symmetric_and_unsigned_tokens_are_refused() {
+        use CoreJwsSigningAlgorithm as Alg;
+        assert!(!accepted_algorithm(&Alg::None));
+        assert!(!accepted_algorithm(&Alg::HmacSha256));
+        assert!(accepted_algorithm(&Alg::EdDsa));
+        assert!(accepted_algorithm(&Alg::EcdsaP256Sha256));
     }
 
     #[test]

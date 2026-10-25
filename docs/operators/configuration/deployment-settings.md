@@ -73,9 +73,10 @@ An invite made in the dashboard may also name a community.
   which posting spends (one for each character, and `mana-attachment-cost` for each file) and which
   comes back at the recharge rate. A busy channel fills no faster than that, however many people
   post in it.
-- **When a channel is busy:** what it cannot pay for waits its turn, the higher ranked first, then
-  those who have belonged longest, and the people viewing the channel see a bar. Moderators and
-  admins (those holding Bypass channel mana) post at once.
+- **When a channel is busy:** what it cannot pay for waits its turn, in order of rank, then of how
+  long people have belonged; what the channel earns back is shared among the first three waiting,
+  the first taking the most, and the people viewing the channel see a bar. Moderators and admins
+  (those holding Bypass channel mana) post at once.
 - **Per channel:** holders of Manage channels may lower a channel's recharge and maximum in its
   settings, never raise them past these.
 - **Lowering these** takes effect at once in every channel set above them.

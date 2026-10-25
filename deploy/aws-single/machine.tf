@@ -167,7 +167,8 @@ resource "aws_instance" "this" {
   iam_instance_profile   = aws_iam_instance_profile.machine.name
   tags                   = { Name = var.name }
 
-  # Docker and the scripts in machine/, then the volume mounted. Nothing of the box starts
+  # Docker and the scripts in machine/, the voice server refused the instance metadata service
+  # (machine/voice-imds.service), then the volume mounted. Nothing of the box starts
   # here: the release does that (release.tf), once this has finished. Ubuntu's own Docker
   # comes with Compose 2.20 or later, which the box needs.
   user_data = <<-EOT
@@ -190,7 +191,11 @@ resource "aws_instance" "this" {
       - path: /etc/systemd/system/docker.service.d/data.conf
         encoding: b64
         content: ${filebase64("${path.module}/machine/docker-data.conf")}
+      - path: /etc/systemd/system/aspen-voice-imds.service
+        encoding: b64
+        content: ${filebase64("${path.module}/machine/voice-imds.service")}
     runcmd:
+      - [systemctl, enable, --now, aspen-voice-imds.service]
       - [/usr/local/sbin/aspen-setup, "${local.data_device}"]
   EOT
 

@@ -1,6 +1,8 @@
 package com.aspen_chat.client.passkeys;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import androidx.credentials.exceptions.CreateCredentialCancellationException;
 import androidx.credentials.exceptions.CreateCredentialProviderConfigurationException;
@@ -47,6 +49,19 @@ public class PasskeyFailureTest {
                 PasskeyFailure.FAILED,
                 PasskeyFailure.of(new CreatePublicKeyCredentialDomException(new InvalidStateError())));
         assertEquals(PasskeyFailure.FAILED, PasskeyFailure.of(new IllegalStateException()));
+    }
+
+    @Test
+    public void onlyTheDeploymentsOwnRelyingPartyRunsHere() {
+        assertTrue(AspenPasskeysPlugin.rpIdFits("example.org", "example.org"));
+        assertTrue(AspenPasskeysPlugin.rpIdFits("example.org", "chat.example.org"));
+        assertTrue(AspenPasskeysPlugin.rpIdFits("Example.ORG", "chat.example.org"));
+        assertFalse(AspenPasskeysPlugin.rpIdFits("victim.example", "evil.example"));
+        assertFalse(AspenPasskeysPlugin.rpIdFits("example.org", "badexample.org"));
+        assertFalse(AspenPasskeysPlugin.rpIdFits("chat.example.org", "example.org"));
+        assertFalse(AspenPasskeysPlugin.rpIdFits("", "example.org"));
+        assertFalse(AspenPasskeysPlugin.rpIdFits(null, "example.org"));
+        assertFalse(AspenPasskeysPlugin.rpIdFits("example.org", null));
     }
 
     @Test

@@ -397,12 +397,20 @@ fn handles(state: &GlobalServerContext, means: &Means, kind: JobKind) -> bool {
 
 /// The kinds this server runs that share a bound of their own on how many run at once, beyond
 /// the runner's places, with that bound: previews, which take memory and cores in proportion to
-/// what they decode, at most `[media.previews] concurrency` at once.
+/// what they decode, at most `[media.previews] concurrency` at once; and plugins' timers, which
+/// plugins set as many of as they like (`plugin::timer`), at most half the shared places, so
+/// the rest of the normal class always has places left.
 fn bounded(state: &GlobalServerContext) -> Vec<(Vec<JobKind>, usize)> {
-    vec![(
-        crate::attachment::preview::KINDS.to_vec(),
-        state.config.media.previews.concurrency.max(1),
-    )]
+    vec![
+        (
+            crate::attachment::preview::KINDS.to_vec(),
+            state.config.media.previews.concurrency.max(1),
+        ),
+        (
+            vec![JobKind::FirePluginTimer],
+            (state.config.jobs.concurrency / 2).max(1),
+        ),
+    ]
 }
 
 /// How many times a job of `kind` is claimed without coming further before it is given up. A

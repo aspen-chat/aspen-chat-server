@@ -49,12 +49,12 @@ function scripted(responders: (() => Response)[]) {
   return { fetch, paths };
 }
 
-function started(id: string, expiresInMs = 300_000) {
+function started(id: string, expiresInMs = 300_000, rpId = "aspen.test") {
   return () =>
     json(201, {
       id,
       purpose: "signIn",
-      options: { publicKey: { challenge: "AAEC", rpId: "aspen.test", allowCredentials: [] } },
+      options: { publicKey: { challenge: "AAEC", rpId, allowCredentials: [] } },
       expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
     });
 }
@@ -240,8 +240,8 @@ describe("native passkeys", () => {
     const asked: unknown[] = [];
     const native: NativePasskeys = {
       create: () => Promise.reject(new Error("not asked")),
-      get: (publicKey) => {
-        asked.push(publicKey);
+      get: (publicKey, host) => {
+        asked.push(publicKey, host);
         return Promise.resolve({ id: "native" });
       },
     };
@@ -253,7 +253,10 @@ describe("native passkeys", () => {
       { kind: "native", native, fallback: handoff(opened) },
     );
     expect(outcome.outcome).toBe("signedIn");
-    expect(asked).toEqual([{ challenge: "AAEC", rpId: "aspen.test", allowCredentials: [] }]);
+    expect(asked).toEqual([
+      { challenge: "AAEC", rpId: "aspen.test", allowCredentials: [] },
+      "aspen.test",
+    ]);
     expect(opened).toEqual([]);
     expect(paths).toEqual([
       "POST /api/v1/auth/passkey-ceremonies",
@@ -274,6 +277,39 @@ describe("native passkeys", () => {
       { kind: "native", native, fallback: handoff(opened) },
     );
     expect(outcome.outcome).toBe("signedIn");
+    expect(opened).toEqual([`${baseUrl}/auth/passkey#ceremony=cer-6`]);
+    expect(paths).toEqual([
+      "POST /api/v1/auth/passkey-ceremonies",
+      "POST /api/v1/auth/passkey-ceremonies",
+      "POST /api/v1/auth/passkey-ceremonies/cer-6/claim",
+    ]);
+  });
+
+  it("go to the system browser when the options name another deployment's relying party", async () => {
+    const asked: unknown[] = [];
+    const native: NativePasskeys = {
+      create: (publicKey) => {
+        asked.push(publicKey);
+        return Promise.resolve({ id: "native" });
+      },
+      get: (publicKey) => {
+        asked.push(publicKey);
+        return Promise.resolve({ id: "native" });
+      },
+    };
+    const { fetch, paths } = scripted([
+      started("cer-5", 300_000, "victim.example"),
+      started("cer-6"),
+      signedIn,
+    ]);
+    const client = new AspenClient({ baseUrl, sessionStore: new MemorySessionStore(), fetch });
+    const opened: string[] = [];
+    const outcome = await client.runPasskeyCeremony(
+      { purpose: "signIn" },
+      { kind: "native", native, fallback: handoff(opened) },
+    );
+    expect(outcome.outcome).toBe("signedIn");
+    expect(asked).toEqual([]);
     expect(opened).toEqual([`${baseUrl}/auth/passkey#ceremony=cer-6`]);
     expect(paths).toEqual([
       "POST /api/v1/auth/passkey-ceremonies",

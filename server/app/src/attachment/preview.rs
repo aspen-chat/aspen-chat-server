@@ -73,11 +73,23 @@ pub const MAX_ATTEMPTS: i32 = 6;
 /// The kinds of job that make previews, whose payloads are [`Hold`]s.
 pub const KINDS: [JobKind; 2] = [JobKind::MakePicturePreview, JobKind::MakeVideoPoster];
 
-/// Until when messages holding an attachment wait for its preview: a preview job's payload.
+/// How many previews of each kind one account's uploads may have waiting to be made at once,
+/// its bots' included. An upload past it gets no preview, and is shown as its original, so no
+/// one uploading many pictures that are slow to decode keeps everyone else's previews waiting
+/// behind theirs. Counted by kind, since posters may wait days for a server that can run
+/// `ffmpeg` while pictures are made at once.
+pub const MAX_PENDING_PER_ACCOUNT: i64 = 20;
+
+/// Until when messages holding an attachment wait for its preview, and whose uploads it counts
+/// toward: a preview job's payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Hold {
     pub hold_until: DateTime<Utc>,
+    /// The account charged for the upload (`upload_quota::charged_account`), for
+    /// [`MAX_PENDING_PER_ACCOUNT`]; indexed by `job_preview_account`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<crate::UserId>,
 }
 
 /// The kind of job that makes a preview of an attachment of `mime_type`, as its uploader named
@@ -129,25 +141,52 @@ pub fn of(state: &GlobalServerContext, row: &super::Attachment) -> Option<Attach
     })
 }
 
-/// Queues the making of the preview of attachment `id`, of `mime_type`, in the transaction that
-/// confirms it. Call [`jobs::wake`] once it commits.
+#[derive(QueryableByName)]
+struct Pending {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pending: i64,
+}
+
+/// Queues the making of the preview of attachment `id`, of `mime_type`, uploaded by `uploader`,
+/// in the transaction that confirms it, unless the account charged for it already has
+/// [`MAX_PENDING_PER_ACCOUNT`] waiting. Answers whether it queued one; call [`jobs::wake`] once
+/// it commits if so.
 pub async fn queue(
     conn: &mut AsyncPgConnection,
     id: AttachmentId,
+    uploader: crate::UserId,
     mime_type: &str,
-) -> crate::Result<()> {
+) -> crate::Result<bool> {
     let Some(kind) = kind_of(mime_type) else {
-        return Ok(());
+        return Ok(false);
     };
+    // Locked until the transaction ends, so two confirmations at once cannot both take the last
+    // place.
+    let account = crate::upload_quota::charged_account(conn, uploader).await?;
+    let Pending { pending } = diesel::sql_query(
+        "SELECT count(*) AS pending FROM (SELECT 1 FROM job \
+         WHERE kind IN ('makePicturePreview', 'makeVideoPoster') AND failed_at IS NULL \
+         AND kind = $1 AND payload->>'account' = $2 LIMIT $3) AS waiting",
+    )
+    .bind::<diesel::sql_types::Text, _>(kind)
+    .bind::<diesel::sql_types::Text, _>(account.0.to_string())
+    .bind::<diesel::sql_types::BigInt, _>(MAX_PENDING_PER_ACCOUNT)
+    .get_result(conn)
+    .await?;
+    if pending >= MAX_PENDING_PER_ACCOUNT {
+        tracing::debug!(attachment = %id.0, account = %account.0, "too many previews waiting");
+        return Ok(false);
+    }
     let hold = Hold {
         hold_until: Utc::now() + chrono::Duration::from_std(HOLD).unwrap_or_default(),
+        account: Some(account),
     };
     jobs::enqueue(
         conn,
         NewJob::new(kind, JobClass::Interactive, &hold)?.keyed(id.0.to_string()),
     )
     .await?;
-    Ok(())
+    Ok(true)
 }
 
 /// The attachment a preview job makes the preview of.
@@ -408,5 +447,48 @@ mod tests {
         assert!(worth_keeping(0, 1));
         assert!(!worth_keeping(1, 1));
         assert!(worth_keeping(u64::MAX / 2, u64::MAX));
+    }
+
+    /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing.
+    #[tokio::test]
+    async fn an_account_and_its_bots_have_a_bounded_number_of_previews_waiting() {
+        use diesel_async::SimpleAsyncConnection;
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        let (owner, bot) = (Uuid::now_v7(), Uuid::now_v7());
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                   VALUES ('{owner}', '{owner}', '', now(), now());
+               INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at, bot, bot_owner)
+                   VALUES ('{bot}', '{bot}', '', now(), now(), true, '{owner}');"#
+        ))
+        .await
+        .unwrap();
+        let queue_one = async |conn: &mut AsyncPgConnection, uploader: Uuid, mime: &str| {
+            queue(
+                conn,
+                AttachmentId(Uuid::now_v7()),
+                crate::UserId(uploader),
+                mime,
+            )
+            .await
+            .unwrap()
+        };
+        for i in 0..MAX_PENDING_PER_ACCOUNT {
+            let uploader = if i % 2 == 0 { owner } else { bot };
+            assert!(queue_one(&mut conn, uploader, "image/png").await);
+        }
+        // The bot's uploads count as its owner's: neither has room for another picture.
+        assert!(!queue_one(&mut conn, owner, "image/png").await);
+        assert!(!queue_one(&mut conn, bot, "image/jpeg").await);
+        // Posters are counted apart.
+        assert!(queue_one(&mut conn, bot, "video/mp4").await);
+        // Nothing is queued for what has no preview.
+        assert!(!queue_one(&mut conn, owner, "application/pdf").await);
     }
 }

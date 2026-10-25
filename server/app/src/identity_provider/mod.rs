@@ -106,12 +106,13 @@ pub struct NewProvider {
     pub trust_email: bool,
 }
 
-/// Changes to a provider; `None` leaves a setting as it is.
+/// Changes to a provider; `None` leaves a setting as it is. A provider's issuer and client id
+/// are fixed once it is added: a `sub` is unique only within one issuer, and a provider may give
+/// each client its own subjects, so the accounts linked under one would be signed into by whoever
+/// holds those subjects under the other. Changing either is adding a provider and relinking.
 #[derive(Default)]
 pub struct ProviderChanges {
     pub name: Option<String>,
-    pub issuer: Option<String>,
-    pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub enabled: Option<bool>,
     pub skip_invite: Option<bool>,
@@ -205,7 +206,7 @@ pub async fn list_in(conn: &mut AsyncPgConnection) -> crate::Result<Vec<Provider
         .await?;
     let mut settings = Vec::with_capacity(providers.len());
     for provider in providers {
-        let linked = linked_accounts(conn, provider.id).await?;
+        let linked = linked_accounts(conn, &provider).await?;
         settings.push(ProviderSettings::of(provider, linked));
     }
     Ok(settings)
@@ -214,15 +215,13 @@ pub async fn list_in(conn: &mut AsyncPgConnection) -> crate::Result<Vec<Provider
 /// How many accounts are linked to `provider`, counted no further than [`LINKED_COUNT_CAP`] + 1
 /// so the count costs no more than that however many there are. A deployment has at most
 /// [`MAX_PROVIDERS`], so counting each in turn stays bounded too.
-async fn linked_accounts(
-    conn: &mut AsyncPgConnection,
-    provider: IdentityProviderId,
-) -> crate::Result<i64> {
+async fn linked_accounts(conn: &mut AsyncPgConnection, provider: &Provider) -> crate::Result<i64> {
     let linked: i64 = diesel::sql_query(
         "SELECT count(*) AS count FROM \
-         (SELECT 1 FROM user_identity WHERE provider = $1 LIMIT $2) AS linked",
+         (SELECT 1 FROM user_identity WHERE provider = $1 AND issuer = $2 LIMIT $3) AS linked",
     )
-    .bind::<diesel::sql_types::Uuid, _>(provider.0)
+    .bind::<diesel::sql_types::Uuid, _>(provider.id.0)
+    .bind::<diesel::sql_types::Text, _>(&provider.issuer)
     .bind::<diesel::sql_types::BigInt, _>(LINKED_COUNT_CAP + 1)
     .get_result::<Count>(conn)
     .await?
@@ -312,8 +311,7 @@ fn issuer_taken(error: diesel::result::Error) -> crate::Error {
     }
 }
 
-/// Changes a provider. A changed issuer, client id, or secret is checked against the provider's
-/// discovery document first.
+/// Changes a provider's name, secret, or choices.
 pub async fn update(
     state: &GlobalServerContext,
     access: &DeploymentAccess,
@@ -322,43 +320,27 @@ pub async fn update(
 ) -> crate::Result<ProviderSettings> {
     access.require(DeploymentPermission::ManageIdentityProviders)?;
     let mut conn = state.connection_pool.get().await?;
-    update_in(&state.config, &mut conn, id, changes).await
+    update_in(&mut conn, id, changes).await
 }
 
 /// [`update`] without a permission check, for the terminal.
 pub async fn update_in(
-    config: &AspenConfig,
     conn: &mut AsyncPgConnection,
     id: IdentityProviderId,
     changes: ProviderChanges,
 ) -> crate::Result<ProviderSettings> {
     let name = changes.name.as_deref().map(validate_name).transpose()?;
-    let issuer = changes
-        .issuer
-        .as_deref()
-        .map(|issuer| validate_setting(issuer, t!("identityProviderIssuer")))
-        .transpose()?;
-    let client_id = changes
-        .client_id
-        .as_deref()
-        .map(|client_id| validate_setting(client_id, t!("identityProviderClientId")))
-        .transpose()?;
     let client_secret = changes
         .client_secret
         .as_deref()
         .map(|secret| validate_setting(secret, t!("identityProviderClientSecret")))
         .transpose()?;
-    if let Some(issuer) = &issuer {
-        discovery::document(config, issuer, true).await?;
-    }
     let target = identity_provider::table
         .filter(identity_provider::id.eq(id))
         .filter(identity_provider::removed_at.is_null());
     let provider: Provider = diesel::update(target)
         .set((
             name.map(|v| identity_provider::name.eq(v)),
-            issuer.map(|v| identity_provider::issuer.eq(v)),
-            client_id.map(|v| identity_provider::client_id.eq(v)),
             client_secret.map(|v| identity_provider::client_secret.eq(v)),
             changes.enabled.map(|v| identity_provider::enabled.eq(v)),
             changes
@@ -373,9 +355,8 @@ pub async fn update_in(
         ))
         .returning(Provider::as_returning())
         .get_result(conn)
-        .await
-        .map_err(issuer_taken)?;
-    let linked = linked_accounts(conn, provider.id).await?;
+        .await?;
+    let linked = linked_accounts(conn, &provider).await?;
     Ok(ProviderSettings::of(provider, linked))
 }
 
@@ -458,7 +439,7 @@ pub async fn forget_step(
 }
 
 /// Whether `user` still has a way in: a password, a passkey, or an identity at a provider that
-/// is not removed. Called inside the transaction that takes one away, after taking it, so the
+/// is not removed and still names the issuer it was linked at. Called inside the transaction that takes one away, after taking it, so the
 /// answer counts what is left; it holds the account's row first, so two removals at once are
 /// checked one after the other and cannot each leave the other's as the last.
 pub async fn has_way_in(conn: &mut AsyncPgConnection, user: crate::UserId) -> crate::Result<bool> {
@@ -484,7 +465,8 @@ pub async fn has_way_in(conn: &mut AsyncPgConnection, user: crate::UserId) -> cr
         user_identity::table
             .inner_join(identity_provider::table)
             .filter(user_identity::user.eq(user))
-            .filter(identity_provider::removed_at.is_null()),
+            .filter(identity_provider::removed_at.is_null())
+            .filter(user_identity::issuer.eq(identity_provider::issuer)),
     ))
     .get_result::<bool>(conn)
     .await?)

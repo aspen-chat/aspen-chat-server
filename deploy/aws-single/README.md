@@ -18,8 +18,10 @@ It has never been applied to an AWS account, so expect to fix things the first t
 | Addresses                        | An Elastic IP and an IPv6 address, both kept when the machine is replaced                             |
 
 The deployment is at `<domain>` and its voice server at `voice.<domain>`, over IPv4 and IPv6. The
-server reaches the bucket as the machine's role, with no key pair. No SSH port is open: commands
-reach the machine through Session Manager.
+server reaches the bucket as the machine's role, with no key pair; the voice server is refused the
+machine's metadata service, and with it that role
+([`machine/voice-imds.service`](machine/voice-imds.service)). No SSH port is open: commands reach
+the machine through Session Manager.
 
 ## What you give up
 

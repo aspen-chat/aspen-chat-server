@@ -81,6 +81,12 @@ server, the voice server, and SeaweedFS, each at a name of its own on port 443:
 | `https://s3.$HOST`    | SeaweedFS's S3 API, uploads        |
 | `https://media.$HOST` | SeaweedFS's filer, downloads       |
 
+The filer lists directories and takes uploads and deletes from anyone, so Caddy lets through to it
+only `GET` and `HEAD` of a single file under the bucket's four prefixes clients read
+(`attachments/`, `attachment-previews/`, `icons/`, `link-preview-images/`), as the box does
+(`docs/operators/installing/storage-read-path.md`), and answers everything else, the files of
+deleted messages under `evidence/` among them, with 404.
+
 1. Issue a certificate for the host and the names under it, and start Caddy:
 
    ```

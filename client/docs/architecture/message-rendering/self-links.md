@@ -20,10 +20,12 @@ Every route of the app is read:
 
 - a deployment's front page, communities, channels, messages, threads, DMs, and invites, on its own
   address or the home's under `/at/{domain}` (an invite's `?at=` naming its deployment);
-- the home's own pages: the dashboard and its tabs, adding a bot, registration invites, sign-in
-  codes, attributions.
+- the home's own pages: the dashboard and its tabs, adding a bot, registration invites,
+  attributions.
 
-The deployment's API, files, and any other path stay ordinary links.
+The deployment's API, files, and any other path stay ordinary links. So does a sign-in code's page
+(`/device-link`): opened in place it would put up the screen that signs someone else's device in to
+the reader's account, from one press on a message.
 
 ## What the chip shows
 

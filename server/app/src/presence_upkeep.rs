@@ -6,8 +6,15 @@
 //!   same statement, is copied to Valkey; only then is their `online` key set, and those watching
 //!   them told (`app::presence_feed`). Whenever the key exists, so does the copy of what they
 //!   chose, even after Valkey lost its keys, so someone who chose invisible is never shown online
-//!   in between: until their arrival is done, they show as offline to everyone. Their
-//!   `last_seen_at` is then written on each membership, which the member samples are read by.
+//!   in between: until their arrival is done, they show as offline to everyone. The copy and the
+//!   key are written while the arrival's transaction holds their row, so a change of override
+//!   committed meanwhile (`app::presence_override::write`, which copies under the same lock)
+//!   reaches Valkey after it, never before to be undone. Their `last_seen_at` is then written on
+//!   each membership, which the member samples are ordered by, unless they arrive invisible: a
+//!   co-member watching the samples would otherwise see them come online.
+//! - **Seen in one community.** Posting in a community's channel or thread, or joining its call,
+//!   shows its members the user is about, so it writes `last_seen_at` on that membership alone
+//!   ([`seen_in`]), whatever their presence says; a DM writes none.
 //! - **Listing.** Each community they belong to lists them as someone who may be online, renewed
 //!   once per margin however often their keys are set (`user:{uuid}:listed`).
 //!
@@ -26,21 +33,64 @@
 
 use crate::database::Pool;
 use crate::presence_feed::PresenceFeed;
-use crate::presence_override::PresenceOverride;
+use crate::presence_override::{ChosenPresence, PresenceOverride};
 use crate::{CommunityId, UserId};
 use aspen_schema::community_user;
 use diesel::prelude::*;
-use diesel_async::RunQueryDsl;
+use diesel_async::scoped_futures::ScopedFutureExt;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use fred::interfaces::{KeysInterface, SortedSetsInterface};
 use fred::types::{Expiration, SetOptions};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Duration;
 use tokio::sync::Notify;
 
 /// The most people one statement writes the arrival or reads the memberships of. A person
 /// belongs to at most `[limits] max_communities_per_user` communities, so this bounds the
 /// memberships one statement touches too.
 const BATCH: usize = 100;
+
+/// The least time between two writes of one membership's `last_seen_at` for what its member did
+/// there ([`seen_in`]).
+const SEEN_EVERY: Duration = Duration::from_secs(60);
+
+/// The memberships this server wrote `last_seen_at` on within [`SEEN_EVERY`], so posting
+/// steadily costs one write a minute, not one a message.
+static SEEN: LazyLock<moka::sync::Cache<(CommunityId, UserId), ()>> = LazyLock::new(|| {
+    moka::sync::Cache::builder()
+        .max_capacity(100_000)
+        .time_to_live(SEEN_EVERY)
+        .build()
+});
+
+/// Writes `user`'s `last_seen_at` on their membership of `community` for something they did there
+/// that its members see (posting, joining its call), at most once each [`SEEN_EVERY`]: by this
+/// server's memory of its last write, then by the row's own time. One indexed `UPDATE` on `conn`,
+/// outside any transaction, so it holds the row for no longer than the statement. A failure is
+/// logged; the member sample is ordered by it, and nothing else depends on it.
+pub(crate) async fn seen_in(conn: &mut AsyncPgConnection, user: UserId, community: CommunityId) {
+    if SEEN.contains_key(&(community, user)) {
+        return;
+    }
+    SEEN.insert((community, user), ());
+    let due = chrono::Utc::now()
+        - chrono::Duration::from_std(SEEN_EVERY).unwrap_or(chrono::Duration::minutes(1));
+    let written = diesel::update(
+        community_user::table.filter(
+            community_user::community
+                .eq(community)
+                .and(community_user::user.eq(user))
+                .and(community_user::last_seen_at.lt(due)),
+        ),
+    )
+    .set(community_user::last_seen_at.eq(diesel::dsl::now))
+    .execute(conn)
+    .await;
+    if let Err(e) = written {
+        tracing::warn!(error = %e, "failed to record when a member was last seen");
+    }
+}
 
 /// How long listings last, from the configuration.
 #[derive(Clone, Copy)]
@@ -170,19 +220,58 @@ impl PresenceUpkeep {
 
 impl Upkeep {
     /// Brings `arriving` online: writes their `last_seen_at`, copies their overrides to Valkey,
-    /// sets the `online` key of each whose copy landed, tells those watching them, and writes
-    /// `last_seen_at` on their memberships. The rows are locked in key order first: another
-    /// server may write some of the same people's at once (their other devices), and rows locked
-    /// in any order could deadlock.
+    /// sets the `online` key of each whose copy landed, all while their rows are held, then tells
+    /// those watching them, and writes `last_seen_at` on the memberships of those not invisible.
+    /// The rows are locked in key order: another server may write some of the same people's at
+    /// once (their other devices), and rows locked in any order could deadlock.
     async fn arrive(&self, arriving: &HashMap<UserId, bool>) {
         let ids: Vec<uuid::Uuid> = arriving.keys().map(|user| user.0).collect();
-        let rows = match self.record_arrivals(&ids).await {
-            Ok(rows) => rows,
+        let arrived = async {
+            let mut conn = self.pool.get().await?;
+            conn.transaction(|conn| {
+                async move {
+                    let rows = record_arrivals(conn.as_mut(), &ids).await?;
+                    Ok::<_, crate::Error>(self.bring_online(rows, arriving).await)
+                }
+                .scope_boxed()
+            })
+            .await
+        };
+        let (online, seen) = match arrived.await {
+            Ok(arrived) => arrived,
             Err(e) => {
                 tracing::warn!(error = %e, "failed to record when users came online");
                 return;
             }
         };
+        // After the override is copied, so those told read what the user chose.
+        for user in online {
+            self.feed.changed(user);
+        }
+        if seen.is_empty() {
+            return;
+        }
+        if let Err(e) = self.record_memberships_seen(&seen).await {
+            tracing::warn!(error = %e, "failed to record when users came online");
+        }
+    }
+
+    /// Copies each of `rows`' override to Valkey and sets their `online` keys, answering those
+    /// whose keys were set, and those of `rows` not invisible, whose memberships are marked seen.
+    async fn bring_online(
+        &self,
+        rows: Vec<Arrived>,
+        arriving: &HashMap<UserId, bool>,
+    ) -> (Vec<UserId>, Vec<uuid::Uuid>) {
+        let now = chrono::Utc::now();
+        let seen: Vec<uuid::Uuid> = rows
+            .iter()
+            .filter(|row| {
+                ChosenPresence::in_force(row.presence_override, row.presence_override_until, now)
+                    .is_none_or(|chosen| chosen.presence_override != PresenceOverride::Invisible)
+            })
+            .map(|row| row.id)
+            .collect();
         let online = rows.into_iter().map(|row| async move {
             let user = UserId(row.id);
             let bot = arriving.get(&user).copied().unwrap_or(false);
@@ -198,31 +287,19 @@ impl Upkeep {
                 crate::user_status::set_online_keys(&self.valkey, &self.feed, user, bot).await
             };
             match came.await {
-                // After the override is copied, so those told read what the user chose.
-                Ok(()) => self.feed.changed(user),
-                Err(e) => tracing::warn!(error = %e, "failed to bring a user online"),
+                Ok(()) => Some(user),
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to bring a user online");
+                    None
+                }
             }
         });
-        futures_util::future::join_all(online).await;
-        if let Err(e) = self.record_memberships_seen(&ids).await {
-            tracing::warn!(error = %e, "failed to record when users came online");
-        }
-    }
-
-    /// Writes `ids`' `last_seen_at` as now and reads back their presence overrides.
-    async fn record_arrivals(&self, ids: &[uuid::Uuid]) -> crate::Result<Vec<Arrived>> {
-        use diesel::sql_types::{Array, Uuid};
-        Ok(diesel::sql_query(
-            r#"
-            UPDATE "user" u SET last_seen_at = now()
-            FROM (SELECT id FROM "user" WHERE id = ANY($1) ORDER BY id FOR UPDATE) locked
-            WHERE u.id = locked.id
-            RETURNING u.id, u.presence_override, u.presence_override_until
-            "#,
-        )
-        .bind::<Array<Uuid>, _>(ids)
-        .load(self.pool.get().await?.as_mut())
-        .await?)
+        let online = futures_util::future::join_all(online)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+        (online, seen)
     }
 
     /// Writes `ids`' `last_seen_at` as now on each of their memberships.
@@ -326,5 +403,83 @@ impl Upkeep {
         }
         let _: Vec<fred::types::Value> = pipeline.all().await?;
         Ok(())
+    }
+}
+
+/// Writes `ids`' `last_seen_at` as now and reads back their presence overrides, holding their
+/// rows until `conn`'s transaction ends.
+async fn record_arrivals(
+    conn: &mut AsyncPgConnection,
+    ids: &[uuid::Uuid],
+) -> crate::Result<Vec<Arrived>> {
+    use diesel::sql_types::{Array, Uuid};
+    Ok(diesel::sql_query(
+        r#"
+        UPDATE "user" u SET last_seen_at = now()
+        FROM (SELECT id FROM "user" WHERE id = ANY($1) ORDER BY id FOR UPDATE) locked
+        WHERE u.id = locked.id
+        RETURNING u.id, u.presence_override, u.presence_override_until
+        "#,
+    )
+    .bind::<Array<Uuid>, _>(ids)
+    .load(conn)
+    .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diesel_async::SimpleAsyncConnection;
+
+    /// `seen_in` against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing.
+    #[tokio::test]
+    async fn being_seen_in_a_community_writes_that_membership_alone() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let user = UserId(uuid::Uuid::now_v7());
+        let (here, elsewhere) = (
+            CommunityId(uuid::Uuid::now_v7()),
+            CommunityId(uuid::Uuid::now_v7()),
+        );
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                 VALUES ('{u}', 'seen{u}', '', now(), now());
+             INSERT INTO community (id, name) VALUES ('{here}', 'h'), ('{elsewhere}', 'e');
+             INSERT INTO community_user ("user", community, last_seen_at)
+                 VALUES ('{u}', '{here}', '2020-01-01'), ('{u}', '{elsewhere}', '2020-01-01');"#,
+            u = user.0,
+            here = here.0,
+            elsewhere = elsewhere.0,
+        ))
+        .await
+        .unwrap();
+        async fn seen(conn: &mut AsyncPgConnection, user: UserId, community: CommunityId) -> i32 {
+            community_user::table
+                .select(diesel::dsl::sql::<diesel::sql_types::Integer>(
+                    "extract(year from last_seen_at)::int",
+                ))
+                .filter(community_user::user.eq(user))
+                .filter(community_user::community.eq(community))
+                .first(conn)
+                .await
+                .unwrap()
+        }
+        seen_in(&mut conn, user, here).await;
+        assert!(seen(&mut conn, user, here).await > 2020);
+        assert_eq!(seen(&mut conn, user, elsewhere).await, 2020);
+        // Within the minute this server remembers its write, and writes nothing.
+        conn.batch_execute(&format!(
+            "UPDATE community_user SET last_seen_at = '2020-01-01' WHERE \"user\" = '{}'",
+            user.0
+        ))
+        .await
+        .unwrap();
+        seen_in(&mut conn, user, here).await;
+        assert_eq!(seen(&mut conn, user, here).await, 2020);
     }
 }

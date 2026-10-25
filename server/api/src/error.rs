@@ -131,6 +131,10 @@ pub enum ProblemCode {
     /// once, or every database connection stays taken for `database_pool_wait_seconds`.
     /// `Retry-After` says how many seconds to wait.
     ServerBusy,
+    /// The request was not answered within `[connections] request_seconds`, or its body did
+    /// not arrive within it. Its work may still finish, so a client checks before repeating a
+    /// write.
+    RequestTimedOut,
     /// Another deployment could not be reached, or did not answer as a deployment does.
     /// `detail` says which.
     DeploymentUnreachable,
@@ -216,7 +220,9 @@ impl ProblemCode {
             | ProblemCode::AlreadyReported
             | ProblemCode::LastSecondFactor => StatusCode::CONFLICT,
             ProblemCode::PasswordRequirementsNotMet => StatusCode::UNPROCESSABLE_ENTITY,
-            ProblemCode::ServerBusy => StatusCode::SERVICE_UNAVAILABLE,
+            ProblemCode::ServerBusy | ProblemCode::RequestTimedOut => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             ProblemCode::DeploymentUnreachable => StatusCode::BAD_GATEWAY,
             ProblemCode::FederationRefused | ProblemCode::StrongerSignInRequired => {
                 StatusCode::FORBIDDEN
@@ -279,6 +285,7 @@ impl ProblemCode {
             ProblemCode::OldPasswordIncorrect => t!("problemOldPasswordIncorrect"),
             ProblemCode::PasswordRequirementsNotMet => t!("problemPasswordRequirementsNotMet"),
             ProblemCode::ServerBusy => t!("problemServerBusy"),
+            ProblemCode::RequestTimedOut => t!("problemRequestTimedOut"),
             ProblemCode::DeploymentUnreachable => t!("problemDeploymentUnreachable"),
             ProblemCode::FederationRefused => t!("problemFederationRefused"),
             ProblemCode::AssertionInvalid => t!("problemAssertionInvalid"),

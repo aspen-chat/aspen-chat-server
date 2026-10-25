@@ -55,10 +55,10 @@ browsers, which give up at a redirect or at anything but the server's own answer
 Point whatever stands before the server at one of these. Neither needs a session, and neither is
 rate limited.
 
-| Ask                        | Answers                                                                                                                                                   | For                                                                                      |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `GET /api/v1/health`       | `204` while the server is running.                                                                                                                        | A load balancer's or reverse proxy's health check.                                       |
-| `GET /api/v1/health/ready` | `204` when it also reaches its database, NATS, and Valkey; otherwise `503` [`notReady`](../troubleshooting/server.md#notready), naming those it does not. | Waiting for a new server before stopping the one it replaces, and finding what is wrong. |
+| Ask                        | Answers                                                                                                                                                                | For                                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `GET /api/v1/health`       | `204` while the server is running.                                                                                                                                     | A load balancer's or reverse proxy's health check.                                       |
+| `GET /api/v1/health/ready` | `204` when it also reaches its database, NATS, and Valkey; otherwise `503` [`notReady`](../troubleshooting/server.md#notready); the log names those it does not reach. | Waiting for a new server before stopping the one it replaces, and finding what is wrong. |
 
 A [private worker](#private-workers) answers both at the same paths on a listener of its own.
 

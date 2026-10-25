@@ -76,7 +76,9 @@ Each change saves with it a job (`shutOut`, urgent; see [Jobs](../jobs/index.md)
 (`standing::shut_out_step`):
 
 - signs them out within seconds, a hundred at a time;
-- decides per home, from the gates as they then stand, rather than per user.
+- decides per home, from the gates as they then stand, rather than per user. It reads them from the
+  settings' row, not from the server's copy, which may not yet have followed the change that saved
+  the job.
 
 The standing check would otherwise do so at its next pass (see [Standing](standing.md)).
 

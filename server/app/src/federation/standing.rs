@@ -226,6 +226,14 @@ pub async fn answer(state: &GlobalServerContext, token: &str) -> crate::Result<S
 const CONCURRENCY: usize = 16;
 /// The most foreign users one pass asks about; the rest are due at the next.
 const MAX_DUE_PER_PASS: i64 = 5000;
+/// The most homes one pass asks; the homes whose users have been due longest are asked first,
+/// so the rest come first at the next pass. As many as [`CONCURRENCY`] homes at a time can ask
+/// within [`CONFIRM_BUDGET`] if each takes all of [`BUDGET`].
+const MAX_HOMES_PER_PASS: i64 = 192;
+/// The longest a pass spends asking one home about its users, over all of its chunks: those not
+/// asked by then are left due for the next pass, so a home that answers slowly holds up only
+/// its own users, and holds a place in [`CONCURRENCY`] for no longer than this.
+const HOME_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
 /// The longest a pass spends asking homes about their users: chunks not asked by then are left
 /// due for the next pass, and count against no home.
 const CONFIRM_BUDGET: std::time::Duration = std::time::Duration::from_secs(240);
@@ -432,14 +440,131 @@ struct Due {
     confirmed_at: Option<DateTime<Utc>>,
 }
 
-/// A foreign user as the pass reads them: id, home, id at home, bot, when last confirmed.
-type DueRow = (
-    UserId,
-    Option<Domain>,
-    Option<Uuid>,
-    bool,
-    Option<DateTime<Utc>>,
+/// The due users of the home named by the SQL expression `$home`, at most `$limit` of them, as
+/// `id, home_id, bot, home_confirmed_at`: those never confirmed, then those confirmed before
+/// `$due` (the pass's due time), longest ago first. Each branch walks `user_home_confirmed` from
+/// the home's first due user, so it reads no further than the users it returns and those of
+/// them without a session.
+macro_rules! due_of_home {
+    ($home:literal, $due:literal, $limit:literal) => {
+        concat!(
+            "SELECT d.id, d.home_id, d.bot, d.home_confirmed_at FROM (",
+            "(SELECT u.id, u.home_id, u.bot, u.home_confirmed_at, 0 AS tier FROM \"user\" u",
+            " WHERE u.home_domain = ",
+            $home,
+            " AND u.deleted_at IS NULL AND u.home_confirmed_at IS NULL AND ",
+            due_of_home!(@session),
+            " LIMIT ",
+            $limit,
+            ") UNION ALL (SELECT u.id, u.home_id, u.bot, u.home_confirmed_at, 1 AS tier",
+            " FROM \"user\" u WHERE u.home_domain = ",
+            $home,
+            " AND u.deleted_at IS NULL AND u.home_confirmed_at < ",
+            $due,
+            " AND ",
+            due_of_home!(@session),
+            " ORDER BY u.home_confirmed_at LIMIT ",
+            $limit,
+            ")) d ORDER BY d.tier, d.home_confirmed_at LIMIT ",
+            $limit
+        )
+    };
+    (@session) => {
+        "EXISTS (SELECT 1 FROM refresh_token r WHERE r.\"user\" = u.id AND r.expires > CURRENT_TIMESTAMP)"
+    };
+}
+
+/// The homes with users due, the one whose user has been due longest first, at most
+/// [`MAX_HOMES_PER_PASS`]. The homes are found by stepping from one to the next through
+/// `user_home_confirmed`, one probe per home, rather than reading every foreign user.
+const DUE_HOMES_SQL: &str = concat!(
+    "WITH RECURSIVE homes AS (",
+    "(SELECT u.home_domain FROM \"user\" u WHERE u.home_domain IS NOT NULL",
+    " AND u.deleted_at IS NULL ORDER BY u.home_domain LIMIT 1)",
+    " UNION ALL SELECT (SELECT u.home_domain FROM \"user\" u",
+    " WHERE u.home_domain > homes.home_domain AND u.deleted_at IS NULL",
+    " ORDER BY u.home_domain LIMIT 1) FROM homes WHERE homes.home_domain IS NOT NULL)",
+    " SELECT h.home_domain AS home FROM homes h CROSS JOIN LATERAL (",
+    due_of_home!("h.home_domain", "$1", "1"),
+    ") oldest WHERE h.home_domain IS NOT NULL",
+    " ORDER BY oldest.home_confirmed_at NULLS FIRST, h.home_domain LIMIT $2"
 );
+
+/// The due users of each of `$1` (domains), at most `$3` of each.
+const DUE_USERS_SQL: &str = concat!(
+    "SELECT h.home, d.id, d.home_id, d.bot, d.home_confirmed_at",
+    " FROM unnest($1::text[]) AS h(home) CROSS JOIN LATERAL (",
+    due_of_home!("h.home", "$2", "$3"),
+    ") d"
+);
+
+#[derive(QueryableByName)]
+struct DueHome {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    home: Domain,
+}
+
+#[derive(QueryableByName)]
+struct DueRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    home: Domain,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+    home_id: Option<Uuid>,
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    bot: bool,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
+    home_confirmed_at: Option<DateTime<Utc>>,
+}
+
+/// The users a pass asks about, by home: at most [`MAX_DUE_PER_PASS`], shared evenly among the
+/// homes with users due (at most [`MAX_HOMES_PER_PASS`] of them, those due longest first), so a
+/// home whose users stay due, because it leaves them out of its answers or never answers, takes
+/// no more of a pass than any other home, and every home's users are asked about in turn.
+async fn due_users(
+    conn: &mut AsyncPgConnection,
+    due_before: DateTime<Utc>,
+) -> crate::Result<HashMap<Domain, Vec<Due>>> {
+    use diesel::sql_types::{Array, BigInt, Text, Timestamptz};
+    let homes: Vec<DueHome> = diesel::sql_query(DUE_HOMES_SQL)
+        .bind::<Timestamptz, _>(due_before)
+        .bind::<BigInt, _>(MAX_HOMES_PER_PASS)
+        .load(conn)
+        .await?;
+    if homes.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let share = share_per_home(homes.len());
+    let homes: Vec<String> = homes
+        .into_iter()
+        .map(|home| home.home.as_str().to_owned())
+        .collect();
+    let rows: Vec<DueRow> = diesel::sql_query(DUE_USERS_SQL)
+        .bind::<Array<Text>, _>(&homes)
+        .bind::<Timestamptz, _>(due_before)
+        .bind::<BigInt, _>(share)
+        .load(conn)
+        .await?;
+    let mut by_home: HashMap<Domain, Vec<Due>> = HashMap::new();
+    for row in rows {
+        if let Some(home_id) = row.home_id {
+            by_home.entry(row.home).or_default().push(Due {
+                id: UserId(row.id),
+                home_id,
+                bot: row.bot,
+                confirmed_at: row.home_confirmed_at,
+            });
+        }
+    }
+    Ok(by_home)
+}
+
+/// How many due users a pass takes of each of `homes` homes: an even share of
+/// [`MAX_DUE_PER_PASS`], and at least one.
+fn share_per_home(homes: usize) -> i64 {
+    (MAX_DUE_PER_PASS / i64::try_from(homes.max(1)).unwrap_or(i64::MAX)).max(1)
+}
 
 /// What one pass knows of every home, read once for them all.
 struct PassContext<'a> {
@@ -464,50 +589,7 @@ async fn confirm_users(state: &GlobalServerContext, backoff: &mut Backoff) -> cr
     let due_before = Utc::now()
         - Duration::seconds(i64::try_from(config.standing_interval_seconds).unwrap_or(i64::MAX));
     let mut conn = state.connection_pool.get().await?;
-    // Those never confirmed, then those confirmed longest ago, through `user_standing_due`, at
-    // most `MAX_DUE_PER_PASS`: the rest wait for the next pass, oldest first.
-    let due = |never: bool, limit: i64| {
-        let query = user::table
-            .select((
-                user::id,
-                user::home_domain,
-                user::home_id,
-                user::bot,
-                user::home_confirmed_at,
-            ))
-            .filter(user::home_domain.is_not_null())
-            .filter(user::deleted_at.is_null())
-            .filter(diesel::dsl::exists(
-                refresh_token::table
-                    .filter(refresh_token::user.eq(user::id))
-                    .filter(refresh_token::expires.gt(diesel::dsl::now)),
-            ))
-            .limit(limit)
-            .into_boxed();
-        if never {
-            query.filter(user::home_confirmed_at.is_null())
-        } else {
-            query
-                .filter(user::home_confirmed_at.lt(due_before))
-                .order(user::home_confirmed_at.asc())
-        }
-    };
-    let mut rows: Vec<DueRow> = due(true, MAX_DUE_PER_PASS).load(&mut conn).await?;
-    let room = MAX_DUE_PER_PASS - rows.len() as i64;
-    if room > 0 {
-        rows.extend(due(false, room).load::<DueRow>(&mut conn).await?);
-    }
-    let mut by_home: HashMap<Domain, Vec<Due>> = HashMap::new();
-    for (id, home, home_id, bot, confirmed_at) in rows {
-        if let (Some(home), Some(home_id)) = (home, home_id) {
-            by_home.entry(home).or_default().push(Due {
-                id,
-                home_id,
-                bot,
-                confirmed_at,
-            });
-        }
-    }
+    let by_home = due_users(&mut conn, due_before).await?;
     if by_home.is_empty() {
         return Ok(());
     }
@@ -601,10 +683,11 @@ async fn confirm_home(
         return Ok(None);
     }
     let mut reached = ask_now;
+    let until = context.until.min(tokio::time::Instant::now() + HOME_BUDGET);
     for chunk in admitted.chunks(MAX_USERS) {
-        // A pass that has run long leaves the rest of the chunks due for the next, rather than
-        // holding them against a home that was never asked.
-        if tokio::time::Instant::now() >= context.until {
+        // A pass, or a home, that has run long leaves the rest of the chunks due for the next
+        // pass, rather than holding them against a home that was never asked.
+        if tokio::time::Instant::now() >= until {
             break;
         }
         let answer = if reached {
@@ -644,7 +727,8 @@ async fn confirm_home(
             None => {
                 // Once a home fails, the rest of its users are not asked about this pass.
                 reached = false;
-                unreached(state, &mut conn, home, chunk).await?;
+                let chunk: Vec<&Due> = chunk.iter().collect();
+                unreached(state, &mut conn, home, &chunk).await?;
             }
         }
     }
@@ -652,12 +736,13 @@ async fn confirm_home(
 }
 
 /// Ends the sessions of those of `home`'s users who have gone unconfirmed for longer than
-/// `standing_grace_seconds`, for a home that did not answer or was not asked.
+/// `standing_grace_seconds`, for a home that did not answer, was not asked, or answered without
+/// naming them.
 async fn unreached(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     home: &Domain,
-    users: &[Due],
+    users: &[&Due],
 ) -> crate::Result<()> {
     let grace = Duration::seconds(
         i64::try_from(state.config.federation.standing_grace_seconds).unwrap_or(i64::MAX),
@@ -733,6 +818,15 @@ async fn apply(
             .execute(conn)
             .await?;
     }
+    // A user the answer leaves out is no news of them, as when the home is not reached: they
+    // stay due, and lose their sessions once unconfirmed for the grace. A home that leaves its
+    // users out to keep them here therefore keeps them no longer than one that never answers,
+    // and its share of a pass (`due_users`) keeps them from crowding out other homes' users.
+    let omitted: Vec<&Due> = asked
+        .iter()
+        .filter(|due| !said.contains_key(&due.home_id))
+        .collect();
+    unreached(state, conn, home, &omitted).await?;
     for due in asked {
         let Some(standing) = said.get(&due.home_id).copied() else {
             continue;
@@ -786,9 +880,9 @@ pub async fn shut_out(conn: &mut AsyncPgConnection, home: Option<Domain>) -> cra
 const SHUT_OUT_BATCH: i64 = 100;
 
 /// One step of signing out users from elsewhere: the homes not admitted are decided afresh, per
-/// home rather than per user, from the gates as they stand (`settings().federation`) and the
-/// lists, and a batch of those homes' users who still have a session here are signed out, each in
-/// a transaction of its own. Those signed out have no session left, so each step reads only who
+/// home rather than per user, from the gates as the settings' row holds them and the lists, and
+/// a batch of those homes' users who still have a session here are signed out, each in a
+/// transaction of its own. Those signed out have no session left, so each step reads only who
 /// remains, and a second run finds nothing to do.
 pub async fn shut_out_step(
     state: &GlobalServerContext,
@@ -809,7 +903,11 @@ pub async fn shut_out_step(
                 .load(conn.as_mut())
                 .await?;
             let lists = lists_of(conn.as_mut(), &homes).await?;
-            let policy = state.settings().federation;
+            // The gates as the row holds them, not this server's copy of them, which may not
+            // yet have followed the change that queued this job.
+            let policy = crate::deployment_settings::load(conn.as_mut())
+                .await?
+                .federation;
             homes
                 .into_iter()
                 .flat_map(|home| {
@@ -940,6 +1038,59 @@ mod tests {
         assert!(answer.len() + MAX_USERS * 16 * 4 / 3 <= jws::MAX_LENGTH);
         let body = serde_json::to_vec(&serde_json::json!({ "standing": answer })).unwrap();
         assert!(body.len() <= MAX_ANSWER_BYTES);
+    }
+
+    #[test]
+    fn every_home_gets_a_share_of_a_pass() {
+        assert_eq!(share_per_home(1), MAX_DUE_PER_PASS);
+        assert_eq!(share_per_home(2), MAX_DUE_PER_PASS / 2);
+        let most = usize::try_from(MAX_HOMES_PER_PASS).unwrap();
+        assert!(share_per_home(most) >= 1);
+        assert!(share_per_home(most) * MAX_HOMES_PER_PASS <= MAX_DUE_PER_PASS);
+    }
+
+    /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing.
+    #[tokio::test]
+    async fn a_home_whose_users_stay_due_leaves_room_for_others() {
+        use diesel_async::SimpleAsyncConnection;
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at, home_domain,
+                 home_id, home_confirmed_at)
+             SELECT gen_random_uuid(), 'h' || g, '', now(), now(), 'hostile.standing.test',
+                 gen_random_uuid(), now() - interval '30 days'
+             FROM generate_series(1, 6000) g;
+             INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at, home_domain,
+                 home_id, home_confirmed_at)
+             SELECT gen_random_uuid(), 'k' || g, '', now(), now(), 'kind.standing.test',
+                 gen_random_uuid(), now() - interval '2 days'
+             FROM generate_series(1, 3) g;
+             INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at, home_domain,
+                 home_id, home_confirmed_at)
+             VALUES (gen_random_uuid(), 'fresh', '', now(), now(), 'kind.standing.test',
+                 gen_random_uuid(), now());
+             INSERT INTO refresh_token (token, expires, "user", verified_at, method)
+             SELECT 'standing-' || id, now() + interval '1 day', id, now(), 'password'
+             FROM "user" WHERE home_domain LIKE '%.standing.test';"#,
+        )
+        .await
+        .unwrap();
+        let due = due_users(&mut conn, Utc::now() - Duration::hours(1))
+            .await
+            .unwrap();
+        let of = |home: &str| due.get(&Domain::parse(home).unwrap()).map_or(0, Vec::len);
+        assert_eq!(of("kind.standing.test"), 3);
+        let hostile = of("hostile.standing.test");
+        assert!(
+            hostile > 0 && hostile <= MAX_DUE_PER_PASS as usize / 2,
+            "{hostile}"
+        );
     }
 
     #[test]

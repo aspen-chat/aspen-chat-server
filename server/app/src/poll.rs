@@ -164,9 +164,9 @@ pub async fn create_poll(
     };
     let message_row = poll_message(&row, MessageKind::Poll, now);
     let mut conn = state.connection_pool.get().await?;
-    let access = channel_access(state, conn.as_mut(), creator, channel).await?;
-    // A poll is posted as a message, so it takes sending here as well.
-    access.require(access.send_permission())?;
+    // A poll is posted as a message, so it takes what posting one does: a channel that holds
+    // messages (not a plugin's), and sending there.
+    let (_, access) = crate::message::may_post(state, conn.as_mut(), creator, channel).await?;
     access.require(Permissions::CREATE_POLLS)?;
     // It spends its channel's mana as a message does (`app::mana`), and waits its turn in a
     // busy channel; one that waited has been paid for, and counts its duration from now.

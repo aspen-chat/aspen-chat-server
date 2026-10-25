@@ -87,17 +87,6 @@ impl SignInMethod {
             Self::SecondFactor | Self::Passkey | Self::IdentityProviderTwoFactor
         )
     }
-
-    /// What an assertion to another deployment says of it (`app::federation::abroad`): an
-    /// identity provider's sign-in by its strength, as a password or a second factor, so that
-    /// deployments read it as any other and the protocol names no provider.
-    pub fn carried_abroad(self) -> Self {
-        match self {
-            Self::IdentityProvider => Self::Password,
-            Self::IdentityProviderTwoFactor => Self::SecondFactor,
-            other => other,
-        }
-    }
 }
 
 /// The identity provider a sign-in was made through (`app::identity_provider`), and the
@@ -274,25 +263,33 @@ pub enum TokenRefreshOutcome {
     InvalidToken,
 }
 
-pub async fn try_login(
+/// The account a password sign-in names: the user of this deployment `username` answers to in
+/// any case (`user::named`), unless it is a bot.
+pub async fn password_account(
     state: &GlobalServerContext,
     username: &str,
-    password: &str,
-) -> Result<LoginOutcome, crate::Error> {
+) -> crate::Result<Option<UserPg>> {
     use schema::user::dsl::*;
 
-    let user_entry: Option<UserPg> = {
-        let mut conn = state.connection_pool.get().await?;
-        user.select(UserPg::as_select())
-            .filter(crate::user::named(username.to_owned()))
-            .first(conn.as_mut())
-            .await
-            .optional()?
-    };
-    // A bot has no password; it signs in only with its token. An unknown name or a bot's is
-    // checked against a hash no password matches, so the answer takes as long as a wrong
-    // password for a real account and does not tell which names exist.
-    let account = user_entry.filter(|u| !u.bot);
+    let mut conn = state.connection_pool.get().await?;
+    // A bot has no password; it signs in only with its token.
+    Ok(user
+        .select(UserPg::as_select())
+        .filter(crate::user::named(username.to_owned()))
+        .first(conn.as_mut())
+        .await
+        .optional()?
+        .filter(|u: &UserPg| !u.bot))
+}
+
+/// Checks `password` against `account`, as `password_account` found it. No account is checked
+/// against a hash no password matches, so the answer takes as long as a wrong password for a
+/// real account and does not tell which names exist.
+pub async fn try_password(
+    state: &GlobalServerContext,
+    account: Option<UserPg>,
+    password: &str,
+) -> Result<LoginOutcome, crate::Error> {
     let hash = account.as_ref().map_or_else(
         || UNMATCHABLE_PASSWORD_HASH.to_string(),
         |u| u.password_hash.clone(),
@@ -304,17 +301,22 @@ pub async fn try_login(
     };
     let mut conn = state.connection_pool.get().await?;
     let conn = conn.as_mut();
-    first_factor_proved(state, conn, u.id, SignInMethod::Password, None).await
+    first_factor_proved(state, conn, u.id, SignInMethod::Password, Utc::now(), None).await
 }
 
 /// Finishes a sign-in whose first factor, `method`, is proved: asks for a second factor when it
-/// counts as one factor and the account holds one, and otherwise issues the session. A banned
-/// account learns so here, before a second factor is asked for that could not be used.
+/// counts as one factor and the account holds one, and otherwise issues the session, counted as
+/// verified at `verified_at` (when the person last proved who they are: now for a password, the
+/// provider's `auth_time` for a provider's sign-in, which may have been made silently from an old
+/// session there). A second factor asked for is proved now, so the session it gives is verified
+/// now. A banned account learns so here, before a second factor is asked for that could not be
+/// used.
 pub async fn first_factor_proved(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     user: UserId,
     method: SignInMethod,
+    verified_at: DateTime<Utc>,
     provider: Option<ProviderSignIn>,
 ) -> crate::Result<LoginOutcome> {
     crate::user_ban::check_not_banned(conn, user).await?;
@@ -332,7 +334,7 @@ pub async fn first_factor_proved(
         return Ok(LoginOutcome::SecondFactorRequired { ticket, methods });
     }
     Ok(LoginOutcome::SignedIn(
-        issue(state, conn, user, method, false, Utc::now(), provider).await?,
+        issue(state, conn, user, method, false, verified_at, provider).await?,
     ))
 }
 
@@ -451,7 +453,7 @@ pub enum SecondFactorOutcome {
     Rejected,
 }
 
-/// Finishes a sign-in that `try_login` left waiting for a second factor.
+/// Finishes a sign-in that `try_password` left waiting for a second factor.
 pub async fn complete_second_factor(
     state: &GlobalServerContext,
     ticket: &str,

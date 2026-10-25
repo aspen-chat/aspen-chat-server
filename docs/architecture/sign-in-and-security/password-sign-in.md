@@ -32,7 +32,11 @@ There are two, both in `api::rate_limit::limit_sign_in`.
 
 - While `username_failures` is spent, password sign-in for the name is refused.
 - Passkeys, device links, and a reset by email still reach the account then.
-- An unknown name counts like a known one.
+- Both count by the account the name finds (`app::rate_limit::sign_in_subject`), looked up first
+  (`login::password_account`) by the same match as the sign-in, PostgreSQL's `lower`. So every
+  spelling that reaches an account shares its limits, however the database folds its case.
+- An unknown name counts by the name itself, in lower case, like a known one, so the limits do not
+  tell which names exist.
 - A wrong password also counts toward the address's `ip_failures`, as a wrong second-factor code
   does (see [Device credentials](device-credentials.md#who-a-request-counts-as)).
 

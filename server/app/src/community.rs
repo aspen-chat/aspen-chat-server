@@ -789,7 +789,9 @@ pub struct Membership {
 /// grouped by community and in order of priority within each group. Those with a connection
 /// (online or away, `app::user_status::connected_members`) come first, and among them those
 /// holding a role shown apart, by the rank of their highest such role, even when they fill the
-/// whole sample; then the rest, each by when they last came online. The caller's own membership
+/// whole sample; then the rest, each by when they were last seen, less those who blocked the
+/// caller, whose `last_seen_at` would tell the caller when they come and go (they are left out of
+/// the connected too, `app::user_status::presence_visible`). The caller's own membership
 /// of each community is always among them, wherever they rank, because their memberships carry
 /// the order of their own community list. One query serves any number of communities, and its
 /// work grows with who is connected and the sample's size, never with how many members there
@@ -805,8 +807,8 @@ pub async fn read_community_members(
     if communities.is_empty() {
         return Ok(Vec::new());
     }
-    // Each community's connected members, as (community, user) pairs; those who blocked the
-    // caller (`app::user_status::presence_visible`) are ordered as if not connected.
+    // Each community's connected members, as (community, user) pairs, less those who blocked the
+    // caller (`app::user_status::presence_visible`).
     let connected = try_join_all(
         communities
             .iter()
@@ -857,6 +859,9 @@ pub async fn read_community_members(
                 SELECT cu.community, cu."user", cu.last_seen_at
                 FROM community_user cu
                 WHERE cu.community = c.id
+                  AND NOT EXISTS (
+                      SELECT 1 FROM user_block b WHERE b.blocker = cu."user" AND b.blocked = $3
+                  )
                 ORDER BY cu.last_seen_at DESC, cu."user"
                 LIMIT $2 * 2
             ) recent

@@ -60,5 +60,7 @@ The server does what the client cannot.
   within a second (`app::presence_feed`).
 - The blocker is left out of every channel's count of who is online for the blocked user
   (`app::channel_presence`).
+- The blocker is left out of the blocked user's member samples, connected or not, since its order
+  follows when members were last seen (`app::community::read_community_members`).
 - So a block keeps the blocked user from watching when the blocker is about.
 - The blocker still sees the blocked user's presence, which their client may hide.

@@ -43,9 +43,11 @@ Neither holds `ffmpeg`, so the `api` image offers videos for download without a 
 posters, build an image on it that installs `ffmpeg`, and set `[media.previews] ffmpeg` and
 `ffprobe` to it ([`[media.previews]`](../docs/operators/configuration/previews.md#mediapreviews)).
 
-- Both run as the user `aspen` (10001) in `/etc/aspen`, and read their configuration there: mount
-  `aspen.toml` or `voice_server.toml` into it, or have the container write it before it starts the
-  server, as [`aws/servers.tf`](aws/servers.tf) does.
+- The `api` image runs as the user `aspen` (10001) and the `voice` image as `aspen-voice` (10002),
+  so a machine running both can refuse the voice server what the API server may reach, such as a
+  cloud's instance metadata service. Both work in `/etc/aspen`, and read their configuration there:
+  mount `aspen.toml` or `voice_server.toml` into it, or have the container write it before it starts
+  the server, as [`aws/servers.tf`](aws/servers.tf) does.
 - The `api` image sets `ASPEN_WEB_CLIENT__DIR` to the web client it holds, so `aspen.toml` needs no
   `[web_client]`.
 - Every other setting can also be given in the container's environment

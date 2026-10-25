@@ -774,6 +774,30 @@ impl Call {
         let id = UserId(parse_id(&user_id)?);
         let annotation = annotation::Annotation::try_from(annotation)?;
         let mut conn = self.conn().await?;
+        if !self.reaches(conn.as_mut(), id).await? {
+            return Err(wit::Error::NotFound);
+        }
+        // A route speaks for its caller, who may speak only of someone they share a community
+        // with where the plugin runs, which is where the note is shown.
+        if let Phase::Route { caller } = self.phase
+            && caller != id
+        {
+            use aspen_schema::community_user;
+            let shown = annotation::shown_in(conn.as_mut(), &self.plugin.id, id)
+                .await
+                .map_err(|e| self.fail(e))?;
+            let shared: bool = diesel::select(diesel::dsl::exists(
+                community_user::table
+                    .filter(community_user::user.eq(caller))
+                    .filter(community_user::community.eq_any(shown)),
+            ))
+            .get_result(conn.as_mut())
+            .await
+            .map_err(|e| self.fail(e.into()))?;
+            if !shared {
+                return Err(wit::Error::NotFound);
+            }
+        }
         annotation::set_on_user(&self.server, conn.as_mut(), &self.plugin.id, id, annotation)
             .await
             .map_err(|e| self.fail(e))
@@ -1095,6 +1119,10 @@ impl Call {
                         "a route publishes to its caller alone among users".into(),
                     ));
                 }
+                // Elsewhere, only to someone the plugin reaches.
+                if !self.reaches(conn.as_mut(), user).await? {
+                    return Err(wit::Error::NotFound);
+                }
                 super::Target::User(user)
             }
         };
@@ -1263,6 +1291,7 @@ impl Call {
         self.require(PluginPermission::Timers)?;
         let mut conn = self.conn().await?;
         super::timer::set(
+            &self.server,
             conn.as_mut(),
             &self.plugin.id,
             &key,
@@ -1283,7 +1312,16 @@ impl Call {
         self.require(PluginPermission::Timers)?;
         let scope = self.scope(scope).await?;
         let mut conn = self.conn().await?;
-        super::timer::set(conn.as_mut(), &self.plugin.id, &key, &due, &payload, &scope).await
+        super::timer::set(
+            &self.server,
+            conn.as_mut(),
+            &self.plugin.id,
+            &key,
+            &due,
+            &payload,
+            &scope,
+        )
+        .await
     }
 
     async fn cancel_timer(&mut self, key: String) -> Result<(), wit::Error> {
@@ -1309,9 +1347,7 @@ impl Call {
             .map(|m| parse_id(&m).map(MessageId))
             .transpose()?;
         let text = PluginText::from(text);
-        if text.key.is_empty() || text.key.len() > 64 {
-            return Err(wit::Error::Invalid("a text's key is 1 to 64 bytes".into()));
-        }
+        annotation::check_text(&text)?;
         {
             let mut conn = self.conn().await?;
             self.running_at(conn.as_mut(), channel_id).await?;

@@ -14,9 +14,10 @@ use crate::context::GlobalServerContext;
 use crate::events::{ChannelHome, channel_home, dm_recipients};
 use crate::typing::{Audience, EphemeralEvent, Relay};
 use fred::interfaces::KeysInterface;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
+use tokio::time::Instant;
 use tracing::warn;
 
 /// The core NATS subject every API server publishes mana levels on and reads them from. It
@@ -94,6 +95,12 @@ async fn for_viewer(
     now(state, &pool, queued).await
 }
 
+/// How long a channel a connection's viewer looked up is not looked up again when the
+/// connection starts to view it anew. The connection takes at most one `viewing` list a second
+/// (`api::event_stream`), so a client switching between lists costs at most
+/// `event_feed::MAX_VIEWING` lookups in this time.
+const LOOKED_UP_FOR: Duration = Duration::from_secs(5);
+
 /// One event stream connection's task telling it the mana of the channels it starts to view,
 /// below full, so a bar already showing appears at once; spends since are routed as relays.
 /// Dropping it, with the connection, ends the task.
@@ -112,9 +119,16 @@ impl Viewer {
         let (told, levels) = tokio::sync::mpsc::channel(8);
         tokio::spawn(async move {
             let mut viewed: HashSet<ChannelId> = HashSet::new();
+            let mut looked_up: HashMap<ChannelId, Instant> = HashMap::new();
             while let Some(list) = incoming.recv().await {
+                let at = Instant::now();
+                looked_up.retain(|_, when| at.duration_since(*when) < LOOKED_UP_FOR);
                 let now: HashSet<ChannelId> = list.into_iter().collect();
                 for channel in now.difference(&viewed) {
+                    if looked_up.contains_key(channel) {
+                        continue;
+                    }
+                    looked_up.insert(*channel, at);
                     if let Some(event) = for_viewer(&state, user, *channel).await
                         && told.send(event).await.is_err()
                     {

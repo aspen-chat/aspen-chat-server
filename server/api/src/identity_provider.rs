@@ -5,7 +5,7 @@
 
 use crate::admin::AdminUser;
 use crate::auth::{EnrollingSessionUser, LoginResponse, LoginResult, SessionUser, login_result};
-use crate::error::{ApiError, ApiResult, Problem};
+use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::extract::{Created, Json, NoContent, Path, Query};
 use crate::rate_limit::Failures;
 use crate::user::{UserRef, not_your_account};
@@ -95,8 +95,8 @@ pub struct IdentityProviderFlow {
 }
 
 /// Starts signing in at a provider, linking one, or verifying again through one. `signIn` needs
-/// no session; `link` needs a recently verified one, and `reauthenticate` one of an account
-/// linked to the provider.
+/// no session; `link` needs a recently verified one that owes the server neither a second factor
+/// nor a verified email address, and `reauthenticate` one of an account linked to the provider.
 #[utoipa::path(
     post,
     path = "/auth/identity-provider-flows",
@@ -106,7 +106,7 @@ pub struct IdentityProviderFlow {
         (status = CREATED, body = IdentityProviderFlow, headers(("Location" = String, description = "URL of the flow"))),
         (status = BAD_REQUEST, description = "`badRequest` or `validation`", body = Problem),
         (status = UNAUTHORIZED, description = "`unauthorized`: no session for `link` or `reauthenticate`", body = Problem),
-        (status = FORBIDDEN, description = "`reauthenticationRequired`, or `forbidden` for a bot or a user of another deployment", body = Problem),
+        (status = FORBIDDEN, description = "`reauthenticationRequired`; `twoFactorEnrollmentRequired` or `emailVerificationRequired` for `link` from a session that owes them; or `forbidden` for a bot or a user of another deployment", body = Problem),
         (status = NOT_FOUND, description = "`identityProviderUnavailable`", body = Problem),
         (status = CONFLICT, description = "`conflict`: the account is linked to that provider already", body = Problem),
         (status = BAD_GATEWAY, description = "`identityProviderUnreachable`", body = Problem),
@@ -118,6 +118,19 @@ pub async fn start_flow(
     session: Option<EnrollingSessionUser>,
     Json(request): Json<IdentityProviderFlowRequest>,
 ) -> ApiResult<Created<IdentityProviderFlow>> {
+    // Such a session may sign out and verify again, as `EnrollingSessionUser` allows, but adds
+    // nothing to its account until it has done what it owes.
+    if request.purpose == IdentityProviderPurpose::Link
+        && let Some(EnrollingSessionUser(session)) = &session
+    {
+        let settings = state.settings();
+        if session.caller.enrollment_required(&settings) {
+            return Err(ApiError::new(ProblemCode::TwoFactorEnrollmentRequired));
+        }
+        if session.caller.verification_required(&settings) {
+            return Err(ApiError::new(ProblemCode::EmailVerificationRequired));
+        }
+    }
     let started = flow::start(
         &state,
         session.as_ref().map(|EnrollingSessionUser(s)| &s.caller),
@@ -452,7 +465,10 @@ pub struct IdentityProviderCreateRequest {
     pub skip_invite: bool,
     #[serde(default)]
     pub enforces_two_factor: bool,
-    #[serde(default = "enabled_by_default")]
+    /// Whether an address it reports as verified becomes a new account's verified address. Off
+    /// unless given: a provider that marks any address verified would have mail sent to
+    /// addresses its users merely typed.
+    #[serde(default)]
     pub trust_email: bool,
 }
 
@@ -508,8 +524,6 @@ pub async fn create_provider(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdentityProviderUpdateRequest {
     pub name: Option<String>,
-    pub issuer: Option<String>,
-    pub client_id: Option<String>,
     /// A new secret; the old is never shown.
     pub client_secret: Option<String>,
     pub enabled: Option<bool>,
@@ -518,8 +532,8 @@ pub struct IdentityProviderUpdateRequest {
     pub trust_email: Option<bool>,
 }
 
-/// Changes a provider. A changed issuer is checked against its discovery document first. Needs
-/// Manage identity providers.
+/// Changes a provider's name, secret, or choices. Its issuer and client id are fixed once it is
+/// added; changing either is adding another provider. Needs Manage identity providers.
 #[utoipa::path(
     patch,
     path = "/admin/identity-providers/{provider}",
@@ -532,8 +546,6 @@ pub struct IdentityProviderUpdateRequest {
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Manage identity providers", body = Problem),
         (status = NOT_FOUND, body = Problem),
-        (status = CONFLICT, description = "`conflict`: a provider of that issuer exists", body = Problem),
-        (status = BAD_GATEWAY, description = "`identityProviderUnreachable`", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
 )]
@@ -549,8 +561,6 @@ pub async fn update_provider(
         provider,
         providers::ProviderChanges {
             name: request.name,
-            issuer: request.issuer,
-            client_id: request.client_id,
             client_secret: request.client_secret,
             enabled: request.enabled,
             skip_invite: request.skip_invite,
@@ -688,9 +698,11 @@ pub struct LogoutForm {
 /// `POST /auth/oidc/back-channel-logout`: a provider ends the sign-ins it made of someone
 /// (OpenID Connect Back-Channel Logout 1.0). It answers `200` once they have ended, or `400`
 /// with an OAuth error body when the token is refused, saying no more than the specification
-/// asks; why goes to the log.
+/// asks; why goes to the log. A refused token counts toward its address's failures, apart from
+/// the limits valid tokens are counted by, so a stranger posting bad ones spends only their own.
 pub async fn back_channel_logout(
     State(state): State<GlobalServerContext>,
+    failures: Option<Extension<Failures>>,
     form: axum::Form<LogoutForm>,
 ) -> Response {
     let no_store = [(CACHE_CONTROL, "no-store")];
@@ -704,6 +716,7 @@ pub async fn back_channel_logout(
         }
         Err(providers::logout::LogoutError::Refused(reason)) => {
             tracing::info!(reason, "refused a back-channel logout");
+            crate::rate_limit::note_failure(&state, &failures).await;
             (
                 StatusCode::BAD_REQUEST,
                 no_store,
