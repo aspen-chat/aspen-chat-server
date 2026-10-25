@@ -16,6 +16,8 @@ import {
   pkcePair,
   PasskeyCancelledError,
   PasskeyUnavailableError,
+  rpIdFits,
+  rpIdOf,
   runInPage,
   signalUnknownCredential,
   type Passkey,
@@ -426,12 +428,22 @@ export class AspenClient {
         await this.api.POST(`${API_PREFIX}/auth/passkey-ceremonies`, { body: request }),
       );
       const publicKey = (started.options as { publicKey?: unknown }).publicKey;
+      // Credential Manager checks only that the relying party's own domain names this app,
+      // and the app's origin is the same for every deployment, so options another
+      // deployment's ceremony gave would be signed for it here. A browser holds a page to its
+      // own domain; this holds the deployment to its own, and anything else goes to the
+      // system browser, which opens this deployment's page.
+      const host = new URL(this.baseUrl).hostname;
+      const rpId = rpIdOf(started.purpose, publicKey);
       let credential: Record<string, unknown>;
       try {
+        if (rpId === null || !rpIdFits(rpId, host)) {
+          throw new PasskeyUnavailableError(`relying party ${rpId ?? "(none)"} is not ${host}'s`);
+        }
         credential =
           started.purpose === "register"
-            ? await transport.native.create(publicKey)
-            : await transport.native.get(publicKey);
+            ? await transport.native.create(publicKey, host)
+            : await transport.native.get(publicKey, host);
       } catch (e) {
         if (e instanceof PasskeyUnavailableError) {
           return this.runPasskeyCeremony(request, {

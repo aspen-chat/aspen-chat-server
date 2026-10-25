@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canRunInPage,
   creationOptions,
+  rpIdFits,
   fromBase64url,
   parseHandoffReturn,
   requestOptions,
@@ -48,6 +49,14 @@ describe("passkeys", () => {
     expect(canRunInPage("example.org", "chat.example.org", true)).toBe(true);
     expect(canRunInPage("example.org", "badexample.org", true)).toBe(false);
     expect(canRunInPage("example.org", "example.org", false)).toBe(false);
+  });
+
+  it("holds a relying party to the deployment's host or a parent of it", () => {
+    expect(rpIdFits("aspen.test", "aspen.test")).toBe(true);
+    expect(rpIdFits("aspen.test", "chat.aspen.test")).toBe(true);
+    expect(rpIdFits("victim.example", "aspen.test")).toBe(false);
+    expect(rpIdFits("chat.aspen.test", "aspen.test")).toBe(false);
+    expect(rpIdFits("", "aspen.test")).toBe(false);
   });
 
   it("reads the browser's return", () => {

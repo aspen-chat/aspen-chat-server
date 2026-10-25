@@ -117,15 +117,20 @@ transport when:
   (`passkeys.androidApps`; a deployment that predates the list names none).
 
 The plugin hands Credential Manager the ceremony's `publicKey` options as the server gave them, and
-the credential back as the JSON the server reads. It asks only for passkeys and providers at hand on
-the phone (`preferImmediatelyAvailableCredentials`): otherwise, with none for the deployment,
-Google's sheet waits to be dismissed, which reads as cancelled, where the browser could still have
-reached a security key or another phone. `PasskeyPlatformTest` (a device test) holds that a
-deployment that does not name the app fails at once as `unavailable`. The ceremony starts and
-completes as one in a page does, by the sign-in that started it. When Credential Manager is missing,
-no provider answers, or Android refuses the app for the domain (`unavailable`), the ceremony is left
-to expire and another goes to the system browser (`fallback`). A dismissed prompt (`cancelled`) ends
-it.
+the credential back as the JSON the server reads, but only when the options' relying party (`rpId`
+to sign in, `rp.id` to register) is the deployment's host or a parent of it (`rpIdFits`, the rule
+`canRunInPage` holds a page to). `AspenClient.runPasskeyCeremony` checks it before calling the
+plugin, which is told the host and checks it again; anything else goes to the system browser, as
+`unavailable` does. Credential Manager checks only that the relying party's domain names the app,
+and the app's origin is the same for every deployment, so without it a deployment could relay
+another's ceremony and have the app sign it. It asks only for passkeys and providers at hand on the
+phone (`preferImmediatelyAvailableCredentials`): otherwise, with none for the deployment, Google's
+sheet waits to be dismissed, which reads as cancelled, where the browser could still have reached a
+security key or another phone. `PasskeyPlatformTest` (a device test) holds that a deployment that
+does not name the app fails at once as `unavailable`. The ceremony starts and completes as one in a
+page does, by the sign-in that started it. When Credential Manager is missing, no provider answers,
+or Android refuses the app for the domain (`unavailable`), the ceremony is left to expire and
+another goes to the system browser (`fallback`). A dismissed prompt (`cancelled`) ends it.
 
 ### Autofill
 

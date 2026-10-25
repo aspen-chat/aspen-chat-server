@@ -37,6 +37,7 @@ export {
   passkeySignalAvailable,
   pkcePair,
   requestOptions,
+  rpIdFits,
   signalAllAcceptedCredentials,
   signalCurrentUserDetails,
   signalUnknownCredential,
