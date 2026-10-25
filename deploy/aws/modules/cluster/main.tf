@@ -11,9 +11,13 @@ resource "aws_cloudwatch_log_group" "this" {
 }
 
 # What ECS itself does for a task before it starts: pull its image, read its configuration
-# file, and write its logs. What a task may do once it runs is its own role's.
+# file, and write its logs. What a task may do once it runs is its own role's. Each kind of task
+# has a role of its own that may read only its own configuration, so a task whose host is taken
+# over (a voice server's, which faces the internet on its own machine) yields only what that
+# task already had.
 resource "aws_iam_role" "execution" {
-  name = "${var.name}-task-execution"
+  for_each = var.execution_secrets
+  name     = "${var.name}-${each.key}-exec"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -26,20 +30,22 @@ resource "aws_iam_role" "execution" {
 }
 
 resource "aws_iam_role_policy_attachment" "execution" {
-  role       = aws_iam_role.execution.name
+  for_each   = var.execution_secrets
+  role       = aws_iam_role.execution[each.key].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 resource "aws_iam_role_policy" "execution_config" {
-  name = "read-configuration"
-  role = aws_iam_role.execution.id
+  for_each = var.execution_secrets
+  name     = "read-configuration"
+  role     = aws_iam_role.execution[each.key].id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
       Action   = "secretsmanager:GetSecretValue"
-      Resource = var.config_secret_arns
+      Resource = each.value
     }]
   })
 }

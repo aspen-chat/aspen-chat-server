@@ -40,7 +40,7 @@ resource "aws_ecs_task_definition" "server" {
   network_mode             = "awsvpc"
   cpu                      = local.server_sizes[each.key].cpu
   memory                   = local.server_sizes[each.key].memory
-  execution_role_arn       = module.cluster.execution_role_arn
+  execution_role_arn       = module.cluster.execution_role_arns["server"]
   task_role_arn            = aws_iam_role.server.arn
 
   runtime_platform {

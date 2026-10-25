@@ -86,6 +86,11 @@ run "release" {
     error_message = "The machine's metadata, and its role's credentials with it, need a token."
   }
 
+  assert {
+    condition     = strcontains(aws_instance.this.user_data, "[systemctl, enable, --now, aspen-voice-imds.service]")
+    error_message = "The machine refuses the voice server its metadata, and its role's credentials with it."
+  }
+
   # Anything in user_data that a variable decides would replace the machine when it changed.
   assert {
     condition     = !strcontains(aws_instance.this.user_data, "2026-10-16") && strcontains(aws_instance.this.user_data, local.data_device)

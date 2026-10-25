@@ -26,7 +26,7 @@ resource "aws_ecs_task_definition" "nats" {
   network_mode             = "awsvpc"
   cpu                      = var.nats.cpu
   memory                   = var.nats.memory
-  execution_role_arn       = module.cluster.execution_role_arn
+  execution_role_arn       = module.cluster.execution_role_arns["nats"]
 
   runtime_platform {
     operating_system_family = local.runtime_platform.operating_system_family

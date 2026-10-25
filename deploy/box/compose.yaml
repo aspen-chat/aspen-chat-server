@@ -59,10 +59,13 @@ services:
     <<: *service
     profiles: ["main"]
     image: valkey/valkey:8-alpine
-    # Nothing in it is worth keeping across a restart, and it must never evict
+    # Its password (`requirepass`) is in the file, kept off the command line every process on
+    # the machine can read; loopback is shared with every container here. Nothing in it is
+    # worth keeping across a restart, and it must never evict
     # (docs/operators/installing/1-services.md).
     command:
       - valkey-server
+      - /etc/valkey/valkey.conf
       - --bind
       - 127.0.0.1
       - --save
@@ -71,6 +74,8 @@ services:
       - ${VALKEY_MEMORY_MB}mb
       - --maxmemory-policy
       - noeviction
+    volumes:
+      - ./config/valkey.conf:/etc/valkey/valkey.conf:ro
 
   nats:
     <<: *service

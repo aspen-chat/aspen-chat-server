@@ -43,6 +43,15 @@ def release(store: Box, box: dict) -> None:
         )  # fmt: skip
 
 
+def reload_caddy(store: Box) -> None:
+    """Has Caddy take up its rewritten configuration, through the admin socket the Caddyfile
+    names. A Caddy started before its admin API moved there has no socket, and is restarted."""
+    if store.exec_ok("caddy", "test", "-S", "/run/caddy-admin.sock"):
+        store.compose("exec", "-T", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile")
+    else:
+        store.compose("restart", "caddy")
+
+
 def converge(store: Box, box: dict) -> set:
     """Writes the configuration, starts what the servers need, and has each service that was
     already running take up a file of its that changed. Answers the files that changed."""
@@ -54,8 +63,10 @@ def converge(store: Box, box: dict) -> set:
     store.compose("up", "-d", "--wait", *(() if external_database(box) else ("postgres",)), "valkey", "nats", "caddy")
     if changed & {"nats.conf", "nats-ca.pem"} and "nats" in was_running:
         store.compose("restart", "nats")
+    if "valkey.conf" in changed and "valkey" in was_running:
+        store.compose("restart", "valkey")
     if "Caddyfile" in changed and "caddy" in was_running:
-        store.compose("exec", "-T", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile")
+        reload_caddy(store)
     if box["storage"]["kind"] == "bundled":
         store.compose("up", "-d", "garage")
         if changed & {"garage.toml", "garage.env"} and "garage" in was_running:
@@ -120,7 +131,7 @@ def up_voice_only(store: Box, box: dict) -> None:
     changed = render(store, box)
     store.compose("up", "-d", "--wait", "caddy")
     if "Caddyfile" in changed and "caddy" in was_running:
-        store.compose("exec", "-T", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile")
+        reload_caddy(store)
     start_voice(store, changed, was_running)
     print(f"\nhttps://{box['name']}.{box['domain']} is up. `aspen-box doctor` checks it.")
 

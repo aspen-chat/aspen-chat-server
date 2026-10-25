@@ -45,7 +45,7 @@ resource "aws_ecs_task_definition" "restore" {
   network_mode             = "awsvpc"
   cpu                      = 1024
   memory                   = 2048
-  execution_role_arn       = module.cluster.execution_role_arn
+  execution_role_arn       = module.cluster.execution_role_arns["restore"]
   task_role_arn            = aws_iam_role.restore.arn
 
   runtime_platform {
