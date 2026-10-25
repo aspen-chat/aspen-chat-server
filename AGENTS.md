@@ -470,7 +470,11 @@ newest release, and `runs.using` in that tag's `action.yml` the Node.js it runs 
 majors several times a year and GitHub retires the Node.js runtimes under the old ones, so a version
 written from memory is usually behind and soon warns on every run. Read the release notes of each
 major version a bump crosses for what it breaks, and prefer a step the repository's own scripts can
-do to an action that has stopped being released.
+do to an action that has stopped being released. An action from anyone but GitHub (not under
+`actions/`) is pinned by the commit its release tag names, with the tag beside it as a comment
+(`uses: pnpm/action-setup@<commit> # v6.1.0`), since its owner can move a tag to other code that
+then runs with the job's secrets: `gh api repos/<owner>/<action>/git/ref/tags/<tag>` names the
+commit, or an annotated tag to follow to it with `git/tags/<sha>`.
 
 `.github/workflows/images.yml` publishes both images to the GitHub Container Registry
 (`ghcr.io/aspen-chat/aspen-api` and `aspen-voice`) for x86-64 and 64-bit ARM, each built on a runner
