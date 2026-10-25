@@ -28,19 +28,29 @@ pub async fn health() -> NoContent {
 }
 
 /// Whether this server reaches everything it needs to do its work: its database, NATS, and
-/// Valkey. For starting a server before the one it replaces is stopped, and for finding what
-/// is wrong with one. The services are asked at most once a second however often this is.
-/// Unauthenticated.
+/// Valkey. For starting a server before the one it replaces is stopped. The services are asked
+/// at most once a second however often this is. Which it cannot reach is in the server's log,
+/// not the answer, since anyone may ask. Unauthenticated.
 #[utoipa::path(
     get,
     path = "/health/ready",
     tag = TAG_DEPLOYMENT,
     responses(
         (status = NO_CONTENT, description = "The server reaches every service it needs."),
-        (status = SERVICE_UNAVAILABLE, description = "`notReady`: `detail` names the services it cannot reach", body = Problem),
+        (status = SERVICE_UNAVAILABLE, description = "`notReady`: the server cannot reach a service it needs; its log says which", body = Problem),
     )
 )]
 pub async fn ready(State(state): State<GlobalServerContext>) -> ApiResult<NoContent> {
+    let readiness = aspen_app::health::readiness(&state).await;
+    if readiness.is_ready() {
+        return Ok(NoContent);
+    }
+    Err(ApiError::new(ProblemCode::NotReady).with_detail(t!("notReadyPublicDetail")))
+}
+
+/// [`ready`] on a private worker's listener, which only the machine it runs on reaches, naming
+/// the services it cannot reach.
+async fn ready_naming_services(State(state): State<GlobalServerContext>) -> ApiResult<NoContent> {
     let readiness = aspen_app::health::readiness(&state).await;
     if readiness.is_ready() {
         return Ok(NoContent);
@@ -67,7 +77,7 @@ pub async fn serve_for_private_worker(state: GlobalServerContext) -> Result<(), 
         .route(&format!("{API_PREFIX}/health"), axum::routing::get(health))
         .route(
             &format!("{API_PREFIX}/health/ready"),
-            axum::routing::get(ready),
+            axum::routing::get(ready_naming_services),
         )
         .with_state(state);
     tracing::info!(%address, "serving health checks");

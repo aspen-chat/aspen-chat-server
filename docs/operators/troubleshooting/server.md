@@ -13,9 +13,10 @@ It says why on standard error. The usual causes:
 
 ## `notReady`
 
-**Means:** `GET /api/v1/health/ready` found that this server cannot reach a service it needs. Its
-`detail` names which of PostgreSQL, NATS, and Valkey. The server logs `this server is not ready`
-once, with the same names, and `this server is ready again` when they are back.
+**Means:** `GET /api/v1/health/ready` found that this server cannot reach a service it needs. The
+server logs `this server is not ready` once, naming which of PostgreSQL, NATS, and Valkey, and
+`this server is ready again` when they are back. The answer itself names them only on a private
+worker's health listener, since anyone may ask a server that takes requests.
 
 **What to do:** for each service named, check that it is running, that this server's machine can
 reach it, and that `aspen.toml` gives its address and credentials
