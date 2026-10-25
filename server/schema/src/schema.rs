@@ -851,6 +851,7 @@ diesel::table! {
         user -> Uuid,
         thread -> Uuid,
         followed_at -> Timestamptz,
+        by_hand -> Bool,
     }
 }
 

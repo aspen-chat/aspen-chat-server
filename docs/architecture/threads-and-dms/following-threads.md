@@ -1,7 +1,7 @@
 # Following threads
 
-Code: `app::thread_follow`. Table `thread_follow` holds the user, the thread (each cascading), and
-when they last followed it.
+Code: `app::thread_follow`. Table `thread_follow` holds the user, the thread (each cascading), when
+they last followed it, and whether they ever followed it by hand (`by_hand`).
 
 ## What a follow does
 
@@ -20,7 +20,7 @@ This holds whatever their notification level for the parent. A mute of the paren
 | By hand                                               | `PUT /channels/{channel}/follows/@me`: `201` or `200`                   |
 | Starting it                                           | The author of the message a thread starts from follows it as it is made |
 | Posting in it                                         | A poll included. Follows again and marks it followed now                |
-| Being tagged by name in a reply while able to read it | Follows again and marks it followed now                                 |
+| Being tagged by name in a reply while able to read it | Follows again and marks it followed now, unless they blocked its author |
 
 `DELETE /channels/{channel}/follows/@me` stops following. That lasts until they follow again or take
 part again.
@@ -31,8 +31,15 @@ A follow of a DM's thread tells only the DM's people, whoever followed it before
 
 ## The cap
 
-A user follows at most `MAX_THREAD_FOLLOWS` (1000) threads on a deployment. Past that, those
-followed least recently are let go, each announced.
+A user follows at most `MAX_THREAD_FOLLOWS` (1000) threads on a deployment. A new follow at the cap
+lets go the one followed least recently, announced:
+
+- **By hand:** any follow.
+- **By taking part** (starting, posting, being tagged): only another follow made by taking part
+  (`thread_follow_automatic_by_age`). When every follow they have was made by hand, the new follow
+  is not made, so what others do never undoes a choice the user made themselves.
+
+Following by hand a thread they already follow by taking part marks it made by hand.
 
 ## Listing and events
 

@@ -125,3 +125,4 @@ pub mod m20261022_232808_join_messages;
 pub mod m20261023_120000_attachment_spoilers;
 pub mod m20261023_191323_identity_providers;
 pub mod m20261025_050226_held_message_made_thread;
+pub mod m20261025_050540_thread_follow_by_hand;
