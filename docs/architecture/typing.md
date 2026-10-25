@@ -170,6 +170,8 @@ Typing works the same on every deployment a user uses.
 3. **When the deciding permission is lost, what happens to what is already open?**
    - Losing Send messages, or a block, refuses the typist's next refresh (within three seconds).
      What reached others before runs out by the expiry.
+   - A block in a community, or lifting it, reaches the typist's words within two seconds: a word
+     within two seconds of the last check goes to whom that check found, its blocks among it.
    - Losing View channel (an override, a role edited, taken, or deleted, a move, a category deleted,
      a removal, a ban, leaving) is followed by the routing model as for every event. The next word
      does not reach them, and their client drops what it showed with the channel or after the
