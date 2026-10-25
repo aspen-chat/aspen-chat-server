@@ -56,7 +56,9 @@ provider can no longer sign in**: ask their people to set a password or add a pa
 
 Turn `allow_private_addresses` on for a provider on your LAN. While it is on, anyone holding Manage
 identity providers can make the server fetch a discovery document from any address it can reach, so
-grant that permission accordingly.
+grant that permission accordingly. Off or on, a provider's issuer and the endpoints its discovery
+document names may not be loopback or unspecified addresses written as numbers (`127.0.0.1`,
+`[::1]`, `0.0.0.0`); a provider on the same machine is named by a host name instead.
 
 ## What must be reachable
 

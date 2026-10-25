@@ -67,9 +67,12 @@ answers of at most 1 MiB. Why one failed is classified (`aspen_outbound::classif
 other deployments are) into a message the administrator can act on. An issuer that resolves to an
 address inside a network (a LAN Keycloak) is refused unless
 `[identity_providers] allow_private_addresses` is set in `aspen.toml`: otherwise anyone holding
-Manage identity providers could make the server call services only it can reach.
-`[identity_providers] ca_file` adds authorities to trust, for a provider whose certificate an
-organisation issued itself.
+Manage identity providers could make the server call services only it can reach. Names are checked
+as they resolve (`PublicResolver`); a URL naming an address outright is never resolved, so every
+call (`discovery::call`, for the issuer and for each endpoint its document names: keys, token)
+checks it first, refusing one inside a network unless private addresses are allowed, and a loopback
+or unspecified one (this machine) always. `[identity_providers] ca_file` adds authorities to trust,
+for a provider whose certificate an organisation issued itself.
 
 ## Flows
 
