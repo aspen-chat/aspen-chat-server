@@ -187,8 +187,8 @@ async fn ensure_attachments_ready(
 }
 
 /// Checks that `author` may post text in `channel_id`, answering the channel and the author's
-/// access to it: that it holds messages, and that they may send there. Saying they are typing
-/// there (`app::typing`) takes the same. In a transaction it holds the channel ([`hold_channel`]).
+/// access to it: that it holds messages, and that they may send there. In a transaction it holds
+/// the channel ([`hold_channel`]).
 pub(crate) async fn may_post(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -196,13 +196,47 @@ pub(crate) async fn may_post(
     channel_id: ChannelId,
 ) -> Result<(Channel, ChannelAccess), crate::Error> {
     let target = hold_channel(conn, channel_id).await?;
+    let access = may_send_in(state, conn, author, &target).await?;
+    Ok((target, access))
+}
+
+/// Checks that `author` may say they are typing in `channel_id` (`app::typing`), which takes what
+/// posting text there takes ([`may_post`]). It reads the channel without holding it: nothing is
+/// written after it, and a check that locks a row on every word would let typing frames write to
+/// the database.
+pub(crate) async fn may_type(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    channel_id: ChannelId,
+) -> Result<(), crate::Error> {
+    let target = channel::table
+        .select(Channel::as_select())
+        .filter(
+            channel::id
+                .eq(channel_id)
+                .and(channel::deleted_at.is_null()),
+        )
+        .first(conn)
+        .await?;
+    may_send_in(state, conn, author, &target).await?;
+    Ok(())
+}
+
+/// Checks that `target` holds messages and that `author` may send there, answering their access.
+async fn may_send_in(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    target: &Channel,
+) -> Result<ChannelAccess, crate::Error> {
     // A plugin's channel holds the plugin's contents, not messages.
     if target.ty == ChannelType::Plugin {
         return Err(crate::Error::Validation(t!("pluginChannelHasNoMessages")));
     }
-    let access = channel_access(state, conn, author, channel_id).await?;
+    let access = channel_access(state, conn, author, target.id).await?;
     access.require(access.send_permission())?;
-    Ok((target, access))
+    Ok(access)
 }
 
 /// The live channel `channel_id`, whose row a transaction posting in it holds against removal

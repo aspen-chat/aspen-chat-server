@@ -232,7 +232,9 @@ there.
   pool to recharge enough to pay for it.
 - **Starting to view:** each event stream connection's task (`live::Viewer`) tells it the level of
   each channel it starts to view whose pool is below full and that it may read, so a bar already
-  showing appears at once.
+  showing appears at once. A channel it looked up in the last five seconds (`live::LOOKED_UP_FOR`)
+  is not looked up again, and the connection takes at most one `viewing` list a second, so a client
+  switching lists bounds its own lookups.
 - **In the app:** the store keeps the latest level of up to 32 channels (`RecordStore.mana`), and
   the bar draws the level between frames from `at` and `recharge`, rising steadily at 15 frames a
   second (`manaDrawnAt`). It shows once the level falls below 60% of `max` (`MANA_SHOW_BELOW`), or

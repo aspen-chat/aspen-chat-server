@@ -28,8 +28,9 @@ use tracing::{debug, warn};
 /// `events::SUBJECT_ROOT`, whose subjects JetStream keeps.
 pub const TYPING_SUBJECT: &str = "aspen.typing";
 
-/// The least time between two `typing` frames for one channel that are published; a client
-/// sends them every `TYPING_REFRESH_SECONDS`, and closer ones are dropped.
+/// The least time between two `typing` frames for one channel that are published, and between
+/// two checks of one channel; a client sends them every `TYPING_REFRESH_SECONDS`, and closer
+/// ones are dropped.
 const REFRESH_FLOOR: Duration = Duration::from_secs(TYPING_REFRESH_SECONDS - 1);
 
 /// How long someone is shown typing after the last word that they are.
@@ -98,80 +99,216 @@ impl Typist {
     }
 }
 
-/// A channel the connection said its user is typing in.
-struct Shown {
-    /// When it last published that they are.
+/// How many words a connection's typist may check or publish in a burst, and how many it earns
+/// back each second ([`Budget`]). A person types in one channel, refreshing every
+/// `TYPING_REFRESH_SECONDS`, so this leaves room for switching between a few; it bounds each
+/// connection's database checks and the relays it sends every API server.
+const BUDGET_BURST: f64 = 4.0;
+const BUDGET_PER_SECOND: f64 = 2.0;
+
+/// A token bucket over a connection's checks and publishes.
+struct Budget {
+    tokens: f64,
     at: Instant,
+}
+
+impl Budget {
+    fn new(now: Instant) -> Self {
+        Budget {
+            tokens: BUDGET_BURST,
+            at: now,
+        }
+    }
+
+    /// Takes one token, answering whether there was one.
+    fn take(&mut self, now: Instant) -> bool {
+        let earned = now.duration_since(self.at).as_secs_f64() * BUDGET_PER_SECOND;
+        self.tokens = (self.tokens + earned).min(BUDGET_BURST);
+        self.at = now;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Who a word about one channel reaches, as a check found it.
+#[derive(Clone)]
+struct Found {
     audience: Audience,
     unseen_by: Vec<UserId>,
 }
 
+/// What a connection's typist knows of one channel it was told of. It outlives a stop and a
+/// refusal, so neither lets the next `typing` check the channel again sooner than
+/// [`REFRESH_FLOOR`]. An entry is made only by a check, which takes a token of the [`Budget`],
+/// and is forgotten [`EXPIRY`] after it was last checked or shown, so a typist holds at most
+/// what its budget lets it check in that time.
+struct Known {
+    /// When it was last checked.
+    checked: Instant,
+    /// Who the check found the word reaches; `None` when it refused.
+    found: Option<Found>,
+    /// When it last published that the user is typing there, while they are shown typing.
+    shown: Option<Instant>,
+}
+
+impl Known {
+    fn fresh(&self, now: Instant) -> bool {
+        now.duration_since(self.checked) < REFRESH_FLOOR
+    }
+
+    fn last_used(&self) -> Instant {
+        self.shown
+            .map_or(self.checked, |shown| shown.max(self.checked))
+    }
+}
+
 async fn run(state: GlobalServerContext, user: UserId, mut frames: mpsc::Receiver<Frame>) {
-    let mut shown: HashMap<ChannelId, Shown> = HashMap::new();
+    let mut known: HashMap<ChannelId, Known> = HashMap::new();
+    let mut budget = Budget::new(Instant::now());
     while let Some(frame) = frames.recv().await {
         let now = Instant::now();
-        shown.retain(|_, s| now.duration_since(s.at) < EXPIRY);
+        known.retain(|_, k| now.duration_since(k.last_used()) < EXPIRY);
+        for k in known.values_mut() {
+            if k.shown.is_some_and(|at| now.duration_since(at) >= EXPIRY) {
+                k.shown = None;
+            }
+        }
         match frame {
             Frame::Typing(channel) => {
-                if let Some(s) = shown.get(&channel) {
-                    if now.duration_since(s.at) < REFRESH_FLOOR {
-                        continue;
-                    }
-                } else if shown.len() >= MAX_CHANNELS {
+                let entry = known.get(&channel);
+                if entry.is_some_and(|k| {
+                    k.shown
+                        .is_some_and(|at| now.duration_since(at) < REFRESH_FLOOR)
+                        || (k.found.is_none() && k.fresh(now))
+                }) {
                     continue;
                 }
-                // A check that takes longer than a refresh is overtaken by the next one.
-                let checked = tokio::time::timeout(
-                    Duration::from_secs(TYPING_REFRESH_SECONDS),
-                    audience(&state, user, channel),
-                )
-                .await;
-                let (audience, unseen_by) = match checked {
-                    Ok(Ok(found)) => found,
-                    Ok(Err(e)) => {
-                        // Refused (no longer allowed to post there) or failed: whatever was
-                        // shown lapses.
-                        debug!(error = %e, "typing refused");
-                        if let Some(s) = shown.remove(&channel) {
-                            publish(&state, user, channel, false, s.audience, s.unseen_by).await;
+                let showing = entry.is_some_and(|k| k.shown.is_some());
+                if !showing && known.values().filter(|k| k.shown.is_some()).count() >= MAX_CHANNELS
+                {
+                    continue;
+                }
+                if !budget.take(now) {
+                    continue;
+                }
+                let cached = entry.filter(|k| k.fresh(now)).and_then(|k| k.found.clone());
+                let found = match cached {
+                    Some(found) => found,
+                    None => {
+                        let found = check(&state, user, channel).await;
+                        let checked = Instant::now();
+                        match found {
+                            Some(found) => {
+                                known.insert(
+                                    channel,
+                                    Known {
+                                        checked,
+                                        found: Some(found.clone()),
+                                        shown: None,
+                                    },
+                                );
+                                found
+                            }
+                            None => {
+                                // Refused or failed. What was shown lapses by the expiry rather
+                                // than being withdrawn: the audience was read at least a refresh
+                                // ago, and may hold people who may no longer be told of the
+                                // channel.
+                                known.insert(
+                                    channel,
+                                    Known {
+                                        checked,
+                                        found: None,
+                                        shown: None,
+                                    },
+                                );
+                                continue;
+                            }
                         }
-                        continue;
-                    }
-                    Err(_) => {
-                        warn!("checking who sees someone typing took longer than a refresh");
-                        continue;
                     }
                 };
-                publish(
-                    &state,
-                    user,
-                    channel,
-                    true,
-                    audience.clone(),
-                    unseen_by.clone(),
-                )
-                .await;
-                shown.insert(
-                    channel,
-                    Shown {
-                        at: Instant::now(),
-                        audience,
-                        unseen_by,
-                    },
-                );
+                publish(&state, user, channel, true, &found).await;
+                if let Some(k) = known.get_mut(&channel) {
+                    k.shown = Some(Instant::now());
+                }
             }
             Frame::Stopped(channel) => {
-                if let Some(s) = shown.remove(&channel) {
-                    publish(&state, user, channel, false, s.audience, s.unseen_by).await;
-                }
+                stop(&state, user, channel, &mut known, &mut budget).await;
             }
         }
     }
     // The connection ended.
+    let shown: Vec<ChannelId> = known
+        .iter()
+        .filter(|(_, k)| k.shown.is_some())
+        .map(|(channel, _)| *channel)
+        .collect();
+    for channel in shown {
+        stop(&state, user, channel, &mut known, &mut budget).await;
+    }
+}
+
+/// Says `user` stopped typing in `channel`, if they are shown typing there. The stop goes to the
+/// audience the last check found when that check is fresh; otherwise the channel is checked again
+/// when the budget allows and the stop goes to whom that finds, and when it does not, or refuses,
+/// nothing is said and what was shown lapses by the expiry. So a stop never reaches people read
+/// into the audience longer ago than [`REFRESH_FLOOR`].
+async fn stop(
+    state: &GlobalServerContext,
+    user: UserId,
+    channel: ChannelId,
+    known: &mut HashMap<ChannelId, Known>,
+    budget: &mut Budget,
+) {
     let now = Instant::now();
-    for (channel, s) in shown {
-        if now.duration_since(s.at) < EXPIRY {
-            publish(&state, user, channel, false, s.audience, s.unseen_by).await;
+    let Some(k) = known.get_mut(&channel) else {
+        return;
+    };
+    if k.shown.take().is_none() {
+        return;
+    }
+    let found = match k.found.clone().filter(|_| k.fresh(now)) {
+        Some(found) => found,
+        None => {
+            if !budget.take(now) {
+                return;
+            }
+            let found = check(state, user, channel).await;
+            k.checked = Instant::now();
+            k.found.clone_from(&found);
+            match found {
+                Some(found) => found,
+                None => return,
+            }
+        }
+    };
+    publish(state, user, channel, false, &found).await;
+}
+
+/// Who sees `user` typing in `channel`, or `None` when they may not say so there or the check
+/// failed. A check that takes longer than a refresh is overtaken by the next one.
+async fn check(state: &GlobalServerContext, user: UserId, channel: ChannelId) -> Option<Found> {
+    let checked = tokio::time::timeout(
+        Duration::from_secs(TYPING_REFRESH_SECONDS),
+        audience(state, user, channel),
+    )
+    .await;
+    match checked {
+        Ok(Ok((audience, unseen_by))) => Some(Found {
+            audience,
+            unseen_by,
+        }),
+        Ok(Err(e)) => {
+            debug!(error = %e, "typing refused");
+            None
+        }
+        Err(_) => {
+            warn!("checking who sees someone typing took longer than a refresh");
+            None
         }
     }
 }
@@ -183,7 +320,7 @@ async fn audience(
     channel: ChannelId,
 ) -> crate::Result<(Audience, Vec<UserId>)> {
     let mut conn = state.connection_pool.get().await?;
-    crate::message::may_post(state, conn.as_mut(), user, channel).await?;
+    crate::message::may_type(state, conn.as_mut(), user, channel).await?;
     let audience = match channel_home(state, conn.as_mut(), channel).await? {
         ChannelHome::Community {
             community,
@@ -241,8 +378,7 @@ async fn publish(
     user: UserId,
     channel: ChannelId,
     typing: bool,
-    audience: Audience,
-    unseen_by: Vec<UserId>,
+    found: &Found,
 ) {
     let relay = Relay {
         event: EphemeralEvent::Typing {
@@ -250,8 +386,8 @@ async fn publish(
             user_id: user,
             typing,
         },
-        audience,
-        unseen_by,
+        audience: found.audience.clone(),
+        unseen_by: found.unseen_by.clone(),
     };
     let payload = match serde_json::to_vec(&relay) {
         Ok(payload) => payload,
@@ -277,6 +413,24 @@ mod tests {
     #[test]
     fn the_subject_lies_outside_what_jetstream_keeps() {
         assert!(!TYPING_SUBJECT.starts_with(crate::events::SUBJECT_ROOT));
+    }
+
+    #[test]
+    fn the_budget_allows_a_burst_then_its_rate() {
+        let start = Instant::now();
+        let mut budget = Budget::new(start);
+        for _ in 0..4 {
+            assert!(budget.take(start));
+        }
+        assert!(!budget.take(start));
+        let half_second = start + Duration::from_millis(500);
+        assert!(budget.take(half_second));
+        assert!(!budget.take(half_second));
+        let much_later = start + Duration::from_secs(60);
+        for _ in 0..4 {
+            assert!(budget.take(much_later));
+        }
+        assert!(!budget.take(much_later));
     }
 
     #[test]

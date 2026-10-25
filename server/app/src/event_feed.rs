@@ -1253,6 +1253,18 @@ async fn tell(shard: &mpsc::Sender<ShardCommand>, command: ShardCommand) {
     let _ = shard.send(command).await;
 }
 
+/// Hands each shard what a relay (`app::typing::Relay`) carries. A relay is ephemeral, so a
+/// shard whose queue is full goes without it rather than holding up the dispatcher, and with it
+/// the stream's events, behind relays.
+fn route_relays(payload: &[u8], models: &Models, shards: &[mpsc::Sender<ShardCommand>]) {
+    for event in relayed_events(payload, models) {
+        let event = Arc::new(event);
+        for to in shards {
+            let _ = to.try_send(ShardCommand::Route(event.clone()));
+        }
+    }
+}
+
 /// One routing shard: the connections whose id falls to it, and the events they read. A
 /// connection it could not add is given back to the dispatcher through `unregister`.
 async fn route_shard(
@@ -1799,12 +1811,7 @@ async fn dispatch(
                     typing = subscribe_relays(&context, TYPING_SUBJECT).await;
                     continue;
                 };
-                for event in relayed_events(&message.payload, &models) {
-                    let event = Arc::new(event);
-                    for to in &shards {
-                        tell(to, ShardCommand::Route(event.clone())).await;
-                    }
-                }
+                route_relays(&message.payload, &models, &shards);
             }
             message = mana.next() => {
                 let Some(message) = message else {
@@ -1812,12 +1819,7 @@ async fn dispatch(
                     mana = subscribe_relays(&context, MANA_SUBJECT).await;
                     continue;
                 };
-                for event in relayed_events(&message.payload, &models) {
-                    let event = Arc::new(event);
-                    for to in &shards {
-                        tell(to, ShardCommand::Route(event.clone())).await;
-                    }
-                }
+                route_relays(&message.payload, &models, &shards);
             }
             message = messages.next() => {
                 let message = match message {
