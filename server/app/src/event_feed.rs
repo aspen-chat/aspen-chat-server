@@ -1140,10 +1140,13 @@ impl Routes {
             {
                 let model = event.access.get().map(Arc::as_ref);
                 let roles = connection.roles.get(&community);
+                // Sorted, so the same roles held in another order share a decision.
+                let mut held = roles.cloned().unwrap_or_default();
+                held.sort_unstable();
                 let key = (
                     connection.moderator || model.is_some_and(|m| m.is_owner(connection.user)),
                     event.creator == Some(connection.user),
-                    roles.cloned().unwrap_or_default(),
+                    held,
                 );
                 let visible = *decided.entry(key).or_insert_with(|| {
                     may_read(event, model, connection.user, roles, connection.moderator)
