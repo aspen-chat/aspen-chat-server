@@ -6,8 +6,12 @@
 //!   same statement, is copied to Valkey; only then is their `online` key set, and those watching
 //!   them told (`app::presence_feed`). Whenever the key exists, so does the copy of what they
 //!   chose, even after Valkey lost its keys, so someone who chose invisible is never shown online
-//!   in between: until their arrival is done, they show as offline to everyone. Their
-//!   `last_seen_at` is then written on each membership, which the member samples are read by.
+//!   in between: until their arrival is done, they show as offline to everyone. The copy and the
+//!   key are written while the arrival's transaction holds their row, so a change of override
+//!   committed meanwhile (`app::presence_override::write`, which copies under the same lock)
+//!   reaches Valkey after it, never before to be undone. Their `last_seen_at` is then written on
+//!   each membership, which the member samples are ordered by, unless they arrive invisible: a
+//!   co-member watching the samples would otherwise see them come online.
 //! - **Listing.** Each community they belong to lists them as someone who may be online, renewed
 //!   once per margin however often their keys are set (`user:{uuid}:listed`).
 //!
@@ -26,11 +30,12 @@
 
 use crate::database::Pool;
 use crate::presence_feed::PresenceFeed;
-use crate::presence_override::PresenceOverride;
+use crate::presence_override::{ChosenPresence, PresenceOverride};
 use crate::{CommunityId, UserId};
 use aspen_schema::community_user;
 use diesel::prelude::*;
-use diesel_async::RunQueryDsl;
+use diesel_async::scoped_futures::ScopedFutureExt;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use fred::interfaces::{KeysInterface, SortedSetsInterface};
 use fred::types::{Expiration, SetOptions};
 use std::collections::{HashMap, HashSet};
@@ -170,19 +175,58 @@ impl PresenceUpkeep {
 
 impl Upkeep {
     /// Brings `arriving` online: writes their `last_seen_at`, copies their overrides to Valkey,
-    /// sets the `online` key of each whose copy landed, tells those watching them, and writes
-    /// `last_seen_at` on their memberships. The rows are locked in key order first: another
-    /// server may write some of the same people's at once (their other devices), and rows locked
-    /// in any order could deadlock.
+    /// sets the `online` key of each whose copy landed, all while their rows are held, then tells
+    /// those watching them, and writes `last_seen_at` on the memberships of those not invisible.
+    /// The rows are locked in key order: another server may write some of the same people's at
+    /// once (their other devices), and rows locked in any order could deadlock.
     async fn arrive(&self, arriving: &HashMap<UserId, bool>) {
         let ids: Vec<uuid::Uuid> = arriving.keys().map(|user| user.0).collect();
-        let rows = match self.record_arrivals(&ids).await {
-            Ok(rows) => rows,
+        let arrived = async {
+            let mut conn = self.pool.get().await?;
+            conn.transaction(|conn| {
+                async move {
+                    let rows = record_arrivals(conn.as_mut(), &ids).await?;
+                    Ok::<_, crate::Error>(self.bring_online(rows, arriving).await)
+                }
+                .scope_boxed()
+            })
+            .await
+        };
+        let (online, seen) = match arrived.await {
+            Ok(arrived) => arrived,
             Err(e) => {
                 tracing::warn!(error = %e, "failed to record when users came online");
                 return;
             }
         };
+        // After the override is copied, so those told read what the user chose.
+        for user in online {
+            self.feed.changed(user);
+        }
+        if seen.is_empty() {
+            return;
+        }
+        if let Err(e) = self.record_memberships_seen(&seen).await {
+            tracing::warn!(error = %e, "failed to record when users came online");
+        }
+    }
+
+    /// Copies each of `rows`' override to Valkey and sets their `online` keys, answering those
+    /// whose keys were set, and those of `rows` not invisible, whose memberships are marked seen.
+    async fn bring_online(
+        &self,
+        rows: Vec<Arrived>,
+        arriving: &HashMap<UserId, bool>,
+    ) -> (Vec<UserId>, Vec<uuid::Uuid>) {
+        let now = chrono::Utc::now();
+        let seen: Vec<uuid::Uuid> = rows
+            .iter()
+            .filter(|row| {
+                ChosenPresence::in_force(row.presence_override, row.presence_override_until, now)
+                    .is_none_or(|chosen| chosen.presence_override != PresenceOverride::Invisible)
+            })
+            .map(|row| row.id)
+            .collect();
         let online = rows.into_iter().map(|row| async move {
             let user = UserId(row.id);
             let bot = arriving.get(&user).copied().unwrap_or(false);
@@ -198,31 +242,19 @@ impl Upkeep {
                 crate::user_status::set_online_keys(&self.valkey, &self.feed, user, bot).await
             };
             match came.await {
-                // After the override is copied, so those told read what the user chose.
-                Ok(()) => self.feed.changed(user),
-                Err(e) => tracing::warn!(error = %e, "failed to bring a user online"),
+                Ok(()) => Some(user),
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to bring a user online");
+                    None
+                }
             }
         });
-        futures_util::future::join_all(online).await;
-        if let Err(e) = self.record_memberships_seen(&ids).await {
-            tracing::warn!(error = %e, "failed to record when users came online");
-        }
-    }
-
-    /// Writes `ids`' `last_seen_at` as now and reads back their presence overrides.
-    async fn record_arrivals(&self, ids: &[uuid::Uuid]) -> crate::Result<Vec<Arrived>> {
-        use diesel::sql_types::{Array, Uuid};
-        Ok(diesel::sql_query(
-            r#"
-            UPDATE "user" u SET last_seen_at = now()
-            FROM (SELECT id FROM "user" WHERE id = ANY($1) ORDER BY id FOR UPDATE) locked
-            WHERE u.id = locked.id
-            RETURNING u.id, u.presence_override, u.presence_override_until
-            "#,
-        )
-        .bind::<Array<Uuid>, _>(ids)
-        .load(self.pool.get().await?.as_mut())
-        .await?)
+        let online = futures_util::future::join_all(online)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+        (online, seen)
     }
 
     /// Writes `ids`' `last_seen_at` as now on each of their memberships.
@@ -327,4 +359,24 @@ impl Upkeep {
         let _: Vec<fred::types::Value> = pipeline.all().await?;
         Ok(())
     }
+}
+
+/// Writes `ids`' `last_seen_at` as now and reads back their presence overrides, holding their
+/// rows until `conn`'s transaction ends.
+async fn record_arrivals(
+    conn: &mut AsyncPgConnection,
+    ids: &[uuid::Uuid],
+) -> crate::Result<Vec<Arrived>> {
+    use diesel::sql_types::{Array, Uuid};
+    Ok(diesel::sql_query(
+        r#"
+        UPDATE "user" u SET last_seen_at = now()
+        FROM (SELECT id FROM "user" WHERE id = ANY($1) ORDER BY id FOR UPDATE) locked
+        WHERE u.id = locked.id
+        RETURNING u.id, u.presence_override, u.presence_override_until
+        "#,
+    )
+    .bind::<Array<Uuid>, _>(ids)
+    .load(conn)
+    .await?)
 }

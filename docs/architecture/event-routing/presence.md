@@ -25,7 +25,8 @@ A chosen status holds only while they are connected: offline is offline whatever
 
 - Finding `online` not set is the user coming online. Their arrival writes `user.last_seen_at`,
   copies their override (below), and only then sets `online`, so until it is done they show as
-  offline to everyone. A mark that finds the key set renews it (`SET … XX`), and one that finds it
+  offline to everyone. It writes `community_user.last_seen_at` on each of their memberships too,
+  which orders the member sample, unless they arrive invisible. A mark that finds the key set renews it (`SET … XX`), and one that finds it
   not set leaves it to the arrival.
 - What follows from either key being set is done in batches by one task per server
   (`app::presence_upkeep`), at most 100 people to a statement, on one database connection at a time:
@@ -60,7 +61,9 @@ while or until they change it (`app::presence_override`).
   changes reach Valkey in the order they commit. A transaction that fails after writing it puts back
   what is committed.
 - Coming online copies the row again (the same statement that writes `last_seen_at` reads it back),
-  so a Valkey that lost the copy has it again, and sets `online` only after the copy. Wherever
+  so a Valkey that lost the copy has it again, and sets `online` only after the copy. Both are
+  written while the arrival's transaction holds the row, so an override set meanwhile reaches Valkey
+  after them rather than being undone by them. Wherever
   `online` exists the copy does too, so someone who chose invisible is never shown online, even
   right after Valkey lost its keys. An arrival that cannot read the row, or write the copy, leaves
   `online` unset: the user shows offline, and the next mark, at most fifteen seconds later while
