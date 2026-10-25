@@ -130,16 +130,27 @@ Console account, which its signing keys come with.
   jurisdiction that requires the check, the app shows only this, and nothing else of Aspen: "Your
   device has indicated you are not old enough to use this app. We do not store your age in any
   location. This determination is made by your operating system and legal jurisdiction." The age is
-  never stored, in the app or anywhere else.
+  never stored, in the app or anywhere else. A device that reports no age range lets the person in.
 - **The app's privacy policy** is Bitcrafters', published on its domain and linked from the store
-  listings, adapted from Mastodon's with the names changed.
+  listings. It makes the promise Mastodon's iOS app policy makes, in words of its own: the app
+  collects nothing, and the deployments it connects to are covered by their own policies:
+
+  > The Aspen app, published by Bitcrafters LLC, does not collect or process any personal
+  > information about the people who use it.
+  >
+  > The app connects to Aspen deployments run by others, which may collect and process personal
+  > information. This policy does not cover them: each deployment publishes a Privacy Policy of its
+  > own, which you can read in the app or on that deployment's website.
+
+  The app itself has no terms of use; each deployment's are its own.
+
 - **Each deployment's own Privacy Policy and Terms of Use**, written by its administrators in the
   dashboard and linked from the sign-in page's footer. Aspen gives no default for either; a
-  deployment without one says so where it would be shown.
+  deployment without one shows "This deployment has not published a Privacy Policy." or "This
+  deployment has not published Terms of Use." where it would be.
 
-Both stores also need what Aspen lacks: deleting one's account in the app, accepting the terms at
-registration, a contact link, a deployment and account for the stores' reviewers, and calls that
-keep running in the background.
+Both stores also need what Aspen lacks: deleting one's account in the app, a contact link, a
+deployment and account for the stores' reviewers, and calls that keep running in the background.
 
 ## Not used
 
