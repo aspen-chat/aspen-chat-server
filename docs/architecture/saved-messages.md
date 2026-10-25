@@ -61,7 +61,8 @@ follow. It carries the message, and the save's id while it is saved (`null` once
    channel, so a deployment moderator saves no DM they are not in. Reads keep only saves whose
    message, and its channel, are live and that the user may read now
    (`app::search::readable_everywhere`: the channels they may view in their communities, the DMs
-   they are in, and both's threads).
+   they are in, and both's threads, checked as one comparison of the message's home channel, its own
+   or its thread's parent, against that list).
 3. **When the deciding permission is lost?** The save stays, unlisted.
    - Every way of losing a channel (a role's permissions, a role taken or deleted, an override, a
      move, a category deleted, a removal, a ban, leaving, a DM left) makes the reads leave it out.

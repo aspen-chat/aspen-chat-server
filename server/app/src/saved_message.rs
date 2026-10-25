@@ -167,6 +167,13 @@ pub async fn forget(
     Ok(())
 }
 
+/// The channel whose reading decides who reads a saved message's: its own, or a thread's
+/// parent. `readable_everywhere` lists only channels and DMs, never threads, so one check of
+/// this against it, which PostgreSQL hashes, stands for both.
+fn home_channel() -> diesel::expression::SqlLiteral<diesel::sql_types::Uuid> {
+    diesel::dsl::sql("COALESCE(channel.parent_channel, channel.id)")
+}
+
 /// Every save of the user's that they may read now, newest first.
 pub async fn read_saves(
     state: &GlobalServerContext,
@@ -181,11 +188,7 @@ pub async fn read_saves(
         .filter(saved_message::user.eq(user_id))
         .filter(message::deleted_at.is_null())
         .filter(channel::deleted_at.is_null())
-        .filter(
-            channel::id
-                .eq_any(readable.clone())
-                .or(channel::parent_channel.eq_any(readable)),
-        )
+        .filter(home_channel().eq_any(readable))
         .order_by(saved_message::id.desc())
         .load(conn.as_mut())
         .await?)
@@ -208,11 +211,7 @@ pub async fn read_saved_messages(
         .filter(saved_message::user.eq(user_id))
         .filter(message::deleted_at.is_null())
         .filter(channel::deleted_at.is_null())
-        .filter(
-            channel::id
-                .eq_any(readable.clone())
-                .or(channel::parent_channel.eq_any(readable)),
-        )
+        .filter(home_channel().eq_any(readable))
         .into_boxed();
     if let Some(before) = before {
         // A page after a save since removed is empty: the reader's app heard of the removal

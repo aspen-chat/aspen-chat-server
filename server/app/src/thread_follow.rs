@@ -5,7 +5,9 @@
 //! tags them by name. Bots follow only by hand. Unfollowing ends it until they follow again or take part again.
 //!
 //! A user follows at most [`MAX_THREAD_FOLLOWS`] threads on a deployment; past that, those they
-//! followed least recently, by hand or by taking part, are let go. Following a thread they may
+//! followed least recently are let go, though a follow made by taking part only ever lets go
+//! another made by taking part, and is not made when every follow they have was made by hand.
+//! A reply that tags someone who has blocked its author does not make them follow. Following a thread they may
 //! no longer read changes nothing for them: whatever it would tell them is decided by whether
 //! they may read it now. Every change is published to the user's own subject as
 //! `threadFollowChanged`, so their other devices follow.
@@ -15,11 +17,10 @@ use crate::context::GlobalServerContext;
 use crate::mention::Mentions;
 use crate::t;
 use crate::{ChannelId, EventScope, UserId, publish_event};
-use aspen_schema::{channel, thread_follow, user};
+use aspen_schema::{channel, thread_follow, user, user_block};
 use aspen_wire::message_enum::server_event::ServerEvent;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
-use diesel::upsert::excluded;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use std::collections::HashSet;
@@ -54,7 +55,7 @@ pub async fn follow(
     }
     conn.transaction(|conn| {
         async move {
-            let started = take_part(state, conn.as_mut(), &[user], thread).await?;
+            let started = take_part(state, conn.as_mut(), &[user], thread, How::ByHand).await?;
             Ok::<_, crate::Error>((
                 ThreadFollow {
                     thread,
@@ -109,15 +110,26 @@ pub struct Followed {
     pub at: DateTime<Utc>,
 }
 
+/// How a follow is made: by hand, or by taking part in the thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum How {
+    ByHand,
+    TakingPart,
+}
+
 /// Has each of `users` follow `thread`, on `conn`, which is expected to be inside the caller's
-/// transaction (the one posting the reply that makes them take part), and marks it followed now
-/// for those who followed it already, so the threads they take part in are the last let go.
-/// Returns those who began following.
+/// transaction (the one posting the reply that makes them take part, or following by hand), and
+/// marks it followed now for those who followed it already, so the threads they take part in are
+/// the last let go; a follow by hand marks it made by hand. Someone at
+/// [`MAX_THREAD_FOLLOWS`] makes room ([`make_room`]): by hand, by letting go the follow they
+/// made least recently; by taking part, only a follow also made by taking part, so with none
+/// but follows by hand they do not begin following. Returns those who began following.
 pub async fn take_part(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     users: &[UserId],
     thread: ChannelId,
+    how: How,
 ) -> crate::Result<Followed> {
     let at = Utc::now();
     if users.is_empty() {
@@ -126,69 +138,54 @@ pub async fn take_part(
             at,
         });
     }
-    let already: HashSet<UserId> = thread_follow::table
-        .select(thread_follow::user)
-        .filter(thread_follow::thread.eq(thread))
-        .filter(thread_follow::user.eq_any(users))
-        .load::<UserId>(conn)
-        .await?
-        .into_iter()
-        .collect();
-    let rows: Vec<_> = users
-        .iter()
-        .map(|user| {
-            (
-                thread_follow::user.eq(*user),
+    let already: Vec<UserId> = diesel::update(
+        thread_follow::table
+            .filter(thread_follow::thread.eq(thread))
+            .filter(thread_follow::user.eq_any(users)),
+    )
+    .set((
+        thread_follow::followed_at.eq(at),
+        thread_follow::by_hand
+            .eq(thread_follow::by_hand
+                .or((how == How::ByHand).into_sql::<diesel::sql_types::Bool>())),
+    ))
+    .returning(thread_follow::user)
+    .get_results(conn)
+    .await?;
+    let already: HashSet<UserId> = already.into_iter().collect();
+    let mut began = Vec::new();
+    for user in users.iter().copied().filter(|user| !already.contains(user)) {
+        let Some(let_go) = make_room(conn, user, how).await? else {
+            continue;
+        };
+        let made = diesel::insert_into(thread_follow::table)
+            .values((
+                thread_follow::user.eq(user),
                 thread_follow::thread.eq(thread),
                 thread_follow::followed_at.eq(at),
-            )
-        })
-        .collect();
-    diesel::insert_into(thread_follow::table)
-        .values(rows)
-        .on_conflict((thread_follow::user, thread_follow::thread))
-        .do_update()
-        .set(thread_follow::followed_at.eq(excluded(thread_follow::followed_at)))
-        .execute(conn)
-        .await?;
-    let began: Vec<UserId> = users
-        .iter()
-        .copied()
-        .filter(|user| !already.contains(user))
-        .collect();
-    for user in &began {
-        publish_event(
-            state,
-            conn,
-            EventScope::User(*user),
-            &ServerEvent::ThreadFollowChanged {
-                thread,
-                following: true,
-            },
-        )
-        .await?;
-        let over: Vec<ChannelId> = thread_follow::table
-            .select(thread_follow::thread)
-            .filter(thread_follow::user.eq(user))
-            .order_by(thread_follow::followed_at.desc())
-            .offset(MAX_THREAD_FOLLOWS)
-            .load(conn)
+                thread_follow::by_hand.eq(how == How::ByHand),
+            ))
+            .on_conflict_do_nothing()
+            .execute(conn)
             .await?;
-        if over.is_empty() {
-            continue;
-        }
-        diesel::delete(
-            thread_follow::table
-                .filter(thread_follow::user.eq(user))
-                .filter(thread_follow::thread.eq_any(&over)),
-        )
-        .execute(conn)
-        .await?;
-        for let_go in over {
+        if made == 1 {
+            began.push(user);
             publish_event(
                 state,
                 conn,
-                EventScope::User(*user),
+                EventScope::User(user),
+                &ServerEvent::ThreadFollowChanged {
+                    thread,
+                    following: true,
+                },
+            )
+            .await?;
+        }
+        for let_go in let_go {
+            publish_event(
+                state,
+                conn,
+                EventScope::User(user),
                 &ServerEvent::ThreadFollowChanged {
                     thread: let_go,
                     following: false,
@@ -198,6 +195,56 @@ pub async fn take_part(
         }
     }
     Ok(Followed { users: began, at })
+}
+
+/// Lets go what `user` follows past [`MAX_THREAD_FOLLOWS`] less one, the least recently
+/// followed first, so one more follow made `how` fits: by hand, any follow
+/// (`thread_follow_by_age`); by taking part, only those also made by taking part
+/// (`thread_follow_automatic_by_age`). Answers the threads let go, or `None` when there is no
+/// room to make.
+async fn make_room(
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    how: How,
+) -> crate::Result<Option<Vec<ChannelId>>> {
+    let held: i64 = diesel::sql_query(
+        "SELECT count(*) AS count FROM (SELECT 1 FROM thread_follow WHERE \"user\" = $1 \
+         LIMIT $2) follows",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(user)
+    .bind::<diesel::sql_types::BigInt, _>(MAX_THREAD_FOLLOWS)
+    .get_result::<Count>(conn)
+    .await?
+    .count;
+    if held < MAX_THREAD_FOLLOWS {
+        return Ok(Some(Vec::new()));
+    }
+    let mut oldest = thread_follow::table
+        .select(thread_follow::thread)
+        .filter(thread_follow::user.eq(user))
+        .order_by(thread_follow::followed_at.asc())
+        .limit(1)
+        .into_boxed();
+    if how == How::TakingPart {
+        oldest = oldest.filter(thread_follow::by_hand.eq(false));
+    }
+    let Some(let_go) = oldest.first::<ChannelId>(conn).await.optional()? else {
+        return Ok(None);
+    };
+    diesel::delete(
+        thread_follow::table
+            .filter(thread_follow::user.eq(user))
+            .filter(thread_follow::thread.eq(let_go)),
+    )
+    .execute(conn)
+    .await?;
+    Ok(Some(vec![let_go]))
+}
+
+#[derive(QueryableByName)]
+struct Count {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    count: i64,
 }
 
 /// The threads the user follows that they may read now.
@@ -219,7 +266,8 @@ pub async fn read_follows(
 }
 
 /// Has those a new reply in `thread` makes take part follow it: its author, and those it tags by
-/// name who may read it, bots aside. On `conn`, inside the transaction posting the reply.
+/// name who may read it and have not blocked its author, bots aside. On `conn`, inside the
+/// transaction posting the reply.
 pub async fn reply_posted(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -236,6 +284,18 @@ pub async fn reply_posted(
     ) && !tagged.is_empty()
     {
         tagged = crate::visibility::viewers(conn, community, &tagged, parent).await?;
+    }
+    if !tagged.is_empty() {
+        let tagged_list: Vec<UserId> = tagged.iter().copied().collect();
+        let blocking: Vec<UserId> = user_block::table
+            .select(user_block::blocker)
+            .filter(user_block::blocked.eq(author))
+            .filter(user_block::blocker.eq_any(&tagged_list))
+            .load(conn)
+            .await?;
+        for blocker in blocking {
+            tagged.remove(&blocker);
+        }
     }
     let users: Vec<UserId> = std::iter::once(author).chain(tagged).collect();
     took_part(state, conn, &users, thread.id).await
@@ -258,6 +318,6 @@ pub async fn took_part(
         .filter(user::deleted_at.is_null())
         .load(conn)
         .await?;
-    take_part(state, conn, &people, thread).await?;
+    take_part(state, conn, &people, thread, How::TakingPart).await?;
     Ok(())
 }

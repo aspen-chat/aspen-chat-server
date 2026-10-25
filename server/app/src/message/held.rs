@@ -145,9 +145,20 @@ pub async fn post(
             let held = conn
                 .transaction::<_, crate::Error, _>(|conn| {
                     async move {
-                        let channel =
-                            super::made(state, conn.as_mut(), author, channel, unmade.as_ref())
+                        let (channel, made_thread) = match unmade.as_ref() {
+                            Some(unmade) => {
+                                let (thread, made) = crate::thread::open_in(
+                                    state,
+                                    conn.as_mut(),
+                                    author,
+                                    unmade.starter,
+                                    unmade.id,
+                                )
                                 .await?;
+                                (thread.id, made)
+                            }
+                            None => (channel, false),
+                        };
                         super::check_posting(
                             state,
                             conn.as_mut(),
@@ -194,6 +205,7 @@ pub async fn post(
                                 held_message::tags_replied.eq(held.tags_replied),
                                 held_message::locale.eq(&held.locale),
                                 held_message::held_at.eq(held.held_at),
+                                held_message::made_thread.eq(made_thread),
                             ))
                             .execute(conn.as_mut())
                             .await?;
@@ -208,12 +220,26 @@ pub async fn post(
             return Ok(Posted::Held(held));
         }
     }
-    // A busy channel's mana (`app::mana`): checked once the author is known to be allowed to
-    // post, so that only those who could post spend it. A reply that makes its thread goes
-    // ahead, since a new thread's pool is full.
+    // A busy channel's mana (`app::mana`): decided once the author is known to be allowed to
+    // post what they sent, with its attachments and what it replies to, so that only what
+    // could be posted spends it. A reply that makes its thread goes ahead, since a new
+    // thread's pool is full, though its echo spends the parent's (`post_now`).
     let mut conn = state.connection_pool.get().await?;
     let (channel, unmade) = super::resolve(conn.as_mut(), to).await?;
-    if unmade.is_none() {
+    if let Some(unmade) = &unmade {
+        if reply.is_some() {
+            return Err(crate::Error::Validation(t!("replyElsewhere")));
+        }
+        super::check_first_reply(
+            state,
+            conn.as_mut(),
+            author,
+            unmade,
+            &attachments,
+            echo_to_parent,
+        )
+        .await?;
+    } else {
         super::check_posting(
             state,
             conn.as_mut(),
@@ -223,11 +249,11 @@ pub async fn post(
             echo_to_parent,
         )
         .await?;
+        if let Some(reply) = reply {
+            super::reply::check(conn.as_mut(), channel, reply.to, false).await?;
+        }
         let cost = mana::message_cost(&state.settings(), &content, attachments.len());
         if mana::decide_for(state, conn.as_mut(), author, channel, cost).await? == Decision::Wait {
-            if let Some(reply) = reply {
-                super::reply::check(conn.as_mut(), channel, reply.to, false).await?;
-            }
             drop(conn);
             let held = queue::wait(
                 state,
@@ -266,7 +292,8 @@ pub async fn post(
 
 /// Posts a message now (`super::post`), with its echo to the thread's parent when the parent's
 /// pool can pay for it; when it cannot, the reply is posted alone and its echo waits in the
-/// parent's queue, as an item of its author's.
+/// parent's queue, as an item of its author's. The echo's mana is decided only for an author
+/// who may send in the parent, as posting the echo takes, so no one else spends its mana.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn post_now(
     state: &GlobalServerContext,
@@ -284,6 +311,9 @@ pub(crate) async fn post_now(
     if echo_to_parent {
         let mut conn = state.connection_pool.get().await?;
         if let Some(parent) = super::parent_of(conn.as_mut(), to).await? {
+            crate::permissions::channel_access(state, conn.as_mut(), author, parent)
+                .await?
+                .require(crate::permissions::Permissions::SEND_MESSAGES)?;
             let cost = mana::message_cost(&state.settings(), &content, attachments.len());
             if mana::decide_for(state, conn.as_mut(), author, parent, cost).await? == Decision::Wait
             {
@@ -402,8 +432,9 @@ pub(super) async fn take(conn: &mut AsyncPgConnection, id: HeldMessageId) -> cra
 }
 
 /// Cancels a held message of `author`'s that has not been posted, whatever it waits for, and
-/// tells their apps. A first reply that made its thread as it was held takes the thread with
-/// it, as a dropped one does. Not found when it is not theirs, or already posted.
+/// tells their apps. A first reply that made its thread as it was held (`made_thread`) takes
+/// the thread with it, as a dropped one does. Not found when it is not theirs, or already
+/// posted.
 pub async fn cancel(
     state: &GlobalServerContext,
     author: UserId,
@@ -412,11 +443,11 @@ pub async fn cancel(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction::<_, crate::Error, _>(|conn| {
         async move {
-            let channel: ChannelId = diesel::delete(
+            let (channel, made_thread): (ChannelId, bool) = diesel::delete(
                 held_message::table
                     .filter(held_message::id.eq(id).and(held_message::author.eq(author))),
             )
-            .returning(held_message::channel)
+            .returning((held_message::channel, held_message::made_thread))
             .get_result(conn)
             .await?;
             crate::publish_event(
@@ -426,7 +457,9 @@ pub async fn cancel(
                 &ServerEvent::HeldMessageCancelled { held: id, channel },
             )
             .await?;
-            crate::thread::remove_if_unreplied(state, conn, channel).await?;
+            if made_thread {
+                crate::thread::remove_if_unreplied(state, conn, channel).await?;
+            }
             Ok(())
         }
         .scope_boxed()
@@ -588,7 +621,7 @@ pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::
         mana::decide_for(state, conn.as_mut(), held.author, held.channel, cost).await
     };
     if let Ok(Decision::Wait) = decided {
-        queue::wait_held(state, held.id, held.channel, cost).await?;
+        queue::wait_held(state, held.id, held.author, held.channel, cost).await?;
         return Ok(Outcome::Done);
     }
     release(state, held, jobs::last_attempt(job)).await
@@ -893,9 +926,9 @@ pub async fn drop_held_by_step(
 }
 
 /// Drops a held message that will not be posted and tells its author's apps why. When it was the
-/// first reply of a thread, which it made as it was held (`post`), and nothing else was posted
-/// or waits there, the thread goes with it (`thread::remove_if_unreplied`), in the same
-/// transaction.
+/// first reply of a thread, which it made as it was held (`post`, `made_thread`), and nothing
+/// else was posted or waits there, the thread goes with it (`thread::remove_if_unreplied`), in
+/// the same transaction.
 pub(crate) async fn drop_held(
     state: &GlobalServerContext,
     id: HeldMessageId,
@@ -906,9 +939,15 @@ pub(crate) async fn drop_held(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction::<_, crate::Error, _>(|conn| {
         async move {
-            if take(conn, id).await.is_err() {
+            let made_thread: Option<bool> = diesel::delete(held_message::table)
+                .filter(held_message::id.eq(id))
+                .returning(held_message::made_thread)
+                .get_result(conn)
+                .await
+                .optional()?;
+            let Some(made_thread) = made_thread else {
                 return Ok(());
-            }
+            };
             crate::publish_event(
                 state,
                 conn,
@@ -920,7 +959,9 @@ pub(crate) async fn drop_held(
                 },
             )
             .await?;
-            crate::thread::remove_if_unreplied(state, conn, channel).await?;
+            if made_thread {
+                crate::thread::remove_if_unreplied(state, conn, channel).await?;
+            }
             Ok(())
         }
         .scope_boxed()

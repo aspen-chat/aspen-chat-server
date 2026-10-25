@@ -1,5 +1,7 @@
 //! Secrets the deployment's servers share and nothing outside them knows, kept in
-//! `server_secret`, each made by the first server to start and read by every one as it starts.
+//! `server_secret`, each made by the first server to start and read by every one as it starts:
+//! the keys of mailed codes, join tokens, device credentials, session and bot tokens, and the
+//! order of equals in a channel's mana queue (`MANA_ORDER`).
 
 use crate::CHACHA_RNG;
 use aspen_schema::server_secret;
@@ -18,6 +20,10 @@ const JOIN_TOKENS: &str = "joinTokens";
 pub const DEVICES: &str = "devices";
 /// The name of the secret session and bot tokens are signed with (`app::signed_token`).
 pub const TOKENS: &str = "tokens";
+/// The name of the secret that orders authors equal in priority in a channel's mana queue
+/// (`app::mana::queue`): an HMAC under it of the channel, the author, and their username, which
+/// no one outside the servers can work out, so no one can choose a name that wins its ties.
+pub const MANA_ORDER: &str = "manaOrder";
 
 /// Makes the secret named `name` with `make` when the deployment has none, and reads it. Servers
 /// starting together make one: the name is the key of its row.

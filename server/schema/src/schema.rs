@@ -395,6 +395,7 @@ diesel::table! {
         target -> Nullable<Uuid>,
         payload -> Nullable<Jsonb>,
         cost -> Int4,
+        made_thread -> Bool,
     }
 }
 
@@ -850,6 +851,7 @@ diesel::table! {
         user -> Uuid,
         thread -> Uuid,
         followed_at -> Timestamptz,
+        by_hand -> Bool,
     }
 }
 

@@ -88,11 +88,17 @@ pub fn check_channel_settings(
 }
 
 /// A message's text as glyphs: grapheme clusters, what a reader sees as one character, in
-/// every script alike. A tag (`<@id>`, `<@&id>`), a custom emoji (`<:id>`), and `@everyone`
-/// are one glyph each however long their stored form; each is ASCII, one cluster a byte, so
-/// counting it whole and taking back the rest is exact.
+/// every script alike. A cluster longer than [`GLYPH_SCALARS`] scalars costs one more for each
+/// scalar past them, so text stacked into a few clusters (a chain of emoji joined by ZWJ,
+/// combining marks heaped on one letter) costs what its characters would apart. A tag
+/// (`<@id>`, `<@&id>`), a custom emoji (`<:id>`), and `@everyone` are one glyph each however
+/// long their stored form; each is ASCII, one cluster a byte, so counting it whole and taking
+/// back the rest is exact.
 pub fn glyphs(content: &str) -> u32 {
-    let mut count = content.graphemes(true).count();
+    let mut count: usize = content
+        .graphemes(true)
+        .map(|cluster| 1 + cluster.chars().count().saturating_sub(GLYPH_SCALARS))
+        .sum();
     let mut rest = content;
     while let Some(at) = rest.find('<') {
         rest = &rest[at..];
@@ -112,6 +118,11 @@ pub fn glyphs(content: &str) -> u32 {
     count = count.saturating_sub(content.matches(EVERYONE).count() * (EVERYONE.len() - 1));
     u32::try_from(count).unwrap_or(u32::MAX)
 }
+
+/// The most scalars one glyph holds at the cost of one: the longest emoji sequence Unicode
+/// recommends (a kiss of two people with skin tones, 👩🏻‍❤️‍💋‍👨🏼) is ten, and no script's
+/// letter with its marks comes near it.
+pub const GLYPH_SCALARS: usize = 10;
 
 /// `<:` and a hyphenated UUID and `>`.
 const EMOJI_TOKEN_LEN: usize = 2 + 36 + 1;
@@ -203,7 +214,8 @@ pub async fn pool_of(
 /// A pool's level as of its latest tick, for viewers (`app::mana::live`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Level {
-    /// In thousandths of mana; below zero in debt.
+    /// In thousandths of mana, what its queue's first authors have been credited included; below
+    /// zero in debt.
     pub level: i64,
     /// The time of the tick it is as of, in Unix milliseconds.
     pub at_ms: i64,
@@ -215,9 +227,11 @@ pub struct Level {
 /// (into debt then), `bypass` always spends. Nothing goes below half the capacity in debt. A pool
 /// is a hash of `level` and `tick` (the tick it is as of, 200 ms each since 1970); one Valkey
 /// does not hold is full, and one that fills again is forgotten, so a quiet channel keeps no
-/// key. What is spent is added to its sender, `ARGV[5]` (empty for none), in whole mana, in
-/// `KEYS[2]`, this minute's [`sent_key`], kept `ARGV[6]` milliseconds ([`top_senders`]).
-/// Answers whether it spent, the level, and the tick's time in milliseconds.
+/// key. `KEYS[3]` is the pool's [`credit_key`], what its queue's first authors have been credited
+/// ([`SHARE`]): it is the pool's mana too, so the level never rises above the capacity less it,
+/// and the level answered includes it. What is spent is added to its sender, `ARGV[5]` (empty for
+/// none), in whole mana, in `KEYS[2]`, this minute's [`sent_key`], kept `ARGV[6]` milliseconds
+/// ([`top_senders`]). Answers whether it spent, the level, and the tick's time in milliseconds.
 const POOL: &str = r"
 local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
@@ -237,8 +251,12 @@ end
 if tick > last then
   level = level + (tick - last) * per
 end
-if level > max then
-  level = max
+local held = 0
+for _, credit in ipairs(redis.call('HVALS', KEYS[3])) do
+  held = held + tonumber(credit)
+end
+if level > max - held then
+  level = max - held
 end
 local spent = 0
 if mode == 'bypass' or (mode == 'pay' and (level >= cost or level == max)) then
@@ -256,7 +274,143 @@ else
   local ticks = math.ceil((max - level) / per)
   redis.call('PEXPIRE', KEYS[1], ticks * 200 + 1000)
 end
-return {spent, level, tick * 200}
+return {spent, level + held, tick * 200}
+";
+
+/// A pool's queue's allocation (`app::mana::queue`), atomically on Valkey's clock, beside
+/// [`POOL`]'s pool (`KEYS[1]`), its [`credit_key`] (`KEYS[2]`), and this minute's [`sent_key`]
+/// (`KEYS[3]`). `ARGV` are thousandths earned a tick, the capacity in thousandths, the mode, how
+/// long a minute's spending is kept, and then, for each author given, their id, their oldest
+/// row's cost in thousandths, and their weight, in thirds.
+///
+/// `share` is given the queue's first authors, at most three, in order: credit held by anyone
+/// else goes back to the pool, and whatever the pool then holds above zero is split into three
+/// portions, each author credited their weight's (with the rounding's remainder to the first).
+/// It answers, for each, whether their row can be paid: their credit covers it, or, while the
+/// pool is not in debt, their credit has reached their weight's share of the capacity, as a full
+/// pool pays anything. `pay` is given one author and pays their row so: from their credit, or
+/// with all of it and the rest from the pool, into debt down to half the capacity. Credit is
+/// kept a minute past the last call, which a running drainer makes five times a second. Answers
+/// the level (with the credit held) and the tick's time, then whether each author can be paid
+/// (`share`) or whether the one was (`pay`).
+const SHARE: &str = r"
+local time = redis.call('TIME')
+local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+local tick = math.floor(now / 200)
+local per = tonumber(ARGV[1])
+local max = tonumber(ARGV[2])
+local mode = ARGV[3]
+local floor = -math.floor(max / 2)
+local state = redis.call('HMGET', KEYS[1], 'level', 'tick')
+local level = tonumber(state[1])
+local last = tonumber(state[2])
+if level == nil or last == nil then
+  level = max
+  last = tick
+end
+if tick > last then
+  level = level + (tick - last) * per
+end
+local credit = {}
+local flat = redis.call('HGETALL', KEYS[2])
+for i = 1, #flat, 2 do
+  credit[flat[i]] = tonumber(flat[i + 1])
+end
+local authors, costs, weights = {}, {}, {}
+for i = 5, #ARGV, 3 do
+  authors[#authors + 1] = ARGV[i]
+  costs[#costs + 1] = tonumber(ARGV[i + 1])
+  weights[#weights + 1] = tonumber(ARGV[i + 2])
+end
+local function sum()
+  local held = 0
+  for _, c in pairs(credit) do
+    held = held + c
+  end
+  return held
+end
+local function payable(i)
+  local c = credit[authors[i]] or 0
+  return c >= costs[i] or (level >= 0 and c >= math.floor(weights[i] * max / 3))
+end
+local answer = {}
+if mode == 'share' then
+  local top = {}
+  for _, author in ipairs(authors) do
+    top[author] = true
+  end
+  for author, c in pairs(credit) do
+    if not top[author] then
+      level = level + c
+      credit[author] = nil
+    end
+  end
+  local held = sum()
+  if level > max - held then
+    level = max - held
+  end
+  if level > 0 and #authors > 0 then
+    local portion = math.floor(level / 3)
+    for i, author in ipairs(authors) do
+      local add = weights[i] * portion
+      if i == 1 then
+        add = add + level - 3 * portion
+      end
+      credit[author] = (credit[author] or 0) + add
+    end
+    level = 0
+  end
+  for i = 1, #authors do
+    answer[i] = payable(i) and 1 or 0
+  end
+else
+  local held = sum()
+  if level > max - held then
+    level = max - held
+  end
+  local author, cost = authors[1], costs[1]
+  local c = credit[author] or 0
+  local spent = 0
+  if c >= cost then
+    credit[author] = c - cost
+    spent = 1
+  elseif payable(1) then
+    level = math.max(level - (cost - c), floor)
+    credit[author] = 0
+    spent = 1
+  end
+  if credit[author] == 0 then
+    credit[author] = nil
+  end
+  if spent == 1 and cost > 0 then
+    redis.call('ZINCRBY', KEYS[3], math.floor(cost / 1000), author)
+    redis.call('PEXPIRE', KEYS[3], tonumber(ARGV[4]))
+  end
+  answer[1] = spent
+end
+redis.call('DEL', KEYS[2])
+local held = 0
+for author, c in pairs(credit) do
+  if c > 0 then
+    redis.call('HSET', KEYS[2], author, c)
+    held = held + c
+  end
+end
+if held > 0 then
+  redis.call('PEXPIRE', KEYS[2], 60000)
+end
+if level >= max then
+  redis.call('DEL', KEYS[1])
+else
+  redis.call('HSET', KEYS[1], 'level', level, 'tick', tick)
+  local ticks = math.ceil((max - level) / per)
+  redis.call('PEXPIRE', KEYS[1], ticks * 200 + 1000)
+end
+local out = {level + held, tick * 200}
+for i = 1, #answer do
+  out[#out + 1] = answer[i]
+end
+return out
 ";
 
 #[derive(Clone, Copy)]
@@ -278,6 +432,12 @@ impl Mode {
 
 fn key(channel: ChannelId) -> String {
     format!("mana:{}", channel.0)
+}
+
+/// What each of a pool's queue's first authors has been credited of its mana ([`SHARE`]), in
+/// thousandths: a hash of user ids.
+fn credit_key(channel: ChannelId) -> String {
+    format!("mana:{}:credit", channel.0)
 }
 
 /// How far back [`top_senders`] reads: the past hour, a minute at a time.
@@ -381,7 +541,11 @@ async fn run(
         .valkey
         .eval(
             POOL,
-            vec![key(pool.channel), sent_key(pool.channel, this_minute())],
+            vec![
+                key(pool.channel),
+                sent_key(pool.channel, this_minute()),
+                credit_key(pool.channel),
+            ],
             vec![
                 per_tick.to_string(),
                 (i64::from(pool.settings.max) * MILLI).to_string(),
@@ -462,17 +626,96 @@ pub async fn decide_for(
     decide(state, conn, &pool, author, bypass, cost).await
 }
 
-/// Pays for a waiting message as the pool's drainer posts it: whether the pool held the cost,
-/// or was full. Mana that cannot be counted pays.
-pub async fn pay_waiting(
+/// One of a pool's queue's first three authors, as [`share`] and [`pay_turn`] take them: their
+/// oldest waiting row's cost, and how many of the three portions of what the pool earns they are
+/// credited ([`WEIGHTS`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Turn {
+    pub author: crate::UserId,
+    pub cost: u32,
+    pub weight: u32,
+}
+
+/// The portions, in thirds, the first authors of a queue are credited of what its pool earns,
+/// by how many wait: one takes all three, two take two and one, three take one each.
+pub const WEIGHTS: [&[u32]; 3] = [&[3], &[2, 1], &[1, 1, 1]];
+
+/// The weights of the first of `waiting` authors, in queue order: none past the third.
+pub fn weights(waiting: usize) -> &'static [u32] {
+    match waiting {
+        0 => &[],
+        1..=3 => WEIGHTS[waiting - 1],
+        _ => WEIGHTS[2],
+    }
+}
+
+async fn allot(
     state: &GlobalServerContext,
     pool: &Pool,
-    sender: crate::UserId,
-    cost: u32,
-) -> bool {
-    spend(state, pool, cost, Mode::Pay, sender)
+    mode: &str,
+    turns: &[Turn],
+) -> Result<Vec<i64>, fred::error::Error> {
+    let per_tick = i64::from(pool.settings.recharge) * MILLI * 200 / 1000;
+    let mut args = vec![
+        per_tick.to_string(),
+        (i64::from(pool.settings.max) * MILLI).to_string(),
+        mode.to_string(),
+        ((SENT_MINUTES + 1) * 60_000).to_string(),
+    ];
+    for turn in turns {
+        args.push(turn.author.0.to_string());
+        args.push((i64::from(turn.cost) * MILLI).to_string());
+        args.push(turn.weight.to_string());
+    }
+    state
+        .valkey
+        .eval(
+            SHARE,
+            vec![
+                key(pool.channel),
+                credit_key(pool.channel),
+                sent_key(pool.channel, this_minute()),
+            ],
+            args,
+        )
         .await
-        .unwrap_or(true)
+}
+
+/// Credits `turns`, a pool's queue's first authors in order, with what the pool has earned, and
+/// gives back to the pool what anyone else holds ([`SHARE`]): with none, everything held goes
+/// back, as when the queue empties. Answers, for each, whether their oldest row can now be paid
+/// for; every one when Valkey cannot count, as mana that cannot be counted lets everything
+/// through.
+pub async fn share(state: &GlobalServerContext, pool: &Pool, turns: &[Turn]) -> Vec<bool> {
+    match allot(state, pool, "share", turns).await {
+        Ok(answer) => (0..turns.len())
+            .map(|at| answer.get(2 + at) == Some(&1))
+            .collect(),
+        Err(error) => {
+            unavailable(&error);
+            vec![true; turns.len()]
+        }
+    }
+}
+
+/// Pays for `turn`'s oldest row as the pool's drainer posts it, from what its author has been
+/// credited, or with all of it and the rest into debt once it has reached their share of the
+/// capacity, telling viewers of the new level. Whether it was paid; it is when Valkey cannot
+/// count.
+pub async fn pay_turn(state: &GlobalServerContext, pool: &Pool, turn: Turn) -> bool {
+    match allot(state, pool, "pay", &[turn]).await {
+        Ok(answer) => {
+            let paid = answer.get(2) == Some(&1);
+            if paid && let [level, at_ms, ..] = answer[..] {
+                live::changed(state, pool, Level { level, at_ms }).await;
+            }
+            paid
+        }
+        Err(error) => {
+            unavailable(&error);
+            true
+        }
+    }
 }
 
 /// Spends, telling viewers of the new level; `None` when Valkey cannot count it.
@@ -535,6 +778,33 @@ mod tests {
         assert_eq!(glyphs("🇯🇵"), 1);
         // A line break of CR and LF is one.
         assert_eq!(glyphs("a\r\nb"), 3);
+        // Every emoji sequence Unicode recommends is one, the longest included, and so is
+        // England's flag, a tag sequence.
+        assert_eq!(glyphs("👩🏻‍❤️‍💋‍👨🏼"), 1);
+        assert_eq!(glyphs("👨‍👩‍👧‍👦"), 1);
+        assert_eq!(
+            glyphs("🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}"),
+            1
+        );
+        // Indic conjuncts and Hangul, composed or as jamo, cost a glyph each.
+        assert_eq!(glyphs("क्षत्रिय"), 3);
+        assert_eq!(glyphs("नमस्ते"), 3);
+        assert_eq!(glyphs("한국어"), 3);
+        assert_eq!(glyphs("\u{1112}\u{1161}\u{11ab}"), 1);
+        assert_eq!(glyphs("ཧྐྵྨླྺྼྻྂ"), 1);
+    }
+
+    #[test]
+    fn a_stacked_cluster_costs_its_scalars_past_the_first_ten() {
+        // A hundred emoji in one ZWJ chain: 199 scalars.
+        let chain = vec!["😀"; 100].join("\u{200d}");
+        assert_eq!(glyphs(&chain), 1 + 199 - 10);
+        // A letter under a thousand combining marks.
+        let zalgo = format!("a{}", "\u{0301}".repeat(1000));
+        assert_eq!(glyphs(&zalgo), 1 + 1001 - 10);
+        // Ten scalars are one glyph; eleven are two.
+        assert_eq!(glyphs(&format!("a{}", "\u{0301}".repeat(9))), 1);
+        assert_eq!(glyphs(&format!("a{}", "\u{0301}".repeat(10))), 2);
     }
 
     #[test]
@@ -559,6 +829,174 @@ mod tests {
         assert_eq!(added("hello", "hello world", 0), 6);
         assert_eq!(added("hello world", "hi", 0), 0);
         assert_eq!(added("hello", "jello", 1), 30);
+    }
+
+    /// Uses the Valkey of `docker-compose.yaml`, or `VALKEY_URL`.
+    async fn test_valkey() -> fred::clients::Client {
+        use fred::interfaces::ClientLike;
+        let url = std::env::var("VALKEY_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
+        let client = fred::clients::Client::new(
+            fred::prelude::Config::from_url(&url).unwrap(),
+            None,
+            None,
+            None,
+        );
+        client
+            .init()
+            .await
+            .expect("Valkey from docker-compose.yaml");
+        client
+    }
+
+    /// A pool of 100 mana earning 10 a second: 2,000 thousandths a tick.
+    const PER: i64 = 2_000;
+    const MAX: i64 = 100_000;
+
+    async fn allot_on(
+        valkey: &fred::clients::Client,
+        channel: ChannelId,
+        mode: &str,
+        turns: &[(crate::UserId, i64, u32)],
+    ) -> Vec<i64> {
+        let mut args = vec![
+            PER.to_string(),
+            MAX.to_string(),
+            mode.to_string(),
+            "60000".to_string(),
+        ];
+        for (author, cost, weight) in turns {
+            args.extend([author.0.to_string(), cost.to_string(), weight.to_string()]);
+        }
+        valkey
+            .eval(
+                SHARE,
+                vec![key(channel), credit_key(channel), sent_key(channel, 0)],
+                args,
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn credit_of(
+        valkey: &fred::clients::Client,
+        channel: ChannelId,
+        author: crate::UserId,
+    ) -> i64 {
+        use fred::interfaces::HashesInterface;
+        let credit: Option<i64> = valkey
+            .hget(credit_key(channel), author.0.to_string())
+            .await
+            .unwrap();
+        credit.unwrap_or(0)
+    }
+
+    async fn forget(valkey: &fred::clients::Client, channel: ChannelId) {
+        use fred::interfaces::KeysInterface;
+        let _: i64 = valkey
+            .del(vec![
+                key(channel),
+                credit_key(channel),
+                sent_key(channel, 0),
+            ])
+            .await
+            .unwrap();
+    }
+
+    fn user(n: u128) -> crate::UserId {
+        crate::UserId(uuid::Uuid::from_u128(n))
+    }
+
+    #[tokio::test]
+    async fn the_first_three_waiting_are_credited_a_third_each_and_paid_from_it() {
+        let valkey = test_valkey().await;
+        let channel = ChannelId(uuid::Uuid::now_v7());
+        let (a, b, c, d) = (user(1), user(2), user(3), user(4));
+        // A full pool, shared by three: a third each, the remainder to the first.
+        let answer = allot_on(
+            &valkey,
+            channel,
+            "share",
+            &[(a, 30_000, 1), (b, 40_000, 1), (c, 20_000, 1)],
+        )
+        .await;
+        assert_eq!(answer[0], MAX, "the level counts what is credited");
+        // b's row costs more than its credit, which is its whole share of the pool, so it may
+        // post into debt.
+        assert_eq!(&answer[2..], &[1, 1, 1]);
+        assert_eq!(credit_of(&valkey, channel, a).await, 33_334);
+        assert_eq!(credit_of(&valkey, channel, b).await, 33_333);
+        // Paid from their credit, the rest staying theirs.
+        let paid = allot_on(&valkey, channel, "pay", &[(a, 30_000, 1)]).await;
+        assert_eq!(paid[2], 1);
+        assert_eq!(credit_of(&valkey, channel, a).await, 3_334);
+        assert!(paid[0] <= MAX - 30_000 + 2 * PER);
+        // One with no credit is refused, and others keep theirs.
+        let refused = allot_on(&valkey, channel, "pay", &[(d, 1_000, 1)]).await;
+        assert_eq!(refused[2], 0);
+        assert_eq!(credit_of(&valkey, channel, b).await, 33_333);
+        // Out of the first three, a's credit goes back to the pool, and is shared again.
+        let answer = allot_on(
+            &valkey,
+            channel,
+            "share",
+            &[(b, 40_000, 1), (c, 20_000, 1), (d, 1_000, 1)],
+        )
+        .await;
+        assert_eq!(credit_of(&valkey, channel, a).await, 0);
+        assert!(credit_of(&valkey, channel, d).await >= 1_111);
+        assert!(answer[0] <= MAX);
+        // With no one waiting, everything goes back.
+        allot_on(&valkey, channel, "share", &[]).await;
+        for author in [a, b, c, d] {
+            assert_eq!(credit_of(&valkey, channel, author).await, 0);
+        }
+        forget(&valkey, channel).await;
+    }
+
+    #[tokio::test]
+    async fn two_waiting_take_two_thirds_and_one() {
+        let valkey = test_valkey().await;
+        let channel = ChannelId(uuid::Uuid::now_v7());
+        let (a, b) = (user(1), user(2));
+        allot_on(
+            &valkey,
+            channel,
+            "share",
+            &[(a, 90_000, weights(2)[0]), (b, 90_000, weights(2)[1])],
+        )
+        .await;
+        assert_eq!(credit_of(&valkey, channel, a).await, 66_667);
+        assert_eq!(credit_of(&valkey, channel, b).await, 33_333);
+        forget(&valkey, channel).await;
+    }
+
+    #[tokio::test]
+    async fn a_row_larger_than_a_share_of_the_pool_posts_into_debt_once_the_share_is_held() {
+        let valkey = test_valkey().await;
+        let channel = ChannelId(uuid::Uuid::now_v7());
+        let (a, b) = (user(1), user(2));
+        // Alone, with the whole pool credited: a row costing more than the pool posts, into
+        // debt down to half the capacity.
+        let answer = allot_on(&valkey, channel, "share", &[(a, 150_000, 3)]).await;
+        assert_eq!(answer[2], 1);
+        let paid = allot_on(&valkey, channel, "pay", &[(a, 150_000, 3)]).await;
+        assert_eq!(paid[2], 1);
+        assert!(paid[0] <= -MAX / 2 + 2 * PER, "{}", paid[0]);
+        assert_eq!(credit_of(&valkey, channel, a).await, 0);
+        // In debt nothing is shared out, and nothing more posts into debt.
+        let answer = allot_on(&valkey, channel, "share", &[(b, 150_000, 3)]).await;
+        assert_eq!(answer[2], 0);
+        assert_eq!(credit_of(&valkey, channel, b).await, 0);
+        forget(&valkey, channel).await;
+    }
+
+    #[test]
+    fn the_first_three_have_weights_and_the_rest_none() {
+        assert_eq!(weights(0), &[] as &[u32]);
+        assert_eq!(weights(1), &[3]);
+        assert_eq!(weights(2), &[2, 1]);
+        assert_eq!(weights(3), &[1, 1, 1]);
+        assert_eq!(weights(500), &[1, 1, 1]);
     }
 
     #[test]

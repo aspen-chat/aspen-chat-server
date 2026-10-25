@@ -17,10 +17,10 @@ message announces each one who joins.
   community that has none (`channel_created`).
 - A holder of Manage community may name another: one of the community's live text channels that they
   may view. Naming a channel they may not view is answered as not found, another kind of channel is
-  refused with `validation`, and so is `null`, since a community with a text channel always has a
-  default. A create request may not name one.
+  refused with `validation`, and so is `null`: a default may be changed but not taken away. A create
+  request may not name one.
 - When the default channel is deleted, `choose` picks the next, inside the deleting transaction, and
-  announces it. A community left without a text channel has none.
+  announces it. A community left without a text channel that everyone's role may view has none.
 - Each change holds the community's row (`hold_community`), so two channels deleted at once cannot
   each pick the other, and a channel being named holds the channel's row, so it cannot be deleted
   before the community names it.
@@ -28,9 +28,10 @@ message announces each one who joins.
 ### Choosing the next one
 
 `choose` takes the oldest of the community's live text channels that everyone's role may view, after
-its category's override and then its own for everyone's role (`CommunityModel::everyone_views`), or
-the oldest of all when everyone's role may view none. A channel's age is its UUIDv7 id, so the order
-needs no other column.
+its category's override and then its own for everyone's role (`CommunityModel::everyone_views`).
+When everyone's role may view none, the community is left without a default, and posts no join
+messages until one is named, so no new member is shown, and no join announced in, a channel not
+everyone sees. A channel's age is its UUIDv7 id, so the order needs no other column.
 
 The `join_messages` migration gave each existing community the channel `choose` would pick.
 
