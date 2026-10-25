@@ -92,8 +92,9 @@ mana.
 
 ## Deciding
 
-Every gate first checks that the author may post there as posting would (`check_posting`, or the
-endpoint's own checks), so only someone who could post spends a channel's mana. Then
+Every gate first checks that the author may post there as posting would (`check_posting`, or
+`check_first_reply` for a reply that makes its thread, or the endpoint's own checks), with its
+attachments and what it replies to, so only what could be posted spends a channel's mana. Then
 `mana::decide_for` answers:
 
 1. **No pool, or nothing to pay:** go ahead.
@@ -110,10 +111,11 @@ refused after spending (by a plugin, say) has spent for nothing, which the next 
 waits is answered `202 Accepted` with the held row.
 
 - **A thread's first reply always goes ahead:** the thread it makes has a new, full pool.
-- **An echo made with its reply** spends the parent's pool too. When the parent cannot pay, the
-  reply is posted alone, from the thread's pool, and its echo waits in the parent's queue as an item
-  of its author's (`held::post_now`). An echo the parent's queue cannot take then is not made, and
-  its author may echo the reply later.
+- **An echo made with its reply** spends the parent's pool too, decided only once the author is
+  known to hold Send messages in the parent, as posting the echo takes. When the parent cannot pay,
+  the reply is posted alone, from the thread's pool, and its echo waits in the parent's queue as an
+  item of its author's (`held::post_now`). An echo the parent's queue cannot take then is not made,
+  and its author may echo the reply later.
 - **An echo asked for later** (`PUT /messages/{message}/echo`) waits in the parent's queue the same
   way.
 - **A message released from its preview's hold** asks the channel too. When the channel is busy, its

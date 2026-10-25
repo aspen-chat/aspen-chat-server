@@ -208,12 +208,26 @@ pub async fn post(
             return Ok(Posted::Held(held));
         }
     }
-    // A busy channel's mana (`app::mana`): checked once the author is known to be allowed to
-    // post, so that only those who could post spend it. A reply that makes its thread goes
-    // ahead, since a new thread's pool is full.
+    // A busy channel's mana (`app::mana`): decided once the author is known to be allowed to
+    // post what they sent, with its attachments and what it replies to, so that only what
+    // could be posted spends it. A reply that makes its thread goes ahead, since a new
+    // thread's pool is full, though its echo spends the parent's (`post_now`).
     let mut conn = state.connection_pool.get().await?;
     let (channel, unmade) = super::resolve(conn.as_mut(), to).await?;
-    if unmade.is_none() {
+    if let Some(unmade) = &unmade {
+        if reply.is_some() {
+            return Err(crate::Error::Validation(t!("replyElsewhere")));
+        }
+        super::check_first_reply(
+            state,
+            conn.as_mut(),
+            author,
+            unmade,
+            &attachments,
+            echo_to_parent,
+        )
+        .await?;
+    } else {
         super::check_posting(
             state,
             conn.as_mut(),
@@ -223,11 +237,11 @@ pub async fn post(
             echo_to_parent,
         )
         .await?;
+        if let Some(reply) = reply {
+            super::reply::check(conn.as_mut(), channel, reply.to, false).await?;
+        }
         let cost = mana::message_cost(&state.settings(), &content, attachments.len());
         if mana::decide_for(state, conn.as_mut(), author, channel, cost).await? == Decision::Wait {
-            if let Some(reply) = reply {
-                super::reply::check(conn.as_mut(), channel, reply.to, false).await?;
-            }
             drop(conn);
             let held = queue::wait(
                 state,
@@ -266,7 +280,8 @@ pub async fn post(
 
 /// Posts a message now (`super::post`), with its echo to the thread's parent when the parent's
 /// pool can pay for it; when it cannot, the reply is posted alone and its echo waits in the
-/// parent's queue, as an item of its author's.
+/// parent's queue, as an item of its author's. The echo's mana is decided only for an author
+/// who may send in the parent, as posting the echo takes, so no one else spends its mana.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn post_now(
     state: &GlobalServerContext,
@@ -284,6 +299,9 @@ pub(crate) async fn post_now(
     if echo_to_parent {
         let mut conn = state.connection_pool.get().await?;
         if let Some(parent) = super::parent_of(conn.as_mut(), to).await? {
+            crate::permissions::channel_access(state, conn.as_mut(), author, parent)
+                .await?
+                .require(crate::permissions::Permissions::SEND_MESSAGES)?;
             let cost = mana::message_cost(&state.settings(), &content, attachments.len());
             if mana::decide_for(state, conn.as_mut(), author, parent, cost).await? == Decision::Wait
             {
