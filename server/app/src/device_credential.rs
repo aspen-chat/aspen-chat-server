@@ -144,7 +144,7 @@ fn check_solution(
     }
     let bits = body[9];
     let sealed = BASE64_URL_SAFE_NO_PAD
-        .decode(token.trim())
+        .decode(token)
         .map_err(|_| Refusal::Malformed)?;
     if puzzle::work(&sealed, nonce) < u32::from(bits) {
         return Err(Refusal::Unsolved { bits });

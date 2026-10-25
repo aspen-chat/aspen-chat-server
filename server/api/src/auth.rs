@@ -861,7 +861,9 @@ impl FromRequestParts<GlobalServerContext> for SessionUser {
 }
 
 /// Extracts the credential from an `Authorization` header value using the `Bearer` scheme
-/// (RFC 6750). The scheme name is case-insensitive; the token is returned verbatim.
+/// (RFC 6750). The scheme name is case-insensitive; the token is returned without the whitespace
+/// around it, the one spelling the signature check, the lookup, and the memory of rejected tokens
+/// all see (`app::signed_token::open` strips nothing).
 pub(crate) fn bearer_token(header: &str) -> Option<&str> {
     let (scheme, token) = header.split_once(' ')?;
     if !scheme.eq_ignore_ascii_case("bearer") {
