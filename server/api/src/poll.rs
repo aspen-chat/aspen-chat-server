@@ -69,7 +69,7 @@ pub struct PollReadQuery {
     responses(
         (status = CREATED, body = Poll, headers(("Location" = String, description = "URL of the new poll"))),
         (status = ACCEPTED, description = "Waiting: the channel is busy, and the poll waits its turn for the channel's mana; its duration counts from when it is posted", body = crate::message::HeldMessage),
-        (status = BAD_REQUEST, description = "`badRequest` or `validation` (question, options, or duration out of bounds)", body = Problem),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (question, options, or duration out of bounds, or a plugin's channel, which holds no messages)", body = Problem),
         (status = TOO_MANY_REQUESTS, description = "`channelBusy`: the channel cannot take more waiting for its mana now; try again after `Retry-After`", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
