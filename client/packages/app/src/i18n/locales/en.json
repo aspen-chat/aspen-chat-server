@@ -2507,7 +2507,6 @@
     "deletedMessage": "Deleted message",
     "invite": "Invite",
     "registrationInvite": "Registration invite",
-    "signInCode": "Sign-in code",
     "bot": "Bot",
     "addBot": "Add to a community",
     "description": "Opens here: {url}",
