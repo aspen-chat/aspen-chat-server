@@ -12,9 +12,18 @@ community ever sends its members.
 2. The rest of the connected.
 3. Everyone offline, whatever their roles.
 
-Each tier is ordered by when they last came online (`user.last_seen_at`, written as the presence key
-is set afresh, and beside it on each of their memberships, `community_user.last_seen_at`). The
-caller's own membership is always among the sample.
+Each tier is ordered by when they were last seen there (`community_user.last_seen_at`):
+
+- Coming online writes it on each of their memberships, beside `user.last_seen_at`, unless they come
+  online invisible (`app::presence_upkeep`).
+- Posting in a community's channel or thread, or asking to join its call, writes it on that
+  membership alone, whatever their presence, since its members see them there
+  (`presence_upkeep::seen_in`). One server writes one membership at most once a minute, and not when
+  the row was written within the minute. A DM writes none.
+
+Those who blocked the caller are left out of the sample, connected or not, since where they fall in
+it would tell the caller when they come and go. The caller's own membership is always among the
+sample.
 
 ### Its cost
 

@@ -414,6 +414,10 @@ pub async fn join_offer(
         Some(community) => super::mutes::is_muted(conn.as_mut(), community.community, user).await?,
         None => false,
     };
+    // Joining its call shows the community's members the joiner is about.
+    if let Some(community) = access.community.as_ref().filter(|c| c.member) {
+        crate::presence_upkeep::seen_in(conn.as_mut(), user, community.community).await;
+    }
     let claims = JoinClaims {
         user: user.0,
         channel: channel_id.0,

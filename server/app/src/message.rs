@@ -617,7 +617,7 @@ async fn post(
     } else {
         (content, Vec::new())
     };
-    let message = conn
+    let (message, community) = conn
         .transaction(|conn| {
             async move {
                 if let Some(held) = released {
@@ -783,11 +783,20 @@ async fn post(
                 if let Some(held) = released {
                     held::announce_released(state, conn.as_mut(), author, held, &message).await?;
                 }
-                Ok::<_, crate::Error>(message)
+                let community = access
+                    .community
+                    .as_ref()
+                    .filter(|community| community.member)
+                    .map(|community| community.community);
+                Ok::<_, crate::Error>((message, community))
             }
             .scope_boxed()
         })
         .await?;
+    // Posting there shows its members the author is about.
+    if let Some(community) = community {
+        crate::presence_upkeep::seen_in(conn.as_mut(), author, community).await;
+    }
     // The system account's notices quote names others chose, so nothing in them is fetched and
     // shown as a card under its name.
     if message.kind == MessageKind::Standard && !system_account::is(conn.as_mut(), author).await? {

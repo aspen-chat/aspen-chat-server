@@ -12,6 +12,9 @@
 //!   reaches Valkey after it, never before to be undone. Their `last_seen_at` is then written on
 //!   each membership, which the member samples are ordered by, unless they arrive invisible: a
 //!   co-member watching the samples would otherwise see them come online.
+//! - **Seen in one community.** Posting in a community's channel or thread, or joining its call,
+//!   shows its members the user is about, so it writes `last_seen_at` on that membership alone
+//!   ([`seen_in`]), whatever their presence says; a DM writes none.
 //! - **Listing.** Each community they belong to lists them as someone who may be online, renewed
 //!   once per margin however often their keys are set (`user:{uuid}:listed`).
 //!
@@ -39,13 +42,55 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use fred::interfaces::{KeysInterface, SortedSetsInterface};
 use fred::types::{Expiration, SetOptions};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Duration;
 use tokio::sync::Notify;
 
 /// The most people one statement writes the arrival or reads the memberships of. A person
 /// belongs to at most `[limits] max_communities_per_user` communities, so this bounds the
 /// memberships one statement touches too.
 const BATCH: usize = 100;
+
+/// The least time between two writes of one membership's `last_seen_at` for what its member did
+/// there ([`seen_in`]).
+const SEEN_EVERY: Duration = Duration::from_secs(60);
+
+/// The memberships this server wrote `last_seen_at` on within [`SEEN_EVERY`], so posting
+/// steadily costs one write a minute, not one a message.
+static SEEN: LazyLock<moka::sync::Cache<(CommunityId, UserId), ()>> = LazyLock::new(|| {
+    moka::sync::Cache::builder()
+        .max_capacity(100_000)
+        .time_to_live(SEEN_EVERY)
+        .build()
+});
+
+/// Writes `user`'s `last_seen_at` on their membership of `community` for something they did there
+/// that its members see (posting, joining its call), at most once each [`SEEN_EVERY`]: by this
+/// server's memory of its last write, then by the row's own time. One indexed `UPDATE` on `conn`,
+/// outside any transaction, so it holds the row for no longer than the statement. A failure is
+/// logged; the member sample is ordered by it, and nothing else depends on it.
+pub(crate) async fn seen_in(conn: &mut AsyncPgConnection, user: UserId, community: CommunityId) {
+    if SEEN.contains_key(&(community, user)) {
+        return;
+    }
+    SEEN.insert((community, user), ());
+    let due = chrono::Utc::now()
+        - chrono::Duration::from_std(SEEN_EVERY).unwrap_or(chrono::Duration::minutes(1));
+    let written = diesel::update(
+        community_user::table.filter(
+            community_user::community
+                .eq(community)
+                .and(community_user::user.eq(user))
+                .and(community_user::last_seen_at.lt(due)),
+        ),
+    )
+    .set(community_user::last_seen_at.eq(diesel::dsl::now))
+    .execute(conn)
+    .await;
+    if let Err(e) = written {
+        tracing::warn!(error = %e, "failed to record when a member was last seen");
+    }
+}
 
 /// How long listings last, from the configuration.
 #[derive(Clone, Copy)]
@@ -379,4 +424,62 @@ async fn record_arrivals(
     .bind::<Array<Uuid>, _>(ids)
     .load(conn)
     .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diesel_async::SimpleAsyncConnection;
+
+    /// `seen_in` against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing.
+    #[tokio::test]
+    async fn being_seen_in_a_community_writes_that_membership_alone() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let user = UserId(uuid::Uuid::now_v7());
+        let (here, elsewhere) = (
+            CommunityId(uuid::Uuid::now_v7()),
+            CommunityId(uuid::Uuid::now_v7()),
+        );
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                 VALUES ('{u}', 'seen{u}', '', now(), now());
+             INSERT INTO community (id, name) VALUES ('{here}', 'h'), ('{elsewhere}', 'e');
+             INSERT INTO community_user ("user", community, last_seen_at)
+                 VALUES ('{u}', '{here}', '2020-01-01'), ('{u}', '{elsewhere}', '2020-01-01');"#,
+            u = user.0,
+            here = here.0,
+            elsewhere = elsewhere.0,
+        ))
+        .await
+        .unwrap();
+        async fn seen(conn: &mut AsyncPgConnection, user: UserId, community: CommunityId) -> i32 {
+            community_user::table
+                .select(diesel::dsl::sql::<diesel::sql_types::Integer>(
+                    "extract(year from last_seen_at)::int",
+                ))
+                .filter(community_user::user.eq(user))
+                .filter(community_user::community.eq(community))
+                .first(conn)
+                .await
+                .unwrap()
+        }
+        seen_in(&mut conn, user, here).await;
+        assert!(seen(&mut conn, user, here).await > 2020);
+        assert_eq!(seen(&mut conn, user, elsewhere).await, 2020);
+        // Within the minute this server remembers its write, and writes nothing.
+        conn.batch_execute(&format!(
+            "UPDATE community_user SET last_seen_at = '2020-01-01' WHERE \"user\" = '{}'",
+            user.0
+        ))
+        .await
+        .unwrap();
+        seen_in(&mut conn, user, here).await;
+        assert_eq!(seen(&mut conn, user, here).await, 2020);
+    }
 }
