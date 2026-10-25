@@ -226,7 +226,9 @@ interface types {
         channel(id),
         /// The community's members.
         community(id),
-        /// That user alone.
+        /// That user alone: while answering a route, only its caller; otherwise someone the
+        /// plugin reaches (a member of a community where it runs, or anyone for a plugin that
+        /// runs everywhere or in DMs), and `not-found` for anyone else.
         user(id),
     }
 
@@ -317,7 +319,10 @@ interface host {
     annotate-message: func(message: id, annotation: annotation) -> result<_, error>;
     clear-message-annotation: func(message: id, kind: string) -> result<_, error>;
 
-    /// Sets the plugin's annotation of this kind on a person (`users.annotate`).
+    /// Sets the plugin's annotation of this kind on a person (`users.annotate`). It is shown
+    /// only in the communities of theirs where the plugin runs, to them and to whoever shares
+    /// one of those with them; `not-found` when there are none, or, in a route, when the caller
+    /// shares none of them with the person.
     annotate-user: func(user: id, annotation: annotation) -> result<_, error>;
     clear-user-annotation: func(user: id, kind: string) -> result<_, error>;
 
@@ -353,7 +358,9 @@ interface host {
     caller-may: func(channel: id, permission: string) -> result<bool, error>;
 
     /// Sets the timer `key` to fall due at `due` (RFC 3339) with `payload`, replacing one of the
-    /// same key (`timers`).
+    /// same key (`timers`). A time already past makes it due now, behind whatever else is due.
+    /// A plugin keeps at most 1,000 timers for each community, DM, or user (and for the
+    /// deployment), and 100,000 in all; past either, setting a new key fails with `limit`.
     set-timer: func(key: string, due: string, payload: string) -> result<_, error>;
     cancel-timer: func(key: string) -> result<_, error>;
     /// As `set-timer`, for a timer that goes with `scope`: deleting the community, channel, or

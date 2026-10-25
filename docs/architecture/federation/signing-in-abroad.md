@@ -37,10 +37,12 @@ statement has its own `typ`. It holds:
 - the user's id at home;
 - two minutes of life;
 - a single-use id;
-- how the sign-in proved who they are (`SignInMethod`: `password`, `secondFactor`, `passkey`, or a
-  bot's `token`), recorded on every `refresh_token`. A sign-in through an identity provider is named
-  by its strength, `password` or `secondFactor` (`SignInMethod::carried_abroad`; see
-  [Identity providers](../sign-in-and-security/identity-providers.md#strength));
+- how the sign-in proved who they are (`abroad::AssertedMethod`: `password`, `secondFactor`,
+  `passkey`, or a bot's `token`), recorded on every `refresh_token`. A sign-in through an identity
+  provider is named by its strength, `password` or `secondFactor` (`From<SignInMethod>`; see
+  [Identity providers](../sign-in-and-security/identity-providers.md#strength)). An assertion naming
+  any other method does not parse and is refused, so a host never records a provider's sign-in it
+  did not make;
 - their profile.
 
 ## Verifying it

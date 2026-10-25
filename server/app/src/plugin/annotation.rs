@@ -1,7 +1,8 @@
 //! What plugins say about messages and people: one annotation of each kind per plugin and
 //! subject, set again to replace it. A message's annotations are published in its channel and
 //! sideloaded with its reads, so whoever may read the message sees them and nobody else does; a
-//! person's reach whoever shares a community with them, as their profile does, and are read with
+//! person's are shown only in the communities where the plugin runs ([`shown_in`]): they reach
+//! the person and whoever shares one of those with them, and are read with
 //! `GET /users/{user}/annotations`. Clients draw both from the plugin's catalogue, needing no
 //! code of the plugin's.
 
@@ -23,8 +24,8 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 const MAX_ARGS: usize = 16;
 /// The longest an argument may be, in characters.
 const MAX_ARG_CHARS: usize = 500;
-/// The longest a link may be, in bytes.
-const MAX_LINK: usize = 2000;
+/// The longest a link may be, in bytes: an annotation's, or a card's.
+pub(super) const MAX_LINK: usize = 2000;
 
 /// An annotation a plugin set, checked.
 #[derive(Debug, Clone)]
@@ -36,7 +37,10 @@ pub struct Annotation {
     pub link: Option<String>,
 }
 
-fn check_text(text: &PluginText) -> Result<(), wit::Error> {
+/// Checks a plugin's text: an annotation's, a notice's, or a card's. Clients and the server
+/// render it from the plugin's catalogue with its arguments filled in, so its size is bounded by
+/// its arguments'.
+pub(super) fn check_text(text: &PluginText) -> Result<(), wit::Error> {
     if text.key.is_empty() || text.key.len() > 64 {
         return Err(wit::Error::Invalid("a text's key is 1 to 64 bytes".into()));
     }
@@ -308,8 +312,46 @@ pub async fn clear_on_message(
     .await
 }
 
+/// The communities of `subject`'s where `plugin` runs (installed, and on everywhere or turned on
+/// there), which are where its annotations of them are shown. At most
+/// `[limits] max_communities_per_user`.
+pub async fn shown_in(
+    conn: &mut AsyncPgConnection,
+    plugin: &str,
+    subject: UserId,
+) -> crate::Result<Vec<CommunityId>> {
+    use aspen_schema::community_plugin;
+    let mode: Option<String> = aspen_schema::plugin::table
+        .select(aspen_schema::plugin::mode)
+        .filter(aspen_schema::plugin::id.eq(plugin))
+        .filter(aspen_schema::plugin::removed_at.is_null())
+        .first(conn)
+        .await
+        .optional()?;
+    match mode {
+        None => Ok(Vec::new()),
+        Some(mode) if mode == super::Mode::Everywhere.to_string() => {
+            crate::events::memberships(conn, subject).await
+        }
+        Some(_) => Ok(community_user::table
+            .inner_join(
+                community_plugin::table
+                    .on(community_plugin::community.eq(community_user::community)),
+            )
+            .select(community_user::community)
+            .filter(community_user::user.eq(subject))
+            .filter(community_plugin::plugin.eq(plugin))
+            .filter(community_plugin::enabled)
+            .filter(community_user::community.eq_any(crate::community::live()))
+            .load(conn)
+            .await?),
+    }
+}
+
 /// Sets `plugin`'s annotation of its kind on `subject`'s profile, replacing one it set before,
-/// and announces it wherever their profile is.
+/// and announces it to the subject and in the communities where it is shown ([`shown_in`]).
+/// `NotFound` when the plugin runs in none of the subject's communities, where it would be
+/// shown to no one.
 pub async fn set_on_user(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -325,6 +367,10 @@ pub async fn set_on_user(
                 .filter(user::id.eq(subject).and(user::deleted_at.is_null()))
                 .first::<UserId>(conn)
                 .await?;
+            let communities = shown_in(conn, plugin, subject).await?;
+            if communities.is_empty() {
+                return Err(diesel::result::Error::NotFound.into());
+            }
             let others: i64 = user_annotation::table
                 .filter(
                     user_annotation::user
@@ -389,7 +435,10 @@ pub async fn set_on_user(
             publish_event(
                 state,
                 conn,
-                EventScope::UserEverywhere(subject),
+                EventScope::UserIn {
+                    user: subject,
+                    communities,
+                },
                 &ServerEvent::UserAnnotation(event),
             )
             .await
@@ -422,10 +471,14 @@ pub async fn clear_on_user(
             .await
             .optional()?;
             if let Some(id) = deleted {
+                let communities = shown_in(conn, plugin, subject).await?;
                 publish_event(
                     state,
                     conn,
-                    EventScope::UserEverywhere(subject),
+                    EventScope::UserIn {
+                        user: subject,
+                        communities,
+                    },
                     &ServerEvent::UserAnnotation(UserAnnotationEvent::Delete { id }),
                 )
                 .await?;
@@ -468,38 +521,48 @@ pub async fn of_messages(
         .collect())
 }
 
-/// The annotations of `subject`'s profile as `viewer` may see them: all of them for the subject
-/// and for whoever shares a community with them, who are those their events reach
-/// (`EventScope::UserEverywhere`), and none for anyone else.
+/// The annotations of `subject`'s profile as `viewer` may see them: those of the plugins that
+/// run in a community the two share (for the subject, one of their own), the communities their
+/// events reach ([`shown_in`]), and none for anyone else.
 pub async fn of_user(
     state: &GlobalServerContext,
     viewer: UserId,
     subject: UserId,
 ) -> crate::Result<Vec<UserAnnotation>> {
+    use aspen_schema::{community_plugin, plugin};
     let mut conn = state.connection_pool.get().await?;
-    if viewer != subject {
-        let viewers: Vec<CommunityId> = community_user::table
-            .select(community_user::community)
-            .filter(community_user::user.eq(viewer))
-            .load(conn.as_mut())
-            .await?;
-        let shared: bool = diesel::select(diesel::dsl::exists(
-            community_user::table.filter(
-                community_user::user
-                    .eq(subject)
-                    .and(community_user::community.eq_any(viewers)),
+    let viewers = diesel::alias!(community_user as viewers);
+    let shared: Vec<CommunityId> = community_user::table
+        .select(community_user::community)
+        .filter(community_user::user.eq(subject))
+        .filter(
+            community_user::community.eq_any(
+                viewers
+                    .select(viewers.field(community_user::community))
+                    .filter(viewers.field(community_user::user).eq(viewer)),
             ),
-        ))
-        .get_result(conn.as_mut())
+        )
+        .filter(community_user::community.eq_any(crate::community::live()))
+        .load(conn.as_mut())
         .await?;
-        if !shared {
-            return Ok(Vec::new());
-        }
+    if shared.is_empty() {
+        return Ok(Vec::new());
     }
+    let shown_here = community_plugin::table
+        .select(community_plugin::plugin)
+        .filter(community_plugin::community.eq_any(shared))
+        .filter(community_plugin::enabled);
     Ok(user_annotation::table
+        .inner_join(plugin::table.on(plugin::id.eq(user_annotation::plugin)))
         .select(UserAnnotationRow::as_select())
         .filter(user_annotation::user.eq(subject))
-        .filter(user_annotation::plugin.eq_any(installed_plugins()))
+        // A removed plugin's notes are read nowhere while a job takes them away.
+        .filter(plugin::removed_at.is_null())
+        .filter(
+            plugin::mode
+                .eq(super::Mode::Everywhere.to_string())
+                .or(user_annotation::plugin.eq_any(shown_here)),
+        )
         .order(user_annotation::id.asc())
         .load(conn.as_mut())
         .await?

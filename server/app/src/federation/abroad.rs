@@ -54,8 +54,45 @@ pub struct Assertion {
     exp: i64,
     /// Its id, which the host remembers until it expires so it is used once.
     jti: Uuid,
-    method: SignInMethod,
+    method: AssertedMethod,
     profile: Profile,
+}
+
+/// How a user signed in at home, as an assertion says. An identity provider's sign-in is said by
+/// its strength, as a password or a second factor, so the protocol names no provider, and a host
+/// never takes from another deployment a sign-in only its own providers make: an assertion
+/// naming any other method does not parse, and is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum AssertedMethod {
+    Password,
+    SecondFactor,
+    Passkey,
+    Token,
+}
+
+impl From<SignInMethod> for AssertedMethod {
+    fn from(method: SignInMethod) -> Self {
+        match method {
+            SignInMethod::Password | SignInMethod::IdentityProvider => Self::Password,
+            SignInMethod::SecondFactor | SignInMethod::IdentityProviderTwoFactor => {
+                Self::SecondFactor
+            }
+            SignInMethod::Passkey => Self::Passkey,
+            SignInMethod::Token => Self::Token,
+        }
+    }
+}
+
+impl From<AssertedMethod> for SignInMethod {
+    fn from(method: AssertedMethod) -> Self {
+        match method {
+            AssertedMethod::Password => Self::Password,
+            AssertedMethod::SecondFactor => Self::SecondFactor,
+            AssertedMethod::Passkey => Self::Passkey,
+            AssertedMethod::Token => Self::Token,
+        }
+    }
 }
 
 impl Statement for Assertion {
@@ -156,7 +193,7 @@ pub async fn issue(
             iat: now.timestamp(),
             exp: expires_at.timestamp(),
             jti: Uuid::new_v4(),
-            method: caller.method.carried_abroad(),
+            method: caller.method.into(),
             profile: Profile {
                 name: user.name.clone(),
                 display_name: user.display_name.clone(),
@@ -257,9 +294,9 @@ pub async fn sign_in(
     }
     // A bot has no second factor anywhere; a person must have proved more than a password.
     let proved = if claims.profile.bot {
-        claims.method == SignInMethod::Token
+        claims.method == AssertedMethod::Token
     } else {
-        claims.method != SignInMethod::Token
+        claims.method != AssertedMethod::Token
     };
     if !proved {
         return Err(invalid(
@@ -267,7 +304,10 @@ pub async fn sign_in(
             t!("statementInconsistent", domain = home.as_str()),
         ));
     }
-    if settings.require_two_factor && !claims.profile.bot && !claims.method.strong() {
+    if settings.require_two_factor
+        && !claims.profile.bot
+        && !SignInMethod::from(claims.method).strong()
+    {
         return Err(crate::Error::StrongerSignInRequired);
     }
     check_profile(&claims.profile).map_err(|error| profile_refused(&home, error))?;
@@ -285,7 +325,7 @@ pub async fn sign_in(
     if let Some(community) = joined {
         crate::everyone_limit::after_join(state, community).await;
     }
-    let session = issue_session(state, &mut conn, user, claims.method, true).await?;
+    let session = issue_session(state, &mut conn, user, claims.method.into(), true).await?;
     if claims.profile.icon != previous_icon {
         let state = state.clone();
         let icon = claims.profile.icon;

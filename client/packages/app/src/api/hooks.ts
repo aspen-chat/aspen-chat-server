@@ -1042,17 +1042,17 @@ export function useAnnotations(messageId: string): readonly MessageAnnotation[] 
 }
 
 /**
- * What the plugins the deployment runs say about a person, read when first asked for;
- * `undefined` while it is read.
+ * What the plugins the deployment runs say about a person, `undefined` while first read. They
+ * are read again each time a view of the person opens, since a plugin's notes are shown only in
+ * communities where it runs and no event tells a member that a community turned one off; what
+ * was read before is shown meanwhile.
  */
 export function useUserAnnotations(userId: string): readonly UserAnnotation[] | undefined {
   const sync = useSync();
   const annotations = useTopic(`userAnnotations:${userId}`, (s) => s.userAnnotations(userId));
   useEffect(() => {
-    if (annotations === undefined) {
-      void sync.loadUserAnnotations(userId).catch(() => undefined);
-    }
-  }, [sync, userId, annotations]);
+    void sync.loadUserAnnotations(userId).catch(() => undefined);
+  }, [sync, userId]);
   return annotations;
 }
 
