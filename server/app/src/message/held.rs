@@ -621,7 +621,7 @@ pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::
         mana::decide_for(state, conn.as_mut(), held.author, held.channel, cost).await
     };
     if let Ok(Decision::Wait) = decided {
-        queue::wait_held(state, held.id, held.channel, cost).await?;
+        queue::wait_held(state, held.id, held.author, held.channel, cost).await?;
         return Ok(Outcome::Done);
     }
     release(state, held, jobs::last_attempt(job)).await

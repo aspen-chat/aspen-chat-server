@@ -126,4 +126,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261023_191323_identity_providers::M,
     &migrations::m20261025_050226_held_message_made_thread::M,
     &migrations::m20261025_050540_thread_follow_by_hand::M,
+    &migrations::m20261025_052519_held_message_mana_by_age::M,
 ];

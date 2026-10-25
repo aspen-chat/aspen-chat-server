@@ -123,8 +123,8 @@ waits is answered `202 Accepted` with the held row.
 - **An echo asked for later** (`PUT /messages/{message}/echo`) waits in the parent's queue the same
   way.
 - **A message released from its preview's hold** asks the channel too. When the channel is busy, its
-  row becomes one waiting for mana (`queue::wait_held`), without the bounds below, since it was
-  accepted when sent.
+  row becomes one waiting for mana (`queue::wait_held`), within the bounds below as anything that
+  waits; one past them is dropped, its author told the channel is too busy.
 
 ## Waiting rows
 
@@ -234,10 +234,12 @@ there.
   like any job, so many busy channels at once wait their turns for places.
 - **Standings** are read as each author is first seen waiting in a step, and kept for the step, so a
   role given or taken counts within ten seconds.
-- **Each tick** first drops what has waited `MAX_WAIT`, a hundred at a time, telling each author.
-  Then it reads each item's oldest row, puts them in queue order, and, up to ten times
-  (`ROUNDS_PER_TICK`): shares what the pool has earned among the first three, and posts the oldest
-  row of each whose credit can pay for it.
+- **Each tick** first drops what has waited `MAX_WAIT`, a hundred at a time, oldest first
+  (`held_message_mana_by_age`), telling each author. Then it reads each item's oldest row, one row
+  for each author however many they have waiting (skipping from author to author through
+  `held_message_mana_queue`, then a `LATERAL` read of each one's oldest), puts them in queue order,
+  and, up to ten times (`ROUNDS_PER_TICK`): shares what the pool has earned among the first three,
+  and posts the oldest row of each whose credit can pay for it.
 - **Higher priority earns more, not everything:** the first in the queue is credited at least a
   third of all the pool earns, and two thirds or all of it when fewer wait. A raid of new accounts
   holds at most two of the three places while one regular waits, and none while three do, so it is

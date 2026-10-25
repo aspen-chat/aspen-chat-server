@@ -110,39 +110,7 @@ pub async fn wait(state: &GlobalServerContext, waiting: Waiting) -> crate::Resul
     let held = conn
         .transaction::<_, crate::Error, _>(|conn| {
             async move {
-                let item: ItemSize = diesel::sql_query(
-                    "SELECT count(*) AS messages, COALESCE(sum(cost), 0)::bigint AS mana \
-                     FROM held_message WHERE channel = $1 AND author = $2 AND waiting = 'mana'",
-                )
-                .bind::<PgUuid, _>(waiting.channel)
-                .bind::<PgUuid, _>(waiting.author)
-                .get_result(conn.as_mut())
-                .await?;
-                if item.messages >= MAX_ITEM_MESSAGES
-                    || (item.messages > 0 && item.mana + i64::from(waiting.cost) > MAX_ITEM_MANA)
-                {
-                    return Err(crate::Error::ChannelBusy(t!(
-                        "channelBusyItem",
-                        messages = MAX_ITEM_MESSAGES,
-                        mana = MAX_ITEM_MANA
-                    )));
-                }
-                if item.messages == 0 {
-                    let items: Count = diesel::sql_query(
-                        "SELECT count(*) AS count FROM (SELECT DISTINCT author FROM held_message \
-                         WHERE channel = $1 AND waiting = 'mana' LIMIT $2) items",
-                    )
-                    .bind::<PgUuid, _>(waiting.channel)
-                    .bind::<BigInt, _>(MAX_ITEMS)
-                    .get_result(conn.as_mut())
-                    .await?;
-                    if items.count >= MAX_ITEMS {
-                        return Err(crate::Error::ChannelBusy(t!(
-                            "channelBusyQueue",
-                            items = MAX_ITEMS
-                        )));
-                    }
-                }
+                check_bounds(conn.as_mut(), waiting.channel, waiting.author, waiting.cost).await?;
                 let held = HeldMessage {
                     id: HeldMessageId::new(),
                     author: waiting.author,
@@ -197,30 +165,104 @@ pub async fn wait(state: &GlobalServerContext, waiting: Waiting) -> crate::Resul
     Ok(held)
 }
 
+/// Refuses with `channelBusy` something of `author`'s costing `cost` to wait in `channel`'s pool
+/// when their item is full, or when they have none and the queue holds [`MAX_ITEMS`].
+async fn check_bounds(
+    conn: &mut AsyncPgConnection,
+    channel: ChannelId,
+    author: UserId,
+    cost: u32,
+) -> crate::Result<()> {
+    let item: ItemSize = diesel::sql_query(
+        "SELECT count(*) AS messages, COALESCE(sum(cost), 0)::bigint AS mana \
+         FROM held_message WHERE channel = $1 AND author = $2 AND waiting = 'mana'",
+    )
+    .bind::<PgUuid, _>(channel)
+    .bind::<PgUuid, _>(author)
+    .get_result(&mut *conn)
+    .await?;
+    if item.messages >= MAX_ITEM_MESSAGES
+        || (item.messages > 0 && item.mana + i64::from(cost) > MAX_ITEM_MANA)
+    {
+        return Err(crate::Error::ChannelBusy(t!(
+            "channelBusyItem",
+            messages = MAX_ITEM_MESSAGES,
+            mana = MAX_ITEM_MANA
+        )));
+    }
+    if item.messages == 0 {
+        let items: Count = diesel::sql_query(format!(
+            "SELECT count(*) AS count FROM ({AUTHORS}) items WHERE author IS NOT NULL"
+        ))
+        .bind::<PgUuid, _>(channel)
+        .bind::<BigInt, _>(MAX_ITEMS)
+        .get_result(conn)
+        .await?;
+        if items.count >= MAX_ITEMS {
+            return Err(crate::Error::ChannelBusy(t!(
+                "channelBusyQueue",
+                items = MAX_ITEMS
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The first `$2` authors waiting in pool `$1`, one row each read through
+/// `held_message_mana_queue` by skipping from one author to the next, however many rows each
+/// has waiting; the last row's author is `NULL`.
+const AUTHORS: &str = r#"
+    WITH RECURSIVE authors(author, n) AS (
+        (SELECT author, 1 FROM held_message WHERE channel = $1 AND waiting = 'mana'
+         ORDER BY author LIMIT 1)
+        UNION ALL
+        SELECT (SELECT h.author FROM held_message h
+                WHERE h.channel = $1 AND h.waiting = 'mana' AND h.author > a.author
+                ORDER BY h.author LIMIT 1),
+               a.n + 1
+        FROM authors a WHERE a.author IS NOT NULL AND a.n < $2
+    )
+    SELECT author FROM authors
+"#;
+
 /// Turns a message held for its previews, released, into one waiting for its channel's mana,
-/// in its author's item, costing `cost`. It was accepted when sent, so no bound refuses it.
+/// in its author's item, costing `cost`, within the bounds of what may wait ([`make_room`],
+/// [`check_bounds`]): one past them is dropped, its author told the channel is too busy.
 pub async fn wait_held(
     state: &GlobalServerContext,
     id: HeldMessageId,
+    author: UserId,
     channel: ChannelId,
     cost: u32,
 ) -> crate::Result<()> {
-    let mut conn = state.connection_pool.get().await?;
-    conn.transaction::<_, crate::Error, _>(|conn| {
-        async move {
-            diesel::update(held_message::table.filter(held_message::id.eq(id)))
-                .set((
-                    held_message::waiting.eq(HeldWaiting::Mana),
-                    held_message::cost.eq(i32::try_from(cost).unwrap_or(i32::MAX)),
-                ))
-                .execute(conn.as_mut())
-                .await?;
-            ensure_drainer(conn.as_mut(), channel).await
+    let bounded = match make_room(state, channel, author).await {
+        Ok(()) => {
+            let mut conn = state.connection_pool.get().await?;
+            conn.transaction::<_, crate::Error, _>(|conn| {
+                async move {
+                    check_bounds(conn.as_mut(), channel, author, cost).await?;
+                    diesel::update(held_message::table.filter(held_message::id.eq(id)))
+                        .set((
+                            held_message::waiting.eq(HeldWaiting::Mana),
+                            held_message::cost.eq(i32::try_from(cost).unwrap_or(i32::MAX)),
+                        ))
+                        .execute(conn.as_mut())
+                        .await?;
+                    ensure_drainer(conn.as_mut(), channel).await
+                }
+                .scope_boxed()
+            })
+            .await
         }
-        .scope_boxed()
-    })
-    .await?;
-    drop(conn);
+        Err(error) => Err(error),
+    };
+    match bounded {
+        Ok(()) => {}
+        Err(crate::Error::ChannelBusy(reason)) => {
+            return held::drop_held(state, id, author, channel, reason).await;
+        }
+        Err(error) => return Err(error),
+    }
     jobs::wake(state).await;
     tell_level(state, channel).await
 }
@@ -244,8 +286,8 @@ async fn tell_level(state: &GlobalServerContext, channel: ChannelId) -> crate::R
 
 #[derive(QueryableByName)]
 struct Author {
-    #[diesel(sql_type = PgUuid)]
-    author: UserId,
+    #[diesel(sql_type = diesel::sql_types::Nullable<PgUuid>)]
+    author: Option<UserId>,
 }
 
 #[derive(QueryableByName)]
@@ -268,17 +310,14 @@ async fn make_room(
     author: UserId,
 ) -> crate::Result<()> {
     let mut conn = state.connection_pool.get().await?;
-    let authors: Vec<UserId> = diesel::sql_query(
-        "SELECT DISTINCT author FROM held_message WHERE channel = $1 AND waiting = 'mana' \
-         LIMIT $2",
-    )
-    .bind::<PgUuid, _>(channel)
-    .bind::<BigInt, _>(MAX_ITEMS)
-    .load::<Author>(conn.as_mut())
-    .await?
-    .into_iter()
-    .map(|row| row.author)
-    .collect();
+    let authors: Vec<UserId> = diesel::sql_query(AUTHORS)
+        .bind::<PgUuid, _>(channel)
+        .bind::<BigInt, _>(MAX_ITEMS)
+        .load::<Author>(conn.as_mut())
+        .await?
+        .into_iter()
+        .filter_map(|row| row.author)
+        .collect();
     if (authors.len() as i64) < MAX_ITEMS || authors.contains(&author) {
         return Ok(());
     }
@@ -478,16 +517,22 @@ async fn finish_if_empty(
     Ok(deleted == 1)
 }
 
-/// Each author's oldest waiting row in `channel`.
+/// Each author's oldest waiting row in `channel`, of at most twice [`MAX_ITEMS`] authors (two
+/// newcomers at once may both find room in a full queue, [`make_room`]): one row read for each,
+/// through `held_message_mana_queue`, however many they have waiting.
 async fn items(
     conn: &mut AsyncPgConnection,
     channel: ChannelId,
 ) -> crate::Result<Vec<HeldMessage>> {
     Ok(diesel::sql_query(format!(
-        "SELECT DISTINCT ON (author) {COLUMNS} FROM held_message \
-         WHERE channel = $1 AND waiting = 'mana' ORDER BY author, held_at, id"
+        "SELECT head.* FROM ({AUTHORS}) a CROSS JOIN LATERAL ( \
+             SELECT {COLUMNS} FROM held_message \
+             WHERE channel = $1 AND author = a.author AND waiting = 'mana' \
+             ORDER BY held_at, id LIMIT 1) head \
+         WHERE a.author IS NOT NULL"
     ))
     .bind::<PgUuid, _>(channel)
+    .bind::<BigInt, _>(MAX_ITEMS * 2)
     .load(conn)
     .await?)
 }
@@ -509,7 +554,8 @@ async fn oldest(
     .optional()?)
 }
 
-/// Drops what has waited past [`MAX_WAIT`], a batch a tick, telling each author.
+/// Drops what has waited past [`MAX_WAIT`], a batch a tick, telling each author, oldest first
+/// through `held_message_mana_by_age`.
 async fn expire(state: &GlobalServerContext, channel: ChannelId) -> crate::Result<()> {
     let old: Vec<HeldMessage> = {
         let mut conn = state.connection_pool.get().await?;
