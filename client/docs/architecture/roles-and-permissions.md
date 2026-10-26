@@ -129,7 +129,9 @@ Wherever a member is chosen (the Members tab, handing over ownership, Check acce
   refused.
 - `AspenSync.searchMembers` caches the people found and their roles without adding them to the
   sample.
-- `MemberPicker` is the combobox the dialogs share.
+- `MemberPicker` is the combobox the dialogs and the search dialog's From share. Emptying it chooses
+  no one; where it narrows something (From), it also offers an Anyone option that does
+  (`useAnyoneOption`, which the dashboard's `AdminUserPicker` uses too).
 
 ## Pins
 

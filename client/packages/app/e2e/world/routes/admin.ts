@@ -102,6 +102,7 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
     ["GET", /^\/admin\/overview$/, admin.overview],
     ["GET", /^\/admin\/users$/, () => admin.users(url)],
     ["GET", /^\/admin\/communities$/, () => admin.communities(url)],
+    ["GET", /^\/admin\/file-transfers$/, () => admin.fileTransfers(url)],
     ["GET", /^\/admin\/registration-invites$/, admin.invites],
     [
       "POST",

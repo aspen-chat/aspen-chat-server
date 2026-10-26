@@ -13,22 +13,28 @@ import {
 import { fieldClass, inputClass, labelClass } from "@/features/auth/styles";
 import { useMemberSearch } from "@/features/community-settings/memberSearch";
 import { optionClass } from "@/features/invites/dialog";
+import { type PersonOption, useAnyoneOption } from "@/features/users/anyoneOption";
 import { displayNameOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
 
 /**
  * Chooses one member of a community by typing their name: the member sample until something is
- * typed, then a search of every member for those who may search (`useMemberSearch`).
+ * typed, then a search of every member for those who may search (`useMemberSearch`). Emptying
+ * the field chooses no one, as does the option named `anyoneLabel` when there is one
+ * (`useAnyoneOption`), which the empty field then shows too.
  */
 export function MemberPicker({
   communityId,
   label,
+  anyoneLabel,
   exclude = [],
   onChange,
 }: {
   communityId: string;
   label: string;
+  /** Names choosing no one, for a picker that narrows something by a member. */
+  anyoneLabel?: string;
   /** Members not to offer, such as the caller. */
   exclude?: readonly string[];
   onChange: (user: User | null) => void;
@@ -40,19 +46,32 @@ export function MemberPicker({
   const typing = chosen === null || query !== displayNameOf(chosen);
   const search = useMemberSearch(communityId, typing ? query : "");
   const members = search.members.filter((u) => !exclude.includes(u.id));
+  const anyone = useAnyoneOption({
+    offersAnyone: anyoneLabel !== undefined,
+    chosen,
+    narrowed: typing && query.trim() !== "",
+    found: members,
+  });
   return (
     <ComboBox
-      items={members}
+      items={anyone.options}
       inputValue={query}
-      onInputChange={setQuery}
-      value={chosen?.id ?? null}
-      onChange={(key) => {
-        const user = members.find((u) => u.id === key) ?? null;
-        setChosen(user);
-        if (user !== null) {
-          setQuery(displayNameOf(user));
+      onInputChange={(text) => {
+        setQuery(text);
+        if (text.trim() === "" && chosen !== null) {
+          setChosen(null);
+          onChange(null);
         }
-        onChange(user);
+      }}
+      value={anyone.value}
+      onChange={(key) => {
+        const user = anyone.personOf(key);
+        setChosen(user);
+        setQuery(user === null ? "" : displayNameOf(user));
+        // Choosing again whom the field already shows tells the caller nothing.
+        if (user?.id !== chosen?.id) {
+          onChange(user);
+        }
       }}
       menuTrigger="focus"
       allowsEmptyCollection
@@ -60,7 +79,10 @@ export function MemberPicker({
     >
       <Label className={labelClass}>{label}</Label>
       <div className="relative">
-        <Input className={inputClass + " w-full pe-9"} />
+        <Input
+          {...(anyoneLabel === undefined ? {} : { placeholder: anyoneLabel })}
+          className={inputClass + " w-full pe-9"}
+        />
         <Button className="absolute top-1/2 end-2 -translate-y-1/2 rounded p-1 text-ink-muted outline-none">
           <CaretDownIcon size={14} aria-hidden="true" />
         </Button>
@@ -78,12 +100,18 @@ export function MemberPicker({
             )
           }
         >
-          {(user: User) => (
-            <ListBoxItem id={user.id} textValue={displayNameOf(user)} className={optionClass}>
-              {displayNameOf(user)}
-              <span className="ms-2 text-xs text-ink-muted">{user.name}</span>
-            </ListBoxItem>
-          )}
+          {({ id, person: user }: PersonOption<User>) =>
+            user === null ? (
+              <ListBoxItem id={id} textValue={anyoneLabel ?? ""} className={optionClass}>
+                {anyoneLabel}
+              </ListBoxItem>
+            ) : (
+              <ListBoxItem id={id} textValue={displayNameOf(user)} className={optionClass}>
+                {displayNameOf(user)}
+                <span className="ms-2 text-xs text-ink-muted">{user.name}</span>
+              </ListBoxItem>
+            )
+          }
         </ListBox>
       </Popover>
     </ComboBox>

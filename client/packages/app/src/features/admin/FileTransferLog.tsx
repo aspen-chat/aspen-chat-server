@@ -75,6 +75,7 @@ export function FileTransferLog() {
       <div className="max-w-xs">
         <AdminUserPicker
           label={m.admin.fileTransfersOf}
+          anyoneLabel={m.admin.fileTransfersOfAnyone}
           onChange={(user) => {
             setLoading(true);
             setPerson(user?.id);

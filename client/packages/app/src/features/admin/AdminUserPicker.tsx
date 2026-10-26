@@ -14,6 +14,7 @@ import { useSync } from "@/api/hooks";
 import { fieldClass, inputClass, labelClass } from "@/features/auth/styles";
 import { optionClass } from "@/features/invites/dialog";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
+import { type PersonOption, useAnyoneOption } from "@/features/users/anyoneOption";
 import { useMessages } from "@/i18n/context";
 
 /** How long typing pauses before the search is sent. */
@@ -27,13 +28,16 @@ function nameOf(user: AdminUserEntry): string {
 
 /**
  * Chooses one of the deployment's users by typing their username or display name, searched in
- * the dashboard's user directory, for whoever may read it. Emptying the field chooses no one.
+ * the dashboard's user directory, for whoever may read it. Emptying the field chooses no one, as
+ * does the option named `anyoneLabel` (`useAnyoneOption`), which the empty field shows too.
  */
 export function AdminUserPicker({
   label,
+  anyoneLabel,
   onChange,
 }: {
   label: string;
+  anyoneLabel: string;
   onChange: (user: AdminUserEntry | null) => void;
 }) {
   const m = useMessages();
@@ -52,6 +56,7 @@ export function AdminUserPicker({
   const searching = result.of !== typed;
   const found = result.users;
   const error = result.error;
+  const anyone = useAnyoneOption({ offersAnyone: true, chosen, narrowed: typed !== "", found });
   useEffect(() => {
     let current = true;
     const timer = setTimeout(() => {
@@ -79,7 +84,7 @@ export function AdminUserPicker({
   }, [sync, typed]);
   return (
     <ComboBox
-      items={found}
+      items={anyone.options}
       inputValue={query}
       onInputChange={(text) => {
         setQuery(text);
@@ -88,14 +93,15 @@ export function AdminUserPicker({
           onChange(null);
         }
       }}
-      value={chosen?.id ?? null}
+      value={anyone.value}
       onChange={(key) => {
-        const user = found.find((u) => u.id === key) ?? null;
+        const user = anyone.personOf(key);
         setChosen(user);
-        if (user !== null) {
-          setQuery(nameOf(user));
+        setQuery(user === null ? "" : nameOf(user));
+        // Choosing again whom the field already shows tells the caller nothing.
+        if (user?.id !== chosen?.id) {
+          onChange(user);
         }
-        onChange(user);
       }}
       menuTrigger="focus"
       allowsEmptyCollection
@@ -103,7 +109,7 @@ export function AdminUserPicker({
     >
       <Label className={labelClass}>{label}</Label>
       <div className="relative">
-        <Input className={inputClass + " w-full pe-9"} />
+        <Input placeholder={anyoneLabel} className={inputClass + " w-full pe-9"} />
         <Button className="absolute top-1/2 end-2 -translate-y-1/2 rounded p-1 text-ink-muted outline-none">
           <CaretDownIcon size={14} aria-hidden="true" />
         </Button>
@@ -119,14 +125,20 @@ export function AdminUserPicker({
             )
           }
         >
-          {(user: AdminUserEntry) => (
-            <ListBoxItem id={user.id} textValue={nameOf(user)} className={optionClass}>
-              {nameOf(user)}
-              <span className="ms-2 text-xs text-ink-muted">
-                {user.homeDomain == null ? user.name : `${user.name}@${user.homeDomain}`}
-              </span>
-            </ListBoxItem>
-          )}
+          {({ id, person: user }: PersonOption<AdminUserEntry>) =>
+            user === null ? (
+              <ListBoxItem id={id} textValue={anyoneLabel} className={optionClass}>
+                {anyoneLabel}
+              </ListBoxItem>
+            ) : (
+              <ListBoxItem id={id} textValue={nameOf(user)} className={optionClass}>
+                {nameOf(user)}
+                <span className="ms-2 text-xs text-ink-muted">
+                  {user.homeDomain == null ? user.name : `${user.name}@${user.homeDomain}`}
+                </span>
+              </ListBoxItem>
+            )
+          }
         </ListBox>
       </Popover>
     </ComboBox>

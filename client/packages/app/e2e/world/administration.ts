@@ -68,6 +68,45 @@ export function administration() {
       registeredWith: standingInvite,
     });
   }
+  // Two files offered in calls: one Bob sent the caller, one the caller sent Member 01.
+  const fileOffers = [
+    {
+      id: "0190f0a0-0000-7000-8000-000000000f02",
+      sender: bob,
+      fileName: "lunch-menu.pdf",
+      fileSize: 48_213,
+      allowDirect: true,
+      validForSeconds: 600,
+      offeredAt: minutesAgo(30),
+      transfers: [
+        {
+          receiver: me,
+          mode: "directPreferred",
+          outcome: "completed",
+          startedAt: minutesAgo(29),
+          endedAt: minutesAgo(29),
+        },
+      ],
+    },
+    {
+      id: "0190f0a0-0000-7000-8000-000000000f01",
+      sender: me,
+      fileName: "holiday-photos.zip",
+      fileSize: 73_400_320,
+      allowDirect: false,
+      validForSeconds: 600,
+      offeredAt: minutesAgo(90),
+      transfers: [
+        {
+          receiver: "0190f0a0-0000-7000-8000-000000000101",
+          mode: "relayOnly",
+          outcome: "cancelled",
+          startedAt: minutesAgo(89),
+          endedAt: minutesAgo(88),
+        },
+      ],
+    },
+  ];
   const communities = [
     { id: community, name: "Family", icon: null, members: 2, createdAt: minutesAgo(3000) },
     {
@@ -195,6 +234,12 @@ export function administration() {
         url,
         (u, field) => (field === "name" ? u.displayName.toLowerCase() : u.createdAt),
       ),
+    fileTransfers: (url: URL) => {
+      const user = url.searchParams.get("filter[user]");
+      return fileOffers.filter(
+        (o) => user === null || o.sender === user || o.transfers.some((t) => t.receiver === user),
+      );
+    },
     communities: (url: URL) =>
       page(
         communities.filter((c) => c.name.toLowerCase().includes(named(url))),
