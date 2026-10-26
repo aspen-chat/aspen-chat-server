@@ -5,9 +5,10 @@ import { Markdown } from "./Markdown";
 const render = (content: string) => renderToStaticMarkup(<Markdown content={content} />);
 const renderAfter = (content: string) =>
   renderToStaticMarkup(<Markdown content={content} after={<i>12:30</i>} />);
-/** What follows the text, ending its last line or standing under its last block. */
-const inline = /<span class="message-after[^"]*inline-flex[^"]*"><i>12:30<\/i><\/span>/;
-const block = /<span class="message-after[^"]* flex [^"]*"><i>12:30<\/i><\/span>/;
+/** What follows the text, ending its last line or beside its last block. */
+const inline = /<span class="message-after[^"]*"><i>12:30<\/i><\/span>/;
+const beside = (block: string) =>
+  new RegExp(`<div class="message-after-row">${block}\\s*${inline.source}</div>`);
 
 describe("Markdown", () => {
   it("ends the last line of text with what follows it, wherever that line is", () => {
@@ -20,17 +21,17 @@ describe("Markdown", () => {
     expect(renderAfter("one\n\ntwo").match(/message-after/g)).toHaveLength(1);
   });
 
-  it("puts what follows code or a table under it", () => {
-    expect(renderAfter("```\nlet x = 1;\n```")).toMatch(
-      new RegExp(`</pre>\\s*${block.source}</div>$`),
-    );
-    expect(renderAfter("| a |\n| - |\n| b |")).toMatch(
-      new RegExp(`</table>\\s*${block.source}</div>$`),
+  it("puts what follows code, a table, or a rule beside it", () => {
+    expect(renderAfter("```\nlet x = 1;\n```")).toMatch(beside("<pre>.*</pre>"));
+    expect(renderAfter("| a |\n| - |\n| b |")).toMatch(beside("<table>[^]*</table>"));
+    expect(renderAfter("text\n\n***")).toMatch(beside("<hr/>"));
+    expect(renderAfter("- a\n\n  ```\n  x\n  ```")).toMatch(
+      new RegExp(`<li>[^]*${beside("<pre>.*</pre>").source}\\s*</li>`),
     );
   });
 
   it("draws nothing after text with nothing to follow it", () => {
-    expect(render("one\n\n```\ncode\n```")).not.toContain("message-after");
+    expect(render("one\n\n```\ncode\n```")).not.toContain('<span class="message-after');
     expect(render("plain")).toBe('<div class="message-body"><p>plain</p></div>');
   });
 

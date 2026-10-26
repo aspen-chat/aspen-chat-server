@@ -36,10 +36,10 @@ const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "shor
  * message ends with: its text, after its edited mark, or beside its last card or its pictures
  * where the line has room, and under them where it has not (`Trailed`). After the text, the
  * marks end its last line, as a word would, wrapping under it where the line has no room, and
- * stand under a code block or table it ends with (`Markdown`'s `after`). A message that fails
- * to draw shows its text alone, plainly, rather than taking the list it is in down with it. Without `savedMark` the saved
- * mark is left to whoever draws the message, as `MessageItem` gives it to its header on a touch
- * screen.
+ * sit beside a code block, table, or rule it ends with, under it only where the line has no
+ * room (`Markdown`'s `after`). A message that fails to draw shows its text alone, plainly,
+ * rather than taking the list it is in down with it. Without `savedMark` the saved mark is left
+ * to whoever draws the message, as `MessageItem` gives it to its header on a touch screen.
  */
 export function MessageBody(props: MessageBodyProps) {
   const { message, hideText = false } = props;

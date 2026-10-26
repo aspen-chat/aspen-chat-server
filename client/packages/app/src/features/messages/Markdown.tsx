@@ -108,9 +108,8 @@ const components: Components = {
       return <Spoiler>{children}</Spoiler>;
     }
     const attributes = props as Record<string, unknown>;
-    const after = attributes["data-after-text"];
-    if (after === "inline" || after === "block") {
-      return <AfterText place={after} />;
+    if ("data-after-text" in attributes) {
+      return <AfterText />;
     }
     const emoji = attributes["data-emoji"];
     if (typeof emoji === "string") {
@@ -180,9 +179,9 @@ function fencedCode(children: ReactNode): { text: string; language: string | nul
  * falls back to its plain text too, rather than taking the message list down with it.
  *
  * `after` follows the text (`remarkAfterText`): at the end of its last line where that is
- * text, and under its last block where that is code or a table. The text is parsed again only
- * when it, its tags, or `links` change, since parsing is most of its cost; `after` reaches its
- * place without that.
+ * text, and beside its last block where that is code, a table, or a rule, under it only where
+ * the line has no room. The text is parsed again only when it, its tags, or `links` change,
+ * since parsing is most of its cost; `after` reaches its place without that.
  */
 export function Markdown({ after = null, ...text }: MarkdownTextProps & { after?: ReactNode }) {
   return (
@@ -210,7 +209,7 @@ const MarkdownText = memo(function MarkdownText({
   const plain = (
     <p>
       {content}
-      <AfterText place="inline" />
+      <AfterText />
     </p>
   );
   if (opensTooDeeply(content)) {
@@ -242,18 +241,13 @@ const AfterTextContext = createContext<ReactNode>(null);
  * keeps a little room before it; a mark that is hidden (a grouped message's time while the
  * pointer is elsewhere) has no box, so neither takes any room nor makes the text a line longer.
  */
-function AfterText({ place }: { place: "inline" | "block" }) {
+function AfterText() {
   const after = useContext(AfterTextContext);
   if (after === null) {
     return null;
   }
   return (
-    <span
-      className={
-        "message-after flex-wrap items-baseline font-normal " +
-        (place === "inline" ? "inline-flex *:ms-1" : "flex gap-x-1 *:mt-1")
-      }
-    >
+    <span className="message-after inline-flex flex-wrap items-baseline font-normal *:ms-1">
       {after}
     </span>
   );

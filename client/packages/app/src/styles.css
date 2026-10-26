@@ -628,10 +628,24 @@ body {
 .message-body p {
   white-space: pre-wrap;
 }
-/* What follows a message whose text ends with code or a table stands under it with only its
-   marks' own room above, so a mark that is hidden takes no room at all (`Markdown`'s `after`). */
-.message-body > .message-after {
-  margin-top: 0;
+/* What follows a message whose text ends with code, a table, or a rule sits beside it, level
+   with its last line, and wraps under it only where the line has no room (`remarkAfterText`).
+   A block wider than the line shrinks to it, so long code scrolls rather than overflowing; a
+   rule, which has no width of its own, is at least 3rem and takes what the marks leave.
+   `flex-end` stands in where `last baseline` is not understood. */
+.message-after-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  align-items: last baseline;
+  row-gap: 0.25rem;
+}
+.message-after-row > :first-child {
+  min-width: 0;
+}
+.message-after-row > hr {
+  flex: 1 0 3rem;
+  align-self: center;
 }
 .message-body code {
   font-family: var(--font-mono);
