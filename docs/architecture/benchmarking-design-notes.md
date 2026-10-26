@@ -20,6 +20,7 @@ Why [Benchmarking](benchmarking.md) works as it does.
 ## Metrics
 
 - Non-standard methods are named `OTHER`. The request series stay bounded however many made-up
-  methods arrive.
+  methods arrive. `HEAD` is named `GET`: axum runs the `GET` handler for it, so it is that request's
+  work and, for the limits that share the key, that request's count.
 - The bench reports heap growth beside resident growth. Allocated rising tells a leak; resident well
   above allocated is memory jemalloc keeps. Reporting both tells the two apart.

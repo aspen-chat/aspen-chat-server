@@ -192,23 +192,33 @@ impl Route {
     }
 }
 
-/// The methods a route key names as they are. Any other method token a client sends is named
-/// `OTHER` (`OTHER_METHOD`), so made-up methods cannot make new keys, and with them new metric
-/// series and buckets.
-const METHODS: [&str; 9] = [
-    "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE",
+/// The methods a route key names as they are, besides `HEAD`, which it names `GET`. Any other
+/// method token a client sends is named `OTHER` (`OTHER_METHOD`), so made-up methods cannot make
+/// new keys, and with them new metric series and buckets.
+const METHODS: [&str; 8] = [
+    "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE",
 ];
 
 /// What a route key calls a method that is none of `METHODS`.
 pub const OTHER_METHOD: &str = "OTHER";
 
-/// The key a request's limits and metrics go by: its method and its path template.
+/// The key a request's limits and metrics go by: its method and its path template. A `HEAD`
+/// request is keyed as the `GET` request it is: axum answers it by running the `GET` handler and
+/// dropping the body, so it does the handler's whole work and tells its status, and it must be
+/// counted, failed, and refused as that handler's `GET` is. No rules are compiled for `HEAD`
+/// (`api::rate_limit::routes` names the OpenAPI methods), so keyed as itself it would fall to the
+/// unknown-method rules, which count only the address: no user or device limits, no failures,
+/// never fail-closed.
 pub fn route_key(method: &str, template: &str) -> String {
-    let method = METHODS
-        .iter()
-        .find(|known| known.eq_ignore_ascii_case(method))
-        .copied()
-        .unwrap_or(OTHER_METHOD);
+    let method = if method.eq_ignore_ascii_case("HEAD") {
+        "GET"
+    } else {
+        METHODS
+            .iter()
+            .find(|known| known.eq_ignore_ascii_case(method))
+            .copied()
+            .unwrap_or(OTHER_METHOD)
+    };
     format!("{method} {template}")
 }
 
@@ -1004,6 +1014,26 @@ mod tests {
         assert_eq!(route_key("post", "/users"), "POST /users");
         assert_eq!(route_key("FROBNICATE", "/users"), "OTHER /users");
         assert_eq!(route_key("x1", "/users"), route_key("x2", "/users"));
+    }
+
+    /// A `HEAD` request runs the `GET` handler, so it is limited as that `GET`: by its rules,
+    /// as its user, with its failures and its fail-closed answer, never as an unknown method.
+    #[test]
+    fn head_is_limited_as_get() {
+        assert_eq!(
+            route_key("HEAD", "/invites/{code}"),
+            route_key("GET", "/invites/{code}")
+        );
+        assert_eq!(route_key("head", "/users/@me"), "GET /users/@me");
+        let mut config = config();
+        config.fail_closed = vec!["GET /channels/{channel}".into()];
+        let limiter = RateLimiter::compile(&config, &routes()).unwrap();
+        let get = route_key("GET", "/channels/{channel}");
+        let head = route_key("HEAD", "/channels/{channel}");
+        assert_eq!(limiter.access(&head), Access::Authenticated);
+        assert_eq!(dimensions(&limiter, &head), dimensions(&limiter, &get));
+        assert_eq!(dimensions(&limiter, &head), ["ip", "per_channel", "user"]);
+        assert!(limiter.fails_closed(&head));
     }
 
     #[test]
