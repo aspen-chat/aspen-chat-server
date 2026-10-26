@@ -1,6 +1,7 @@
 import { ArrowSquareOutIcon, CaretLeftIcon, CaretRightIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { Button, Dialog, Link, Modal, ModalOverlay, useLocale } from "react-aria-components";
+import { overlayLayerClass } from "@/features/invites/dialog";
 import { pictureAlt, type Picture } from "@/features/messages/images";
 import { SpoilerCover } from "@/features/messages/SpoilerCard";
 import { useMessages } from "@/i18n/context";
@@ -43,7 +44,10 @@ export function ImageGallery({
         }
       }}
       isDismissable
-      className="fixed inset-x-0 top-(--title-bar-height) bottom-0 z-20 flex items-center justify-center bg-black/80 motion-backdrop"
+      className={
+        "fixed inset-x-0 top-(--title-bar-height) bottom-0 flex items-center justify-center bg-black/80 motion-backdrop " +
+        overlayLayerClass
+      }
     >
       <Modal className="h-full w-full outline-none motion-dialog">
         <Dialog aria-label={m.gallery.label} className="flex h-full w-full flex-col outline-none">

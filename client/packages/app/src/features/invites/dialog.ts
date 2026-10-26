@@ -1,6 +1,13 @@
+/**
+ * The layer every modal overlay is drawn on: the z-index React Aria gives each popover, so
+ * overlays are stacked in the order they open (each is portaled to the end of the body), and a
+ * modal opened from a popover, such as a ban from a profile card, is drawn over it.
+ */
+export const overlayLayerClass = "z-100000";
 /** Tailwind class strings shared by the modal dialogs. */
 export const overlayClass =
-  "overlay-inset fixed inset-x-0 top-[calc(var(--title-bar-height)+var(--visible-top))] bottom-(--visible-bottom) z-10 flex items-center justify-center bg-black/40 motion-backdrop";
+  "overlay-inset fixed inset-x-0 top-[calc(var(--title-bar-height)+var(--visible-top))] bottom-(--visible-bottom) flex items-center justify-center bg-black/40 motion-backdrop " +
+  overlayLayerClass;
 /**
  * The frame every modal is drawn in. It is never taller than the overlay leaves room for, and
  * scrolls within itself when its content is taller than that, as a long form is on a phone;
