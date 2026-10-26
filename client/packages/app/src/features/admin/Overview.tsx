@@ -1,4 +1,6 @@
 import type { AdminOverview } from "@aspen/protocol";
+import { Link } from "@tanstack/react-router";
+import type { AdminTab } from "@/features/admin/adminTabs";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { useFigures } from "@/features/admin/format";
 import type { AdminRead } from "@/features/admin/useAdminRead";
@@ -17,6 +19,7 @@ export function Overview({ read }: { read: AdminRead<AdminOverview> }) {
       <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Figure
           label={m.admin.users}
+          tab="users"
           value={data === undefined ? (error === null ? undefined : "—") : headline(data.users)}
           detail={
             data === undefined
@@ -26,6 +29,7 @@ export function Overview({ read }: { read: AdminRead<AdminOverview> }) {
         />
         <Figure
           label={m.admin.communities}
+          tab="communities"
           value={
             data === undefined ? (error === null ? undefined : "—") : headline(data.communities)
           }
@@ -52,11 +56,17 @@ export function Overview({ read }: { read: AdminRead<AdminOverview> }) {
 /** A headline figure: its label, the value, and a line of detail under it. */
 function Figure({
   label,
+  tab,
   value,
   detail,
   small = false,
 }: {
   label: string;
+  /**
+   * The tab listing what it counts. Its label is then a link whose target covers the whole
+   * panel, since a `<dl>` may hold no link around its groups.
+   */
+  tab?: AdminTab;
   /** `undefined` while it is on its way, a skeleton its size meanwhile. */
   value: string | undefined;
   detail?: string | undefined;
@@ -64,8 +74,22 @@ function Figure({
   small?: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-1 rounded-lg border border-line bg-surface-raised p-4">
-      <dt className="text-sm text-ink-muted">{label}</dt>
+    <div
+      className={`flex flex-col gap-1 rounded-lg border border-line bg-surface-raised p-4 ${tab === undefined ? "" : "relative has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-accent/50 has-[a:hover]:bg-surface-hover"}`}
+    >
+      <dt className="text-sm text-ink-muted">
+        {tab === undefined ? (
+          label
+        ) : (
+          <Link
+            to="/admin/$tab"
+            params={{ tab }}
+            className="outline-none after:absolute after:inset-0 after:rounded-lg hover:text-ink"
+          >
+            {label}
+          </Link>
+        )}
+      </dt>
       <dd className={small ? "text-xl font-semibold" : "text-3xl font-semibold"}>
         {value ?? (
           <>
