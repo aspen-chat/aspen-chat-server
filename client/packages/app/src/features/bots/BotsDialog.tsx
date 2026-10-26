@@ -16,6 +16,7 @@ import { fieldClass, inputClass, labelClass, primaryButtonClass } from "@/featur
 import { botAddLink } from "@/features/bots/botLink";
 import { Avatar } from "@/features/communities/Avatar";
 import { IconPicker } from "@/features/media/IconPicker";
+import { EditProfileDialog } from "@/features/users/EditProfileDialog";
 import { PermissionChecklist } from "@/features/community-settings/PermissionChecklist";
 import { PeoplePicker } from "@/features/dms/PeoplePicker";
 import {
@@ -275,6 +276,7 @@ function BotEditor({
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        <EditProfileDialog user={bot} bot triggerClassName={secondaryButtonClass} />
         <IconPicker onIcon={(iconId) => sync.updateBotProfile(bot.id, { icon: iconId })}>
           {(open, uploading) => (
             <Button onPress={open} isDisabled={uploading} className={secondaryButtonClass}>

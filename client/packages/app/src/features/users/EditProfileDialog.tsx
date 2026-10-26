@@ -48,26 +48,35 @@ const iconButtonClass =
   "rounded-md border border-line p-1.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
   "pressed:bg-surface-hover disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-accent/50";
 
-/** The signed-in user's "Edit profile" control and the form it opens. */
+/**
+ * The "Edit profile" control and the form it opens: the signed-in user's own, or with `bot` a
+ * bot's they own, opened from a labelled button rather than the pencil.
+ */
 export function EditProfileDialog({
   user,
   triggerClassName,
+  bot = false,
 }: {
   user: User;
   triggerClassName: string;
+  bot?: boolean;
 }) {
   const m = useMessages();
   return (
     <DialogTrigger>
-      <Tooltip text={m.profile.edit}>
-        <Button aria-label={m.profile.edit} className={triggerClassName}>
-          <PencilSimpleIcon size={24} aria-hidden="true" />
-        </Button>
-      </Tooltip>
+      {bot ? (
+        <Button className={triggerClassName}>{m.profile.edit}</Button>
+      ) : (
+        <Tooltip text={m.profile.edit}>
+          <Button aria-label={m.profile.edit} className={triggerClassName}>
+            <PencilSimpleIcon size={24} aria-hidden="true" />
+          </Button>
+        </Tooltip>
+      )}
       <ModalOverlay className={overlayClass} isDismissable>
         <Modal className={modalClass}>
           <Dialog className={dialogClass}>
-            {({ close }) => <ProfileEditor user={user} close={close} />}
+            {({ close }) => <ProfileEditor user={user} bot={bot} close={close} />}
           </Dialog>
         </Modal>
       </ModalOverlay>
@@ -75,7 +84,7 @@ export function EditProfileDialog({
   );
 }
 
-function ProfileEditor({ user, close }: { user: User; close: () => void }) {
+function ProfileEditor({ user, bot, close }: { user: User; bot: boolean; close: () => void }) {
   const m = useMessages();
   const sync = useSync();
   const client = useAspenClient();
@@ -97,9 +106,13 @@ function ProfileEditor({ user, close }: { user: User; close: () => void }) {
     setPending(true);
     setError(null);
     try {
-      const updated = await sync.updateProfile(patch);
-      if ("displayName" in patch) {
-        void signalProfileToPasskeys(client, transport, updated);
+      if (bot) {
+        await sync.updateBotProfile(user.id, patch);
+      } else {
+        const updated = await sync.updateProfile(patch);
+        if ("displayName" in patch) {
+          void signalProfileToPasskeys(client, transport, updated);
+        }
       }
       close();
     } catch (e) {
