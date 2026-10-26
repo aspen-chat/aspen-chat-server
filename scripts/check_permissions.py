@@ -3302,6 +3302,17 @@ def join_messages(world: World, check: Checks) -> None:
     check("with join messages turned off, a join posts none", joins(general) == [member["id"]], joins(general))
 
 
+def usernames(world: World, check: Checks) -> None:
+    say("a username, which nobody changes once the account is made")
+    stack, member = world.stack, world.member
+    check("a profile change giving a username is refused, not ignored",
+          stack.status("PATCH", "/users/@me", {"name": f"renamed{world.run}"}, member["token"]) == 400)
+    check("and the name stands",
+          stack.api("GET", "/users/@me", token=member["token"])["name"] == member["name"])
+    check("while the rest of the profile changes",
+          stack.status("PATCH", "/users/@me", {"displayName": "Still me"}, member["token"]) == 200)
+
+
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, replies, calls, attachments,
@@ -3310,7 +3321,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
-             marking_unread, join_messages, identity_providers]
+             marking_unread, join_messages, identity_providers, usernames]
 
 
 def main() -> None:

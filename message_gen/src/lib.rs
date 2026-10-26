@@ -381,10 +381,23 @@ fn populate_field_types(
                             is_id = true;
                         }
                         "permanent" => {
-                            other_permanent_fields.push(Field {
+                            let stripped = Field {
                                 attrs: not_our_attrs(field.attrs.iter()).cloned().collect(),
                                 ..field.clone()
-                            });
+                            };
+                            // `permanent = "server_mutable"`: clients set the field at creation
+                            // and never after, while the server may still change it, so update
+                            // events carry it and update requests do not.
+                            if let Ok(v) = meta.value() {
+                                let Ok(s) = v.parse::<LitStr>() else {
+                                    abort!(v.span(), "permanent value must be unspecified, or \"server_mutable\"");
+                                };
+                                if s.value() != "server_mutable" {
+                                    abort!(v.span(), "must be \"server_mutable\" or unspecified for a field nothing changes after creation")
+                                }
+                                server_mutable_fields.push(stripped.clone());
+                            }
+                            other_permanent_fields.push(stripped);
                             is_other = false;
                             is_permanent = true;
                         }

@@ -1864,10 +1864,10 @@ async fn reset_profile(
     let mut attempts = 0;
     let updated = loop {
         attempts += 1;
-        if renamed {
-            request.name = Some(placeholder_username());
-        }
-        match crate::user::apply_profile_update(state.clone(), subject, request.clone()).await {
+        let rename = renamed.then(placeholder_username);
+        match crate::user::apply_profile_update(state.clone(), subject, request.clone(), rename)
+            .await
+        {
             Err(crate::Error::Diesel(diesel::result::Error::DatabaseError(
                 diesel::result::DatabaseErrorKind::UniqueViolation,
                 _,

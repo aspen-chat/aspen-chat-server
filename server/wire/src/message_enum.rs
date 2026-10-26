@@ -24,6 +24,10 @@ enum MessageEnumSource {
     User {
         #[message_gen(id)]
         id: UserId,
+        // Chosen at registration. Its owner never changes it; the server may, when a moderator
+        // resets it (`app::report`) or a foreign user's home renames them, announced by the
+        // user's `update`.
+        #[message_gen(permanent = "server_mutable")]
         name: String,
         #[message_gen(secret)]
         password: String,

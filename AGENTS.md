@@ -917,6 +917,10 @@ entity and its fields. From this single definition, the macro generates:
   from both request bodies.
 - `#[message_gen(permanent)]` — Field is set at creation and cannot be updated. Included in
   `CreateRequest` but not `UpdateRequest`.
+- `#[message_gen(permanent = "server_mutable")]` — As above, but the server may still change the
+  field (`User.name`, which a moderator's reset renames), so the `Update` server event carries it. A
+  request that still gives such a field is refused rather than ignored, with
+  `api::extract::refusing`.
 - `#[message_gen(server_authoritative)]` — Server controls this field entirely. Clients cannot set
   or modify it (e.g., timestamps, author IDs).
 - `#[message_gen(server_authoritative = "mutable")]` — As above, but the server may change the field

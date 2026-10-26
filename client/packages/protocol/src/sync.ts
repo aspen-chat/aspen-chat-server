@@ -3498,8 +3498,7 @@ export class AspenSync {
   async updateProfile(patch: UserUpdateRequest): Promise<User> {
     const result = await this.#client.api.PATCH("/api/v1/users/{user}", {
       params: { path: { user: "@me" } },
-      // A new username composed (NFC), as the server requires.
-      body: patch.name == null ? patch : { ...patch, name: patch.name.normalize("NFC") },
+      body: patch,
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));

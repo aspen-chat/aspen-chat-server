@@ -41,6 +41,22 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Json<T> {
     }
 }
 
+/// `body` as a `T`, refused with `validation` and `refusal` when it gives `field`: something a
+/// client may ask to change that nothing changes, such as a username, which `T` leaves out. A
+/// client that sends it anyway is told so rather than having it ignored. A handler using this
+/// takes `Json<serde_json::Value>` and names `T` as its `request_body`.
+pub fn refusing<T: DeserializeOwned>(
+    body: serde_json::Value,
+    field: &str,
+    refusal: std::borrow::Cow<'static, str>,
+) -> Result<T, ApiError> {
+    if body.get(field).is_some() {
+        return Err(ApiError::new(ProblemCode::Validation).with_detail(refusal));
+    }
+    serde_json::from_value(body)
+        .map_err(|error| ApiError::new(ProblemCode::BadRequest).with_detail(error.to_string()))
+}
+
 /// Whether JSON text holds an escaped U+0000 (`\u0000`) in a string. JSON holds no raw control
 /// characters, and backslashes appear only in strings, each starting a two-character escape or a
 /// `\uXXXX`, so stepping over escapes finds every one.
