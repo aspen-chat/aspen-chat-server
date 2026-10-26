@@ -109,3 +109,41 @@ test("all servers are searched at once, newest first", async ({ page }) => {
   await expect(results.first()).toContainText(`on ${foreignDomain}`);
   await expect(results.nth(1)).toContainText(ownText);
 });
+
+test("a search by its author can be widened to anyone again", async ({ page }) => {
+  await signInToWorld(page);
+  const dialog = await openSearch(page);
+  const from = dialog.getByRole("combobox", { name: "From" });
+  await expect(from).toHaveAttribute("placeholder", "Anyone");
+  await dialog.getByRole("button", { name: /^Show suggestions/ }).click();
+  await page.getByRole("option", { name: /^Bob With A Rather Long Display Name/ }).click();
+  const searched = () =>
+    page.waitForRequest((request) => new URL(request.url()).pathname.endsWith("/messages"));
+  let asked = searched();
+  await dialog.getByRole("searchbox", { name: "Words" }).fill("crisps");
+  await dialog.getByRole("button", { name: "Search", exact: true }).click();
+  expect(new URL((await asked).url()).searchParams.get("filter[author]")).not.toBeNull();
+  await dialog.getByRole("button", { name: /^Show suggestions/ }).click();
+  await page.getByRole("option", { name: "Anyone", exact: true }).click();
+  await expect(page.getByRole("listbox")).toBeHidden();
+  await expect(from).toHaveValue("");
+  asked = searched();
+  await dialog.getByRole("button", { name: "Search", exact: true }).click();
+  expect(new URL((await asked).url()).searchParams.get("filter[author]")).toBeNull();
+});
+
+test("emptying the author field stops narrowing the search by them", async ({ page }) => {
+  await signInToWorld(page);
+  const dialog = await openSearch(page);
+  const from = dialog.getByRole("combobox", { name: "From" });
+  await dialog.getByRole("button", { name: /^Show suggestions/ }).click();
+  await page.getByRole("option", { name: /^Bob With A Rather Long Display Name/ }).click();
+  await from.fill("");
+  await from.press("Escape");
+  const asked = page.waitForRequest((request) =>
+    new URL(request.url()).pathname.endsWith("/messages"),
+  );
+  await dialog.getByRole("searchbox", { name: "Words" }).fill("crisps");
+  await dialog.getByRole("button", { name: "Search", exact: true }).click();
+  expect(new URL((await asked).url()).searchParams.get("filter[author]")).toBeNull();
+});

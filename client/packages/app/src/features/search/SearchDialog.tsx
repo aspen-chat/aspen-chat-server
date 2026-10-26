@@ -372,7 +372,12 @@ function SearchPanel({
           </div>
         </div>
         {byAuthor && (
-          <MemberPicker communityId={communityId} label={m.search.from} onChange={setAuthor} />
+          <MemberPicker
+            communityId={communityId}
+            label={m.search.from}
+            anyoneLabel={m.search.fromAnyone}
+            onChange={setAuthor}
+          />
         )}
         <Button type="submit" isDisabled={!ready || pending} className={primaryButtonClass}>
           {pending ? m.search.searching : m.search.submit}

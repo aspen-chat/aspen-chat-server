@@ -149,4 +149,5 @@ It tells who sent what to whom in private calls, so only holders of Moderate any
 
 - `GET /admin/file-transfers`: newest offer first, paged by `before` and `limit`, one person's by
   `filter[user]` (as sender or receiver);
-- the dashboard's File transfers section.
+- the dashboard's File transfers section, narrowed to one person by `AdminUserPicker` and widened
+  again by its Anyone option or by emptying it.

@@ -27,6 +27,7 @@ const TAB_OF: Record<string, string> = {
   "Deployment profile": "Settings",
   "Privacy Policy and Terms of Use": "Settings",
   Policies: "Settings",
+  "File transfers": "File transfers",
 };
 
 const tabs = (page: Page) => page.getByRole("navigation", { name: "Administration sections" });
@@ -428,4 +429,38 @@ test("a Privacy Policy is published, read on its page, and withdrawn", async ({ 
   // What was written stays, to publish again.
   await expect(field).toHaveValue("# Ours\n\nWe keep little.");
   await expect(publish).toBeEnabled();
+});
+
+test("the file transfers can be narrowed to one person and widened to anyone again", async ({
+  page,
+}) => {
+  // The record is for those who may moderate any community, which the world's caller may not.
+  await page.route(/\/api\/v1\/users\/@me\/admin$/, (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        permissions: ["viewDashboard", "moderateCommunities"],
+        roles: [deploymentAdministrator],
+        inclusions: [],
+      }),
+    }),
+  );
+  await page.reload();
+  const transfers = await openSection(page, "File transfers");
+  const log = transfers.getByRole("table", { name: "File transfers" });
+  await expect(log.getByText("lunch-menu.pdf")).toBeVisible();
+  await expect(log.getByText("holiday-photos.zip")).toBeVisible();
+  const of = transfers.getByRole("combobox", { name: "Only offers made or received by" });
+  await of.click();
+  await page.getByRole("option", { name: /^Bob With A Rather Long Display Name/ }).click();
+  await expect(of).toHaveValue("Bob With A Rather Long Display Name");
+  await expect(log.getByText("holiday-photos.zip")).toBeHidden();
+  await expect(log.getByText("lunch-menu.pdf")).toBeVisible();
+  await transfers.getByRole("button", { name: /^Show suggestions/ }).click();
+  await page.getByRole("option", { name: "Anyone", exact: true }).click();
+  await expect(page.getByRole("listbox")).toBeHidden();
+  await expect(of).toHaveValue("");
+  await expect(of).toHaveAttribute("placeholder", "Anyone");
+  await expect(log.getByText("holiday-photos.zip")).toBeVisible();
+  await expect(log.getByText("lunch-menu.pdf")).toBeVisible();
 });
