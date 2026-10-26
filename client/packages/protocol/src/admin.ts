@@ -173,17 +173,20 @@ export class AdminApi {
     }
   }
 
-  /** A page of the report cases in one state. Takes Review reports. */
+  /**
+   * A page of the report cases in one state, in the order the server lists them, continuing
+   * after the case `before` names when given. Takes Review reports.
+   */
   async reportCases(
     status: ReportStatus,
-    page: { offset?: number; limit?: number } = {},
+    page: { before?: string; limit?: number } = {},
   ): Promise<ReportCaseList> {
     return adminRead(
       await this.#client.api.GET("/api/v1/admin/reports", {
         params: {
           query: {
             "filter[status]": status,
-            ...(page.offset === undefined || page.offset === 0 ? {} : { offset: page.offset }),
+            ...(page.before === undefined ? {} : { before: page.before }),
             ...(page.limit === undefined ? {} : { limit: page.limit }),
           },
         },

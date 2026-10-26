@@ -11,6 +11,9 @@ Review takes the deployment permission Review reports.
 | `GET /admin/report-counts`                                    | Counts the open and dismissed cases, each up to `MAX_COUNTED_CASES` (1000, shown as "999+")                                                                                                                                                                            |
 | `GET /admin/reports/{case}/context`                           | Reads the reported message's surroundings (below)                                                                                                                                                                                                                      |
 
+The dashboard's Reports section shows a page at a time, each further page read with `before`, and
+reads every page it shows again when what awaits review changes.
+
 The list and the single read give each case with:
 
 - Its latest `SHOWN_REPORTS` (50) reports, and `reportCount`, how many it has in all.
