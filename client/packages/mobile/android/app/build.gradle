@@ -49,6 +49,8 @@ dependencies {
     // provides it before Android 14, which has it built in.
     implementation "androidx.credentials:credentials:$androidxCredentialsVersion"
     implementation "androidx.credentials:credentials-play-services-auth:$androidxCredentialsVersion"
+    // Whether the user is old enough, where the law has Play say (`AspenAgePlugin`).
+    implementation "com.google.android.play:age-signals:$playAgeSignalsVersion"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

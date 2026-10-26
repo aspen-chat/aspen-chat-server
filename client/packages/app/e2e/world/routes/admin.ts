@@ -117,6 +117,25 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
     ["GET", /^\/admin\/database-latency$/, () => admin.databaseLatency(url)],
     ["GET", /^\/deployment$/, admin.profile],
     [
+      "GET",
+      /^\/deployment\/documents\/(privacyPolicy|termsOfUse)$/,
+      () => admin.document(path.split("/").pop() ?? ""),
+    ],
+    [
+      "PUT",
+      /^\/deployment\/documents\/(privacyPolicy|termsOfUse)$/,
+      () =>
+        admin.publishDocument(
+          path.split("/").pop() ?? "",
+          (request.postDataJSON() as { body: string }).body,
+        ),
+    ],
+    [
+      "DELETE",
+      /^\/deployment\/documents\/(privacyPolicy|termsOfUse)$/,
+      () => admin.withdrawDocument(path.split("/").pop() ?? ""),
+    ],
+    [
       "PATCH",
       /^\/deployment$/,
       () => admin.updateProfile(request.postDataJSON() as { displayName?: string | null }),

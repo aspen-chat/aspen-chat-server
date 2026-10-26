@@ -312,6 +312,8 @@ streamSizesRefused: "NATS does not have %{asked} MiB of memory for the streams. 
 streamMemoryTooLittle: "NATS has %{available} MiB of memory for the streams, and each needs at least %{min} MiB. This server's operator needs to raise max_memory_store in the NATS server's configuration and restart NATS."
 deploymentDisplayNameLength: "A deployment's display name must be between 1 and %{max} characters. Shorten it, or clear it to welcome people without one."
 deploymentIconMissing: "Upload the deployment's icon first, and confirm the upload."
+documentBlank: "Write the document before publishing it, or withdraw it to publish none."
+documentTooLong: "A document may be at most %{max} characters long. Shorten it, or link to a longer version kept elsewhere."
 federationNotADomain: "Enter the deployment's domain, such as chat.example.org, with :port if it is not served on 443."
 federationOwnDomain: "That is this deployment's own domain."
 federationGateNeedsDomain: "A federation gate can open only once this deployment has a domain. Its operators need to give it an https `public_url` in aspen.toml and restart its servers."

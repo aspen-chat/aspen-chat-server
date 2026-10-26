@@ -63,7 +63,13 @@ function useKnownHosts(): KnownHosts {
  * any other target, a relative or protocol-relative one included, which on a page loaded from a
  * file would become a `file:` link, leaves its text as plain text.
  */
-function ExternalLink({ href, children }: { href: string | undefined; children: ReactNode }) {
+export function ExternalLink({
+  href,
+  children,
+}: {
+  href: string | undefined;
+  children: ReactNode;
+}) {
   const target = messageLinkUrl(href);
   if (target === undefined) {
     return <span>{children}</span>;

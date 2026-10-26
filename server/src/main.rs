@@ -136,6 +136,11 @@ enum Command {
         #[clap(subcommand)]
         action: operator::JobsCommand,
     },
+    /// Operator commands for the deployment's Privacy Policy and Terms of Use.
+    Documents {
+        #[clap(subcommand)]
+        action: operator::DocumentsCommand,
+    },
     /// Operator commands for registration invites.
     Invites {
         #[clap(subcommand)]
@@ -277,6 +282,7 @@ async fn run(options: Opt) -> Result<()> {
             Command::Admin { action } => operator::admin(&config, action).await,
             Command::Attachments { action } => operator::attachments(&config, action).await,
             Command::Invites { action } => operator::invites(&config, action).await,
+            Command::Documents { action } => operator::documents(&config, action).await,
             Command::Communities { action } => operator::communities(&config, action).await,
             Command::Jobs { action } => operator::jobs(&config, action).await,
             Command::Federation { action } => operator::federation(&config, action).await,

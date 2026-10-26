@@ -100,6 +100,18 @@ export async function endOtherSignIns(client: AspenClient): Promise<void> {
 }
 
 /**
+ * Deletes the account: every sign-in ends, communities it owns pass to their highest-ranked
+ * members, and its email address, second factors, and identities at providers are let go.
+ * Needs a recent verification.
+ */
+export async function deleteAccount(client: AspenClient): Promise<void> {
+  const result = await client.api.DELETE(`${API_PREFIX}/users/{user}`, me);
+  if (result.error !== undefined) {
+    throw new ApiProblemError(problemOf(result.error, result.response));
+  }
+}
+
+/**
  * Unlinks an identity provider from the account. Needs a recent verification; refused with
  * `lastSignInMethod` when it is the account's only way in.
  */

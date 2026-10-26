@@ -25,6 +25,7 @@ const TAB_OF: Record<string, string> = {
   Communities: "Communities",
   "Moderation log": "Moderation log",
   "Deployment profile": "Settings",
+  "Privacy Policy and Terms of Use": "Settings",
   Policies: "Settings",
 };
 
@@ -365,4 +366,30 @@ test("the plugins tab lists what is installed, what each may do, and what it kee
   await expect(section).toContainText("Keeps a count of each channel's messages.");
   // Without Manage plugins, nothing here changes anything.
   await expect(section.getByRole("button", { name: "Turn off" })).toHaveCount(0);
+});
+
+test("a Privacy Policy is published, read on its page, and withdrawn", async ({ page }) => {
+  const documents = await openSection(page, "Privacy Policy and Terms of Use");
+  const policy = documents.locator("form").first();
+  const field = policy.getByRole("textbox", { name: "Privacy Policy" });
+  await expect(policy.getByText(/^Not published\./)).toBeVisible();
+  const publish = policy.getByRole("button", { name: "Publish" });
+  await expect(publish).toBeDisabled();
+  await field.fill("# Ours\n\nWe keep little.");
+  await publish.click();
+  await expect(policy.getByRole("status")).toHaveText("Published.");
+  await expect(publish).toBeDisabled();
+
+  await policy.getByRole("link", { name: "Open its page" }).click();
+  await expect(page).toHaveURL(/\/privacy$/);
+  await expect(page.getByText("We keep little.")).toBeVisible();
+  await page.goBack();
+
+  const withdraw = policy.getByRole("button", { name: "Withdraw" });
+  await withdraw.click();
+  await expect(policy.getByRole("status")).toHaveText(/^Withdrawn\./);
+  await expect(withdraw).toHaveCount(0);
+  // What was written stays, to publish again.
+  await expect(field).toHaveValue("# Ours\n\nWe keep little.");
+  await expect(publish).toBeEnabled();
 });

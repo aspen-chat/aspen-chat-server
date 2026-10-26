@@ -702,6 +702,21 @@ body {
 .message-body input[type="checkbox"] {
   margin-inline-end: 0.4rem;
 }
+/* A deployment's document (`DocumentText`) is read as a page, not a message: its paragraphs flow
+   as Markdown wraps them, and its headings stand apart from the text before them. Its headings
+   start one level down, under the page's title. */
+.document-body p {
+  white-space: normal;
+}
+.document-body > :is(h2, h3, h4) {
+  margin-top: 1.5em;
+}
+.document-body h2 {
+  font-size: var(--text-lg);
+}
+.document-body h3 {
+  font-size: var(--text-base);
+}
 /* Spoilers: a solid block until revealed, then a faint tint so the reader can see what was hidden. */
 .message-body .spoiler {
   border-radius: 0.25rem;

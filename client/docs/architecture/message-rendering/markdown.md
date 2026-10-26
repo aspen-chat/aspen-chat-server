@@ -2,7 +2,8 @@
 
 Message bodies are GitHub-flavoured Markdown, rendered by `src/features/messages/Markdown.tsx` with
 `react-markdown`. No raw HTML is allowed, and unsafe schemes are dropped. Element styles are the
-`message-body` rules in `styles.css`. Only messages are rendered by `Markdown.tsx`.
+`message-body` rules in `styles.css`. Only messages are rendered by `Markdown.tsx`; a deployment's
+documents have `DocumentText` (`documents.md`), which shares its link handling and limits.
 
 ## Limits
 

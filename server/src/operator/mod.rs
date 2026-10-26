@@ -10,7 +10,8 @@
 //! `federation` manages the directory of other deployments and this deployment's key
 //! (`app::federation`), as Manage federation does from the dashboard, and can also replace the
 //! key, which no account can. `settings` shows and changes the deployment's settings
-//! (`app::deployment_settings`), and `voice-servers` keeps the registry of voice servers
+//! (`app::deployment_settings`), `documents` its Privacy Policy and Terms of Use
+//! (`app::deployment_document`), and `voice-servers` keeps the registry of voice servers
 //! (`app::voice`), as the dashboard does. `identity-providers` keeps the OpenID Connect providers
 //! people sign in through (`app::identity_provider`), as the dashboard does. `plugins` installs, configures, and removes plugins
 //! (`app::plugin::install`), which no account can install or grant permissions to.
@@ -21,6 +22,7 @@ mod admin;
 mod attachments;
 mod bench;
 mod communities;
+mod documents;
 mod federation;
 mod identity_providers;
 mod invites;
@@ -34,6 +36,7 @@ pub use admin::{AdminCommand, admin};
 pub use attachments::{AttachmentsCommand, attachments};
 pub use bench::{BenchCommand, bench};
 pub use communities::{CommunitiesCommand, communities};
+pub use documents::{DocumentsCommand, documents};
 pub use federation::{FederationCommand, federation};
 pub use identity_providers::{IdentityProvidersCommand, identity_providers};
 pub use invites::{InvitesCommand, invites};

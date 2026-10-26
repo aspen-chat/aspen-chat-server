@@ -18,6 +18,7 @@
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
 		A5E000000000000000000001 /* MainViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000011 /* MainViewController.swift */; };
 		A5E000000000000000000002 /* AspenFilesPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000012 /* AspenFilesPlugin.swift */; };
+		A5E000000000000000000004 /* AspenAgePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000015 /* AspenAgePlugin.swift */; };
 		A5E000000000000000000003 /* AppUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000013 /* AppUITests.swift */; };
 		A5E000000000000000000121 /* WebPush.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000101 /* WebPush.swift */; };
 		A5E000000000000000000122 /* PushState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000102 /* PushState.swift */; };
@@ -61,6 +62,7 @@
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
 		A5E000000000000000000011 /* MainViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewController.swift; sourceTree = "<group>"; };
 		A5E000000000000000000012 /* AspenFilesPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenFilesPlugin.swift; sourceTree = "<group>"; };
+		A5E000000000000000000015 /* AspenAgePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenAgePlugin.swift; sourceTree = "<group>"; };
 		A5E000000000000000000013 /* AppUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUITests.swift; sourceTree = "<group>"; };
 		A5E000000000000000000014 /* AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A5E000000000000000000101 /* WebPush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPush.swift; sourceTree = "<group>"; };
@@ -131,6 +133,7 @@
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				A5E000000000000000000011 /* MainViewController.swift */,
 				A5E000000000000000000012 /* AspenFilesPlugin.swift */,
+				A5E000000000000000000015 /* AspenAgePlugin.swift */,
 				A5E000000000000000000103 /* AspenPushPlugin.swift */,
 				A5E000000000000000000107 /* App.entitlements */,
 				A5E000000000000000000108 /* Localizable.strings */,
@@ -330,6 +333,7 @@
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				A5E000000000000000000001 /* MainViewController.swift in Sources */,
 				A5E000000000000000000002 /* AspenFilesPlugin.swift in Sources */,
+				A5E000000000000000000004 /* AspenAgePlugin.swift in Sources */,
 				A5E000000000000000000123 /* AspenPushPlugin.swift in Sources */,
 				A5E000000000000000000121 /* WebPush.swift in Sources */,
 				A5E000000000000000000122 /* PushState.swift in Sources */,

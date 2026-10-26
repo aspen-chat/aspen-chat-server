@@ -1054,6 +1054,33 @@ def deployment_settings(world: World, check: Checks) -> None:
     stack.command("admin", "revoke", world.owner["name"])
 
 
+
+def deployment_documents(world: World, check: Checks) -> None:
+    say("the deployment's Privacy Policy and Terms of Use")
+    stack = world.stack
+    policy = "/deployment/documents/privacyPolicy"
+    check("anyone reads one not yet published, as none, signed out", stack.api("GET", policy)["body"] is None)
+    check("publishing one takes Manage deployment settings",
+          stack.status("PUT", policy, {"body": "# Privacy"}, world.owner["token"]) == 403)
+    stack.command("admin", "grant", world.owner["name"])
+    check("which an administrator has", stack.status("PUT", policy, {"body": "# Privacy"}, world.owner["token"]) == 200)
+    check("and then anyone reads it, signed out", stack.api("GET", policy)["body"] == "# Privacy")
+    check("and signed in", stack.api("GET", policy, token=world.member["token"])["body"] == "# Privacy")
+    stack.command("admin", "revoke", world.owner["name"])
+    check("once the role is taken, the next change is refused",
+          stack.status("PUT", policy, {"body": "# Changed"}, world.owner["token"]) == 403)
+    check("and so is withdrawing it", stack.status("DELETE", policy, token=world.owner["token"]) == 403)
+    check("leaving it as it was", stack.api("GET", policy)["body"] == "# Privacy")
+    terms = stack.work / "terms.md"
+    terms.write_text("# Terms\n\nBe kind.\n")
+    stack.command("documents", "set", "termsOfUse", str(terms))
+    check("the terminal publishes one from a file",
+          stack.api("GET", "/deployment/documents/termsOfUse")["body"] == "# Terms\n\nBe kind.\n")
+    stack.command("documents", "withdraw", "termsOfUse")
+    stack.command("documents", "withdraw", "privacyPolicy")
+    check("and withdraws them", stack.api("GET", policy)["body"] is None
+          and stack.api("GET", "/deployment/documents/termsOfUse")["body"] is None)
+
 def sign_ins(world: World, check: Checks) -> None:
     say("sign-ins ending while their streams are open")
     stack = world.stack
@@ -3305,7 +3332,7 @@ def join_messages(world: World, check: Checks) -> None:
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, replies, calls, attachments,
-             operators, deployment_settings, sign_ins, removal, presence, chosen_presence, lost_presence_keys, typing, channel_mana, name_colours, dual_invites, device_links, typed_device_links,
+             operators, deployment_settings, deployment_documents, sign_ins, removal, presence, chosen_presence, lost_presence_keys, typing, channel_mana, name_colours, dual_invites, device_links, typed_device_links,
              passkeys,
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,

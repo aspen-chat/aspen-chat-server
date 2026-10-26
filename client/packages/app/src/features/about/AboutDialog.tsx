@@ -10,6 +10,7 @@ import { useAspenClient } from "@/api/context";
 import { detectShell } from "@/config";
 import { authMethods } from "@/features/auth/authMethods";
 import { useDeploymentProfile } from "@/features/auth/deploymentProfile";
+import { DocumentLinks } from "@/features/documents/DocumentLinks";
 import { linkButtonClass } from "@/features/auth/styles";
 import {
   dialogClass,
@@ -28,9 +29,9 @@ import { format, type Messages } from "@/i18n/messages";
  * is on (its name, or its address when it has none), the versions of everything this copy of
  * Aspen is made of (the app and the commit it was built from, the desktop or phone app around
  * it, the server's software, and the protocol versions each side speaks), the way to the Open
- * Source Attributions page, which `onNavigate` is told of so Settings can close, and, last, what
- * the Mozilla Public License lets the user do, with the license and the source code this build
- * was made from.
+ * Source Attributions page and to the deployment's Privacy Policy and Terms of Use, which
+ * `onNavigate` is told of so Settings can close, and, last, what the Mozilla Public License lets
+ * the user do, with the license and the source code this build was made from.
  */
 export function AboutDialog({ onNavigate }: { onNavigate: () => void }) {
   const m = useMessages();
@@ -113,6 +114,14 @@ function AboutPanel({ onNavigate }: { onNavigate: () => void }) {
         <Link to="/attributions" onClick={onNavigate} className={linkButtonClass + " self-start"}>
           {m.about.attributions}
         </Link>
+      </section>
+      <section aria-labelledby="about-documents" className={planeClass}>
+        <h3 id="about-documents" className="text-sm font-semibold text-ink-muted">
+          {deployment === undefined
+            ? m.documents.heading
+            : format(m.documents.headingNamed, { name: deployment })}
+        </h3>
+        <DocumentLinks onNavigate={onNavigate} />
       </section>
       <section aria-labelledby="about-rights" className={planeClass}>
         <h3 id="about-rights" className="text-sm font-semibold text-ink-muted">

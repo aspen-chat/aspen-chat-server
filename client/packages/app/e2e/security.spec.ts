@@ -80,3 +80,27 @@ test("a user changes their own password, and a wrong current one is refused at i
   ).toBeVisible();
   expect(changes.at(-1)).toEqual({ oldPassword: "hunter22", newPassword: "a new password" });
 });
+
+test("a user deletes their account after saying so, and is signed out", async ({ page }) => {
+  const deleted: string[] = [];
+  await signInToWorld(page, async (p) => {
+    await stubSecurity(p, []);
+    await p.route(/\/api\/v1\/users\/(%40|@)me$/, (route) => {
+      if (route.request().method() !== "DELETE") {
+        return route.fallback();
+      }
+      deleted.push(route.request().url());
+      return route.fulfill({ status: 204 });
+    });
+  });
+  await openSecurity(page);
+  const section = page
+    .getByRole("dialog", { name: "Sign-in and security" })
+    .getByRole("region", { name: "Delete your account" });
+  await section.getByRole("button", { name: "Delete account…" }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Delete your account?" });
+  await expect(confirm).toContainText("This can't be undone.");
+  await confirm.getByRole("button", { name: "Delete my account" }).click();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  expect(deleted).toHaveLength(1);
+});
