@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @aspen/app build:shell",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node node_modules/typescript-7/bin/tsc --noEmit",
     "test": "echo \"@aspen/mobile: run test:android with an Android SDK\"",
     "test:android": "cd android && ./gradlew :app:testDebugUnitTest :app:connectedDebugAndroidTest",
     "sync": "pnpm build && cap sync",
@@ -31,6 +31,6 @@
   "devDependencies": {
     "@capacitor/cli": "^8.5.3",
     "@types/node": "^26.6.4",
-    "typescript": "~5.9.3"
+    "typescript-7": "npm:typescript@~7.0.2"
   }
 }

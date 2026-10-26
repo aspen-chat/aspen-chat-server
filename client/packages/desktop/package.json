@@ -11,7 +11,7 @@
     "build": "electron-vite build",
     "fetch:libobs": "node scripts/fetch-libobs.mjs",
     "build:native": "node scripts/build-native.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node node_modules/typescript-7/bin/tsc --noEmit",
     "test": "node --test 'src/**/*.test.ts'",
     "package:build": "install-electron && pnpm --filter @aspen/app build:desktop && pnpm build:native && electron-vite build",
     "package": "pnpm package:build && electron-builder --config electron-builder.yml",
@@ -24,7 +24,7 @@
     "electron": "^44.9.1",
     "electron-builder": "^26.17.0",
     "electron-vite": "^5.0.0",
-    "typescript": "~5.9.3",
+    "typescript-7": "npm:typescript@~7.0.2",
     "vite": "^7.3.7"
   }
 }

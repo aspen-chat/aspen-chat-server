@@ -60,6 +60,13 @@ pnpm --filter @aspen/desktop package:flatpak   # the Flatpak (Linux; see docs/ar
 pnpm --filter @aspen/mobile run:android   # build, sync, and install on a phone (see below)
 ```
 
+Two TypeScripts are installed. Type checking, in `typecheck` and before each `vite build`, runs
+TypeScript 7's native compiler, installed as `typescript-7` and called by its path, since both
+packages name their binary `tsc`. `typescript` stays on 6.0 for what loads the compiler's JavaScript
+API, which 7 does not have: typescript-eslint's type-aware rules and `openapi-typescript` in
+codegen. `openapi-typescript` asks for TypeScript 5 as a peer, so `pnpm install` warns about it;
+codegen writes the same files under 6.0. Move `typescript` to 7 when both tools support it.
+
 ## Running the Android app on a phone
 
 The app bundles a copy of the `build:shell` output rather than loading a dev server, so rebuild and

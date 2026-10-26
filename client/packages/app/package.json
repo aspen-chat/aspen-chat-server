@@ -7,11 +7,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "build:shell": "tsc --noEmit && vite build --base ./ --mode mobile",
-    "build:desktop": "tsc --noEmit && vite build --base ./ --mode desktop",
+    "build": "node node_modules/typescript-7/bin/tsc --noEmit && vite build",
+    "build:shell": "node node_modules/typescript-7/bin/tsc --noEmit && vite build --base ./ --mode mobile",
+    "build:desktop": "node node_modules/typescript-7/bin/tsc --noEmit && vite build --base ./ --mode desktop",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node node_modules/typescript-7/bin/tsc --noEmit",
     "test": "vitest run",
     "e2e": "playwright test",
     "e2e:install": "playwright install --with-deps chromium firefox webkit"
@@ -129,7 +129,7 @@
     "jsdom": "^30.1.2",
     "tailwindcss": "^4.3.3",
     "tailwindcss-react-aria-components": "^2.2.0",
-    "typescript": "~5.9.3",
+    "typescript-7": "npm:typescript@~7.0.2",
     "vite": "^7.3.7",
     "vitest": "^5.0.3"
   }
