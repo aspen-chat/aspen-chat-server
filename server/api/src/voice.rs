@@ -53,11 +53,16 @@ pub struct VoiceServer {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub last_report_at: Option<DateTime<Utc>>,
+    /// What the voice server needs to sign in to NATS as itself: its user's entry for NATS's
+    /// `authorization { users = [...] }`, with `PASSWORD` to replace by one its operator
+    /// chooses and gives it under `[nats_user]`. Its id goes in its `voice_server.toml` too.
+    pub nats_user: String,
 }
 
 impl From<app::voice::VoiceServer> for VoiceServer {
     fn from(row: app::voice::VoiceServer) -> Self {
         VoiceServer {
+            nats_user: row.nats_user(),
             id: row.id,
             name: row.name,
             url: row.url,

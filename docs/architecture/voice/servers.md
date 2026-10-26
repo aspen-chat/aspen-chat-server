@@ -12,14 +12,19 @@ servers by that row; the voice server learns its own row from `id` in `voice_ser
 
 ## Managing servers
 
-| Route    | How                                                        |
-| -------- | ---------------------------------------------------------- |
-| REST     | `/voice-servers`, with the Manage voice servers permission |
-| Terminal | `aspen-chat-server voice-servers list\|add\|set\|remove`   |
+| Route     | How                                                                          |
+| --------- | ---------------------------------------------------------------------------- |
+| REST      | `/voice-servers`, with the Manage voice servers permission                   |
+| Dashboard | The Voice servers section of the fleet tab (`VoiceServers.tsx`), on that API |
+| Terminal  | `aspen-chat-server voice-servers list\|add\|set\|remove`                     |
 
 - `add` registers a server, or updates the one of that name. A deployment's scripts may run it every
   time.
-- `remove` refuses a server that holds calls. Ending them takes a server's context.
+- Every record (`api::voice::VoiceServer`) carries `natsUser`, the server's NATS user's entry for
+  NATS's authorization (`app::voice::VoiceServer::nats_user`), which `add` prints and the dashboard
+  shows under Setup with the id, so a server registered from either can be given both.
+- `remove` refuses a server that holds calls. Ending them takes a server's context. The REST
+  `DELETE`, and so the dashboard, ends them instead (`app::voice::delete_server`).
 - Removing a voice server clears its waiting reports (see [Reports](voice-reports.md)).
 - Enabling or disabling a server ends a suspension; enabling it also forgets its failures (see
   [Choosing a server](server-selection.md)).

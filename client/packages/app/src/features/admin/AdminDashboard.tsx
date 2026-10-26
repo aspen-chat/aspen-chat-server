@@ -43,6 +43,7 @@ import { ADMIN_RAIL } from "@/features/layout/paneSizes";
 import { linkButtonClass } from "@/features/auth/styles";
 import { CommunityDirectory, UserDirectory } from "@/features/admin/Directories";
 import { FleetHealth } from "@/features/admin/FleetHealth";
+import { VoiceServersSection } from "@/features/admin/VoiceServers";
 import { Growth } from "@/features/admin/Growth";
 import { Overview } from "@/features/admin/Overview";
 import { ADMIN_TABS, useAdminTabLabel, type AdminTab } from "@/features/admin/adminTabs";
@@ -63,7 +64,7 @@ function useAllowedTabs(): AdminTab[] {
     permissions.has("removeContent");
   const allowed: Record<AdminTab, boolean> = {
     overview: view,
-    fleet: view,
+    fleet: view || permissions.has("manageVoiceServers"),
     invites: permissions.has("manageRegistrationInvites"),
     roles: true,
     reports: permissions.has("reviewReports"),
@@ -103,14 +104,14 @@ const TAB_ICONS: Record<AdminTab, Icon> = {
 
 /**
  * The Administration Dashboard, `/admin/{tab}`: a `RailPage` whose rail holds the tabs, beside
- * the one open. The tabs are the deployment's totals and their growth, the health of its servers,
- * registration invites, its roles, the reports people made and the categories they make them
- * in, searchable lists of its users and communities, the name and icon it welcomes people with
- * and its policies, its email newsletter, federation with other deployments, the identity
- * providers people may sign in with, its plugins, the moderation log, the record of file
- * transfers, and a preview of the background jobs. Each shows only to those with the deployment
- * permission it needs; the server refuses everyone else whatever this page shows. `/admin`, or
- * a tab the caller may not open, goes to the first they may.
+ * the one open. The tabs are the deployment's totals and their growth, its voice servers and the
+ * health of its servers, registration invites, its roles, the reports people made and the
+ * categories they make them in, searchable lists of its users and communities, the name and icon
+ * it welcomes people with and its policies, its email newsletter, federation with other
+ * deployments, the identity providers people may sign in with, its plugins, the moderation log,
+ * the record of file transfers, and a preview of the background jobs. Each shows only to those
+ * with the deployment permission it needs; the server refuses everyone else whatever this page
+ * shows. `/admin`, or a tab the caller may not open, goes to the first they may.
  */
 export function AdminDashboard({ tab }: { tab: string | undefined }) {
   const m = useMessages();
@@ -192,7 +193,12 @@ function TabContent({ tab }: { tab: AdminTab }) {
     case "overview":
       return <Totals />;
     case "fleet":
-      return <FleetHealth />;
+      return (
+        <>
+          {permissions.has("manageVoiceServers") && <VoiceServersSection />}
+          {permissions.has("viewDashboard") && <FleetHealth />}
+        </>
+      );
     case "invites":
       return <Invites view={permissions.has("viewDashboard")} />;
     case "roles":

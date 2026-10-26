@@ -120,7 +120,40 @@ export function administration() {
     eventStreamMib: null,
     voiceReportStreamMib: 64,
   };
+  // The registered voice servers, as `/voice-servers` lists them and its writes change.
+  const registered: {
+    id: string;
+    name: string;
+    url: string;
+    capacity: number;
+    enabled: boolean;
+    participants: number;
+    natsUser: string;
+  }[] = [
+    {
+      id: "0190f0a0-0000-7000-8000-000000000031",
+      name: "voice-east",
+      url: "https://voice-east.example",
+      capacity: 500,
+      enabled: true,
+      participants: 12,
+      natsUser: '    { user: "voice-east", password: "PASSWORD" }\n',
+    },
+  ];
   return {
+    voiceServers: () => registered,
+    createVoiceServer: (body: { name: string; url: string; capacity: number }) => {
+      const id = `0190f0a0-0000-7000-8000-0000000000${String(40 + registered.length)}`;
+      const server = {
+        ...body,
+        id,
+        enabled: true,
+        participants: 0,
+        natsUser: `    { user: "${body.name}", password: "PASSWORD" }\n`,
+      };
+      registered.push(server);
+      return reply(server, 201);
+    },
     profile: () => profile,
     settings: () => settings,
     updateSettings: (change: Record<string, number | boolean | null>) =>
