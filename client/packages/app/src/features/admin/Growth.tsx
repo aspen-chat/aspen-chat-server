@@ -1,4 +1,5 @@
 import type { Growth as GrowthSeries, GrowthRange } from "@aspen/protocol";
+import { Link } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
 import { ToggleButton, ToggleButtonGroup, useLocale } from "react-aria-components";
 import { useSync } from "@/api/hooks";
@@ -139,7 +140,15 @@ export function Growth() {
                 key={key}
                 className="flex min-w-0 flex-col gap-2 rounded-lg border border-line bg-surface-raised p-4"
               >
-                <figcaption className="text-sm font-medium">{m.admin[key]}</figcaption>
+                <figcaption className="text-sm font-medium">
+                  <Link
+                    to="/admin/$tab"
+                    params={{ tab: key }}
+                    className="rounded-sm outline-none underline-offset-2 hover:text-accent hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
+                  >
+                    {m.admin[key]}
+                  </Link>
+                </figcaption>
                 <LineChart
                   label={format(m.admin.chartLabel, {
                     series: m.admin[key],

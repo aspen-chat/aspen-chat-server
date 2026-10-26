@@ -51,6 +51,22 @@ test("the overview counts users and communities and says how people join", async
   await expect(overview.getByText("Invite only")).toBeVisible();
 });
 
+test("the overview's totals and the growth charts' titles open the directories", async ({
+  page,
+}) => {
+  for (const [section, name] of [
+    ["Overview", "Users"],
+    ["Overview", "Communities"],
+    ["Growth", "Users"],
+    ["Growth", "Communities"],
+  ] as const) {
+    const found = await openSection(page, section);
+    await found.getByRole("link", { name, exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/admin/${name.toLowerCase()}$`));
+    await expect(page.getByRole("region", { name })).toBeVisible();
+  }
+});
+
 test("the fleet names each server's state in words", async ({ page }) => {
   const fleet = await openSection(page, "Server fleet");
   const api = fleet.getByRole("table", { name: "API servers" });
