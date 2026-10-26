@@ -1,10 +1,21 @@
 //! Reading a page's preview metadata (Open Graph, Twitter Card, `<title>`, description, and
 //! `theme-color`) out of its `<head>` with `html5ever`'s tokenizer.
+//!
+//! A page whose head gives no description (Wikipedia's articles give none) is described by its
+//! lead paragraph instead: the first `<p>` of its main content, `<main>`, `<article>`, or the
+//! element whose `role` is `main`, that has at least [`MIN_LEAD_CHARS`] characters of shown text.
+//! Text inside elements a reader does not take as the paragraph's (footnote markers in `<sup>`,
+//! tables, figures and their captions, asides, navigation, scripts, and anything `hidden`) is left
+//! out. Only the first such container is read, so a page listing many articles is not described
+//! by whichever comes first in the list, and nothing outside one is read, so a cookie banner or a
+//! site's navigation never becomes the description.
 
 use aspen_wire::link_preview::VideoEmbed;
+use html5ever::Attribute;
 use html5ever::tendril::StrTendril;
+use html5ever::tokenizer::states::RawKind;
 use html5ever::tokenizer::{
-    BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
+    BufferQueue, Tag, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
 };
 use std::cell::RefCell;
 
@@ -77,6 +88,109 @@ const COLOR_FUNCTIONS: [&str; 9] = [
     "rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch",
 ];
 
+/// Elements with no end tag, which open nothing.
+pub(crate) const VOID_ELEMENTS: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track",
+    "wbr",
+];
+
+/// The fewest characters a lead paragraph has, so a byline, a date, or a one-line caption written
+/// as a `<p>` is passed over for the paragraph after it.
+const MIN_LEAD_CHARS: usize = 50;
+
+/// The bytes of a lead paragraph's text past which no more is kept, ample for
+/// [`MAX_DESCRIPTION_CHARS`].
+const MAX_LEAD_BYTES: usize = 16 * 1024;
+
+/// The most elements open at once inside the main content that the search for its lead paragraph
+/// follows; a page nested deeper is given no lead paragraph.
+const MAX_OPEN_ELEMENTS: usize = 256;
+
+/// Elements whose text is not part of a paragraph around them, as a reader takes it.
+const HIDING_ELEMENTS: &[&str] = &[
+    "aside", "audio", "button", "canvas", "dialog", "figure", "footer", "form", "header", "iframe",
+    "math", "nav", "noscript", "object", "script", "select", "style", "sup", "svg", "table",
+    "template", "textarea", "video",
+];
+
+/// Elements whose start ends an open `<p>`, as HTML's parsing rules have it.
+const PARAGRAPH_ENDERS: &[&str] = &[
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "center",
+    "dd",
+    "details",
+    "dialog",
+    "dir",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hgroup",
+    "hr",
+    "li",
+    "listing",
+    "main",
+    "menu",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "search",
+    "section",
+    "summary",
+    "table",
+    "ul",
+    "xmp",
+];
+
+/// How the tokenizer reads what follows an element's start tag, for the elements whose content
+/// is text rather than markup: a script's `"<p>"` in a string is not a paragraph.
+fn raw_kind(name: &str) -> Option<RawKind> {
+    match name {
+        "script" => Some(RawKind::ScriptData),
+        "style" | "xmp" | "iframe" | "noembed" | "noframes" | "noscript" => Some(RawKind::Rawtext),
+        "title" | "textarea" => Some(RawKind::Rcdata),
+        _ => None,
+    }
+}
+
+/// `text`'s words on one line, cut to `max_chars` with an ellipsis; `None` when it has none.
+pub(crate) fn one_line(text: &str, max_chars: usize) -> Option<String> {
+    let mut line = String::new();
+    let mut chars = 0;
+    for word in text.split_whitespace() {
+        let needed = word.chars().count() + usize::from(!line.is_empty());
+        if chars + needed > max_chars {
+            // A first word longer than the limit is cut inside the word.
+            if line.is_empty() {
+                line.extend(word.chars().take(max_chars));
+            }
+            line.push('…');
+            return Some(line);
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+        chars += needed;
+    }
+    (!line.is_empty()).then_some(line)
+}
+
 /// `text` cut to `max_chars` characters, with an ellipsis when anything was cut.
 fn cut(text: String, max_chars: usize) -> String {
     match text.char_indices().nth(max_chars) {
@@ -128,6 +242,136 @@ impl ParsedMetadata {
     }
 }
 
+/// An element open inside the main content.
+struct OpenElement {
+    name: String,
+    /// Whether its text, and its descendants', is left out of paragraphs.
+    hides: bool,
+}
+
+/// The search for a page's lead paragraph (see the module's documentation).
+#[derive(Default)]
+struct LeadSearch {
+    /// The elements open inside the main content, its container first; empty until the
+    /// container starts.
+    open: Vec<OpenElement>,
+    /// How many of `open` hide their text.
+    hiding: usize,
+    /// The text read so far of the open paragraph, when it is shown.
+    paragraph: Option<String>,
+    found: Option<String>,
+    /// A paragraph was found, the container ended, or the search was given up.
+    finished: bool,
+}
+
+impl LeadSearch {
+    fn is_main_content(name: &str, attrs: &[Attribute]) -> bool {
+        matches!(name, "main" | "article")
+            || attr(attrs, "role").is_some_and(|role| {
+                role.split_ascii_whitespace()
+                    .any(|role| role.eq_ignore_ascii_case("main"))
+            })
+    }
+
+    fn hides(name: &str, attrs: &[Attribute]) -> bool {
+        HIDING_ELEMENTS.contains(&name)
+            || attr(attrs, "hidden").is_some()
+            || attr(attrs, "aria-hidden").is_some_and(|value| value.eq_ignore_ascii_case("true"))
+    }
+
+    fn start_tag(&mut self, name: &str, attrs: &[Attribute], self_closing: bool) {
+        if self.finished {
+            return;
+        }
+        let void = self_closing || VOID_ELEMENTS.contains(&name);
+        if self.open.is_empty() {
+            if !void && Self::is_main_content(name, attrs) {
+                self.open.push(OpenElement {
+                    name: name.to_owned(),
+                    hides: false,
+                });
+            }
+            return;
+        }
+        if PARAGRAPH_ENDERS.contains(&name)
+            && let Some(paragraph) = self.open.iter().rposition(|e| e.name == "p")
+        {
+            self.close_from(paragraph);
+            if self.finished {
+                return;
+            }
+        }
+        if name == "br" {
+            self.text(" ");
+        }
+        if void {
+            return;
+        }
+        if self.open.len() >= MAX_OPEN_ELEMENTS {
+            self.finished = true;
+            return;
+        }
+        let hides = Self::hides(name, attrs);
+        self.hiding += usize::from(hides);
+        self.open.push(OpenElement {
+            name: name.to_owned(),
+            hides,
+        });
+        if name == "p" && self.hiding == 0 {
+            self.paragraph = Some(String::new());
+        }
+    }
+
+    /// An end tag closes the innermost open element of its name and every element opened inside
+    /// it; one that matches no open element is ignored, as browsers ignore it.
+    fn end_tag(&mut self, name: &str) {
+        if self.finished {
+            return;
+        }
+        if let Some(element) = self.open.iter().rposition(|e| e.name == name) {
+            self.close_from(element);
+        }
+    }
+
+    fn close_from(&mut self, index: usize) {
+        for element in self.open.split_off(index) {
+            self.hiding -= usize::from(element.hides);
+            if element.name == "p" {
+                self.end_paragraph();
+            }
+        }
+        if self.open.is_empty() {
+            self.finished = true;
+        }
+    }
+
+    fn end_paragraph(&mut self) {
+        if let Some(text) = self.paragraph.take()
+            && let Some(line) = one_line(&text, MAX_DESCRIPTION_CHARS)
+            && line.chars().count() >= MIN_LEAD_CHARS
+        {
+            self.found = Some(line);
+            self.finished = true;
+        }
+    }
+
+    fn text(&mut self, text: &str) {
+        if self.hiding == 0
+            && let Some(paragraph) = self.paragraph.as_mut()
+            && paragraph.len() < MAX_LEAD_BYTES
+        {
+            paragraph.push_str(text);
+        }
+    }
+}
+
+fn attr<'a>(attrs: &'a [Attribute], name: &str) -> Option<&'a str> {
+    attrs
+        .iter()
+        .find(|a| a.name.local.as_ref().eq_ignore_ascii_case(name))
+        .map(|a| a.value.as_ref())
+}
+
 #[derive(Default)]
 struct MetaState {
     /// `(key_lower, value)` pairs of [`KNOWN_KEYS`], first writer wins so the HTML's first
@@ -139,16 +383,81 @@ struct MetaState {
     title_chunks: Vec<String>,
     /// The bytes of `title_chunks`, at most [`MAX_TITLE_BYTES`] (one more once text was dropped).
     title_bytes: usize,
-    in_head: bool,
     in_title: bool,
-    done: bool,
+    /// The `<body>` started: the head's tags are all read, and only the lead paragraph is
+    /// searched for, when the head gave no description.
+    in_body: bool,
+    lead: LeadSearch,
 }
 
 impl MetaState {
-    fn new() -> Self {
-        Self {
-            in_head: true,
-            ..Self::default()
+    fn has_description(&self) -> bool {
+        ["og:description", "twitter:description", "description"]
+            .iter()
+            .any(|key| self.lookup(key).is_some())
+    }
+
+    fn head_tag(&mut self, tag: &Tag) {
+        match (tag.kind, tag.name.as_ref()) {
+            (TagKind::StartTag, "body") => {
+                self.in_body = true;
+                self.in_title = false;
+                if self.has_description() {
+                    self.lead.finished = true;
+                }
+            }
+            (TagKind::StartTag, "title") => {
+                self.in_title = true;
+            }
+            (TagKind::EndTag, "title") => {
+                self.in_title = false;
+            }
+            (TagKind::StartTag, "meta") => {
+                let mut name_attr = String::new();
+                let mut property_attr = String::new();
+                let mut content_attr: Option<String> = None;
+                let mut media_attr: Option<String> = None;
+                for attr in &tag.attrs {
+                    let key = attr.name.local.as_ref().to_ascii_lowercase();
+                    let value = attr.value.as_ref();
+                    match key.as_str() {
+                        "name" => name_attr = value.to_ascii_lowercase(),
+                        "property" => property_attr = value.to_ascii_lowercase(),
+                        "content" => content_attr = Some(value.to_string()),
+                        "media" => media_attr = Some(value.to_string()),
+                        _ => {}
+                    }
+                }
+                let Some(content) = content_attr else {
+                    return;
+                };
+                let key = if !property_attr.is_empty() {
+                    property_attr
+                } else {
+                    name_attr
+                };
+                if key.is_empty() {
+                    return;
+                }
+                if key == "theme-color" {
+                    if self.theme_colors.len() < MAX_THEME_COLORS {
+                        self.theme_colors.push((media_attr, content));
+                    }
+                } else {
+                    self.insert_meta(&key, &content);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn title_text(&mut self, text: &str) {
+        // Text past the cap is dropped, and with it everything after it.
+        if self.title_bytes + text.len() <= MAX_TITLE_BYTES {
+            self.title_bytes += text.len();
+            self.title_chunks.push(text.to_owned());
+        } else {
+            self.title_bytes = MAX_TITLE_BYTES + 1;
         }
     }
 
@@ -210,7 +519,7 @@ impl MetaState {
         dark.or(unqualified).or(any).map(ToOwned::to_owned)
     }
 
-    fn into_metadata(self) -> ParsedMetadata {
+    fn into_metadata(mut self) -> ParsedMetadata {
         let title = self
             .lookup("og:title")
             .or_else(|| self.lookup("twitter:title"))
@@ -228,7 +537,8 @@ impl MetaState {
             .lookup("og:description")
             .or_else(|| self.lookup("twitter:description"))
             .or_else(|| self.lookup("description"))
-            .map(ToOwned::to_owned);
+            .map(ToOwned::to_owned)
+            .or(self.lead.found.take());
         let site_name = self.lookup("og:site_name").map(ToOwned::to_owned);
         let image_url = self
             .lookup("og:image")
@@ -259,75 +569,30 @@ impl TokenSink for MetaSink {
 
     fn process_token(&self, token: Token, _line: u64) -> TokenSinkResult<Self::Handle> {
         let mut state = self.state.borrow_mut();
-        if state.done {
+        if state.in_body && state.lead.finished {
             return TokenSinkResult::Continue;
         }
         match token {
             Token::TagToken(tag) => {
                 let name = tag.name.as_ref();
-                match (tag.kind, name) {
-                    (TagKind::StartTag, "head") => {
-                        state.in_head = true;
-                    }
-                    (TagKind::EndTag, "head") => {
-                        state.in_head = false;
-                    }
-                    (TagKind::StartTag, "body") => {
-                        state.in_head = false;
-                        state.done = true;
-                    }
-                    (TagKind::StartTag, "title") => {
-                        state.in_title = true;
-                    }
-                    (TagKind::EndTag, "title") => {
-                        state.in_title = false;
-                    }
-                    (TagKind::StartTag, "meta") => {
-                        let mut name_attr = String::new();
-                        let mut property_attr = String::new();
-                        let mut content_attr: Option<String> = None;
-                        let mut media_attr: Option<String> = None;
-                        for attr in &tag.attrs {
-                            let key = attr.name.local.as_ref().to_ascii_lowercase();
-                            let value = attr.value.as_ref();
-                            match key.as_str() {
-                                "name" => name_attr = value.to_ascii_lowercase(),
-                                "property" => property_attr = value.to_ascii_lowercase(),
-                                "content" => content_attr = Some(value.to_string()),
-                                "media" => media_attr = Some(value.to_string()),
-                                _ => {}
-                            }
-                        }
-                        let Some(content) = content_attr else {
-                            return TokenSinkResult::Continue;
-                        };
-                        let key = if !property_attr.is_empty() {
-                            property_attr
-                        } else {
-                            name_attr
-                        };
-                        if key.is_empty() {
-                            return TokenSinkResult::Continue;
-                        }
-                        if key == "theme-color" {
-                            if state.theme_colors.len() < MAX_THEME_COLORS {
-                                state.theme_colors.push((media_attr, content));
-                            }
-                        } else {
-                            state.insert_meta(&key, &content);
-                        }
-                    }
-                    _ => {}
+                match tag.kind {
+                    TagKind::StartTag => state.lead.start_tag(name, &tag.attrs, tag.self_closing),
+                    TagKind::EndTag => state.lead.end_tag(name),
+                }
+                if !state.in_body {
+                    state.head_tag(&tag);
+                }
+                if tag.kind == TagKind::StartTag
+                    && let Some(kind) = raw_kind(name)
+                {
+                    return TokenSinkResult::RawData(kind);
                 }
             }
-            Token::CharacterTokens(data) if state.in_title => {
-                // Text past the cap is dropped, and with it everything after it.
-                if state.title_bytes + data.len() <= MAX_TITLE_BYTES {
-                    state.title_bytes += data.len();
-                    state.title_chunks.push(data.as_ref().to_owned());
-                } else {
-                    state.title_bytes = MAX_TITLE_BYTES + 1;
+            Token::CharacterTokens(data) => {
+                if state.in_title {
+                    state.title_text(&data);
                 }
+                state.lead.text(&data);
             }
             _ => {}
         }
@@ -339,7 +604,7 @@ impl TokenSink for MetaSink {
 /// blocking thread, where `fetch` runs it.
 pub fn parse_html_metadata(body: &str) -> ParsedMetadata {
     let sink = MetaSink {
-        state: RefCell::new(MetaState::new()),
+        state: RefCell::new(MetaState::default()),
     };
     let tokenizer = Tokenizer::new(sink, TokenizerOpts::default());
     let input = BufferQueue::default();
@@ -411,7 +676,7 @@ mod tests {
         }
         html.push_str(r#"<meta property="og:title" content="Late"></head>"#);
         let sink = MetaSink {
-            state: RefCell::new(MetaState::new()),
+            state: RefCell::new(MetaState::default()),
         };
         let tokenizer = Tokenizer::new(sink, TokenizerOpts::default());
         let input = BufferQueue::default();
@@ -461,6 +726,97 @@ mod tests {
         ] {
             assert_eq!(css_color(not_colour), None, "{not_colour}");
         }
+    }
+
+    #[test]
+    fn long_text_is_cut_at_a_word() {
+        assert_eq!(
+            one_line("  one two\n three ", 20).as_deref(),
+            Some("one two three")
+        );
+        assert_eq!(one_line("one two three", 8).as_deref(), Some("one two…"));
+        assert_eq!(one_line("abcdefghij", 4).as_deref(), Some("abcd…"));
+        assert_eq!(one_line(" \n ", 4), None);
+    }
+
+    /// Wikipedia's article markup, abridged: no description in the head, and ahead of the lead
+    /// paragraph a placeholder `<p>`, a maintenance banner in a table, and a captioned picture.
+    #[test]
+    fn a_page_without_a_description_gives_its_lead_paragraph() {
+        let html = r#"
+<html><head><title>Tetraphobia - Wikipedia</title>
+<meta property="og:title" content="Tetraphobia - Wikipedia"></head>
+<body>
+<div class="cookie-notice"><p>We use cookies to make this site work, and to understand how it is used.</p></div>
+<main id="content"><div id="bodyContent"><section>
+<p class="mw-empty-elt">
+</p>
+<table role="presentation"><tr><td><p>This article needs additional citations for verification. Please help improve this article.</p></td></tr></table>
+<figure><img src="lift.jpg"><figcaption><p>An elevator control panel in a residential apartment building in Shanghai</p></figcaption></figure>
+<script>document.write("<p>Not a paragraph of the page, but a string of a script</p>")</script>
+<p><b>Tetraphobia</b> (<span>from</span>&nbsp;<a href="/wiki/Ancient_Greek">Ancient Greek</a>
+ <span lang="grc">τετράς (tetrás)</span>&nbsp;'four') is the practice of avoiding instances
+of the digit number 4.<sup class="reference">[1]</sup></p>
+<p>The Chinese word for "four" sounds quite similar to the word for "death".</p>
+</section></div></main></body></html>
+"#;
+        let meta = parse_html_metadata(html);
+        assert_eq!(meta.title.as_deref(), Some("Tetraphobia - Wikipedia"));
+        assert_eq!(
+            meta.description.as_deref(),
+            Some(
+                "Tetraphobia (from Ancient Greek τετράς (tetrás) 'four') is the practice of \
+                 avoiding instances of the digit number 4."
+            )
+        );
+    }
+
+    #[test]
+    fn a_description_in_the_head_beats_the_lead_paragraph() {
+        let html = r#"<head><meta name="description" content="From the head"></head>
+<body><main><p>A paragraph long enough to be a lead paragraph, were the head silent.</p></main></body>"#;
+        let meta = parse_html_metadata(html);
+        assert_eq!(meta.description.as_deref(), Some("From the head"));
+    }
+
+    #[test]
+    fn only_shown_paragraphs_of_the_main_content_are_read() {
+        let outside = r#"<head></head><body>
+<p>A paragraph long enough to be a lead paragraph, but outside the main content.</p>
+<div><p>Another paragraph long enough to be a lead paragraph, in a plain division.</p></div>
+</body>"#;
+        assert_eq!(parse_html_metadata(outside).description, None);
+
+        // A byline is too short; `hidden` and `aria-hidden` text is not shown; a `<p>` left open
+        // is ended by the next block, as browsers end it.
+        let html = r#"<head></head><body><div role="banner navigation"></div>
+<div role="main">
+<p>By Jane Doe, 3 October 2026
+<div hidden><p>A paragraph long enough to be a lead paragraph, but hidden from readers.</p></div>
+<p aria-hidden="true">A paragraph long enough to be a lead paragraph, but hidden from readers.
+<p>The lead paragraph, <span aria-hidden="TRUE">(hidden) </span>left open<br>across a line break.
+<h2>A heading</h2>
+</div></body>"#;
+        assert_eq!(
+            parse_html_metadata(html).description.as_deref(),
+            Some("The lead paragraph, left open across a line break.")
+        );
+    }
+
+    #[test]
+    fn only_the_first_main_content_is_read() {
+        let html = r#"<head></head><body>
+<article><h2>A post</h2><p>Too short to lead.</p></article>
+<article><p>The second article's paragraph, long enough to be a lead paragraph.</p></article>
+</body>"#;
+        assert_eq!(parse_html_metadata(html).description, None);
+    }
+
+    #[test]
+    fn the_bodys_titles_are_not_the_pages() {
+        let html = r#"<head><title>The page</title></head>
+<body><svg><title>An icon</title></svg></body>"#;
+        assert_eq!(parse_html_metadata(html).title.as_deref(), Some("The page"));
     }
 
     #[test]

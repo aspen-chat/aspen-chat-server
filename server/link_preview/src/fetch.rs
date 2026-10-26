@@ -15,7 +15,10 @@ use tracing::debug;
 use url::Url;
 
 /// Maximum number of HTML bytes we'll read from any single URL while looking
-/// for metadata. Just enough that almost every real site's `<head>` fits.
+/// for metadata. Just enough that almost every real site's `<head>` fits, and
+/// the lead paragraph of most pages whose head gives no description; a page
+/// whose lead paragraph starts past it (Wikipedia's longest articles, behind
+/// their infoboxes) is previewed without one.
 pub const MAX_METADATA_BYTES: usize = 256 * 1024;
 
 /// End-to-end timeout for a single metadata fetch, including redirect chasing.
