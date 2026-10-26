@@ -1,0 +1,230 @@
+/* The Aspen palette's values from `client/packages/app/src/styles.css`, and the measures of the
+   app's signed-out screens (`DeploymentWelcome`, `features/auth/styles.ts`), so the page reads as
+   the sign-in screen does. */
+
+@font-face {
+  font-family: "Inclusive Sans Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 700;
+  src: url(fonts/inclusive-sans-latin-ext-wght-normal.woff2) format("woff2-variations");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+    U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Inclusive Sans Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 700;
+  src: url(fonts/inclusive-sans-latin-wght-normal.woff2) format("woff2-variations");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  color-scheme: light dark;
+  --surface: light-dark(#fafafa, #0a0a0a);
+  --surface-hover: light-dark(#ececec, #262626);
+  --ink: light-dark(#171717, #f5f5f5);
+  --ink-muted: light-dark(#525252, #a3a3a3);
+  --line: light-dark(#d4d4d4, #2e2e2e);
+  --accent: light-dark(#047857, #34d399);
+  --accent-strong: light-dark(#065f46, #6ee7b7);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem 1rem;
+  gap: 2rem;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: "Inclusive Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 24rem;
+  text-align: center;
+}
+
+.aspen-icon {
+  width: 8rem;
+  height: 8rem;
+  user-select: none;
+}
+
+@media (min-width: 48rem) {
+  body {
+    justify-content: center;
+  }
+
+  .aspen-icon {
+    width: 16rem;
+    height: 16rem;
+  }
+}
+
+h1 {
+  margin: 0 0 0.75rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.33;
+  text-wrap: balance;
+}
+
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.platforms {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.platform {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  padding: 0.5rem 1rem;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  outline: none;
+}
+
+.platform:hover {
+  background: var(--surface-hover);
+}
+
+.platform:active {
+  opacity: 0.8;
+}
+
+.platform:focus-visible,
+.linux-options a:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 50%, transparent);
+}
+
+.platform:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: none;
+}
+
+.platform svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: none;
+}
+
+summary.platform {
+  list-style: none;
+}
+
+summary.platform::-webkit-details-marker {
+  display: none;
+}
+
+.chevron {
+  transition: rotate 150ms;
+}
+
+details[open] .chevron {
+  rotate: 180deg;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    transition: none;
+  }
+}
+
+.linux-options {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  padding: 1rem;
+  text-align: start;
+}
+
+.linux-options h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.linux-options p {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+}
+
+.linux-options a {
+  border-radius: 0.125rem;
+  color: var(--accent);
+  font-weight: 500;
+  text-underline-offset: 2px;
+  outline: none;
+}
+
+.linux-options a:hover {
+  color: var(--accent-strong);
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.875em;
+  overflow-wrap: anywhere;
+}
+
+.coming-soon {
+  margin: 1rem 0 0;
+  color: var(--ink-muted);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+footer {
+  max-width: 32rem;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+footer p {
+  margin: 0.25rem 0;
+}
