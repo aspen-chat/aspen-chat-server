@@ -251,6 +251,18 @@ test("a voice server is registered from the fleet tab, which shows what to give 
   await expect(servers.getByText('user: "voice-north"')).toBeVisible();
 });
 
+test("a user's name in the directory opens their card, with what may be done to them", async ({
+  page,
+}) => {
+  const users = await openSection(page, "Users");
+  await users
+    .getByRole("button", { name: "Open Bob With A Rather Long Display Name's profile" })
+    .click();
+  const card = page.getByRole("dialog", { name: /Bob With A Rather Long Display Name/ });
+  await expect(card.getByText("On this server")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Message" })).toBeVisible();
+});
+
 test("the dashboard opens at its first tab, and no tab makes the screen scroll sideways", async ({
   page,
 }) => {

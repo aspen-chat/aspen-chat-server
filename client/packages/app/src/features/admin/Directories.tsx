@@ -9,7 +9,7 @@ import {
 } from "@aspen/protocol";
 import { CheckIcon, PencilSimpleIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import {
   Button,
   CheckboxButton,
@@ -19,7 +19,7 @@ import {
   Popover,
   ToggleButton,
 } from "react-aria-components";
-import { useDeploymentCan, useMe, useSync } from "@/api/hooks";
+import { useDeploymentCan, useMe, useSync, useUser } from "@/api/hooks";
 import { rankOf, type DeploymentRoles } from "@/features/admin/deploymentRoleRecords";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { markClass } from "@/features/layout/choices";
@@ -32,6 +32,7 @@ import {
 } from "@/features/invites/dialog";
 import { UserBanDialog } from "@/features/admin/UserBanDialog";
 import { BotBadge } from "@/features/users/BotBadge";
+import { ProfilePopover } from "@/features/users/ProfileCard";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { Directory } from "@/features/admin/Directory";
@@ -40,7 +41,8 @@ import { Directory } from "@/features/admin/Directory";
  * The deployment's users, searched by username or display name and sortable, or only those
  * banned, with the deployment roles each holds, bots marked, and bans shown. Those who may manage
  * deployment roles change them here, moderators open someone's DMs, holders of Ban users ban
- * and lift bans, and those who may manage the deployment's settings delete a bot whose owner is gone.
+ * and lift bans, and those who may manage the deployment's settings delete a bot whose owner is
+ * gone. A name opens the person's profile card, which offers the same beneath it.
  */
 export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined }) {
   const m = useMessages();
@@ -50,7 +52,6 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
   const moderator = useDeploymentCan("moderateCommunities");
   const deleteOwnerlessBots = useDeploymentCan("manageDeploymentSettings");
   const banUsers = useDeploymentCan("banUsers");
-  const me = useMe();
   const [bannedOnly, setBannedOnly] = useState(false);
   const [version, setVersion] = useState(0);
   const load = useCallback(
@@ -83,18 +84,18 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
           heading: m.admin.name,
           sort: { ascending: "name", descending: "-name", first: "ascending" },
           cell: (user) => (
-            <span className="flex items-center gap-2">
-              <Avatar name={user.displayName ?? user.name} iconId={user.icon} size="sm" />
-              <span className="min-w-0">
-                <span className="flex items-center gap-1.5">
-                  <span className="truncate font-medium">{user.displayName ?? user.name}</span>
-                  {user.bot && <BotBadge />}
-                </span>
-                <span className="block truncate text-xs text-ink-muted">
-                  {user.homeDomain == null ? user.name : `${user.name}@${user.homeDomain}`}
-                </span>
-              </span>
-            </span>
+            <UserCardName
+              entry={user}
+              actions={
+                <div className="flex flex-col gap-2">
+                  <span className="text-xs font-semibold text-ink-muted">
+                    {m.admin.onThisServer}
+                  </span>
+                  <UserRoles user={user} roles={roles} manage={manage} />
+                  <UserActions user={user} onChanged={reload} bannedOnly={bannedOnly} />
+                </div>
+              }
+            />
           ),
         },
         {
@@ -115,21 +116,83 @@ export function UserDirectory({ roles }: { roles: DeploymentRoles | undefined })
               {
                 heading: m.admin.actions,
                 cell: (user: AdminUserEntry) => (
-                  <span className="flex flex-wrap items-center gap-2">
-                    {moderator && <UserDms user={user} />}
-                    {((banUsers && user.id !== me?.id) || user.ban != null) && (
-                      <UserBanControl user={user} mayBan={banUsers} onChanged={reload} />
-                    )}
-                    {deleteOwnerlessBots && user.bot && user.botOwner == null && (
-                      <DeleteOwnerlessBot user={user} />
-                    )}
-                  </span>
+                  <UserActions user={user} onChanged={reload} bannedOnly={bannedOnly} />
                 ),
               },
             ]
           : []),
       ]}
     />
+  );
+}
+
+/**
+ * What the caller may do to a user across the deployment: open their DMs, ban them or lift
+ * their ban, and delete a bot whose owner is gone, each for those who may.
+ */
+function UserActions({
+  user,
+  onChanged,
+  bannedOnly,
+}: {
+  user: AdminUserEntry;
+  onChanged: () => void;
+  bannedOnly: boolean;
+}) {
+  const me = useMe();
+  const moderator = useDeploymentCan("moderateCommunities");
+  const deleteOwnerlessBots = useDeploymentCan("manageDeploymentSettings");
+  const banUsers = useDeploymentCan("banUsers");
+  if (!(moderator || deleteOwnerlessBots || banUsers || bannedOnly)) {
+    return null;
+  }
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      {moderator && <UserDms user={user} />}
+      {((banUsers && user.id !== me?.id) || user.ban != null) && (
+        <UserBanControl user={user} mayBan={banUsers} onChanged={onChanged} />
+      )}
+      {deleteOwnerlessBots && user.bot && user.botOwner == null && (
+        <DeleteOwnerlessBot user={user} />
+      )}
+    </span>
+  );
+}
+
+/**
+ * A user's picture and name in the directory, which opens their profile card, with `actions`
+ * beneath it, once their profile is read.
+ */
+function UserCardName({ entry, actions }: { entry: AdminUserEntry; actions: ReactNode }) {
+  const m = useMessages();
+  const user = useUser(entry.id);
+  const name = entry.displayName ?? entry.name;
+  const shown = (
+    <span className="flex items-center gap-2">
+      <Avatar name={name} iconId={entry.icon} size="sm" />
+      <span className="min-w-0">
+        <span className="flex items-center gap-1.5">
+          <span className="truncate font-medium">{name}</span>
+          {entry.bot && <BotBadge />}
+        </span>
+        <span className="block truncate text-xs text-ink-muted">
+          {entry.homeDomain == null ? entry.name : `${entry.name}@${entry.homeDomain}`}
+        </span>
+      </span>
+    </span>
+  );
+  if (user === undefined) {
+    return shown;
+  }
+  return (
+    <ProfilePopover user={user} extra={actions}>
+      <Button
+        aria-label={format(m.admin.openCard, { name })}
+        className="rounded-md text-start outline-none hover:underline focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        {shown}
+      </Button>
+    </ProfilePopover>
   );
 }
 

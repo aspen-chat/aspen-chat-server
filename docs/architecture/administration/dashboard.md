@@ -60,7 +60,10 @@ The user directory:
   itself;
 - takes `filter[banned]=true`, and gives each standing ban as `ban`;
 - marks users of other deployments by their domain;
-- is one of the directories every moderation permission opens.
+- is one of the directories every moderation permission opens;
+- opens a person's profile card from their name (`ProfilePopover`), with what the reader may do to
+  them across the deployment beneath it: their deployment roles, their DMs, a ban or its lifting,
+  and deleting a bot whose owner is gone, each as the row's own controls offer it.
 
 ## Fleet health
 

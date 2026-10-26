@@ -1023,6 +1023,8 @@
     "noApiServers": "No API server has reported in the last half minute.",
     "voiceServers": "Voice servers",
     "noVoiceServers": "No voice servers are registered.",
+    "onThisServer": "On this server",
+    "openCard": "Open {name}'s profile",
     "voiceServerAdmin": {
       "hint": "The servers calls run on. Register each here, then give it the id and NATS user shown under Setup. How each is doing is under Fleet.",
       "capacity": "Up to {capacity, number} participants",
