@@ -16,7 +16,7 @@
 //! cached, so a later mention of the link gets the picture.
 
 use crate::fetch::{Lookup, http_client, read_capped};
-use crate::html_meta::ParsedMetadata;
+use crate::html_meta::{ParsedMetadata, VOID_ELEMENTS, one_line};
 use html5ever::tendril::StrTendril;
 use html5ever::tokenizer::states::RawKind;
 use html5ever::tokenizer::{
@@ -368,12 +368,6 @@ struct EmbedState {
     text: String,
 }
 
-/// Elements with no end tag, which must not count towards `text_depth`.
-const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track",
-    "wbr",
-];
-
 /// Elements whose end starts a new line of text.
 const BLOCK_ELEMENTS: &[&str] = &[
     "p",
@@ -468,29 +462,6 @@ impl EmbedState {
             text: one_line(&self.text, MAX_DESCRIPTION_CHARS),
         }
     }
-}
-
-/// `text`'s words on one line, cut to `max_chars` with an ellipsis; `None` when it has none.
-fn one_line(text: &str, max_chars: usize) -> Option<String> {
-    let mut line = String::new();
-    let mut chars = 0;
-    for word in text.split_whitespace() {
-        let needed = word.chars().count() + usize::from(!line.is_empty());
-        if chars + needed > max_chars {
-            // A first word longer than the limit is cut inside the word.
-            if line.is_empty() {
-                line.extend(word.chars().take(max_chars));
-            }
-            line.push('…');
-            return Some(line);
-        }
-        if !line.is_empty() {
-            line.push(' ');
-        }
-        line.push_str(word);
-        chars += needed;
-    }
-    (!line.is_empty()).then_some(line)
 }
 
 struct EmbedSink {
@@ -749,17 +720,6 @@ mod tests {
             parse_embed_page("<html><body>gone</body></html>", "abc"),
             None
         );
-    }
-
-    #[test]
-    fn long_text_is_cut_at_a_word() {
-        assert_eq!(
-            one_line("  one two\n three ", 20).as_deref(),
-            Some("one two three")
-        );
-        assert_eq!(one_line("one two three", 8).as_deref(), Some("one two…"));
-        assert_eq!(one_line("abcdefghij", 4).as_deref(), Some("abcd…"));
-        assert_eq!(one_line(" \n ", 4), None);
     }
 
     #[test]
