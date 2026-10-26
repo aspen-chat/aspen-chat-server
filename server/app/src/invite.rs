@@ -96,8 +96,11 @@ pub async fn create_invite(
     .await
 }
 
-/// Makes an invite to `community` from `user`, who needs Create invites there, on `conn`, and
-/// announces it. Inside a transaction, the invite and its announcement go with it.
+/// Makes an invite to `community` from `user`, who needs Create invites there, and Manage
+/// invites besides to choose its code, on `conn`, and announces it. Inside a transaction, the
+/// invite and its announcement go with it. A chosen code is unique across the deployment, so
+/// whoever chooses one takes it from every other community; it is left to those who manage a
+/// community's invites.
 pub async fn insert(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -106,9 +109,11 @@ pub async fn insert(
     custom_code: Option<String>,
     expires_at: Option<chrono::DateTime<Utc>>,
 ) -> crate::Result<Invite> {
-    require_member(conn, user, community)
-        .await?
-        .require(Permissions::CREATE_INVITES)?;
+    let access = require_member(conn, user, community).await?;
+    access.require(Permissions::CREATE_INVITES)?;
+    if custom_code.is_some() {
+        access.require(Permissions::MANAGE_INVITES)?;
+    }
 
     let code = match custom_code {
         Some(c) => {

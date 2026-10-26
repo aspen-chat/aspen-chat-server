@@ -9,14 +9,15 @@ Code: `intercept::wanted`, `intercept::decide`, `intercept::decide_unchanged`.
 1. Call `intercept::wanted`.
 2. When any plugin running there intercepts the hook, check first:
    - the author's permission to post (`check_posting`);
-   - that every attachment is their own ready upload or, on an edit, already the message's
-     (`ensure_attachments_ready`).
+   - that every attachment is their own ready upload (`ensure_attachments_ready`); an edit keeps the
+     message's files.
 3. Call `intercept::decide`, before the saving transaction opens.
 
 ### Edits
 
-- An edit is decided whenever it changes the text or the attachments.
-- One changing only the attachments shows the plugins the text as it stands.
+- An edit is decided whenever it changes the text or a file's description or spoiler mark.
+- One changing only a file shows the plugins the text as it stands, and the file as it will stand
+  (`intercept::Draft::retouched`).
 - A rewrite of it is then saved as a change of text, its earlier rewriters still named.
 
 ## What a plugin may answer

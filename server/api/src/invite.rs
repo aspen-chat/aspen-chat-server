@@ -18,7 +18,8 @@ use utoipa::{IntoParams, ToSchema};
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InviteCreateRequest {
-    /// Alphanumeric, 1 to 16 characters. Omit to have the server generate a code.
+    /// Alphanumeric, 1 to 16 characters, and unique on the deployment; choosing one takes
+    /// Manage invites. Omit to have the server generate a code.
     pub custom_code: Option<String>,
     /// Omit for an invite that never expires.
     pub expires_at: Option<DateTime<Utc>>,

@@ -8,6 +8,8 @@ tryAgainLater: "Something went wrong on the server. Try again; if it keeps happe
 problemBadRequest: "The request could not be understood."
 problemValidation: "The request is not valid."
 textHasNul: "Text may not contain the null character (U+0000). Remove it and try again."
+usernameFixed: "A username can't be changed once the account is made. Change your display name instead, which is what most people see."
+messageFilesFixed: "Files can't be added to or swapped in a sent message. Remove a file, or send the new one in a message of its own."
 problemUnauthorized: "You must be logged in to do that."
 problemForbidden: "You are not allowed to do that."
 problemNotFound: "The requested item does not exist."

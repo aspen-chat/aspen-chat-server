@@ -228,6 +228,42 @@ test("users and communities are searched, sorted, and paged", async ({ page }) =
   await expect(communities.getByRole("row").nth(1)).toContainText("Book club");
 });
 
+test("a voice server is registered from the fleet tab, which shows what to give it", async ({
+  page,
+}) => {
+  await openSection(page, "Server fleet");
+  const servers = page.getByRole("region", { name: "Voice servers" });
+  await expect(servers.getByText("voice-east", { exact: true })).toBeVisible();
+  await servers.getByRole("button", { name: "Add a voice server" }).click();
+  await servers.getByRole("textbox", { name: "Name" }).fill("voice-north");
+  await servers.getByRole("textbox", { name: "Address" }).fill("https://voice-north.example");
+  await servers.getByRole("textbox", { name: "Capacity" }).fill("250");
+  const created = page.waitForRequest(
+    (r) => r.method() === "POST" && r.url().endsWith("/api/v1/voice-servers"),
+  );
+  await servers.getByRole("button", { name: "Add a voice server" }).click();
+  expect((await created).postDataJSON()).toEqual({
+    name: "voice-north",
+    url: "https://voice-north.example",
+    capacity: 250,
+  });
+  // The one just added shows its id and NATS user at once.
+  await expect(servers.getByText('id = "0190f0a0-0000-7000-8000-000000000041"')).toBeVisible();
+  await expect(servers.getByText('user: "voice-north"')).toBeVisible();
+});
+
+test("a user's name in the directory opens their card, with what may be done to them", async ({
+  page,
+}) => {
+  const users = await openSection(page, "Users");
+  await users
+    .getByRole("button", { name: "Open Bob With A Rather Long Display Name's profile" })
+    .click();
+  const card = page.getByRole("dialog", { name: /Bob With A Rather Long Display Name/ });
+  await expect(card.getByText("On this server")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Message" })).toBeVisible();
+});
+
 test("the dashboard opens at its first tab, and no tab makes the screen scroll sideways", async ({
   page,
 }) => {

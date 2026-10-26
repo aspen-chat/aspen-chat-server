@@ -30,9 +30,8 @@ import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
-/** How many cases a page lists, and the most the server lists at once. */
+/** How many cases a page lists. */
 const PAGE = 15;
-const MAX_LISTED = 100;
 const STATUSES: readonly ReportStatus[] = ["open", "resolved", "dismissed"];
 
 /** What a page of cases names, by id, for drawing each case. */
@@ -42,6 +41,19 @@ interface Named {
   channels: ReadonlyMap<string, Channel>;
   communities: ReadonlyMap<string, Community>;
   categories: ReadonlyMap<string, string>;
+}
+
+/** Two pages of cases as one, the later's after the earlier's. */
+function joined(a: ReportCaseList, b: ReportCaseList): ReportCaseList {
+  return {
+    cases: [...a.cases, ...b.cases],
+    users: [...a.users, ...b.users],
+    messages: [...a.messages, ...b.messages],
+    channels: [...a.channels, ...b.channels],
+    communities: [...a.communities, ...b.communities],
+    categories: [...a.categories, ...b.categories],
+    attachments: [...a.attachments, ...b.attachments],
+  };
 }
 
 function namedBy(list: ReportCaseList): Named {
@@ -66,18 +78,21 @@ export function ReportsSection() {
   const sync = useSync();
   const changes = useReportsChanges();
   const [status, setStatus] = useState<ReportStatus>("open");
-  const [limit, setLimit] = useState(PAGE);
-  const load = useCallback(
-    () =>
-      Promise.all([sync.admin.reportCases(status, { limit }), sync.admin.reportCounts()]).then(
-        ([list, counts]) => {
-          // The people and files they name are drawn from the cache, like everyone else's.
-          sync.store.ingest({ users: list.users, attachments: list.attachments });
-          return { list, counts };
-        },
-      ),
-    [sync, status, limit],
-  );
+  // How many pages are shown; reading again reads each, one after another.
+  const [pages, setPages] = useState(1);
+  const load = useCallback(async () => {
+    const counts = sync.admin.reportCounts();
+    let list = await sync.admin.reportCases(status, { limit: PAGE });
+    let last = list;
+    for (let page = 1; page < pages && last.cases.length === PAGE; page++) {
+      const before = last.cases.at(-1)?.id;
+      last = await sync.admin.reportCases(status, { limit: PAGE, ...(before ? { before } : {}) });
+      list = joined(list, last);
+    }
+    // The people and files they name are drawn from the cache, like everyone else's.
+    sync.store.ingest({ users: list.users, attachments: list.attachments });
+    return { list, counts: await counts, more: last.cases.length === PAGE };
+  }, [sync, status, pages]);
   const read = useAdminRead(load);
   // A change to what awaits review reads the page again.
   const [heard, setHeard] = useState(changes);
@@ -113,7 +128,7 @@ export function ReportsSection() {
           const found = STATUSES.find((s) => s === next);
           if (found !== undefined) {
             setStatus(found);
-            setLimit(PAGE);
+            setPages(1);
           }
         }}
         className="flex flex-wrap gap-1"
@@ -143,10 +158,10 @@ export function ReportsSection() {
           ))}
         </ul>
       )}
-      {list !== undefined && list.cases.length >= limit && limit < MAX_LISTED && (
+      {list !== undefined && read.data?.more === true && (
         <Button
           onPress={() => {
-            setLimit((n) => Math.min(n + PAGE, MAX_LISTED));
+            setPages((n) => n + 1);
           }}
           className={secondaryButtonClass + " self-start"}
         >

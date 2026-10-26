@@ -2161,6 +2161,38 @@ export class AspenSync {
     await this.loadMessage(messageId);
   }
 
+  /**
+   * Gives one of the caller's own message's files a new description or spoiler mark, as an edit
+   * of the message; `description` null clears it. Applied to the cache at once, as the event
+   * the server publishes would.
+   */
+  async retouchAttachment(
+    messageId: string,
+    attachmentId: string,
+    change: { description?: string | null; spoiler?: boolean },
+  ): Promise<void> {
+    const result = await this.#client.api.PATCH(
+      "/api/v1/messages/{message}/attachments/{attachment}",
+      { params: { path: { message: messageId, attachment: attachmentId } }, body: change },
+    );
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    const attachment = this.store.attachment(attachmentId);
+    if (attachment !== undefined) {
+      // As the server keeps it: trimmed, and none when nothing is left.
+      const given = change.description === undefined ? attachment.description : change.description;
+      const description = given?.trim() ?? "";
+      this.store.applyEvent({
+        serverEvent: "attachmentChanged",
+        attachment: attachmentId,
+        message: messageId,
+        description: description === "" ? null : description,
+        spoiler: change.spoiler ?? attachment.spoiler ?? false,
+      });
+    }
+  }
+
   /** Renames a channel; see `#readsEventsOf` for the cache. */
   async renameChannel(channelId: string, name: string): Promise<void> {
     const result = await this.#client.api.PATCH("/api/v1/channels/{channel}", {
@@ -3498,8 +3530,7 @@ export class AspenSync {
   async updateProfile(patch: UserUpdateRequest): Promise<User> {
     const result = await this.#client.api.PATCH("/api/v1/users/{user}", {
       params: { path: { user: "@me" } },
-      // A new username composed (NFC), as the server requires.
-      body: patch.name == null ? patch : { ...patch, name: patch.name.normalize("NFC") },
+      body: patch,
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
@@ -3558,6 +3589,22 @@ export class AspenSync {
     const result = await this.#client.api.POST("/api/v1/communities/{community}/invites", {
       params: { path: { community: communityId } },
       body,
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.upsertInvite(result.data);
+    return result.data;
+  }
+
+  /**
+   * Changes when an invite expires, or with `null` makes it never expire. The caller's own, or
+   * any with Manage invites.
+   */
+  async updateInvite(code: string, expiresAt: string | null): Promise<Invite> {
+    const result = await this.#client.api.PATCH("/api/v1/invites/{code}", {
+      params: { path: { code } },
+      body: { expiresAt },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));

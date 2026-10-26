@@ -45,8 +45,9 @@
 use crate::context::GlobalServerContext;
 use crate::media_store::{PresignedUpload, Promotion, Served};
 use crate::t;
-use crate::{AttachmentId, Loadable, UserId};
+use crate::{AttachmentId, ChannelId, EventScope, Loadable, MessageId, UserId, publish_event};
 use aspen_schema::{attachment, message, message_attachment};
+use aspen_wire::message_enum::server_event::ServerEvent;
 use chrono::{DateTime, Utc};
 use diesel::{
     BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable, Selectable,
@@ -602,6 +603,39 @@ pub async fn update_attachment(
             .await?
     };
     Ok(row)
+}
+
+/// Gives `attachment`, a file of the message `message` in `channel`, a new description and
+/// spoiler mark inside the edit that changes them (`app::message::update_message`), which has
+/// checked who may, and announces them to the channel.
+pub(crate) async fn retouch(
+    state: &GlobalServerContext,
+    conn: &mut diesel_async::AsyncPgConnection,
+    message: MessageId,
+    channel: ChannelId,
+    attachment_id: AttachmentId,
+    description: Option<String>,
+    spoiler: bool,
+) -> crate::Result<()> {
+    diesel::update(attachment::table.filter(attachment::id.eq(attachment_id)))
+        .set((
+            attachment::description.eq(&description),
+            attachment::spoiler.eq(spoiler),
+        ))
+        .execute(conn)
+        .await?;
+    publish_event(
+        state,
+        conn,
+        EventScope::Channel(channel),
+        &ServerEvent::AttachmentChanged {
+            attachment: attachment_id,
+            message,
+            description,
+            spoiler,
+        },
+    )
+    .await
 }
 
 /// How long a confirmed attachment may wait to be sent before [`sweep_unsent`] deletes it.

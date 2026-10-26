@@ -55,7 +55,7 @@ The person who made a bot owns it (`user.bot_owner`). A bot acts for its owner.
 | `PATCH /bots/{bot}`        | Makes it public or private                                                                         |
 | `PUT /bots/{bot}/transfer` | Offers it to another person (see [Handing a bot over](handing-over.md))                            |
 | `DELETE /bots/{bot}`       | Deletes it                                                                                         |
-| `PATCH /users/{user}`      | Changes its profile, by the bot or its owner                                                       |
+| `PATCH /users/{user}`      | Changes its profile (not its username), by the bot or its owner, who does so from Bots in Settings |
 
 **Why issuing a token needs a fresh verification:** whoever holds a stolen session could otherwise
 take the bot's token.

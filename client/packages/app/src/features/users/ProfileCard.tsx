@@ -60,21 +60,21 @@ import { useContextMenu } from "@/features/layout/contextMenuState";
 import { UserMenu } from "@/features/users/UserMenu";
 
 /**
- * A user's profile as a card, its parts on planes: who they are, their pronouns, what they are up to, the
- * email address they chose to show, and their
- * bio, with ways to message, block, and report them when they are someone else. Opens from any
- * control that names the user, such as a message author or a member row. Opened within a
- * community it calls them by their nickname there, if they chose one, with their display name
- * beneath; shows the roles they hold there, with a way to give them another for those who may;
- * lets the reader choose their own nickname on their own card; and offers clearing someone
- * else's nickname to those who may, and reporting it to anyone. Inside the reader's one-to-one DM with them it offers no way to message them, which is
- * where the reader already is. A block takes away messaging and calling, except for a holder of
- * Message any user, who reaches anyone. The system account's card offers none of these: it
- * sends notices, and is not messaged, called, blocked, or reported. What the deployment's
- * plugins say about the person shows beneath who they are, and a plugin's own account names
- * its plugin.
+ * A user's profile as a card, its parts on planes: who they are, their pronouns, what they are
+ * up to, the email address they chose to show, and their bio, with ways to message, block, and
+ * report them when they are someone else. Opens from any control that names the user, such as a
+ * message author or a member row. Opened within a community it calls them by their nickname
+ * there, if they chose one, with their display name beneath; shows the roles they hold there,
+ * with a way to give them another for those who may; lets the reader choose their own nickname
+ * on their own card; and offers clearing someone else's nickname to those who may, and
+ * reporting it to anyone. Inside the reader's one-to-one DM with them it offers no way to
+ * message them, which is where the reader already is. A block takes away messaging and calling,
+ * except for a holder of Message any user, who reaches anyone. The system account's card offers
+ * none of these: it sends notices, and is not messaged, called, blocked, or reported. What the
+ * deployment's plugins say about the person shows beneath who they are, and a plugin's own
+ * account names its plugin. `extra`, when given, is a plane of its own at the end.
  */
-export function ProfileCard({ user }: { user: User }) {
+export function ProfileCard({ user, extra }: { user: User; extra?: ReactNode }) {
   const m = useMessages();
   const me = useMe();
   const blocked = useBlocked(user.id);
@@ -187,6 +187,7 @@ export function ProfileCard({ user }: { user: User }) {
           )}
         </>
       )}
+      {extra !== undefined && <div className={planeClass}>{extra}</div>}
       {wizard && (
         <div className="flex justify-end">
           <CopyIdButton id={user.id} thing={user.bot ? "bot" : "user"} />
@@ -591,6 +592,7 @@ export function ProfilePopover({
   anchorRef,
   channelId = null,
   contextMenu = true,
+  extra,
 }: {
   user: User;
   children: ReactNode;
@@ -601,6 +603,8 @@ export function ProfilePopover({
   /** The channel the trigger is shown in, whose message box their menu's Mention writes in. */
   channelId?: string | null;
   contextMenu?: boolean;
+  /** More the card shows beneath the rest, such as what a dashboard's moderators may do. */
+  extra?: ReactNode;
 }) {
   const m = useMessages();
   const { communityId } = useParams({ strict: false });
@@ -629,7 +633,7 @@ export function ProfilePopover({
             className="rounded-lg border border-line bg-surface shadow-lg"
           >
             <Dialog aria-label={format(m.profile.cardLabel, { name })} className="outline-none">
-              <ProfileCard user={user} />
+              <ProfileCard user={user} extra={extra} />
             </Dialog>
           </Popover>
         </OnceOpen>

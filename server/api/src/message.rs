@@ -807,19 +807,22 @@ pub async fn get_message(
     Ok(Json(MessageRead::new(m, included)))
 }
 
-/// Edits the caller's own message. New text or a new attachment takes Send messages (Send
-/// messages in threads in a thread), and a new attachment Attach files besides; clearing the
-/// text or removing attachments takes neither.
+/// Edits the caller's own message's text. New text takes Send messages (Send messages in
+/// threads in a thread); clearing it does not. An edit changes no file: a request giving
+/// `attachments` is refused with `validation`. A file is taken off with
+/// `DELETE /messages/{message}/attachments/{attachment}`, and its description and spoiler mark
+/// changed with `PATCH` there.
 #[utoipa::path(
     patch,
     path = "/messages/{message}",
     tag = TAG_MESSAGES,
     params(("message" = MessageId, Path)),
+    request_body = MessageUpdateRequest,
     security(("bearerAuth" = [])),
     responses(
         (status = OK, description = "Edited; or, when the edit changes nothing, the message as it stands", body = Message),
         (status = ACCEPTED, description = "Waiting: the channel is busy, and an edit that lengthens the message waits its turn for the channel's mana", body = HeldMessage),
-        (status = BAD_REQUEST, body = Problem),
+        (status = BAD_REQUEST, description = "`validation`: the text is too long, or the request gives `attachments`", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -831,10 +834,12 @@ pub async fn update_message(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(message): Path<MessageId>,
-    Json(request): Json<MessageUpdateRequest>,
+    Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Response> {
+    let request: MessageUpdateRequest =
+        crate::extract::refusing(body, "attachments", t!("messageFilesFixed"))?;
     Ok(
-        match app::message::update_message(&state, user.id, message, request, None).await? {
+        match app::message::update_message(&state, user.id, message, request.into(), None).await? {
             app::message::Edited::Done(m) => Json(Message::from(*m)).into_response(),
             app::message::Edited::Waiting(held) => {
                 (StatusCode::ACCEPTED, Json(HeldMessage::from(held))).into_response()
@@ -1032,6 +1037,62 @@ pub async fn unpin_message(
 ) -> ApiResult<NoContent> {
     app::message::set_pinned(&state, user.id, message, false).await?;
     Ok(NoContent)
+}
+
+/// A new description or spoiler mark for one of a message's files. Absent fields are left as
+/// they are; `null` clears the description.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageAttachmentUpdateRequest {
+    /// What the file shows, for those who cannot see it; at most 1500 characters.
+    #[serde(default, deserialize_with = "crate::extract::double_option")]
+    pub description: Option<Option<String>>,
+    /// Whether apps cover the file until each reader reveals it.
+    #[serde(default)]
+    #[schema(nullable = false)]
+    pub spoiler: Option<bool>,
+}
+
+/// Changes the description or spoiler mark of one of the caller's own message's files, as an
+/// edit of the message: plugins decide it as they decide one, the message is marked edited,
+/// and its channel hears `attachmentChanged`. A new or different description, or a spoiler
+/// mark taken off, takes Send messages (Send messages in threads in a thread); clearing a
+/// description or covering the file does not.
+#[utoipa::path(
+    patch,
+    path = "/messages/{message}/attachments/{attachment}",
+    tag = TAG_MESSAGES,
+    params(("message" = MessageId, Path), ("attachment" = AttachmentId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, description = "Changed; or, when nothing changes, the message as it stands", body = Message),
+        (status = BAD_REQUEST, description = "`validation`: the description is too long, or the message is of a kind that cannot be edited", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`forbidden`: someone else's message, or a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
+        (status = NOT_FOUND, description = "No such message, or no such file in it", body = Problem),
+        (status = UNPROCESSABLE_ENTITY, description = "`pluginRefused`: a plugin refused the change", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn update_message_attachment(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path((message, attachment)): Path<(MessageId, AttachmentId)>,
+    Json(request): Json<MessageAttachmentUpdateRequest>,
+) -> ApiResult<Json<Message>> {
+    let edit = app::message::Edit {
+        content: None,
+        retouch: Some(app::message::Retouch {
+            attachment,
+            description: request.description,
+            spoiler: request.spoiler,
+        }),
+    };
+    match app::message::update_message(&state, user.id, message, edit, None).await? {
+        app::message::Edited::Done(m) => Ok(Json(Message::from(*m))),
+        // A retouch spends no mana, so it never waits.
+        app::message::Edited::Waiting(_) => Err(ApiError::new(ProblemCode::Internal)),
+    }
 }
 
 /// Takes one attachment off a message: its author may, and anyone with Manage messages. The

@@ -32,11 +32,11 @@ An event elsewhere costs nothing more.
 
 ## What a plugin is told
 
-| Event                                | Told as                                                                    | When                                                  |
-| ------------------------------------ | -------------------------------------------------------------------------- | ----------------------------------------------------- |
-| A message's `update`                 | `message-edited`                                                           | When its text or its attachments changed.             |
-| Message events                       | The message as saved, read after its transaction commits, retrying briefly | Only where the plugin runs, and with `messages.read`. |
-| `botCommandInvoked`                  | `command-invoked`                                                          | Reaches the plugin whose principal it names.          |
-| A `communityPlugin` event of its own | `plugin-enabled` or `plugin-disabled`                                      | Always.                                               |
+| Event                                | Told as                                                                    | When                                                       |
+| ------------------------------------ | -------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| A message's `update`                 | `message-edited`                                                           | When its text, its files, or a file's description changed. |
+| Message events                       | The message as saved, read after its transaction commits, retrying briefly | Only where the plugin runs, and with `messages.read`.      |
+| `botCommandInvoked`                  | `command-invoked`                                                          | Reaches the plugin whose principal it names.               |
+| A `communityPlugin` event of its own | `plugin-enabled` or `plugin-disabled`                                      | Always.                                                    |
 
 Timers are delivered through `observe::deliver` too (see [Timers](timers.md)).

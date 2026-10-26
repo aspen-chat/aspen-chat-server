@@ -68,10 +68,7 @@ fn print_setup(server: &VoiceServer) {
          NATS's authorization, with a password of your own, which its voice_server.toml gives \
          under [nats_user] (docs/operators/installing/6-voice-servers.md):\n"
     );
-    print!(
-        "{}",
-        voice_protocol::control::nats_permissions(id).nats_user(&server.name, "PASSWORD")
-    );
+    print!("{}", server.nats_user());
 }
 
 fn capacity(capacity: u32) -> Result<i32> {

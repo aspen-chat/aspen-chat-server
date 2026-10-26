@@ -588,6 +588,7 @@ async fn post(
                             access: &access,
                             content: shown,
                             attachments: &attachments,
+                            retouched: None,
                             editing: None,
                             unmade_thread_of: unmade.as_ref().map(|unmade| unmade.parent),
                         },
@@ -605,6 +606,7 @@ async fn post(
                             access: &access,
                             content,
                             attachments: &attachments,
+                            retouched: None,
                             editing: None,
                             unmade_thread_of: unmade.as_ref().map(|unmade| unmade.parent),
                         },
@@ -935,61 +937,80 @@ pub struct MessageChangeset {
     pub altered_by: Option<Vec<Option<String>>>,
 }
 
+/// An edit of a message: new text, a new description or spoiler mark for one of its files, or
+/// both. Its files themselves are never changed by an edit; one is taken off by
+/// [`remove_attachment`].
+#[derive(Debug, Clone, Default)]
+pub struct Edit {
+    pub content: Option<String>,
+    pub retouch: Option<Retouch>,
+}
+
+/// A new description or spoiler mark for one of a message's files; `None` leaves each as it is,
+/// and `Some(None)` clears the description.
+#[derive(Debug, Clone)]
+pub struct Retouch {
+    pub attachment: AttachmentId,
+    pub description: Option<Option<String>>,
+    pub spoiler: Option<bool>,
+}
+
+impl From<MessageUpdateRequest> for Edit {
+    fn from(request: MessageUpdateRequest) -> Self {
+        Edit {
+            content: request.content,
+            retouch: None,
+        }
+    }
+}
+
+/// A file's description and spoiler mark as they stand, with what a retouch makes of them.
+struct Retouched {
+    attachment: AttachmentId,
+    before: (Option<String>, bool),
+    after: (Option<String>, bool),
+}
+
+impl Retouched {
+    fn changes(&self) -> bool {
+        self.before != self.after
+    }
+
+    /// Whether it says more than before: a new or different description, or a spoiler mark
+    /// taken off. Covering a file or clearing its description only takes away.
+    fn adds(&self) -> bool {
+        (self.after.0.is_some() && self.after.0 != self.before.0)
+            || (self.before.1 && !self.after.1)
+    }
+}
+
+/// Edits the caller's own message. Only text and files' descriptions and spoiler marks change;
+/// plugins decide the message as it will stand, as they decide a new one.
 pub async fn update_message(
     state: &GlobalServerContext,
     caller: UserId,
     id: MessageId,
-    command: MessageUpdateRequest,
+    edit: Edit,
     waited: Option<HeldMessageId>,
 ) -> Result<Edited, crate::Error> {
     let mut conn = state.connection_pool.get().await?;
-    let (channel_id, kind, author): (ChannelId, MessageKind, UserId) = message::table
-        .select((message::channel, message::kind, message::author))
-        .filter(message::id.eq(id).and(message::deleted_at.is_null()))
-        .first(conn.as_mut())
-        .await?;
+    let (channel_id, kind, author, before_content): (ChannelId, MessageKind, UserId, String) =
+        message::table
+            .select((
+                message::channel,
+                message::kind,
+                message::author,
+                message::content,
+            ))
+            .filter(message::id.eq(id).and(message::deleted_at.is_null()))
+            .first(conn.as_mut())
+            .await?;
     let access = channel_access(state, conn.as_mut(), caller, channel_id).await?;
     // A message says what its author said; nobody else may put words in it.
     if author != caller {
         return Err(crate::Error::Forbidden(t!("editOthersMessage")));
     }
     access.ensure_unblocked()?;
-    // Adding to a message is posting, so it takes what posting here takes: Send messages (Send
-    // messages in threads in a thread) for new text, and Attach files besides for a new file.
-    // An edit that only takes away does not: clearing the text (`content` given as empty),
-    // removing attachments (`attachments` naming only some of those it has), or both, so
-    // someone who may no longer post can still withdraw what they said.
-    let (before_content, before_attachments): (String, std::collections::HashSet<AttachmentId>) = (
-        message::table
-            .select(message::content)
-            .filter(message::id.eq(id))
-            .first(conn.as_mut())
-            .await?,
-        message_attachment::table
-            .select(message_attachment::attachment_id)
-            .filter(message_attachment::message_id.eq(id))
-            .load::<AttachmentId>(conn.as_mut())
-            .await?
-            .into_iter()
-            .collect(),
-    );
-    let added_files = command.attachments.as_ref().map_or(0, |wanted| {
-        wanted
-            .iter()
-            .filter(|attachment| !before_attachments.contains(attachment))
-            .count()
-    });
-    let adds_files = added_files > 0;
-    let adds_text = command
-        .content
-        .as_deref()
-        .is_some_and(|text| !text.is_empty());
-    if adds_text || adds_files {
-        access.require(access.send_permission())?;
-    }
-    if adds_files {
-        access.require(Permissions::ATTACH_FILES)?;
-    }
     // Only text its author wrote is theirs to edit. An echo shows its reply's content; a
     // command was sent as it stands, and its bot has already answered it; the other kinds
     // record what Aspen keeps (a poll, a call, a warning, a join, a community growing) and have
@@ -1008,23 +1029,50 @@ pub async fn update_message(
             return Err(crate::Error::Validation(t!("messageNotEditable")));
         }
     }
-    // New attachments must be the author's, or already this message's, before any plugin is
-    // shown them; the saving transaction checks again.
-    if let Some(new_attachments) = &command.attachments {
-        ensure_attachments_ready(conn.as_mut(), caller, Some(id), new_attachments).await?;
+    let attachments: Vec<AttachmentId> = message_attachment::table
+        .select(message_attachment::attachment_id)
+        .filter(message_attachment::message_id.eq(id))
+        .load(conn.as_mut())
+        .await?;
+    let retouched = match &edit.retouch {
+        None => None,
+        Some(retouch) => {
+            // Only a file of this message is retouched through it.
+            if !attachments.contains(&retouch.attachment) {
+                return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
+            }
+            let before: (Option<String>, bool) = attachment::table
+                .select((attachment::description, attachment::spoiler))
+                .filter(attachment::id.eq(retouch.attachment))
+                .first(conn.as_mut())
+                .await?;
+            let description = match &retouch.description {
+                Some(raw) => crate::attachment::description(raw.clone())?,
+                None => before.0.clone(),
+            };
+            let after = (description, retouch.spoiler.unwrap_or(before.1));
+            Some(Retouched {
+                attachment: retouch.attachment,
+                before,
+                after,
+            })
+        }
+    };
+    // Adding to a message is posting, so it takes what posting here takes: Send messages (Send
+    // messages in threads in a thread) for new text or a new description. An edit that only
+    // takes away does not: clearing the text (`content` given as empty), clearing a description,
+    // or covering a file, so someone who may no longer post can still withdraw what they said.
+    let adds_text = edit.content.as_deref().is_some_and(|text| !text.is_empty());
+    if adds_text || retouched.as_ref().is_some_and(Retouched::adds) {
+        access.require(access.send_permission())?;
     }
     // An edit that changes nothing is dropped, answered with the message as it stands; the apps
     // do not send one.
-    let same_text = command
+    let same_text = edit
         .content
         .as_ref()
         .is_none_or(|content| *content == before_content);
-    let same_files = command.attachments.as_ref().is_none_or(|wanted| {
-        wanted.len() == before_attachments.len()
-            && wanted
-                .iter()
-                .all(|attachment| before_attachments.contains(attachment))
-    });
+    let same_files = retouched.as_ref().is_none_or(|r| !r.changes());
     if same_text && same_files {
         if let Some(waited) = waited {
             held::take(conn.as_mut(), waited).await?;
@@ -1033,21 +1081,22 @@ pub async fn update_message(
             current(state, conn.as_mut(), id).await?,
         )));
     }
+    let retouched = retouched.filter(Retouched::changes);
     // Lengthening a message spends its channel's mana as posting does (`app::mana`), and waits
-    // its turn in a busy channel; one waited already has been paid for.
-    if waited.is_none() {
-        if let Some(content) = &command.content {
-            check_content(content)?;
-        }
-        let after = command.content.as_deref().unwrap_or(&before_content);
-        let cost = mana::edit_cost(&state.settings(), &before_content, after, added_files);
+    // its turn in a busy channel; one waited already has been paid for. Retouching a file
+    // spends none, and waits for nothing.
+    if waited.is_none()
+        && retouched.is_none()
+        && let Some(content) = &edit.content
+    {
+        check_content(content)?;
+        let cost = mana::edit_cost(&state.settings(), &before_content, content, 0);
         if mana::decide_for(state, conn.as_mut(), caller, channel_id, cost).await?
             == mana::Decision::Wait
         {
             drop(conn);
             let change = WaitingEdit {
-                content: command.content.clone(),
-                attachments: command.attachments.clone(),
+                content: Some(content.clone()),
             };
             let held = mana::queue::wait(
                 state,
@@ -1055,8 +1104,8 @@ pub async fn update_message(
                     author: caller,
                     channel: channel_id,
                     kind: held::HeldKind::Edit,
-                    content: command.content.unwrap_or(before_content),
-                    attachments: command.attachments.unwrap_or_default(),
+                    content: content.clone(),
+                    attachments: Vec::new(),
                     echo_to_parent: false,
                     reply: None,
                     target: Some(id),
@@ -1068,81 +1117,75 @@ pub async fn update_message(
             return Ok(Edited::Waiting(held));
         }
     }
-    // Plugins decide an edit as they decide a new message, whether it changes the text, the
-    // attachments, or both, shown the text as it will stand; the edit records who rewrote it.
-    let mut command = command;
+    // Plugins decide an edit as they decide a new message, whether it changes the text, a
+    // file's description, or both, shown the message as it will stand; the edit records who
+    // rewrote it.
+    let mut content = edit.content;
     let mut altered_by = None;
-    if let Some(content) = &command.content {
+    if let Some(content) = &content {
         check_content(content)?;
     }
-    if command.content.is_some() || command.attachments.is_some() {
-        let running =
-            intercept::wanted(state, conn.as_mut(), InterceptHook::MessageEdit, channel_id).await?;
-        if !running.is_empty() {
-            let attachments = match &command.attachments {
-                Some(attachments) => attachments.clone(),
-                None => {
-                    message_attachment::table
-                        .select(message_attachment::attachment_id)
-                        .filter(message_attachment::message_id.eq(id))
-                        .load(conn.as_mut())
-                        .await?
-                }
-            };
-            // With only its attachments changing, a message keeps its text, and the plugins
-            // that rewrote it before, unless one rewrites it now.
-            let (content, kept_text) = match command.content.take() {
-                Some(content) => (content, None),
-                None => {
-                    let (content, by): (String, Vec<Option<String>>) = message::table
-                        .select((message::content, message::altered_by))
-                        .filter(message::id.eq(id))
-                        .first(conn.as_mut())
-                        .await?;
-                    (content.clone(), Some((content, by)))
-                }
-            };
-            // As on create, the connection goes back to the pool while the plugins run.
-            drop(conn);
-            let decided = intercept::decide(
-                state,
-                InterceptHook::MessageEdit,
-                running,
-                intercept::Draft {
-                    author: caller,
-                    access: &access,
-                    content,
-                    attachments: &attachments,
-                    editing: Some(id),
-                    unmade_thread_of: None,
-                },
-            )
-            .await?;
-            check_content(&decided.content)?;
-            conn = state.connection_pool.get().await?;
-            match kept_text {
-                Some((before, _)) if decided.content == before => {}
-                Some((_, mut by)) => {
-                    // Its earlier rewriters' changes are still in the text, so they stay named.
-                    for plugin in decided.altered_by {
-                        if !by.contains(&Some(plugin.clone())) {
-                            by.push(Some(plugin));
-                        }
-                    }
-                    command.content = Some(decided.content);
-                    altered_by = Some(by.into_iter().flatten().collect());
-                }
-                None => {
-                    command.content = Some(decided.content);
-                    altered_by = Some(decided.altered_by);
-                }
+    let running =
+        intercept::wanted(state, conn.as_mut(), InterceptHook::MessageEdit, channel_id).await?;
+    if !running.is_empty() {
+        // With only a file retouched, a message keeps its text, and the plugins that rewrote it
+        // before, unless one rewrites it now.
+        let (shown, kept_text) = match content.take() {
+            Some(content) => (content, None),
+            None => {
+                let by: Vec<Option<String>> = message::table
+                    .select(message::altered_by)
+                    .filter(message::id.eq(id))
+                    .first(conn.as_mut())
+                    .await?;
+                (before_content.clone(), Some(by))
             }
-        } else if command.content.is_some() {
-            altered_by = Some(Vec::new());
+        };
+        // As on create, the connection goes back to the pool while the plugins run.
+        drop(conn);
+        let decided = intercept::decide(
+            state,
+            InterceptHook::MessageEdit,
+            running,
+            intercept::Draft {
+                author: caller,
+                access: &access,
+                content: shown,
+                attachments: &attachments,
+                retouched: retouched.as_ref().map(|r| intercept::Retouched {
+                    attachment: r.attachment,
+                    description: r.after.0.clone(),
+                    spoiler: r.after.1,
+                }),
+                editing: Some(id),
+                unmade_thread_of: None,
+            },
+        )
+        .await?;
+        check_content(&decided.content)?;
+        conn = state.connection_pool.get().await?;
+        match kept_text {
+            Some(_) if decided.content == before_content => {}
+            Some(mut by) => {
+                // Its earlier rewriters' changes are still in the text, so they stay named.
+                for plugin in decided.altered_by {
+                    if !by.contains(&Some(plugin.clone())) {
+                        by.push(Some(plugin));
+                    }
+                }
+                content = Some(decided.content);
+                altered_by = Some(by.into_iter().flatten().collect());
+            }
+            None => {
+                content = Some(decided.content);
+                altered_by = Some(decided.altered_by);
+            }
         }
+    } else if content.is_some() {
+        altered_by = Some(Vec::new());
     }
-    let content_changed = command.content.is_some();
-    let new_content_for_refetch = command.content.clone();
+    let content_changed = content.is_some();
+    let new_content_for_refetch = content.clone();
     let (message, attachments, previews_cleared) = conn
         .transaction(|conn| {
             async move {
@@ -1153,7 +1196,7 @@ pub async fn update_message(
                 }
                 // New text tags afresh, with the author's permissions as they are now, and as a
                 // reply tags who it tagged when posted.
-                let mentions = match &command.content {
+                let mentions = match &content {
                     Some(content) => {
                         let requested =
                             match reply::tagged_on_edit(conn.as_mut(), id, caller).await? {
@@ -1168,14 +1211,13 @@ pub async fn update_message(
                     None => None,
                 };
                 // New text links afresh.
-                let linked_messages = command
-                    .content
+                let linked_messages = content
                     .as_deref()
                     .map(|content| message_link::parse(content, id));
                 let Some(message) = diesel::update(message::table)
                     .set(MessageChangeset {
-                        content: command.content.clone(),
-                        edited_at: content_changed.then(Utc::now),
+                        content: content.clone(),
+                        edited_at: Some(Utc::now()),
                         mentions: mentions.clone(),
                         linked_messages: linked_messages.clone(),
                         altered_by: altered_by
@@ -1191,43 +1233,18 @@ pub async fn update_message(
                 else {
                     return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
                 };
-
-                if let Some(ref new_attachments) = command.attachments {
-                    ensure_attachments_ready(conn.as_mut(), caller, Some(id), new_attachments)
-                        .await?;
-                    let before: Vec<AttachmentId> = diesel::delete(message_attachment::table)
-                        .filter(message_attachment::message_id.eq(id))
-                        .returning(message_attachment::attachment_id)
-                        .load(conn.as_mut())
-                        .await?;
-                    let held: Vec<MessageAttachment> = new_attachments
-                        .iter()
-                        .map(|attachment_id| MessageAttachment {
-                            message_id: id,
-                            attachment_id: *attachment_id,
-                        })
-                        .collect();
-                    if !held.is_empty() {
-                        diesel::insert_into(message_attachment::table)
-                            .values(&held)
-                            .execute(conn.as_mut())
-                            .await?;
-                    }
-                    crate::attachment::mark_sent(conn.as_mut(), new_attachments).await?;
-                    // What the edit took off is kept for reviewing reports.
-                    let removed: Vec<AttachmentId> = before
-                        .into_iter()
-                        .filter(|kept| !new_attachments.contains(kept))
-                        .collect();
-                    crate::attachment::evidence::keep_removed(conn.as_mut(), id, &removed).await?;
-                }
-
-                let attachments: Vec<AttachmentId> = message_attachment::table
-                    .select(message_attachment::attachment_id)
-                    .filter(message_attachment::message_id.eq(id))
-                    .load(conn.as_mut())
+                if let Some(retouched) = &retouched {
+                    crate::attachment::retouch(
+                        state,
+                        conn.as_mut(),
+                        id,
+                        channel_id,
+                        retouched.attachment,
+                        retouched.after.0.clone(),
+                        retouched.after.1,
+                    )
                     .await?;
-
+                }
                 if let Some(mentions) = &mentions {
                     mention::replace(conn.as_mut(), id, channel_id, mentions).await?;
                 }
@@ -1247,9 +1264,11 @@ pub async fn update_message(
                     EventScope::Message(id),
                     &ServerEvent::Message(MessageEvent::Update {
                         id,
-                        content: command.content,
-                        attachments: command.attachments,
-                        edited_at: content_changed.then_some(message.edited_at),
+                        content,
+                        // A retouched file is named among the message's files, so whatever
+                        // follows its files (plugins observing edits) reads it again.
+                        attachments: retouched.is_some().then(|| attachments.clone()),
+                        edited_at: Some(message.edited_at),
                         // Clients drop their stale cards with the edit itself; the
                         // fetcher's own update brings the new set.
                         link_previews: previews_cleared.then(Vec::new),
@@ -1274,8 +1293,8 @@ pub async fn update_message(
     }
 
     // Re-load the current preview set for the REST response. On a content
-    // edit this will be empty (we just wiped it); for attachment-only edits
-    // the previous set is still current.
+    // edit this will be empty (we just wiped it); for a retouch the previous
+    // set is still current.
     let mut conn = state.connection_pool.get().await?;
     let link_previews = load_previews(conn.as_mut(), state.media_store.as_ref(), &[id])
         .await?
@@ -1362,14 +1381,13 @@ pub enum Edited {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WaitingEdit {
     content: Option<String>,
-    attachments: Option<Vec<AttachmentId>>,
 }
 
-impl From<WaitingEdit> for MessageUpdateRequest {
+impl From<WaitingEdit> for Edit {
     fn from(change: WaitingEdit) -> Self {
-        MessageUpdateRequest {
+        Edit {
             content: change.content,
-            attachments: change.attachments,
+            retouch: None,
         }
     }
 }

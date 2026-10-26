@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button, useLocale } from "react-aria-components";
 import { useSync, useIdWizard } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
+import { AdminUserPicker } from "@/features/admin/AdminUserPicker";
 import { Cell, Table } from "@/features/admin/FleetHealth";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { formatSize } from "@/features/voice/files";
@@ -19,7 +20,8 @@ const PAGE = 50;
 
 /**
  * The record of files offered in calls, newest first, a page at a time: who offered what, by
- * name and size, and who received it, how, and how it ended. The files never reach the server.
+ * name and size, and who received it, how, and how it ended, of everyone or only of the person
+ * chosen, as sender or receiver. The files never reach the server.
  */
 export function FileTransferLog() {
   const timeFormat = useDateFormat(TIME);
@@ -31,10 +33,11 @@ export function FileTransferLog() {
   const [complete, setComplete] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [person, setPerson] = useState<string | undefined>(undefined);
 
   const read = useCallback(
     (before: string | undefined, isCurrent: () => boolean) => {
-      sync.admin.fileTransferLog(before).then(
+      sync.admin.fileTransferLog(before, person).then(
         (page) => {
           if (!isCurrent()) {
             return;
@@ -52,7 +55,7 @@ export function FileTransferLog() {
         },
       );
     },
-    [sync],
+    [sync, person],
   );
 
   useEffect(() => {
@@ -69,6 +72,15 @@ export function FileTransferLog() {
       title={m.admin.fileTransfers}
       hint={m.admin.fileTransfersHint}
     >
+      <div className="max-w-xs">
+        <AdminUserPicker
+          label={m.admin.fileTransfersOf}
+          onChange={(user) => {
+            setLoading(true);
+            setPerson(user?.id);
+          }}
+        />
+      </div>
       {error !== null && (
         <ReadFailed
           error={error}

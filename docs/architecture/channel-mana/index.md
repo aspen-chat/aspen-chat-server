@@ -66,11 +66,11 @@ mana.
 - **Markdown markers** cost what they are, a glyph each.
 - **Counted on the text as sent**, before the channel's plugins decide it.
 - **A slash command** costs its invocation's text, as its message shows it, and its attachments.
-- **An edit** costs the glyphs it adds beyond the message's length before, and its added attachments
-  (`mana::edit_cost`). One that shortens or rewords costs nothing and applies at once, even while
-  others wait.
-- **An edit that changes nothing** (the same text and the same attachments) is dropped, and answered
-  with the message as it stands. The apps do not send one.
+- **An edit** costs the glyphs it adds beyond the message's length before (`mana::edit_cost`). One
+  that shortens or rewords costs nothing and applies at once, even while others wait, and so does a
+  new description or spoiler mark for one of its files.
+- **An edit that changes nothing** (the same text, and the same description and mark) is dropped,
+  and answered with the message as it stands. The apps do not send one.
 - **A poll** costs the glyphs of its question and answers, one line each.
 - **An echo** to a thread's parent costs its reply's cost, from the parent's pool.
 

@@ -3378,6 +3378,72 @@ def large_communities(world: World, check: Checks) -> None:
     finally:
         threshold(200)
 
+def sent_files(world: World, check: Checks) -> None:
+    say("a sent message's files: fixed, though their author may describe them or mark them spoilers")
+    stack, member = world.stack, world.member
+    channel = world.channel("sent-files")
+    handle = stack.api("POST", "/attachments", {"fileName": "cat.txt", "mimeType": "text/plain",
+                                                "byteSize": 3}, member["token"])
+    put = urllib.request.Request(handle["uploadUrl"], data=b"cat", method="PUT",
+                                 headers={"content-type": "text/plain"})
+    urllib.request.urlopen(put, timeout=15).close()
+    file = stack.api("POST", f"/attachments/{handle['id']}/confirm", token=member["token"])["id"]
+    message = stack.api("POST", f"/channels/{channel}/messages",
+                        {"content": "look", "attachments": [file]}, member["token"])["id"]
+    retouch = f"/messages/{message}/attachments/{file}"
+    world.stream.gather(0.5)
+    check("an edit that gives files is refused, not ignored",
+          stack.status("PATCH", f"/messages/{message}", {"content": "look", "attachments": []},
+                       member["token"]) == 400)
+    check("and one giving no files is not",
+          stack.status("PATCH", f"/messages/{message}", {"content": "look here"}, member["token"]) == 200)
+    check("someone else may not describe the author's file",
+          stack.status("PATCH", retouch, {"description": "theirs"}, world.owner["token"]) == 403)
+    check("its author may", stack.status("PATCH", retouch, {"description": "a cat"}, member["token"]) == 200)
+    heard = of(world.stream.gather(1.0), "attachmentChanged", attachment=file)
+    check("and the channel hears it", bool(heard) and heard[-1].get("description") == "a cat", heard)
+    world.as_owner("PUT", f"/channels/{channel}/overrides/{world.everyone}",
+                   {"allow": [], "deny": ["sendMessages"]})
+    world.stream.gather(0.5)
+    check("without Send messages a new description is refused",
+          stack.status("PATCH", retouch, {"description": "a dog"}, member["token"]) == 403)
+    check("but taking one away is not",
+          stack.status("PATCH", retouch, {"description": None, "spoiler": True}, member["token"]) == 200)
+    check("nor is a file outside the message found through it",
+          stack.status("PATCH", f"/messages/{message}/attachments/{message}", {"spoiler": True},
+                       member["token"]) == 404)
+
+
+def invite_codes(world: World, check: Checks) -> None:
+    say("an invite's chosen code, which only those who manage invites choose")
+    stack, member = world.stack, world.member
+    invites = f"/communities/{world.community}/invites"
+    code = f"club{world.run}"[:16]
+    check("Create invites alone makes an invite with a code the server chooses",
+          stack.status("POST", invites, {"expiresAt": None}, member["token"]) == 201)
+    check("but not one with a code of the member's choosing",
+          stack.status("POST", invites, {"expiresAt": None, "customCode": code}, member["token"]) == 403)
+    world.give(world.role("Invite managers", ["manageInvites"]))
+    world.stream.gather(0.5)
+    check("Manage invites chooses one",
+          stack.status("POST", invites, {"expiresAt": None, "customCode": code}, member["token"]) == 201)
+    check("which no one may take again",
+          stack.status("POST", invites, {"expiresAt": None, "customCode": code},
+                       world.owner["token"]) == 409)
+    check("and whose expiry its maker changes",
+          stack.status("PATCH", f"/invites/{code}", {"expiresAt": None}, member["token"]) == 200)
+
+
+def usernames(world: World, check: Checks) -> None:
+    say("a username, which nobody changes once the account is made")
+    stack, member = world.stack, world.member
+    check("a profile change giving a username is refused, not ignored",
+          stack.status("PATCH", "/users/@me", {"name": f"renamed{world.run}"}, member["token"]) == 400)
+    check("and the name stands",
+          stack.api("GET", "/users/@me", token=member["token"])["name"] == member["name"])
+    check("while the rest of the profile changes",
+          stack.status("PATCH", "/users/@me", {"displayName": "Still me"}, member["token"]) == 200)
+
 
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
@@ -3387,7 +3453,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
-             marking_unread, join_messages, large_communities, identity_providers]
+             marking_unread, join_messages, identity_providers, sent_files, invite_codes, usernames, large_communities]
 
 
 def main() -> None:

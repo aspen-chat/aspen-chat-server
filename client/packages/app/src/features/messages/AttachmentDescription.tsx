@@ -1,5 +1,5 @@
 import { ATTACHMENT_DESCRIPTION_MAX_CHARS } from "@aspen/protocol";
-import { TextAlignLeftIcon } from "@phosphor-icons/react";
+import { EyeSlashIcon, TextAlignLeftIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import {
   Button,
@@ -12,6 +12,7 @@ import {
   Text,
   TextArea,
   TextField,
+  ToggleButton,
 } from "react-aria-components";
 import { inputClass, labelClass, primaryButtonClass } from "@/features/auth/styles";
 import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
@@ -20,10 +21,16 @@ import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
+/** The look of the small controls beside a file in the message box and the message editor. */
+export const pendingControlClass =
+  "rounded p-0.5 text-ink-faint outline-none hover:text-ink pointer-coarse:p-1.5 " +
+  "focus-visible:ring-2 focus-visible:ring-accent/50";
+
 /**
- * The control on a file waiting to be sent that describes what it shows, for readers who cannot
- * see it: a button (filled once there is a description) opening a modal with the text, kept
- * when saved. What is saved, and when it reaches the server, is the message box's business.
+ * The control on a file, waiting to be sent or in a message being edited, that describes what it
+ * shows, for readers who cannot see it: a button (filled once there is a description) opening a
+ * modal with the text, kept when saved. What is saved, and when it reaches the server, is the
+ * business of what holds it.
  */
 export function AttachmentDescriptionButton({
   name,
@@ -114,5 +121,34 @@ function DescriptionForm({
         </Button>
       </div>
     </Form>
+  );
+}
+
+/**
+ * Marks a file as a spoiler, which readers' apps cover until each reader
+ * reveals it, or takes the mark off; its eye is filled while it is on.
+ */
+export function SpoilerToggle({
+  name,
+  spoiler,
+  onChange,
+}: {
+  name: string;
+  spoiler: boolean;
+  onChange: (spoiler: boolean) => void;
+}) {
+  const m = useMessages();
+  const label = format(m.markSpoiler, { name });
+  return (
+    <Tooltip text={label}>
+      <ToggleButton
+        aria-label={label}
+        isSelected={spoiler}
+        onChange={onChange}
+        className={pendingControlClass + " selected:text-accent"}
+      >
+        <EyeSlashIcon size={14} weight={spoiler ? "fill" : "regular"} aria-hidden="true" />
+      </ToggleButton>
+    </Tooltip>
   );
 }

@@ -144,6 +144,15 @@ pub struct VoiceServer {
     pub suspended_until: Option<DateTime<Utc>>,
 }
 
+impl VoiceServer {
+    /// Its NATS user's entry in NATS's `authorization { users = [...] }`, allowed only the
+    /// subjects of its own id, with `PASSWORD` standing for a password its operator chooses and
+    /// gives it under `[nats_user]` (`docs/operators/installing/6-voice-servers.md`).
+    pub fn nats_user(&self) -> String {
+        voice_protocol::control::nats_permissions(self.id.0).nats_user(&self.name, "PASSWORD")
+    }
+}
+
 #[derive(Debug, Clone, AsChangeset)]
 #[diesel(table_name = voice_server)]
 #[diesel(check_for_backend(diesel::pg::Pg))]

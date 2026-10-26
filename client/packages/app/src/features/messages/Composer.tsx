@@ -6,7 +6,6 @@ import {
 } from "@aspen/protocol";
 import {
   ChartBarIcon,
-  EyeSlashIcon,
   FileIcon,
   PaperclipIcon,
   PaperPlaneRightIcon,
@@ -30,7 +29,6 @@ import {
   ProgressBar,
   TextArea,
   TextField,
-  ToggleButton,
 } from "react-aria-components";
 import { useEmojiCompletion } from "@/features/emoji/useEmojiCompletion";
 import { useTagging } from "@/features/mentions/useTagging";
@@ -46,7 +44,11 @@ import {
   useUser,
 } from "@/api/hooks";
 import { describable, isImageType } from "@/features/messages/images";
-import { AttachmentDescriptionButton } from "@/features/messages/AttachmentDescription";
+import {
+  AttachmentDescriptionButton,
+  pendingControlClass,
+  SpoilerToggle,
+} from "@/features/messages/AttachmentDescription";
 import { HeldMessages } from "@/features/messages/HeldMessages";
 import { ManaBar } from "@/features/messages/ManaBar";
 import { TypingIndicator } from "@/features/messages/TypingIndicator";
@@ -105,10 +107,6 @@ const menuItemClass =
   "focus:bg-surface-hover pointer-coarse:py-2.5";
 
 /** The controls on a file waiting to be sent, in a column at its end. */
-const pendingControlClass =
-  "rounded p-0.5 text-ink-faint outline-none hover:text-ink pointer-coarse:p-1.5 " +
-  "focus-visible:ring-2 focus-visible:ring-accent/50";
-
 const toolButtonClass =
   "shrink-0 rounded-md border border-line p-2.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
   "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
@@ -868,34 +866,5 @@ function BlockedNote({ userId }: { userId: string }) {
         </p>
       )}
     </div>
-  );
-}
-
-/**
- * Marks a file waiting to be sent as a spoiler, which readers' apps cover until each reader
- * reveals it, or takes the mark off; its eye is filled while it is on.
- */
-function SpoilerToggle({
-  name,
-  spoiler,
-  onChange,
-}: {
-  name: string;
-  spoiler: boolean;
-  onChange: (spoiler: boolean) => void;
-}) {
-  const m = useMessages();
-  const label = format(m.markSpoiler, { name });
-  return (
-    <Tooltip text={label}>
-      <ToggleButton
-        aria-label={label}
-        isSelected={spoiler}
-        onChange={onChange}
-        className={pendingControlClass + " selected:text-accent"}
-      >
-        <EyeSlashIcon size={14} weight={spoiler ? "fill" : "regular"} aria-hidden="true" />
-      </ToggleButton>
-    </Tooltip>
   );
 }

@@ -547,16 +547,12 @@ pub async fn update_user(
         .first(conn.as_mut())
         .await?;
     if foreign
-        && (command.name.is_some()
-            || command.icon.is_some()
+        && (command.icon.is_some()
             || command.display_name.is_some()
             || command.pronouns.is_some()
             || command.bio.is_some())
     {
         return Err(crate::Error::Forbidden(t!("foreignProfileAtHome")));
-    }
-    if let Some(name) = &command.name {
-        validate_new_username(name)?;
     }
     // A new picture must be one the caller uploaded: their own, or for a bot, its owner's.
     if let Some(Some(icon)) = command.icon
@@ -565,7 +561,7 @@ pub async fn update_user(
         crate::icon::require_own(conn.as_mut(), requesting_user, icon, t!("iconMissing")).await?;
     }
     drop(conn);
-    let updated = apply_profile_update(state.clone(), id, command).await?;
+    let updated = apply_profile_update(state.clone(), id, command, None).await?;
     let mut conn = state.connection_pool.get().await?;
     Ok(with_online_status(
         &state,
@@ -578,11 +574,13 @@ pub async fn update_user(
 }
 
 /// Writes a checked profile update to `id`'s account and announces it to everyone who shares a
-/// community with them: the owner's own update, or a moderator's reset (`app::report`).
+/// community with them: the owner's own update, or a moderator's reset (`app::report`), which
+/// alone may give a new username (`rename`); nobody changes their own.
 pub async fn apply_profile_update(
     state: GlobalServerContext,
     id: UserId,
     command: UserUpdateRequest,
+    rename: Option<String>,
 ) -> Result<User, crate::Error> {
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
@@ -595,7 +593,7 @@ pub async fn apply_profile_update(
             };
             let Some(user_pg) = diesel::update(user::table)
                 .set(UserChangeset {
-                    name: command.name.clone(),
+                    name: rename.clone(),
                     icon: command.icon,
                     password_hash: None,
                     display_name: command.display_name.clone(),
@@ -619,7 +617,7 @@ pub async fn apply_profile_update(
                 crate::EventScope::UserEverywhere(id),
                 &message_enum::server_event::ServerEvent::User(UserEvent::Update {
                     id,
-                    name: command.name,
+                    name: rename,
                     icon: command.icon,
                     display_name: command.display_name,
                     pronouns: command.pronouns,

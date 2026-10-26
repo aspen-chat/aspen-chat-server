@@ -576,6 +576,7 @@ export const MessageItem = memo(function MessageItem({
             messageId={id}
             channelId={message.channelId}
             initial={message.content}
+            attachments={message.attachments}
             onDone={() => {
               setEditing(false);
             }}

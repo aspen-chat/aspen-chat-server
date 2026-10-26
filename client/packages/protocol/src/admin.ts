@@ -14,6 +14,9 @@ export type AdminCommunityEntry = components["schemas"]["AdminCommunityEntry"];
 export type RegistrationInvite = components["schemas"]["RegistrationInvite"];
 export type RegistrationInviteRequest = components["schemas"]["RegistrationInviteRequest"];
 export type Fleet = components["schemas"]["Fleet"];
+export type VoiceServer = components["schemas"]["VoiceServer"];
+export type VoiceServerCreateRequest = components["schemas"]["VoiceServerCreateRequest"];
+export type VoiceServerUpdateRequest = components["schemas"]["VoiceServerUpdateRequest"];
 export type ApiServerHealth = components["schemas"]["ApiServerHealth"];
 export type VoiceServerHealth = components["schemas"]["VoiceServerHealth"];
 export type UnregisteredVoiceServer = components["schemas"]["UnregisteredVoiceServer"];
@@ -170,17 +173,20 @@ export class AdminApi {
     }
   }
 
-  /** A page of the report cases in one state. Takes Review reports. */
+  /**
+   * A page of the report cases in one state, in the order the server lists them, continuing
+   * after the case `before` names when given. Takes Review reports.
+   */
   async reportCases(
     status: ReportStatus,
-    page: { offset?: number; limit?: number } = {},
+    page: { before?: string; limit?: number } = {},
   ): Promise<ReportCaseList> {
     return adminRead(
       await this.#client.api.GET("/api/v1/admin/reports", {
         params: {
           query: {
             "filter[status]": status,
-            ...(page.offset === undefined || page.offset === 0 ? {} : { offset: page.offset }),
+            ...(page.before === undefined ? {} : { before: page.before }),
             ...(page.limit === undefined ? {} : { limit: page.limit }),
           },
         },
@@ -504,6 +510,39 @@ export class AdminApi {
   /** The health of the deployment's API and voice servers. */
   async fleet(): Promise<Fleet> {
     return adminRead(await this.#client.api.GET("/api/v1/admin/fleet"));
+  }
+
+  /** The registered voice servers. Takes Manage voice servers. */
+  async voiceServers(): Promise<VoiceServer[]> {
+    return adminRead(await this.#client.api.GET("/api/v1/voice-servers"));
+  }
+
+  /**
+   * Registers a voice server, answering with what it must be given to report as it: its id and
+   * its NATS user. Takes Manage voice servers.
+   */
+  async createVoiceServer(request: VoiceServerCreateRequest): Promise<VoiceServer> {
+    return adminRead(await this.#client.api.POST("/api/v1/voice-servers", { body: request }));
+  }
+
+  /** Changes a registered voice server. Takes Manage voice servers. */
+  async updateVoiceServer(id: string, change: VoiceServerUpdateRequest): Promise<VoiceServer> {
+    return adminRead(
+      await this.#client.api.PATCH("/api/v1/voice-servers/{server}", {
+        params: { path: { server: id } },
+        body: change,
+      }),
+    );
+  }
+
+  /** Removes a registered voice server; any call on it ends. Takes Manage voice servers. */
+  async deleteVoiceServer(id: string): Promise<void> {
+    const result = await this.#client.api.DELETE("/api/v1/voice-servers/{server}", {
+      params: { path: { server: id } },
+    });
+    if (result.error !== undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
   }
 
   /**

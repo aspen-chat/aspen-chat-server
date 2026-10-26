@@ -13,7 +13,7 @@ Community permissions hold across the community. Overrides never touch them and 
 | `manageChannels`    | Create, edit, arrange, and delete channels, and set their overrides.                                                                           |
 | `manageCategories`  | The same for categories.                                                                                                                       |
 | `createInvites`     | Create invites.                                                                                                                                |
-| `manageInvites`     | Edit or revoke anyone's invites, and see them all. Everyone may manage their own.                                                              |
+| `manageInvites`     | Edit or revoke anyone's invites, see them all, and choose an invite's code, which is unique on the deployment. Everyone may manage their own.  |
 | `manageRoles`       | Manage roles.                                                                                                                                  |
 | `assignRoles`       | Give and take roles.                                                                                                                           |
 | `removeMembers`     | Remove members.                                                                                                                                |
@@ -69,13 +69,17 @@ Channel permissions can also be allowed or denied per channel and per category.
 
 Editing a message is its author's alone (`app::message::update_message`). Adding to it is posting:
 
-| Edit                                                                | Takes                                                                                                             |
-| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| New text (`content` given and not empty)                            | The channel's send permission: `sendMessages`, or `sendInThreads` in a thread (`ChannelAccess::send_permission`). |
-| A new attachment (`attachments` naming one the message lacks)       | The send permission, and `attachFiles` besides.                                                                   |
-| Only taking away (clearing the text, removing attachments, or both) | Nothing.                                                                                                          |
+| Edit                                                                                        | Takes                                                                                                             |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| New text (`content` given and not empty)                                                    | The channel's send permission: `sendMessages`, or `sendInThreads` in a thread (`ChannelAccess::send_permission`). |
+| A file's new or different description, or its spoiler mark taken off                        | The send permission.                                                                                              |
+| Only taking away (clearing the text, clearing a description, covering a file, removing one) | Nothing.                                                                                                          |
 
-So someone who may no longer post can still withdraw what they said.
+So someone who may no longer post can still withdraw what they said. An edit never adds or swaps a
+file: `PATCH /messages/{message}` refuses `attachments` with `validation` (`messageFilesFixed`), a
+file is taken off with `DELETE /messages/{message}/attachments/{attachment}` (its author, or a
+holder of Manage messages), and its description and spoiler mark are changed with `PATCH` there, by
+its author, as an edit (`app::message::Retouch`).
 
 ## Threads and DMs
 

@@ -174,15 +174,18 @@ pub async fn list_user_communities(
     )))
 }
 
+/// Changes the caller's profile, or the profile of a bot they own. A username is chosen at
+/// registration and never changed: a request giving `name` is refused with `validation`.
 #[utoipa::path(
     patch,
     path = "/users/{user}",
     tag = TAG_USERS,
     params(("user" = inline(UserRef), Path)),
+    request_body = UserUpdateRequest,
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = User),
-        (status = BAD_REQUEST, body = Problem),
+        (status = BAD_REQUEST, description = "`validation`: a field is out of bounds, or the request gives `name`", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -193,8 +196,9 @@ pub async fn update_user(
     State(state): State<GlobalServerContext>,
     session: SessionUser,
     Path(user): Path<UserRef>,
-    Json(request): Json<UserUpdateRequest>,
+    Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<User>> {
+    let request: UserUpdateRequest = crate::extract::refusing(body, "name", t!("usernameFixed"))?;
     let user_id = user.resolve(&session);
     let updated = app::user::update_user(state, session.user.id, user_id, request)
         .await

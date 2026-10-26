@@ -14,17 +14,23 @@ import {
   Label,
   ListBox,
   ListBoxItem,
+  Menu,
+  MenuItem,
+  MenuTrigger,
   Modal,
   ModalOverlay,
   NumberField,
   Popover,
   Select,
   SelectValue,
+  Text,
+  TextField,
 } from "react-aria-components";
 import { useCan, useDeploymentCan, useInvites, useMe, useSync } from "@/api/hooks";
 import { useScopeDomain } from "@/api/identity";
 import { inputClass, labelClass, primaryButtonClass } from "@/features/auth/styles";
 import { headerIconButtonClass } from "@/features/layout/headerButton";
+import { menuItemClass, menuPopoverClass } from "@/features/layout/menu";
 import { ShowMore } from "@/features/layout/ShowMore";
 import { Tooltip } from "@/features/layout/Tooltip";
 import {
@@ -44,6 +50,9 @@ import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
 import { CopyIdButton } from "@/features/layout/CopyId";
+
+/** The longest code someone may choose for an invite, as the server's `INVITE_CODE_LENGTH`. */
+const MAX_CODE_CHARS = 16;
 
 /** How long a new invite stays valid, as a key into the `expiry` messages. */
 const EXPIRY_OPTIONS = {
@@ -108,9 +117,9 @@ export function InviteModal({
 const MAX_DUAL_USES = 1000;
 
 /**
- * Lists a community's invites with copy, QR code, and revoke, and creates new ones. Without
- * Manage invites the server lists only the caller's own, and without Create invites nothing new
- * is offered. Someone who may also make registration invites may make a dual invite here: a
+ * Lists a community's invites with copy, QR code, a new expiry, and revoke, and creates new
+ * ones. Without Manage invites the server lists only the caller's own, a new one's code is
+ * made by the server, and without Create invites nothing new is offered. Someone who may also make registration invites may make a dual invite here: a
  * link that creates an account on the deployment and joins this community with it.
  */
 export function InviteManager({ communityId }: { communityId: string }) {
@@ -125,6 +134,7 @@ export function InviteManager({ communityId }: { communityId: string }) {
   const [expiry, setExpiry] = useState<ExpiryOption>("week");
   const [dual, setDual] = useState(false);
   const [dualUses, setDualUses] = useState(1);
+  const [code, setCode] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The invite just made shows its QR code at once; any other shows it when asked.
@@ -156,9 +166,12 @@ export function InviteManager({ communityId }: { communityId: string }) {
         );
         setShown(null);
       } else {
+        const chosen = code.trim();
         const invite = await sync.createInvite(communityId, {
           expiresAt: lifetime === null ? null : new Date(Date.now() + lifetime).toISOString(),
+          ...(manageAll && chosen !== "" ? { customCode: chosen } : {}),
         });
+        setCode("");
         setMade(null);
         setShown(invite.code);
       }
@@ -227,6 +240,20 @@ export function InviteManager({ communityId }: { communityId: string }) {
               {creating ? m.creatingInvite : m.createInvite}
             </Button>
           </div>
+          {manageAll && !(dual && mayDual) && (
+            <TextField
+              value={code}
+              onChange={setCode}
+              maxLength={MAX_CODE_CHARS}
+              className="flex flex-col gap-1"
+            >
+              <Label className={labelClass}>{m.customInviteCode}</Label>
+              <Input className={inputClass + " font-mono"} />
+              <Text slot="description" className="text-xs text-ink-muted">
+                {m.customInviteCodeHint}
+              </Text>
+            </TextField>
+          )}
           {mayDual && (
             <ChoiceCheckbox
               isSelected={dual}
@@ -331,6 +358,7 @@ function InviteRow({
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  const [changeError, setChangeError] = useState<string | null>(null);
   const domain = useScopeDomain();
   const share = useShareUrl();
   const link = share?.(invitePath(invite.code, domain)) ?? null;
@@ -383,6 +411,42 @@ function InviteRow({
               ? m.expired
               : format(m.expiresOn, { date: dateFormat.format(expiresAt) })}
         </span>
+        {revocable && (
+          <MenuTrigger>
+            <Button
+              aria-label={format(m.changeInviteExpiry, { code: invite.code })}
+              className={secondaryButtonClass}
+            >
+              {m.changeExpiry}
+            </Button>
+            <Popover className={menuPopoverClass}>
+              <Menu
+                className="outline-none"
+                onAction={(key) => {
+                  if (typeof key !== "string" || !(key in EXPIRY_OPTIONS)) {
+                    return;
+                  }
+                  const lifetime = EXPIRY_OPTIONS[key as ExpiryOption];
+                  setChangeError(null);
+                  sync
+                    .updateInvite(
+                      invite.code,
+                      lifetime === null ? null : new Date(Date.now() + lifetime).toISOString(),
+                    )
+                    .catch((e: unknown) => {
+                      setChangeError(e instanceof ApiProblemError ? e.message : String(e));
+                    });
+                }}
+              >
+                {(Object.keys(EXPIRY_OPTIONS) as ExpiryOption[]).map((option) => (
+                  <MenuItem key={option} id={option} className={menuItemClass}>
+                    {m.expiry[option]}
+                  </MenuItem>
+                ))}
+              </Menu>
+            </Popover>
+          </MenuTrigger>
+        )}
         <Button
           isDisabled={link === null}
           onPress={(event) => {
@@ -419,6 +483,11 @@ function InviteRow({
         )}
         <CopyIdButton id={invite.code} thing="invite" />
       </div>
+      {changeError !== null && (
+        <p role="alert" className="text-xs text-danger">
+          {changeError}
+        </p>
+      )}
       {qrShown && link !== null && (
         <InviteQr
           link={link}

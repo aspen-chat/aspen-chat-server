@@ -114,6 +114,15 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
       () => admin.revoke(path.split("/").pop() ?? ""),
     ],
     ["GET", /^\/admin\/fleet$/, admin.fleet],
+    ["GET", /^\/voice-servers$/, admin.voiceServers],
+    [
+      "POST",
+      /^\/voice-servers$/,
+      () =>
+        admin.createVoiceServer(
+          request.postDataJSON() as { name: string; url: string; capacity: number },
+        ),
+    ],
     ["GET", /^\/admin\/database-latency$/, () => admin.databaseLatency(url)],
     ["GET", /^\/deployment$/, admin.profile],
     [

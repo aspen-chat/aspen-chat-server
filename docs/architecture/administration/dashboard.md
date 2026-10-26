@@ -5,17 +5,18 @@ growth, the directories, and the fleet.
 
 ## What the dashboard reads
 
-| Endpoint                          | What it shows                                                                 | Permission                                                                                               |
-| --------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `/admin/overview`                 | The deployment's totals                                                       | View dashboard                                                                                           |
-| `/admin/growth?range=…`           | Growth of users and communities                                               | View dashboard                                                                                           |
-| User and community directories    | Users and communities, searched, sorted, and paged                            | View dashboard, or any moderation permission but Message any user (`DeploymentPermissions::DIRECTORIES`) |
-| `/admin/moderation-log`           | The [moderation log](moderation.md#reading-the-log)                           | View dashboard                                                                                           |
-| `/admin/file-transfers`           | The record of files offered in calls ([File transfers](../file-transfers.md)) | Moderate any community                                                                                   |
-| `/admin/registration-invites`     | [Registration invites](registration-invites.md)                               | Manage registration invites                                                                              |
-| The fleet                         | [Fleet health](#fleet-health), with [NATS memory](#nats-memory)               | View dashboard                                                                                           |
-| `/admin/database-latency?range=…` | [Database latency](#database-latency)                                         | View dashboard                                                                                           |
-| `/admin/jobs`                     | A preview of background jobs ([Jobs](../jobs/index.md))                       | View jobs                                                                                                |
+| Endpoint                          | What it shows                                                                                                     | Permission                                                                                               |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `/admin/overview`                 | The deployment's totals                                                                                           | View dashboard                                                                                           |
+| `/admin/growth?range=…`           | Growth of users and communities                                                                                   | View dashboard                                                                                           |
+| User and community directories    | Users and communities, searched, sorted, and paged                                                                | View dashboard, or any moderation permission but Message any user (`DeploymentPermissions::DIRECTORIES`) |
+| `/admin/moderation-log`           | The [moderation log](moderation.md#reading-the-log)                                                               | View dashboard                                                                                           |
+| `/admin/file-transfers`           | The record of files offered in calls ([File transfers](../file-transfers.md))                                     | Moderate any community                                                                                   |
+| `/admin/registration-invites`     | [Registration invites](registration-invites.md)                                                                   | Manage registration invites                                                                              |
+| The fleet                         | [Fleet health](#fleet-health), with [NATS memory](#nats-memory)                                                   | View dashboard                                                                                           |
+| `/voice-servers`                  | The registered voice servers, added, changed, and removed ([Voice servers](../voice/servers.md#managing-servers)) | Manage voice servers                                                                                     |
+| `/admin/database-latency?range=…` | [Database latency](#database-latency)                                                                             | View dashboard                                                                                           |
+| `/admin/jobs`                     | A preview of background jobs ([Jobs](../jobs/index.md))                                                           | View jobs                                                                                                |
 
 Powers too strong for even a privileged web API, such as suspending rate limits, stay terminal
 commands.
@@ -59,7 +60,10 @@ The user directory:
   itself;
 - takes `filter[banned]=true`, and gives each standing ban as `ban`;
 - marks users of other deployments by their domain;
-- is one of the directories every moderation permission opens.
+- is one of the directories every moderation permission opens;
+- opens a person's profile card from their name (`ProfilePopover`), with what the reader may do to
+  them across the deployment beneath it: their deployment roles, their DMs, a ban or its lifting,
+  and deleting a bot whose owner is gone, each as the row's own controls offer it.
 
 ## Fleet health
 
