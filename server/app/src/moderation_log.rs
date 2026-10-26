@@ -33,6 +33,9 @@ pub enum ModerationAction {
     DeleteChannel,
     RenameCommunity,
     DeleteCommunity,
+    /// Everything a deleted community held erased, as its takedown from the dashboard asked
+    /// (`app::community_takedown`).
+    EraseCommunity,
     RemoveWriteIn,
     /// A poll closed before its deadline; the subject is the poll.
     ClosePoll,
@@ -240,7 +243,9 @@ fn subject_of(action: &str, subject: &str) -> Option<Subject> {
         ModerationAction::RenameChannel | ModerationAction::RenameCommunity => {
             Some(Subject::Name(subject.to_string()))
         }
-        ModerationAction::DeleteChannel | ModerationAction::DeleteCommunity => None,
+        ModerationAction::DeleteChannel
+        | ModerationAction::DeleteCommunity
+        | ModerationAction::EraseCommunity => None,
     }
 }
 

@@ -132,4 +132,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261025_052519_held_message_mana_by_age::M,
     &migrations::m20261025_060007_deployment_documents::M,
     &migrations::m20261025_143903_large_communities::M,
+    &migrations::m20261026_071540_community_takedown_keys::M,
 ];

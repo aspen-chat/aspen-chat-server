@@ -36,6 +36,9 @@ A deleted community keeps its rows but counts for nothing wherever memberships a
 - `app::community::add_member` refuses every way in. It holds the community's row until the
   membership commits, so a deletion beside it waits.
 
+A moderator's takedown from the dashboard may erase those rows instead (see
+[Community takedowns](../administration/community-takedowns.md)).
+
 ## Caps
 
 | Cap                                             | Limit | Constant                          |

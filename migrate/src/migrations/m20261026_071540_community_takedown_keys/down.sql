@@ -1,0 +1,12 @@
+DROP INDEX registration_invite_by_community_invite;
+DROP INDEX moderation_log_by_channel;
+DROP INDEX category_collapse_by_category;
+DROP INDEX plugin_notice_by_message;
+DROP INDEX plugin_notice_by_channel;
+DROP INDEX notification_setting_by_community;
+DROP INDEX notification_setting_by_channel;
+DROP INDEX mention_by_channel;
+CREATE INDEX channel_community ON channel (community);
+DROP INDEX channel_by_community;
+CREATE INDEX community_user_by_community ON community_user (community);
+DROP INDEX community_user_by_community_user;

@@ -21,7 +21,8 @@ Its holder:
 - ranks above every role but the owner;
 - may delete messages, attachments, reactions, and poll write-ins;
 - may remove members, never the owner;
-- may rename and delete channels and communities;
+- may rename and delete channels and communities, and take a community down from the dashboard,
+  erasing what it held (see [Community takedowns](community-takedowns.md));
 - may list anyone's DMs (`GET /admin/users/{user}/dms`).
 
 It does nothing else. A moderator posts nowhere they could not already, and joins and reshapes no

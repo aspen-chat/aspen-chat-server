@@ -385,31 +385,36 @@ pub async fn delete_community(
                 )
                 .await?;
             }
-            let deleted = diesel::update(community::table)
-                .set(community::deleted_at.eq(diesel::dsl::now))
-                .filter(community::id.eq(id).and(community::deleted_at.is_null()))
-                .execute(conn.as_mut())
-                .await?;
-            if deleted == 0 {
-                return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
-            }
-            // What plugins kept about it goes with it.
-            crate::plugin::storage::forget(
-                conn.as_mut(),
-                crate::plugin::storage::Scope::Community(id),
-            )
-            .await?;
-            publish_event(
-                state,
-                conn.as_mut(),
-                EventScope::Community(id),
-                &ServerEvent::Community(CommunityEvent::Delete { id }),
-            )
-            .await?;
-            Ok(())
+            mark_deleted(state, conn.as_mut(), id).await
         }
         .scope_boxed()
     })
+    .await
+}
+
+/// Marks the community deleted inside the caller's transaction, forgets what plugins kept about
+/// it, and announces it, which takes everyone out of its calls once it commits
+/// (`app::events::rechecks_of`). Refuses a community already deleted as not found.
+pub async fn mark_deleted(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    id: CommunityId,
+) -> crate::error::Result<()> {
+    let deleted = diesel::update(community::table)
+        .set(community::deleted_at.eq(diesel::dsl::now))
+        .filter(community::id.eq(id).and(community::deleted_at.is_null()))
+        .execute(conn)
+        .await?;
+    if deleted == 0 {
+        return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
+    }
+    crate::plugin::storage::forget(conn, crate::plugin::storage::Scope::Community(id)).await?;
+    publish_event(
+        state,
+        conn,
+        EventScope::Community(id),
+        &ServerEvent::Community(CommunityEvent::Delete { id }),
+    )
     .await
 }
 

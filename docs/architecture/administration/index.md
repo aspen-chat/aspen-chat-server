@@ -18,6 +18,8 @@ and the deployment settings hold what its administrators decide.
 - [The Privacy Policy and Terms of Use](deployment-documents.md): what the deployment publishes for
   anyone to read, and who may change it.
 - [Bans from the deployment](deployment-bans.md): banning anyone from the whole deployment.
+- [Community takedowns](community-takedowns.md): deleting a community from the dashboard, hiding or
+  erasing what it held, and banning its members.
 - [Design notes](design-notes.md): why it works this way.
 
 ## Key files
@@ -32,4 +34,5 @@ and the deployment settings hold what its administrators decide.
 | Deployment settings  | `app::deployment_settings`, `api::deployment_settings`       |
 | Documents            | `app::deployment_document`, `api::deployment_document`       |
 | Bans                 | `app::user_ban`                                              |
+| Community takedowns  | `app::community_takedown`                                    |
 | Terminal             | `operator` (`admin`, `invites`, `settings`, `documents`)     |

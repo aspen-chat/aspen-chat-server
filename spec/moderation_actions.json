@@ -13,6 +13,7 @@
         "deleteChannel",
         "renameCommunity",
         "deleteCommunity",
+        "eraseCommunity",
         "removeWriteIn",
         "closePoll",
         "banUser",
