@@ -76,10 +76,24 @@ The reasons behind the choices described in [Roles and permissions](index.md).
 - **Searching a community larger than the sample is limited to its owner, deployment moderators, and
   holders of a few managing permissions.** No ordinary member can list a large community whole.
 
-## Everyone mention limit
+## Large communities
 
 - **A large community loses Mention everyone from its everyone role.** A tag of everyone would then
   reach more people than it likely means to.
+- **A small community's channels tell of every message; a large one's of tags.** In a few dozen
+  people every message is likely meant for everyone, and waking each member for each one costs
+  little. Past the threshold it would be too many messages for anyone to want, and too much work for
+  the server to do for every message.
+- **One threshold decides both, and a community crosses it once.** Members see one change at one
+  moment, which the announcement can describe whole, and their notifications do not change back and
+  forth as people join and leave near the threshold.
+- **The announcement tags everyone.** It changes what every member is told of, so every member who
+  can see it should hear of it, whatever their level but `nothing`.
+- **It is written by each reader's client.** The message carries what changed (`growth`) and no
+  text, so each reader sees it in their own language, as a join message and a poll's result are.
+- **With the threshold at 0 no community is small.** 0 turns the threshold off. Treating every
+  community as small would make each message of a community of any size wake every member, so it
+  treats every one as large.
 - **Channel and category overrides are left as they are.** They are deliberate choices for their
   channels.
 - **The community's row is locked and its members counted after a join commits, acting only if no

@@ -379,7 +379,7 @@ pub async fn redeem(conn: &mut AsyncPgConnection, code: &str) -> crate::Result<O
 /// Adds the account `user`, just made with a dual invite, to the community of
 /// `community_invite`, on `conn`, inside the transaction that made it. A community invite that
 /// no longer works is passed over, since the registration invite alone still made the account;
-/// the community joined is returned for `app::everyone_limit::after_join` once the transaction
+/// the community joined is returned for `app::large_community::after_join` once the transaction
 /// commits.
 pub async fn join_invited(
     state: &GlobalServerContext,

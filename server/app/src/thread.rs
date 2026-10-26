@@ -500,6 +500,7 @@ pub async fn echo(
         echo: None,
         reply_to: None,
         tags_replied: false,
+        growth: None,
     };
     diesel::insert_into(message::table)
         .values(&echo)

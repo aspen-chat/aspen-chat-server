@@ -1039,6 +1039,7 @@ pub async fn set_owner(
             owner: Some(owner),
             default_channel: None,
             suppress_join_messages: None,
+            small: None,
         }),
     )
     .await

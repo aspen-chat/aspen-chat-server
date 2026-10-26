@@ -1,6 +1,10 @@
 import type { NotificationLevel } from "@aspen/protocol";
 import { Label, RadioButton, RadioField, RadioGroup, Text } from "react-aria-components";
-import { useCommunityNotificationLevel, useSync } from "@/api/hooks";
+import {
+  useCommunityDefaultNotificationLevel,
+  useCommunityNotificationLevel,
+  useSync,
+} from "@/api/hooks";
 import { choiceClass, RadioMark } from "@/features/layout/choices";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -9,12 +13,14 @@ const LEVELS: readonly NotificationLevel[] = ["all", "tags", "nothing"];
 
 /**
  * How much of a community's channels the user is told of, for those without a setting of their
- * own: its default (tags), every message, tags, or nothing.
+ * own: its default (every message while it is small, tags once it is large), every message,
+ * tags, or nothing.
  */
 export function CommunityNotifications({ communityId }: { communityId: string }) {
   const m = useMessages();
   const sync = useSync();
   const level = useCommunityNotificationLevel(communityId);
+  const fallback = useCommunityDefaultNotificationLevel(communityId);
   return (
     <RadioGroup
       value={level ?? "default"}
@@ -35,7 +41,7 @@ export function CommunityNotifications({ communityId }: { communityId: string })
       <RadioField value="default">
         <RadioButton className={choiceClass}>
           <RadioMark />
-          {format(m.notifications.default, { level: m.notifications.levels.tags })}
+          {format(m.notifications.default, { level: m.notifications.levels[fallback] })}
         </RadioButton>
       </RadioField>
       {LEVELS.map((choice) => (

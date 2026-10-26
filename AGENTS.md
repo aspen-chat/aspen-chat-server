@@ -252,7 +252,7 @@ or what an operator must open, route, or back up updates it in the same commit.
    follows changes through the NATS key-value bucket `aspen_settings`). They are the display name
    and icon (which also name the system account and what authenticators call the deployment),
    `registration_invite_required`, `require_two_factor`, `bots_enabled` and `bots_max_per_user`,
-   `everyone_mention_limit`, `custom_emoji_limit`, `upload_quota_gib`, `mana_max_recharge`,
+   `large_community_members`, `custom_emoji_limit`, `upload_quota_gib`, `mana_max_recharge`,
    `mana_max`, and `mana_attachment_cost` (how fast a busy channel fills; see Channel mana),
    `evidence_retention_days`, `file_transfers`, `email_required`, `email_verification_required`,
    `newsletter_enabled`, `event_stream_mib` and `voice_report_stream_mib` (how much of NATS's memory
@@ -864,7 +864,7 @@ a NATS stream or subject, or a client package updates them in the same commit.
 - `docs/architecture/replies.md` — replying to a message of the same channel, tagging its author,
   and what is shown of a deleted original
 - `docs/architecture/roles-and-permissions/index.md` — community permissions, roles, overrides,
-  ranking, bans, the everyone mention limit, and member search
+  ranking, bans, large communities, and member search
 - `docs/architecture/web-client/index.md` — the web client every API server serves at `public_url`,
   its files and caching, and its pages' Open Graph tags: the deployment's, and an invite's
   community's

@@ -19,11 +19,11 @@ A message tells its reader by the same rule as their notifications (see
 
 By the reader's level in a DM, a community, a category, or a channel:
 
-| Level                          | Messages that tell them                                          |
-| ------------------------------ | ---------------------------------------------------------------- |
-| `all` (a DM's default)         | Every message                                                    |
-| `tags` (a community's default) | Only those that tag them: by name, a role they hold, or everyone |
-| `nothing`                      | None                                                             |
+| Level                                          | Messages that tell them                                          |
+| ---------------------------------------------- | ---------------------------------------------------------------- |
+| `all` (a DM's and a small community's default) | Every message                                                    |
+| `tags` (a large community's default)           | Only those that tag them: by name, a role they hold, or everyone |
+| `nothing`                                      | None                                                             |
 
 A thread counts as its parent for the level. Besides these, every reply in a thread they follow
 tells them, whatever their level (see [Threads and DMs](threads-and-dms/index.md)).
@@ -34,7 +34,7 @@ A message is never in the feed when it is:
   thread's parent included);
 - by them, or by anyone they blocked;
 - from before they joined (the community, or the DM a thread's parent is);
-- a message that only records something: an echo, a poll's result, a call, or a command.
+- a message that only records something: an echo, a call, or a command.
 
 ## Views
 

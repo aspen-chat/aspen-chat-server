@@ -3329,6 +3329,56 @@ def join_messages(world: World, check: Checks) -> None:
     check("with join messages turned off, a join posts none", joins(general) == [member["id"]], joins(general))
 
 
+def large_communities(world: World, check: Checks) -> None:
+    say("a community growing large, announced in a default channel only some can see")
+    stack, member = world.stack, world.member
+
+    def small() -> bool | None:
+        return world.as_owner("GET", f"/communities/{world.community}")["data"].get("small")
+
+    def threshold(members: int) -> None:
+        stack.command("settings", "set", "--large-community-members", str(members))
+
+    def grew(channel: str) -> list[dict]:
+        read = stack.api("GET", f"/channels/{channel}/messages", token=world.owner["token"])
+        return [m for m in read["data"] if m["kind"] == "communityGrew"]
+
+    def newcomer(name: str) -> dict:
+        joining = world.account(name)
+        code = world.as_owner("POST", f"/communities/{world.community}/invites", {})["code"]
+        stack.api("PUT", f"/communities/{world.community}/members/@me", {"inviteCode": code}, joining["token"])
+        return joining
+
+    try:
+        check("a community under the threshold is small", small() is True)
+        threshold(0)
+        check("with the threshold at 0 no community is small", eventually(lambda: small() is False))
+        threshold(3)
+        check("and under a threshold again it is small", eventually(lambda: small() is True))
+        hidden = world.channel("lobby", overrides=[{"role": world.everyone, "allow": [], "deny": ["viewChannel"]}])
+        world.as_owner("PATCH", f"/communities/{world.community}", {"defaultChannel": hidden})
+        world.stream.gather(1.0)
+        newcomer("third")
+        got = world.stream.gather(2.0)
+        check("reaching the threshold tells every member the community is no longer small",
+              bool(of(got, "community", id=world.community, small=False)) and small() is False)
+        check("but the announcement does not reach a member who cannot see the default channel",
+              not [e for e in of(got, "message") if e.get("kind") == "communityGrew"])
+        announced = grew(hidden)
+        check("it is there for those who can, tagging everyone, saying what changed",
+              len(announced) == 1 and announced[0]["mentions"]["everyone"]
+              and announced[0]["growth"] == {"members": 3, "mentionEveryoneTaken": False}, announced)
+        newcomer("fourth")
+        world.stream.gather(1.0)
+        check("a community grows large once", len(grew(hidden)) == 1, grew(hidden))
+        threshold(2)
+        newcomer("fifth")
+        world.stream.gather(1.0)
+        check("whatever the threshold does after", len(grew(hidden)) == 1 and small() is False)
+    finally:
+        threshold(200)
+
+
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, replies, calls, attachments,
@@ -3337,7 +3387,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
-             marking_unread, join_messages, identity_providers]
+             marking_unread, join_messages, large_communities, identity_providers]
 
 
 def main() -> None:

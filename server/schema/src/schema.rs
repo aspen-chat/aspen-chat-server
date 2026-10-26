@@ -163,7 +163,7 @@ diesel::table! {
         icon -> Nullable<Uuid>,
         deleted_at -> Nullable<Timestamptz>,
         owner -> Nullable<Uuid>,
-        everyone_limited_at -> Nullable<Timestamptz>,
+        large_at -> Nullable<Timestamptz>,
         member_count -> Int4,
         default_channel -> Nullable<Uuid>,
         suppress_join_messages -> Bool,
@@ -278,7 +278,7 @@ diesel::table! {
         require_two_factor -> Bool,
         bots_enabled -> Bool,
         bots_max_per_user -> Int4,
-        everyone_mention_limit -> Int4,
+        large_community_members -> Int4,
         custom_emoji_limit -> Int4,
         file_transfers -> Bool,
         users_emigration -> Text,
@@ -503,6 +503,7 @@ diesel::table! {
         home_channel -> Uuid,
         reply_to -> Nullable<Uuid>,
         tags_replied -> Bool,
+        growth -> Nullable<Jsonb>,
     }
 }
 

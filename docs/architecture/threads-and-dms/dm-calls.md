@@ -45,7 +45,7 @@ started it:
 | `call`        | The call held two people at once                                                                                                   | `callSeconds`: how long it lasted |
 | `missed_call` | It never held two people at once (`voice_session.had_company`, carried over to a replacing session like the start and the starter) | No length                         |
 
-Like echoes and poll results, these messages:
+Like echoes, these messages:
 
 - Wake no phone.
 - Notify no one.

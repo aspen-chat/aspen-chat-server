@@ -131,4 +131,5 @@ pub static MIGRATIONS: &[&dyn Migration] = &[
     &migrations::m20261025_051906_identity_provider_distrust_email::M,
     &migrations::m20261025_052519_held_message_mana_by_age::M,
     &migrations::m20261025_060007_deployment_documents::M,
+    &migrations::m20261025_143903_large_communities::M,
 ];

@@ -74,9 +74,10 @@ pub struct DeploymentSettings {
     pub bots_enabled: bool,
     /// The most bots one person may own.
     pub bots_max_per_user: u32,
-    /// How many members a community gains before Mention everyone is taken from its everyone
-    /// role (`app::everyone_limit`); 0 never.
-    pub everyone_mention_limit: u32,
+    /// How many members a community gains before it is large (`app::large_community`): its
+    /// everyone role loses Mention everyone and its channels tell of tags rather than every
+    /// message. With 0 no community crosses it, and every community's channels tell of tags.
+    pub large_community_members: u32,
     /// The most custom emoji one community may hold (`app::custom_emoji`).
     pub custom_emoji_limit: u32,
     /// How many GiB one person may upload in any 24 hours (`app::upload_quota`); 0 sets no limit.
@@ -128,7 +129,7 @@ struct SettingsRow {
     require_two_factor: bool,
     bots_enabled: bool,
     bots_max_per_user: i32,
-    everyone_mention_limit: i32,
+    large_community_members: i32,
     custom_emoji_limit: i32,
     upload_quota_gib: i32,
     mana_max_recharge: i32,
@@ -164,7 +165,7 @@ impl From<SettingsRow> for DeploymentSettings {
             require_two_factor: row.require_two_factor,
             bots_enabled: row.bots_enabled,
             bots_max_per_user: count(row.bots_max_per_user),
-            everyone_mention_limit: count(row.everyone_mention_limit),
+            large_community_members: count(row.large_community_members),
             custom_emoji_limit: count(row.custom_emoji_limit),
             upload_quota_gib: count(row.upload_quota_gib),
             mana_max_recharge: count(row.mana_max_recharge),
@@ -210,7 +211,7 @@ pub struct SettingsChange {
     #[diesel(skip_update)]
     pub bots_max_per_user: Option<u32>,
     #[diesel(skip_update)]
-    pub everyone_mention_limit: Option<u32>,
+    pub large_community_members: Option<u32>,
     #[diesel(skip_update)]
     pub custom_emoji_limit: Option<u32>,
     #[diesel(skip_update)]
@@ -289,7 +290,7 @@ impl SettingsChange {
             require_two_factor => next.require_two_factor,
             bots_enabled => next.bots_enabled,
             bots_max_per_user => next.bots_max_per_user,
-            everyone_mention_limit => next.everyone_mention_limit,
+            large_community_members => next.large_community_members,
             custom_emoji_limit => next.custom_emoji_limit,
             upload_quota_gib => next.upload_quota_gib,
             mana_max_recharge => next.mana_max_recharge,
@@ -526,8 +527,8 @@ pub async fn update(
                     .set((
                         &change,
                         deployment_settings::bots_max_per_user.eq(count(wanted.bots_max_per_user)),
-                        deployment_settings::everyone_mention_limit
-                            .eq(count(wanted.everyone_mention_limit)),
+                        deployment_settings::large_community_members
+                            .eq(count(wanted.large_community_members)),
                         deployment_settings::custom_emoji_limit
                             .eq(count(wanted.custom_emoji_limit)),
                         deployment_settings::upload_quota_gib.eq(count(wanted.upload_quota_gib)),
@@ -577,7 +578,7 @@ fn validate(settings: &DeploymentSettings) -> crate::Result<()> {
     let sizes = [settings.event_stream_mib, settings.voice_report_stream_mib];
     if [
         settings.bots_max_per_user,
-        settings.everyone_mention_limit,
+        settings.large_community_members,
         settings.custom_emoji_limit,
         settings.upload_quota_gib,
         settings.mana_max_recharge,

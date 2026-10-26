@@ -9,4 +9,9 @@
     <string name="aspen_push_relay" translatable="false"></string>
     <string name="aspen_push_channel_name">Messages</string>
     <string name="aspen_push_new_message">New message</string>
+    <string name="aspen_push_poll">Posted a poll</string>
+    <string name="aspen_push_poll_closed">A poll has closed</string>
+    <string name="aspen_push_member_joined">Joined the community</string>
+    <string name="aspen_push_community_grew">This community is now large. Channels you haven\'t chosen notifications for now notify you only of messages that tag you.</string>
+    <string name="aspen_push_community_grew_mention_everyone">Members can no longer tag @everyone, unless the community\'s owner turns Mention everyone back on.</string>
 </resources>

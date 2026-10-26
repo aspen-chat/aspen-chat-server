@@ -67,6 +67,8 @@ export type NotificationLevel = components["schemas"]["NotificationLevel"];
 export type NotificationSetting = components["schemas"]["NotificationSetting"];
 /** Who a message tags, as far as its author was allowed to; the tags that count. */
 export type Mentions = components["schemas"]["Mentions"];
+/** What changed when a community became large, on its `communityGrew` message. */
+export type CommunityGrowth = components["schemas"]["CommunityGrowth"];
 /** Someone the caller has blocked, and since when. */
 export type UserBlock = components["schemas"]["UserBlock"];
 /** A pinned message: which, when it was pinned, and its place among the channel's pins. */

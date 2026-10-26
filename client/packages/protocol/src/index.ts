@@ -130,6 +130,7 @@ export type {
   NotificationSetting,
   UserBlock,
   Mentions,
+  CommunityGrowth,
   Pin,
   BotCommands,
   FrequentEmoji,

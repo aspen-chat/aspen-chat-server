@@ -131,3 +131,4 @@ pub mod m20261025_050540_thread_follow_by_hand;
 pub mod m20261025_051906_identity_provider_distrust_email;
 pub mod m20261025_052519_held_message_mana_by_age;
 pub mod m20261025_060007_deployment_documents;
+pub mod m20261025_143903_large_communities;

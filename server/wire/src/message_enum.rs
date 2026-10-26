@@ -347,6 +347,10 @@ enum MessageEnumSource {
         // profile as the reports found it. See `app::report`.
         #[message_gen(server_authoritative)]
         warning: Option<crate::report::Warning>,
+        // For a `CommunityGrew`, what changed as the community became large. See
+        // `app::large_community`.
+        #[message_gen(server_authoritative, default)]
+        growth: Option<crate::message::CommunityGrowth>,
         // The plugins that rewrote its text as it was posted or last edited, in the order they
         // ran (`app::plugin::intercept`), so every client can say it was changed and by what;
         // an edit announces the new set with its `Update` event.
@@ -508,6 +512,13 @@ enum MessageEnumSource {
         // Whether to post no message when someone joins.
         #[message_gen(default)]
         suppress_join_messages: bool,
+        // Whether it is small (`app::large_community`): its channels tell members of every
+        // message, not only tags, unless they choose otherwise. It stops being small once, when
+        // it gains the deployment's threshold of members, announced by its `update`; with the
+        // threshold at 0 no community is small. Absent, from a deployment that predates it,
+        // whose channels tell of tags.
+        #[message_gen(server_authoritative = "mutable", default)]
+        small: bool,
     },
     /// A community's own emoji: a named picture used in its messages as `<:id>` and as a
     /// reaction. Changed only by holders of Manage custom emoji; a rename is announced as its
@@ -840,6 +851,7 @@ mod tests {
             owner: None,
             default_channel: None,
             suppress_join_messages: None,
+            small: None,
         });
         assert_eq!(
             serde_json::to_value(e).unwrap(),

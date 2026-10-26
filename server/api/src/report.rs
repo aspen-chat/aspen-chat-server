@@ -321,7 +321,7 @@ async fn named_by(
     Ok((
         users.into_iter().map(User::from).collect(),
         channels,
-        communities.into_iter().map(Community::from).collect(),
+        communities.into_iter().map(|c| c.record(state)).collect(),
         reviewed,
     ))
 }

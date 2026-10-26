@@ -124,6 +124,7 @@ The reasons behind the settings described in
 
 ## Deployment settings
 
-- **`everyone-mention-limit` takes Mention everyone from the everyone role past a size.** One
-  `@everyone` cannot reach that many people by accident.
+- **`large-community-members` takes Mention everyone from the everyone role past a size, and makes
+  the community's channels notify of tags.** One `@everyone` cannot reach that many people by
+  accident, and nobody is told of every message of a community that large unless they ask to be.
   ([Deployment settings](../../operators/configuration/deployment-settings.md))

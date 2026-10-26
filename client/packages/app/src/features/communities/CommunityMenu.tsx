@@ -9,7 +9,14 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { Menu } from "react-aria-components";
-import { useCan, useChannels, useCommunityNotificationLevel, useMe, useSync } from "@/api/hooks";
+import {
+  useCan,
+  useChannels,
+  useCommunityDefaultNotificationLevel,
+  useCommunityNotificationLevel,
+  useMe,
+  useSync,
+} from "@/api/hooks";
 import { useAspenClient } from "@/api/context";
 import { CommunitySettingsModal } from "@/features/community-settings/CommunitySettingsDialog";
 import { InviteModal } from "@/features/invites/InviteDialog";
@@ -55,6 +62,7 @@ export function CommunityMenu({
   const me = useMe();
   const channels = useChannels(community.id);
   const level = useCommunityNotificationLevel(community.id);
+  const fallback = useCommunityDefaultNotificationLevel(community.id);
   const createInvites = useCan(community.id, "createInvites");
   const manageInvites = useCan(community.id, "manageInvites");
   const [dialog, setDialog] = useState<CommunityDialog | null>(null);
@@ -97,7 +105,7 @@ export function CommunityMenu({
           )}
           <NotificationsSubmenu
             own={level}
-            inherited="tags"
+            inherited={fallback}
             choose={(next) => sync.setCommunityNotifications(community.id, next)}
             close={close}
           />

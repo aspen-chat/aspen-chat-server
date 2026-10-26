@@ -15,6 +15,7 @@
 import { isDm } from "./channels";
 import {
   isUnread,
+  communityDefaultLevel,
   kindNotifies,
   levelOf,
   placeMentions,
@@ -1055,8 +1056,9 @@ export class RecordStore {
   /**
    * Topic `notifications`: how much of a channel the caller wants to be told of (a thread
    * follows its parent): their setting for the channel, else for its category, else for its
-   * community, else every message of a DM and tags elsewhere. `own` is the channel's own
-   * setting, if it has one, and `inherited` what the level would be without it.
+   * community, else every message of a DM or of a small community's channel and tags in a large
+   * one. `own` is the channel's own setting, if it has one, and `inherited` what the level
+   * would be without it.
    */
   notificationLevel(channelId: string): {
     level: NotificationLevel;
@@ -1071,7 +1073,21 @@ export class RecordStore {
       place?.parentCategory == null ? undefined : this.#categoryLevels.get(place.parentCategory);
     const community =
       place?.community == null ? undefined : this.#communityLevels.get(place.community);
-    return levelOf(place, own, category, community);
+    return levelOf(place, own, category, community, this.#small(place?.community));
+  }
+
+  /**
+   * Topic `notifications`: the level a community's channels take when the caller has set
+   * nothing for them or their category or community: every message in a small community,
+   * tags in a large one.
+   */
+  communityDefaultNotificationLevel(communityId: string): NotificationLevel {
+    return communityDefaultLevel(this.#small(communityId));
+  }
+
+  /** Whether a community is small, by its record; one not held counts as large. */
+  #small(communityId: string | null | undefined): boolean {
+    return communityId != null && this.#communities.get(communityId)?.small === true;
   }
 
   /** Topic `notifications`: the caller's setting for a community, if they made one. */
@@ -1082,7 +1098,7 @@ export class RecordStore {
   /**
    * Topic `notifications`: the caller's setting for a category (`own`), if they made one, and
    * what its channels without one of their own take without it (`inherited`): the community's,
-   * else tags.
+   * else the community's default.
    */
   categoryNotificationLevel(
     categoryId: string,
@@ -1090,7 +1106,9 @@ export class RecordStore {
   ): { own: NotificationLevel | null; inherited: NotificationLevel } {
     return {
       own: this.#categoryLevels.get(categoryId) ?? null,
-      inherited: this.#communityLevels.get(communityId) ?? "tags",
+      inherited:
+        this.#communityLevels.get(communityId) ??
+        this.communityDefaultNotificationLevel(communityId),
     };
   }
 
@@ -3307,6 +3325,10 @@ export class RecordStore {
     }
     if ((previous?.owner ?? null) !== (community.owner ?? null)) {
       this.#accessChanged(community.id);
+    }
+    // Whether it is small decides the level its channels take without a setting.
+    if (previous?.small !== community.small) {
+      this.#touch("notifications");
     }
   }
 

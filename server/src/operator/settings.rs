@@ -41,10 +41,11 @@ pub struct SettingsArgs {
     /// The most bots one person may own.
     #[clap(long)]
     bots_max_per_user: Option<u32>,
-    /// How many members a community gains before Mention everyone is taken from its everyone
-    /// role; 0 never.
+    /// How many members a community gains before it is large: its everyone role loses Mention
+    /// everyone, and its channels notify of tags rather than every message. With 0 no
+    /// community crosses it, and every community's channels notify of tags.
     #[clap(long)]
-    everyone_mention_limit: Option<u32>,
+    large_community_members: Option<u32>,
     /// The most custom emoji one community may hold.
     #[clap(long)]
     custom_emoji_limit: Option<u32>,
@@ -149,7 +150,7 @@ impl From<SettingsArgs> for SettingsChange {
             require_two_factor: args.require_two_factor,
             bots_enabled: args.bots_enabled,
             bots_max_per_user: args.bots_max_per_user,
-            everyone_mention_limit: args.everyone_mention_limit,
+            large_community_members: args.large_community_members,
             custom_emoji_limit: args.custom_emoji_limit,
             upload_quota_gib: args.upload_quota_gib,
             mana_max_recharge: args.mana_max_recharge,
@@ -184,7 +185,7 @@ impl From<&DeploymentSettings> for SettingsArgs {
             require_two_factor: Some(settings.require_two_factor),
             bots_enabled: Some(settings.bots_enabled),
             bots_max_per_user: Some(settings.bots_max_per_user),
-            everyone_mention_limit: Some(settings.everyone_mention_limit),
+            large_community_members: Some(settings.large_community_members),
             custom_emoji_limit: Some(settings.custom_emoji_limit),
             upload_quota_gib: Some(settings.upload_quota_gib),
             mana_max_recharge: Some(settings.mana_max_recharge),

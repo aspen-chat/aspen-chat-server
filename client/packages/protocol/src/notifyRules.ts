@@ -37,33 +37,41 @@ export function placeMentions(
 
 /**
  * The level a channel notifies at, given the channel whose setting governs it (a thread's
- * parent), its own setting, and its community's: the channel's, else the community's, else
- * every message of a DM and tags elsewhere.
+ * parent), its own setting, its category's, its community's, and whether its community is
+ * `small`: the channel's, else the category's, else the community's, else every message of a
+ * DM or of a small community's channel, and tags in a large community.
  */
 export function levelOf(
   place: Channel | undefined,
   own: NotificationLevel | null,
   category: NotificationLevel | undefined,
   community: NotificationLevel | undefined,
+  small: boolean,
 ): { level: NotificationLevel; own: NotificationLevel | null; inherited: NotificationLevel } {
   const fallback: NotificationLevel =
-    place?.ty === "dm" || place?.ty === "groupDm" ? "all" : "tags";
+    place?.ty === "dm" || place?.ty === "groupDm" ? "all" : communityDefaultLevel(small);
   const inherited = category ?? community ?? fallback;
   return { level: own ?? inherited, own, inherited };
 }
 
+/**
+ * The level of a community's channels with no setting: every message in a small community,
+ * tags in a large one, where every message would be too many (the server's
+ * `notification_setting::default_level`).
+ */
+export function communityDefaultLevel(small: boolean): NotificationLevel {
+  return small ? "all" : "tags";
+}
+
 /** Whether a message's kind is one that may notify at all. */
 export function kindNotifies(message: Message): boolean {
-  // An echo, a poll's result, and a join say nothing of their own, a call's record follows the
-  // ring that already told of the call, and a command is for its bot, whose answer is what
-  // tells.
+  // An echo says nothing of its own, a call's record follows the ring that already told of the
+  // call, and a command is for its bot, whose answer is what tells.
   if (
     message.kind === "threadEcho" ||
-    message.kind === "pollClosed" ||
     message.kind === "call" ||
     message.kind === "missedCall" ||
-    message.kind === "command" ||
-    message.kind === "memberJoined"
+    message.kind === "command"
   ) {
     return false;
   }

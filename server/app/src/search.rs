@@ -363,6 +363,7 @@ fn bound<'a>(
             MessageKind::Call,
             MessageKind::MissedCall,
             MessageKind::MemberJoined,
+            MessageKind::CommunityGrew,
         ])
         .bind::<Nullable<Text>, _>(text)
         .bind::<Nullable<PgUuid>, _>(sought.author)

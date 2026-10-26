@@ -272,8 +272,10 @@ which alone can wake it.
 ## Who is woken, and for what
 
 The deployment decides; the relay and the phone only carry it out. A person is sent a `message`
-pointer when a message is posted that they may read and that is either in a DM they are in, or tags
-them (by name, a role they hold, or everyone), unless:
+pointer when a message is posted that they may read and that their notification settings ask for,
+per community, category, and channel ("all messages", "only tags", "nothing"; without any, every
+message of a DM or of a small community, and in a large community those that tag them by name, a
+role they hold, or everyone), unless:
 
 - they wrote it, or they blocked its author on this deployment (a block made elsewhere is the app's
   to apply: it drops the notification of anyone it holds blocked);
@@ -284,11 +286,12 @@ them (by name, a role they hold, or everyone), unless:
 - they are in do not disturb on this deployment, which also gives the `read` pointers sent them
   meanwhile a `badge` of 0.
 
-Their own notification settings, per community, category, and channel ("all messages", "only tags",
-"nothing"), are part of notifications in general, not of this protocol, and narrow this further.
-When they read a channel that had woken their phone, the deployment sends `read`; when such a
-message is deleted, `deleted`. When they mark a channel unread, it sends `read` at the position the
-channel moved back to, which takes down nothing still shown but carries the new `badge`.
+Which messages those settings ask for is part of notifications in general, not of this protocol. A
+message with no text of its own (a poll's result, a join, a community becoming large) is described
+by its `kind`, and a `communityGrew` message by its `growth`. When they read a channel that had
+woken their phone, the deployment sends `read`; when such a message is deleted, `deleted`. When they
+mark a channel unread, it sends `read` at the position the channel moved back to, which takes down
+nothing still shown but carries the new `badge`.
 
 ## Quotas and abuse
 

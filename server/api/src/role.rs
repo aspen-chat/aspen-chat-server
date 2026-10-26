@@ -291,7 +291,7 @@ pub async fn transfer_ownership(
 ) -> ApiResult<Json<message_enum::Community>> {
     app::role::transfer_ownership(&state, user.id, community, request.user).await?;
     let c = app::community::read_community(&state, user.id, community).await?;
-    Ok(Json(message_enum::Community::from(c)))
+    Ok(Json(c.record(&state)))
 }
 
 /// Sets a role's override in a channel, which takes Manage channels and viewing the channel

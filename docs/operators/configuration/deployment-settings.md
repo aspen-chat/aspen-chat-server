@@ -64,7 +64,7 @@ them.
 | ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bots-enabled`            | `true`  | Whether people may make bots. Bots already made keep working either way.                                                                                                                                                                                                   |
 | `bots-max-per-user`       | `25`    | The most bots one person may own.                                                                                                                                                                                                                                          |
-| `everyone-mention-limit`  | `200`   | How many members a community gains before its everyone role loses Mention everyone. `0` never turns it off. See [below](#everyone-mention-limit).                                                                                                                          |
+| `large-community-members` | `200`   | How many members a community gains before it is large: its everyone role loses Mention everyone, and its channels notify members of tags rather than every message. `0` makes no community cross it, and every community notify of tags. See [below](#large-communities).  |
 | `custom-emoji-limit`      | `1000`  | The most custom emoji one community may hold. Each is a small picture (PNG, JPEG, WebP, or GIF, at most 256 KiB) in the object storage.                                                                                                                                    |
 | `upload-quota-gib`        | `25`    | How many GiB one person may upload, attachments and pictures together, in any 24 hours. `0` sets no limit. See [below](#upload-quota).                                                                                                                                     |
 | `mana-max-recharge`       | `50`    | The most mana any channel earns back a second, and what one earns back unless its own settings say less. At least `1`. See [below](#channel-mana).                                                                                                                         |
@@ -73,12 +73,17 @@ them.
 | `evidence-retention-days` | `365`   | How many days files kept as evidence (those of deleted messages, and attachments taken off theirs) are kept for reviewing reports, unless a report about the message is open or was closed within as long. `0` keeps them for good. See [Backups](../backups.md#evidence). |
 | `file-transfers`          | `true`  | Whether people may offer files to one another in calls. See [below](#file-transfers).                                                                                                                                                                                      |
 
-### Everyone mention limit
+### Large communities
 
-- It happens once per community.
-- The owner is told why by the deployment's own account, which cannot be signed in to, messaged, or
-  blocked.
-- The owner may turn Mention everyone back on.
+- It happens once per community, and stays however many members leave or however the setting changes
+  later.
+- Below it, a community's channels notify members of every message unless they choose otherwise.
+- Its default channel announces what changed, tagging everyone who can see it.
+- The owner is told why Mention everyone was taken by the deployment's own account, which cannot be
+  signed in to, messaged, or blocked, and may turn it back on.
+- Members' own notification settings are left as they are.
+- Changing the setting to or from `0` reaches apps already open the next time they load the
+  community; phones follow it at once.
 
 ### Upload quota
 

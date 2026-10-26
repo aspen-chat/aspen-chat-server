@@ -113,6 +113,8 @@ async fn would_tell(
         find(|s| s.category.is_some()),
         find(|s| s.community.is_some()),
         place.ty,
+        // Whatever the community's size, its default tells of tags, which is all a notice asks.
+        false,
     );
     Ok(level != NotificationLevel::Nothing)
 }

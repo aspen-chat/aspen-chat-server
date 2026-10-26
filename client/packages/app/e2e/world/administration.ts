@@ -121,7 +121,7 @@ export function administration() {
     requireTwoFactor: false,
     botsEnabled: true,
     botsMaxPerUser: 25,
-    everyoneMentionLimit: 200,
+    largeCommunityMembers: 200,
     customEmojiLimit: 1000,
     evidenceRetentionDays: 365,
     fileTransfers: true,

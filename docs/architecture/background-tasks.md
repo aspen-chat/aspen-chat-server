@@ -68,14 +68,15 @@ written-in answer, before they are saved (`intercept::decide_unchanged`; see
 
 Messages have a `kind`:
 
-| Kind                  | Notes                                                                                            |
-| --------------------- | ------------------------------------------------------------------------------------------------ |
-| `standard`            | The only kind that can be edited                                                                 |
-| `poll`, `poll_closed` | Carry no content and name their poll in `poll`. The client renders them from the poll record     |
-| `thread_echo`         | See [Threads and DMs](threads-and-dms/index.md)                                                  |
-| `call`, `missed_call` | See [Threads and DMs](threads-and-dms/index.md)                                                  |
-| `command`             | Text its bot has already answered                                                                |
-| `member_joined`       | Announces its author joining the community. See [Default channels and join messages](joining.md) |
+| Kind                  | Notes                                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `standard`            | The only kind that can be edited                                                                            |
+| `poll`, `poll_closed` | Carry no content and name their poll in `poll`. The client renders them from the poll record                |
+| `thread_echo`         | See [Threads and DMs](threads-and-dms/index.md)                                                             |
+| `call`, `missed_call` | See [Threads and DMs](threads-and-dms/index.md)                                                             |
+| `command`             | Text its bot has already answered                                                                           |
+| `member_joined`       | Announces its author joining the community. See [Default channels and join messages](joining.md)            |
+| `community_grew`      | Announces the community becoming large. See [Large communities](roles-and-permissions/large-communities.md) |
 
 Only a `standard` message can be edited, and only by its author (`app::message::update_message`).
 The other kinds hold no text of their author's, or, for a command, text its bot has already

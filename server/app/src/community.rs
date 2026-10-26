@@ -37,6 +37,8 @@ pub struct Community {
     /// See `app::default_channel`.
     pub default_channel: Option<ChannelId>,
     pub suppress_join_messages: bool,
+    /// When it became large (`app::large_community`); `None` while it has not.
+    pub large_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Queryable, Selectable, Insertable)]
@@ -186,6 +188,7 @@ pub async fn create_community(
                 owner: Some(user),
                 default_channel: None,
                 suppress_join_messages: command.suppress_join_messages,
+                large_at: None,
             };
             diesel::insert_into(community::table)
                 .values(community.clone())
@@ -309,6 +312,7 @@ pub async fn update_community(
                     owner: None,
                     default_channel: command.default_channel,
                     suppress_join_messages: command.suppress_join_messages,
+                    small: None,
                 }),
             )
             .await?;
@@ -433,7 +437,7 @@ pub async fn join_community(
             .scope_boxed()
         })
         .await?;
-    crate::everyone_limit::after_join(state, community).await;
+    crate::large_community::after_join(state, community).await;
     Ok(membership)
 }
 
@@ -1127,15 +1131,18 @@ pub async fn read_community_member(
         .ok_or(crate::Error::Diesel(diesel::result::Error::NotFound))
 }
 
-impl From<Community> for aspen_wire::message_enum::Community {
-    fn from(c: Community) -> Self {
+impl Community {
+    /// The community's wire record, which says whether it is small by the deployment's
+    /// threshold of the moment.
+    pub fn record(self, state: &GlobalServerContext) -> aspen_wire::message_enum::Community {
         aspen_wire::message_enum::Community {
-            id: c.id,
-            name: c.name,
-            icon: c.icon.map(|i| *i.id()),
-            owner: c.owner,
-            default_channel: c.default_channel,
-            suppress_join_messages: c.suppress_join_messages,
+            small: crate::large_community::small(state, self.large_at),
+            id: self.id,
+            name: self.name,
+            icon: self.icon.map(|i| *i.id()),
+            owner: self.owner,
+            default_channel: self.default_channel,
+            suppress_join_messages: self.suppress_join_messages,
         }
     }
 }

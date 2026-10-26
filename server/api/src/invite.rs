@@ -157,7 +157,7 @@ pub async fn get_invite(
     let mut included = Included::default();
     if query.include.contains(InviteInclude::Community) {
         let community = app::community::read_invited_community(&state, invite.community).await?;
-        included.communities = Some(vec![message_enum::Community::from(community)]);
+        included.communities = Some(vec![community.record(&state)]);
     }
     Ok(Json(InviteRead::new(
         message_enum::Invite::from(&invite),
@@ -315,7 +315,7 @@ pub async fn get_registration_invite(
         && query.include.contains(RegistrationInviteInclude::Community)
     {
         let record = app::community::read_invited_community(&state, community.id).await?;
-        included.communities = Some(vec![message_enum::Community::from(record)]);
+        included.communities = Some(vec![record.record(&state)]);
     } else if query.include.contains(RegistrationInviteInclude::Community) {
         included.communities = Some(Vec::new());
     }

@@ -3,14 +3,14 @@
 //!
 //! A message tells its reader by the same rule as their notifications (`app::push`, and the
 //! apps' own): in a DM, a community, a category, or a channel, every message where their level
-//! is `all` (a DM's by default), only those that tag them where it is `tags` (a community's by
-//! default), and nothing where it is `nothing`, a thread counting as its parent; and every reply
-//! in a thread they follow (`app::thread_follow`), whatever their level. Never in a channel they
-//! muted, or whose category they muted unless they kept the channel unmuted (a thread's parent
-//! included), never by them or anyone they blocked, never from before they
-//! joined, and never a message that only records something (an echo, a poll's result, a call, a
-//! command). What is read is decided as they may read it now, as search decides it, and a page
-//! is read a place at a time ([`page_sql`]).
+//! is `all` (a DM's and a small community's by default), only those that tag them where it is
+//! `tags` (a large community's by default, `app::large_community`), and nothing where it is
+//! `nothing`, a thread counting as its parent; and every reply in a thread they follow
+//! (`app::thread_follow`), whatever their level. Never in a channel they muted, or whose
+//! category they muted unless they kept the channel unmuted (a thread's parent included), never
+//! by them or anyone they blocked, never from before they joined, and never a message that only
+//! records something (an echo, a call, a command). What is read is decided as they may read it
+//! now, as search decides it, and a page is read a place at a time ([`page_sql`]).
 //!
 //! That rule is the feed's own view ([`ActivityView::Notifying`]). The other views read wider or
 //! narrower than it, whatever the user's levels: everything said where they read, what tags
@@ -353,6 +353,7 @@ pub async fn read_activity(
         crate::category_mute::read_category_mutes(state, &visible),
     )?;
     let mut conn = state.connection_pool.get().await?;
+    let small = crate::large_community::small_among(state, conn.as_mut(), &communities).await?;
     let channels = visible.visible_channels();
     let homes: HashMap<ChannelId, (Option<CommunityId>, Option<CategoryId>)> = channel::table
         .select((channel::id, channel::community, channel::parent_category))
@@ -394,6 +395,7 @@ pub async fn read_activity(
                     category.and_then(|c| for_category.get(&c)).copied(),
                     community.and_then(|c| for_community.get(&c)).copied(),
                     ty,
+                    community.is_some_and(|c| small.contains(&c)),
                 ),
                 muted: own_mute
                     .get(&channel)
@@ -440,11 +442,9 @@ pub async fn read_activity(
         // What only records something says nothing of its own, as it wakes no phone.
         .bind::<Array<aspen_schema::sql_types::MessageKind>, _>(vec![
             MessageKind::ThreadEcho,
-            MessageKind::PollClosed,
             MessageKind::Call,
             MessageKind::MissedCall,
             MessageKind::Command,
-            MessageKind::MemberJoined,
         ])
         .load(conn.as_mut())
         .await?;

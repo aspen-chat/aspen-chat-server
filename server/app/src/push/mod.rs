@@ -730,17 +730,14 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> crate::R
     let Some(found) = found.filter(|found| found.deleted_at.is_none()) else {
         return Ok(());
     };
-    // An echo, a poll's result, and a join say nothing of their own, a call's record follows
-    // the ring that already told everyone of the call, and a command is for its bot, whose
-    // answer is what tells.
+    // An echo says nothing of its own, a call's record follows the ring that already told
+    // everyone of the call, and a command is for its bot, whose answer is what tells.
     if matches!(
         found.kind,
         MessageKind::ThreadEcho
-            | MessageKind::PollClosed
             | MessageKind::Call
             | MessageKind::MissedCall
             | MessageKind::Command
-            | MessageKind::MemberJoined
     ) {
         return Ok(());
     }
@@ -996,6 +993,12 @@ async fn recipients(
         None => posted_in,
     };
     let community = place.community.as_ref().map(|c| *c.id());
+    let small = match community {
+        Some(community) => {
+            crate::large_community::is_small(state, conn.as_mut(), community).await?
+        }
+        None => false,
+    };
     let mentions = &found.mentions;
     let mut candidates: HashMap<UserId, bool> = diesel::sql_query(RECIPIENTS_SQL)
         .bind::<Nullable<PgUuid>, _>(community.map(|c| c.0))
@@ -1004,7 +1007,7 @@ async fn recipients(
         .bind::<Array<PgUuid>, _>(mentions.users.iter().map(|u| u.0).collect::<Vec<_>>())
         .bind::<Array<PgUuid>, _>(mentions.roles.iter().map(|r| r.0).collect::<Vec<_>>())
         .bind::<Bool, _>(mentions.everyone)
-        .bind::<Text, _>(default_level(place.ty))
+        .bind::<Text, _>(default_level(place.ty, small))
         .bind::<Nullable<PgUuid>, _>(posted_in_thread.then_some(channel_id.0))
         .bind::<Nullable<PgUuid>, _>(place.parent_category.as_ref().map(|c| c.id().0))
         .load::<Recipient>(conn.as_mut())
@@ -1061,8 +1064,10 @@ struct Recipient {
 /// with no setting, `$8` the thread it is a reply in (`NULL` when it is in none), `$9` the
 /// channel's category (`NULL` when it is in none). Candidates come from indexed branches: the
 /// members tagged by name (`community_user`'s key), holders of tagged roles
-/// (`community_member_role_by_role`), every member when everyone is, those whose setting asks for
-/// every message (`notification_setting_all_*`), a DM's people, and the thread's followers
+/// (`community_member_role_by_role`), every member when everyone is tagged or `$7` asks for
+/// every message (only in a small community, which `app::large_community` bounds by the
+/// deployment's threshold), those whose setting asks for every message
+/// (`notification_setting_all_*`), a DM's people, and the thread's followers
 /// (`thread_follow_by_thread`), a DM's thread's only while they are still its people. Each one's
 /// level is the channel's setting, else its category's, else the community's, else `$7`, and a
 /// follower is told whatever theirs; those with a phone who neither blocked the author, muted
@@ -1079,6 +1084,9 @@ const RECIPIENTS_SQL: &str = concat!(
         UNION ALL
         SELECT cu."user", true, false FROM community_user cu
         WHERE $6 AND cu.community = $1
+        UNION ALL
+        SELECT cu."user", false, false FROM community_user cu
+        WHERE NOT $6 AND $7 = 'all' AND cu.community = $1
         UNION ALL
         SELECT ns."user", false, false FROM notification_setting ns
         WHERE $1 IS NOT NULL AND ns.level = 'all' AND ns.channel = $2
