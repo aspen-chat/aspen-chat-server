@@ -3597,6 +3597,22 @@ export class AspenSync {
     return result.data;
   }
 
+  /**
+   * Changes when an invite expires, or with `null` makes it never expire. The caller's own, or
+   * any with Manage invites.
+   */
+  async updateInvite(code: string, expiresAt: string | null): Promise<Invite> {
+    const result = await this.#client.api.PATCH("/api/v1/invites/{code}", {
+      params: { path: { code } },
+      body: { expiresAt },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.upsertInvite(result.data);
+    return result.data;
+  }
+
   async revokeInvite(code: string): Promise<void> {
     const result = await this.#client.api.DELETE("/api/v1/invites/{code}", {
       params: { path: { code } },

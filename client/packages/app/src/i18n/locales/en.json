@@ -1360,6 +1360,10 @@
     "week": "In 7 days"
   },
   "createInvite": "Create invite",
+  "customInviteCode": "Code (optional)",
+  "customInviteCodeHint": "Letters and digits, up to 16. Each code is unique on this server. Leave it empty for a random one.",
+  "changeExpiry": "Change expiry",
+  "changeInviteExpiry": "Change when invite {code} expires",
   "creatingInvite": "Creating…",
   "noInvitesYet": "No invites yet. Create one and share the link.",
   "neverExpires": "Never expires",

@@ -13,7 +13,7 @@ Community permissions hold across the community. Overrides never touch them and 
 | `manageChannels`    | Create, edit, arrange, and delete channels, and set their overrides.                                                                           |
 | `manageCategories`  | The same for categories.                                                                                                                       |
 | `createInvites`     | Create invites.                                                                                                                                |
-| `manageInvites`     | Edit or revoke anyone's invites, and see them all. Everyone may manage their own.                                                              |
+| `manageInvites`     | Edit or revoke anyone's invites, see them all, and choose an invite's code, which is unique on the deployment. Everyone may manage their own.  |
 | `manageRoles`       | Manage roles.                                                                                                                                  |
 | `assignRoles`       | Give and take roles.                                                                                                                           |
 | `removeMembers`     | Remove members.                                                                                                                                |

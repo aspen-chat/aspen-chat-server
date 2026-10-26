@@ -3338,6 +3338,26 @@ def sent_files(world: World, check: Checks) -> None:
                        member["token"]) == 404)
 
 
+def invite_codes(world: World, check: Checks) -> None:
+    say("an invite's chosen code, which only those who manage invites choose")
+    stack, member = world.stack, world.member
+    invites = f"/communities/{world.community}/invites"
+    code = f"club{world.run}"[:16]
+    check("Create invites alone makes an invite with a code the server chooses",
+          stack.status("POST", invites, {"expiresAt": None}, member["token"]) == 201)
+    check("but not one with a code of the member's choosing",
+          stack.status("POST", invites, {"expiresAt": None, "customCode": code}, member["token"]) == 403)
+    world.give(world.role("Invite managers", ["manageInvites"]))
+    world.stream.gather(0.5)
+    check("Manage invites chooses one",
+          stack.status("POST", invites, {"expiresAt": None, "customCode": code}, member["token"]) == 201)
+    check("which no one may take again",
+          stack.status("POST", invites, {"expiresAt": None, "customCode": code},
+                       world.owner["token"]) == 409)
+    check("and whose expiry its maker changes",
+          stack.status("PATCH", f"/invites/{code}", {"expiresAt": None}, member["token"]) == 200)
+
+
 def usernames(world: World, check: Checks) -> None:
     say("a username, which nobody changes once the account is made")
     stack, member = world.stack, world.member
@@ -3357,7 +3377,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
-             marking_unread, join_messages, identity_providers, sent_files, usernames]
+             marking_unread, join_messages, identity_providers, sent_files, invite_codes, usernames]
 
 
 def main() -> None:
