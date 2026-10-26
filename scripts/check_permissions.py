@@ -3302,6 +3302,42 @@ def join_messages(world: World, check: Checks) -> None:
     check("with join messages turned off, a join posts none", joins(general) == [member["id"]], joins(general))
 
 
+def sent_files(world: World, check: Checks) -> None:
+    say("a sent message's files: fixed, though their author may describe them or mark them spoilers")
+    stack, member = world.stack, world.member
+    channel = world.channel("sent-files")
+    handle = stack.api("POST", "/attachments", {"fileName": "cat.txt", "mimeType": "text/plain",
+                                                "byteSize": 3}, member["token"])
+    put = urllib.request.Request(handle["uploadUrl"], data=b"cat", method="PUT",
+                                 headers={"content-type": "text/plain"})
+    urllib.request.urlopen(put, timeout=15).close()
+    file = stack.api("POST", f"/attachments/{handle['id']}/confirm", token=member["token"])["id"]
+    message = stack.api("POST", f"/channels/{channel}/messages",
+                        {"content": "look", "attachments": [file]}, member["token"])["id"]
+    retouch = f"/messages/{message}/attachments/{file}"
+    world.stream.gather(0.5)
+    check("an edit that gives files is refused, not ignored",
+          stack.status("PATCH", f"/messages/{message}", {"content": "look", "attachments": []},
+                       member["token"]) == 400)
+    check("and one giving no files is not",
+          stack.status("PATCH", f"/messages/{message}", {"content": "look here"}, member["token"]) == 200)
+    check("someone else may not describe the author's file",
+          stack.status("PATCH", retouch, {"description": "theirs"}, world.owner["token"]) == 403)
+    check("its author may", stack.status("PATCH", retouch, {"description": "a cat"}, member["token"]) == 200)
+    heard = of(world.stream.gather(1.0), "attachmentChanged", attachment=file)
+    check("and the channel hears it", bool(heard) and heard[-1].get("description") == "a cat", heard)
+    world.as_owner("PUT", f"/channels/{channel}/overrides/{world.everyone}",
+                   {"allow": [], "deny": ["sendMessages"]})
+    world.stream.gather(0.5)
+    check("without Send messages a new description is refused",
+          stack.status("PATCH", retouch, {"description": "a dog"}, member["token"]) == 403)
+    check("but taking one away is not",
+          stack.status("PATCH", retouch, {"description": None, "spoiler": True}, member["token"]) == 200)
+    check("nor is a file outside the message found through it",
+          stack.status("PATCH", f"/messages/{message}/attachments/{message}", {"spoiler": True},
+                       member["token"]) == 404)
+
+
 def usernames(world: World, check: Checks) -> None:
     say("a username, which nobody changes once the account is made")
     stack, member = world.stack, world.member
@@ -3321,7 +3357,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
-             marking_unread, join_messages, identity_providers, usernames]
+             marking_unread, join_messages, identity_providers, sent_files, usernames]
 
 
 def main() -> None:

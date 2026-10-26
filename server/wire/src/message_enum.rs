@@ -131,6 +131,16 @@ enum MessageEnumSource {
         message: Option<MessageId>,
         preview: AttachmentPreview,
     },
+    // The author of `message` gave one of its files a new description or spoiler mark by
+    // editing it (`app::message::update_message`); published in the message's channel, and
+    // apps that hold the attachment set both. The message's own `update` comes with it.
+    #[message_gen(custom_event)]
+    AttachmentChanged {
+        attachment: AttachmentId,
+        message: MessageId,
+        description: Option<String>,
+        spoiler: bool,
+    },
     // A message its author sent while a preview of one of its attachments was being made, or
     // while its channel was too busy (`app::mana`), and which was held for it, was posted as
     // `message` (`app::message::held`); the author's apps show the message in place of the one
@@ -305,6 +315,10 @@ enum MessageEnumSource {
         // Set whenever the content changes; `None` until the first edit.
         #[message_gen(server_authoritative = "mutable")]
         edited_at: Option<chrono::DateTime<Utc>>,
+        // Given when it is posted; an edit changes no file, though its author or a holder of
+        // Manage messages may take one off (`DELETE /messages/{message}/attachments/{attachment}`),
+        // announced by the message's `update`.
+        #[message_gen(permanent = "server_mutable")]
         attachments: Vec<AttachmentId>,
         // Empty at creation; a background fetch fills it in afterwards and a content edit
         // clears it, each announced by an `Update` event carrying the new set.

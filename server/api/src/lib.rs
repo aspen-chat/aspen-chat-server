@@ -357,7 +357,10 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(message::reply_in_thread))
         .routes(routes!(message::echo_reply))
         .routes(routes!(message::pin_message, message::unpin_message))
-        .routes(routes!(message::remove_attachment))
+        .routes(routes!(
+            message::remove_attachment,
+            message::update_message_attachment
+        ))
         .routes(routes!(email::get_email, email::update_email))
         .routes(routes!(
             email::set_email_address,

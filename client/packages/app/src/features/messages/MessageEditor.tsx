@@ -1,30 +1,39 @@
-import { ApiProblemError } from "@aspen/protocol";
+import { ApiProblemError, type Attachment } from "@aspen/protocol";
 import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useState, type KeyboardEvent } from "react";
 import { Button, TextArea, TextField } from "react-aria-components";
-import { useSync } from "@/api/hooks";
+import { useAttachments, useSync } from "@/api/hooks";
 import { decodeCustomEmoji } from "@/features/emoji/customEmoji";
 import { useEmojiCompletion } from "@/features/emoji/useEmojiCompletion";
 import { decodeTags } from "@/features/mentions/tags";
 import { useTagging } from "@/features/mentions/useTagging";
 import { MESSAGE_MAX_CHARS, messageLength } from "@/features/messages/messageLength";
 import { MessageLengthNote } from "@/features/messages/MessageLengthNote";
+import {
+  AttachmentDescriptionButton,
+  pendingControlClass,
+  SpoilerToggle,
+} from "@/features/messages/AttachmentDescription";
+import { describable } from "@/features/messages/images";
 import { useMessages } from "@/i18n/context";
 
 /**
  * Replaces a message's text in place. Enter saves, Escape cancels, Shift+Enter breaks a line.
  * Its tags read as they were written (`@username`, `@Role`), and more can be picked as in the
- * message box.
+ * message box. Its files stay as they are, but each can be described or marked a spoiler,
+ * saved as soon as it is changed.
  */
 export function MessageEditor({
   messageId,
   channelId,
   initial,
+  attachments,
   onDone,
 }: {
   messageId: string;
   channelId: string;
   initial: string;
+  attachments: readonly string[];
   onDone: () => void;
 }) {
   const m = useMessages();
@@ -129,6 +138,7 @@ export function MessageEditor({
         />
       </TextField>
       <MessageLengthNote length={length} />
+      {attachments.length > 0 && <EditedFiles messageId={messageId} ids={attachments} />}
       {error !== null && (
         <p role="alert" className="text-sm text-danger">
           {error}
@@ -152,6 +162,69 @@ export function MessageEditor({
           {m.save}
         </Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The files of a message being edited, each with its spoiler mark and, for a picture or video,
+ * its description, changed on the server as soon as they are changed here.
+ */
+function EditedFiles({ messageId, ids }: { messageId: string; ids: readonly string[] }) {
+  const m = useMessages();
+  const sync = useSync();
+  const files = useAttachments(ids);
+  const [error, setError] = useState<string | null>(null);
+  function change(attachment: Attachment, change: { description?: string; spoiler?: boolean }) {
+    setError(null);
+    sync
+      .retouchAttachment(messageId, attachment.id, {
+        ...change,
+        ...(change.description === undefined
+          ? {}
+          : { description: change.description === "" ? null : change.description }),
+      })
+      .catch((e: unknown) => {
+        setError(e instanceof ApiProblemError ? e.message : String(e));
+      });
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <ul aria-label={m.editedFiles} className="flex flex-wrap gap-2">
+        {files.map(
+          (file) =>
+            file !== undefined && (
+              <li
+                key={file.id}
+                className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-sm"
+              >
+                <span className="max-w-40 truncate">{file.fileName}</span>
+                <SpoilerToggle
+                  name={file.fileName}
+                  spoiler={file.spoiler ?? false}
+                  onChange={(spoiler) => {
+                    change(file, { spoiler });
+                  }}
+                />
+                {describable(file.mimeType) && (
+                  <AttachmentDescriptionButton
+                    name={file.fileName}
+                    description={file.description ?? ""}
+                    onSave={(description) => {
+                      change(file, { description });
+                    }}
+                    className={pendingControlClass}
+                  />
+                )}
+              </li>
+            ),
+        )}
+      </ul>
+      {error !== null && (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

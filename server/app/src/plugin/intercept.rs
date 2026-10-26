@@ -29,11 +29,21 @@ pub struct Draft<'a> {
     pub access: &'a ChannelAccess,
     pub content: String,
     pub attachments: &'a [AttachmentId],
+    /// For an edit giving one of the message's files a new description or spoiler mark, the file
+    /// as it will stand, which the plugins are shown in place of how it stands now.
+    pub retouched: Option<Retouched>,
     /// The message being edited, for `message.edit`.
     pub editing: Option<MessageId>,
     /// For a reply that makes its thread, the channel the thread is made in: the thread,
     /// `access.channel`, is stored only with the reply, after the plugins have decided it.
     pub unmade_thread_of: Option<crate::ChannelId>,
+}
+
+/// One of a draft's files with a new description and spoiler mark.
+pub struct Retouched {
+    pub attachment: AttachmentId,
+    pub description: Option<String>,
+    pub spoiler: bool,
 }
 
 /// What the plugins left of a draft: its text, and who rewrote it.
@@ -93,7 +103,7 @@ pub async fn decide(
         });
     }
     let community = draft.access.community.as_ref().map(|c| c.community);
-    let (author, place, attachments) = {
+    let (author, place, mut attachments) = {
         let mut conn = state.connection_pool.get().await?;
         (
             host::person(conn.as_mut(), draft.author, community).await?,
@@ -106,6 +116,13 @@ pub async fn decide(
             host::attachments(conn.as_mut(), draft.attachments).await?,
         )
     };
+    if let Some(retouched) = &draft.retouched {
+        let id = retouched.attachment.0.to_string();
+        for record in attachments.iter_mut().filter(|record| record.id == id) {
+            record.description = retouched.description.clone();
+            record.spoiler = retouched.spoiler;
+        }
+    }
     let shown: HashSet<AttachmentId> = draft.attachments.iter().copied().collect();
     let budget = Duration::from_millis(state.config.plugins.intercept_millis);
     for running in running {

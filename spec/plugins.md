@@ -167,10 +167,10 @@ own.
 `message.create` and `message.edit`, more by addition. The host calls the plugin with the draft: its
 text, author (with their roles in the community), place, and attachments' records, before the
 transaction that saves it opens, so a slow plugin holds no database connection or lock. The author's
-permission to post is checked first, and that every attachment is their own upload (on an edit, or
-already the message's); what they may not post never reaches a plugin. `message.edit` is called for
-every edit, of the text, the attachments, or both, with the text as it will stand; on an edit of the
-attachments alone, a rewrite of that text changes it too.
+permission to post is checked first, and that every attachment is their own upload; what they may
+not post never reaches a plugin. An edit adds or swaps no file. `message.edit` is called for every
+edit, of the text, a file's description or spoiler mark, or both, with the message as it will stand;
+on an edit of a file alone, a rewrite of the text changes it too.
 
 The plugin answers `allow`, `rewrite` with new text (with `messages.rewrite`), or `refuse` with a
 reason from its `messages` (with `messages.refuse`), which the person reads, in their language, as

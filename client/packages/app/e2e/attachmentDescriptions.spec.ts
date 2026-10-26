@@ -174,3 +174,48 @@ test("a description given while the picture uploads reaches the server once it i
   await expect.poll(() => recorded.descriptions).toEqual(["A sleepy cat"]);
   expect(recorded.calls).toEqual(["reserve", "confirm", "describe"]);
 });
+
+test("a sent picture is described from its message's editor, which changes no file", async ({
+  page,
+}) => {
+  const recorded: Recorded = { calls: [], descriptions: [] };
+  const retouched: unknown[] = [];
+  await signInToWorld(page, async (p) => {
+    await withUploads(p, recorded);
+    await p.route(/\/api\/v1\/messages\/[^/]+\/attachments\/[^/]+$/, (route) => {
+      retouched.push(route.request().postDataJSON());
+      return route.fulfill({ json: {} });
+    });
+  });
+  await page
+    .getByRole("grid", { name: "Channels" })
+    .first()
+    .getByText("general", { exact: true })
+    .click();
+  await page.locator("form input[type=file]").setInputFiles({
+    name: "cat.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(PIXEL, "base64"),
+  });
+  await expect.poll(() => recorded.calls).toContain("confirm");
+  await page.getByRole("textbox", { name: "Message" }).fill("Sent without words for it");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect.poll(() => recorded.calls.at(-1)).toBe("send");
+
+  const sent = page.locator("article").filter({ hasText: "Sent without words for it" }).last();
+  await sent.getByText("Sent without words for it").click({ button: "right" });
+  await page
+    .getByRole("menu", { name: "Message actions" })
+    .getByRole("menuitem", { name: "Edit message" })
+    .click();
+  const files = sent.getByRole("list", { name: "Files in this message" });
+  await files.getByRole("button", { name: "Describe cat.png" }).click();
+  const dialog = page.getByRole("dialog", { name: "Describe cat.png" });
+  await dialog.getByRole("textbox", { name: "Description" }).fill("A grey cat");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect.poll(() => retouched).toEqual([{ description: "A grey cat" }]);
+  await files.getByRole("button", { name: "Mark cat.png as a spoiler" }).click();
+  await expect.poll(() => retouched).toEqual([{ description: "A grey cat" }, { spoiler: true }]);
+  // The description is the picture's text alternative at once.
+  await expect(page.getByRole("img", { name: "A grey cat" })).toBeAttached();
+});

@@ -3061,6 +3061,18 @@ export class RecordStore {
           }
           break;
         }
+        case "attachmentChanged": {
+          const attachment = this.#attachments.get(event.attachment);
+          if (attachment !== undefined) {
+            this.#attachments.set(attachment.id, {
+              ...attachment,
+              description: event.description ?? null,
+              spoiler: event.spoiler,
+            });
+            this.#touch(`attachment:${attachment.id}`);
+          }
+          break;
+        }
         case "heldMessagePosted":
           // The message itself arrives by its own event.
           this.#settledHeld.add(event.held);

@@ -155,6 +155,7 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
             message: Some(_), ..
         } => ScopeKind::Channel,
         ServerEvent::AttachmentPreviewed { message: None, .. } => ScopeKind::User,
+        ServerEvent::AttachmentChanged { .. } => ScopeKind::Channel,
         ServerEvent::PluginEvent {
             channel: None,
             community: Some(_),
@@ -744,6 +745,7 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         | ServerEvent::PluginEvent { .. }
         | ServerEvent::PluginNotice { .. }
         | ServerEvent::AttachmentPreviewed { .. }
+        | ServerEvent::AttachmentChanged { .. }
         | ServerEvent::HeldMessagePosted { .. }
         | ServerEvent::HeldMessageFailed { .. }
         | ServerEvent::HeldMessageCancelled { .. } => Vec::new(),

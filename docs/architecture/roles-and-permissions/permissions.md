@@ -69,13 +69,17 @@ Channel permissions can also be allowed or denied per channel and per category.
 
 Editing a message is its author's alone (`app::message::update_message`). Adding to it is posting:
 
-| Edit                                                                | Takes                                                                                                             |
-| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| New text (`content` given and not empty)                            | The channel's send permission: `sendMessages`, or `sendInThreads` in a thread (`ChannelAccess::send_permission`). |
-| A new attachment (`attachments` naming one the message lacks)       | The send permission, and `attachFiles` besides.                                                                   |
-| Only taking away (clearing the text, removing attachments, or both) | Nothing.                                                                                                          |
+| Edit                                                                                        | Takes                                                                                                             |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| New text (`content` given and not empty)                                                    | The channel's send permission: `sendMessages`, or `sendInThreads` in a thread (`ChannelAccess::send_permission`). |
+| A file's new or different description, or its spoiler mark taken off                        | The send permission.                                                                                              |
+| Only taking away (clearing the text, clearing a description, covering a file, removing one) | Nothing.                                                                                                          |
 
-So someone who may no longer post can still withdraw what they said.
+So someone who may no longer post can still withdraw what they said. An edit never adds or swaps a
+file: `PATCH /messages/{message}` refuses `attachments` with `validation` (`messageFilesFixed`), a
+file is taken off with `DELETE /messages/{message}/attachments/{attachment}` (its author, or a
+holder of Manage messages), and its description and spoiler mark are changed with `PATCH` there, by
+its author, as an edit (`app::message::Retouch`).
 
 ## Threads and DMs
 

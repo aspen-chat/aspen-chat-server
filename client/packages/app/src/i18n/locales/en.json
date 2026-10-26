@@ -1379,6 +1379,7 @@
   "deleteMessage": "Delete message",
   "save": "Save",
   "cancel": "Cancel",
+  "editedFiles": "Files in this message",
   "editingHint": "Enter to save, Escape to cancel",
   "editMessageLabel": "Edit message",
   "deleteMessageHeading": "Delete this message?",
