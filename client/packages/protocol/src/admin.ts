@@ -61,6 +61,9 @@ export type JobClass = components["schemas"]["JobClass"];
 export type GrowthRange = paths["/api/v1/admin/growth"]["get"]["parameters"]["query"]["range"];
 export type UserBanRequest = components["schemas"]["UserBanRequest"];
 export type UserBanOutcome = components["schemas"]["UserBanOutcome"];
+export type CommunityReach = components["schemas"]["CommunityReach"];
+export type CommunityTakedownRequest = components["schemas"]["CommunityTakedownRequest"];
+export type CommunityTakedown = components["schemas"]["CommunityTakedown"];
 export type ReportCase = components["schemas"]["ReportCase"];
 export type ReportCaseList = components["schemas"]["ReportCaseList"];
 export type ReportCounts = components["schemas"]["ReportCounts"];
@@ -146,6 +149,18 @@ export class AdminApi {
     return adminRead(
       await this.#client.api.GET("/api/v1/admin/communities", {
         params: { query: listQuery(query) },
+      }),
+    );
+  }
+
+  /**
+   * Whom taking a community down would reach: its members, and how many of them a ban by the
+   * caller would. Takes Moderate any community.
+   */
+  async communityReach(communityId: string): Promise<CommunityReach> {
+    return adminRead(
+      await this.#client.api.GET("/api/v1/admin/communities/{community}/reach", {
+        params: { path: { community: communityId } },
       }),
     );
   }

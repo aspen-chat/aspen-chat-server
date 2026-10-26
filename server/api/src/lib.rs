@@ -399,6 +399,8 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(admin::get_overview))
         .routes(routes!(admin::list_users))
         .routes(routes!(admin::list_communities))
+        .routes(routes!(admin::get_community_reach))
+        .routes(routes!(admin::take_down_community))
         .routes(routes!(
             admin::list_registration_invites,
             admin::create_registration_invite

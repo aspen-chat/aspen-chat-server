@@ -1146,6 +1146,151 @@ pub async fn ban_user(
     Ok((status, Json(outcome.into())))
 }
 
+/// Whom taking a community down would reach, counted as it stands.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CommunityReach {
+    /// Its members whose accounts stand.
+    pub members: u64,
+    /// Those of them a ban by the caller would reach: not the caller, the system account,
+    /// anyone banned already, or anyone holding a deployment role at or above the caller's
+    /// highest.
+    pub bannable: u64,
+}
+
+impl From<app::community_takedown::Reach> for CommunityReach {
+    fn from(reach: app::community_takedown::Reach) -> Self {
+        Self {
+            members: reach.members.unsigned_abs(),
+            bannable: reach.banned.unsigned_abs(),
+        }
+    }
+}
+
+/// Whom taking a community down would reach: its members, and how many of them a ban from the
+/// deployment by the caller would reach, for the dashboard to say before it asks. Takes
+/// Moderate any community.
+#[utoipa::path(
+    get,
+    path = "/admin/communities/{community}/reach",
+    tag = TAG_ADMIN,
+    params(("community" = CommunityId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = CommunityReach),
+        (status = BAD_REQUEST, body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Moderate any community", body = Problem),
+        (status = NOT_FOUND, description = "No such community, or it is deleted", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn get_community_reach(
+    State(state): State<GlobalServerContext>,
+    AdminUser(_session, access): AdminUser,
+    Path(community): Path<CommunityId>,
+) -> ApiResult<Json<CommunityReach>> {
+    let reach = app::community_takedown::reach(&state, &access, community).await?;
+    Ok(Json(reach.into()))
+}
+
+/// The ban from the deployment a community takedown gives each member it reaches, as a ban of
+/// one person does.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MemberBanRequest {
+    /// What each banned person is told when they try to sign in; at most
+    /// `app::ban::REASON_MAX_CHARS` characters.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// How long the bans last, in seconds, at least a minute; absent or `null` until lifted.
+    /// Every ban ends at the same moment, counted from the request.
+    #[serde(default)]
+    pub duration_seconds: Option<u32>,
+    /// How far back each banned person's messages anywhere on the deployment, DMs included,
+    /// are deleted: 3600 (the last hour) or 86400 (the last day); absent or `null` to leave
+    /// them. Takes Remove content.
+    #[serde(default)]
+    pub delete_messages_seconds: Option<u32>,
+}
+
+/// What a community takedown does beyond deleting the community.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CommunityTakedownRequest {
+    /// `true` erases everything the community held outright: its messages and their files,
+    /// channels, threads, categories, roles, memberships, invites, and emoji, all but the
+    /// messages report cases are about. `false` only hides it, as its owner's deletion does.
+    pub erase: bool,
+    /// Bans every member it reaches from the deployment (see `GET .../reach`); absent or `null`
+    /// bans nobody. Takes Ban users.
+    #[serde(default)]
+    pub ban_members: Option<MemberBanRequest>,
+}
+
+/// A community taken down: whom it reached, counted as the community was deleted.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CommunityTakedown {
+    /// Its members whose accounts stood.
+    pub members: u64,
+    /// How many of them are being banned, a batch at a time; 0 when no ban was asked for.
+    pub banned_members: u64,
+}
+
+/// Takes a community down: deletes it at once, as its owner's deletion does, and then, as asked,
+/// bans every member it reaches from the deployment and erases everything it held, both done
+/// in the background in that order. Takes Moderate any community; banning takes Ban users, and
+/// the bans' deletion window Remove content. Written to the moderation log, each ban as it is
+/// made.
+#[utoipa::path(
+    post,
+    path = "/admin/communities/{community}/takedown",
+    tag = TAG_ADMIN,
+    params(("community" = CommunityId, Path)),
+    request_body = CommunityTakedownRequest,
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, description = "Deleted, with the bans and erasure under way", body = CommunityTakedown),
+        (status = BAD_REQUEST, description = "`validation`: the reason, duration, or deletion window", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Moderate any community, or Ban users (and Remove content to delete messages) to ban", body = Problem),
+        (status = NOT_FOUND, description = "No such community, or it is deleted", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn take_down_community(
+    State(state): State<GlobalServerContext>,
+    AdminUser(_session, access): AdminUser,
+    Path(community): Path<CommunityId>,
+    Json(request): Json<CommunityTakedownRequest>,
+) -> ApiResult<Json<CommunityTakedown>> {
+    let ban = request.ban_members.map(|ban| app::ban::BanRequest {
+        reason: ban.reason,
+        duration_seconds: ban.duration_seconds,
+        delete_messages_seconds: ban.delete_messages_seconds,
+    });
+    let banning = ban.is_some();
+    let reach = app::community_takedown::take_down(
+        &state,
+        &access,
+        community,
+        &app::community_takedown::TakedownRequest {
+            erase: request.erase,
+            ban,
+        },
+    )
+    .await?;
+    Ok(Json(CommunityTakedown {
+        members: reach.members.unsigned_abs(),
+        banned_members: if banning {
+            reach.banned.unsigned_abs()
+        } else {
+            0
+        },
+    }))
+}
+
 /// Lifts a ban from the deployment. Nothing standing is not an error. Takes Ban users and
 /// ranking above the person banned, as banning does; written to the moderation log.
 #[utoipa::path(

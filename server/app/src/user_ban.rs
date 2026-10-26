@@ -183,7 +183,7 @@ pub async fn ban_user(
 
 /// Bans one person inside the caller's transaction, adding to `outcome`. Returns a bot's owner.
 #[allow(clippy::too_many_arguments)]
-async fn ban_one(
+pub(crate) async fn ban_one(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     access: &DeploymentAccess,

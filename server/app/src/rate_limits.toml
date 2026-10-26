@@ -245,6 +245,8 @@ endpoints = [
   "GET /admin/overview",
   "GET /admin/users",
   "GET /admin/communities",
+  "GET /admin/communities/{community}/reach",
+  "POST /admin/communities/{community}/takedown",
   "GET /admin/registration-invites",
   "POST /admin/registration-invites",
   "DELETE /admin/registration-invites/{code}",

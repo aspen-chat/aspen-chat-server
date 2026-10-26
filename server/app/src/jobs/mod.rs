@@ -487,6 +487,7 @@ async fn step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outco
         JobKind::PurgeEvidence => crate::attachment::evidence::purge_step(state, job).await,
         JobKind::FitStreams => crate::nats_memory::fit_step(state, job).await,
         JobKind::ForgetIdentityProvider => crate::identity_provider::forget_step(state, job).await,
+        JobKind::TakeDownCommunity => crate::community_takedown::step(state, job).await,
     }
 }
 

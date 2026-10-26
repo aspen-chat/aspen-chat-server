@@ -30,6 +30,7 @@ import {
   secondaryButtonClass,
   toggleChipClass,
 } from "@/features/invites/dialog";
+import { CommunityBanDialog } from "@/features/admin/CommunityBanDialog";
 import { UserBanDialog } from "@/features/admin/UserBanDialog";
 import { BotBadge } from "@/features/users/BotBadge";
 import { ProfilePopover } from "@/features/users/ProfileCard";
@@ -482,17 +483,22 @@ function DmLink({ dm }: { dm: Channel }) {
 }
 
 /**
- * The deployment's communities, searched by name and sortable. A moderator opens any of them.
+ * The deployment's communities, searched by name and sortable. A moderator opens any of them,
+ * or bans one: deleting it, hiding or erasing what it holds, and banning its members.
  */
 export function CommunityDirectory() {
   const m = useMessages();
   const { count, day } = useFigures();
   const sync = useSync();
   const moderator = useDeploymentCan("moderateCommunities");
+  const [version, setVersion] = useState(0);
   const load = useCallback(
     (query: AdminListQuery<CommunitySort>) => sync.admin.adminCommunities(query),
     [sync],
   );
+  const reload = useCallback(() => {
+    setVersion((n) => n + 1);
+  }, []);
   return (
     <Directory<AdminCommunityEntry, CommunitySort>
       idThing="community"
@@ -500,6 +506,7 @@ export function CommunityDirectory() {
       title={m.admin.communities}
       searchLabel={m.admin.searchCommunities}
       load={load}
+      version={version}
       defaultSort="-createdAt"
       columns={[
         {
@@ -528,19 +535,57 @@ export function CommunityDirectory() {
               {
                 heading: m.admin.actions,
                 cell: (community: AdminCommunityEntry) => (
-                  <Link
-                    to="/communities/$communityId"
-                    params={{ communityId: community.id }}
-                    aria-label={format(m.admin.openCommunityLabel, { community: community.name })}
-                    className={secondaryButtonClass + " inline-block py-0.5 text-xs"}
-                  >
-                    {m.admin.openCommunity}
-                  </Link>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <Link
+                      to="/communities/$communityId"
+                      params={{ communityId: community.id }}
+                      aria-label={format(m.admin.openCommunityLabel, {
+                        community: community.name,
+                      })}
+                      className={secondaryButtonClass + " inline-block py-0.5 text-xs"}
+                    >
+                      {m.admin.openCommunity}
+                    </Link>
+                    <CommunityBanControl community={community} onBanned={reload} />
+                  </span>
                 ),
               },
             ]
           : []),
       ]}
     />
+  );
+}
+
+/** The Ban button of a community's row, which opens `CommunityBanDialog`. */
+function CommunityBanControl({
+  community,
+  onBanned,
+}: {
+  community: AdminCommunityEntry;
+  onBanned: () => void;
+}) {
+  const m = useMessages();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button
+        aria-label={format(m.admin.banCommunityLabel, { community: community.name })}
+        onPress={() => {
+          setOpen(true);
+        }}
+        className={secondaryButtonClass + " py-0.5 text-xs text-danger"}
+      >
+        {m.admin.banCommunity}
+      </Button>
+      {open && (
+        <CommunityBanDialog
+          community={community}
+          isOpen={open}
+          onOpenChange={setOpen}
+          onBanned={onBanned}
+        />
+      )}
+    </>
   );
 }

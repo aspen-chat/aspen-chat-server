@@ -33,6 +33,7 @@ pub mod channel;
 pub mod channel_mute;
 pub mod channel_presence;
 pub mod community;
+pub mod community_takedown;
 pub mod context;
 pub mod custom_emoji;
 pub mod database_latency;

@@ -2356,6 +2356,121 @@ def ban_deletions(world: World, check: Checks) -> None:
           stack.status("GET", f"/messages/{in_hidden}", token=world.owner["token"]) == 200)
 
 
+def community_takedowns(world: World, check: Checks) -> None:
+    say("taking a community down from the dashboard: deleted at once, its members banned, its contents erased")
+    stack, member = world.stack, world.member
+    stack.command("admin", "grant", world.owner["name"])
+    stack.command("admin", "allow", "moderateCommunities")
+    peer, mod = world.account("peer"), world.account("mod")
+    # A second Administrator ranks with the owner, so the owner's ban passes over them.
+    stack.command("admin", "grant", peer["name"])
+    mods = world.as_owner("POST", "/admin/roles", {"name": f"Mods{world.run}",
+                                                   "permissions": ["moderateCommunities"]})["id"]
+    world.as_owner("PUT", f"/admin/users/{mod['id']}/roles/{mods}")
+    invite = world.as_owner("POST", f"/communities/{world.community}/invites", {})
+    stack.api("PUT", f"/communities/{world.community}/members/@me",
+              {"inviteCode": invite.get("code") or invite.get("id")}, peer["token"])
+    category = world.as_owner("POST", f"/communities/{world.community}/categories",
+                              {"name": "doomed", "sortIndex": 1})["id"]
+    general = world.channel("doomed-general", category=category)
+    world.role("Doomed role")
+    kept = stack.api("POST", f"/channels/{general}/messages", {"content": "reported", "attachments": []},
+                     member["token"])["id"]
+    report_category = stack.api("GET", "/report-categories", token=world.owner["token"])[0]["id"]
+    stack.api("POST", f"/messages/{kept}/reports", {"category": report_category}, world.owner["token"])
+    erased = world.post(general, "erased with the community")
+    stack.api("PUT", f"/messages/{erased}/reactions/%F0%9F%91%8D/@me", token=member["token"])
+    reply = stack.api("POST", f"/messages/{erased}/thread/messages",
+                      {"content": "a reply erased with its thread", "attachments": [], "echoToParent": True},
+                      member["token"])
+    thread = reply["channelId"]
+    body = b"a file erased with its message"
+    handle = stack.api("POST", "/attachments", {"fileName": "erased.txt", "mimeType": "text/plain",
+                                                "byteSize": len(body)}, member["token"])
+    urllib.request.urlopen(urllib.request.Request(handle["uploadUrl"], data=body, method="PUT",
+                                                  headers={"content-type": "text/plain"}), timeout=15).close()
+    erased_file = stack.api("POST", f"/attachments/{handle['id']}/confirm", token=member["token"])
+    stack.api("POST", f"/channels/{world.channel('doomed-other')}/messages",
+              {"content": "a file", "attachments": [erased_file["id"]]}, member["token"])
+    check("its file is served while it stands", read_url(erased_file["downloadUrl"]) == (200, body))
+    check("Moderate any community alone counts whom a takedown reaches",
+          stack.status("GET", f"/communities/{world.community}", token=mod["token"]) == 200
+          and stack.status("GET", f"/admin/communities/{world.community}/reach", token=mod["token"]) == 200)
+    check("but does not ban its members",
+          stack.status("POST", f"/admin/communities/{world.community}/takedown",
+                       {"erase": False, "banMembers": {}}, mod["token"]) == 403)
+    check("and a member with no deployment permission counts nothing",
+          stack.status("GET", f"/admin/communities/{world.community}/reach", token=member["token"]) == 403)
+    stack.command("admin", "allow", "banUsers")
+    reach = world.as_owner("GET", f"/admin/communities/{world.community}/reach")
+    check("the count names its members, and those a ban by the caller reaches",
+          reach == {"members": 3, "bannable": 1}, reach)
+    taken = world.as_owner("POST", f"/admin/communities/{world.community}/takedown",
+                           {"erase": True, "banMembers": {"reason": "checking takedowns"}})
+    check("taking it down answers the same count", taken == {"members": 3, "bannedMembers": 1}, taken)
+    gathered = world.stream.gather(2.0)
+    check("its members hear it is deleted",
+          bool(of(gathered, "community", type="delete", id=world.community)), gathered[-3:])
+    check("it is gone at once", stack.status("GET", f"/communities/{world.community}",
+                                             token=peer["token"]) == 404)
+    check("its member is banned from the deployment shortly after", eventually(
+        lambda: stack.status("POST", "/auth/login", {"username": member["name"], "password": PASSWORD}) == 403))
+    world.stream.gather(1.0)
+    # Banning ends their sign-ins before it announces the ban, so the stream closes as signed out.
+    check("which closes their stream", world.stream.closed in (4401, 4410), world.stream.closed)
+    check("the moderator and whoever ranks with them are passed over",
+          stack.status("GET", "/users/@me", token=peer["token"]) == 200
+          and stack.status("GET", "/users/@me", token=world.owner["token"]) == 200)
+
+    def left(sql: str) -> int:
+        return int(psql(sql, stack.database) or 0)
+
+    community = f"'{world.community}'"
+    check("its contents are erased but the message a report case is about", eventually(lambda: (
+        left(f"SELECT count(*) FROM job WHERE kind = 'takeDownCommunity' AND key = '{world.community}'") == 0)))
+    check("which stays, deleted", left(
+        f"SELECT count(*) FROM message WHERE channel IN (SELECT id FROM channel WHERE community = {community})"
+    ) == 1 and left(f"SELECT count(*) FROM message WHERE id = '{kept}' AND deleted_at IS NOT NULL") == 1)
+    check("in the one channel that holds it",
+          left(f"SELECT count(*) FROM channel WHERE community = {community}") == 1
+          and left(f"SELECT count(*) FROM channel WHERE id = '{general}'") == 1)
+    check("its thread and the file are gone, the file from storage too",
+          left(f"SELECT count(*) FROM channel WHERE id = '{thread}'") == 0
+          and left(f"SELECT count(*) FROM attachment WHERE id = '{erased_file['id']}'") == 0
+          and read_url(erased_file["downloadUrl"])[0] in (403, 404))
+    check("with no category, role, membership, invite, or reaction left", all(left(sql) == 0 for sql in (
+        f"SELECT count(*) FROM category WHERE community = {community}",
+        f"SELECT count(*) FROM community_role WHERE community = {community}",
+        f"SELECT count(*) FROM community_user WHERE community = {community}",
+        f"SELECT count(*) FROM invite WHERE community = {community}",
+        f"SELECT count(*) FROM react WHERE message = '{erased}'",
+    )))
+    logged = {e["action"] for e in world.as_owner("GET", "/admin/moderation-log")
+              if e.get("community") == world.community}
+    check("the deletion and the erasure are in the moderation log",
+          {"deleteCommunity", "eraseCommunity"} <= logged, logged)
+
+    hidden = world.as_owner("POST", "/communities", {"name": f"Hidden {world.run}"})["id"]
+    kept_channel = world.as_owner("POST", "/channels", {"name": "hidden", "ty": "text", "community": hidden,
+                                                       "sortIndex": 1})["id"]
+    world.post(kept_channel, "only hidden")
+    taken = world.as_owner("POST", f"/admin/communities/{hidden}/takedown", {"erase": False})
+    check("a takedown that only hides bans nobody", taken == {"members": 1, "bannedMembers": 0}, taken)
+    still = left(f"SELECT count(*) FROM message WHERE channel = '{kept_channel}'")
+    check("and keeps what it held, deleted",
+          still == 1 and stack.status("GET", f"/communities/{hidden}", token=world.owner["token"]) == 404, still)
+    check("a community already taken down is not found",
+          stack.status("POST", f"/admin/communities/{hidden}/takedown", {"erase": True},
+                       world.owner["token"]) == 404)
+    world.as_owner("DELETE", f"/admin/users/{mod['id']}/roles/{mods}")
+    world.as_owner("DELETE", f"/admin/roles/{mods}")
+    world.as_owner("DELETE", f"/admin/users/{member['id']}/ban")
+    stack.command("admin", "revoke", peer["name"])
+    stack.command("admin", "deny", "banUsers")
+    stack.command("admin", "deny", "moderateCommunities")
+    stack.command("admin", "revoke", world.owner["name"])
+
+
 def job_preview(world: World, check: Checks) -> None:
     say("the jobs preview takes View jobs")
     stack, member = world.stack, world.member
@@ -3450,7 +3565,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, replies, calls, attachments,
              operators, deployment_settings, deployment_documents, sign_ins, removal, presence, chosen_presence, lost_presence_keys, typing, channel_mana, name_colours, dual_invites, device_links, typed_device_links,
              passkeys,
-             nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, job_preview, dm_reads, frequent_emoji, emoji_deletions,
+             nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, community_takedowns, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
              marking_unread, join_messages, identity_providers, sent_files, invite_codes, usernames, large_communities]

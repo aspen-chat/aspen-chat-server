@@ -145,6 +145,9 @@ pub enum JobKind {
     FitStreams,
     /// Deleting a removed identity provider's links to accounts.
     ForgetIdentityProvider,
+    /// Banning a community's members and erasing what it held, as its takedown from the
+    /// dashboard asked.
+    TakeDownCommunity,
 }
 
 crate::wire_name_traits!(JobKind);

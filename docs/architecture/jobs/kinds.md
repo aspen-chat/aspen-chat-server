@@ -37,6 +37,7 @@ described under [Claiming and classes](claiming.md#classes).
 | [`purgeEvidence`](#purgeevidence)                   | maintenance                                        | daily                                                          | Deletes deleted messages' files past the retention.                                                                   |
 | [`fitStreams`](#fitstreams)                         | normal                                             | every fifteen seconds                                          | Sizes the NATS streams to their settings and NATS's memory.                                                           |
 | [`forgetIdentityProvider`](#forgetidentityprovider) | normal                                             |                                                                | Deletes a removed identity provider's links.                                                                          |
+| [`takeDownCommunity`](#takedowncommunity)           | normal                                             |                                                                | Bans a taken-down community's members and erases what it held.                                                        |
 
 ## Polls, calls, and upkeep
 
@@ -203,6 +204,16 @@ Each step:
 3. moves the job's place past them in the same transaction.
 
 The ban answers how many messages it covers.
+
+### `takeDownCommunity`
+
+What a community's takedown from the dashboard asked for beyond deleting it, keyed by the community
+(`community_takedown::step`; see [Community takedowns](../administration/community-takedowns.md)):
+
+1. its members banned from the deployment, fifty a step, each in a savepoint of its own;
+2. then, when asked, everything it held erased, stage by stage: messages fifty a step, their files
+   deleted from storage the step after; channels, threads first, and categories one a step; and what
+   any of them holds per person, per message, or per member a thousand rows a step.
 
 ### `shutOut`
 

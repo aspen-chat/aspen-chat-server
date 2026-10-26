@@ -13,7 +13,12 @@
  * hold covers the first bootstrap, which makes both paths one piece of code.
  */
 
-import { AdminApi, adminRead } from "./admin";
+import {
+  AdminApi,
+  adminRead,
+  type CommunityTakedown,
+  type CommunityTakedownRequest,
+} from "./admin";
 import { EventStream, type EventStreamOptions, reconnectDelayMs, serverDelayMs } from "./events";
 import type {
   CommunityPlugin,
@@ -3239,6 +3244,27 @@ export class AspenSync {
     if (!this.#readsEventsOf(communityId)) {
       this.store.applyEvent({ serverEvent: "community", type: "delete", id: communityId });
     }
+  }
+
+  /**
+   * Takes a community down from the dashboard: deletes it at once and, as `request` asks, bans
+   * its members from the deployment and erases what it held, which the server does after
+   * answering. Takes Moderate any community, and Ban users to ban; see `#readsEventsOf`.
+   */
+  async takeDownCommunity(
+    communityId: string,
+    request: CommunityTakedownRequest,
+  ): Promise<CommunityTakedown> {
+    const outcome = adminRead(
+      await this.#client.api.POST("/api/v1/admin/communities/{community}/takedown", {
+        params: { path: { community: communityId } },
+        body: request,
+      }),
+    );
+    if (!this.#readsEventsOf(communityId)) {
+      this.store.applyEvent({ serverEvent: "community", type: "delete", id: communityId });
+    }
+    return outcome;
   }
 
   /**
