@@ -1167,6 +1167,7 @@
     "noModeration": "Nothing yet.",
     "fileTransfers": "File transfers",
     "fileTransfersHint": "Files offered in calls and who received them, by name and size. The files themselves go between people's devices, directly or encrypted through a voice server's relay, and never reach this server.",
+    "fileTransfersOf": "Only offers made or received by",
     "noFileTransfers": "Nothing offered yet.",
     "jobs": "Jobs",
     "jobsHint": "A preview of the server's background work, read again every few seconds: what runs now, what waits, by how pressing it is and then how long it has waited, and what was given up. At most 100 are listed.",
