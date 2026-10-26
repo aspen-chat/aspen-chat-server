@@ -21,7 +21,8 @@ A `federated_deployment` row holds:
 
 - how it came to be (`origin`): added by an administrator or from the terminal, or recorded when
   first contacted;
-- a note;
+- a note, given when it is added and changed or cleared from the dashboard
+  (`PATCH /admin/federation/deployments/{domain}`);
 - its pinned key, and any `offered_key`;
 - when it was first and last contacted;
 - its protocol (see [Protocol versions](protocol-versions.md)).

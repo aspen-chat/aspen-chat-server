@@ -10,6 +10,7 @@ import { useCallback, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   Dialog,
+  DialogTrigger,
   Form,
   Input,
   Label,
@@ -104,6 +105,7 @@ export function FederationSection() {
           <span className="text-xs text-ink-muted">
             {m.federation.origin[d.origin]} · {moment(d.createdAt)}
           </span>
+          <NoteEditor deployment={d} onChanged={changed} />
         </span>
       ),
     },
@@ -864,5 +866,86 @@ function ForgetDialog({
         {pending ? m.federation.forgetting : m.federation.forget}
       </Button>
     </DeploymentDialog>
+  );
+}
+
+/** Changes the note kept on a deployment, or clears it when left empty, in a modal. */
+function NoteEditor({
+  deployment,
+  onChanged,
+}: {
+  deployment: FederatedDeployment;
+  onChanged: () => void;
+}) {
+  const m = useMessages();
+  const sync = useSync();
+  const [text, setText] = useState(deployment.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <DialogTrigger
+      onOpenChange={(open) => {
+        if (open) {
+          setText(deployment.note ?? "");
+          setError(null);
+        }
+      }}
+    >
+      <Button className={smallButtonClass + " self-start"}>
+        {deployment.note == null ? m.federation.addNote : m.federation.editNote}
+      </Button>
+      <ModalOverlay isDismissable className={overlayClass}>
+        <Modal className={modalClass}>
+          <Dialog className={dialogClass}>
+            {({ close }) => (
+              <Form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const note = text.trim();
+                  setSaving(true);
+                  setError(null);
+                  sync.admin
+                    .setFederatedDeploymentNote(deployment.domain, note === "" ? null : note)
+                    .then(
+                      () => {
+                        setSaving(false);
+                        onChanged();
+                        close();
+                      },
+                      (e: unknown) => {
+                        setSaving(false);
+                        setError(problemText(e));
+                      },
+                    );
+                }}
+                className="flex flex-col gap-4"
+              >
+                <DialogHeading>
+                  {format(m.federation.noteHeading, { domain: deployment.domain })}
+                </DialogHeading>
+                <TextField
+                  value={text}
+                  onChange={setText}
+                  maxLength={MAX_NOTE_CHARS}
+                  autoFocus
+                  className={fieldClass}
+                >
+                  <Label className={labelClass}>{m.federation.note}</Label>
+                  <Input placeholder={m.federation.notePlaceholder} className={inputClass} />
+                </TextField>
+                {error !== null && (
+                  <p role="alert" className={alertClass}>
+                    {error}
+                  </p>
+                )}
+                <Button type="submit" isDisabled={saving} className={primaryButtonClass}>
+                  {m.save}
+                </Button>
+              </Form>
+            )}
+          </Dialog>
+        </Modal>
+      </ModalOverlay>
+    </DialogTrigger>
   );
 }
