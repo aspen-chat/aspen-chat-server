@@ -8,6 +8,7 @@ import {
   type RefObject,
 } from "react";
 import { Dialog, Modal, ModalOverlay } from "react-aria-components";
+import { overlayLayerClass } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMotion } from "@/features/layout/motion";
 import { useSwipe } from "@/features/layout/useSwipe";
@@ -267,7 +268,7 @@ export function Drawer({
         }
       }}
       isDismissable
-      className="fixed inset-x-0 top-(--title-bar-height) bottom-0 z-10"
+      className={"fixed inset-x-0 top-(--title-bar-height) bottom-0 " + overlayLayerClass}
     >
       <div
         aria-hidden="true"
