@@ -1,10 +1,11 @@
 //! What each user wants to be told of, for themself alone: for a whole community, one of its
 //! categories, or one of its text channels, or a DM, every message (`all`), only messages that
 //! tag them (`tags`), or nothing. A channel's own setting outranks its category's, which
-//! outranks its community's, and without any a DM tells of every message and a community
-//! channel of tags ([`level_of`], [`default_level`]); a thread follows its parent. Phones are woken by these (`app::push`), and the apps notify by them. Every change is
-//! published to the user's own subject as `notificationSettingChanged`, so their other devices
-//! follow.
+//! outranks its community's, and without any a DM, or a channel of a small community
+//! (`app::large_community`), tells of every message, and a channel of a large one of tags
+//! ([`level_of`], [`default_level`]); a thread follows its parent. Phones are woken by these
+//! (`app::push`), and the apps notify by them. Every change is published to the user's own
+//! subject as `notificationSettingChanged`, so their other devices follow.
 
 use crate::channel::ChannelType;
 use crate::context::GlobalServerContext;
@@ -37,23 +38,27 @@ pub struct NotificationSetting {
 }
 
 /// A channel's level for the user: its own setting, else its category's, else its community's,
-/// else the default for its kind.
+/// else the default for its kind and, in a community, whether that community is `small`.
 pub fn level_of(
     own: Option<NotificationLevel>,
     category: Option<NotificationLevel>,
     community: Option<NotificationLevel>,
     ty: ChannelType,
+    small: bool,
 ) -> NotificationLevel {
     own.or(category)
         .or(community)
-        .unwrap_or_else(|| default_level(ty))
+        .unwrap_or_else(|| default_level(ty, small))
 }
 
 /// The level of a channel neither the user nor its community has a setting for: every message
-/// of a DM, which is written to its few people, and tags in a community, which may be large.
-pub fn default_level(ty: ChannelType) -> NotificationLevel {
+/// of a DM, which is written to its few people, and of a small community's channel; tags in a
+/// large community (`app::large_community`), where every message would be too many. `small` is
+/// whether the channel's community is small, and is ignored for a DM.
+pub fn default_level(ty: ChannelType, small: bool) -> NotificationLevel {
     match ty {
         ChannelType::Dm | ChannelType::GroupDm => NotificationLevel::All,
+        _ if small => NotificationLevel::All,
         _ => NotificationLevel::Tags,
     }
 }
@@ -300,18 +305,32 @@ mod tests {
     fn a_channel_takes_its_own_level_then_its_categorys_then_its_communitys() {
         use NotificationLevel::{All, Nothing, Tags};
         assert_eq!(
-            level_of(Some(Nothing), Some(All), Some(Tags), ChannelType::Text),
+            level_of(
+                Some(Nothing),
+                Some(All),
+                Some(Tags),
+                ChannelType::Text,
+                true
+            ),
             Nothing
         );
         assert_eq!(
-            level_of(None, Some(All), Some(Nothing), ChannelType::Text),
+            level_of(None, Some(All), Some(Nothing), ChannelType::Text, false),
             All
         );
         assert_eq!(
-            level_of(None, None, Some(Nothing), ChannelType::Text),
+            level_of(None, None, Some(Nothing), ChannelType::Text, true),
             Nothing
         );
-        assert_eq!(level_of(None, None, None, ChannelType::Text), Tags);
-        assert_eq!(level_of(None, None, None, ChannelType::Dm), All);
+    }
+
+    #[test]
+    fn without_a_setting_a_small_community_and_a_dm_tell_of_everything() {
+        use NotificationLevel::{All, Tags};
+        assert_eq!(level_of(None, None, None, ChannelType::Text, true), All);
+        assert_eq!(level_of(None, None, None, ChannelType::Plugin, true), All);
+        assert_eq!(level_of(None, None, None, ChannelType::Text, false), Tags);
+        assert_eq!(level_of(None, None, None, ChannelType::Dm, false), All);
+        assert_eq!(level_of(None, None, None, ChannelType::GroupDm, false), All);
     }
 }

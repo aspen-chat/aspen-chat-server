@@ -304,6 +304,21 @@ final class MessageFetcher {
         switch message["kind"] as? String {
         case "poll":
             return NSLocalizedString("notification.poll", comment: "posted a poll")
+        case "pollClosed":
+            return NSLocalizedString("notification.pollClosed", comment: "a poll has closed")
+        case "memberJoined":
+            return NSLocalizedString("notification.memberJoined", comment: "joined the community")
+        case "communityGrew":
+            let growth = message["growth"] as? [String: Any]
+            let grew = NSLocalizedString("notification.communityGrew", comment: "the community is now large")
+            guard growth?["mentionEveryoneTaken"] as? Bool == true else {
+                return grew
+            }
+            let mention = NSLocalizedString(
+                "notification.communityGrewMentionEveryone",
+                comment: "members can no longer tag everyone"
+            )
+            return "\(grew) \(mention)"
         default:
             let attachments = message["attachments"] as? [Any] ?? []
             return attachments.isEmpty

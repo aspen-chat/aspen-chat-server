@@ -78,6 +78,12 @@ pub async fn seed(
         ..plan.clone()
     })?;
     let now = Utc::now();
+    // A community seeded with the deployment's threshold of members is large, as the joins that
+    // brought them would have made it (`app::large_community`); the everyone role the seed gives
+    // it holds no Mention everyone to take.
+    let large_from = crate::deployment_settings::load(conn)
+        .await?
+        .large_community_members;
     let manifest = conn
         .transaction::<_, crate::Error, _>(|conn| {
             async move {
@@ -140,6 +146,9 @@ pub async fn seed(
                             community::id.eq(id),
                             community::name.eq(format!("bench {} {index}", plan.run)),
                             community::owner.eq(owner),
+                            community::large_at.eq((large_from > 0
+                                && planned.members.len() >= large_from as usize)
+                                .then_some(now)),
                         ))
                         .execute(conn)
                         .await?;

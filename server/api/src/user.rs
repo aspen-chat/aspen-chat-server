@@ -169,10 +169,7 @@ pub async fn list_user_communities(
     let included =
         crate::community::sideload_communities(&state, user_id, &ids, &query.include).await?;
     Ok(Json(CommunityList::new(
-        communities
-            .into_iter()
-            .map(crate::message_enum::Community::from)
-            .collect(),
+        communities.into_iter().map(|c| c.record(&state)).collect(),
         included,
     )))
 }

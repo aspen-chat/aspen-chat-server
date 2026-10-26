@@ -137,6 +137,22 @@ pub fn message_enum_source(
                 }
             })
             .collect::<Vec<_>>();
+        // Server-set fields as the record declares them: one marked `default` may be absent from
+        // a record from a deployment that predates it, so the schemas say it may be.
+        let defaulted_server_fields = server_authoritative_fields
+            .iter()
+            .map(|f| {
+                let defaulted = f
+                    .ident
+                    .as_ref()
+                    .is_some_and(|ident| create_defaults.contains(ident));
+                if defaulted {
+                    quote!(#[serde(default)] pub #f)
+                } else {
+                    quote!(pub #f)
+                }
+            })
+            .collect::<Vec<_>>();
         // Create request: everything the client may set at creation time. Identifiers and parent
         // references arrive via the URL path, server authoritative fields are never accepted.
         if commands
@@ -271,7 +287,7 @@ pub fn message_enum_source(
             pub struct #variant_ident {
                 #(pub #id_fields_all,)*
                 #(pub #parent_fields,)*
-                #(pub #server_authoritative_fields,)*
+                #(#defaulted_server_fields,)*
                 #(#defaulted_other_fields,)*
                 #(pub #other_permanent_fields,)*
             }
@@ -419,7 +435,8 @@ fn populate_field_types(
                         // `default`: a create request, or a record from a deployment that
                         // predates the field, may leave it out, which then takes its type's
                         // default, so a field added later refuses no request and breaks no
-                        // reader of an older deployment's records.
+                        // reader of an older deployment's records. On a server-set field it
+                        // concerns records alone.
                         "default" => {
                             if let Some(ident) = &field.ident {
                                 create_defaults.push(ident.clone());

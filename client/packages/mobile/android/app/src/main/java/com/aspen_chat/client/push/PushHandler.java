@@ -112,8 +112,8 @@ public final class PushHandler {
         String nickname = nicknameOf(included, community, message.getString("author"));
         String name = nickname != null ? nickname : nameOf(author);
         String text = readable(message.optString("content"), included);
-        if (text.isEmpty()) {
-            text = context.getString(R.string.aspen_push_new_message);
+        if (text.trim().isEmpty()) {
+            text = recorded(message);
         }
         post(
             origin,
@@ -231,6 +231,28 @@ public final class PushHandler {
     }
 
     /** What the app calls a user: their display name, or else their username. */
+    /** What a message with no text of its own says, by its kind. */
+    private String recorded(JSONObject message) {
+        switch (message.optString("kind")) {
+            case "poll":
+                return context.getString(R.string.aspen_push_poll);
+            case "pollClosed":
+                return context.getString(R.string.aspen_push_poll_closed);
+            case "memberJoined":
+                return context.getString(R.string.aspen_push_member_joined);
+            case "communityGrew": {
+                String grew = context.getString(R.string.aspen_push_community_grew);
+                JSONObject growth = message.optJSONObject("growth");
+                if (growth == null || !growth.optBoolean("mentionEveryoneTaken")) {
+                    return grew;
+                }
+                return grew + " " + context.getString(R.string.aspen_push_community_grew_mention_everyone);
+            }
+            default:
+                return context.getString(R.string.aspen_push_new_message);
+        }
+    }
+
     private static String nameOf(JSONObject user) {
         if (user == null) {
             return "";

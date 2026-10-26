@@ -29,8 +29,9 @@ Both resolvers run the cases in `spec/permission_vectors.json`. Change the three
   channels, and invites.
 - [Role colours](role-colours.md): a role's hue and showing it apart.
 - [Bans](bans.md): banning, lifting, and deleting recent messages.
-- [Everyone mention limit](everyone-mention-limit.md): taking Mention everyone from large
-  communities.
+- [Large communities](large-communities.md): what changes when a community grows past the
+  deployment's threshold: Mention everyone, its channels' default notifications, and the message
+  announcing both.
 - [Members](members.md): the member sample and member search.
 - [Access checks](access-checks.md): how reads, events, and calls apply permissions, and how the
   client follows changes.

@@ -4,8 +4,10 @@ use diesel::deserialize::FromSql;
 use diesel::pg::Pg;
 use diesel::serialize::{IsNull, Output, ToSql};
 use diesel::{AsExpression, FromSqlRow};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use utoipa::ToSchema;
 
 /// What a message is. Both poll kinds and echoes carry no `content`; the client renders the poll
 /// kinds from the poll record the message's `poll` field names, and an echo from its reply.
@@ -17,8 +19,8 @@ use std::io::Write;
     Eq,
     Deserialize,
     Serialize,
-    utoipa::ToSchema,
-    schemars::JsonSchema,
+    ToSchema,
+    JsonSchema,
     FromSqlRow,
     AsExpression,
 )]
@@ -50,6 +52,10 @@ pub enum MessageKind {
     /// The system message announcing that its `author` joined the community, posted in its
     /// default channel (see `app::default_channel`). It has no content of its own.
     MemberJoined,
+    /// The system message announcing that the community has become large, posted in its
+    /// default channel by the system account and tagging everyone (see `app::large_community`).
+    /// It has no content of its own; its `growth` says what changed.
+    CommunityGrew,
 }
 
 impl ToSql<aspen_schema::sql_types::MessageKind, Pg> for MessageKind {
@@ -64,6 +70,7 @@ impl ToSql<aspen_schema::sql_types::MessageKind, Pg> for MessageKind {
             MessageKind::Command => b"command",
             MessageKind::Warning => b"warning",
             MessageKind::MemberJoined => b"member_joined",
+            MessageKind::CommunityGrew => b"community_grew",
         })?;
         Ok(IsNull::No)
     }
@@ -83,6 +90,7 @@ impl FromSql<aspen_schema::sql_types::MessageKind, Pg> for MessageKind {
             b"missed_call" => Ok(MessageKind::MissedCall),
             b"warning" => Ok(MessageKind::Warning),
             b"member_joined" => Ok(MessageKind::MemberJoined),
+            b"community_grew" => Ok(MessageKind::CommunityGrew),
             _ => Err(format!(
                 "Unrecognized enum variant: {:?}",
                 String::from_utf8_lossy(bytes.as_bytes())
@@ -91,3 +99,31 @@ impl FromSql<aspen_schema::sql_types::MessageKind, Pg> for MessageKind {
         }
     }
 }
+
+/// What changed when a community became large, carried by its `CommunityGrew` message so each
+/// reader's client can say so in their own language.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    JsonSchema,
+    FromSqlRow,
+    AsExpression,
+)]
+#[diesel(sql_type = diesel::sql_types::Jsonb)]
+#[serde(rename_all = "camelCase")]
+pub struct CommunityGrowth {
+    /// How many members the community had when it crossed the deployment's threshold: the
+    /// threshold, or more when a join before could not make it large.
+    pub members: u32,
+    /// Whether Mention everyone was taken from the everyone role. It is not when the role
+    /// had already lost it.
+    pub mention_everyone_taken: bool,
+}
+
+crate::jsonb_sql_traits!(CommunityGrowth);

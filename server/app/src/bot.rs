@@ -782,7 +782,7 @@ pub async fn add_to_community(
         })
         .await?;
     if added.1 {
-        crate::everyone_limit::after_join(state, community).await;
+        crate::large_community::after_join(state, community).await;
     }
     Ok(added)
 }

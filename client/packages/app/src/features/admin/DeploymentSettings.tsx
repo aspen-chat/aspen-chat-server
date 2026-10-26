@@ -30,7 +30,7 @@ type Toggle =
   | "newsletterEnabled";
 type Count =
   | "botsMaxPerUser"
-  | "everyoneMentionLimit"
+  | "largeCommunityMembers"
   | "customEmojiLimit"
   | "uploadQuotaGib"
   | "evidenceRetentionDays"
@@ -189,9 +189,9 @@ function PoliciesForm({ initial }: { initial: DeploymentSettings }) {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {count("botsMaxPerUser", m.admin.botsMaxPerUser)}
         {count(
-          "everyoneMentionLimit",
-          m.admin.everyoneMentionLimit,
-          m.admin.everyoneMentionLimitHint,
+          "largeCommunityMembers",
+          m.admin.largeCommunityMembers,
+          m.admin.largeCommunityMembersHint,
         )}
         {count("customEmojiLimit", m.admin.customEmojiLimit)}
         {count("uploadQuotaGib", m.admin.uploadQuotaGib, m.admin.uploadQuotaGibHint)}

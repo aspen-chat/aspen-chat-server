@@ -323,7 +323,7 @@ pub async fn sign_in(
     )
     .await?;
     if let Some(community) = joined {
-        crate::everyone_limit::after_join(state, community).await;
+        crate::large_community::after_join(state, community).await;
     }
     let session = issue_session(state, &mut conn, user, claims.method.into(), true).await?;
     if claims.profile.icon != previous_icon {

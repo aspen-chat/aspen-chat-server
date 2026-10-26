@@ -1254,8 +1254,8 @@
     "botsEnabled": "People may make bots",
     "botsEnabledHint": "Bots already made keep working either way.",
     "botsMaxPerUser": "Bots per person",
-    "everyoneMentionLimit": "Members before Mention everyone is turned off",
-    "everyoneMentionLimitHint": "A community this large has Mention everyone taken from its everyone role, and its owner is told why. 0 never.",
+    "largeCommunityMembers": "Members before a community is large",
+    "largeCommunityMembersHint": "Once a community has this many members, its everyone role loses Mention everyone, its channels notify members only of tags unless they choose otherwise, and its default channel announces both. Smaller communities notify of every message. At 0 no community crosses it, and every community notifies only of tags.",
     "customEmojiLimit": "Custom emoji per community",
     "uploadQuotaGib": "GiB each person may upload a day",
     "uploadQuotaGibHint": "Files and pictures together, over any 24 hours. Past it, uploads wait until there is room. 0 sets no limit.",
@@ -1465,6 +1465,12 @@
   "send": "Send",
   "unknownUser": "Unknown user",
   "memberJoined": "{name} joined the community.",
+  "communityGrew": {
+    "members": "{community} now has {members, plural, one {# member} other {# members}}, which makes it a large community.",
+    "notifications": "Channels you haven't chosen notifications for now notify you only of messages that tag you.",
+    "mentionEveryone": "Members can no longer tag @everyone, unless the community's owner turns Mention everyone back on for the everyone role.",
+    "thisCommunity": "This community"
+  },
   "linkToMessage": "Link to this message",
   "attachmentUnavailable": "Attachment unavailable",
   "attachFile": "Attach a file",
@@ -1665,6 +1671,7 @@
   "notifications": {
     "titleInChannel": "{name} in #{channel} ({community})",
     "poll": "Posted a poll",
+    "pollClosed": "A poll has closed",
     "attachment": "Sent an attachment",
     "newMessage": "New message",
     "announced": "{name}: {body}",

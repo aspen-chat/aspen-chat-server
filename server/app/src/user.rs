@@ -445,7 +445,7 @@ pub async fn after_account_created(
     joined: Option<crate::CommunityId>,
 ) {
     if let Some(community) = joined {
-        crate::everyone_limit::after_join(state, community).await;
+        crate::large_community::after_join(state, community).await;
     }
     crate::email::wake(state).await;
 }

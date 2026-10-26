@@ -92,8 +92,8 @@ Why administration works as it does. The how is in the [Administration pages](in
 - **`federation_domain` never changes once pinned.** Other deployments pin this deployment's key at
   that name.
 - **`pin_domain` runs from `settings set` too.** So gates can open before any server has run.
-- **Lowered limits are not applied retroactively.** Bots owned, emoji held, and communities past the
-  everyone mention limit stay as they are. Turning bots off leaves existing bots working.
+- **Lowered limits are not applied retroactively.** Bots owned, emoji held, and communities already
+  large stay as they are. Turning bots off leaves existing bots working.
 - **A 4403 close makes the client ask for a second factor.** It then behaves as it would at sign-in.
 
 ## Registration invites

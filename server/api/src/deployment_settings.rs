@@ -177,9 +177,11 @@ pub struct DeploymentSettings {
     pub bots_enabled: bool,
     /// The most bots one person may own.
     pub bots_max_per_user: u32,
-    /// How many members a community gains before Mention everyone is taken from its everyone
-    /// role and its owner told why; 0 never.
-    pub everyone_mention_limit: u32,
+    /// How many members a community gains before it is large: its everyone role loses Mention
+    /// everyone, its channels notify of tags rather than every message unless members choose
+    /// otherwise, and its default channel announces both, tagging everyone. With 0 no
+    /// community crosses it, and every community's channels notify of tags.
+    pub large_community_members: u32,
     /// The most custom emoji one community may hold.
     pub custom_emoji_limit: u32,
     /// How many GiB one person may upload, attachments and pictures together, in any 24 hours;
@@ -228,7 +230,7 @@ impl DeploymentSettings {
             require_two_factor: settings.require_two_factor,
             bots_enabled: settings.bots_enabled,
             bots_max_per_user: settings.bots_max_per_user,
-            everyone_mention_limit: settings.everyone_mention_limit,
+            large_community_members: settings.large_community_members,
             custom_emoji_limit: settings.custom_emoji_limit,
             upload_quota_gib: settings.upload_quota_gib,
             mana_max_recharge: settings.mana_max_recharge,
@@ -255,7 +257,7 @@ pub struct DeploymentSettingsUpdateRequest {
     pub bots_enabled: Option<bool>,
     /// At most 2147483647, as are the other counts.
     pub bots_max_per_user: Option<u32>,
-    pub everyone_mention_limit: Option<u32>,
+    pub large_community_members: Option<u32>,
     pub custom_emoji_limit: Option<u32>,
     pub upload_quota_gib: Option<u32>,
     /// At least 1. Channels set above it recharge at it.
@@ -287,7 +289,7 @@ impl From<DeploymentSettingsUpdateRequest> for SettingsChange {
             require_two_factor: request.require_two_factor,
             bots_enabled: request.bots_enabled,
             bots_max_per_user: request.bots_max_per_user,
-            everyone_mention_limit: request.everyone_mention_limit,
+            large_community_members: request.large_community_members,
             custom_emoji_limit: request.custom_emoji_limit,
             upload_quota_gib: request.upload_quota_gib,
             mana_max_recharge: request.mana_max_recharge,

@@ -48,8 +48,10 @@ A join message:
 
 - is posted in the name of the one who joined, and is read by them already (`read_state::advance`);
 - counts toward the channel's unread state as any message does;
-- notifies no one, wakes no phone (`app::push`), and is left out of search and the activity feed, as
-  a poll's result and a call's record are;
+- notifies, wakes phones (`app::push`), and is in the activity feed as any message is, by each
+  member's level for the channel: by default in a small community, not in a large one (see
+  [Notifications](notifications.md));
+- is left out of search, as a poll's result and a call's record are;
 - cannot be edited (`app::message::update_message`); the client offers no thread or report on one,
   as on a call's record.
 

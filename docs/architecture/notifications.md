@@ -6,7 +6,7 @@ What each user is told of is theirs to choose, for a whole community, a category
 | ----------- | ---------------------------------------------------------------------------------------------------------------------- |
 | Logic       | `app::notification_setting`                                                                                            |
 | Table       | `notification_setting`: the user, exactly one of a community, a category, or a channel (each cascading), and a `level` |
-| Default     | `default_level`                                                                                                        |
+| Default     | `default_level`, by `Community.small`                                                                                  |
 | Event       | Custom `notificationSettingChanged`, on the user's own subject                                                         |
 | Sideload    | `include=notifications` on community reads and the DM list, as `included.notificationSettings`                         |
 | Client rule | `RecordStore.notifies`                                                                                                 |
@@ -26,13 +26,24 @@ that tags them would.
 ## Which setting applies
 
 1. A channel's own setting outranks its category's, which outranks its community's (`level_of`).
-2. Without any, a DM tells of every message and a community channel of tags (`default_level`).
+2. Without any, a DM tells of every message, and so does a small community's channel; a large
+   community's tells of tags (`default_level`; see
+   [Large communities](roles-and-permissions/large-communities.md)). Each community's record says
+   whether it is small (`Community.small`), so the apps follow the same default.
 3. A thread follows its parent.
 4. A category's setting may be made only for a category the user may learn of, and community reads
    leave out settings of categories they may no longer learn of.
 
 Every reply in a thread the user follows tells them whatever the level, though a mute of the parent
 still silences it (see [Threads and DMs](threads-and-dms/index.md)).
+
+## Which messages may tell
+
+Every kind of message may, by the rules above, but those that only record something told of already:
+a thread reply's echo, a call's record, and a bot command, whose bot's answer is what tells. A
+poll's result, a join, and a community growing large tell as any message does, each described by the
+apps in the reader's language since it has no text of its own (`describe` in the client, and the iOS
+and Android push code; see [Push](push.md)).
 
 Do not disturb outranks them all: while the user is in it, nothing tells them, and no phone is woken
 (see [Presence](event-routing/presence.md#choosing-a-status)). The activity feed still lists what

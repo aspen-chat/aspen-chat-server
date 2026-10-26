@@ -89,13 +89,17 @@ One task per API server (`app::push::spawn_dispatcher`) reads the event stream t
 JetStream consumer `aspen_push`, which they share, so each event is handled once. Each DM copy is
 deduplicated in Valkey.
 
-A new message wakes:
+A new message wakes, as far as each one's level for its channel asks (see
+[Notifications](notifications.md)):
 
 - the other people of its DM; or
+- the members of a small community, whose channels tell of every message by default; or
+- those whose setting asks for every message; or
 - those it tags (by name, a role, or everyone); or
 - those who follow the thread it is a reply in;
 
-provided they may view its channel. It never wakes:
+provided they may view its channel. An echo, a call's record, and a bot command wake no one. It
+never wakes:
 
 - its author;
 - anyone who blocked the author here;
@@ -109,7 +113,9 @@ provided they may view its channel. It never wakes:
 1. One query (`RECIPIENTS_SQL`) finds the candidates from indexed branches:
    - the members tagged by name;
    - the holders of tagged roles;
-   - every member, when everyone is tagged;
+   - every member, when everyone is tagged, or when the default level asks for every message (a
+     small community's, bounded by the threshold; see
+     [Large communities](roles-and-permissions/large-communities.md));
    - those whose setting for the channel, its category, or its community asks for every message;
    - a DM's people;
    - the thread's followers, and a DM's thread's only while they are still its people.

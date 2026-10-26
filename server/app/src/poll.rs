@@ -344,6 +344,7 @@ fn poll_message(poll: &Poll, kind: MessageKind, timestamp: DateTime<Utc>) -> Mes
         echo: None,
         reply_to: None,
         tags_replied: false,
+        growth: None,
     }
 }
 

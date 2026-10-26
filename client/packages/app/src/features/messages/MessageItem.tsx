@@ -41,6 +41,7 @@ import { MessageBody, SavedMark } from "@/features/messages/MessageBody";
 import { MessageAnnotations } from "@/features/plugins/Annotations";
 import { MessageEditor } from "@/features/messages/MessageEditor";
 import { CallNotice, MissedCallNotice } from "@/features/messages/CallNotice";
+import { CommunityGrewNotice } from "@/features/messages/CommunityGrewNotice";
 import { JoinNotice } from "@/features/messages/JoinNotice";
 import { PollClosedNotice } from "@/features/messages/PollClosedNotice";
 import {
@@ -295,6 +296,7 @@ export const MessageItem = memo(function MessageItem({
     message.kind !== "call" &&
     message.kind !== "missedCall" &&
     message.kind !== "memberJoined" &&
+    message.kind !== "communityGrew" &&
     (message.thread != null || permissions.has("startThreads"));
   // A thread not made yet opens empty, and its first reply makes it.
   const openThread = () => {
@@ -347,6 +349,13 @@ export const MessageItem = memo(function MessageItem({
     return (
       <NoticeRow id={id} arriving={arriving} highlighted={highlighted}>
         <JoinNotice member={message.author} />
+      </NoticeRow>
+    );
+  }
+  if (message.kind === "communityGrew") {
+    return (
+      <NoticeRow id={id} arriving={arriving} highlighted={highlighted}>
+        <CommunityGrewNotice communityId={home.community} growth={message.growth} />
       </NoticeRow>
     );
   }

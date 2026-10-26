@@ -1,5 +1,5 @@
 //! The deployment's own account, which sends people notices from the deployment itself, such as
-//! a community owner's when `app::everyone_limit` turns Mention everyone off, and the warnings
+//! a community owner's when `app::large_community` turns Mention everyone off, and the warnings
 //! its moderators give (`app::report`).
 //!
 //! It is one row of `user` with `system` set, made the first time a notice is sent, called what

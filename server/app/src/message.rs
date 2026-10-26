@@ -77,6 +77,8 @@ pub struct Message {
     pub reply_to: Option<MessageId>,
     /// Whether it was posted tagging the author of `reply_to`.
     pub tags_replied: bool,
+    /// For a `CommunityGrew`, what changed (`app::large_community`).
+    pub growth: Option<crate::large_community::CommunityGrowth>,
 }
 
 pub mod held;
@@ -106,6 +108,7 @@ pub fn record(
         command_bot: row.command_bot,
         linked_messages: row.linked_messages.0.clone(),
         warning: row.warning.clone(),
+        growth: row.growth,
         altered_by: row.altered_by.iter().flatten().cloned().collect(),
         card: row.card.clone(),
         echo: row.echo,
@@ -713,6 +716,7 @@ async fn post(
                     echo,
                     reply_to: reply.map(|reply| reply.to),
                     tags_replied: reply.is_some_and(|reply| reply.tag),
+                    growth: None,
                 };
                 diesel::insert_into(message::table)
                     .values(&message)
@@ -988,8 +992,8 @@ pub async fn update_message(
     }
     // Only text its author wrote is theirs to edit. An echo shows its reply's content; a
     // command was sent as it stands, and its bot has already answered it; the other kinds
-    // record what Aspen keeps (a poll, a call, a warning, a join) and have no text of their
-    // author's.
+    // record what Aspen keeps (a poll, a call, a warning, a join, a community growing) and have
+    // no text of their author's.
     match kind {
         MessageKind::Standard => {}
         MessageKind::ThreadEcho => return Err(crate::Error::Validation(t!("echoNotEditable"))),
@@ -999,7 +1003,8 @@ pub async fn update_message(
         | MessageKind::Call
         | MessageKind::MissedCall
         | MessageKind::Warning
-        | MessageKind::MemberJoined => {
+        | MessageKind::MemberJoined
+        | MessageKind::CommunityGrew => {
             return Err(crate::Error::Validation(t!("messageNotEditable")));
         }
     }

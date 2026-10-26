@@ -44,19 +44,19 @@ The profile is a display name and an icon.
 
 ## Policies
 
-| Setting                                                               | See                                                        |
-| --------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `registration_invite_required`                                        | [Registration invites](registration-invites.md)            |
-| `require_two_factor`                                                  | [Sign-in and security](../sign-in-and-security/index.md)   |
-| `bots_enabled`, `bots_max_per_user`                                   | [Bots](../bots/index.md)                                   |
-| `everyone_mention_limit`                                              | [Roles and permissions](../roles-and-permissions/index.md) |
-| `custom_emoji_limit`                                                  | [Custom emoji](../custom-emoji.md)                         |
-| `upload_quota_gib`                                                    | [Attachment previews](../attachment-previews/index.md)     |
-| `mana_max_recharge`, `mana_max`, `mana_attachment_cost`               | [Channel mana](../channel-mana/index.md#settings)          |
-| `evidence_retention_days`                                             | [Reports](../reports/evidence.md#purging-evidence)         |
-| `file_transfers`                                                      | [File transfers](../file-transfers.md)                     |
-| `email_required`, `email_verification_required`, `newsletter_enabled` | [Email](../email/index.md)                                 |
-| `event_stream_mib`, `voice_report_stream_mib`                         | [NATS memory](../nats-memory.md)                           |
+| Setting                                                               | See                                                                |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `registration_invite_required`                                        | [Registration invites](registration-invites.md)                    |
+| `require_two_factor`                                                  | [Sign-in and security](../sign-in-and-security/index.md)           |
+| `bots_enabled`, `bots_max_per_user`                                   | [Bots](../bots/index.md)                                           |
+| `large_community_members`                                             | [Large communities](../roles-and-permissions/large-communities.md) |
+| `custom_emoji_limit`                                                  | [Custom emoji](../custom-emoji.md)                                 |
+| `upload_quota_gib`                                                    | [Attachment previews](../attachment-previews/index.md)             |
+| `mana_max_recharge`, `mana_max`, `mana_attachment_cost`               | [Channel mana](../channel-mana/index.md#settings)                  |
+| `evidence_retention_days`                                             | [Reports](../reports/evidence.md#purging-evidence)                 |
+| `file_transfers`                                                      | [File transfers](../file-transfers.md)                             |
+| `email_required`, `email_verification_required`, `newsletter_enabled` | [Email](../email/index.md)                                         |
+| `event_stream_mib`, `voice_report_stream_mib`                         | [NATS memory](../nats-memory.md)                                   |
 
 The email settings turn on only where `[email]` is configured. `emailAvailable` in the policies and
 `email` in the profile say whether it is.
@@ -128,7 +128,7 @@ Whoever made the change brings what is open in line once it commits (`after_chan
 | An immigration gate or its shared list | Users of other deployments the gates no longer admit are signed out and taken out of their calls (`standing::shut_out`), as the standing check would                                                          |
 | `require_two_factor` turned on         | Each server's open event streams follow its copy. A stream whose account lacked a second factor when it identified closes with 4403 (`api::event_stream`), and the client asks for one as at sign-in          |
 | Bots turned off                        | Bots already made keep working                                                                                                                                                                                |
-| A lower limit                          | Not applied to what already exceeds it: bots owned, emoji held, or communities already past the everyone mention limit                                                                                        |
+| A lower limit                          | Not applied to what already exceeds it: bots owned, emoji held, or communities already large                                                                                                                  |
 | A stream's size                        | The stream is that size before the change answers. Made smaller than what it holds, its oldest go at once, and clients that needed them reload ([NATS memory](../nats-memory.md#what-a-smaller-stream-loses)) |
 | The gates, for CORS                    | CORS follows the gates as each request arrives                                                                                                                                                                |
 

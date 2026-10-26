@@ -94,6 +94,7 @@ async fn set(
             owner: None,
             default_channel: Some(channel),
             suppress_join_messages: None,
+            small: None,
         }),
     )
     .await
@@ -213,6 +214,7 @@ pub async fn announce_join(
         echo: None,
         reply_to: None,
         tags_replied: false,
+        growth: None,
     };
     diesel::insert_into(message::table)
         .values(&row)

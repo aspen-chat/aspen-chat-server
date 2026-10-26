@@ -2,5 +2,9 @@
 "notification.placeholder" = "New activity in Aspen";
 "notification.someone" = "Someone";
 "notification.poll" = "Posted a poll";
+"notification.pollClosed" = "A poll has closed";
+"notification.memberJoined" = "Joined the community";
+"notification.communityGrew" = "This community is now large. Channels you haven't chosen notifications for now notify you only of messages that tag you.";
+"notification.communityGrewMentionEveryone" = "Members can no longer tag @everyone, unless the community's owner turns Mention everyone back on.";
 "notification.message" = "Sent a message";
 "notification.attachment" = "Sent an attachment";

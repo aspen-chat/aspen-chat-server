@@ -589,6 +589,14 @@ export function useCommunityNotificationLevel(communityId: string): Notification
   return useTopic("notifications", (s) => s.communityNotificationLevel(communityId));
 }
 
+/**
+ * The level a community's channels take without any setting of the caller's: every message
+ * while the community is small, tags once it is large.
+ */
+export function useCommunityDefaultNotificationLevel(communityId: string): NotificationLevel {
+  return useTopic("notifications", (s) => s.communityDefaultNotificationLevel(communityId));
+}
+
 /** How many unread messages in a channel tag the caller; none shown in do not disturb. */
 export function useMentions(channelId: string): number {
   const hidden = useDoNotDisturb();

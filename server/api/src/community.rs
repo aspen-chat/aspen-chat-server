@@ -318,10 +318,10 @@ pub async fn create_community(
     SessionUser { user, .. }: SessionUser,
     Json(request): Json<CommunityCreateRequest>,
 ) -> ApiResult<Created<message_enum::Community>> {
-    let c = app::community::create_community(state, user.id, &request).await?;
+    let c = app::community::create_community(state.clone(), user.id, &request).await?;
     Ok(Created::new(
         format!("{API_PREFIX}/communities/{}", c.id.0),
-        message_enum::Community::from(c),
+        c.record(&state),
     ))
 }
 
@@ -349,10 +349,7 @@ pub async fn get_community(
 ) -> ApiResult<Json<CommunityRead>> {
     let c = app::community::read_community(&state, user.id, community).await?;
     let included = sideload_communities(&state, user.id, &[c.id], &query.include).await?;
-    Ok(Json(Sideloaded::new(
-        message_enum::Community::from(c),
-        included,
-    )))
+    Ok(Json(Sideloaded::new(c.record(&state), included)))
 }
 
 #[utoipa::path(
@@ -377,7 +374,7 @@ pub async fn update_community(
     Json(request): Json<CommunityUpdateRequest>,
 ) -> ApiResult<Json<message_enum::Community>> {
     let c = app::community::update_community(&state, user.id, community, request).await?;
-    Ok(Json(message_enum::Community::from(c)))
+    Ok(Json(c.record(&state)))
 }
 
 #[utoipa::path(

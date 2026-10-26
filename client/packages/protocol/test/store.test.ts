@@ -1985,6 +1985,42 @@ describe("RecordStore notifications", () => {
     expect(store.notificationLevel(dev.id).level).toBe("nothing");
   });
 
+  it("tells of every message in a small community, and of tags once it is large", () => {
+    const store = bootstrapped();
+    store.applyEvent({ serverEvent: "community", type: "update", id: aspen.id, small: true });
+    expect(store.notificationLevel(general.id)).toEqual({
+      level: "all",
+      own: null,
+      inherited: "all",
+    });
+    expect(store.communityDefaultNotificationLevel(aspen.id)).toBe("all");
+    expect(store.categoryNotificationLevel(work.id, aspen.id).inherited).toBe("all");
+    store.replaceNotificationSettings([{ community: aspen.id, channel: null, level: "tags" }]);
+    expect(store.notificationLevel(general.id).level).toBe("tags");
+    store.replaceNotificationSettings([]);
+    store.applyEvent({ serverEvent: "community", type: "update", id: aspen.id, small: false });
+    expect(store.notificationLevel(general.id).level).toBe("tags");
+    expect(store.communityDefaultNotificationLevel(aspen.id)).toBe("tags");
+  });
+
+  it("notifies of a poll's result, a join, and a community growing as of any message", () => {
+    const store = bootstrapped();
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: id(1000), lastMessage: null, mentions: 0 }],
+    });
+    store.replaceNotificationSettings([{ community: aspen.id, channel: null, level: "all" }]);
+    expect(store.notifies({ ...message(2, general.id, bob.id), kind: "pollClosed" })).toBe(true);
+    expect(store.notifies({ ...message(3, general.id, bob.id), kind: "memberJoined" })).toBe(true);
+    expect(store.notifies({ ...message(4, general.id, bob.id), kind: "threadEcho" })).toBe(false);
+    store.replaceNotificationSettings([{ community: aspen.id, channel: null, level: "tags" }]);
+    const grew = {
+      ...message(5, general.id, bob.id),
+      kind: "communityGrew" as const,
+      mentions: { users: [], roles: [], everyone: true },
+    };
+    expect(store.notifies(grew)).toBe(true);
+  });
+
   it("notifies of others' unread messages as the level asks, never muted or blocked ones", () => {
     const store = bootstrapped();
     store.ingest({

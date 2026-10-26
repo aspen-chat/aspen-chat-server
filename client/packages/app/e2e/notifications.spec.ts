@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { bob, me, roadmap, signInToWorld, type Publish } from "./world";
+import { bob, community, me, roadmap, signInToWorld, type Publish } from "./world";
 
 /**
  * Notification settings and what they bring, against the stubbed world: a channel's menu sets
@@ -51,7 +51,12 @@ test.beforeEach(async ({ page }) => {
 let sent = 900;
 
 /** A new message by Bob in #roadmap, as the stream announces it. */
-function post(publish: Publish, content: string, tags: string[] = []) {
+function post(
+  publish: Publish,
+  content: string,
+  tags: string[] = [],
+  record: Record<string, unknown> = {},
+) {
   sent += 1;
   publish({
     serverEvent: "message",
@@ -71,6 +76,7 @@ function post(publish: Publish, content: string, tags: string[] = []) {
     echoOf: null,
     attachments: [],
     mentions: { users: tags, roles: [], everyone: false },
+    ...record,
   });
 }
 
@@ -153,4 +159,50 @@ test("a channel's menu sets what it tells of", async ({ page }) => {
   post(publish, `<@${me}> hello?`, [me]);
   await page.waitForTimeout(500);
   expect(await page.evaluate(() => window.shownNotifications.length)).toBe(1);
+});
+
+test("a small community tells of every message, until it grows large and says so", async ({
+  page,
+}) => {
+  const publish = await signInToWorld(page);
+  await turnOnSystemNotifications(page);
+  publish({ serverEvent: "community", type: "update", id: community, small: true });
+  await page.getByText("roadmap", { exact: true }).click({ button: "right" });
+  const options = page.getByRole("menu", { name: "Options for roadmap" });
+  await options.getByRole("menuitem", { name: /^Notifications\s*All messages/ }).click();
+  const menu = page.getByRole("menu", { name: /^Notifications/ });
+  await expect(menu.getByRole("menuitemradio", { name: "Default (All messages)" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  post(publish, "Just thinking out loud");
+  await expect.poll(() => page.evaluate(() => window.shownNotifications.length)).toBe(1);
+
+  publish({ serverEvent: "community", type: "update", id: community, small: false });
+  post(publish, "", [], {
+    kind: "communityGrew",
+    growth: { members: 200, mentionEveryoneTaken: true },
+    mentions: { users: [], roles: [], everyone: true },
+  });
+  await expect.poll(() => page.evaluate(() => window.shownNotifications.length)).toBe(2);
+  const told = await page.evaluate(() => window.shownNotifications[1]?.body);
+  expect(told).toContain("now has 200 members");
+  expect(told).toContain("can no longer tag @everyone");
+  post(publish, "Nobody tagged here");
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => window.shownNotifications.length)).toBe(2);
+  // Shown in the channel as a notice, in the reader's words.
+  await page.getByText("roadmap", { exact: true }).click();
+  post(publish, "", [], {
+    kind: "communityGrew",
+    growth: { members: 200, mentionEveryoneTaken: false },
+    mentions: { users: [], roles: [], everyone: true },
+  });
+  const notice = page.locator("article").filter({ hasText: "large community" });
+  await expect(notice).toContainText(
+    "Family now has 200 members, which makes it a large community.",
+  );
+  await expect(notice).not.toContainText("@everyone");
 });
