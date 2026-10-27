@@ -1284,12 +1284,18 @@ both pass `spec/pseudo_locale_vectors.json`; change the three together.
 
 ### File layout
 
-- `server/locales/en.yml` — English translations (the default, and the only catalogue besides the
-  pseudo-locales made from it). Additional locale files (e.g., `fr.yml`, `de.yml`) go alongside it
-  and are negotiated with no further change; the client needs a catalogue of its own for each
+- `server/locales/en.yml` — English, the default and the catalogue every translation is made from
+  (along with the pseudo-locales). `es.yml` is Latin American Spanish, in beta: informal tú,
+  infinitives on buttons, and the region's words (video, computadora, configuración, reportar,
+  banear). Additional locale files (`fr.yml`, `de.yml`) go alongside them and are negotiated with no
+  further change; the client needs a catalogue of its own for each
   (`client/packages/app/src/i18n/locales/<language>.json`, beside its `en.json`, named in
-  `LANGUAGES` and `TRANSLATIONS` in `client/packages/app/src/i18n/locales.ts`). The client's strings
-  are ICU MessageFormat, with plurals; see `client/AGENTS.md`.
+  `LANGUAGES` and `TRANSLATIONS` in `client/packages/app/src/i18n/locales.ts`, in `BETA` while it is
+  one, and in `NATIVE_NAMES` when its name is not what `Intl.DisplayNames` gives its tag). The
+  client's strings are ICU MessageFormat, with plurals; see `client/AGENTS.md`. A string added to
+  either English catalogue is added to each translation too, or left out of it: a translation's
+  tests (`aspen_locale`'s and `locales.test.ts`) refuse a key English lacks or placeholders that
+  differ from English's, and a key a translation lacks reads in English.
 
 ## Git Policy
 

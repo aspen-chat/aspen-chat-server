@@ -1,3 +1,4 @@
+import es from "./locales/es.json";
 import { en, register, type Messages, type StringTree } from "./messages";
 import { accented, mirrored, pseudoCatalogue } from "./pseudo";
 
@@ -5,7 +6,7 @@ import { accented, mirrored, pseudoCatalogue } from "./pseudo";
  * The catalogues the app has, by BCP 47 tag: English, the two pseudo-locales made from it, and
  * each translation in `TRANSLATIONS`.
  */
-export const LANGUAGES = ["en", "en-XA", "ar-XB"] as const;
+export const LANGUAGES = ["en", "es", "en-XA", "ar-XB"] as const;
 export type Language = (typeof LANGUAGES)[number];
 
 /**
@@ -13,7 +14,23 @@ export type Language = (typeof LANGUAGES)[number];
  * as a translation platform writes it, any of English's strings in English's places. One it
  * lacks reads in English.
  */
-const TRANSLATIONS: Readonly<Partial<Record<Language, StringTree>>> = {};
+const TRANSLATIONS: Readonly<Partial<Record<Language, StringTree>>> = { es };
+
+/**
+ * Translations still in beta: offered, named as such in the language list, and shown with a note
+ * saying where to report mistakes. A translation leaves this set once its speakers have reviewed
+ * it in use.
+ */
+export const BETA: ReadonlySet<Language> = new Set<Language>(["es"]);
+
+/**
+ * A translation's name in itself where it differs from what `Intl.DisplayNames` gives for its
+ * tag: a catalogue written in one region's variety says so, since speakers of another look for
+ * their own.
+ */
+export const NATIVE_NAMES: Readonly<Partial<Record<Language, string>>> = {
+  es: "Español (Latinoamérica)",
+};
 
 /** The language choice that follows the platform's languages. */
 export const AUTOMATIC = "automatic";

@@ -298,4 +298,80 @@ mod tests {
             .block_on(scope(ACCENTED, async { current() }));
         assert_eq!(inside, ACCENTED);
     }
+
+    /// Each catalogue in `locales/`, by locale, as its `key: "text"` lines: the format
+    /// `rust_i18n` reads them in, with every key at the top level.
+    fn catalogues() -> Vec<(String, Vec<(String, String)>)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../locales");
+        let mut catalogues = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let Some(locale) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let text = std::fs::read_to_string(&path).unwrap();
+            let strings = text
+                .lines()
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|line| {
+                    let (key, value) = line.split_once(": ").unwrap_or_else(|| {
+                        panic!("{locale}.yml: `{line}` is not a `key: \"text\"` line")
+                    });
+                    (key.to_owned(), value.to_owned())
+                })
+                .collect();
+            catalogues.push((locale.to_owned(), strings));
+        }
+        catalogues
+    }
+
+    /// The `%{name}` placeholders of a template, in order.
+    fn placeholders(template: &str) -> Vec<&str> {
+        pieces(template)
+            .into_iter()
+            .filter_map(|piece| match piece {
+                Piece::Placeholder(placeholder) => Some(placeholder),
+                Piece::Text(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_translation_has_only_englishs_keys_with_englishs_placeholders() {
+        let catalogues = catalogues();
+        let english: HashMap<&str, &str> = catalogues
+            .iter()
+            .find(|(locale, _)| locale == DEFAULT)
+            .expect("en.yml")
+            .1
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        for (locale, strings) in &catalogues {
+            if locale == DEFAULT {
+                continue;
+            }
+            assert!(
+                available().contains(&locale.as_str()),
+                "{locale}.yml is not among the locales the server speaks"
+            );
+            for (key, value) in strings {
+                let source = english
+                    .get(key.as_str())
+                    .unwrap_or_else(|| panic!("{locale}.yml has `{key}`, which en.yml lacks"));
+                assert!(
+                    key == "_version" || value.starts_with('"'),
+                    "{locale}.yml: `{key}` is not double-quoted"
+                );
+                let mut expected = placeholders(source);
+                let mut found = placeholders(value);
+                expected.sort_unstable();
+                found.sort_unstable();
+                assert_eq!(
+                    found, expected,
+                    "{locale}.yml: `{key}` names placeholders other than en.yml's"
+                );
+            }
+        }
+    }
 }

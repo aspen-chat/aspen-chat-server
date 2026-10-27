@@ -1,6 +1,7 @@
 import { LANGUAGE } from "@aspen/protocol";
 import { CaretDownIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
+import build from "virtual:build-info";
 import {
   Button,
   Label,
@@ -17,20 +18,32 @@ import {
   selectButtonClass,
   selectPopoverClass,
 } from "@/features/invites/dialog";
+import { linkButtonClass } from "@/features/auth/styles";
 import { useLanguageSetting, useMessages } from "@/i18n/context";
-import { AUTOMATIC, LANGUAGES, type Language } from "@/i18n/locales";
+import { formatNodes } from "@/i18n/formatNodes";
+import { AUTOMATIC, BETA, LANGUAGES, NATIVE_NAMES, type Language } from "@/i18n/locales";
 import { format, type Messages } from "@/i18n/messages";
 
 /** A language's name in itself, as its speakers would look for it. */
-function nativeName(language: Language, m: Messages): string {
+function bareName(language: Language, m: Messages): string {
   switch (language) {
     case "en-XA":
       return m.settings.pseudoAccented;
     case "ar-XB":
       return m.settings.pseudoMirrored;
     default:
-      return new Intl.DisplayNames([language], { type: "language" }).of(language) ?? language;
+      return (
+        NATIVE_NAMES[language] ??
+        new Intl.DisplayNames([language], { type: "language" }).of(language) ??
+        language
+      );
   }
+}
+
+/** A language's name as the list shows it: `bareName`, marked when the translation is in beta. */
+function nativeName(language: Language, m: Messages): string {
+  const name = bareName(language, m);
+  return BETA.has(language) ? format(m.settings.languageBeta, { language: name }) : name;
 }
 
 /** The language the app shows, kept with the account. */
@@ -79,6 +92,17 @@ export function LanguageSection() {
         </Popover>
       </Select>
       <p className="text-xs text-ink-muted">{m.settings.languageHint}</p>
+      {BETA.has(resolved.language) && (
+        <p className="text-xs text-ink-muted">
+          {formatNodes(m.settings.languageBetaHint, {
+            link: (
+              <a href={build.issues} target="_blank" rel="noreferrer" className={linkButtonClass}>
+                {m.settings.languageBetaLink}
+              </a>
+            ),
+          })}
+        </p>
+      )}
     </section>
   );
 }

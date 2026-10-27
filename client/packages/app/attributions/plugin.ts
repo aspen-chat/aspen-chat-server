@@ -102,6 +102,7 @@ function buildInfo(): BuildInfo {
     modified,
     // A build with changes of its own has no published source to point at but the project's.
     source: commit === null || modified ? repository : `${repository}/tree/${commit}`,
+    issues: `${repository}/issues`,
   };
 }
 

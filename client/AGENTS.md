@@ -433,15 +433,18 @@ same commit, as with comments.
   localized and is shown as-is. The language shown (`src/i18n/locales.ts`, `I18nProvider`) is the
   account preference `LANGUAGE`, which Settings sets and `FollowLanguagePreference` applies once the
   account's preferences are read, or `automatic`, which follows the browser's languages; this
-  install remembers the last one for the sign-in screen. It picks the catalogue (English, or the
-  pseudo-locales `en-XA` and `ar-XB` made from it by `src/i18n/pseudo.ts`), React Aria's locale, the
-  document's `lang` and `dir`, and the languages every `AspenClient` request and event stream asks
-  servers to write in (`setPreferredLanguages`). Dates and numbers are formatted in that locale
-  through `useDateFormat` and `useNumberFormat` (`src/i18n/format.ts`) and the dashboard's
-  `useFigures`, never `Intl` with the browser's default. Layout is written for both directions:
-  logical utilities (`ms-`, `pe-`, `start-`, `border-s`, `text-start`), never `ml-`, `pr-`, `left-`,
-  `border-l`, or `text-left`, and an icon that points somewhere (a back arrow, a next caret) mirrors
-  with `rtl:-scale-x-100`; a chart of time keeps `dir="ltr"`.
+  install remembers the last one for the sign-in screen. It picks the catalogue (English, a
+  translation named in `LANGUAGES`, or the pseudo-locales `en-XA` and `ar-XB` made from English by
+  `src/i18n/pseudo.ts`), React Aria's locale, the document's `lang` and `dir`, and the languages
+  every `AspenClient` request and event stream asks servers to write in (`setPreferredLanguages`).
+  Dates and numbers are formatted in that locale through `useDateFormat` and `useNumberFormat`
+  (`src/i18n/format.ts`) and the dashboard's `useFigures`, never `Intl` with the browser's default.
+  The language list (`LanguageSection`) names each catalogue in itself, from `NATIVE_NAMES` or
+  `Intl.DisplayNames`, marks the ones `BETA` holds, and while one of those is shown links to the
+  project's issue tracker (`issues` in `virtual:build-info`) for mistakes. Layout is written for
+  both directions: logical utilities (`ms-`, `pe-`, `start-`, `border-s`, `text-start`), never
+  `ml-`, `pr-`, `left-`, `border-l`, or `text-left`, and an icon that points somewhere (a back
+  arrow, a next caret) mirrors with `rtl:-scale-x-100`; a chart of time keeps `dir="ltr"`.
 - Three builds of the same code: `pnpm build` (web, served from a site root, real URL paths),
   `pnpm build:shell` (`--base ./`, used by the mobile package, which loads the bundle from an
   app-local origin and routes after a `#`), and `pnpm build:desktop` (the same for the desktop

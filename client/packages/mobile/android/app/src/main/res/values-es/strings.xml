@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="aspen_push_channel_name">Mensajes</string>
+    <string name="aspen_push_new_message">Mensaje nuevo</string>
+    <string name="aspen_push_poll">Publicó una encuesta</string>
+    <string name="aspen_push_poll_closed">Una encuesta se cerró</string>
+    <string name="aspen_push_member_joined">Se unió a la comunidad</string>
+    <string name="aspen_push_community_grew">Esta comunidad ahora es grande. Los canales en los que no elegiste notificaciones ahora solo te avisan de los mensajes que te mencionan.</string>
+    <string name="aspen_push_community_grew_mention_everyone">Los miembros ya no pueden mencionar a @everyone, a menos que el propietario de la comunidad vuelva a activar Mencionar a todos.</string>
+</resources>

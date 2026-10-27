@@ -68,4 +68,6 @@ export interface BuildInfo {
    * commit it was built from when that is known and unchanged.
    */
   readonly source: string;
+  /** The project's issue tracker, where a mistake in the app or a translation is reported. */
+  readonly issues: string;
 }
