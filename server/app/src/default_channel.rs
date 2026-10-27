@@ -196,6 +196,7 @@ pub async fn announce_join(
         id: MessageId::new(),
         channel: MaybeLoaded::from_id(channel),
         content: String::new(),
+        search_text: None,
         author: MaybeLoaded::from_id(user),
         timestamp: Utc::now(),
         deleted_at: None,

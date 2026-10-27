@@ -582,6 +582,7 @@ async fn insert_messages(
                     message::author.eq(m.author),
                     message::channel.eq(m.channel),
                     message::content.eq(&m.content),
+                    message::search_text.eq(crate::search::search_text(&m.content)),
                     message::timestamp.eq(m.at),
                     message::kind.eq(m.kind),
                     message::poll.eq(m.poll),

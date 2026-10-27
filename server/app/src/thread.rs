@@ -481,6 +481,7 @@ pub async fn echo(
         id,
         channel: MaybeLoaded::from_id(parent),
         content: String::new(),
+        search_text: None,
         author: MaybeLoaded::from_id(*reply.author.id()),
         timestamp: Utc::now(),
         deleted_at: None,

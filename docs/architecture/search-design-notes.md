@@ -2,6 +2,30 @@
 
 Why [Search](search.md) works as it does.
 
+## Words of languages written without spaces
+
+- PostgreSQL's parser takes a run of letters for one word, so a sentence of Chinese, Japanese, or
+  Thai is one word to it, and no word of the sentence can be found. Segmenting the text searched for
+  alone would not help: the index holds the sentence as one word, which none of the query's words
+  equals.
+- So the words are found as a message is written, in Rust (`aspen_search_text`), and kept in a
+  column of its own, `search_text`, which the index is over. PostgreSQL has no segmenter of its own
+  for these languages without an extension, which every operator would have to install.
+- The column is null where the segmenter found no two words to part, which it does for nearly every
+  message in a script that writes spaces: a null costs nothing to keep, where a copy of the content
+  would double what the table holds of text. The index expression is
+  `COALESCE(search_text, content)`, and every statement writes it out as the index does.
+- Only spaces are added, and only between two segments that are both words (letters or numbers).
+  Punctuation, URLs, and the query's operators (`"a phrase"`, `-word`) stay as written, so
+  PostgreSQL's own parser reads them as it did.
+- The text searched for goes through the same function as the messages did: the segmenter's
+  dictionaries decide where a word ends, and both sides must agree. For the same reason
+  `aspen-migrate`, whose migration found the words of every message written before the column
+  existed, uses the crate at the same version as the server.
+- That migration reads every message in one transaction, in batches, and rebuilds the index once
+  they are written: the rebuild reads every message anyway, and a column filled later by a job would
+  leave the messages it had not reached found only by the sentence.
+
 ## Why not one statement
 
 - PostgreSQL's full-text index (GIN) returns matches in no order. "The newest 25 matches" as one

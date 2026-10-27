@@ -18,6 +18,7 @@ flowchart LR
     subgraph beneath["Beneath app: needs nothing of it"]
         database["aspen_database<br/>PostgreSQL over TLS, the pool"]
         previews["aspen_previews<br/>pictures and posters"]
+        search_text["aspen_search_text<br/>the words a message is searched by"]
         plugin_rt["aspen_plugin_runtime<br/>wasmtime, call limits"]
         link_preview["aspen_link_preview"]
         outbound["aspen_outbound<br/>requests to other hosts"]
@@ -37,7 +38,7 @@ flowchart LR
 
     bin --> api --> app
     bin --> app
-    app --> database & previews & plugin_rt & link_preview & webpush & fed_core & email_tpl
+    app --> database & previews & search_text & plugin_rt & link_preview & webpush & fed_core & email_tpl
     link_preview --> outbound
     plugin_rt & fed_core & link_preview --> wire
     api & app --> wire & locale
@@ -75,6 +76,7 @@ flowchart TB
 
     app["aspen_app<br/>(and everything beneath it)"]
     database["aspen_database"]
+    search_text["aspen_search_text"]
     voice_protocol["voice_protocol<br/>join tokens, control, signalling"]
     limits["aspen_limits<br/>limit format, GCRA, trusted proxies"]
     metrics["aspen_metrics<br/>Prometheus exporter, jemalloc stats"]
@@ -86,7 +88,7 @@ flowchart TB
     chat --> app & voice_protocol & limits & metrics & sockets & bench_protocol
     app --> database & voice_protocol & tls & config_values & bench_protocol
     voice_server --> voice_protocol & limits & metrics & sockets & tls & config_values
-    migrate --> database
+    migrate --> database & search_text
     bench --> voice_protocol & limits & metrics & bench_protocol
     voice_protocol --> limits
     database --> metrics
@@ -95,8 +97,10 @@ flowchart TB
 - `voice_protocol` is the whole contract between the two servers: the join token the API server
   signs and the voice server checks, the reports and commands they exchange over NATS, and the
   signalling frames clients exchange with the voice server.
-- `aspen-migrate` needs only the database connection; its migrations are its own
-  (`migrate/src/migrations/`), and `aspen_schema` is regenerated from the database they make.
+- `aspen-migrate` needs the database connection, and `aspen_search_text` for the migration that
+  found the words of every message written before `search_text` existed, at the version the server
+  finds them with; its migrations are its own (`migrate/src/migrations/`), and `aspen_schema` is
+  regenerated from the database they make.
 - `aspen-bench` drives a deployment through its public API and the voice servers, and reads both
   servers' metrics by the names `aspen_metrics` gives them. The population it plans is written into
   the database by `aspen-chat-server bench seed`; `aspen_bench_protocol` is the plan and the

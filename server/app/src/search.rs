@@ -4,8 +4,12 @@
 //! Words are matched by PostgreSQL full-text search in the `simple` configuration, which
 //! lowercases every word and does no more, so every language is searched alike; the query takes
 //! the syntax web search engines use (`websearch_to_tsquery`): words all of which must appear,
-//! `"a phrase"`, `or`, and `-word` to leave one out. The index `message_search` is on the very
-//! expression written here.
+//! `"a phrase"`, `or`, and `-word` to leave one out. PostgreSQL takes a run of letters for one
+//! word, so a message in a language written without spaces between words (Chinese, Japanese,
+//! Thai) is searched by its `search_text`, its content with a space between every two words
+//! written without one ([`search_text`], computed as it is written), and the query's text goes
+//! through the same function. The index `message_search` is on the very expression written
+//! here.
 //!
 //! What may be searched is what the user may read: the channels they may view in the
 //! communities they belong to, the DMs they are in, and the threads of both. Messages by anyone
@@ -33,6 +37,7 @@ use crate::t;
 use crate::visibility::Visibility;
 use crate::{ChannelId, CommunityId, MessageId, UserId};
 use aspen_schema::{community_user, dm_recipient, message};
+pub use aspen_search_text::search_text;
 use diesel::dsl::exists;
 use diesel::pg::Pg;
 use diesel::prelude::*;
@@ -209,7 +214,8 @@ const PASSES: &str = r#"
         JOIN attachment a ON a.id = held.attachment_id
         WHERE held.message_id = m.id AND a.mime_type LIKE 'image/%'
     ))
-    AND ($6 IS NULL OR to_tsvector('simple', m.content) @@ websearch_to_tsquery('simple', $6))
+    AND ($6 IS NULL OR to_tsvector('simple', COALESCE(m.search_text, m.content))
+        @@ websearch_to_tsquery('simple', $6))
     AND (SELECT gone.deleted_at FROM channel gone WHERE gone.id = m.channel) IS NULL
 "#;
 
@@ -321,7 +327,8 @@ fn probe_sql() -> String {
         r#"
         SELECT m.id FROM message m
         WHERE m.deleted_at IS NULL AND m.home_channel = ANY($2)
-          AND to_tsvector('simple', m.content) @@ websearch_to_tsquery('simple', $6)
+          AND to_tsvector('simple', COALESCE(m.search_text, m.content))
+              @@ websearch_to_tsquery('simple', $6)
         LIMIT {}
         "#,
         PROBE_CAP + 1
@@ -532,6 +539,10 @@ pub async fn search_messages(
             max = MAX_TEXT_CHARS
         )));
     }
+    // The words of the text as the messages' were found, so both sides agree on where a word
+    // of a language written without spaces ends.
+    let text = text.map(|text| search_text(text).unwrap_or_else(|| text.to_owned()));
+    let text = text.as_deref();
     let started = Instant::now();
     let Readable { places, in_thread } = readable_channels(state, caller, search.scope).await?;
     if places.is_empty() {
@@ -936,12 +947,17 @@ mod tests {
             (5, ANN, GONE_THREAD, "apples in a deleted thread"),
             (6, ANN, ELSEWHERE, "apples somewhere not searched"),
             (7, BEN, CHANNEL, "apples long ago"),
+            (8, BEN, CHANNEL, "我喜欢猫和狗"),
         ];
         let rows: String = messages
             .iter()
             .map(|(minutes, author, channel, text)| {
+                let search_text = match search_text(text) {
+                    Some(words) => format!("'{words}'"),
+                    None => "NULL".to_owned(),
+                };
                 format!(
-                    "('{}', '{author}', '{channel}', '{text}', now())",
+                    "('{}', '{author}', '{channel}', '{text}', {search_text}, now())",
                     said(*minutes)
                 )
             })
@@ -957,7 +973,8 @@ mod tests {
                  VALUES ('{THREAD}', 't', 'thread', 0, '{CHANNEL}', NULL),
                         ('{GONE_THREAD}', 'g', 'thread', 0, '{CHANNEL}', now());
              INSERT INTO user_block (blocker, blocked) VALUES ('{READER}', '{BLOCKED}');
-             INSERT INTO message (id, author, channel, content, "timestamp") VALUES {rows};
+             INSERT INTO message (id, author, channel, content, search_text, "timestamp")
+                 VALUES {rows};
              INSERT INTO mention (message, channel, target_user)
                  VALUES ('{tagged}', '{CHANNEL}', '{READER}');"#,
             tagged = said(7),
@@ -995,7 +1012,7 @@ mod tests {
         assert_eq!(read.found, apples);
         // Everything said in the place and its threads, the deleted thread's too: the window
         // counts what it read, not what passed.
-        assert_eq!(read.examined, 6);
+        assert_eq!(read.examined, 7);
 
         let by_author = sought(Some("apples"), Some(BEN), None);
         assert_eq!(by_author.source(), Source::Author);
@@ -1004,7 +1021,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(read.found, [said(7)]);
-        assert_eq!(read.examined, 2);
+        assert_eq!(read.examined, 3);
 
         let by_tag = sought(None, None, Some(READER));
         assert_eq!(by_tag.source(), Source::Tagged);
@@ -1047,6 +1064,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(read.unwrap().found, apples);
+
+        // A word of a language written without spaces between words is found within a
+        // sentence, as an English word is: the message was stored with its words found, and
+        // the text searched for goes through the same function (`search_messages`).
+        let a_word_of_chinese = sought(Some("猫"), None, None);
+        let read = step(&mut conn, &a_word_of_chinese, &whole, Uuid::nil(), None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.found, [said(8)]);
+        assert_eq!(
+            probe(&mut conn, &a_word_of_chinese).await.unwrap(),
+            [said(8)]
+        );
 
         // A thread is searched by the channel its replies are in, each way a window is read.
         let thread = [id(THREAD)];

@@ -327,6 +327,7 @@ fn poll_message(poll: &Poll, kind: MessageKind, timestamp: DateTime<Utc>) -> Mes
         id: MessageId::new(),
         channel: MaybeLoaded::from_id(poll.channel),
         content: String::new(),
+        search_text: None,
         author: MaybeLoaded::from_id(poll.created_by),
         timestamp,
         deleted_at: None,

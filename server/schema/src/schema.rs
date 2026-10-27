@@ -504,6 +504,7 @@ diesel::table! {
         reply_to -> Nullable<Uuid>,
         tags_replied -> Bool,
         growth -> Nullable<Jsonb>,
+        search_text -> Nullable<Text>,
     }
 }
 

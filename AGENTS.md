@@ -40,6 +40,9 @@ explicit direction.
   compact JWS with EdDSA, join-token keys, Web Push's ECDH, HKDF, AES-GCM, and VAPID signatures)
 - **Email:** `lettre` over SMTP, written from `askama` templates (`server/templates/email/`), with
   `chrono-tz` for each digest's time zone; see Email
+- **Search:** PostgreSQL full-text search, with `icu_segmenter` (ICU4X, its data compiled in)
+  finding the words of text written without spaces between them, Chinese, Japanese, and Thai among
+  them, as a message is written (`server/search_text/`); see Search
 - **Attachment previews:** `image` (decoders written in Rust), `fast_image_resize`, `moxcms` (colour
   profiles), and `webp` (libwebp, built from source) for pictures, and the operator's `ffmpeg` and
   `ffprobe`, run as processes of their own, for videos' posters; see Attachment previews
@@ -755,6 +758,9 @@ wherever it lives:
   (`app::locale`).
 - `aspen_previews` (`server/previews/`): decoding, resizing, and encoding attachments' previews, and
   videos' posters.
+- `aspen_search_text` (`server/search_text/`, `app::search::search_text`): what a message is
+  searched by, its content with a space between every two words written without one, which
+  `aspen-migrate` uses too.
 - `aspen_plugin_runtime` (`server/plugin_runtime/`): the bindings `spec/plugin.wit` generates, the
   engine and its epoch, and a call's limits.
 - `aspen_database` (`server/database/`, `app::database`): connecting to PostgreSQL as `database_url`
