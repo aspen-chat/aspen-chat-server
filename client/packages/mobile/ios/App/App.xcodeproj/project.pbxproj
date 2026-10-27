@@ -28,6 +28,7 @@
 		A5E000000000000000000126 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000104 /* NotificationService.swift */; };
 		A5E000000000000000000127 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000108 /* Localizable.strings */; };
 		A5E000000000000000000128 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000109 /* Localizable.strings */; };
+		A5E000000000000000000176 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000175 /* InfoPlist.strings */; };
 		A5E000000000000000000129 /* AspenNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000110 /* AspenNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -72,8 +73,11 @@
 		A5E000000000000000000105 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A5E000000000000000000106 /* AspenNotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AspenNotificationService.entitlements; sourceTree = "<group>"; };
 		A5E000000000000000000107 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
-		A5E000000000000000000108 /* Localizable.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; path = Localizable.strings; sourceTree = "<group>"; };
-		A5E000000000000000000109 /* Localizable.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; path = Localizable.strings; sourceTree = "<group>"; };
+		A5E000000000000000000170 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A5E000000000000000000171 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A5E000000000000000000172 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A5E000000000000000000173 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A5E000000000000000000174 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A5E000000000000000000110 /* AspenNotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AspenNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -137,6 +141,7 @@
 				A5E000000000000000000103 /* AspenPushPlugin.swift */,
 				A5E000000000000000000107 /* App.entitlements */,
 				A5E000000000000000000108 /* Localizable.strings */,
+				A5E000000000000000000175 /* InfoPlist.strings */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -261,6 +266,7 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				es,
 				Base,
 			);
 			mainGroup = 504EC2FB1FED79650016851F;
@@ -304,6 +310,7 @@
 				504EC30D1FED79650016851F /* Main.storyboard in Resources */,
 				2FAD9763203C412B000D30F8 /* config.xml in Resources */,
 				A5E000000000000000000127 /* Localizable.strings in Resources */,
+				A5E000000000000000000176 /* InfoPlist.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -388,6 +395,32 @@
 				504EC3111FED79650016851F /* Base */,
 			);
 			name = LaunchScreen.storyboard;
+			sourceTree = "<group>";
+		};
+		A5E000000000000000000108 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A5E000000000000000000170 /* en */,
+				A5E000000000000000000171 /* es */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+		A5E000000000000000000109 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A5E000000000000000000172 /* en */,
+				A5E000000000000000000173 /* es */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+		A5E000000000000000000175 /* InfoPlist.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A5E000000000000000000174 /* es */,
+			);
+			name = InfoPlist.strings;
 			sourceTree = "<group>";
 		};
 /* End PBXVariantGroup section */

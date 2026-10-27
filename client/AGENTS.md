@@ -441,10 +441,15 @@ same commit, as with comments.
   (`src/i18n/format.ts`) and the dashboard's `useFigures`, never `Intl` with the browser's default.
   The language list (`LanguageSection`) names each catalogue in itself, from `NATIVE_NAMES` or
   `Intl.DisplayNames`, marks the ones `BETA` holds, and while one of those is shown links to the
-  project's issue tracker (`issues` in `virtual:build-info`) for mistakes. Layout is written for
-  both directions: logical utilities (`ms-`, `pe-`, `start-`, `border-s`, `text-start`), never
-  `ml-`, `pr-`, `left-`, `border-l`, or `text-left`, and an icon that points somewhere (a back
-  arrow, a next caret) mirrors with `rtl:-scale-x-100`; a chart of time keeps `dir="ltr"`.
+  project's issue tracker (`issues` in `virtual:build-info`) for mistakes. The few strings the
+  native shells show on their own (a push's placeholder text, iOS's permission prompts) are
+  translated beside the catalogue: Android's `values-<language>/strings.xml`, and iOS's
+  `<language>.lproj/Localizable.strings` in the app and the notification extension and
+  `InfoPlist.strings` in the app, each a variant group in the Xcode project with the language in
+  `knownRegions`. Layout is written for both directions: logical utilities (`ms-`, `pe-`, `start-`,
+  `border-s`, `text-start`), never `ml-`, `pr-`, `left-`, `border-l`, or `text-left`, and an icon
+  that points somewhere (a back arrow, a next caret) mirrors with `rtl:-scale-x-100`; a chart of
+  time keeps `dir="ltr"`.
 - Three builds of the same code: `pnpm build` (web, served from a site root, real URL paths),
   `pnpm build:shell` (`--base ./`, used by the mobile package, which loads the bundle from an
   app-local origin and routes after a `#`), and `pnpm build:desktop` (the same for the desktop

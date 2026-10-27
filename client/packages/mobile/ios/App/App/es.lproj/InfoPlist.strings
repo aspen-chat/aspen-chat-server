@@ -1,0 +1,4 @@
+/* What iOS shows when asking for each permission; the English is in Info.plist. */
+"NSMicrophoneUsageDescription" = "Aspen usa el micrófono cuando te unes a una llamada de voz.";
+"NSCameraUsageDescription" = "Aspen usa la cámara cuando la activas en una llamada, tomas una foto para enviarla o escaneas un código QR para iniciar sesión o unirte a una comunidad.";
+"NSLocalNetworkUsageDescription" = "Aspen se conecta a servidores de tu red local cuando inicias sesión en uno de ellos.";
