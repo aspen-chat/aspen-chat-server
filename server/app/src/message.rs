@@ -48,6 +48,9 @@ pub struct Message {
     pub id: MessageId,
     pub channel: MaybeLoaded<Channel>,
     pub content: String,
+    /// What it is searched by when that is not its content as written: the content with a
+    /// space between every two words written without one (`app::search::search_text`).
+    pub search_text: Option<String>,
     pub author: MaybeLoaded<User>,
     pub timestamp: chrono::DateTime<Utc>,
     pub deleted_at: Option<chrono::DateTime<Utc>>,
@@ -693,6 +696,7 @@ async fn post(
                 let message = Message {
                     id,
                     channel: MaybeLoaded::from_id(channel_id),
+                    search_text: crate::search::search_text(&content),
                     content,
                     author: MaybeLoaded::from_id(author),
                     timestamp: Utc::now(),
@@ -931,6 +935,8 @@ pub async fn with_relations(
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct MessageChangeset {
     pub content: Option<String>,
+    /// Set whenever `content` is, from it.
+    pub search_text: Option<Option<String>>,
     pub edited_at: Option<chrono::DateTime<Utc>>,
     pub mentions: Option<Mentions>,
     pub linked_messages: Option<MessageLinks>,
@@ -1217,6 +1223,7 @@ pub async fn update_message(
                 let Some(message) = diesel::update(message::table)
                     .set(MessageChangeset {
                         content: content.clone(),
+                        search_text: content.as_deref().map(crate::search::search_text),
                         edited_at: Some(Utc::now()),
                         mentions: mentions.clone(),
                         linked_messages: linked_messages.clone(),

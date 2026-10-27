@@ -80,6 +80,7 @@ regex = "1.13.1"
 # for the system account's by letters that look alike.
 unicode-normalization = "0.1.24"
 unicode-segmentation = "1.12"
+aspen_search_text = { path = "../search_text" }
 unicode-security = "0.1.2"
 # Plugins (`app::plugin`): WebAssembly components run in a sandbox, metered and bounded. The
 # WASI host gives a component built for `wasm32-wasip2` the system interfaces its standard

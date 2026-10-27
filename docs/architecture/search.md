@@ -6,6 +6,7 @@ reads. Why it reads as it does is in the [design notes](search-design-notes.md).
 | Part                  | Where                                                                                                                                               |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Logic                 | `app::search`                                                                                                                                       |
+| Words                 | `aspen_search_text` (`app::search::search_text`), the words of text written without spaces between them                                             |
 | Places for deep steps | `app::deep_search`, `[search]` in `aspen.toml`                                                                                                      |
 | Handler               | `api::message::search_messages`                                                                                                                     |
 | Indexes               | `message_search` (words), `message_by_home_channel` (a place's history), `message_by_author` (an author's), `mention_user_recent` (a tagged user's) |
@@ -128,10 +129,17 @@ A deep step is a core of the database for a moment, so the deployment runs only
 
 - PostgreSQL full-text search in the `simple` configuration, which lowercases and does nothing else.
   So every language is searched alike, and whole words match.
+- PostgreSQL takes a run of letters for one word. So a message is searched by its `search_text`: its
+  content with a space between every two words written without one, the words found by ICU4X's word
+  segmenter (`aspen_search_text`, with its dictionaries for Chinese and Japanese and its models for
+  Thai, Khmer, Lao, and Burmese), computed as the message is written or edited. It is null where the
+  content is searched as written, which it is for nearly every message in a script that writes
+  spaces. The text searched for goes through the same function, so a word of Chinese, Japanese, or
+  Thai is one word to both.
 - The text takes `websearch_to_tsquery` syntax: `"a phrase"`, `or`, `-word`.
 - The index `message_search` is a GIN index (with `btree_gin`) on `home_channel` and
-  `to_tsvector('simple', content)`, for undeleted messages. So text is searched only within the
-  places asked about, rather than through every match on the deployment.
+  `to_tsvector('simple', COALESCE(search_text, content))`, for undeleted messages. So text is
+  searched only within the places asked about, rather than through every match on the deployment.
 - The search writes that expression out literally rather than binding the configuration.
 
 **Why:** a prepared statement's generic plan then still matches the index. Binding the configuration

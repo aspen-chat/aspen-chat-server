@@ -1,0 +1,9 @@
+[package]
+name = "aspen_search_text"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "The text a message is searched by: its content with a space between every two words written without one, so that a word of a language written without spaces is searched for on its own."
+
+[dependencies]
+icu_segmenter = "2.4.0"

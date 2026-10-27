@@ -202,6 +202,7 @@ pub(super) async fn record_call(
         id: MessageId::new(),
         channel: MaybeLoaded::from_id(session.channel),
         content: String::new(),
+        search_text: None,
         author: MaybeLoaded::from_id(starter),
         timestamp: now,
         deleted_at: None,
