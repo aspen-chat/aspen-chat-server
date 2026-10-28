@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Assembles the download page (`site/`) into a directory of static files ready to host.
+"""Assembles the site (`site/`) into a directory of static files ready to host.
 
-The page's own files are in `site/`; Aspen's icon, the favicon, and the Inclusive Sans faces the
-app bundles are copied from where the client keeps them, so the page never holds a second copy.
+The site is the landing page (`site/index.html`) and the download page (`site/downloads/`). Its own
+files are in `site/`; Aspen's icon, the favicon, and the Inclusive Sans faces the app bundles are
+copied from where the client keeps them, so the site never holds a second copy.
 The fonts come from the client's `node_modules`, so `pnpm install` in `client/` comes first.
 
     scripts/build_site.py [--out target/site]

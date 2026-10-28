@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Download Aspen</title>
+    <meta
+      name="description"
+      content="Download Aspen Chat for Windows, macOS, and Linux. iOS and Android are coming soon."
+    />
+    <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="../site.css" />
+  </head>
+  <body>
+    <main>
+      <a class="home" href="../">
+        <img class="aspen-icon" src="../aspen-icon.svg" alt="Aspen" width="256" height="256" />
+      </a>
+      <h1>Download Aspen Chat clients</h1>
+
+      <!-- The download links are placeholders until the builds are published
+           (docs/development/distribution.md). -->
+      <ul class="platforms">
+        <li>
+          <a class="platform" href="#">
+            <svg aria-hidden="true"><use href="../icons.svg#windows" /></svg>
+            Windows
+          </a>
+        </li>
+        <li>
+          <a class="platform" href="#">
+            <svg aria-hidden="true"><use href="../icons.svg#apple" /></svg>
+            macOS
+          </a>
+        </li>
+        <li>
+          <details>
+            <summary class="platform">
+              <svg aria-hidden="true"><use href="../icons.svg#linux" /></svg>
+              Linux
+              <svg class="chevron" aria-hidden="true"><use href="../icons.svg#chevron" /></svg>
+            </summary>
+            <ul class="linux-options">
+              <li>
+                <h2>Flatpak</h2>
+                <p>Any distribution. Updates with <code>flatpak update</code>.</p>
+                <p>
+                  <a href="#">Download aspen.flatpakref</a>, then open it with your software center,
+                  or run <code>flatpak install aspen.flatpakref</code>.
+                </p>
+              </li>
+              <li>
+                <h2>Debian and Ubuntu</h2>
+                <p>
+                  Installing the package adds Aspen's repository, so Aspen updates along with the
+                  rest of the system.
+                </p>
+                <p><a href="#">Download the .deb</a></p>
+              </li>
+              <li>
+                <h2>Fedora and openSUSE</h2>
+                <p>
+                  Installing the package adds Aspen's repository, so Aspen updates along with the
+                  rest of the system.
+                </p>
+                <p><a href="#">Download the .rpm</a></p>
+              </li>
+              <li>
+                <h2>Arch Linux</h2>
+                <p>
+                  Install <a href="#"><code>aspen-bin</code></a> from the AUR with your AUR helper.
+                </p>
+              </li>
+              <li>
+                <h2>Archive</h2>
+                <p>Any distribution. It does not update; download the next release yourself.</p>
+                <p><a href="#">Download the .tar.gz</a></p>
+              </li>
+            </ul>
+          </details>
+        </li>
+      </ul>
+
+      <p class="coming-soon" id="coming-soon">Coming Soon</p>
+      <ul class="platforms" aria-labelledby="coming-soon">
+        <li>
+          <button class="platform" type="button" disabled>
+            <svg aria-hidden="true"><use href="../icons.svg#apple" /></svg>
+            iOS
+          </button>
+        </li>
+        <li>
+          <button class="platform" type="button" disabled>
+            <svg aria-hidden="true"><use href="../icons.svg#android" /></svg>
+            Android
+          </button>
+        </li>
+      </ul>
+    </main>
+
+    <footer>
+      <p>
+        The Android robot is reproduced or modified from work created and shared by Google and used
+        according to terms described in the Creative Commons 3.0 Attribution License.
+      </p>
+      <p>Tux was drawn by Larry Ewing with The GIMP.</p>
+    </footer>
+  </body>
+</html>
