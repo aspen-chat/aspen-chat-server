@@ -84,7 +84,10 @@ Two repository variables, which are not secret:
 
 When a certificate is renewed, its profiles must be made again with the new one, and all three
 secrets replaced. `app_store.py` names the profile that has expired or lacks the identity's
-certificate.
+certificate. A profile also fixes the capabilities its App ID had when it was made: when the app
+gains an entitlement (Declared Age Range, for the age gate), the capability is turned on for the App
+ID in the developer portal, the profile made again, and its secret replaced, or the archive fails
+saying the profile does not include it.
 
 ## The iOS App Store build
 

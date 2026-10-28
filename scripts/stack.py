@@ -220,9 +220,14 @@ class Stack:
         return self
 
     def __exit__(self, kind, error, trace) -> None:
-        if isinstance(error, Failed):
-            for _, log in self.processes:
-                print(f"----- {log.name} -----\n{log.read_text()[-4000:]}", flush=True)
+        # Any error, not only a check's: a request refused by a server that has died is one too.
+        if error is not None:
+            for process, log in self.processes:
+                ended = process.poll()
+                # A negative code is the signal that killed it: -11 a segmentation fault, -9 the
+                # kernel's OOM killer, neither of which the process gets to log.
+                state = "still running" if ended is None else f"exited with {ended}"
+                print(f"----- {log.name} ({state}) -----\n{log.read_text()[-4000:]}", flush=True)
         for process, _ in self.processes:
             process.terminate()
             try:

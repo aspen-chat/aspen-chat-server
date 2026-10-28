@@ -31,7 +31,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dev_ca import issue  # noqa: E402
 from dev_federation import (  # noqa: E402
-    ALPHA, PASSWORD, Failed, api, expect, running_pid, say, sign_in,
+    ALPHA, PASSWORD, Failed, api, expect, running_pid, say, sign_in, terminal,
 )
 
 HOST = "push.localhost"
@@ -134,13 +134,39 @@ def no_push(what: str, seconds: float = 4) -> None:
     Endpoint.pushes.clear()
 
 
+def large_community_members() -> str:
+    """Alpha's threshold of members at which a community is large, as `settings show` prints it."""
+    for line in terminal(ALPHA, "settings", "show").splitlines():
+        name, _, value = line.partition(": ")
+        if name == "large-community-members":
+            return value
+    raise Failed("`settings show` on alpha does not name large_community_members")
+
+
+def set_large_community_members(members: str, club: str, token: str, small: bool) -> None:
+    """Sets alpha's threshold and waits until `club`, read as `token`, is small or not as
+    `small` says, which is when every server has the new setting."""
+    terminal(ALPHA, "settings", "set", "--large-community-members", members)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if api(ALPHA, "GET", f"/communities/{club}", token=token)["data"].get("small") is small:
+            return
+        time.sleep(0.2)
+    raise Failed(f"the community did not become {'small' if small else 'large'} after setting the threshold")
+
+
 def main() -> int:
     if running_pid(ALPHA) is None:
         say("alpha is not running; run `scripts/dev_federation.py up` first")
         return 1
     origin = serve()
     try:
-        check(origin)
+        # The check makes its community large by the threshold, which it leaves as it found it.
+        threshold = large_community_members()
+        try:
+            check(origin)
+        finally:
+            terminal(ALPHA, "settings", "set", "--large-community-members", threshold)
     except Failed as failure:
         say(f"FAILED: {failure}")
         return 1
@@ -189,9 +215,18 @@ def check(origin: str) -> None:
     expect(pointer == {"v": 1, "kind": "message", "channel": dm["id"], "message": hello["id"], "badge": 1},
            "the phone decrypts a pointer to the message, and nothing of what it says")
 
-    api(ALPHA, "POST", f"/channels/{general['id']}/messages", {"content": "Morning, all", "attachments": []},
+    # Two members make a small community, whose channels tell of every message by default; with
+    # the threshold at 0 no community is small, and a community's channels tell of tags alone.
+    morning = api(ALPHA, "POST", f"/channels/{general['id']}/messages",
+                  {"content": "Morning, all", "attachments": []}, token=sender, expect=(201,))
+    pointer = phone.decrypt(next_push("a message in a small community")["body"])
+    expect(pointer["message"] == morning["id"] and pointer["badge"] == 1,
+           "a small community wakes the reader for a message that tags no one, which no badge counts")
+    set_large_community_members("0", club["id"], sender, small=False)
+    expect(True, "with the threshold at 0 the community is no longer small")
+    api(ALPHA, "POST", f"/channels/{general['id']}/messages", {"content": "Morning again", "attachments": []},
         token=sender, expect=(201,))
-    no_push("a message that tags no one wakes no one")
+    no_push("a message that tags no one wakes no one in a large community")
 
     tagged = api(ALPHA, "POST", f"/channels/{general['id']}/messages",
                  {"content": f"<@{reader_id}> lunch?", "attachments": []}, token=sender, expect=(201,))
