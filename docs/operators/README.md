@@ -1,7 +1,6 @@
 # Running Aspen
 
 This guide is for whoever runs an Aspen deployment, from a single spare machine to several servers.
-Nothing in it assumes you have read the code.
 
 ## Guides
 
@@ -18,7 +17,7 @@ Nothing in it assumes you have read the code.
 
 | Part                           | What it does                                                                                                                                                                                                                                                     | Keeps anything?                          |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| `aspen-chat-server`            | The API, the event stream, the web client, the passkey page, and the federation document, all at your deployment's one address. Run as many as you need behind a load balancer. With `--private-worker`, one serves nothing and only shares the background work. | No: everything is in the services below. |
+| `aspen-chat-server`            | The API, the event stream, the web client, the passkey page, and the federation document, all at your deployment's one address. Run as many as you need behind a load balancer. | No: everything is in the services below. |
 | `voice_server`                 | Calls: forwards each participant's audio and video to the others. Run one or more, each registered with the API servers.                                                                                                                                         | No.                                      |
 | PostgreSQL                     | Every account, community, message, and setting, and this deployment's federation key.                                                                                                                                                                            | **Yes: back it up.**                     |
 | Object storage (S3 compatible) | Attachments, icons, avatars, and link preview images.                                                                                                                                                                                                            | **Yes: back it up.**                     |
