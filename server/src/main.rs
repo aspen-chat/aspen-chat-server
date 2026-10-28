@@ -222,6 +222,14 @@ compile_error!(
     "the console feature needs Tokio's instrumentation: build with RUSTFLAGS=\"--cfg tokio_unstable\""
 );
 
+/// The stack of each of the runtime's threads. Tokio gives them 2 MiB, which a debug build
+/// overruns: unoptimized, each `async fn` keeps every future it awaits on the stack as well as in
+/// its own state, so a chain of polls through the app layer takes hundreds of KiB per frame, and
+/// the job runner posting a held message (`jobs::run` down to the query that checks who may post)
+/// was measured at 2 MiB on the way into diesel. A thread's stack pages are committed only as it
+/// touches them, so what a release build leaves unused costs nothing.
+const RUNTIME_THREAD_STACK: usize = 8 << 20;
+
 fn main() {
     let opt = Opt::parse();
     // Writing the API schemas reads no configuration, so it runs where there is none, as in CI.
@@ -259,6 +267,7 @@ fn main() {
     panic::set_hook(Box::new(tracing_panic::panic_hook));
     let runtime = runtime::Builder::new_multi_thread()
         .enable_all()
+        .thread_stack_size(RUNTIME_THREAD_STACK)
         .build()
         .expect("unable to init tokio runtime");
     let code = {

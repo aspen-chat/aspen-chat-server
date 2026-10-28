@@ -3112,6 +3112,9 @@ def thread_follows(world: World, check: Checks) -> None:
     def feed(query: str = "") -> list[str]:
         return [m["id"] for m in stack.api("GET", f"/users/@me/activity{query}", token=member)["data"]]
 
+    # The community is small, so its channels would tell the member of every reply anyway; at
+    # tags, a reply that tags no one reaches their feed only through the follow.
+    stack.api("PUT", f"/communities/{world.community}/notification-settings/@me", {"level": "tags"}, member)
     check("the starter's author follows the thread once it is made", follows(world.owner["token"]) == [thread])
     check("opening it follows nothing", follows() == [])
     world.stream.gather(0.5)
@@ -3156,8 +3159,10 @@ def activity_feed(world: World, check: Checks) -> None:
     plain = world.post(room, "nothing for you")
     tagged = world.post(room, f"<@{world.member['id']}> this is for you")
     own = stack.api("POST", f"/channels/{room}/messages", {"content": "my own", "attachments": []}, member)["id"]
-    check("at the default level only tags are in it, never the reader's own",
-          tagged in feed() and plain not in feed() and own not in feed(), feed())
+    check("at a small community's default every message is in it, never the reader's own",
+          tagged in feed() and plain in feed() and own not in feed(), feed())
+    stack.api("PUT", f"/communities/{world.community}/notification-settings/@me", {"level": "tags"}, member)
+    check("at tags, only those that tag the reader are", tagged in feed() and plain not in feed(), feed())
     stack.api("PUT", f"/communities/{world.community}/notification-settings/@me", {"level": "all"}, member)
     check("at every message, every message is", plain in feed() and tagged in feed())
     stack.api("PUT", f"/channels/{room}/mutes/@me", {}, member)
