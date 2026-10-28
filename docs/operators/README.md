@@ -1,7 +1,6 @@
 # Running Aspen
 
 This guide is for whoever runs an Aspen deployment, from a single spare machine to several servers.
-Nothing in it assumes you have read the code.
 
 ## Guides
 
