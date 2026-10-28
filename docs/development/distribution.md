@@ -168,8 +168,10 @@ deployment and account for the stores' reviewers, and calls that keep running in
   also builds an AppImage, which is not published.
 - The server images, published to GHCR on every push to `main` and every tag (`images.yml`).
 - Android `versionCode` from the CI run number (`android-builds.md`).
-- The download page (`site/`), assembled with the app's icon and font by `scripts/build_site.py`
-  into `target/site/`. Its download links are placeholders, and it is not hosted anywhere.
+- The site (`site/`): a landing page linking to the download page (`site/downloads/`), to the
+  operator guide on GitHub, and to the repository, assembled with the app's icon and font by
+  `scripts/build_site.py` into `target/site/`. The download links are placeholders, and it is not
+  hosted anywhere.
 
 Nothing is published to R2, no repository or feed exists, the desktop app has no updater, the
 dashboard has no update notice, and Android has neither flavour nor release signing.
