@@ -32,6 +32,19 @@ See [Windows game capture](windows-capture.md).
 - **A hook with no frame within `HOOK_TIMEOUT` falls back to window capture.** The game may never
   have presented, an anti-cheat may have refused the hook (after which the source never tries
   again), or the window may not be a game.
+- **The GPU's encoder is tried before x264.** The game and x264 want the same cores, and a GPU
+  encoder takes the picture as a texture. Every encoder is set to the same H.264 constrained
+  baseline, no B-frames, constant bitrate, and one-second keyframes, so the voice server and every
+  viewer see one stream whichever encodes it.
+- **NVIDIA, then Intel, then AMD, then x264.** Each GPU module registers its encoder only when its
+  test program finds that vendor's GPU, so with one GPU the order decides nothing; with two, the
+  first vendor present wins, and each module copes with a picture rendered on the other adapter by
+  reading it back. x264 is always there.
+- **The encoder is chosen as the output starts, not when its module loads.** A module that found the
+  GPU registers its encoder, but libobs makes the encoder itself as the output starts, and that is
+  where a driver turns one down; the helper then tries the next.
+- **The encoders' test programs sit beside the helper, not under `libobs/`.** libobs runs them from
+  beside the executable that loaded it.
 
 ## macOS and Linux
 

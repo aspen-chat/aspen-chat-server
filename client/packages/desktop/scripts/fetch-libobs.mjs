@@ -3,7 +3,7 @@
 // the game hook it injects (`graphics-hook64.dll`, with `inject-helper64.exe` and
 // `get-graphics-offsets64.exe`) is whitelisted by anti-cheat systems and tolerated by antivirus
 // software by that signature, which a build of our own would not carry. From the release zip:
-// `obs.dll` and the libraries it and the five modules the helper loads need (ffmpeg, x264,
+// `obs.dll` and the libraries it and the seven modules the helper loads need (ffmpeg, x264,
 // pthreads, zlib, the Direct3D and WinRT graphics modules, and the rest of `bin/64bit` short of
 // the OBS application, Qt, scripting, and the debug symbols), the modules themselves
 // (`obs-plugins/64bit`), and their data (`data/libobs`, `data/obs-plugins/<module>`, the hook
@@ -11,15 +11,17 @@
 // from the DLL's export table (`obs.def`, then `obs.lib` by MSVC's `lib` or LLVM's
 // `llvm-dlltool`, whichever is found), and headers, which the source archive of the same tag
 // provides (`include/`, with `obsconfig.h` written from its template). The helper's build
-// script finds all of it without being told.
+// script finds all of it without being told. The three test programs the GPU encoder modules
+// run go beside the helper instead (`native/`): libobs looks for them beside the executable that
+// loaded it, and the installer lays them beside the helper the same way.
 //
-//   node scripts/fetch-libobs.mjs            # into native/libobs
+//   node scripts/fetch-libobs.mjs            # into native/libobs, and native/obs-*-test.exe
 //
 // The hook and the `win-capture` module share a versioned interface, so everything comes from
 // the one release.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { inflateRawSync } from "node:zlib";
@@ -29,11 +31,27 @@ const RELEASE_URL = `https://github.com/obsproject/obs-studio/releases/download/
 const RELEASE_SHA256 = "4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1";
 const SOURCE_URL = `https://github.com/obsproject/obs-studio/archive/refs/tags/${OBS_VERSION}.zip`;
 /** The modules the helper loads (`MODULES` in its `obs/startup.rs`) that Windows has. */
-const MODULES = ["obs-x264", "obs-ffmpeg", "image-source", "win-wasapi", "win-capture"];
+const MODULES = [
+  "obs-nvenc",
+  "obs-qsv11",
+  "obs-x264",
+  "obs-ffmpeg",
+  "image-source",
+  "win-wasapi",
+  "win-capture",
+];
+/**
+ * The programs `obs-nvenc`, `obs-qsv11`, and `obs-ffmpeg` (AMD's encoder) run as they load to
+ * ask the GPU what it encodes, each registering its encoder only on a good answer. libobs runs
+ * them from beside the executable that loaded it, the helper, so they are written to `native/`
+ * beside it rather than into `native/libobs`.
+ */
+const TEST_PROGRAMS = ["obs-nvenc-test.exe", "obs-qsv-test.exe", "obs-amf-test.exe"];
 /**
  * What in `bin/64bit` is not a library the helper's process needs: the OBS application and its
- * tools, Qt and its plugin folders, the frontend and scripting libraries, the OpenGL graphics
- * module (Direct3D is used), and the debug symbols.
+ * tools (the encoders' test programs among them, which go beside the helper instead), Qt and its
+ * plugin folders, the frontend and scripting libraries, the OpenGL graphics module (Direct3D is
+ * used), and the debug symbols.
  */
 const NOT_NEEDED =
   /^(obs64|obs-.*-test|obs-ffmpeg-mux)\.exe$|^Qt6|\/|^obs-frontend-api|^obs-scripting|^lua51|^libobs-opengl|\.pdb$/;
@@ -231,6 +249,20 @@ async function main() {
     (name) => name,
   );
   console.log(`kept ${kept} files of OBS Studio ${OBS_VERSION}`);
+  const native = dirname(out);
+  for (const file of readdirSync(native)) {
+    if (/^obs-.*-test\.exe$/.test(file)) {
+      rmSync(join(native, file));
+    }
+  }
+  for (const program of TEST_PROGRAMS) {
+    const read = release.get(`bin/64bit/${program}`);
+    if (read === undefined) {
+      throw new Error(`${program} is not in the release`);
+    }
+    writeFileSync(join(native, program), read());
+  }
+  console.log(`wrote ${TEST_PROGRAMS.join(", ")} beside the helper`);
   writeFileSync(join(out, "obs.def"), exportsOf(readFileSync(join(out, "bin/64bit/obs.dll"))));
 
   // The headers: the libobs directory of the same tag's source, with the config header its

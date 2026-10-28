@@ -12,9 +12,11 @@ protocol is documented at the top of its `main.rs`.
 | macOS                   | The browser's own screen share.                                                                                | The helper, through ScreenCaptureKit (see [application audio](application-audio.md#macos)). |
 | Linux (X11 and Wayland) | The browser's own screen share, picked in the system's picker.                                                 | The helper, through PipeWire (see [application audio](application-audio.md#linux)).         |
 
-On Windows the helper encodes the picture as H.264 constrained baseline and sends it as SRTP
-straight to the voice server's plain RTP transport. The video never passes through the shell or the
-browser, so it is encoded once.
+On Windows the helper encodes the picture as H.264 constrained baseline, with the GPU's encoder
+where OBS has a module for it and x264 otherwise (see
+[Windows game capture](windows-capture.md#the-encoder)), and sends it as SRTP straight to the voice
+server's plain RTP transport. The video never passes through the shell or the browser, so it is
+encoded once.
 
 ## How the shell runs it
 

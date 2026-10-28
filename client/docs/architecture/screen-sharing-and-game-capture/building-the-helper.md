@@ -25,14 +25,20 @@ game hook by that signature.
 `native/libobs` holds, where the helper's build script finds them:
 
 - `obs.dll` and the libraries it and the modules need;
-- the five modules the helper loads;
+- the seven modules the helper loads, the NVIDIA, Intel, and AMD encoders' among them;
 - their data, with the hook's files;
 - headers from the same tag's source;
 - `obs.lib`, written from `obs.dll`'s exports (MSVC's `lib` or LLVM's `llvm-dlltool`).
 
+Beside it, in `native/`, go the three test programs the GPU encoder modules run as they load
+(`obs-nvenc-test.exe`, `obs-qsv-test.exe`, `obs-amf-test.exe`): libobs looks for them beside the
+executable that loaded it, which is the helper (`native/aspen-capture.exe` in development).
+
 Then:
 
-- The installer ships that directory as the `libobs` resource (`electron-builder.yml`).
+- The installer ships that directory as the `libobs` resource and the test programs beside the
+  helper (`electron-builder.yml`), and `scripts/check-libobs.mjs` fails a package in which any of
+  them is missing or differs from the fetched file.
 - The shell starts the helper with its libraries on the `PATH`, and names its modules and data in
   every request (`bundledLibobs` in `gameCapture.ts`).
 - CI packages the Windows installer that way.

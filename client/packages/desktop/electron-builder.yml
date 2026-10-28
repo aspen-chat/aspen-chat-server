@@ -81,12 +81,22 @@ win:
         - obs-plugins/**
         - data/**
         - VERSION
+    # The GPU encoder modules' test programs, which libobs runs from beside the executable that
+    # loaded it, so they go beside the helper (`fetch-libobs.mjs` says which they are).
+    - from: native
+      to: .
+      filter:
+        - obs-*-test.exe
   # electron-builder signs every `.exe` it packages, which would put our signature over the OBS
-  # Project's on the game hook's helpers; anti-cheat systems and antivirus software know them by
-  # the OBS Project's. `scripts/check-libobs.mjs` fails the build when a file under `libobs/`
-  # differs from the one fetched, which is how an OBS release with a new executable shows up here.
+  # Project's on the game hook's helpers and the encoders' test programs; anti-cheat systems and
+  # antivirus software know the hook's by the OBS Project's. `scripts/check-libobs.mjs` fails the
+  # build when any of the OBS files differs from the one fetched, which is how an OBS release
+  # with a new executable shows up here.
   signExts:
     - "!inject-helper32.exe"
     - "!inject-helper64.exe"
     - "!get-graphics-offsets32.exe"
     - "!get-graphics-offsets64.exe"
+    - "!obs-nvenc-test.exe"
+    - "!obs-qsv-test.exe"
+    - "!obs-amf-test.exe"

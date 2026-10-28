@@ -100,7 +100,8 @@ export interface StartOptions {
 
 type Reply =
   | { type: "kinds"; id: number; kinds: CaptureKind[]; applicationAudio: AudioKind | null }
-  | { type: "done"; id: number }
+  /** `encoder` is the libobs encoder a started picture goes through; a start alone carries it. */
+  | { type: "done"; id: number; encoder?: string }
   | { type: "failed"; id: number; reason: string };
 
 export const CAPTURE_KINDS_CHANNEL = "voice:capture-kinds";
