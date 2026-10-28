@@ -68,11 +68,18 @@ const KINDS: &[KindEntry] = &[KindEntry {
 #[cfg(target_os = "linux")]
 const KINDS: &[KindEntry] = &[];
 
-unsafe fn source_kind_registered(id: &CStr) -> bool {
+/// Whether a loaded module registered `id`, among the kinds `enumerate` lists
+/// (`obs_enum_source_types`, `obs_enum_encoder_types`). Asking libobs for an id nobody
+/// registered is no error: it makes a placeholder that fails when first used, so what may be
+/// missing is checked here first.
+unsafe fn registered(
+    id: &CStr,
+    enumerate: unsafe extern "C" fn(usize, *mut *const c_char) -> bool,
+) -> bool {
     let mut index = 0;
-    let mut registered: *const c_char = ptr::null();
-    while unsafe { ffi::obs_enum_source_types(index, &mut registered) } {
-        if !registered.is_null() && unsafe { CStr::from_ptr(registered) } == id {
+    let mut found: *const c_char = ptr::null();
+    while unsafe { enumerate(index, &mut found) } {
+        if !found.is_null() && unsafe { CStr::from_ptr(found) } == id {
             return true;
         }
         index += 1;
@@ -92,16 +99,18 @@ pub fn capture_kinds(
     let mut kinds = Vec::new();
     for entry in KINDS {
         let id = cstring(entry.kind)?;
-        if !unsafe { source_kind_registered(&id) } {
+        if !unsafe { registered(&id, ffi::obs_enum_source_types) } {
             continue;
         }
         let audio = match entry.audio {
             Some((kind, property)) => {
                 let audio_id = cstring(kind)?;
-                unsafe { source_kind_registered(&audio_id) }.then(|| crate::AudioKind {
-                    kind: kind.to_string(),
-                    property: property.to_string(),
-                    targets: None,
+                unsafe { registered(&audio_id, ffi::obs_enum_source_types) }.then(|| {
+                    crate::AudioKind {
+                        kind: kind.to_string(),
+                        property: property.to_string(),
+                        targets: None,
+                    }
                 })
             }
             None => None,
@@ -155,9 +164,210 @@ unsafe fn window_targets(id: &CStr, property: &str) -> Result<Vec<CaptureTarget>
     Ok(targets)
 }
 
+/// One H.264 encoder the picture may go through: a libobs encoder id, and what it alone needs
+/// set beside the settings every encoder gets (`encoder_settings`).
+struct VideoEncoder {
+    id: &'static CStr,
+    configure: unsafe fn(*mut ffi::obs_data),
+}
+
+/// The encoders, best first. The GPU's spares the game its cores, so the three GPU encoders come
+/// before `obs_x264`, which every build has. Each GPU module registers its encoder only when the
+/// test program it runs at load (`obs-nvenc-test`, `obs-qsv-test`, `obs-amf-test`, found beside
+/// this executable) finds that vendor's GPU, so with one GPU the order decides nothing; with two,
+/// the first vendor present wins, and when the picture is rendered on another adapter the
+/// module reroutes to its own non-texture encoder, which reads each frame back through the CPU.
+/// `ASPEN_CAPTURE_ENCODER` names one of these ids to use alone, for finding out whether a GPU's
+/// encoder is what is going wrong.
+const VIDEO_ENCODERS: &[VideoEncoder] = &[
+    VideoEncoder {
+        id: c"obs_nvenc_h264_tex",
+        configure: configure_nvenc,
+    },
+    VideoEncoder {
+        id: c"obs_qsv11_v2",
+        configure: configure_qsv,
+    },
+    VideoEncoder {
+        id: c"h264_texture_amf",
+        configure: configure_amf,
+    },
+    VideoEncoder {
+        id: c"obs_x264",
+        configure: configure_x264,
+    },
+];
+
+/// What every encoder is told: a constant bitrate, the baseline profile (the constrained one as
+/// each names it: x264 and NVENC set the constraint flag on `baseline`, AMF has a name for it),
+/// which every browser decodes, Firefox's OpenH264 included, no B-frames, so none can be lost
+/// (`bf`, which QSV reads over its own `bframes`; x264 has none under the zero-latency tune), and
+/// a keyframe every second, which is how long a new viewer waits, since libobs cannot be asked
+/// for one. None repeats its headers in the stream: the output puts the parameter sets in front
+/// of every keyframe itself (`startup`).
+unsafe fn encoder_settings(encoder: &VideoEncoder, bitrate_kbps: i64) -> *mut ffi::obs_data {
+    unsafe {
+        let settings = ffi::obs_data_create();
+        ffi::obs_data_set_int(settings, c"bitrate".as_ptr(), bitrate_kbps);
+        ffi::obs_data_set_string(settings, c"rate_control".as_ptr(), c"CBR".as_ptr());
+        ffi::obs_data_set_string(settings, c"profile".as_ptr(), c"baseline".as_ptr());
+        ffi::obs_data_set_int(settings, c"bf".as_ptr(), 0);
+        ffi::obs_data_set_int(settings, c"keyint_sec".as_ptr(), 1);
+        (encoder.configure)(settings);
+        settings
+    }
+}
+
+/// NVIDIA: the middle preset with the low-latency tuning, one pass, and no lookahead, so a frame
+/// leaves the encoder as soon as it is encoded.
+unsafe fn configure_nvenc(settings: *mut ffi::obs_data) {
+    unsafe {
+        ffi::obs_data_set_string(settings, c"preset".as_ptr(), c"p4".as_ptr());
+        ffi::obs_data_set_string(settings, c"tune".as_ptr(), c"ll".as_ptr());
+        ffi::obs_data_set_string(settings, c"multipass".as_ptr(), c"disabled".as_ptr());
+        ffi::obs_data_set_bool(settings, c"lookahead".as_ptr(), false);
+    }
+}
+
+/// Intel: the balanced target usage with one frame in flight.
+unsafe fn configure_qsv(settings: *mut ffi::obs_data) {
+    unsafe {
+        ffi::obs_data_set_string(settings, c"target_usage".as_ptr(), c"TU4".as_ptr());
+        ffi::obs_data_set_string(settings, c"latency".as_ptr(), c"ultra-low".as_ptr());
+    }
+}
+
+/// AMD: the quality preset, which the module lowers to what the GPU keeps up with at this size
+/// and rate, and the profile named outright.
+unsafe fn configure_amf(settings: *mut ffi::obs_data) {
+    unsafe {
+        ffi::obs_data_set_string(settings, c"preset".as_ptr(), c"quality".as_ptr());
+        ffi::obs_data_set_string(
+            settings,
+            c"profile".as_ptr(),
+            c"constrained_baseline".as_ptr(),
+        );
+    }
+}
+
+/// x264: the preset a game leaves the cores for, tuned for zero latency.
+unsafe fn configure_x264(settings: *mut ffi::obs_data) {
+    unsafe {
+        ffi::obs_data_set_string(settings, c"preset".as_ptr(), c"veryfast".as_ptr());
+        ffi::obs_data_set_string(settings, c"tune".as_ptr(), c"zerolatency".as_ptr());
+    }
+}
+
+/// The encoders to try, in order: those of `VIDEO_ENCODERS` a loaded module registered, or the
+/// one `ASPEN_CAPTURE_ENCODER` names.
+unsafe fn video_encoders() -> Result<Vec<&'static VideoEncoder>> {
+    let is_registered =
+        |encoder: &&VideoEncoder| unsafe { registered(encoder.id, ffi::obs_enum_encoder_types) };
+    let Some(forced) = std::env::var_os("ASPEN_CAPTURE_ENCODER") else {
+        return Ok(VIDEO_ENCODERS.iter().filter(is_registered).collect());
+    };
+    let forced = forced.to_string_lossy();
+    let Some(encoder) = VIDEO_ENCODERS
+        .iter()
+        .find(|encoder| encoder.id.to_bytes() == forced.as_bytes())
+    else {
+        let known: Vec<_> = VIDEO_ENCODERS
+            .iter()
+            .map(|encoder| encoder.id.to_string_lossy())
+            .collect();
+        return Err(format!(
+            "ASPEN_CAPTURE_ENCODER names {forced}, which is none of {}",
+            known.join(", ")
+        ));
+    };
+    if !is_registered(&encoder) {
+        return Err(format!(
+            "ASPEN_CAPTURE_ENCODER names {forced}, which no loaded module registered (its test program found no GPU of that vendor, or is not beside this executable)"
+        ));
+    }
+    Ok(vec![encoder])
+}
+
+/// Makes the picture's encoder and the output and starts them, trying each encoder in turn
+/// until one starts. A module registers its encoder on finding the GPU, but libobs makes the
+/// encoder itself only as the output starts, and that is where a driver without the codec, or
+/// a GPU already encoding all it can, turns it down. Returns the output, the encoder, and its id;
+/// on failure nothing made here is left behind, and the sink is cleared.
+unsafe fn start_output(
+    serial: u64,
+    bitrate_kbps: i64,
+    audio_encoder: *mut ffi::obs_encoder,
+    sink: impl Fn() -> Sink,
+) -> Result<(*mut ffi::obs_output, *mut ffi::obs_encoder, &'static str)> {
+    let encoders = unsafe { video_encoders()? };
+    if encoders.is_empty() {
+        return Err("libobs has no H.264 encoder".into());
+    }
+    let output_name = cstring(&format!("aspen-output-{serial}"))?;
+    let mut failures = Vec::new();
+    for candidate in encoders {
+        let id = candidate.id.to_str().expect("encoder ids are ASCII");
+        let encoder_name = cstring(&format!("aspen-{id}-{serial}"))?;
+        unsafe {
+            let settings = encoder_settings(candidate, bitrate_kbps);
+            let encoder = ffi::obs_video_encoder_create(
+                candidate.id.as_ptr(),
+                encoder_name.as_ptr(),
+                settings,
+                ptr::null_mut(),
+            );
+            ffi::obs_data_release(settings);
+            if encoder.is_null() {
+                failures.push(format!("{id} could not be created"));
+                continue;
+            }
+            ffi::obs_encoder_set_video(encoder, ffi::obs_get_video());
+            let output = ffi::obs_output_create(
+                if audio_encoder.is_null() {
+                    OUTPUT_ID.as_ptr()
+                } else {
+                    OUTPUT_AV_ID.as_ptr()
+                },
+                output_name.as_ptr(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+            );
+            if output.is_null() {
+                ffi::obs_encoder_release(encoder);
+                return Err("the packet output could not be created".into());
+            }
+            // An encoded output takes its media from its encoders.
+            ffi::obs_output_set_video_encoder(output, encoder);
+            if !audio_encoder.is_null() {
+                ffi::obs_output_set_audio_encoder(output, audio_encoder, 0);
+            }
+            *SINK.lock().expect("sink lock") = Some(sink());
+            if ffi::obs_output_start(output) {
+                return Ok((output, encoder, id));
+            }
+            let reason = ffi::obs_output_get_last_error(output);
+            let reason = if reason.is_null() {
+                "did not start".to_string()
+            } else {
+                CStr::from_ptr(reason).to_string_lossy().into_owned()
+            };
+            eprintln!("aspen-capture: {id}: {reason}");
+            failures.push(format!("{id}: {reason}"));
+            *SINK.lock().expect("sink lock") = None;
+            ffi::obs_output_release(output);
+            ffi::obs_encoder_release(encoder);
+        }
+    }
+    Err(format!(
+        "no H.264 encoder started ({})",
+        failures.join("; ")
+    ))
+}
+
 /// Starts capturing: the source, sized into the output, encoded, and sent as SRTP to the
-/// target. One capture at a time; a second call while one runs is an error.
-pub fn start_capture(options: StartOptions) -> Result<()> {
+/// target. Answers with the id of the encoder the picture goes through. One capture at a time;
+/// a second call while one runs is an error.
+pub fn start_capture(options: StartOptions) -> Result<&'static str> {
     ensure_started(
         &plugin_dir(options.plugin_dir.as_ref()),
         &data_dir(options.data_dir.as_ref()),
@@ -212,8 +422,6 @@ pub fn start_capture(options: StartOptions) -> Result<()> {
         let serial = SESSIONS_STARTED.fetch_add(1, Ordering::SeqCst);
         let source_name = cstring(&format!("aspen-capture-{serial}"))?;
         let scene_name = cstring(&format!("aspen-scene-{serial}"))?;
-        let encoder_name = cstring(&format!("aspen-h264-{serial}"))?;
-        let output_name = cstring(&format!("aspen-output-{serial}"))?;
         if options.kind == "game_capture"
             && !ffi::obs_data_has_user_value(settings, c"hook_rate".as_ptr())
         {
@@ -246,48 +454,20 @@ pub fn start_capture(options: StartOptions) -> Result<()> {
         ffi::obs_sceneitem_set_bounds(item, &bounds);
         ffi::obs_set_output_source(0, ffi::obs_scene_get_source(scene));
 
-        let encoder_settings = ffi::obs_data_create();
-        ffi::obs_data_set_int(encoder_settings, c"bitrate".as_ptr(), bitrate);
-        ffi::obs_data_set_string(encoder_settings, c"rate_control".as_ptr(), c"CBR".as_ptr());
-        ffi::obs_data_set_string(encoder_settings, c"preset".as_ptr(), c"veryfast".as_ptr());
-        ffi::obs_data_set_string(encoder_settings, c"tune".as_ptr(), c"zerolatency".as_ptr());
-        // Constrained baseline decodes everywhere, Firefox's OpenH264 included; with the
-        // zero-latency tune there are no B-frames to lose. A keyframe every second is how
-        // long a new viewer waits, since libobs cannot be asked for one.
-        ffi::obs_data_set_string(encoder_settings, c"profile".as_ptr(), c"baseline".as_ptr());
-        ffi::obs_data_set_int(encoder_settings, c"keyint_sec".as_ptr(), 1);
-        let encoder = ffi::obs_video_encoder_create(
-            c"obs_x264".as_ptr(),
-            encoder_name.as_ptr(),
-            encoder_settings,
-            ptr::null_mut(),
-        );
-        ffi::obs_data_release(encoder_settings);
-        if encoder.is_null() {
-            release(Session {
-                serial,
-                source,
-                scene,
-                item,
-                encoder: ptr::null_mut(),
-                output: ptr::null_mut(),
-                audio_source: ptr::null_mut(),
-                audio_encoder: ptr::null_mut(),
-            });
-            return Err("the obs_x264 encoder is not available".into());
-        }
-        ffi::obs_encoder_set_video(encoder, ffi::obs_get_video());
-
         let (audio_source, audio_encoder) = match &options.audio {
             Some(audio) => match create_audio(audio, serial) {
                 Ok(created) => created,
                 Err(reason) => {
+                    sender.stop();
+                    if let Some(audio) = &audio_sender {
+                        audio.stop();
+                    }
                     release(Session {
                         serial,
                         source,
                         scene,
                         item,
-                        encoder,
+                        encoder: ptr::null_mut(),
                         output: ptr::null_mut(),
                         audio_source: ptr::null_mut(),
                         audio_encoder: ptr::null_mut(),
@@ -298,64 +478,33 @@ pub fn start_capture(options: StartOptions) -> Result<()> {
             None => (ptr::null_mut(), ptr::null_mut()),
         };
 
-        let output = ffi::obs_output_create(
-            if audio_encoder.is_null() {
-                OUTPUT_ID.as_ptr()
-            } else {
-                OUTPUT_AV_ID.as_ptr()
-            },
-            output_name.as_ptr(),
-            ptr::null_mut(),
-            ptr::null_mut(),
-        );
-        if output.is_null() {
-            release(Session {
-                serial,
-                source,
-                scene,
-                item,
-                encoder,
-                output: ptr::null_mut(),
-                audio_source,
-                audio_encoder,
-            });
-            return Err("the packet output could not be created".into());
-        }
-        // An encoded output takes its media from its encoders.
-        ffi::obs_output_set_video_encoder(output, encoder);
-        if !audio_encoder.is_null() {
-            ffi::obs_output_set_audio_encoder(output, audio_encoder, 0);
-        }
-
-        *SINK.lock().expect("sink lock") = Some(Sink {
+        let sink = || Sink {
             video: Some(Arc::clone(&sender)),
             parameter_sets: None,
             audio: audio_sender.clone(),
-        });
-        if !ffi::obs_output_start(output) {
-            let reason = ffi::obs_output_get_last_error(output);
-            let reason = if reason.is_null() {
-                "the output did not start".to_string()
-            } else {
-                CStr::from_ptr(reason).to_string_lossy().into_owned()
-            };
-            *SINK.lock().expect("sink lock") = None;
-            sender.stop();
-            if let Some(audio) = &audio_sender {
-                audio.stop();
+        };
+        let (output, encoder, encoder_id) = match start_output(serial, bitrate, audio_encoder, sink)
+        {
+            Ok(started) => started,
+            Err(reason) => {
+                sender.stop();
+                if let Some(audio) = &audio_sender {
+                    audio.stop();
+                }
+                release(Session {
+                    serial,
+                    source,
+                    scene,
+                    item,
+                    encoder: ptr::null_mut(),
+                    output: ptr::null_mut(),
+                    audio_source,
+                    audio_encoder,
+                });
+                return Err(reason);
             }
-            release(Session {
-                serial,
-                source,
-                scene,
-                item,
-                encoder,
-                output,
-                audio_source,
-                audio_encoder,
-            });
-            return Err(reason);
-        }
+        };
+        eprintln!("aspen-capture: encoding with {encoder_id}");
         *session = Some(Session {
             serial,
             source,
@@ -369,8 +518,8 @@ pub fn start_capture(options: StartOptions) -> Result<()> {
         if options.kind == "game_capture" {
             watch_hook(serial, options.settings.clone());
         }
+        Ok(encoder_id)
     }
-    Ok(())
 }
 
 /// The application's audio: its source on output channel 1 (a video capture's scene holds

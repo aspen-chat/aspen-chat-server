@@ -197,8 +197,9 @@ fn catalogue(plugin_dir: Option<&String>, data_dir: Option<&String>) -> Result<C
     })
 }
 
-/// Starts capturing a picture, with the application's sound when asked.
-fn start_capture(options: StartOptions) -> Result<()> {
+/// Starts capturing a picture, with the application's sound when asked; answers with the id of
+/// the libobs encoder the picture goes through.
+fn start_capture(options: StartOptions) -> Result<&'static str> {
     #[cfg(obs)]
     {
         obs::start_capture(options)
@@ -284,6 +285,10 @@ enum Reply {
     },
     Done {
         id: u64,
+        /// The libobs encoder a started picture goes through (`obs_nvenc_h264_tex`, `obs_x264`,
+        /// and the rest of `obs::capture::VIDEO_ENCODERS`); absent on every other reply.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        encoder: Option<&'static str>,
     },
     Failed {
         id: u64,
@@ -324,20 +329,23 @@ fn main() {
             Request::Start { id, options } => {
                 stop_capture();
                 match start_capture(*options) {
-                    Ok(()) => Reply::Done { id },
+                    Ok(encoder) => Reply::Done {
+                        id,
+                        encoder: Some(encoder),
+                    },
                     Err(reason) => Reply::Failed { id, reason },
                 }
             }
             Request::StartAudio { id, options } => {
                 stop_capture();
                 match start_audio_capture(*options) {
-                    Ok(()) => Reply::Done { id },
+                    Ok(()) => Reply::Done { id, encoder: None },
                     Err(reason) => Reply::Failed { id, reason },
                 }
             }
             Request::Stop { id } => {
                 stop_capture();
-                Reply::Done { id }
+                Reply::Done { id, encoder: None }
             }
             Request::Shutdown => break,
         };

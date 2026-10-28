@@ -95,8 +95,13 @@ pub(super) unsafe fn reset_video(width: u32, height: u32, fps: u32) -> Result<()
 }
 
 /// The modules the capture needs, by file name without extension; missing ones are skipped,
-/// since each platform ships its own capture plugin.
+/// since each platform ships its own capture plugin. `obs-nvenc`, `obs-qsv11`, and `obs-ffmpeg`
+/// (AMD's encoder, beside the Opus one) each register their H.264 encoder only when the test
+/// program they run finds that vendor's GPU; `obs-x264` always has one (see
+/// `capture::VIDEO_ENCODERS`).
 const MODULES: &[&str] = &[
+    "obs-nvenc",
+    "obs-qsv11",
     "obs-x264",
     "obs-ffmpeg",
     "image-source",

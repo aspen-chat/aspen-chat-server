@@ -4,3 +4,4 @@ native/aspen-capture.exe
 native/aspen-capture*.new
 native/libobs/
 native/libobs-cache/
+native/obs-*-test.exe
