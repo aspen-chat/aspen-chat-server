@@ -26,6 +26,12 @@ A poll is a record of its own, shown in a message and kept current by the event 
   every vote.
 - A vote only records the caller's own choice locally (`store.setMyVote`). The numbers come from the
   stream.
+- The server tells the caller's own devices which options and write-ins are theirs after every vote
+  and write-in, on the user's own subject (`pollVotesChanged`, with the poll and the indexes as they
+  stand). The store replaces what it holds of the caller's votes and write-ins on that poll with it
+  (`myVotes`, `myWriteIns`), so a vote cast on one device shows on the others, and a single-choice
+  vote moved there moves here; the device that voted recorded the same from its own write and
+  applies the event over it.
 - Each answer's result names only its first five voters. `ChoiceRow` says how many more there are,
   and `VotersDialog` lists everyone who voted for it a page at a time (`AspenSync.loadVoters`).
 - Message reads sideload `polls` with the caller's `pollVotes`. This is the only way to learn one's

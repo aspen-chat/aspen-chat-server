@@ -300,6 +300,16 @@ enum MessageEnumSource {
     // `app::thread_follow`.
     #[message_gen(custom_event)]
     ThreadFollowChanged { thread: ChannelId, following: bool },
+    // Which of a poll's answers are the user's changed, on one of their devices, or by a
+    // written-in answer being removed; the others follow. `options` are the indexes they have
+    // voted for, `write_ins` those of the answers they wrote in that still stand, each as the
+    // poll's rows hold them when it is published. See `app::poll`.
+    #[message_gen(custom_event)]
+    PollVotesChanged {
+        poll: PollId,
+        options: Vec<u32>,
+        write_ins: Vec<u32>,
+    },
     Message {
         #[message_gen(id)]
         id: MessageId,

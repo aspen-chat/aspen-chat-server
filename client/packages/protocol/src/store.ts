@@ -214,6 +214,11 @@ function mergePatch<T extends object>(record: T, patch: object): T {
   return next as T;
 }
 
+/** `indexes` in ascending order, as the sets of the caller's votes are kept. */
+function ascending(indexes: readonly number[]): number[] {
+  return Array.from(indexes).sort((a, b) => a - b);
+}
+
 /** The record carried by a `create` event, without the event's own tags. */
 function created<T extends object>(event: T & { type: "create"; serverEvent: string }): T {
   const record: Record<string, unknown> = { ...(event as Record<string, unknown>) };
@@ -2997,6 +3002,15 @@ export class RecordStore {
           } else {
             this.#removePoll(event.id);
           }
+          break;
+        case "pollVotesChanged":
+          // The caller's own votes and write-ins as they stand, from whichever of their devices
+          // changed them; what this one recorded of its own write is the same, so applying both
+          // is harmless.
+          this.#touchRecord(`poll:${event.poll}`);
+          this.#setMyVotes(event.poll, new Set(ascending(event.options)));
+          this.#myWriteIns.set(event.poll, new Set(ascending(event.writeIns)));
+          this.#touch(`poll:${event.poll}`);
           break;
         case "voiceSession":
           if (event.type === "create") {

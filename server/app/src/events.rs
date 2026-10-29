@@ -201,7 +201,8 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::PluginNotice { .. }
         | ServerEvent::HeldMessagePosted { .. }
         | ServerEvent::HeldMessageFailed { .. }
-        | ServerEvent::HeldMessageCancelled { .. } => ScopeKind::User,
+        | ServerEvent::HeldMessageCancelled { .. }
+        | ServerEvent::PollVotesChanged { .. } => ScopeKind::User,
         ServerEvent::User(_)
         | ServerEvent::BotCommandsChanged { .. }
         | ServerEvent::UserAnnotation(_) => ScopeKind::UserEverywhere,
@@ -748,7 +749,9 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         | ServerEvent::AttachmentChanged { .. }
         | ServerEvent::HeldMessagePosted { .. }
         | ServerEvent::HeldMessageFailed { .. }
-        | ServerEvent::HeldMessageCancelled { .. } => Vec::new(),
+        | ServerEvent::HeldMessageCancelled { .. }
+        // Which answers are a voter's changes what nobody may do here.
+        | ServerEvent::PollVotesChanged { .. } => Vec::new(),
     }
 }
 

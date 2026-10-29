@@ -1155,6 +1155,44 @@ describe("RecordStore polls", () => {
     expect(Array.from(store.myVotes(many.id))).toEqual([0, 1]);
   });
 
+  it("follows the caller's votes and write-ins from their other devices", () => {
+    const store = bootstrapped();
+    const lunch = poll(5, true);
+    store.addPoll(lunch);
+    const listener = vi.fn();
+    store.subscribe(`poll:${lunch.id}`, listener);
+    // Another device voted for Sushi.
+    store.applyEvent({
+      serverEvent: "pollVotesChanged",
+      poll: lunch.id,
+      options: [1],
+      writeIns: [],
+    });
+    expect(Array.from(store.myVotes(lunch.id))).toEqual([1]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    // Then moved the vote on this single-choice poll to a write-in of its own.
+    store.applyEvent({
+      serverEvent: "pollVotesChanged",
+      poll: lunch.id,
+      options: [2],
+      writeIns: [2],
+    });
+    expect(Array.from(store.myVotes(lunch.id))).toEqual([2]);
+    expect(Array.from(store.myWriteIns(lunch.id))).toEqual([2]);
+    // The device that voted recorded its own write first and applies the event over it.
+    const many = { ...poll(6), multipleChoice: true };
+    store.addPoll(many);
+    store.setMyVote(many.id, 1, true);
+    store.setMyVote(many.id, 0, true);
+    store.applyEvent({
+      serverEvent: "pollVotesChanged",
+      poll: many.id,
+      options: [1, 0],
+      writeIns: [],
+    });
+    expect(Array.from(store.myVotes(many.id))).toEqual([0, 1]);
+  });
+
   it("keeps a streamed poll over the create response, and drops it with its message", () => {
     const store = bootstrapped();
     const lunch = poll(4);

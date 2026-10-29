@@ -734,6 +734,52 @@ async fn publish_results(
     Ok(record)
 }
 
+/// Tells `user`'s own devices which of the poll's answers are theirs now, in the transaction
+/// that changed them: the options they have voted for and the written-in answers of theirs
+/// that stand, as the rows hold them. Everyone else learns only the tally, from the poll's
+/// `update`.
+async fn publish_own(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    poll_id: PollId,
+    user: UserId,
+) -> crate::Result<()> {
+    let options: Vec<i32> = poll_vote::table
+        .select(poll_vote::option_index)
+        .filter(poll_vote::poll.eq(poll_id).and(poll_vote::user.eq(user)))
+        .order(poll_vote::option_index)
+        .load(conn)
+        .await?;
+    let write_ins: Vec<i32> = poll_option::table
+        .select(poll_option::index)
+        .filter(
+            poll_option::poll
+                .eq(poll_id)
+                .and(poll_option::write_in)
+                .and(poll_option::written_by.eq(user))
+                .and(poll_option::removed_at.is_null()),
+        )
+        .order(poll_option::index)
+        .load(conn)
+        .await?;
+    let indexes = |rows: Vec<i32>| {
+        rows.into_iter()
+            .filter_map(|i| u32::try_from(i).ok())
+            .collect()
+    };
+    publish_event(
+        state,
+        conn,
+        EventScope::User(user),
+        &ServerEvent::PollVotesChanged {
+            poll: poll_id,
+            options: indexes(options),
+            write_ins: indexes(write_ins),
+        },
+    )
+    .await
+}
+
 /// Records `user`'s vote for `option`. On a single-choice poll any other vote of theirs is
 /// withdrawn first. Returns whether the vote is new, and the poll with its updated tally.
 pub async fn add_vote(
@@ -770,6 +816,7 @@ pub async fn add_vote(
             }
             let inserted = cast_vote(conn.as_mut(), &row, user, option_index, now).await?;
             let record = publish_results(state, conn.as_mut(), row, WriteIns::Unchanged).await?;
+            publish_own(state, conn.as_mut(), id, user).await?;
             Ok((inserted, record))
         }
         .scope_boxed()
@@ -899,6 +946,7 @@ pub async fn write_in(
                 cast_vote(conn.as_mut(), &row, user, existing.index, now).await?;
                 let record =
                     publish_results(state, conn.as_mut(), row, WriteIns::Unchanged).await?;
+                publish_own(state, conn.as_mut(), id, user).await?;
                 return Ok((WriteInOutcome::Existing(existing.index as u32), record));
             }
             let written = options.iter().filter(|o| o.write_in);
@@ -929,6 +977,7 @@ pub async fn write_in(
                 .await?;
             cast_vote(conn.as_mut(), &row, user, index, now).await?;
             let record = publish_results(state, conn.as_mut(), row, WriteIns::Changed).await?;
+            publish_own(state, conn.as_mut(), id, user).await?;
             Ok((WriteInOutcome::Added(index as u32), record))
         }
         .scope_boxed()
@@ -1029,6 +1078,14 @@ pub async fn remove_write_in(
                 .execute(conn.as_mut())
                 .await?;
             publish_results(state, conn.as_mut(), row, WriteIns::Changed).await?;
+            // The remover's and the writer's own answers changed; every other voter for it
+            // learns from the tally, whose `writeIns` leaves `null` at its index.
+            publish_own(state, conn.as_mut(), id, user).await?;
+            if let Some(writer) = writer.flatten()
+                && writer != user
+            {
+                publish_own(state, conn.as_mut(), id, writer).await?;
+            }
             Ok(())
         }
         .scope_boxed()
@@ -1098,6 +1155,7 @@ pub async fn remove_vote(
                 .await?;
             if deleted > 0 {
                 publish_results(state, conn.as_mut(), row, WriteIns::Unchanged).await?;
+                publish_own(state, conn.as_mut(), id, user).await?;
             }
             Ok(())
         }

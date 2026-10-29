@@ -60,6 +60,14 @@ under the row's lock).
 - Both are refused in a blocked DM.
 - So someone who loses the channel changes its tallies no more.
 
+Which answers are the voter's own is theirs alone (`pollVotes` and `ownWriteIns` in the sideloads),
+so the tally's `update` cannot carry it. Every change to them, casting or withdrawing a vote,
+writing an answer in, or a write-in of theirs being removed, publishes `pollVotesChanged` to the
+voter (`app::poll::publish_own`), in the transaction that made the change: the poll, `options`, the
+indexes they have voted for, and `writeIns`, the indexes of the answers they wrote in that still
+stand, each read from the rows as written. Their other devices take it whole, so a vote cast on a
+phone moves on the desktop too, and on a single-choice poll the vote it replaced goes with it.
+
 Plugins that intercept `message.create` where a poll is decide its question and answers, and each
 written-in answer, before they are saved (`intercept::decide_unchanged`; see
 [Plugins](plugins/index.md)).
@@ -98,6 +106,8 @@ A poll's creator may allow write-ins (`allowWriteIns`).
 ### Removing a write-in
 
 `DELETE /polls/{poll}/write-ins/{option}` is offered to its writer and the poll's creator. It takes
-the answer's votes and leaves `null` at its index.
+the answer's votes and leaves `null` at its index. The remover and the writer are each told their
+own answers as they now stand (`pollVotesChanged`); every other voter for it learns from the tally's
+`update`, whose `writeIns` leaves `null` at the index, and drops their vote for it.
 
 **Why:** votes are cast by index, and renumbering would move a vote already on its way.
