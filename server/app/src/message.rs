@@ -1081,8 +1081,18 @@ pub async fn update_message(
         .is_none_or(|content| *content == before_content);
     let same_files = retouched.as_ref().is_none_or(|r| !r.changes());
     if same_text && same_files {
+        // A waiting edit that has been overtaken is done all the same: its row goes and the
+        // author's apps drop the pending edit together, as for one that changed something.
         if let Some(waited) = waited {
-            held::take(conn.as_mut(), waited).await?;
+            conn.transaction(|conn| {
+                async move {
+                    held::take(conn.as_mut(), waited).await?;
+                    held::announce_edited(state, conn.as_mut(), caller, waited, channel_id, id)
+                        .await
+                }
+                .scope_boxed()
+            })
+            .await?;
         }
         return Ok(Edited::Done(Box::new(
             current(state, conn.as_mut(), id).await?,
