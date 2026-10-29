@@ -39,7 +39,8 @@ from pathlib import Path
 from software_passkey import SoftwarePasskey, b64url
 import dev_ca
 import oidc_provider_stand_in
-from stack import REPO, Failed, Ports, Stack, WebSocket, compose, psql, start_services, wait_for, wait_for_services
+from stack import (REPO, EventStream, Failed, Ports, Stack, WebSocket, compose, psql, start_services, wait_for,
+                   wait_for_services)
 
 PORTS = Ports(nats=14322, api=18100, voice=19101, api_metrics=19564, voice_metrics=19565, rtc_min=45200, rtc_max=45399,
               transfer=13578, relay_min=46100, relay_max=46199)
@@ -143,6 +144,14 @@ class World:
 
     def give(self, role: str) -> None:
         self.as_owner("PUT", f"/communities/{self.community}/members/{self.member['id']}/roles/{role}")
+
+    def recruit(self, role: str) -> dict:
+        """Another account, joined to the community."""
+        joiner = self.account(role)
+        invite = self.as_owner("POST", f"/communities/{self.community}/invites", {})
+        self.stack.api("PUT", f"/communities/{self.community}/members/@me",
+                       {"inviteCode": invite.get("code") or invite.get("id")}, joiner["token"])
+        return joiner
 
     def post(self, channel: str, content: str) -> str:
         return self.as_owner("POST", f"/channels/{channel}/messages", {"content": content, "attachments": []})["id"]
@@ -3565,6 +3574,184 @@ def usernames(world: World, check: Checks) -> None:
           stack.status("PATCH", "/users/@me", {"displayName": "Still me"}, member["token"]) == 200)
 
 
+def pins_of_deleted_messages(world: World, check: Checks) -> None:
+    say("a pinned message deleted, whose pin goes with it")
+    stack, member = world.stack, world.member["token"]
+    board = world.channel("board")
+    pinned = world.post(board, "pinned, then deleted")
+    world.as_owner("PUT", f"/messages/{pinned}/pin")
+    world.stream.gather(0.8)
+    check("the member reads the pin",
+          any(p["messageId"] == pinned for p in stack.api("GET", f"/channels/{board}/pins", token=member)))
+    world.as_owner("DELETE", f"/messages/{pinned}")
+    got = world.stream.gather(1.0)
+    kinds = [(e["serverEvent"], e.get("type")) for e in got]
+    pin_gone = [i for i, e in enumerate(got)
+                if e["serverEvent"] == "pin" and e.get("type") == "delete" and e.get("messageId") == pinned]
+    message_gone = [i for i, e in enumerate(got)
+                    if e["serverEvent"] == "message" and e.get("type") == "delete" and e.get("id") == pinned]
+    check("deleting the message tells the open stream its pin is gone, once, before the message",
+          len(pin_gone) == 1 and len(message_gone) == 1 and pin_gone[0] < message_gone[0], kinds)
+    check("a fresh read of the channel's pins lacks it",
+          all(p["messageId"] != pinned for p in stack.api("GET", f"/channels/{board}/pins", token=member)))
+    check("and its row is gone, so the place it held among the channel's pins is free",
+          psql(f"SELECT count(*) FROM pin WHERE message_id = '{pinned}'", stack.database) == "0")
+    check("another message is pinned after it",
+          stack.status("PUT", f"/messages/{world.post(board, 'pinned next')}/pin", token=world.owner["token"]) == 201)
+
+
+def own_votes_elsewhere(world: World, check: Checks) -> None:
+    say("a vote cast from one device, told to the voter's other devices and to nobody else")
+    stack, member = world.stack, world.member
+    ballot = world.channel("ballot-devices")
+    poll = world.as_owner("POST", f"/channels/{ballot}/polls", {
+        "question": "Which?", "options": [{"label": "this"}, {"label": "that"}], "multipleChoice": False,
+        "allowWriteIns": True, "anonymous": False, "durationSeconds": 3600})["id"]
+    other = stack.events(member["token"])
+    bystander = stack.events(world.owner["token"])
+    for stream in (world.stream, other, bystander):
+        stream.gather(0.5)
+
+    def told(stream: EventStream) -> list[tuple[list[int], list[int]]]:
+        return [(sorted(e["options"]), sorted(e["writeIns"]))
+                for e in of(stream.gather(1.0), "pollVotesChanged", poll=poll)]
+
+    def fresh() -> tuple[list[int], list[int]]:
+        included = stack.api("GET", f"/polls/{poll}?include=votes", token=member["token"]).get("included", {})
+        return (sorted(v["option"] for v in included.get("pollVotes", [])),
+                sorted(w["option"] for w in included.get("ownWriteIns", [])))
+
+    stack.api("PUT", f"/polls/{poll}/votes/0/@me", token=member["token"])
+    check("a vote is told to the voter's other device, with the option that is theirs",
+          told(other) == [([0], [])] and told(world.stream) == [([0], [])])
+    check("as a fresh read says", fresh() == ([0], []))
+    stack.api("PUT", f"/polls/{poll}/votes/1/@me", token=member["token"])
+    now = fresh()
+    check("a second vote on a single-choice poll moves it, and both devices hear where to",
+          told(other) == [now] and told(world.stream) == [now] and now == ([1], []), now)
+    written = stack.api("POST", f"/polls/{poll}/write-ins", {"label": "another"}, member["token"])["option"]
+    now = fresh()
+    check("an answer written in is told the same way, the vote moved to it",
+          told(other) == [now] and told(world.stream) == [now] and now == ([written], [written]), now)
+    stack.api("DELETE", f"/polls/{poll}/write-ins/{written}", token=member["token"])
+    now = fresh()
+    check("and so is its removal", told(other) == [now] and told(world.stream) == [now] and now[1] == [], now)
+    heard = bystander.gather(1.0)
+    check("someone who did not vote hears only the poll's tally",
+          not of(heard, "pollVotesChanged") and len(of(heard, "poll", type="update", id=poll)) >= 4,
+          [e["serverEvent"] for e in heard])
+    other.close()
+    bystander.close()
+
+
+def new_channel_overrides(world: World, check: Checks) -> None:
+    say("a channel made with overrides, which reach those they let in along with it")
+    stack = world.stack
+    allowed, denied = world.role("Allowed"), world.role("Denied")
+    world.give(allowed)
+    outsider = world.recruit("outsider")
+    world.as_owner("PUT", f"/communities/{world.community}/members/{outsider['id']}/roles/{denied}")
+    outsider_stream = stack.events(outsider["token"])
+    outsider_stream.gather(0.5)
+    world.stream.gather(0.5)
+    overrides = [{"role": world.everyone, "allow": [], "deny": ["viewChannel"]},
+                 {"role": denied, "allow": [], "deny": ["viewChannel"]},
+                 {"role": allowed, "allow": ["viewChannel"], "deny": []}]
+    gated = world.channel("gated", overrides=overrides)
+
+    def shape(override: dict) -> tuple:
+        return override["role"], sorted(override["allow"]), sorted(override["deny"])
+
+    got = world.stream.gather(1.0)
+    created = [i for i, e in enumerate(got)
+               if e["serverEvent"] == "channel" and e.get("type") == "create" and e.get("id") == gated]
+    told = [(i, e) for i, e in enumerate(got) if e["serverEvent"] == "channelOverride" and e.get("channel") == gated]
+    check("a member the overrides let in receives the channel, once", len(created) == 1,
+          [(e["serverEvent"], e.get("type")) for e in got])
+    check("and then each of its overrides, once",
+          bool(created) and all(i > created[0] and e.get("type") == "create" for i, e in told)
+          and sorted(shape(e) for _, e in told) == sorted(shape(o) for o in overrides),
+          [(i, shape(e)) for i, e in told])
+    read = stack.api("GET", f"/communities/{world.community}?include=channels,roles", token=world.member["token"])
+    fresh = [o for o in read.get("included", {}).get("channelOverrides", []) if o["channel"] == gated]
+    check("which are what a fresh read of the community gives, field by field",
+          sorted(shape(o) for o in fresh) == sorted(shape(e) for _, e in told), fresh)
+    heard = outsider_stream.gather(1.0)
+    check("a member the overrides shut out receives neither the channel nor its overrides",
+          not of(heard, "channel", id=gated) and not of(heard, "channelOverride", channel=gated),
+          [e["serverEvent"] for e in heard])
+    check("and cannot read it", stack.status("GET", f"/channels/{gated}", token=outsider["token"]) == 404)
+    outsider_stream.close()
+
+
+def bot_deletion_reaches_everyone(world: World, check: Checks) -> None:
+    say("a bot made and deleted, told to its owner's other devices and the communities it was in")
+    stack, owner = world.stack, world.owner
+    other = stack.events(owner["token"])
+    other.gather(0.5)
+    world.stream.gather(0.5)
+    bot = stack.api("POST", "/users/@me/bots", {"name": f"dbot{world.run}"}, owner["token"])["bot"]["id"]
+    got = other.gather(1.0)
+    check("the owner's other device is told of the new bot", len(of(got, "user", type="create", id=bot)) == 1,
+          [(e["serverEvent"], e.get("type")) for e in got])
+    check("while a member who shares no community with it yet is not",
+          not of(world.stream.gather(0.8), "user", id=bot))
+    world.as_owner("PUT", f"/communities/{world.community}/members/{bot}", {})
+    world.stream.gather(0.8)
+    check("added to the community, the member reads it", stack.status("GET", f"/users/{bot}", token=world.member["token"]) == 200)
+    stack.api("DELETE", f"/bots/{bot}", token=owner["token"])
+    heard = world.stream.gather(1.0)
+    check("deleting it tells the member's open stream the bot is gone, once",
+          len(of(heard, "user", type="delete", id=bot)) == 1, [(e["serverEvent"], e.get("type")) for e in heard])
+    check("besides its membership", bool(of(heard, "userCommunity", type="delete")), [e["serverEvent"] for e in heard])
+    heard = other.gather(1.0)
+    check("and the owner's other device too", bool(of(heard, "user", type="delete", id=bot)),
+          [(e["serverEvent"], e.get("type")) for e in heard])
+    check("whose fresh read of their bots lacks it",
+          all(b["id"] != bot for b in stack.api("GET", "/users/@me/bots", token=owner["token"])))
+    other.close()
+
+
+def profiles_reach_dm_partners(world: World, check: Checks) -> None:
+    say("a profile change, told to DM partners who share no community with its user")
+    stack = world.stack
+    alice, bob, carol, dave = (world.account(name) for name in ("alice", "bob", "carol", "dave"))
+    stack.command("admin", "grant", alice["name"])
+    stack.command("admin", "allow", "messageAnyUser")
+    bob_stream, dave_stream = stack.events(bob["token"]), stack.events(dave["token"])
+    bob_stream.gather(0.5)
+    dave_stream.gather(0.5)
+    made = stack.api("POST", "/users/@me/dms", {"recipients": [bob["id"], carol["id"]]}, alice["token"])
+    group = made.get("id") or made["data"]["id"]
+    check("a group DM with strangers reaches a partner's open stream", bool(of(bob_stream.gather(1.0), "channel", id=group)))
+    carol_stream = stack.events(carol["token"])
+    carol_stream.gather(0.5)
+
+    def renamed(stream: EventStream, to: str) -> bool:
+        got = of(stream.gather(1.0), "user", type="update", id=alice["id"])
+        return len(got) == 1 and got[0].get("displayName") == to
+
+    first = f"Alice the first {world.run}"
+    stack.api("PATCH", "/users/@me", {"displayName": first}, alice["token"])
+    check("a partner whose stream was open when the DM began hears the name change", renamed(bob_stream, first))
+    check("and one whose stream opened after it", renamed(carol_stream, first))
+    check("as a fresh read of the partner says",
+          stack.api("GET", f"/users/{alice['id']}", token=bob["token"])["displayName"] == first)
+    check("while a stranger with no DM hears nothing of them",
+          not of(dave_stream.gather(0.8), "user", id=alice["id"]), dave_stream.events)
+    stack.api("DELETE", f"/channels/{group}/recipients/@me", token=bob["token"])
+    bob_stream.gather(0.8)
+    second = f"Alice the second {world.run}"
+    stack.api("PATCH", "/users/@me", {"displayName": second}, alice["token"])
+    check("once a partner leaves the DM, nothing more of the user reaches them",
+          not of(bob_stream.gather(1.0), "user", id=alice["id"]))
+    check("while the partner who stayed still hears", renamed(carol_stream, second))
+    for stream in (bob_stream, carol_stream, dave_stream):
+        stream.close()
+    stack.command("admin", "deny", "messageAnyUser")
+    stack.command("admin", "revoke", alice["name"])
+
+
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, replies, calls, attachments,
@@ -3573,7 +3760,9 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, community_takedowns, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
-             marking_unread, join_messages, identity_providers, sent_files, invite_codes, usernames, large_communities]
+             marking_unread, join_messages, identity_providers, sent_files, invite_codes, usernames, large_communities,
+             pins_of_deleted_messages, own_votes_elsewhere, new_channel_overrides, bot_deletion_reaches_everyone,
+             profiles_reach_dm_partners]
 
 
 def main() -> None:
