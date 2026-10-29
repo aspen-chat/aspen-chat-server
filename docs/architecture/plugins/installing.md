@@ -42,7 +42,8 @@ the settings it still has. It asks again when the plugin asks for more.
 Both jobs are described in [Jobs](../jobs/index.md).
 
 Annotations deleted after `remove` go without events. No read shows a removed plugin's annotations
-while the job runs, and clients draw none for a plugin `GET /plugins` does not list.
+while the job runs, and clients draw none for a plugin `GET /plugins` does not list, which the
+`pluginCatalogueChanged` frame has them read again (below).
 
 ## The dashboard
 
@@ -55,3 +56,8 @@ plugins (`/admin/plugins`, `/admin/plugin-order`).
 2. It is announced on the core NATS subject `aspen.plugins.changed` (`registry::announce`).
 3. Every API server reloads on it (`Plugins::reload`), compiling a component again only when its
    SHA-256 changed.
+4. Each API server then writes an `ephemeral` frame `{"serverEvent":"pluginCatalogueChanged"}` to
+   every event stream it holds (`EventFeed::tell_everyone`), with no permission check: the catalogue
+   is every signed-in user's. The client reads `GET /plugins` again and drops the annotations,
+   cards, and community plugin settings of plugins no longer listed. A client that loads after the
+   change reads the new catalogue as it starts.

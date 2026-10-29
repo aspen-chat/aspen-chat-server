@@ -5,8 +5,18 @@
 `GET /plugins` is read:
 
 - with the bootstrap (`AspenSync`);
+- at every `ready` of the event stream: a change while this client was not connected was told to no
+  one;
+- on the ephemeral frame `pluginCatalogueChanged`, which every API server writes to every open
+  stream when a plugin is installed, upgraded, turned on or off, reordered, or removed;
 - again (`loadPlugins`, one read shared by every ask) whenever an event names a plugin the store
-  does not know: an annotation's, or one in a message's `alteredBy`.
+  does not know, or a kind of channel no plugin in it adds: an annotation's plugin, a card's, a
+  plugin's own event's (`pluginEvent`) or notice's (`pluginNotice`), one in a message's `alteredBy`,
+  or a new plugin channel's `pluginType` (`RecordStore.pluginKind`).
+
+A read for word that the catalogue changed (the frame, `ready`) is sent after any read already in
+flight, which may have been answered before the change; every such ask while one is in flight shares
+the read that follows it.
 
 A deployment that does not answer runs none.
 
@@ -19,6 +29,10 @@ A deployment that does not answer runs none.
 - its account, and the permissions that account asks for;
 - its community settings;
 - its `messages`, already in the reader's language. The server makes the pseudo-locales.
+
+Installing a catalogue (`setPlugins`) drops what was held of a plugin it no longer lists: its
+annotations of messages and of people, and each community's use of it (`communityPlugins`). Nothing
+but the catalogue says a plugin was removed, since its rows go without events.
 
 ### A plugin's text
 

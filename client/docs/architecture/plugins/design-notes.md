@@ -7,10 +7,15 @@ Rationale behind the [plugins](index.md) pages.
 - **The app draws plugins' contributions from records and each plugin's catalogue.** A plugin the
   app has never heard of shows as well as one it has. The one code of a plugin's the app shows is a
   view's page, in a sandboxed frame.
-- **The catalogue is read again whenever an event names an unknown plugin.** One read is shared by
-  every ask (`loadPlugins`). See [the catalogue](catalogue.md).
-- **Annotations and cards of plugins the catalogue lacks are passed over.** A plugin turned off or
-  removed takes its notes with it. See [annotations](annotations.md).
+- **The catalogue is read again whenever an event names an unknown plugin, when the server says it
+  changed, and at every connection.** A plugin that is removed or turned off names nothing in any
+  event, so only the server's word (`pluginCatalogueChanged`) and a read per connection can tell of
+  it; a plugin that is new tells of itself through the first annotation, card, event, notice, or
+  channel of its that arrives. One read is shared by every ask (`loadPlugins`). See
+  [the catalogue](catalogue.md).
+- **Annotations and cards of plugins the catalogue lacks are passed over, and dropped once a
+  catalogue lacks them.** A plugin turned off or removed takes its notes with it. See
+  [annotations](annotations.md).
 - **Pressing an annotation opens a popover.** Nothing depends on hover.
 
 ## Views and the bridge

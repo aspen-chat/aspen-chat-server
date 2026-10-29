@@ -973,6 +973,22 @@ export class RecordStore {
     return this.#plugins.find((p) => p.id === id);
   }
 
+  /**
+   * The plugin that adds the kind of channel named `pluginType` (`Channel.pluginType`), and the
+   * kind; `undefined` when no plugin the deployment runs does.
+   */
+  pluginKind(
+    pluginType: string,
+  ): { plugin: PluginInfo; kind: PluginInfo["channelTypes"][number] } | undefined {
+    for (const plugin of this.#plugins) {
+      const kind = plugin.channelTypes.find((k) => k.pluginType === pluginType);
+      if (kind !== undefined) {
+        return { plugin, kind };
+      }
+    }
+    return undefined;
+  }
+
   /** A community's use of each plugin, for its plugins' managers; `undefined` until read. */
   communityPlugins(communityId: string): readonly CommunityPlugin[] | undefined {
     return this.#memoized(`communityPlugins:${communityId}`, () => {
@@ -4478,17 +4494,45 @@ export class RecordStore {
     });
   }
 
-  /** Installs the plugins the deployment runs, as `GET /plugins` answered. */
+  /**
+   * Installs the plugins the deployment runs, as `GET /plugins` answered. What was held of a
+   * plugin the catalogue no longer lists goes with it: its annotations of messages and people,
+   * and each community's use of it. Nothing says when a plugin is removed but the catalogue.
+   */
   setPlugins(plugins: readonly PluginInfo[]): void {
     this.#batch(() => {
       this.#plugins = plugins;
       this.#touch("plugins");
-      // Annotations are shown only for plugins the deployment runs.
-      for (const id of this.#annotations.keys()) {
-        this.#touch(`annotations:${id}`);
+      const gone = (pluginId: string) => this.plugin(pluginId) === undefined;
+      for (const [messageId, held] of this.#annotations) {
+        for (const [id, annotation] of Array.from(held)) {
+          if (gone(annotation.plugin)) {
+            held.delete(id);
+            this.#annotated.delete(id);
+          }
+        }
+        // Shown only for plugins the deployment runs, so a new catalogue changes what is shown.
+        this.#touch(`annotations:${messageId}`);
       }
-      for (const id of this.#userAnnotations.keys()) {
-        this.#touch(`userAnnotations:${id}`);
+      for (const [userId, held] of this.#userAnnotations) {
+        for (const [id, annotation] of Array.from(held)) {
+          if (gone(annotation.plugin)) {
+            held.delete(id);
+          }
+        }
+        this.#touch(`userAnnotations:${userId}`);
+      }
+      for (const [communityId, held] of this.#communityPlugins) {
+        let changed = false;
+        for (const pluginId of Array.from(held.keys())) {
+          if (gone(pluginId)) {
+            held.delete(pluginId);
+            changed = true;
+          }
+        }
+        if (changed) {
+          this.#touch(`communityPlugins:${communityId}`);
+        }
       }
     });
   }

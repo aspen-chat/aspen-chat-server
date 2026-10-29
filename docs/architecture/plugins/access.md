@@ -64,7 +64,7 @@ chips straight.
 | The principal's membership or its role's permissions                 | Its next action is refused by the same checks a member's would be.                                                                                                                                                                                                                                                                            |
 | The principal, banned from the deployment                            | Every action is refused.                                                                                                                                                                                                                                                                                                                      |
 | `dms` (reinstalling without `--grant-dms`)                           | Its hooks stop in DMs.                                                                                                                                                                                                                                                                                                                        |
-| A plugin's place in `GET /plugins`                                   | The client drops annotations of plugins `GET /plugins` no longer lists.                                                                                                                                                                                                                                                                       |
+| A plugin's place in `GET /plugins`                                   | Every open stream on each API server is told `pluginCatalogueChanged` once the server reloads; the client reads `GET /plugins` again and drops annotations of plugins it no longer lists.                                                                                                                                                     |
 
 ## 4. When it is gained
 
@@ -72,17 +72,18 @@ chips straight.
   any channel gained.
 - A member gaining Manage plugins reads `GET /communities/{community}/plugins` when they open the
   community's plugin settings.
-- A plugin turned on appears in `GET /plugins`, which the client reads again when it meets a plugin
-  it does not know.
+- A plugin turned on appears in `GET /plugins`, which the client reads again on
+  `pluginCatalogueChanged`, and when it meets a plugin it does not know.
 
 ## 5. Does every path that changes it announce it?
 
 - Community changes publish `communityPlugin` events inside their transaction.
 - The principal's joining and leaving publish its membership and role events.
 - Annotation changes publish their own events.
-- The operator's and the dashboard's changes announce on `aspen.plugins.changed`.
+- The operator's and the dashboard's changes announce on `aspen.plugins.changed`, and each API
+  server tells its open streams `pluginCatalogueChanged` once it has reloaded.
 - Removing a plugin deletes its annotations without events. Every client infers that from the
-  catalogue.
+  catalogue it reads again on that frame.
 
 ## 6. Is it published inside the transaction that makes the change?
 

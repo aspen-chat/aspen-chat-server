@@ -9,6 +9,7 @@ use super::{CHANGED_SUBJECT, Mode, PluginPermission, settings};
 use crate::aspen_config::PluginsConfig;
 use crate::context::GlobalServerContext;
 use crate::events::ChannelHome;
+use crate::typing::EphemeralEvent;
 use crate::{CommunityId, UserId};
 use aspen_schema::{community_plugin, plugin, user};
 use chrono::{DateTime, Utc};
@@ -595,8 +596,18 @@ pub async fn start(state: &GlobalServerContext) -> crate::Result<()> {
                         match change.community {
                             Some(community) => state.plugins.forget(Some(community)),
                             None => {
-                                if let Err(e) = state.plugins.reload(&state).await {
-                                    tracing::error!("could not reload plugins: {e}");
+                                match state.plugins.reload(&state).await {
+                                    // Clients hold the catalogue they read at startup; told,
+                                    // each reads it again and drops what it shows of plugins
+                                    // no longer listed. A connection whose queue is full
+                                    // misses it and holds the stale catalogue until reload.
+                                    Ok(()) => {
+                                        state
+                                            .event_feed
+                                            .tell_everyone(&EphemeralEvent::PluginCatalogueChanged)
+                                            .await;
+                                    }
+                                    Err(e) => tracing::error!("could not reload plugins: {e}"),
                                 }
                             }
                         }

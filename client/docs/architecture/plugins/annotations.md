@@ -22,8 +22,9 @@ How they arrive:
 Rules:
 
 - A message's annotations go with it when it is deleted or leaves its window.
-- The store passes over annotations of plugins the catalogue lacks. A plugin turned off or removed
-  takes its notes with it.
+- The store passes over annotations of plugins the catalogue lacks, and drops them when a catalogue
+  is installed that lacks their plugin (`setPlugins`). A plugin turned off or removed takes its
+  notes with it.
 
 ### Drawing
 

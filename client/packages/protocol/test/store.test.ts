@@ -2296,15 +2296,66 @@ describe("RecordStore plugins", () => {
     expect(store.annotations(first.id)).toEqual([]);
   });
 
-  it("hides a plugin's annotations once the catalogue no longer lists it", () => {
+  it("drops what a plugin said, and each community's use of it, once the catalogue no longer lists it", () => {
     const store = bootstrapped();
-    store.setPlugins([filter]);
+    const other = { ...filter, id: "org.example.other" };
+    store.setPlugins([filter, other]);
     const first = message(1);
     store.replaceWindow(general.id, [first], { hasOlder: false, atLatest: true });
-    store.setAnnotations([first.id], [note(1, first.id)]);
+    store.setAnnotations([first.id], [note(1, first.id), note(2, first.id, other.id)]);
+    store.setUserAnnotations(bob.id, [
+      {
+        id: id(5003),
+        user: bob.id,
+        plugin: filter.id,
+        kind: "k",
+        severity: "notice",
+        label: { key: "watched" },
+      },
+      {
+        id: id(5004),
+        user: bob.id,
+        plugin: other.id,
+        kind: "k",
+        severity: "notice",
+        label: { key: "watched" },
+      },
+    ]);
+    store.setCommunityPlugins(aspen.id, [
+      { community: aspen.id, plugin: filter.id, enabled: true, settings: {}, secretsSet: [] },
+      { community: aspen.id, plugin: other.id, enabled: true, settings: {}, secretsSet: [] },
+    ]);
+    const onCommunityPlugins = vi.fn();
+    store.subscribe(`communityPlugins:${aspen.id}`, onCommunityPlugins);
+    expect(store.annotations(first.id)).toHaveLength(2);
+    store.setPlugins([other]);
+    expect(store.annotations(first.id).map((a) => a.plugin)).toEqual([other.id]);
+    expect(store.userAnnotations(bob.id)?.map((a) => a.plugin)).toEqual([other.id]);
+    expect(store.communityPlugins(aspen.id)?.map((p) => p.plugin)).toEqual([other.id]);
+    expect(onCommunityPlugins).toHaveBeenCalledTimes(1);
+    // The annotation that went is gone for good: an update to it finds nothing.
+    store.applyEvent({
+      serverEvent: "messageAnnotation",
+      type: "update",
+      id: id(5001),
+      severity: "warning",
+    });
     expect(store.annotations(first.id)).toHaveLength(1);
     store.setPlugins([]);
     expect(store.annotations(first.id)).toEqual([]);
+  });
+
+  it("names the plugin that adds a kind of channel", () => {
+    const store = bootstrapped();
+    const kind = {
+      pluginType: `${filter.id}:board`,
+      name: "Board",
+      glyph: "board" as const,
+      view: "/board",
+    };
+    store.setPlugins([{ ...filter, channelTypes: [kind] }]);
+    expect(store.pluginKind(kind.pluginType)?.kind).toEqual(kind);
+    expect(store.pluginKind("org.example.gone:board")).toBeUndefined();
   });
 
   it("keeps a community's plugin settings current for its managers", () => {

@@ -437,6 +437,8 @@ export class AspenSync {
   readonly #linkLoads = new Map<string, Promise<void>>();
   /** The read of the plugin catalogue in flight, which every ask shares. */
   #pluginLoad: Promise<void> | null = null;
+  /** The read of the catalogue to follow the one in flight (`#reloadPlugins`), if one is due. */
+  #pluginReload: Promise<void> | null = null;
   readonly #userLoads = new Map<string, Promise<void>>();
   readonly #channelLoads = new Map<string, Promise<void>>();
   readonly #setTimeout: typeof globalThis.setTimeout;
@@ -610,7 +612,7 @@ export class AspenSync {
         }
         if (event.type === "pluginCatalogueChanged") {
           // What the deployment runs changed: installed, removed, turned on or off, or upgraded.
-          void this.loadPlugins().catch(() => undefined);
+          void this.#reloadPlugins().catch(() => undefined);
           return;
         }
         if (kind !== "typing") {
@@ -1466,17 +1468,51 @@ export class AspenSync {
     return this.#pluginLoad;
   }
 
-  /** Whether `event` names a plugin the catalogue does not hold. */
+  /**
+   * Reads the plugins the deployment runs as they stand now, for word that they changed: a read
+   * already in flight may have been answered before the change, so one is sent after it. Every
+   * ask while one is in flight shares the read that follows it.
+   */
+  #reloadPlugins(): Promise<void> {
+    const pending = this.#pluginLoad;
+    if (pending === null) {
+      return this.loadPlugins();
+    }
+    this.#pluginReload ??= pending
+      .catch(() => undefined)
+      .then(() => {
+        this.#pluginReload = null;
+        return this.loadPlugins();
+      });
+    return this.#pluginReload;
+  }
+
+  /**
+   * Whether `event` names a plugin the catalogue does not hold, or a kind of channel no plugin
+   * in it adds: an annotation's, a card's, a plugin's own event's or notice's, one in a
+   * message's `alteredBy`, or a plugin channel's kind.
+   */
   #namesUnknownPlugin(event: ServerEvent): boolean {
     const unknown = (id: string) => this.store.plugin(id) === undefined;
     switch (event.serverEvent) {
       case "messageAnnotation":
       case "userAnnotation":
         return event.type === "create" && unknown(event.plugin);
+      case "pluginEvent":
+      case "pluginNotice":
+        return unknown(event.plugin);
       case "message":
         return (
           (event.type === "create" || event.type === "update") &&
-          (event.alteredBy ?? []).some(unknown)
+          ((event.alteredBy ?? []).some(unknown) ||
+            (event.card != null && unknown(event.card.plugin)))
+        );
+      case "channel":
+        return (
+          event.type === "create" &&
+          event.ty === "plugin" &&
+          event.pluginType != null &&
+          this.store.pluginKind(event.pluginType) === undefined
         );
       default:
         return false;
@@ -4365,6 +4401,9 @@ export class AspenSync {
     if (this.#status === "failed") {
       return;
     }
+    // A change to what the deployment runs while this client was not connected was told to no
+    // one; one small read per connection catches it.
+    void this.#reloadPlugins().catch(() => undefined);
     if (this.#replayMayLack(info)) {
       if (this.#held !== null) {
         this.#rereadWanted = true;

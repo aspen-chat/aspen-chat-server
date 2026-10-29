@@ -567,6 +567,8 @@ describe("AspenSync", () => {
       "/api/v1/users/@me/thread-follows",
       "/api/v1/users/@me/presence-override",
       "/api/v1/users/%40me/preferences",
+      // Read again at `ready`: a change to the catalogue while disconnected is told to no one.
+      "/api/v1/plugins",
     ]);
     expect(sync.store.communities()).toEqual([aspen]);
     expect(sync.store.channels(aspen.id)).toEqual([general]);
@@ -1900,7 +1902,198 @@ describe("AspenSync", () => {
   });
 });
 
+/** Bootstraps and connects, answering `ready` with `frame`; returns the socket and the count. */
+async function connectWith(frame: ReadyFrame, now: () => number = () => 0) {
+  let listings = 0;
+  const { sync, calls } = makeSync(
+    {
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/communities": () => {
+        listings += 1;
+        return json({ data: [aspen], included: { channels: [general] } });
+      },
+      [`/api/v1/channels/${general.id}/messages`]: () => json({ data: [message(1)], included: {} }),
+    },
+    now,
+  );
+  sync.start();
+  await settle();
+  const socket = FakeSocket.instances[0];
+  if (socket === undefined) {
+    throw new Error("stream did not connect");
+  }
+  socket.onopen?.();
+  socket.frame(frame);
+  return { sync, socket, calls, listings: () => listings };
+}
+
+describe("AspenSync and the replay a connection starts with", () => {
+  it("reads everything again when the server left events out of the replay", async () => {
+    const { sync, listings } = await connectWith(ready({ replayComplete: false }));
+    expect(sync.status).toBe("resyncing");
+    await settle();
+    expect(listings()).toBe(2);
+    expect(sync.status).toBe("live");
+    sync.stop();
+  });
+
+  it("reads everything again when the replay begins after the bootstrap did", async () => {
+    const T = 1_760_000_000_000;
+    const late = await connectWith(
+      ready({ replayedSince: new Date(T + 1_000).toISOString() }),
+      () => T,
+    );
+    expect(late.sync.status).toBe("resyncing");
+    await settle();
+    expect(late.listings()).toBe(2);
+    late.sync.stop();
+    // A replay that begins well before the bootstrap covers it, however long the bootstrap took.
+    const early = await connectWith(
+      ready({ replayedSince: new Date(T - 10_000).toISOString() }),
+      () => T,
+    );
+    expect(early.sync.status).toBe("live");
+    expect(early.listings()).toBe(1);
+    early.sync.stop();
+  });
+
+  it("goes live, and reads windows, only once the replay has been delivered", async () => {
+    const { sync, socket, calls } = await connectWith(ready({ catchUpFollows: true }));
+    expect(sync.status).toBe("connecting");
+    const load = sync.loadLatest(general.id);
+    await settle();
+    const reads = () =>
+      calls.filter((u) => u.pathname === `/api/v1/channels/${general.id}/messages`).length;
+    expect(reads()).toBe(0);
+    socket.frame({ type: "caughtUp" });
+    expect(sync.status).toBe("live");
+    await load;
+    expect(reads()).toBe(1);
+    expect(sync.store.messages(general.id)?.ids).toEqual([message(1).id]);
+    sync.stop();
+  });
+
+  it("is live at once on a server whose ready promises no caughtUp", async () => {
+    const older = { type: "ready", userId: me.id, resumed: false } as ServerMessage;
+    const { sync, listings } = await connectWith(older as ReadyFrame);
+    expect(sync.status).toBe("live");
+    expect(listings()).toBe(1);
+    sync.stop();
+  });
+});
+
+describe("AspenSync and the plugin catalogue", () => {
+  const filter = {
+    id: "org.example.filter",
+    version: "1.0.0",
+    name: "Filter",
+    description: "Filters",
+    mode: "optIn" as const,
+    dms: false,
+    principal: null,
+    principalPermissions: [],
+    communitySettings: [],
+    channelTypes: [],
+    messages: { watched: "Watched" },
+  };
+
+  it("reads the catalogue again when told it changed, and drops what a gone plugin said", async () => {
+    let catalogue = [filter];
+    let reads = 0;
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/plugins": () => {
+        reads += 1;
+        return json(catalogue);
+      },
+    });
+    const socket = await goLive(sync);
+    const first = message(1);
+    sync.store.replaceWindow(general.id, [first], { hasOlder: false, atLatest: true });
+    sync.store.setAnnotations(
+      [first.id],
+      [
+        {
+          id: id(5001),
+          message: first.id,
+          plugin: filter.id,
+          kind: "watched",
+          severity: "notice",
+          label: { key: "watched" },
+        },
+      ],
+    );
+    expect(sync.store.annotations(first.id)).toHaveLength(1);
+    catalogue = [];
+    // The read `ready` started is still in flight, and may have been answered before the
+    // change: one is sent after it. Three in all, with the bootstrap's.
+    socket.frame({ type: "ephemeral", event: { type: "pluginCatalogueChanged" } });
+    await settle();
+    expect(reads).toBe(3);
+    expect(sync.store.plugins()).toEqual([]);
+    expect(sync.store.annotations(first.id)).toEqual([]);
+    sync.stop();
+  });
+
+  it("reads the catalogue when a card names a plugin it does not know", async () => {
+    let reads = 0;
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/plugins": () => {
+        reads += 1;
+        return json([]);
+      },
+    });
+    const socket = await goLive(sync);
+    await settle();
+    const before = reads;
+    socket.frame({
+      type: "event",
+      sequence: 1,
+      event: {
+        serverEvent: "message",
+        type: "create",
+        ...message(2),
+        card: { plugin: "org.example.cards", title: null, buttons: [], fields: [] },
+      },
+    });
+    await settle();
+    expect(reads).toBe(before + 1);
+    sync.stop();
+  });
+});
+
 describe("AspenSync following the caller's other devices", () => {
+  it("tells of another deployment the caller started or stopped using elsewhere", async () => {
+    const { sync } = makeSync(bootstrapResponses());
+    const socket = await goLive(sync);
+    const notices: { domain: string; used: boolean }[] = [];
+    sync.onForeignDeployments((notice) => notices.push(notice));
+    socket.frame({
+      type: "event",
+      sequence: 1,
+      event: {
+        serverEvent: "foreignDeploymentsChanged",
+        domain: "beta.localhost:8444",
+        used: true,
+      },
+    });
+    socket.frame({
+      type: "event",
+      sequence: 2,
+      event: {
+        serverEvent: "foreignDeploymentsChanged",
+        domain: "beta.localhost:8444",
+        used: false,
+      },
+    });
+    expect(notices).toEqual([
+      { domain: "beta.localhost:8444", used: true },
+      { domain: "beta.localhost:8444", used: false },
+    ]);
+    sync.stop();
+  });
+
   it("reads a community the caller joined elsewhere, and not one it holds", async () => {
     const cedar: Community = { id: id(12), name: "Cedar", icon: null };
     const lobby: Channel = { ...general, id: id(40), community: cedar.id, name: "lobby" };
