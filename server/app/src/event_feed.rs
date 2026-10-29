@@ -2715,7 +2715,7 @@ mod tests {
         while let Ok(Delivery::Live(e)) = rx.try_recv() {
             sequences.push(e.sequence);
         }
-        assert_eq!(sequences, vec![1, 6]);
+        assert_eq!(sequences, vec![1, 7, 10, 11]);
     }
 
     #[test]

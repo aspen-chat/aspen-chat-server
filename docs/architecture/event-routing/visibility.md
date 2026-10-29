@@ -50,7 +50,10 @@ A category the model holds no overrides of is decided by the community's permiss
 ## Edge cases
 
 - A channel the model does not know (one not yet made, or deleted) nobody views. So a new channel's
-  overrides, published ahead of it, reach only those they let view it.
+  overrides, published ahead of it, reach nobody: they build the model the creation is judged by.
+  `app::channel::insert_channel` publishes them a second time right after the creation, in the same
+  transaction, so they reach exactly those who received it; applying an override twice leaves a
+  model and a client as once does.
 - A model adopted for a community whose events were retained before the dispatcher held it attaches
   to each of those the model as it stood there. So a catch-up judges them by the permissions of
   their moment.

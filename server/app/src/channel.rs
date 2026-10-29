@@ -4,7 +4,7 @@ use crate::context::GlobalServerContext;
 use crate::link_preview::load_previews;
 use crate::message::{Message, MessageWithRelations};
 use crate::moderation_log::{ModerationAction, log_moderation};
-use crate::permissions::{Permissions, missing, require_member};
+use crate::permissions::{Permissions, missing, require_member, to_names};
 use crate::role::GrantedOverride;
 use crate::t;
 use crate::{
@@ -16,7 +16,7 @@ use aspen_schema::{channel, dm_recipient, message};
 pub use aspen_wire::channel::ChannelType;
 use aspen_wire::message_enum;
 use aspen_wire::message_enum::request::{ChannelCreateRequest, ChannelUpdateRequest};
-use aspen_wire::message_enum::server_event::{ChannelEvent, ServerEvent};
+use aspen_wire::message_enum::server_event::{ChannelEvent, ChannelOverrideEvent, ServerEvent};
 use diesel::{
     AsChangeset, BoolExpressionMethods, CombineDsl, ExpressionMethods, Insertable, QueryDsl,
     Queryable, Selectable, SelectableHelper,
@@ -241,13 +241,35 @@ pub async fn insert_channel(
         .await?;
     crate::role::insert_initial_overrides(state, conn, channel.id, overrides).await?;
     // Published as the channel's own event, after its overrides, so it reaches only those who
-    // may view it.
+    // may view it: each feed's model of the community applies the overrides as they pass, and
+    // judges the creation by them.
     let event = ServerEvent::Channel(ChannelEvent::Create(record(&channel, Vec::new())));
     let scope = EventScope::ChannelDefinition {
         channel: channel.id,
         departed: None,
     };
-    crate::publish_event(state, conn, scope, &event).await?;
+    crate::publish_event(state, conn, scope.clone(), &event).await?;
+    // The overrides' first copies reached no reader, since nobody views a channel a feed's
+    // model does not know yet (`app::event_feed::may_read`); published again after the
+    // creation, they reach exactly those who received it. A client and a model that apply an
+    // override twice hold what they would from once.
+    let repeated = overrides
+        .iter()
+        .map(|o| {
+            (
+                scope.clone(),
+                ServerEvent::ChannelOverride(ChannelOverrideEvent::Create(
+                    message_enum::ChannelOverride {
+                        channel: channel.id,
+                        role: o.role,
+                        allow: to_names(o.allow),
+                        deny: to_names(o.deny),
+                    },
+                )),
+            )
+        })
+        .collect();
+    crate::events::publish_events(state, conn, repeated).await?;
     if ty == ChannelType::Text {
         crate::default_channel::channel_created(state, conn, community, channel.id).await?;
     }
