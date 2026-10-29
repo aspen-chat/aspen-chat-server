@@ -675,7 +675,9 @@ async fn confirm_home(
     if !closed.is_empty() {
         let mut conn = state.connection_pool.get().await?;
         for due in &closed {
-            end_stay(state, &mut conn, due.id).await?;
+            let id = due.id;
+            conn.transaction(|conn| async move { end_stay(state, conn, id).await }.scope_boxed())
+                .await?;
             tracing::info!(%home, user = %due.id.0, "ended the sessions of a user whose home this deployment no longer admits");
         }
     }
@@ -749,7 +751,9 @@ async fn unreached(
     );
     for due in users {
         if due.confirmed_at.is_none_or(|at| at < Utc::now() - grace) {
-            end_stay(state, conn, due.id).await?;
+            let id = due.id;
+            conn.transaction(|conn| async move { end_stay(state, conn, id).await }.scope_boxed())
+                .await?;
             tracing::info!(%home, user = %due.id.0, "ended the sessions of a user whose home has gone unreached");
         }
     }
@@ -841,7 +845,11 @@ async fn apply(
                 tracing::info!(%home, user = %due.id.0, "retired a user their home says is gone");
             }
             Standing::Refused | Standing::Unknown => {
-                end_stay(state, conn, due.id).await?;
+                let id = due.id;
+                conn.transaction(|conn| {
+                    async move { end_stay(state, conn, id).await }.scope_boxed()
+                })
+                .await?;
                 tracing::info!(%home, user = %due.id.0, "ended the sessions of a user their home no longer lets be here");
             }
         }
@@ -959,7 +967,9 @@ pub async fn shut_out_step(
 }
 
 /// Ends a foreign user's sessions here, closing their event streams, and takes them out of
-/// their calls.
+/// their calls. Run inside a transaction: the revocation is announced to the open streams
+/// before it commits, so a failed announcement rolls it back and the user stays due for the
+/// next pass rather than being signed out with their streams never told.
 async fn end_stay(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,

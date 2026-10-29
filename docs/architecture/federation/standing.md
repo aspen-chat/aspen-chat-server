@@ -69,6 +69,10 @@ Sessions also end when:
 - a home goes unreached for `standing_grace_seconds`, or leaves a user out of its answers for as
   long.
 
+Each user's sessions end in a transaction of their own (`end_stay`): the revocation is announced to
+their open streams before it commits, so a failed announcement rolls it back and they stay due for
+the next pass rather than being signed out with their streams never told.
+
 A home that leaves its users out of its answers, or never answers, keeps them due, but takes no more
 of a pass than its share, so every other home's users are still asked about. **Why:** see
 [design notes](design-notes.md#a-user-left-out-of-an-answer-is-no-news).
