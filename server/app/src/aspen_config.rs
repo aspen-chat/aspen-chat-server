@@ -595,10 +595,14 @@ pub struct VoiceConfig {
     /// probably down, and offering it would cost clients failed attempts and count against it.
     #[default = 60]
     pub offer_silence_seconds: u64,
-    /// A voice server silent for this long (a day by default) has its sessions ended, so a
-    /// server that died leaves no phantom calls. Long, because a call outliving a brief outage
-    /// of the report link is worth more than ending it early.
-    #[default(24 * 60 * 60)]
+    /// A voice server silent for this long (fifteen minutes by default) has its sessions ended by
+    /// the reaper, so a server that died leaves no phantom calls once the first person to try
+    /// joining each of its calls has not already ended it (`voice::join_offer`). Minutes rather
+    /// than seconds, so a call survives a brief outage of the report link (NATS restarting, a
+    /// voice server reconnecting), whose lost reports its next snapshot repairs; minutes rather
+    /// than hours, since a dead server's calls stay on record, showing their people in them and
+    /// taking the commands no one hears, for at most this long.
+    #[default(15 * 60)]
     pub session_silence_seconds: u64,
     /// A call that has gone this long (a day by default) without ever holding two people at
     /// once is ended and its lone participant told why, so a forgotten client cannot hold a

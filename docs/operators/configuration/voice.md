@@ -5,15 +5,15 @@ server's own settings are on [Voice server](voice-server.md).
 
 ## `[voice]`
 
-| Setting                   | Default |                                                                                                                                                                          |
-| ------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `failure_threshold`       | `5`     | How many different people failing to reach a voice server, within `failure_window_seconds`, suspend it. See [Suspending a failing server](#suspending-a-failing-server). |
-| `failure_window_seconds`  | `3600`  | How long failures are counted, and how long a suspension lasts.                                                                                                          |
-| `join_token_ttl_seconds`  | `60`    | How long someone has to reach a voice server after asking to join.                                                                                                       |
-| `candidate_limit`         | `10`    | The most voice servers one person is offered to choose the nearest from.                                                                                                 |
-| `offer_silence_seconds`   | `60`    | A voice server that has not reported for this long is not offered to people joining.                                                                                     |
-| `session_silence_seconds` | `86400` | A voice server that has not reported for this long has its calls ended.                                                                                                  |
-| `idle_session_seconds`    | `86400` | A call that never had two people in it at once ends after this long.                                                                                                     |
+| Setting                   | Default |                                                                                                                                                                                             |
+| ------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `failure_threshold`       | `5`     | How many different people failing to reach a voice server, within `failure_window_seconds`, suspend it. See [Suspending a failing server](#suspending-a-failing-server).                    |
+| `failure_window_seconds`  | `3600`  | How long failures are counted, and how long a suspension lasts.                                                                                                                             |
+| `join_token_ttl_seconds`  | `60`    | How long someone has to reach a voice server after asking to join.                                                                                                                          |
+| `candidate_limit`         | `10`    | The most voice servers one person is offered to choose the nearest from.                                                                                                                    |
+| `offer_silence_seconds`   | `60`    | A voice server that has not reported for this long is not offered to people joining, and a call on it is ended, its people sent to rejoin elsewhere, when someone asks to join its channel. |
+| `session_silence_seconds` | `900`   | A voice server that has not reported for this long has all its calls ended, those nobody has tried to join included. A brief loss of its link to NATS, within this, ends none.              |
+| `idle_session_seconds`    | `86400` | A call that never had two people in it at once ends after this long.                                                                                                                        |
 
 ### Suspending a failing server
 

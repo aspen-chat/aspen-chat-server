@@ -119,8 +119,16 @@ Why the voice pieces are shaped as they are. The how is in the [voice pages](ind
 
 ## Sessions
 
-- **`session_silence_seconds` is long (a day).** A dead voice server never leaves phantom calls,
-  while a brief outage of the report link does not end anyone's call.
+- **A join offer ends the call of a server that stopped reporting.** The people of a dead server's
+  call rejoin within seconds, and anyone else joining its channel is the next to notice; waiting for
+  the reaper would leave the call on record, its people shown in it and its commands going to no
+  one, for `session_silence_seconds`. The offer passes the lost call's start and starter on through
+  Valkey, so the call that goes on keeps its record and rings no one again, as it does when
+  `record_session` finds the stale row itself. ([Sessions](sessions.md#when-a-server-dies))
+- **`session_silence_seconds` is fifteen minutes.** Minutes rather than seconds, so a brief outage
+  of the report link (NATS restarting, a voice server reconnecting) does not end anyone's call,
+  since the snapshot that follows repairs what was lost; minutes rather than hours, since the calls
+  of a dead server that nobody tries to join stay on record until the reaper ends them.
   ([Sessions](sessions.md#silence-and-the-reaper))
 - **`idle_session_seconds` ends calls that never held two people.** A forgotten client cannot hold a
   voice server slot.

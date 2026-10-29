@@ -61,8 +61,10 @@ The reasons behind the settings described in
 
 ## Voice
 
-- **`session_silence_seconds` is long (a day).** A call is worth more than tidiness after a brief
-  network fault. ([Voice calls](../../operators/configuration/voice.md))
+- **`session_silence_seconds` is fifteen minutes.** Long enough that a brief network fault ends no
+  call, and short enough that the calls of a dead voice server nobody tries to join do not stay on
+  record for hours; one someone tries to join is ended at once.
+  ([Voice calls](../../operators/configuration/voice.md))
 - **`idle_session_seconds` ends calls that never had two people.** A forgotten client cannot hold a
   place on a voice server.
 - **A voice server's `url` must be `https` wherever `public_url` is.** Browsers on an `https` page

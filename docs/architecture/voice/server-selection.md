@@ -22,8 +22,9 @@ All under `[voice]` in `aspen.toml`:
   - has room,
   - has reported within `offer_silence_seconds`. A server that has never reported has not started.
 - At most `candidate_limit` are chosen, at random for now.
-- A call bound to a server silent for `offer_silence_seconds` is skipped when someone joins its
-  channel. They get fresh candidates.
+- A call bound to a server silent for `offer_silence_seconds` is ended with `serverLost` when
+  someone asks to join its channel, and they get fresh candidates (see
+  [When a server dies](sessions.md#when-a-server-dies)).
 
 Each offer also notes in Valkey which servers it named, for the
 [report checks](voice-reports.md#where-a-report-came-from) and the failure checks below.

@@ -73,6 +73,23 @@ unreachable or restarted, or a report kept failing (an `ERROR` line says which).
 - Someone who appeared missing from, or stuck in, a call for up to a minute was this.
 - Warnings that keep coming mean the voice server's link to NATS keeps dropping.
 
+## People show in a call on a voice server that died
+
+A voice server stopped (its machine went down, say) while it held calls. The dashboard's Server
+fleet tab shows it silent.
+
+**Means:** the API servers keep each call on record until something tells them it ended, and a dead
+server tells them nothing. The log says `ending a call whose voice server stopped reporting`, once
+for each call, as they are ended:
+
+- within a second or two of someone asking to join the channel, once the server has been silent for
+  `[voice] offer_silence_seconds` (a minute). The call's own people ask again on their own a minute
+  after their first attempt fails;
+- otherwise by the reaper, after `[voice] session_silence_seconds` (fifteen minutes).
+
+The people of an ended call are sent to rejoin on another voice server. Nothing needs doing unless
+no other voice server takes calls.
+
 ## A voice server was suspended
 
 The log says `voice server suspended after failures from distinct users`, and the dashboard shows it

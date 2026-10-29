@@ -23,6 +23,7 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use fred::interfaces::KeysInterface;
 use fred::types::Expiration;
 use rand::seq::SliceRandom;
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 use uuid::Uuid;
 use voice_protocol::token::{Grants, JoinClaims, sign};
@@ -363,8 +364,12 @@ pub async fn join_offer(
         .await
         .optional_not_found()?;
     let silence = offer_silence(state);
-    // A call on a server that has gone silent is not one the joiner can reach; they are
-    // offered fresh servers instead, and the session the new server starts replaces it.
+    // A call on a server that has gone silent is not one the joiner can reach. It is ended as
+    // lost here, by the first to try joining, rather than left on record (showing its people
+    // in it, and taking the commands no one hears) until the reaper's `session_silence_seconds`
+    // or a new server's report ends it: its people are sent to rejoin, this joiner is offered
+    // fresh servers, and the session the new server starts carries the call on
+    // (`note_carried`).
     let reachable = match existing {
         Some(session) => {
             let server: VoiceServer = voice_server::table
@@ -375,6 +380,26 @@ pub async fn join_offer(
             if reporting(&server, now, silence) {
                 Some((session, server))
             } else {
+                warn!(
+                    session = session.id.0.to_string(),
+                    server = server.id.0.to_string(),
+                    "ending a call whose voice server stopped reporting, as someone joins its channel"
+                );
+                conn.transaction(|conn| {
+                    let session = &session;
+                    async move {
+                        end_session(
+                            state,
+                            conn.as_mut(),
+                            session,
+                            VoiceSessionEndReason::ServerLost,
+                        )
+                        .await
+                    }
+                    .scope_boxed()
+                })
+                .await?;
+                note_carried(state, &session).await;
                 None
             }
         }
@@ -560,6 +585,87 @@ async fn was_offered(state: &GlobalServerContext, user: UserId, server: VoiceSer
     }
 }
 
+/// What a call ended as lost with its voice server ([`join_offer`]) passes to the session that
+/// carries it on: its start, its starter, and whether it has had company, so the carried call
+/// keeps its record (the history message a DM's call leaves spans the whole of it) and rings no
+/// one again. A session `record_session` finds still recorded takes these from its row; one the
+/// offer already ended takes them from here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct CarriedCall {
+    pub created_at: DateTime<Utc>,
+    pub started_by: Option<UserId>,
+    pub had_company: bool,
+}
+
+/// The Valkey key holding what the call lost in `channel` passes on ([`CarriedCall`]).
+fn carried_key(channel: ChannelId) -> String {
+    format!("voice_carried:{}", channel.0)
+}
+
+/// Notes what `lost`, just ended as lost with its server, passes to the session that carries it
+/// on, for as long as a report of that session is believed (`JOIN_REPORT_GRACE_SECONDS` past
+/// the token's lifetime). A Valkey outage is logged, and the carried call starts afresh.
+async fn note_carried(state: &GlobalServerContext, lost: &VoiceSession) {
+    let carried = CarriedCall {
+        created_at: lost.created_at,
+        started_by: lost.started_by,
+        had_company: lost.had_company,
+    };
+    let ttl = i64::try_from(
+        state
+            .config
+            .voice
+            .join_token_ttl_seconds
+            .saturating_add(JOIN_REPORT_GRACE_SECONDS),
+    )
+    .unwrap_or(i64::MAX);
+    let payload = match serde_json::to_string(&carried) {
+        Ok(payload) => payload,
+        Err(e) => {
+            warn!(error = %e, "could not write what a lost call passes on");
+            return;
+        }
+    };
+    let noted: Result<(), fred::error::Error> = state
+        .valkey
+        .set(
+            carried_key(lost.channel),
+            payload,
+            Some(Expiration::EX(ttl)),
+            None,
+            false,
+        )
+        .await;
+    if let Err(e) = noted {
+        warn!(error = %e, "could not note what a lost call passes to the one that carries it on");
+    }
+}
+
+/// Takes what the call lost in `channel` passes on, if one was ended by an offer lately, so the
+/// next session in the channel does not take it too. A Valkey outage is logged and answers
+/// nothing.
+pub(super) async fn take_carried(
+    state: &GlobalServerContext,
+    channel: ChannelId,
+) -> Option<CarriedCall> {
+    let taken: Result<Option<String>, fred::error::Error> =
+        state.valkey.getdel(carried_key(channel)).await;
+    match taken {
+        Ok(Some(carried)) => match serde_json::from_str(&carried) {
+            Ok(carried) => Some(carried),
+            Err(e) => {
+                warn!(error = %e, "could not read what a lost call passes on");
+                None
+            }
+        },
+        Ok(None) => None,
+        Err(e) => {
+            warn!(error = %e, "could not read what a lost call passes on");
+            None
+        }
+    }
+}
+
 /// The Valkey key saying `user` joined a call on `server` recently.
 fn joined_key(server: VoiceServerId, user: UserId) -> String {
     format!("voice_joined:{}:{}", server.0, user.0)
@@ -732,13 +838,14 @@ pub async fn report_failure(
 }
 
 /// Ends every session on a server whose last report is older than `session_silence_seconds`.
-/// A server that never reported is given that long from the session's start instead.
+/// A server that never reported is given that long from the session's start instead. A call
+/// someone tries to join sooner is ended by their offer ([`join_offer`]); this catches the rest.
 pub(super) async fn reap_silent_servers(
     state: &GlobalServerContext,
     limit: i64,
 ) -> crate::Result<usize> {
     let silence = Duration::seconds(
-        i64::try_from(state.config.voice.session_silence_seconds).unwrap_or(24 * 60 * 60),
+        i64::try_from(state.config.voice.session_silence_seconds).unwrap_or(15 * 60),
     );
     let cutoff = Utc::now() - silence;
     let mut conn = state.connection_pool.get().await?;

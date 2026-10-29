@@ -917,31 +917,41 @@ async fn record_session(
         );
         return Ok(None);
     }
-    if let Some(stale) = stale {
-        let recorded_server: VoiceServer = voice_server::table
-            .select(VoiceServer::as_select())
-            .filter(voice_server::id.eq(stale.voice_server))
-            .first(conn)
-            .await?;
-        let recorded_reporting = reporting(&recorded_server, now, offer_silence(state));
-        if !replaces(stale.voice_server, row.voice_server, recorded_reporting) {
-            warn!(
-                channel = channel.to_string(),
-                server = server.to_string(),
-                session = session.to_string(),
-                recorded = stale.id.0.to_string(),
-                "a voice server reported a second call in a channel whose call goes on on another \
-                 server; closing it"
-            );
-            close_room(state, row.voice_server, row.id).await?;
-            return Ok(None);
+    match stale {
+        Some(stale) => {
+            let recorded_server: VoiceServer = voice_server::table
+                .select(VoiceServer::as_select())
+                .filter(voice_server::id.eq(stale.voice_server))
+                .first(conn)
+                .await?;
+            let recorded_reporting = reporting(&recorded_server, now, offer_silence(state));
+            if !replaces(stale.voice_server, row.voice_server, recorded_reporting) {
+                warn!(
+                    channel = channel.to_string(),
+                    server = server.to_string(),
+                    session = session.to_string(),
+                    recorded = stale.id.0.to_string(),
+                    "a voice server reported a second call in a channel whose call goes on on \
+                     another server; closing it"
+                );
+                close_room(state, row.voice_server, row.id).await?;
+                return Ok(None);
+            }
+            // The call goes on on this server: its people rejoin, so it keeps its start and its
+            // starter, and rings no one again.
+            row.created_at = stale.created_at;
+            row.started_by = stale.started_by;
+            row.had_company = stale.had_company;
+            end_session(state, conn, &stale, VoiceSessionEndReason::ServerLost).await?;
         }
-        // The call goes on on this server: its people rejoin, so it keeps its start and its
-        // starter, and rings no one again.
-        row.created_at = stale.created_at;
-        row.started_by = stale.started_by;
-        row.had_company = stale.had_company;
-        end_session(state, conn, &stale, VoiceSessionEndReason::ServerLost).await?;
+        // A call a join offer ended as lost a moment ago goes on here the same way.
+        None => {
+            if let Some(carried) = super::servers::take_carried(state, row.channel).await {
+                row.created_at = carried.created_at;
+                row.started_by = carried.started_by;
+                row.had_company = carried.had_company;
+            }
+        }
     }
     match diesel::insert_into(voice_session::table)
         .values(&row)

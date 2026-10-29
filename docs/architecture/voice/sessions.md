@@ -29,11 +29,11 @@ Community reads sideload calls with `include=voice`, as the DM list does.
 
 All under `[voice]` in `aspen.toml`:
 
-| Setting                   | Default  | Effect                                                                                                                                  |
-| ------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `offer_silence_seconds`   | a minute | A silent server is not offered to new joiners. A call bound to it is skipped when someone joins its channel; they get fresh candidates. |
-| `session_silence_seconds` | a day    | The reaper ends every session on a server silent this long.                                                                             |
-| `idle_session_seconds`    | a day    | The reaper ends any call that has gone this long without ever holding two people at once.                                               |
+| Setting                   | Default         | Effect                                                                                                                                                                                                                 |
+| ------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `offer_silence_seconds`   | a minute        | A silent server is not offered to new joiners. A call bound to it is ended with `serverLost` by the next join offer for its channel (see [When a server dies](#when-a-server-dies)); the joiner gets fresh candidates. |
+| `session_silence_seconds` | fifteen minutes | The reaper ends every session on a server silent this long: the calls of a dead server nobody tries to join.                                                                                                           |
+| `idle_session_seconds`    | a day           | The reaper ends any call that has gone this long without ever holding two people at once.                                                                                                                              |
 
 Nested `[voice]` keys can be set from the environment with a double underscore, for instance
 `ASPEN_VOICE__IDLE_SESSION_SECONDS=30`. Tests shorten the limits this way.
@@ -42,8 +42,37 @@ Nested `[voice]` keys can be set from the environment with a double underscore, 
   which one server runs at a time.
 - Each step ends at most fifty calls of each kind, each in a transaction of its own.
 - Ending a call locks its session's row once its participants are gone.
-- When two end one call at once (the reaper and a voice server's report), the second finds it ended.
-  The call is recorded once.
+- When two end one call at once (the reaper, a join offer, and a voice server's report), the second
+  finds it ended. The call is recorded once.
+- `session_silence_seconds` is minutes rather than seconds so a call survives a brief outage of the
+  report link (NATS restarting, a voice server reconnecting), whose lost reports its next snapshot
+  repairs, and minutes rather than hours since a dead server's calls stay on record, showing their
+  people in them and taking the commands no one hears, for at most this long.
+
+## When a server dies
+
+A voice server that dies stops reporting, but the calls it held stay recorded until something ends
+them. Three things do, in this order:
+
+1. **A join offer for the channel** (`servers::join_offer`). Once the server has been silent for
+   `offer_silence_seconds`, the first person to ask to join the channel's call ends the recorded
+   session with `serverLost`, in a transaction of its own, before being offered fresh servers. The
+   call's people are told to rejoin, as any `serverLost` does. The offer notes the lost call's
+   start, starter, and whether it had company in Valkey (`voice_carried:{channel}`, kept for as long
+   as a report of the new session is believed), and `record_session` takes the note when the new
+   server's `sessionStarted` arrives, so the call goes on with its record as if the row had still
+   been there (see [When a room is lost](#when-a-room-is-lost)). A Valkey outage loses the note, and
+   the call starts afresh.
+2. **A new server's `sessionStarted`**, when a joiner reaches one before any offer found the server
+   silent (see [When a room is lost](#when-a-room-is-lost)).
+3. **The reaper**, after `session_silence_seconds`, for the calls nobody tried to join.
+
+The call's own participants rejoin within a second of losing their socket, which is before the
+server has been silent for `offer_silence_seconds`: their first offer still names the dead server,
+and their attempt fails. A client is expected to ask for another offer once `offer_silence_seconds`
+have passed since the first, rather than giving up; the reference client does so once (`VoiceCall`
+in `client/packages/protocol/src/voice.ts`). That second offer finds the server silent, ends the
+recorded call, and names servers that can take it.
 
 ## When a room is lost
 
@@ -76,12 +105,12 @@ When the recorded call is on another server that still reports:
 
 Every ending publishes a `voiceSessionEnded` event with a reason just before the session's `delete`.
 
-| Reason          | When                                                          | Client rejoins?                                                                   |
-| --------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `empty`         | The last participant left                                     | No                                                                                |
-| `serverLost`    | A snapshot left the session out, or the room was lost (above) | Yes                                                                               |
-| `idle`          | `idle_session_seconds` passed without two people at once      | No. The client shows a dialog saying the call was ended to free server resources. |
-| `serverRemoved` | Its voice server was removed                                  | Yes                                                                               |
+| Reason          | When                                                                                                                                                                            | Client rejoins?                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `empty`         | The last participant left                                                                                                                                                       | No                                                                                |
+| `serverLost`    | A snapshot left the session out, the room was lost (above), or its server stopped reporting and a join offer or the reaper ended it ([When a server dies](#when-a-server-dies)) | Yes                                                                               |
+| `idle`          | `idle_session_seconds` passed without two people at once                                                                                                                        | No. The client shows a dialog saying the call was ended to free server resources. |
+| `serverRemoved` | Its voice server was removed                                                                                                                                                    | Yes                                                                               |
 
 A client whose voice server closed its place with reason `serverStopping` also rejoins.
 
