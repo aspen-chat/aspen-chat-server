@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AspenClient,
   CameraError,
+  DEAD_SERVER_RETRY_MS,
   InsecureAddressError,
   MemorySessionStore,
   READY_TIMEOUT_MS,
@@ -1233,5 +1234,83 @@ describe("VoiceCall", () => {
     );
     expect(signallingUrl(servers.near)).toBe("wss://near.example.org/ws");
     vi.restoreAllMocks();
+  });
+});
+
+describe("VoiceCall after its server goes silent", () => {
+  const joins = (calls: string[]) => calls.filter((c) => c.endsWith("/voice/join")).length;
+
+  it("asks for an offer once more after a minute when the offered server cannot be reached", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, calls, timers } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    expect(joins(calls)).toBe(1);
+    // The socket closes without a word; the API server, not yet knowing, offers the same server.
+    FakeSocket.behaviour.set("near", "refuse");
+    FakeSocket.instances[0]?.onclose?.();
+    expect(call.state.status).toBe("rejoining");
+    timers.at(-1)?.fn();
+    for (let i = 0; i < 6; i += 1) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    expect(joins(calls)).toBe(2);
+    expect(call.state.status).toBe("rejoining");
+    const wait = timers.at(-1);
+    expect(wait?.delay).toBe(DEAD_SERVER_RETRY_MS);
+    // By then the server has gone unreported for as long and the offer names a living one.
+    FakeSocket.behaviour.set("near", "ready");
+    wait?.fn();
+    for (let i = 0; i < 6; i += 1) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    expect(joins(calls)).toBe(3);
+    expect(call.state.status).toBe("connected");
+    expect(DEAD_SERVER_RETRY_MS).toBe(60_000);
+  });
+
+  it("gives up at once when the second offer's server cannot be reached either, or the API server ended the call", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, calls, timers } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    FakeSocket.behaviour.set("near", "refuse");
+    FakeSocket.instances[0]?.onclose?.();
+    timers.at(-1)?.fn();
+    for (let i = 0; i < 6; i += 1) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    expect(call.state.status).toBe("rejoining");
+    timers.at(-1)?.fn();
+    for (let i = 0; i < 6; i += 1) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    expect(call.state.status).toBe("failed");
+    expect(call.state.errorKind).toBe("server");
+    expect(joins(calls)).toBe(3);
+    // A call the API server ended for a lost server is offered another at once; failing to
+    // reach it is a failure.
+    FakeSocket.behaviour.set("near", "ready");
+    await call.join(channel);
+    FakeSocket.behaviour.set("near", "refuse");
+    call.onSessionEnded({ id: session, channel, reason: "serverLost" });
+    timers.at(-1)?.fn();
+    for (let i = 0; i < 6; i += 1) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    expect(call.state.status).toBe("failed");
+  });
+
+  it("ignores the end of a session that is not the call's own", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    expect(call.state.session).toBe(session);
+    call.onSessionEnded({
+      id: "0190f0a0-0000-7000-8000-000000000901",
+      channel,
+      reason: "serverLost",
+    });
+    expect(call.state.status).toBe("connected");
+    call.onSessionEnded({ id: session, channel, reason: "serverLost" });
+    expect(call.state.status).toBe("rejoining");
   });
 });

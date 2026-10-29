@@ -103,6 +103,14 @@ const SCREEN_AUDIO_CODEC = {
 } as const;
 /** The most a lost call waits before rejoining. */
 export const REJOIN_DELAY_MAX_MS = 1_000;
+/**
+ * How long a call whose signalling socket closed, and whose rejoin could not reach the server
+ * the API server still offered, waits before asking for a join offer once more. It mirrors the
+ * server's `offer_silence_seconds`: a voice server that has not reported for that long is no
+ * longer offered, and a call bound to it is ended when someone next asks to join its channel,
+ * so the second offer names a living server.
+ */
+export const DEAD_SERVER_RETRY_MS = 60_000;
 
 export type VoiceCallStatus = "idle" | "joining" | "connected" | "rejoining" | "failed";
 
@@ -270,6 +278,19 @@ export class VoiceRequestRefused extends Error {
     super(detail);
     this.name = "VoiceRequestRefused";
   }
+}
+
+/**
+ * Whether `error` is the voice servers offered failing to take the call (none reached, or the
+ * token refused), rather than the join offer itself refused, the microphone, a request turned
+ * away, or a server not reached over HTTPS, none of which another offer would change.
+ */
+function isServerFailure(error: unknown): boolean {
+  return (
+    !(error instanceof ApiProblemError) &&
+    !(error instanceof InsecureAddressError) &&
+    failure(error).errorKind === "server"
+  );
 }
 
 function failure(
@@ -863,10 +884,16 @@ export class VoiceCall {
 
   /**
    * Called by the sync layer with every `voiceSessionEnded` event. The call's own end by a lost
-   * or removed server triggers a rejoin; an idle end is surfaced to the user.
+   * or removed server triggers a rejoin; an idle end is surfaced to the user. The end of any
+   * other session of the channel, as of the dead one a rejoin has already left for the session
+   * the new offer made, changes nothing.
    */
   onSessionEnded(event: { id: string; channel: string; reason: VoiceSessionEndReason }): void {
-    if (event.channel !== this.#state.channelId || this.#state.status === "idle") {
+    if (
+      event.channel !== this.#state.channelId ||
+      event.id !== this.#state.session ||
+      this.#state.status === "idle"
+    ) {
       return;
     }
     switch (event.reason) {
@@ -884,8 +911,13 @@ export class VoiceCall {
     }
   }
 
-  /** Rejoins the current channel after a random pause of at most `REJOIN_DELAY_MAX_MS`. */
-  #rejoin(): void {
+  /**
+   * Rejoins the current channel after a random pause of at most `REJOIN_DELAY_MAX_MS`. With
+   * `serverSilent`, the server went away without a word (its socket closed), so the API server
+   * may still offer it, not yet knowing it is gone: a rejoin that fails to reach the offered
+   * servers then waits `DEAD_SERVER_RETRY_MS` and asks for an offer once more before giving up.
+   */
+  #rejoin({ serverSilent = false }: { serverSilent?: boolean } = {}): void {
     const channelId = this.#state.channelId;
     if (channelId === null || this.#state.status === "rejoining") {
       return;
@@ -893,16 +925,33 @@ export class VoiceCall {
     this.#teardown({ keepMicrophone: true });
     this.#set({ status: "rejoining", session: null });
     const generation = ++this.#generation;
+    const fail = (error: unknown) => {
+      this.#teardown();
+      this.#set({ ...IDLE, status: "failed", channelId, ...failure(error) });
+    };
+    const attempt = (onFailure: (error: unknown) => void) => {
+      this.#connect(channelId, generation).catch((error: unknown) => {
+        if (generation === this.#generation) {
+          onFailure(error);
+        }
+      });
+    };
     const delay = Math.floor(this.#random() * REJOIN_DELAY_MAX_MS);
     this.#setTimeout(() => {
       if (generation !== this.#generation) {
         return;
       }
-      this.#connect(channelId, generation).catch((error: unknown) => {
-        if (generation === this.#generation) {
-          this.#teardown();
-          this.#set({ ...IDLE, status: "failed", channelId, ...failure(error) });
+      attempt((error) => {
+        if (!serverSilent || !isServerFailure(error)) {
+          fail(error);
+          return;
         }
+        this.#teardown({ keepMicrophone: true });
+        this.#setTimeout(() => {
+          if (generation === this.#generation) {
+            attempt(fail);
+          }
+        }, DEAD_SERVER_RETRY_MS);
       });
     }, delay);
   }
@@ -1097,7 +1146,7 @@ export class VoiceCall {
         // The server went away without a word: treat it as lost and rejoin.
         if (this.#signal === signal && this.#state.status === "connected") {
           this.#signal = null;
-          this.#rejoin();
+          this.#rejoin({ serverSilent: true });
         }
       };
       signal.onFrame = (f) => {

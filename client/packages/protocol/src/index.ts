@@ -342,6 +342,7 @@ export {
   CameraError,
   MicrophoneError,
   VoiceRequestRefused,
+  DEAD_SERVER_RETRY_MS,
   PING_TIMEOUT_MS,
   READY_TIMEOUT_MS,
   REJOIN_DELAY_MAX_MS,

@@ -56,7 +56,10 @@ A rejoin keeps the microphone the same way.
 
 ### Session endings
 
-The `voiceSessionEnded` event (which `AspenSync` hands to the call) carries a reason:
+The `voiceSessionEnded` event (which `AspenSync` hands to the call) carries a reason. Only the end
+of the call's own session (`VoiceCallState.session`, from the `ready` frame) counts: the end of
+another session of the channel, as of the dead one a rejoin has already left behind, changes
+nothing, so a rejoin is not rejoined again when the API server ends the session it replaced.
 
 | Reason                        | What the client does                                                         |
 | ----------------------------- | ---------------------------------------------------------------------------- |
@@ -64,7 +67,15 @@ The `voiceSessionEnded` event (which `AspenSync` hands to the call) carries a re
 | `idle`                        | Sets `endedReason`, which `VoiceEndedDialog` shows until `acknowledgeEnd()`. |
 | `empty`                       | The user's own leave.                                                        |
 
-A socket that drops unannounced also rejoins after the same random pause.
+A socket that drops unannounced also rejoins after the same random pause. The API server may not
+know yet that the voice server is gone, and offers it again; when the rejoin cannot reach any server
+offered (none answers, or the token is refused), the call stays `rejoining`, waits
+`DEAD_SERVER_RETRY_MS` (a minute, the server's `offer_silence_seconds`: a voice server silent for
+that long is no longer offered, and a call bound to it is ended when someone next asks to join its
+channel) and asks for an offer once more, which names a living server. A second failure, or a
+failure of any other kind (the offer refused, the microphone, a request turned away, a server not
+reached over HTTPS), fails the call at once, as does a failed rejoin after `serverLost` or
+`serverRemoved`, whose offer was fresh already.
 
 ### `kicked` frames
 
