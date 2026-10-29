@@ -21,6 +21,7 @@ described under [Claiming and classes](claiming.md#classes).
 | [`purgePlugin`](#purgeplugin)                       | bulk                                               |                                                                | Deletes everything a removed plugin kept.                                                                             |
 | [`recheckAllCalls`](#recheckallcalls)               | urgent                                             |                                                                | Rechecks every call on the deployment.                                                                                |
 | [`confirmStanding`](#confirmstanding)               | normal                                             | every `standing_interval_seconds`, at least every five minutes | A federation standing pass.                                                                                           |
+| [`deliverNotice`](#delivernotice)                   | interactive for `dmJoined`, normal otherwise       |                                                                | Delivers one notice to another deployment.                                                                            |
 | [`makeDigests`](#makedigests)                       | bulk                                               | every minute                                                   | Makes due daily digests.                                                                                              |
 | [`sendEmail`](#sendemail)                           | interactive, normal, or bulk, by the mail          |                                                                | Sends one piece of mail.                                                                                              |
 | [`queueNewsletter`](#queuenewsletter)               | bulk                                               |                                                                | Queues a newsletter post's mail.                                                                                      |
@@ -234,6 +235,20 @@ A standing pass while a gate is open (see [Federation](../federation/index.md)),
 - forgets deployments contacted once and never used.
 
 Which deployments are failing is remembered by each server (`StandingBackoff`).
+
+### `deliverNotice`
+
+Delivers one notice to another deployment (see [DMs and notices](../federation/dms-and-notices.md)):
+a `dmJoined` to a participant's home, or an `accountDeleted` to a deployment the account used. One
+job is saved per receiver, in the transaction of the change it tells of (`notices::queue_dm`,
+`notices::queue_deleted`), and its payload is the receiver, the user's id at home, and what the
+notice says; each attempt signs the notice afresh (`notices::deliver_step`), since a signature is
+good for minutes and a delivery may wait hours.
+
+- Taken (`2xx`) or refused (`4xx`), it is done.
+- Anything else fails the step, tried again with the usual backoff.
+- On its last attempt (`notices::MAX_ATTEMPTS`, 32: about a day) it gives itself up with a warning
+  rather than being kept as a job given up.
 
 ## Email
 

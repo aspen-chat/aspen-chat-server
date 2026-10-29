@@ -24,10 +24,13 @@ participant's home with a signed notice.
 
 When a DM is started with, or gains, users of other deployments:
 
-1. The host makes a signed `aspen-notice+jwt` of kind `dmJoined` for each one's home
-   (`app::federation::notices`).
-2. It POSTs it to the home's `/api/v1/federation/notices`, trying again a few times in the
-   background.
+1. The host saves a `deliverNotice` job for each one's home (`app::federation::notices::queue_dm`)
+   in the transaction that puts them in the DM, so the notice stands or falls with the DM and
+   survives a restart. The runners are woken as it commits.
+2. The job signs an `aspen-notice+jwt` of kind `dmJoined` and POSTs it to the home's
+   `/api/v1/federation/notices`. A home that does not take it is tried again with the jobs' backoff
+   for about a day (`notices::MAX_ATTEMPTS`), the notice signed afresh each time; one that refuses
+   it (`4xx`) is not. See [Jobs](../jobs/kinds.md#delivernotice).
 3. The home takes but ignores a `dmJoined` whose `by` it would not accept as a name and display name
    of its own.
 4. Otherwise, while the user still uses the sender, the home passes it to the user's devices as the

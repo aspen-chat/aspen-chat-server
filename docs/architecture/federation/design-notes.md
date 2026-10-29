@@ -120,6 +120,11 @@ Why federation works as it does. The how is in the [Federation pages](index.md).
   may be. See [Standing](standing.md#limits).
 - **A home answers only for users who signed in at the asker, and `refused` for any other id.** So
   an answer reveals nothing of accounts the asker was never given.
+- **A pass asks only about foreign users with a session here.** A foreign user without one can do
+  nothing here until their home signs them in again, which it refuses for a deleted or refused
+  account, so the pass's cost follows who is active rather than everyone who ever visited. The price
+  is that an `accountDeleted` notice lost for a day leaves such a user's record standing; see
+  [Standing](standing.md#account-deletion).
 
 ### A user left out of an answer is no news
 

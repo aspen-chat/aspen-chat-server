@@ -659,7 +659,6 @@ pub async fn delete(state: &GlobalServerContext, caller: UserId, bot: UserId) ->
         .await?;
     drop(conn);
     retired.finish(state).await;
-    crate::federation::notices::announce_deleted(state, bot);
     Ok(())
 }
 

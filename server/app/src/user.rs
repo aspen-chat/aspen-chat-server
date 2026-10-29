@@ -658,15 +658,15 @@ pub async fn delete_user(
         .await?;
     drop(conn);
     retired.finish(&state).await;
-    crate::federation::notices::announce_deleted(&state, id);
     Ok(())
 }
 
 /// Deletes an account inside the caller's transaction: marks it deleted, ends its sign-ins and
 /// takes its credentials and any bot token, hands each community it owned to the member ranked
 /// highest there (`successor`), takes a bot out of its communities, leaves the bots it owned
-/// working but ownerless, and says it is gone. What is left to do once the transaction commits
-/// is returned, for `Retired::finish`.
+/// working but ownerless, queues the notices that tell the other deployments one of this
+/// deployment's own used (`federation::notices`), and says it is gone. What is left to do once
+/// the transaction commits is returned, for `Retired::finish`.
 pub async fn retire(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -679,6 +679,8 @@ pub async fn retire(
         display_name: Option<String>,
         bot: bool,
         bot_owner: Option<UserId>,
+        /// Whether its home is another deployment, which hears of the deletion from there.
+        foreign: bool,
     }
     let retired: Option<Retiring> = diesel::update(user::table)
         .set(user::deleted_at.eq(diesel::dsl::now))
@@ -688,6 +690,7 @@ pub async fn retire(
             user::display_name,
             user::bot,
             user::bot_owner,
+            user::home_domain.is_not_null(),
         ))
         .get_result(conn)
         .await
@@ -697,6 +700,7 @@ pub async fn retire(
         display_name,
         bot,
         bot_owner,
+        foreign,
     }) = retired
     else {
         return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
@@ -762,6 +766,9 @@ pub async fn retire(
     diesel::delete(bot_token::table.filter(bot_token::bot.eq(id)))
         .execute(conn)
         .await?;
+    if !foreign {
+        crate::federation::notices::queue_deleted(state, conn, id).await?;
+    }
     publish_event(
         state,
         conn,

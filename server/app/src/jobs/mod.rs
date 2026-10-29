@@ -416,10 +416,12 @@ fn bounded(state: &GlobalServerContext) -> Vec<(Vec<JobKind>, usize)> {
 /// How many times a job of `kind` is claimed without coming further before it is given up. A
 /// piece of mail gives itself up first, once it has been tried as often as mail is
 /// (`outbox::MAX_ATTEMPTS`), so its content is never kept as a job given up; so does a held
-/// message, dropped with why on its last attempt.
+/// message, dropped with why on its last attempt, and a notice to another deployment, given up
+/// with a warning once its receiver has been down for about a day.
 fn max_attempts(kind: JobKind) -> i32 {
     match kind {
         JobKind::SendEmail => crate::email::outbox::MAX_ATTEMPTS + 1,
+        JobKind::DeliverNotice => crate::federation::notices::MAX_ATTEMPTS,
         JobKind::MakePicturePreview | JobKind::MakeVideoPoster => {
             crate::attachment::preview::MAX_ATTEMPTS
         }
@@ -488,6 +490,7 @@ async fn step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outco
         JobKind::FitStreams => crate::nats_memory::fit_step(state, job).await,
         JobKind::ForgetIdentityProvider => crate::identity_provider::forget_step(state, job).await,
         JobKind::TakeDownCommunity => crate::community_takedown::step(state, job).await,
+        JobKind::DeliverNotice => crate::federation::notices::deliver_step(state, job).await,
     }
 }
 

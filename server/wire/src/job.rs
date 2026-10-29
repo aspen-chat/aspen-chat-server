@@ -148,6 +148,8 @@ pub enum JobKind {
     /// Banning a community's members and erasing what it held, as its takedown from the
     /// dashboard asked.
     TakeDownCommunity,
+    /// Delivering one notice to another deployment (`app::federation::notices`).
+    DeliverNotice,
 }
 
 crate::wire_name_traits!(JobKind);

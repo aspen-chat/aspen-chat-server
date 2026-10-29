@@ -173,15 +173,18 @@ pub async fn open_dm(
             .scope_boxed()
         })
         .await?;
-    let (dm, recipients, created) = &opened;
-    if *created {
-        crate::federation::notices::announce_dm(state, dm.id, recipients.clone(), caller);
+    // The notices to other deployments' homes are saved with the DM (`insert_dm`); the runners
+    // are woken so they go out at once.
+    if opened.2 {
+        crate::jobs::wake(state).await;
     }
     Ok(opened)
 }
 
 /// Makes the DM between `caller` and `others` and announces it: their one-to-one DM with one
-/// other person, returned as it is when it exists already, or a new group DM with more.
+/// other person, returned as it is when it exists already, or a new group DM with more. The
+/// homes of recipients from elsewhere are told by notices saved in the same transaction
+/// (`federation::notices::queue_dm`).
 pub async fn insert_dm(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -239,6 +242,7 @@ pub async fn insert_dm(
         &ServerEvent::Channel(ChannelEvent::Create(record(&dm, recipients.clone()))),
     )
     .await?;
+    crate::federation::notices::queue_dm(state, conn, dm.id, &recipients, caller).await?;
     Ok((dm, recipients, true))
 }
 
@@ -411,13 +415,17 @@ pub async fn add_recipient(
                     &ServerEvent::Channel(ChannelEvent::Create(record(&dm, now))),
                 )
                 .await?;
+                crate::federation::notices::queue_dm(state, conn.as_mut(), dm_id, &[user], caller)
+                    .await?;
                 Ok(true)
             }
             .scope_boxed()
         })
         .await?;
+    // The newcomer's home is told by a notice saved with them; the runners are woken so it
+    // goes out at once.
     if added {
-        crate::federation::notices::announce_dm(state, dm_id, vec![user], caller);
+        crate::jobs::wake(state).await;
     }
     Ok(added)
 }

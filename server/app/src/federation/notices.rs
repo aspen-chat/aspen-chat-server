@@ -11,11 +11,19 @@
 //!   left stays left.
 //! - `accountDeleted`, from a home to the deployments its user used: the account is gone, and
 //!   each retires its user from there (`app::user::retire`).
+//!
+//! A notice is delivered by a job (`deliverNotice`, [`deliver_step`]), one per receiver, saved
+//! in the transaction of the change it tells of ([`queue_dm`], [`queue_deleted`]), so a notice
+//! is never lost to a restart or a receiver that is down for a while: each attempt signs it
+//! afresh, and the job keeps trying with the jobs' backoff for about a day ([`MAX_ATTEMPTS`])
+//! before giving up with a warning.
 
 use crate::context::GlobalServerContext;
 use crate::federation::keys::signing_key;
 use crate::federation::received::{Received, Senders, Statement, receive};
 use crate::federation::{Direction, Domain, FederationList, Subject, admits, jws, own_domain};
+use crate::jobs::{Claimed, JobClass, JobKind, NewJob, Outcome, enqueue_many, last_attempt};
+use crate::t;
 use crate::{ChannelId, EventScope, UserId, publish_event};
 use aspen_schema::{user, user_foreign_deployment};
 use aspen_wire::message_enum::request::UserUpdateRequest;
@@ -23,23 +31,23 @@ use aspen_wire::message_enum::server_event::ServerEvent;
 use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
-use diesel_async::{AsyncConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// The `typ` of a notice.
 const NOTICE_TYPE: &str = "aspen-notice+jwt";
-/// How long a notice is good for once signed.
+/// How long a notice is good for once signed. Each delivery attempt signs it afresh, so the
+/// lifetime need only cover the request.
 const NOTICE_LIFETIME: Duration = Duration::minutes(2);
 /// Where a home receives notices, under the API.
 pub const NOTICES_PATH: &str = "/federation/notices";
-/// How long to wait before each further attempt to deliver a notice its receiver did not take.
-const RETRY_DELAYS: [std::time::Duration; 3] = [
-    std::time::Duration::from_secs(2),
-    std::time::Duration::from_secs(15),
-    std::time::Duration::from_secs(60),
-];
+/// How many times a notice is tried before it is given up: with the jobs' backoff (ten seconds
+/// doubling to an hour, `jobs::backoff`), about a day, which is as long as a receiver's outage
+/// is worth waiting out. The standing pass covers what a lost `accountDeleted` would have done
+/// for users with a session there, and a DM its user will find on signing in there.
+pub const MAX_ATTEMPTS: i32 = 32;
 
 /// A notice about one user, to their home.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -59,7 +67,7 @@ pub struct Notice {
 }
 
 /// What a notice says.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum About {
     /// The user is in a DM on the deployment telling: started with them, or they were added.
@@ -115,40 +123,55 @@ impl Statement for Notice {
     }
 }
 
-/// Tells the homes of the users of `joined` from elsewhere that `by` put them in the DM
-/// `channel` here. Delivered in the background after the change is committed, each notice tried
-/// again a few times while its receiver does not take it; one never taken is only logged, since
-/// the user's devices signed in here learn of the DM from this deployment's own events anyway.
-pub fn announce_dm(
-    state: &GlobalServerContext,
-    channel: ChannelId,
-    joined: Vec<UserId>,
-    by: UserId,
-) {
-    let state = state.clone();
-    tokio::spawn(async move {
-        if let Err(error) = announce_dm_now(&state, channel, &joined, by).await {
-            tracing::warn!(%error, "could not announce a DM to other deployments");
-        }
-    });
+/// One notice to deliver: what a `deliverNotice` job is given. The notice itself is signed when
+/// the job runs, since a signature is good for minutes and a delivery may wait hours.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Delivery {
+    /// The receiver: the user's home, or a deployment they used.
+    pub to: Domain,
+    /// The user's id at home.
+    pub sub: Uuid,
+    #[serde(flatten)]
+    pub about: About,
 }
 
-async fn announce_dm_now(
+/// Saves one `deliverNotice` job per receiver on `conn`, in the transaction of what they tell
+/// of. A `dmJoined` is interactive, since the user's devices wait on it to sign in and read the
+/// DM; an `accountDeleted` is cleaning up after a decision made.
+async fn queue(conn: &mut AsyncPgConnection, deliveries: Vec<Delivery>) -> crate::Result<()> {
+    let jobs = deliveries
+        .into_iter()
+        .map(|delivery| {
+            let class = match delivery.about {
+                About::DmJoined { .. } => JobClass::Interactive,
+                About::AccountDeleted | About::Unknown => JobClass::Normal,
+            };
+            NewJob::new(JobKind::DeliverNotice, class, &delivery)
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+    enqueue_many(conn, jobs).await
+}
+
+/// Queues telling the homes of the users of `joined` from elsewhere that `by` put them in the
+/// DM `channel` here, in the transaction that put them there. Nothing is queued where
+/// federation is off or nobody in `joined` is from elsewhere.
+pub async fn queue_dm(
     state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
     channel: ChannelId,
     joined: &[UserId],
     by: UserId,
 ) -> crate::Result<()> {
-    let Some(here) = own_domain(&state.config.federation) else {
+    if own_domain(&state.config.federation).is_none() {
         return Ok(());
-    };
-    let mut conn = state.connection_pool.get().await?;
+    }
     let foreign: Vec<(Option<Domain>, Option<Uuid>)> = user::table
         .select((user::home_domain, user::home_id))
         .filter(user::id.eq_any(joined))
         .filter(user::id.ne(by))
         .filter(user::home_domain.is_not_null())
-        .load(&mut conn)
+        .load(conn)
         .await?;
     if foreign.is_empty() {
         return Ok(());
@@ -156,71 +179,64 @@ async fn announce_dm_now(
     let (name, display_name): (String, Option<String>) = user::table
         .select((user::name, user::display_name))
         .find(by)
-        .first(&mut conn)
+        .first(conn)
         .await?;
-    drop(conn);
-    for (home, home_id) in foreign {
-        let (Some(home), Some(home_id)) = (home, home_id) else {
-            continue;
-        };
-        send(
-            state,
-            &here,
-            home,
-            home_id,
-            About::DmJoined {
+    let deliveries = foreign
+        .into_iter()
+        .filter_map(|(home, home_id)| Some((home?, home_id?)))
+        .map(|(to, sub)| Delivery {
+            to,
+            sub,
+            about: About::DmJoined {
                 channel,
                 by: Person {
                     name: name.clone(),
                     display_name: display_name.clone(),
                 },
             },
-        )
-        .await?;
-    }
-    Ok(())
+        })
+        .collect();
+    queue(conn, deliveries).await
 }
 
-/// Tells every other deployment `user`, one of this deployment's own, has used that their
-/// account is gone, in the background.
-pub fn announce_deleted(state: &GlobalServerContext, user_id: UserId) {
-    let state = state.clone();
-    tokio::spawn(async move {
-        if let Err(error) = announce_deleted_now(&state, user_id).await {
-            tracing::warn!(%error, "could not announce a deleted account to other deployments");
-        }
-    });
-}
-
-async fn announce_deleted_now(state: &GlobalServerContext, user_id: UserId) -> crate::Result<()> {
-    let Some(here) = own_domain(&state.config.federation) else {
+/// Queues telling every other deployment `user_id`, one of this deployment's own, has used that
+/// their account is gone, in the transaction that retires it (`app::user::retire`).
+pub async fn queue_deleted(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    user_id: UserId,
+) -> crate::Result<()> {
+    if own_domain(&state.config.federation).is_none() {
         return Ok(());
-    };
+    }
     let used: Vec<String> = user_foreign_deployment::table
         .select(user_foreign_deployment::domain)
         .filter(user_foreign_deployment::user.eq(user_id))
-        .load(&mut state.connection_pool.get().await?)
+        .load(conn)
         .await?;
-    for domain in used {
-        let Ok(domain) = Domain::parse(&domain) else {
-            continue;
-        };
-        send(state, &here, domain, user_id.0, About::AccountDeleted).await?;
-    }
-    Ok(())
+    let deliveries = used
+        .iter()
+        .filter_map(|domain| Domain::parse(domain).ok())
+        .map(|to| Delivery {
+            to,
+            sub: user_id.0,
+            about: About::AccountDeleted,
+        })
+        .collect();
+    queue(conn, deliveries).await
 }
 
-/// Signs a notice about the user `sub` (their id at home) for `to`, and delivers it in the
-/// background.
-async fn send(
-    state: &GlobalServerContext,
-    here: &Domain,
-    to: Domain,
-    sub: Uuid,
-    about: About,
-) -> crate::Result<()> {
+/// One attempt of a `deliverNotice` job: signs the notice and POSTs it to its receiver. Taken
+/// (`2xx`), or refused (`4xx`, which will not change on its own), the job is done; otherwise
+/// it fails, to be tried again after the jobs' backoff, until on its last attempt it is given
+/// up with a warning. Without federation, or a signing key, there is nothing to deliver.
+pub async fn deliver_step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outcome> {
+    let Delivery { to, sub, about } = job.payload()?;
+    let Some(here) = own_domain(&state.config.federation) else {
+        return Ok(Outcome::Done);
+    };
     let Some(key) = signing_key(state.connection_pool.get().await?.as_mut()).await? else {
-        return Ok(());
+        return Ok(Outcome::Done);
     };
     let now = Utc::now();
     let notice = jws::sign(
@@ -228,7 +244,7 @@ async fn send(
         key.id,
         &key.pair,
         &Notice {
-            iss: here.clone(),
+            iss: here,
             aud: to.clone(),
             sub,
             iat: now.timestamp(),
@@ -237,34 +253,26 @@ async fn send(
             about,
         },
     );
-    let state = state.clone();
-    tokio::spawn(async move {
-        deliver(&state, &to, notice).await;
-    });
-    Ok(())
-}
-
-/// POSTs a notice to its receiver, trying again while it does not take it; a notice is signed
-/// for a few minutes, so the last attempt falls within that.
-async fn deliver(state: &GlobalServerContext, to: &Domain, notice: String) {
     let url = format!("https://{to}{}{NOTICES_PATH}", aspen_wire::API_PREFIX);
     let body = serde_json::json!({ "notice": notice });
-    for delay in std::iter::once(std::time::Duration::ZERO).chain(RETRY_DELAYS) {
-        tokio::time::sleep(delay).await;
-        match state.federation_client.post(&url).json(&body).send().await {
-            Ok(response) if response.status().is_success() => return,
-            // A refusal will not change on its own.
-            Ok(response) if response.status().is_client_error() => {
-                tracing::info!(%to, status = %response.status(), "a deployment refused a notice");
-                return;
-            }
-            Ok(response) => {
-                tracing::info!(%to, status = %response.status(), "a deployment could not take a notice");
-            }
-            Err(error) => tracing::info!(%to, %error, "could not reach a deployment with a notice"),
+    let failure = match state.federation_client.post(&url).json(&body).send().await {
+        Ok(response) if response.status().is_success() => return Ok(Outcome::Done),
+        Ok(response) if response.status().is_client_error() => {
+            tracing::info!(%to, status = %response.status(), "a deployment refused a notice");
+            return Ok(Outcome::Done);
         }
+        Ok(response) => format!("answered {}", response.status()),
+        Err(error) => error.to_string(),
+    };
+    if last_attempt(job) {
+        tracing::warn!(%to, attempts = job.attempts, %failure, "gave up delivering a notice");
+        return Ok(Outcome::Done);
     }
-    tracing::warn!(%to, "gave up delivering a notice");
+    tracing::info!(%to, %failure, "a deployment could not take a notice");
+    Err(crate::Error::DeploymentUnreachable(t!(
+        "federationNoAnswer",
+        domain = to.as_str()
+    )))
 }
 
 /// Takes a notice from another deployment: about one of this deployment's users, from a

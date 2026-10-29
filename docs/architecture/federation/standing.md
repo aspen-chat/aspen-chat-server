@@ -30,7 +30,9 @@ pass: the one that claims the recurring job `confirmStanding` (see [Jobs](../job
    been due longest first, stepping from one home to the next through `user_home_confirmed`.
 2. It picks the users with a session here who are due of each, at most `MAX_DUE_PER_PASS` (5000) a
    pass, shared evenly among those homes. Of each home, those never confirmed come first, then those
-   confirmed longest ago.
+   confirmed longest ago. A foreign user with no session here is not asked about: they can do
+   nothing here until their home signs them in again, and asking about everyone who ever visited
+   would make a pass grow with what is stored rather than with who is active.
 3. It asks their homes about them, sixteen homes at a time, each chunk of a home's users within
    twenty seconds of its own, and each home within a minute in all (`HOME_BUDGET`).
 4. Chunks not asked within the home's minute or the pass's four minutes (`CONFIRM_BUDGET`) are left
@@ -89,7 +91,16 @@ So an answer reveals nothing of accounts the asker was never given.
 ## Account deletion
 
 A user who deletes their account has their home send an `accountDeleted` notice to every deployment
-they used. It retires them there at once.
+they used (`user_foreign_deployment`). It retires them there at once. The notices are
+`deliverNotice` jobs saved in the transaction that retires the account (`app::user::retire`,
+`notices::queue_deleted`), one per deployment, tried again with the jobs' backoff for about a day
+when a deployment is down (see [Jobs](../jobs/kinds.md#delivernotice)).
+
+A deployment the notice never reaches within that day learns of the deletion only through the
+standing pass, which asks only about users with a session there (above): a deleted account whose
+user has no session at such a deployment is never retired there, and stays a member of its
+communities, shown as any other, though nobody can act as them, since their home signs in nobody for
+a deleted account. **Why the pass keeps its bound:** see [design notes](design-notes.md#standing).
 
 | Notice             | Accepted from                                                                                                                                                        |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
