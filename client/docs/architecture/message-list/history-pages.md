@@ -85,3 +85,28 @@ until the message's reactions are read again, since neither side carries the fee
 replay a connection starts with cannot land so, since window reads wait for it (below); only a
 server that writes no `caughtUp` leaves the chance. Annotations and attachments have no touches, and
 the attachment record keeps a preview a read lacks on its own (`#putAttachment`).
+
+## The replay a connection starts with
+
+Every connection of the event stream begins with a replay: the stream's last minute on a first
+connection, what was missed on a resumed one. The server's `ready` says what the replay is worth,
+and `AspenSync` decides from it whether the cache can be trusted:
+
+- `replayComplete: false` says the server left out events it could not judge (those of a community
+  from before a change of the caller's roles there, say). The cache is read again (`resyncing`),
+  resumed or not.
+- `replayedSince` says when the replayed window begins, when it is shorter than the usual minute
+  (events let go of early, or a server that started reading the stream less than a minute ago). A
+  bootstrap that began before it, less `REPLAY_CLOCK_SLACK_MS` for the two clocks disagreeing, may
+  have missed events between, so the cache is read again. A server that does not say leaves the
+  fallback: a first connection's bootstrap that took longer than `BOOTSTRAP_STALE_AFTER_MS` is read
+  again.
+- `catchUpFollows: true` says the server ends the replay with a `caughtUp` frame. The sync stays
+  `connecting` until it, and window reads asked for meanwhile wait for it (`#whenCaughtUp`), so the
+  replay is applied before any read is sent and can never land over a read's answer. A server that
+  writes none is live from `ready`, as before there was one.
+
+A `ready` that arrives while a bootstrap is in flight (a reconnect during a resync) and says the
+replay may lack events has the bootstrap done again once it lands, since the one in flight began
+before the connection. The decision is `#replayMayLack`; the stream parses the frame (`EventStream`,
+`ReadyInfo`, `onCaughtUp`) and ignores frames of types it does not know.

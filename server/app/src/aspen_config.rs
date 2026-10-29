@@ -447,6 +447,14 @@ pub struct LimitsConfig {
     /// arrives while requests already queue for the pool, is closed with `serverBusy` and told
     /// when to come back (`api::event_stream`).
     pub max_identifying_event_streams: Option<usize>,
+    /// The most DM partners whose profile events one event stream connection follows
+    /// (`app::event_feed::Following`): the people in the user's most recent DMs, as many DMs as
+    /// keep their partners within this many. A connection learns of a change to the profile of
+    /// someone it shares no community with (a name, an avatar, a deleted account) only through
+    /// this, so a partner from an older DM is shown as they were until the client reads them
+    /// again. Each followed partner is one entry in the server's index of who follows whom.
+    #[default = 100]
+    pub max_followed_dm_partners: usize,
 }
 
 /// Federation: this deployment's name among deployments and how it checks on the users of
@@ -1494,6 +1502,7 @@ mod tests {
         assert_eq!(config.media.s3.upload_url_ttl_seconds, 900);
         assert_eq!(config.presence.away_after_seconds, 600);
         assert_eq!(config.limits.max_communities_per_user, 500);
+        assert_eq!(config.limits.max_followed_dm_partners, 100);
         assert!(config.metrics.enabled);
         assert_eq!(config.event_queue_size, 512);
     }

@@ -227,7 +227,21 @@ function busy(retryAfterSeconds: number): Response {
   });
 }
 
-/** Runs `start()` through the bootstrap and the stream's `ready`. */
+type ReadyFrame = Extract<ServerMessage, { type: "ready" }>;
+
+/** A `ready` as the server writes it: a first connection, with nothing left out of its replay. */
+function ready(overrides: Partial<ReadyFrame> = {}): ReadyFrame {
+  return {
+    type: "ready",
+    userId: me.id,
+    resumed: false,
+    replayComplete: true,
+    catchUpFollows: false,
+    ...overrides,
+  };
+}
+
+/** Runs `start()` through the bootstrap and the stream's `ready` and `caughtUp`. */
 async function goLive(sync: AspenSync): Promise<FakeSocket> {
   sync.start();
   expect(sync.status).toBe("bootstrapping");
@@ -239,7 +253,10 @@ async function goLive(sync: AspenSync): Promise<FakeSocket> {
     throw new Error("stream did not connect after bootstrap");
   }
   socket.onopen?.();
-  socket.frame({ type: "ready", userId: me.id, resumed: false });
+  socket.frame(ready({ catchUpFollows: true }));
+  // Not live until the replay the connection starts with has been delivered.
+  expect(sync.status).toBe("connecting");
+  socket.frame({ type: "caughtUp" });
   expect(sync.status).toBe("live");
   return socket;
 }
@@ -279,7 +296,7 @@ describe("AspenSync", () => {
       throw new Error("no reconnect attempt");
     }
     again.onopen?.();
-    again.frame({ type: "ready", userId: me.id, resumed: true });
+    again.frame(ready({ resumed: true }));
     expect(again.sent.filter((f) => (f as { type: string }).type === "activity")).toHaveLength(0);
     sync.stop();
   });
@@ -659,7 +676,7 @@ describe("AspenSync", () => {
       throw new Error("no reconnect attempt");
     }
     again.onopen?.();
-    again.frame({ type: "ready", userId: me.id, resumed: false });
+    again.frame(ready());
     expect(sync.status).toBe("resyncing");
     await settle();
     expect(sync.status).toBe("failed");
@@ -723,7 +740,7 @@ describe("AspenSync", () => {
       throw new Error("no reconnect attempt");
     }
     again.onopen?.();
-    again.frame({ type: "ready", userId: me.id, resumed: false });
+    again.frame(ready());
     expect(sync.status).toBe("resyncing");
 
     // An event arriving mid-resync is held, not applied.
@@ -762,7 +779,7 @@ describe("AspenSync", () => {
       throw new Error("stream did not connect");
     }
     socket.onopen?.();
-    socket.frame({ type: "ready", userId: me.id, resumed: false });
+    socket.frame(ready());
     expect(sync.status).toBe("resyncing");
     await settle();
     expect(listings).toBe(2);

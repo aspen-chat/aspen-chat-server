@@ -56,6 +56,11 @@ pub enum EphemeralEvent {
         #[serde(default)]
         queued: bool,
     },
+    /// The deployment's installed plugins changed: one was installed, upgraded, turned on or
+    /// off, reordered, or removed (`app::plugin::registry`). Told once per change to every
+    /// connection of each API server as it takes the change up. The client reads `GET /plugins`
+    /// again and drops what it shows of plugins no longer listed.
+    PluginCatalogueChanged,
 }
 
 /// How long a server gathers changes to presence before telling its connections of them

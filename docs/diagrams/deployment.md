@@ -86,7 +86,7 @@ flowchart LR
     end
 
     subgraph js["NATS"]
-        omni[["stream aspen_omni_stream<br/>aspen.events.c.{community}.ch.{channel}<br/>aspen.events.c.{community}.all<br/>aspen.events.u.{user}<br/>in memory, one minute"]]
+        omni[["stream aspen_omni_stream<br/>aspen.events.c.{community}.ch.{channel}<br/>aspen.events.c.{community}.all<br/>aspen.events.u.{user}<br/>aspen.events.p.{user}<br/>in memory, one minute"]]
         typing(["aspen.typing<br/>core NATS, never kept"])
         vrep[["stream aspen_voice_reports<br/>aspen.voice.report.{lane}.{server}<br/>aspen.voice.speaking.{lane}.{server}<br/>in memory, work queue"]]
         tok(["token key requests<br/>core NATS"])

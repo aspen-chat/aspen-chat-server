@@ -30,8 +30,17 @@ describe("reconnectDelayMs", () => {
 describe("ServerMessage validator", () => {
   const validate = compileValidator();
 
-  it("accepts ready, event, and error frames", () => {
-    expect(validate({ type: "ready", userId: uuid, resumed: false })).toBe(true);
+  it("accepts ready, caughtUp, event, and error frames", () => {
+    expect(
+      validate({
+        type: "ready",
+        userId: uuid,
+        resumed: false,
+        replayComplete: true,
+        catchUpFollows: true,
+      }),
+    ).toBe(true);
+    expect(validate({ type: "caughtUp" })).toBe(true);
     expect(
       validate({
         type: "event",
@@ -85,8 +94,17 @@ class FakeSocket {
   }
 
   /** Simulates the server accepting `identify`. */
-  ready(resumed: boolean): void {
-    this.onmessage?.({ data: JSON.stringify({ type: "ready", userId: uuid, resumed }) });
+  ready(resumed: boolean, extra: Record<string, unknown> = {}): void {
+    this.onmessage?.({
+      data: JSON.stringify({
+        type: "ready",
+        userId: uuid,
+        resumed,
+        replayComplete: true,
+        catchUpFollows: false,
+        ...extra,
+      }),
+    });
   }
 
   event(sequence: number): void {
@@ -136,6 +154,7 @@ async function flush(): Promise<void> {
 function harness(
   tokens: (string | null)[] = ["token-1", "token-2", "token-3"],
   random: () => number = () => 0,
+  validate = true,
 ) {
   FakeSocket.instances = [];
   const timers = new FakeTimers();
@@ -143,7 +162,7 @@ function harness(
   const authCalls: boolean[] = [];
   const stream = new EventStream({
     url: "wss://aspen.test/api/v1/events",
-    validate: true,
+    validate,
     authenticate: ({ forceRefresh }) => {
       authCalls.push(forceRefresh);
       return Promise.resolve(tokens.shift() ?? null);
@@ -155,8 +174,12 @@ function harness(
     onReady: (info) =>
       log.push(
         `ready:${String(info.resumed)}` +
-          (info.webClientBuild === null ? "" : `:${info.webClientBuild}`),
+          (info.webClientBuild === null ? "" : `:${info.webClientBuild}`) +
+          (info.replayComplete ? "" : ":incomplete") +
+          (info.replayedSince === null ? "" : `:since ${info.replayedSince}`) +
+          (info.catchUpFollows ? ":catching up" : ""),
       ),
+    onCaughtUp: () => log.push("caught up"),
     onConnectionLost: (reason) => log.push(`lost:${reason}`),
     onResyncRequired: () => log.push("resync"),
     onEvent: (e) => log.push(`event:${e.serverEvent}`),
@@ -206,10 +229,43 @@ describe("EventStream", () => {
     await flush();
     const socket = sockets[0];
     socket?.onopen?.();
-    socket?.onmessage?.({
-      data: JSON.stringify({ type: "ready", userId: uuid, resumed: false, webClientBuild: "b-2" }),
-    });
+    socket?.ready(false, { webClientBuild: "b-2" });
     expect(log).toEqual(["ready:false:b-2"]);
+    stream.stop();
+  });
+
+  it("tells what ready says of the replay, and when it has all arrived", async () => {
+    const { stream, log, sockets } = harness();
+    stream.start();
+    await flush();
+    const socket = sockets[0];
+    socket?.onopen?.();
+    socket?.ready(false, {
+      replayComplete: false,
+      replayedSince: "2026-10-29T10:00:00Z",
+      catchUpFollows: true,
+    });
+    socket?.event(1);
+    socket?.onmessage?.({ data: JSON.stringify({ type: "caughtUp" }) });
+    // A frame of a kind this client does not know is dropped, since a newer server may write one.
+    socket?.onmessage?.({ data: JSON.stringify({ type: "somethingNewer" }) });
+    expect(log).toEqual([
+      "ready:false:incomplete:since 2026-10-29T10:00:00Z:catching up",
+      "event:message",
+      "caught up",
+      "invalid",
+    ]);
+    stream.stop();
+  });
+
+  it("takes a ready without the replay fields as a whole replay with no caughtUp to come", async () => {
+    const { stream, log, sockets } = harness(undefined, undefined, false);
+    stream.start();
+    await flush();
+    const socket = sockets[0];
+    socket?.onopen?.();
+    socket?.onmessage?.({ data: JSON.stringify({ type: "ready", userId: uuid, resumed: true }) });
+    expect(log).toEqual(["ready:true"]);
     stream.stop();
   });
 

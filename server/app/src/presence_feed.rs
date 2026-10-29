@@ -922,7 +922,9 @@ mod tests {
             match received.try_recv().ok()? {
                 EphemeralEvent::Presence { statuses } => return Some(statuses),
                 EphemeralEvent::PresenceWatching => continue,
-                EphemeralEvent::Typing { .. } | EphemeralEvent::Mana { .. } => {
+                EphemeralEvent::Typing { .. }
+                | EphemeralEvent::Mana { .. }
+                | EphemeralEvent::PluginCatalogueChanged => {
                     panic!("a relay from the presence router")
                 }
             }

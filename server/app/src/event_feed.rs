@@ -28,7 +28,17 @@
 //! join brings the community's events from that point and a leave ends them. A catch-up replay
 //! applies the ones it passes over the same way, and judges a community's events from before
 //! the user's own changes as they stood then rather than as the database shows them
-//! (`Retained::catch_up`).
+//! (`Retained::catch_up`). What a catch-up could not vouch for is told to the client with its
+//! `ready` frame (`Outcome::Registered`): whether it was complete, and the moment the retained
+//! window begins when that is later than `MAX_EVENT_AGE` ago; a `caughtUp` frame follows the
+//! replay, so the client knows where live events begin.
+//!
+//! A connection also follows the profiles of its user's DM partners (`Following`): the copy of
+//! an event about a user published on their profile subject (`events::profile_subject`) reaches
+//! the connections following them, so a partner who shares no community with the user still
+//! learns of their new name, or that their account is gone. The partners of the user's most
+//! recent DMs are followed from registration, bounded by `[limits] max_followed_dm_partners`,
+//! and a DM made, changed, or left while the connection is open changes them.
 //!
 //! What happens in a community channel, and the channel's own events, reach only those who may
 //! view it. Publishers name the channel that decides it in the `Aspen-Channel` header (a
@@ -46,6 +56,10 @@
 //! client resumes from the last event it processed. If the feed itself misses events (the
 //! stream's sequence jumps, or restarts after NATS lost it), every local connection is dropped,
 //! and each learns from `resumed: false` that it must rebuild its state.
+//!
+//! Besides the stream's events, the feed hands every local connection a notice the server has
+//! for all of them at once (`EventFeed::tell_everyone`: the installed plugins changed), written
+//! as an `ephemeral` frame.
 
 use crate::context::GlobalServerContext;
 use crate::events::{
@@ -54,13 +68,14 @@ use crate::events::{
 };
 use crate::mana::live::MANA_SUBJECT;
 use crate::permissions::{Permission, Permissions};
-use crate::typing::{Audience, Relay, TYPING_SUBJECT};
+use crate::typing::{Audience, EphemeralEvent, Relay, TYPING_SUBJECT};
 use crate::visibility::{CommunityModel, ModelChange, member_roles};
 use crate::{ASPEN_NATS_STREAM_NAME, CategoryId, ChannelId, CommunityId, RoleId, UserId};
 use async_nats::jetstream;
 use async_nats::jetstream::consumer::pull::{Ordered, OrderedConfig};
 use async_nats::jetstream::consumer::{DeliverPolicy, ReplayPolicy};
 use chrono::{DateTime, Utc};
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -125,6 +140,9 @@ pub struct FeedEvent {
     /// On a user's own subject, whether they now moderate the deployment, and so view every
     /// channel of the communities they read.
     moderator: Option<bool>,
+    /// On a user's own subject, a DM of theirs made or whose people changed, with its people as
+    /// the event leaves them: what their connections follow the profiles of (`Following`).
+    dm: Option<DmChange>,
     /// The community channel whose View channel permission decides who receives the event.
     channel: Option<ChannelId>,
     /// The category whose own overrides decide who receives the event (`CATEGORY_HEADER`).
@@ -238,6 +256,7 @@ impl FeedEvent {
             membership: None,
             roles: None,
             moderator: None,
+            dm: None,
             channel,
             category: None,
             requires: None,
@@ -297,12 +316,19 @@ impl EndedSignIns {
 
 /// What a connection receives, in order.
 pub enum Delivery {
-    /// What it missed before it registered. Always first, and only once.
+    /// What it missed before it registered. Always first, and only once; left out when it
+    /// missed nothing.
     CatchUp(Vec<Arc<FeedEvent>>),
+    /// The catch-up is over and what follows happens live. Always once, right after `CatchUp`
+    /// or first when there was none, so the client knows the replay is written.
+    CaughtUp,
     /// One event as it happens.
     Live(Arc<FeedEvent>),
     /// One event from outside the stream (`app::typing`), which has no sequence.
     Ephemeral(Arc<FeedEvent>),
+    /// One ephemeral event for every connection of this server at once
+    /// (`EventFeed::tell_everyone`), serialized once for all of them.
+    Notice(Arc<RawValue>),
 }
 
 /// A registered connection's end of the feed. Dropping it unregisters the connection. The
@@ -310,6 +336,16 @@ pub enum Delivery {
 pub struct Subscription {
     /// Whether `resume_after` was honoured; when not, the catch-up is the whole retained window.
     pub resumed: bool,
+    /// Whether the catch-up delivered everything the connection may read of what it passed
+    /// through. It did not when it had to leave out what the database's reading would have
+    /// shown (`catch_up`), or when it passed through a community whose model was read from the
+    /// database after a retained change to who views a channel there (`Models::adopt`); the
+    /// client then reads its state again.
+    pub replay_complete: bool,
+    /// When the window the catch-up replayed begins, if that is later than `MAX_EVENT_AGE` ago
+    /// (`Retained::replayed_since`): the client compares it with when it began reading its
+    /// state. `None` when the whole window was there, or the connection resumed.
+    pub replayed_since: Option<DateTime<Utc>>,
     pub deliveries: mpsc::Receiver<Delivery>,
     /// The shard the connection belongs to, told what its client has open.
     shard: mpsc::Sender<ShardCommand>,
@@ -449,6 +485,8 @@ struct Register {
     communities: Vec<CommunityId>,
     roles: HashMap<CommunityId, Vec<RoleId>>,
     moderator: bool,
+    /// The DM partners whose profiles the connection follows, as the database had them.
+    following: Following,
     /// Models of the communities, as the database had them, for those the dispatcher lacks.
     models: HashMap<CommunityId, CommunityModel>,
     resume_after: Option<u64>,
@@ -458,8 +496,13 @@ struct Register {
 
 /// What became of a registration.
 enum Outcome {
-    /// Registered; whether `resume_after` was honoured.
-    Registered(bool),
+    /// Registered: whether `resume_after` was honoured, whether the catch-up was complete, and
+    /// when its window begins if short (`Subscription`'s fields of the same names).
+    Registered {
+        resumed: bool,
+        complete: bool,
+        replayed_since: Option<DateTime<Utc>>,
+    },
     /// The communities the connection reads once caught up whose models it must load before
     /// registering again.
     Load(Vec<CommunityId>),
@@ -533,8 +576,27 @@ impl EventFeed {
             shards: held,
             unregister,
             next_id: Arc::new(AtomicU64::new(0)),
-            queue_size: queue_size.max(1),
+            // A catch-up and the `CaughtUp` after it are queued together before the connection
+            // reads anything.
+            queue_size: queue_size.max(2),
             caps,
+        }
+    }
+
+    /// Hands `event` to every connection of this server, written as an `ephemeral` frame: for
+    /// what every client here must hear of at once and the stream does not carry (the
+    /// installed plugins changed). Serialized once; a connection whose queue is full misses it,
+    /// as it would a relay.
+    pub async fn tell_everyone(&self, event: &EphemeralEvent) {
+        let payload: Arc<RawValue> = match serde_json::value::to_raw_value(event) {
+            Ok(payload) => Arc::from(payload),
+            Err(e) => {
+                error!("a notice for every connection could not be serialized: {e}");
+                return;
+            }
+        };
+        for shard in self.shards.iter() {
+            tell(shard, ShardCommand::Notice(payload.clone())).await;
         }
     }
 }
@@ -549,7 +611,7 @@ pub async fn subscribe(
 ) -> Result<Subscription, Refused> {
     // The connection goes back to the pool before the dispatcher is waited on, so a crowd of
     // reconnections waiting their turn holds none.
-    let (communities, roles, mut models, moderator) = {
+    let (communities, roles, mut models, moderator, following) = {
         let mut conn = state
             .connection_pool
             .get()
@@ -559,7 +621,12 @@ pub async fn subscribe(
         let roles = member_roles(conn.as_mut(), user, &communities).await?;
         let models = CommunityModel::load(conn.as_mut(), &communities).await?;
         let moderator = crate::deployment::is_moderator(conn.as_mut(), user).await?;
-        (communities, roles, models, moderator)
+        let cap = state.config.limits.max_followed_dm_partners;
+        let mut following = Following::new(cap);
+        for (dm, people) in recent_dms(conn.as_mut(), user, cap).await? {
+            following.follow(user, dm, &people);
+        }
+        (communities, roles, models, moderator, following)
     };
     let feed = &state.event_feed;
     let id = feed.next_id.fetch_add(1, Ordering::Relaxed);
@@ -574,6 +641,7 @@ pub async fn subscribe(
                 communities: communities.clone(),
                 roles: roles.clone(),
                 moderator,
+                following: following.clone(),
                 models: std::mem::take(&mut models),
                 resume_after,
                 deliveries: deliveries_tx.clone(),
@@ -587,7 +655,11 @@ pub async fn subscribe(
             return Err(crate::Error::EventFeedStopped.into());
         };
         match outcome {
-            Outcome::Registered(resumed) => {
+            Outcome::Registered {
+                resumed,
+                complete,
+                replayed_since,
+            } => {
                 let Some(shard) = feed
                     .shards
                     .get((id % feed.shards.len().max(1) as u64) as usize)
@@ -596,6 +668,8 @@ pub async fn subscribe(
                 };
                 return Ok(Subscription {
                     resumed,
+                    replay_complete: complete,
+                    replayed_since,
                     deliveries,
                     shard: shard.clone(),
                     _registration: Registration {
@@ -616,6 +690,189 @@ pub async fn subscribe(
         }
     }
     Err(crate::Error::EventFeedStopped.into())
+}
+
+/// A DM's people as an event on one of their own subjects leaves them: the DM made, or its
+/// recipients changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DmChange {
+    channel: ChannelId,
+    recipients: Vec<UserId>,
+}
+
+/// The DM partners whose profile events a connection follows (`SubjectOwner::Profile`): the
+/// people in its user's most recent DMs, as many DMs as keep the partners within `cap`
+/// (`[limits] max_followed_dm_partners`). A DM made or changed while the connection is open is
+/// followed from then, the oldest DMs let go of past the cap, and one the user leaves is let go
+/// of at once; a partner in another followed DM stays followed through it.
+#[derive(Debug, Clone, Default)]
+pub struct Following {
+    cap: usize,
+    /// Each followed DM's partners, and the DMs oldest first.
+    dms: HashMap<ChannelId, Vec<UserId>>,
+    recent: VecDeque<ChannelId>,
+    /// How many followed DMs each partner is in.
+    partners: HashMap<UserId, usize>,
+}
+
+/// Whom a change to a `Following` started and stopped following, for the index of who follows
+/// whom (`Routes::by_profile`).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Followed {
+    started: Vec<UserId>,
+    stopped: Vec<UserId>,
+}
+
+impl Following {
+    pub fn new(cap: usize) -> Self {
+        Following {
+            cap,
+            ..Self::default()
+        }
+    }
+
+    fn follows(&self, user: UserId) -> bool {
+        self.partners.contains_key(&user)
+    }
+
+    fn partners(&self) -> impl Iterator<Item = UserId> + '_ {
+        self.partners.keys().copied()
+    }
+
+    /// Follows `recipients` but `user` as the people of `dm`, the most recent DM, in place of
+    /// whoever it held before; lets go of the oldest DMs while the partners exceed the cap.
+    fn follow(&mut self, user: UserId, dm: ChannelId, recipients: &[UserId]) -> Followed {
+        let mut changed = self.unfollow(dm);
+        let people: Vec<UserId> = recipients.iter().copied().filter(|p| *p != user).collect();
+        for partner in &people {
+            let count = self.partners.entry(*partner).or_default();
+            *count += 1;
+            if *count == 1 {
+                changed.started.push(*partner);
+            }
+        }
+        self.dms.insert(dm, people);
+        self.recent.push_back(dm);
+        while self.partners.len() > self.cap {
+            let Some(oldest) = self.recent.front().copied() else {
+                break;
+            };
+            let gone = self.unfollow(oldest);
+            changed.stopped.extend(gone.stopped);
+        }
+        // A partner let go of and followed again in one change is neither.
+        changed
+            .started
+            .retain(|p| self.partners.contains_key(p) && !changed.stopped.contains(p));
+        changed.stopped.retain(|p| !self.partners.contains_key(p));
+        changed
+    }
+
+    /// Stops following `dm`'s people, but for those in another followed DM.
+    fn unfollow(&mut self, dm: ChannelId) -> Followed {
+        let mut changed = Followed::default();
+        let Some(people) = self.dms.remove(&dm) else {
+            return changed;
+        };
+        self.recent.retain(|c| *c != dm);
+        for partner in people {
+            if let Some(count) = self.partners.get_mut(&partner) {
+                *count -= 1;
+                if *count == 0 {
+                    self.partners.remove(&partner);
+                    changed.stopped.push(partner);
+                }
+            }
+        }
+        changed
+    }
+
+    /// Follows what `change`, on `user`'s own subject, leaves of a DM: its people when `user` is
+    /// among them, and nobody when they have left it.
+    fn apply(&mut self, user: UserId, change: &DmChange) -> Followed {
+        if change.recipients.contains(&user) {
+            self.follow(user, change.channel, &change.recipients)
+        } else {
+            self.unfollow(change.channel)
+        }
+    }
+}
+
+/// The people of `user`'s `dms` most recently active DMs (`dm_recipient.active_at`, through
+/// `dm_recipient_by_activity`), the oldest DM first and each with everyone in it, `user`
+/// included: what a connection follows the profiles of as it registers.
+async fn recent_dms(
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    dms: usize,
+) -> crate::Result<Vec<(ChannelId, Vec<UserId>)>> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        channel: ChannelId,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        user: UserId,
+    }
+    if dms == 0 {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<Row> = diesel::sql_query(
+        r#"
+        SELECT other.channel, other."user" FROM (
+            SELECT dr.channel, dr.active_at FROM dm_recipient dr
+            JOIN channel c ON c.id = dr.channel
+            WHERE dr."user" = $1 AND c.deleted_at IS NULL
+            ORDER BY dr.active_at DESC, dr.channel DESC
+            LIMIT $2
+        ) recent
+        JOIN dm_recipient other ON other.channel = recent.channel
+        ORDER BY recent.active_at ASC, recent.channel ASC
+        "#,
+    )
+    .bind::<diesel::sql_types::Uuid, _>(user.0)
+    .bind::<diesel::sql_types::BigInt, _>(i64::try_from(dms).unwrap_or(i64::MAX))
+    .load(conn)
+    .await?;
+    let mut grouped: Vec<(ChannelId, Vec<UserId>)> = Vec::new();
+    for row in rows {
+        match grouped.last_mut() {
+            Some((dm, people)) if *dm == row.channel => people.push(row.user),
+            _ => grouped.push((row.channel, vec![row.user])),
+        }
+    }
+    Ok(grouped)
+}
+
+/// What an event on a user's own subject says of a DM of theirs, read without parsing the rest
+/// of it: a DM or group DM made, or one whose people changed, with its people as it leaves them.
+fn own_dm_change(payload: &str) -> Option<DmChange> {
+    if !payload.contains("\"recipients\"") {
+        return None;
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Glance {
+        server_event: String,
+        #[serde(rename = "type")]
+        kind: String,
+        id: Option<ChannelId>,
+        ty: Option<crate::channel::ChannelType>,
+        recipients: Option<Vec<UserId>>,
+    }
+    let glance: Glance = serde_json::from_str(payload).ok()?;
+    if glance.server_event != "channel" {
+        return None;
+    }
+    use crate::channel::ChannelType;
+    match (glance.kind.as_str(), glance.ty) {
+        ("create", Some(ChannelType::Dm | ChannelType::GroupDm)) | ("update", None) => {
+            Some(DmChange {
+                channel: glance.id?,
+                recipients: glance.recipients?,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// What an event on `user`'s own subject changes about their memberships, read without parsing
@@ -732,7 +989,6 @@ fn may_read(
 
 /// The events the stream retains, by owner: the last `MAX_EVENT_AGE` of them, and at most
 /// `cap` bytes of their text, past which the oldest go early (`event_retained_mib`).
-#[derive(Default)]
 struct Retained {
     by_owner: HashMap<SubjectOwner, VecDeque<Arc<FeedEvent>>>,
     /// Every retained event's owner and sequence, oldest first, for letting them go in order.
@@ -742,9 +998,48 @@ struct Retained {
     bytes: usize,
     /// The most bytes kept; 0 for no limit.
     cap: usize,
+    /// The moment from which every event published is held until it ages out: when this
+    /// process began reading, moved later by each event let go of early for the cap and by a
+    /// gap, and earlier to the start of the window once the stream is read to its end and
+    /// found not to have cut the window itself (`vouch_since`).
+    holds_since: Instant,
+}
+
+impl Default for Retained {
+    fn default() -> Self {
+        Retained {
+            by_owner: HashMap::new(),
+            order: VecDeque::new(),
+            last_sequence: 0,
+            bytes: 0,
+            cap: 0,
+            holds_since: Instant::now(),
+        }
+    }
 }
 
 impl Retained {
+    /// Takes `since` as the moment from which every event is held, when that is earlier than
+    /// what is held from now.
+    fn vouch_since(&mut self, since: Instant) {
+        self.holds_since = self.holds_since.min(since);
+    }
+
+    /// When the retained window begins, if that is later than `MAX_EVENT_AGE` before `now`: a
+    /// first connection's replay then covers less than a client assumes, and its `ready` frame
+    /// says so (`replayedSince`). `None` when the whole window is held.
+    fn replayed_since(&self, now: Instant) -> Option<DateTime<Utc>> {
+        let whole = now
+            .checked_sub(MAX_EVENT_AGE)
+            .is_some_and(|edge| self.holds_since <= edge);
+        if whole {
+            return None;
+        }
+        let ago = chrono::Duration::from_std(now.saturating_duration_since(self.holds_since))
+            .unwrap_or_default();
+        Some(Utc::now() - ago)
+    }
+
     /// The sequence of the oldest event retained, or the next to come when none is.
     fn first_sequence(&self) -> u64 {
         self.order
@@ -771,7 +1066,9 @@ impl Retained {
             .or_default()
             .push_back(event);
         while self.cap > 0 && self.bytes > self.cap && self.order.len() > 1 {
-            self.pop_oldest();
+            if let Some(published) = self.pop_oldest() {
+                self.holds_since = self.holds_since.max(published);
+            }
         }
     }
 
@@ -784,12 +1081,11 @@ impl Retained {
         }
     }
 
-    /// Lets go of the oldest event retained. Catch-up then starts after it, and a client
-    /// resuming from before it is told it did not resume (`start_after`).
-    fn pop_oldest(&mut self) {
-        let Some((_, owner, _)) = self.order.pop_front() else {
-            return;
-        };
+    /// Lets go of the oldest event retained, answering when it was published. Catch-up then
+    /// starts after it, and a client resuming from before it is told it did not resume
+    /// (`start_after`).
+    fn pop_oldest(&mut self) -> Option<Instant> {
+        let (published, owner, _) = self.order.pop_front()?;
         if let Some(events) = self.by_owner.get_mut(&owner) {
             if let Some(event) = events.pop_front() {
                 self.bytes -= event.payload.get().len();
@@ -798,9 +1094,11 @@ impl Retained {
                 self.by_owner.remove(&owner);
             }
         }
+        Some(published)
     }
 
-    /// Forgets everything, as after a gap: nothing retained can be resumed across it.
+    /// Forgets everything, as after a gap: nothing retained can be resumed across it, and
+    /// nothing from before now is vouched for.
     fn clear(&mut self) {
         *self = Self {
             last_sequence: self.last_sequence,
@@ -859,13 +1157,14 @@ impl Window for Retained {
 
 /// The retained events one registration's catch-up reads, taken by the dispatcher at the moment
 /// it registers: every event on the user's own subject, and those of each community they may
-/// read after where the catch-up starts. A routing shard judges them while the dispatcher goes
-/// on routing, and since it adds the connection before any event routed after, the connection
-/// receives each event once.
+/// read and each profile they may follow after where the catch-up starts. A routing shard
+/// judges them while the dispatcher goes on routing, and since it adds the connection before
+/// any event routed after, the connection receives each event once.
 struct Snapshot {
     user: UserId,
     own: Vec<Arc<FeedEvent>>,
     communities: HashMap<CommunityId, Vec<Arc<FeedEvent>>>,
+    profiles: HashMap<UserId, Vec<Arc<FeedEvent>>>,
 }
 
 impl Window for Snapshot {
@@ -875,6 +1174,7 @@ impl Window for Snapshot {
             SubjectOwner::Community(community) => {
                 self.communities.get(&community).map_or(&[], Vec::as_slice)
             }
+            SubjectOwner::Profile(user) => self.profiles.get(&user).map_or(&[], Vec::as_slice),
             SubjectOwner::User(_) => &[],
         };
         let start = events.partition_point(|e| e.sequence <= after);
@@ -885,11 +1185,13 @@ impl Window for Snapshot {
 /// What a connection of `user`'s, of the sign-in `sign_in`, reading what `reading` says
 /// missed after `after`, and what it reads once it has caught up.
 /// The database was read at some moment in the retained window, possibly before changes
-/// published just ahead of it were committed, so every membership and role change of the
+/// published just ahead of it were committed, so every membership, role, and DM change of the
 /// user's retained up to `after` is applied first (each sets a value, so applying one the
 /// database already shows changes nothing), and those after it as they are passed. Channel
 /// events are kept by the model attached to each, or `models`' for one routed before the
-/// dispatcher held its community's.
+/// dispatcher held its community's. The profile events of the partners followed as the
+/// catch-up starts, and of the people of each DM it passes, are delivered from where each is
+/// followed.
 ///
 /// The database may as well have been read after changes retained beyond `after` were
 /// committed, so a community's events from before the user's own changes there are judged
@@ -918,6 +1220,7 @@ fn catch_up(
         communities: mut reading,
         mut roles,
         mut moderator,
+        mut following,
     } = reading;
     for e in window.since(own, 0).take_while(|e| e.sequence <= after) {
         if let Some(end) = e.ends
@@ -927,6 +1230,9 @@ fn catch_up(
         }
         apply_membership(&mut reading, &mut roles, e);
         moderator = e.moderator.unwrap_or(moderator);
+        if let Some(dm) = &e.dm {
+            following.apply(user, dm);
+        }
     }
     // The user's own changes beyond `after`, each community's and the deployment's first.
     let mut joins_ahead = HashSet::new();
@@ -970,6 +1276,17 @@ fn catch_up(
                 .cloned(),
         );
     }
+    // Profiles followed as the catch-up starts and those of every DM it passes; whether each
+    // event of theirs is read is decided where it falls.
+    let mut profiles: HashSet<UserId> = following.partners().collect();
+    for e in window.since(own, after) {
+        if let Some(dm) = &e.dm {
+            profiles.extend(dm.recipients.iter().copied().filter(|p| *p != user));
+        }
+    }
+    for profile in profiles {
+        events.extend(window.since(SubjectOwner::Profile(profile), after).cloned());
+    }
     events.sort_unstable_by_key(|e| e.sequence);
     events.retain(|e| match e.owner {
         SubjectOwner::User(_) => {
@@ -981,8 +1298,12 @@ fn catch_up(
                 moderator = now;
                 moderation_ahead = false;
             }
+            if let Some(dm) = &e.dm {
+                following.apply(user, dm);
+            }
             e.reaches(sign_in)
         }
+        SubjectOwner::Profile(profile) => following.follows(profile),
         SubjectOwner::Community(community) => {
             if !reading.contains(&community) {
                 return false;
@@ -1014,17 +1335,19 @@ fn catch_up(
         communities: reading,
         roles,
         moderator,
+        following,
     };
     Ok((events, caught_up, complete))
 }
 
 /// What a connection reads: its user's communities, the roles they hold in each besides
-/// everyone's, and whether they moderate the deployment.
+/// everyone's, whether they moderate the deployment, and whose profiles it follows.
 #[derive(Clone)]
 struct Reading {
     communities: HashSet<CommunityId>,
     roles: HashMap<CommunityId, Vec<RoleId>>,
     moderator: bool,
+    following: Following,
 }
 
 /// Applies what an event on the user's own subject changes about their memberships and roles.
@@ -1056,6 +1379,8 @@ struct Connection {
     roles: HashMap<CommunityId, Vec<RoleId>>,
     /// Whether the user moderates the deployment.
     moderator: bool,
+    /// The DM partners whose profile events it receives.
+    following: Following,
     deliveries: mpsc::Sender<Delivery>,
     /// The channels its client has open, which it hears typing in ([`Subscription::viewing`]).
     viewing: HashSet<ChannelId>,
@@ -1067,6 +1392,8 @@ struct Routes {
     connections: HashMap<u64, Connection>,
     by_user: HashMap<UserId, Vec<u64>>,
     by_community: HashMap<CommunityId, Vec<u64>>,
+    /// The connections following each profile (`Connection::following`).
+    by_profile: HashMap<UserId, Vec<u64>>,
 }
 
 impl Routes {
@@ -1074,6 +1401,9 @@ impl Routes {
         self.by_user.entry(connection.user).or_default().push(id);
         for community in &connection.communities {
             self.by_community.entry(*community).or_default().push(id);
+        }
+        for profile in connection.following.partners() {
+            self.by_profile.entry(profile).or_default().push(id);
         }
         self.connections.insert(id, connection);
     }
@@ -1085,6 +1415,33 @@ impl Routes {
         remove_from(&mut self.by_user, connection.user, id);
         for community in connection.communities {
             remove_from(&mut self.by_community, community, id);
+        }
+        for profile in connection.following.partners() {
+            remove_from(&mut self.by_profile, profile, id);
+        }
+    }
+
+    /// Follows, on connection `id`, what `change` leaves of a DM of its user's.
+    fn follow_dm(&mut self, id: u64, change: &DmChange) {
+        let Some(connection) = self.connections.get_mut(&id) else {
+            return;
+        };
+        let changed = connection.following.apply(connection.user, change);
+        for profile in changed.stopped {
+            remove_from(&mut self.by_profile, profile, id);
+        }
+        for profile in changed.started {
+            self.by_profile.entry(profile).or_default().push(id);
+        }
+    }
+
+    /// Hands `payload`, one ephemeral event, to every connection; one whose queue is full goes
+    /// without it, as without a relay.
+    fn tell_everyone(&self, payload: &Arc<RawValue>) {
+        for connection in self.connections.values() {
+            let _ = connection
+                .deliveries
+                .try_send(Delivery::Notice(payload.clone()));
         }
     }
 
@@ -1110,6 +1467,7 @@ impl Routes {
     fn route(&mut self, event: &Arc<FeedEvent>) -> Vec<u64> {
         let readers = match event.owner {
             SubjectOwner::User(user) => self.by_user.get(&user),
+            SubjectOwner::Profile(user) => self.by_profile.get(&user),
             SubjectOwner::Community(community) => self.by_community.get(&community),
         };
         let Some(readers) = readers else {
@@ -1189,6 +1547,9 @@ impl Routes {
                         connection.moderator = moderator;
                     }
                 }
+                if let Some(dm) = &event.dm {
+                    self.follow_dm(id, dm);
+                }
             }
         }
         slow
@@ -1206,13 +1567,19 @@ impl Routes {
 
 /// What a shard needs to catch a connection up before adding it: the events it may have
 /// missed, what it read as they begin, where the catch-up starts and whether that is where the
-/// client asked to resume, the models of its communities, and where to say how it went.
+/// client asked to resume, the models of its communities and whether they vouch for the window,
+/// when the window begins if short, and where to say how it went.
 struct CatchingUp {
     snapshot: Snapshot,
     initial: Reading,
     after: u64,
     resumed: bool,
     models: HashMap<CommunityId, Arc<CommunityModel>>,
+    /// Whether every model the catch-up judges by stood as it does at each retained event: not
+    /// when one was read from the database after a retained change to who views a channel
+    /// (`Models::adopt`), which the events before it then carry as their moment's.
+    models_complete: bool,
+    replayed_since: Option<DateTime<Utc>>,
     outcome: oneshot::Sender<Outcome>,
 }
 
@@ -1224,14 +1591,17 @@ fn ended_by(own: &[Arc<FeedEvent>], sign_in: &SignIn, after: u64) -> Option<Stre
         .find_map(|e| e.ends.filter(|_| e.reaches(sign_in)))
 }
 
-/// What a connection reads once caught up: `initial` with every membership, role, and
-/// moderation change of the user's own retained events applied in order, as [`catch_up`]
-/// leaves it.
-fn reading_after(initial: &Reading, own: &[Arc<FeedEvent>]) -> Reading {
+/// What a connection reads once caught up: `initial` with every membership, role,
+/// moderation, and DM change of the user's own retained events applied in order, as
+/// [`catch_up`] leaves it.
+fn reading_after(initial: &Reading, own: &[Arc<FeedEvent>], user: UserId) -> Reading {
     let mut reading = initial.clone();
     for e in own {
         apply_membership(&mut reading.communities, &mut reading.roles, e);
         reading.moderator = e.moderator.unwrap_or(reading.moderator);
+        if let Some(dm) = &e.dm {
+            reading.following.apply(user, dm);
+        }
     }
     reading
 }
@@ -1240,13 +1610,15 @@ fn reading_after(initial: &Reading, own: &[Arc<FeedEvent>]) -> Reading {
 enum ShardCommand {
     Route(Arc<FeedEvent>),
     /// Catches a connection up, then adds it.
-    Add(u64, Connection, Box<CatchingUp>),
+    Add(u64, Box<Connection>, Box<CatchingUp>),
     /// The channels a connection's client has open.
     Viewing(u64, HashSet<ChannelId>),
     Remove(u64),
     /// Drops one connection, which then resumes: it joined a community whose model this
     /// server does not hold.
     Resync(u64),
+    /// One ephemeral event for every connection (`EventFeed::tell_everyone`).
+    Notice(Arc<RawValue>),
     DropAll(&'static str),
 }
 
@@ -1288,7 +1660,7 @@ async fn route_shard(
                     .record(started.elapsed().as_secs_f64());
             }
             ShardCommand::Add(id, connection, catching_up) => {
-                if add_caught_up(&mut routes, id, connection, *catching_up).is_err() {
+                if add_caught_up(&mut routes, id, *connection, *catching_up).is_err() {
                     let _ = unregister.send(id);
                 }
             }
@@ -1303,6 +1675,7 @@ async fn route_shard(
                 metrics::counter!(aspen_metrics::api::EVENT_STREAMS_DROPPED, "reason" => "resync")
                     .increment(1);
             }
+            ShardCommand::Notice(payload) => routes.tell_everyone(&payload),
             ShardCommand::DropAll(reason) => routes.drop_all(reason),
         }
     }
@@ -1323,6 +1696,8 @@ fn add_caught_up(
         after,
         resumed,
         models,
+        models_complete,
+        replayed_since,
         outcome,
     } = catching_up;
     let caught_up = catch_up(
@@ -1350,8 +1725,15 @@ fn add_caught_up(
     {
         return Err(());
     }
+    if connection.deliveries.try_send(Delivery::CaughtUp).is_err() {
+        return Err(());
+    }
     outcome
-        .send(Outcome::Registered(resumed && complete))
+        .send(Outcome::Registered {
+            resumed,
+            complete: complete && models_complete,
+            replayed_since,
+        })
         .map_err(|_| ())?;
     routes.add(id, connection);
     Ok(())
@@ -1443,17 +1825,19 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
     };
     let kind = server_event_of(payload.get());
     let kind = kind.as_deref();
-    let (membership, roles, moderator, change) = match owner {
+    let (membership, roles, moderator, dm, change) = match owner {
         SubjectOwner::User(user) => {
             let (membership, roles) = own_membership(payload.get(), user);
             (
                 membership,
                 roles,
                 moderation_change(kind, payload.get()),
+                own_dm_change(payload.get()),
                 None,
             )
         }
-        SubjectOwner::Community(_) => (None, None, None, ModelChange::read(payload.get())),
+        SubjectOwner::Profile(_) => (None, None, None, None, None),
+        SubjectOwner::Community(_) => (None, None, None, None, ModelChange::read(payload.get())),
     };
     let own = matches!(owner, SubjectOwner::User(_));
     let sign_ins = (own && kind == Some("signInsEnded"))
@@ -1479,6 +1863,8 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
     let resync = match owner {
         SubjectOwner::Community(_) => kind == Some("communityResync"),
         SubjectOwner::User(_) => kind == Some("userResync"),
+        // A resync of a user is announced on their own subject, not their profile's.
+        SubjectOwner::Profile(_) => false,
     };
     let email_unverified = (own && kind == Some("emailAccountChanged"))
         .then(|| {
@@ -1536,6 +1922,7 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             membership,
             roles,
             moderator,
+            dm,
             channel,
             category,
             requires,
@@ -1563,6 +1950,12 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
 #[derive(Default)]
 struct Models {
     models: HashMap<CommunityId, Arc<CommunityModel>>,
+    /// For a community whose model was adopted after a retained change to who views a channel
+    /// or category there, the newest such event's sequence: the snapshot already reflected it,
+    /// so the events before it carry a model newer than their moment, and a catch-up through
+    /// the community from before it is incomplete (`CatchingUp::models_complete`). Dropped
+    /// with the model.
+    adopted_over: HashMap<CommunityId, u64>,
     /// How many registered connections read each community.
     readers: HashMap<CommunityId, usize>,
     /// Each registered connection's user and the communities it reads.
@@ -1574,16 +1967,43 @@ impl Models {
     /// Takes `snapshot` as `community`'s model unless one is held already, bringing it up to
     /// date with every retained event of the community and attaching to each one routed
     /// without a model the model as it stood there, so a catch-up judges it by the permissions
-    /// of its moment rather than today's.
+    /// of its moment rather than today's. A change the snapshot already reflects (the database
+    /// was read after it) is noted in `adopted_over` when it is to who views a channel or
+    /// category: the model before it is then lost, and with it whom the change took a view
+    /// from. A creation is not: nobody viewed the channel before it.
     fn adopt(&mut self, retained: &Retained, community: CommunityId, snapshot: CommunityModel) {
         if self.models.contains_key(&community) {
             return;
         }
         let mut model = Arc::new(snapshot);
+        let mut over = None;
         for e in retained.since(SubjectOwner::Community(community), 0) {
-            apply_and_attach(&mut model, e);
+            let changed = apply_and_attach(&mut model, e);
+            let views = (e.channel.is_some() || e.category.is_some())
+                && !matches!(e.change, Some(ModelChange::ChannelCreated { .. }));
+            if changed == Some(false) && views {
+                over = Some(e.sequence);
+            }
         }
         self.models.insert(community, model);
+        if let Some(sequence) = over {
+            self.adopted_over.insert(community, sequence);
+        }
+    }
+
+    /// Whether every model of `communities` stood as it does at each retained event after
+    /// `after`: a catch-up through them from there judges each event by its moment.
+    fn vouch_for(&self, communities: &HashSet<CommunityId>, after: u64) -> bool {
+        !communities.iter().any(|community| {
+            self.adopted_over
+                .get(community)
+                .is_some_and(|over| *over > after)
+        })
+    }
+
+    fn forget(&mut self, community: CommunityId) {
+        self.models.remove(&community);
+        self.adopted_over.remove(&community);
     }
 
     /// Lets go of the models no registered connection reads.
@@ -1591,6 +2011,9 @@ impl Models {
         let readers = &self.readers;
         self.models
             .retain(|community, _| readers.get(community).is_some_and(|n| *n > 0));
+        let models = &self.models;
+        self.adopted_over
+            .retain(|community, _| models.contains_key(community));
     }
 
     fn read(&mut self, community: CommunityId) {
@@ -1602,7 +2025,7 @@ impl Models {
             *n -= 1;
             if *n == 0 {
                 self.readers.remove(&community);
-                self.models.remove(&community);
+                self.forget(community);
             }
         }
     }
@@ -1642,7 +2065,7 @@ impl Models {
                 for id in &resync {
                     self.unregister(*id);
                 }
-                self.models.remove(&community);
+                self.forget(community);
                 resync
             }
             SubjectOwner::Community(community) => {
@@ -1651,6 +2074,8 @@ impl Models {
                 }
                 Vec::new()
             }
+            // What a profile subject carries changes no model and no membership.
+            SubjectOwner::Profile(_) => Vec::new(),
             SubjectOwner::User(user) if event.resync => {
                 let resync = self.by_user.get(&user).cloned().unwrap_or_default();
                 for id in &resync {
@@ -1691,15 +2116,17 @@ impl Models {
 
 /// Applies `event`'s change to `model` and attaches the model to the event as it then stands,
 /// and, when the change concerns the channel or category the event names, as it stood before.
-/// Events already given models keep them.
-fn apply_and_attach(model: &mut Arc<CommunityModel>, event: &FeedEvent) {
-    if let Some(change) = &event.change {
+/// Events already given models keep them. Answers whether the change changed the model, or
+/// `None` for an event that carries none.
+fn apply_and_attach(model: &mut Arc<CommunityModel>, event: &FeedEvent) -> Option<bool> {
+    let changed = event.change.as_ref().map(|change| {
         if event.channel.is_some() || event.category.is_some() {
             let _ = event.before.set(model.clone());
         }
-        Arc::make_mut(model).apply(change);
-    }
+        Arc::make_mut(model).apply(change)
+    });
     let _ = event.access.set(model.clone());
+    changed
 }
 
 /// The events a relay of what happens in a channel and is never kept (`app::typing::Relay`:
@@ -1721,9 +2148,12 @@ fn relayed_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
     let place = match relay.event {
         crate::typing::EphemeralEvent::Typing { channel_id, .. }
         | crate::typing::EphemeralEvent::Mana { channel_id, .. } => channel_id,
-        // Presence is told by each server's own router (`app::presence_feed`), never relayed.
+        // Presence is told by each server's own router (`app::presence_feed`), never relayed,
+        // and a change to the plugins is told by each server to all its connections
+        // (`EventFeed::tell_everyone`).
         crate::typing::EphemeralEvent::Presence { .. }
-        | crate::typing::EphemeralEvent::PresenceWatching => return Vec::new(),
+        | crate::typing::EphemeralEvent::PresenceWatching
+        | crate::typing::EphemeralEvent::PluginCatalogueChanged => return Vec::new(),
     };
     match relay.audience {
         Audience::Community {
@@ -1778,6 +2208,27 @@ async fn subscribe_relays(
     }
 }
 
+/// Once the stream is read to its end, takes the whole window the consumer was opened from
+/// (`MAX_EVENT_AGE` before `started`) as held, unless the stream may have cut it: NATS lets
+/// its oldest events go past `max_bytes` whatever their age, and a stream near that limit may
+/// have, where one well under it cannot have lost anything in the window. Then only what was
+/// read since the server started is vouched for, and a first connection in the next minute is
+/// told so (`Retained::replayed_since`).
+fn vouch_loaded_window(
+    retained: &mut Retained,
+    started: Instant,
+    stream_info: &jetstream::stream::Info,
+) {
+    let max_bytes = u64::try_from(stream_info.config.max_bytes).unwrap_or(0);
+    let near_limit = max_bytes > 0 && stream_info.state.bytes.saturating_mul(10) >= max_bytes * 9;
+    if near_limit {
+        return;
+    }
+    if let Some(window_start) = started.checked_sub(MAX_EVENT_AGE) {
+        retained.vouch_since(window_start);
+    }
+}
+
 async fn dispatch(
     context: jetstream::Context,
     shards: Vec<mpsc::Sender<ShardCommand>>,
@@ -1788,6 +2239,7 @@ async fn dispatch(
     let window_start = || DeliverPolicy::ByStartTime {
         start_time: time::OffsetDateTime::now_utc() - MAX_EVENT_AGE,
     };
+    let started = Instant::now();
     let (mut messages, pending) = reopen(&context, window_start()).await;
     let mut retained = Retained::with_cap(retained_bytes);
     let mut models = Models::default();
@@ -1800,6 +2252,7 @@ async fn dispatch(
             && let Ok(stream_info) = stream.info().await
         {
             retained.last_sequence = stream_info.state.last_sequence;
+            vouch_loaded_window(&mut retained, started, stream_info);
         }
         info!("event feed ready");
     }
@@ -1867,6 +2320,11 @@ async fn dispatch(
                 retained.push(event);
                 if !loaded && pending == 0 {
                     loaded = true;
+                    if let Ok(mut stream) = context.get_stream(ASPEN_NATS_STREAM_NAME).await
+                        && let Ok(stream_info) = stream.info().await
+                    {
+                        vouch_loaded_window(&mut retained, started, stream_info);
+                    }
                     info!(retained = retained.order.len(), "event feed ready");
                 }
             }
@@ -1879,11 +2337,18 @@ async fn dispatch(
                     models.adopt(&retained, community, snapshot);
                 }
                 let (after, resumed) = retained.start_after(registration.resume_after);
+                // A resumed connection missed nothing after `after`, however short the window.
+                let replayed_since = if resumed {
+                    None
+                } else {
+                    retained.replayed_since(Instant::now())
+                };
                 let user = registration.user;
                 let initial = Reading {
                     communities: registration.communities.into_iter().collect(),
                     roles: registration.roles,
                     moderator: registration.moderator,
+                    following: registration.following,
                 };
                 // The user's own events decide, cheaply and here, whether the sign-in ended and
                 // what the connection reads once caught up; judging what it missed is the shard's.
@@ -1894,7 +2359,7 @@ async fn dispatch(
                     let _ = registration.outcome.send(Outcome::Ended(end));
                     continue;
                 }
-                let reads = reading_after(&initial, &own);
+                let reads = reading_after(&initial, &own, user);
                 let missing: Vec<CommunityId> = reads
                     .communities
                     .iter()
@@ -1910,6 +2375,15 @@ async fn dispatch(
                 // those the user's own events join or leave.
                 let mut passed: HashSet<CommunityId> = initial.communities.clone();
                 passed.extend(own.iter().filter_map(|e| e.membership).map(|(c, _)| c));
+                // Every profile the catch-up may deliver from: those followed as it starts and
+                // the people of every DM the user's own events change.
+                let mut profiles: HashSet<UserId> = initial.following.partners().collect();
+                profiles.extend(
+                    own.iter()
+                        .filter_map(|e| e.dm.as_ref())
+                        .flat_map(|dm| dm.recipients.iter().copied())
+                        .filter(|p| *p != user),
+                );
                 let snapshot = Snapshot {
                     user,
                     communities: passed
@@ -1922,12 +2396,23 @@ async fn dispatch(
                             (*c, events)
                         })
                         .collect(),
+                    profiles: profiles
+                        .iter()
+                        .map(|p| {
+                            let events = retained
+                                .since(SubjectOwner::Profile(*p), after)
+                                .cloned()
+                                .collect();
+                            (*p, events)
+                        })
+                        .collect(),
                     own,
                 };
                 let held = passed
                     .iter()
                     .filter_map(|c| models.models.get(c).map(|m| (*c, m.clone())))
                     .collect();
+                let models_complete = models.vouch_for(&passed, after);
                 models.register(registration.id, user, reads.communities.clone());
                 let connection = Connection {
                     user,
@@ -1935,6 +2420,7 @@ async fn dispatch(
                     communities: reads.communities,
                     roles: reads.roles,
                     moderator: reads.moderator,
+                    following: reads.following,
                     deliveries: registration.deliveries,
                     viewing: HashSet::new(),
                 };
@@ -1944,11 +2430,13 @@ async fn dispatch(
                     after,
                     resumed,
                     models: held,
+                    models_complete,
+                    replayed_since,
                     outcome: registration.outcome,
                 };
                 tell(
                     shard(registration.id),
-                    ShardCommand::Add(registration.id, connection, Box::new(catching_up)),
+                    ShardCommand::Add(registration.id, Box::new(connection), Box::new(catching_up)),
                 )
                 .await;
             }
@@ -1993,6 +2481,7 @@ mod tests {
             membership,
             roles: None,
             moderator: None,
+            dm: None,
             channel: None,
             category: None,
             requires: None,
@@ -2102,6 +2591,7 @@ mod tests {
             communities: HashSet::from([kept, left]),
             roles: HashMap::new(),
             moderator: false,
+            following: Following::default(),
         };
         let (missed, caught_up, _) = retained
             .catch_up(user, &SignIn::default(), reading(), 0, &none)
@@ -2135,6 +2625,7 @@ mod tests {
             communities: HashSet::from([joined]),
             roles: HashMap::new(),
             moderator: false,
+            following: Following::default(),
         };
         let none = HashMap::new();
         let (missed, caught_up, complete) = retained
@@ -2169,6 +2660,7 @@ mod tests {
             communities: HashSet::from([community]),
             roles: HashMap::from([(community, vec![moderator])]),
             moderator: false,
+            following: Following::default(),
         };
         let none = HashMap::new();
         let (missed, _, complete) = retained
@@ -2208,6 +2700,7 @@ mod tests {
             communities: HashSet::from([community]),
             roles: HashMap::new(),
             moderator: true,
+            following: Following::default(),
         };
         let none = HashMap::new();
         let (missed, caught_up, complete) = retained
@@ -2305,6 +2798,7 @@ mod tests {
             communities: HashSet::from([kept, left]),
             roles: HashMap::new(),
             moderator: false,
+            following: Following::default(),
         };
         for after in [0, 2, 4, 6] {
             let (whole, whole_reading, whole_complete) = retained
@@ -2333,6 +2827,7 @@ mod tests {
                     })
                     .collect(),
                 own: own_events.clone(),
+                profiles: HashMap::new(),
             };
             let (part, part_reading, part_complete) = catch_up(
                 &snapshot,
@@ -2347,7 +2842,7 @@ mod tests {
             assert_eq!(part_reading.communities, whole_reading.communities);
             assert_eq!(part_complete, whole_complete);
             assert_eq!(
-                reading_after(&initial, &own_events).communities,
+                reading_after(&initial, &own_events, user).communities,
                 whole_reading.communities
             );
         }
@@ -2367,6 +2862,7 @@ mod tests {
                 communities: HashSet::new(),
                 roles: HashMap::new(),
                 moderator: false,
+                following: Following::default(),
                 deliveries: tx,
                 viewing: HashSet::new(),
             },
@@ -2456,6 +2952,7 @@ mod tests {
                     communities: HashSet::new(),
                     roles: HashMap::new(),
                     moderator: false,
+                    following: Following::default(),
                     deliveries: tx,
                     viewing: HashSet::new(),
                 },
@@ -2507,6 +3004,7 @@ mod tests {
             communities: HashSet::new(),
             roles: HashMap::new(),
             moderator: false,
+            following: Following::default(),
         };
         let refused =
             |sign_in, after| retained.catch_up(user, &named(sign_in), reading(), after, &none);
@@ -2561,6 +3059,7 @@ mod tests {
             communities: HashSet::new(),
             roles: HashMap::new(),
             moderator: false,
+            following: Following::default(),
         };
         let since = |began, after| {
             let sign_in = SignIn {
@@ -2647,6 +3146,7 @@ mod tests {
                 communities: HashSet::from([community]),
                 roles: HashMap::new(),
                 moderator: false,
+                following: Following::default(),
                 deliveries: tx,
                 viewing: HashSet::new(),
             },
@@ -2676,21 +3176,23 @@ mod tests {
                 category: None,
             }),
         );
-        // A channel made hidden, its override published ahead of its creation, never reaches
-        // them, though the model did not know it before.
+        // A channel made hidden: its override, published ahead of its creation and again after
+        // it (`app::channel::insert_channel`), never reaches them, and nor does the creation,
+        // though the model did not know the channel before.
         let new = ChannelId::new();
         let override_first = followed(4, new, Some(hide(new)));
         let created = followed(
             5,
             new,
-            Some(ModelChange::ChannelCategory {
+            Some(ModelChange::ChannelCreated {
                 channel: new,
                 category: None,
             }),
         );
+        let override_again = followed(6, new, Some(hide(new)));
         // Clearing the override on the hidden channel lets them view it, and they receive it.
         let shown = followed(
-            6,
+            7,
             hidden,
             Some(ModelChange::ChannelOverride {
                 channel: hidden,
@@ -2699,15 +3201,38 @@ mod tests {
             }),
         );
         // Deleting a channel reaches only those who could view it.
-        let deleted = followed(7, new, Some(ModelChange::ChannelDeleted(new)));
+        let deleted = followed(8, new, Some(ModelChange::ChannelDeleted(new)));
+        // A channel they may view, made with an override that keeps everyone from sending: the
+        // override's first copy reaches nobody, since no model knew the channel; the creation
+        // and the second copy reach them.
+        let open_new = ChannelId::new();
+        let quiet = |channel| ModelChange::ChannelOverride {
+            channel,
+            role: everyone,
+            set: Some((Permissions::empty(), Permissions::SEND_MESSAGES)),
+        };
+        let quiet_first = followed(9, open_new, Some(quiet(open_new)));
+        let open_created = followed(
+            10,
+            open_new,
+            Some(ModelChange::ChannelCreated {
+                channel: open_new,
+                category: None,
+            }),
+        );
+        let quiet_again = followed(11, open_new, Some(quiet(open_new)));
         for e in [
             hiding,
             after,
             moved,
             override_first,
             created,
+            override_again,
             shown,
             deleted,
+            quiet_first,
+            open_created,
+            quiet_again,
         ] {
             routes.route(&e);
         }
@@ -2742,6 +3267,7 @@ mod tests {
                 communities: HashSet::from([community]),
                 roles: HashMap::new(),
                 moderator: false,
+                following: Following::default(),
                 deliveries: tx,
                 viewing: HashSet::new(),
             },
@@ -2801,6 +3327,7 @@ mod tests {
                 communities: HashSet::from([community]),
                 roles: HashMap::new(),
                 moderator: false,
+                following: Following::default(),
                 deliveries: member_tx,
                 viewing: HashSet::new(),
             },
@@ -2813,6 +3340,7 @@ mod tests {
                 communities: HashSet::from([community]),
                 roles: HashMap::from([(community, vec![moderator])]),
                 moderator: false,
+                following: Following::default(),
                 deliveries: moderator_tx,
                 viewing: HashSet::new(),
             },
@@ -2881,6 +3409,7 @@ mod tests {
                     communities: HashSet::from([community]),
                     roles,
                     moderator: false,
+                    following: Following::default(),
                     deliveries: tx,
                     viewing,
                 },
@@ -3006,6 +3535,7 @@ mod tests {
                     communities: HashSet::from([community]),
                     roles: HashMap::from([(community, roles)]),
                     moderator: false,
+                    following: Following::default(),
                     deliveries: tx,
                     viewing: HashSet::new(),
                 },
@@ -3022,6 +3552,402 @@ mod tests {
             .map(|rx| rx.try_recv().is_ok())
             .collect();
         assert_eq!(got, vec![true, true, false]);
+    }
+
+    /// A connection of `user`'s following `following`, with its deliveries.
+    fn following_connection(
+        routes: &mut Routes,
+        id: u64,
+        user: UserId,
+        following: Following,
+    ) -> mpsc::Receiver<Delivery> {
+        let (tx, rx) = mpsc::channel(16);
+        routes.add(
+            id,
+            Connection {
+                user,
+                sign_in: SignIn::default(),
+                communities: HashSet::new(),
+                roles: HashMap::new(),
+                moderator: false,
+                following,
+                deliveries: tx,
+                viewing: HashSet::new(),
+            },
+        );
+        rx
+    }
+
+    fn received(rx: &mut mpsc::Receiver<Delivery>) -> Vec<u64> {
+        let mut sequences = Vec::new();
+        while let Ok(Delivery::Live(e)) = rx.try_recv() {
+            sequences.push(e.sequence);
+        }
+        sequences
+    }
+
+    #[test]
+    fn following_keeps_the_partners_of_the_most_recent_dms_within_its_cap() {
+        let me = UserId::new();
+        let (a, b, c, d) = (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let (dm_ab, dm_a, dm_c, dm_d) = (
+            ChannelId::new(),
+            ChannelId::new(),
+            ChannelId::new(),
+            ChannelId::new(),
+        );
+        let mut following = Following::new(3);
+        let changed = following.follow(me, dm_ab, &[me, a, b]);
+        assert_eq!(
+            changed.started.iter().copied().collect::<HashSet<_>>(),
+            HashSet::from([a, b])
+        );
+        assert!(changed.stopped.is_empty());
+        // `a` is followed already, through `dm_ab`.
+        assert_eq!(following.follow(me, dm_a, &[a, me]), Followed::default());
+        assert_eq!(following.follow(me, dm_c, &[me, c]).started, vec![c]);
+        assert!(following.follows(a) && following.follows(b) && !following.follows(me));
+        // A fourth partner is one past the cap, so the oldest DM goes: `b` with it, while `a`
+        // stays, followed through `dm_a`.
+        let changed = following.follow(me, dm_d, &[me, d]);
+        assert_eq!(changed.started, vec![d]);
+        assert_eq!(changed.stopped, vec![b]);
+        assert_eq!(
+            following.partners().collect::<HashSet<_>>(),
+            HashSet::from([a, c, d])
+        );
+        // Leaving `dm_a` lets go of `a`, since `dm_ab` is gone.
+        let changed = following.apply(
+            me,
+            &DmChange {
+                channel: dm_a,
+                recipients: vec![a],
+            },
+        );
+        assert_eq!(changed.stopped, vec![a]);
+        assert!(changed.started.is_empty());
+        // Someone else leaving `dm_c` changes nothing followed; someone joining it is followed.
+        assert_eq!(
+            following.apply(
+                me,
+                &DmChange {
+                    channel: dm_c,
+                    recipients: vec![me],
+                },
+            ),
+            Followed {
+                started: Vec::new(),
+                stopped: vec![c],
+            }
+        );
+        let changed = following.apply(
+            me,
+            &DmChange {
+                channel: dm_c,
+                recipients: vec![me, c, b],
+            },
+        );
+        assert_eq!(
+            changed.started.iter().copied().collect::<HashSet<_>>(),
+            HashSet::from([b, c])
+        );
+        assert_eq!(
+            following.partners().collect::<HashSet<_>>(),
+            HashSet::from([b, c, d])
+        );
+        // A cap of nothing follows nobody.
+        let mut none = Following::new(0);
+        none.follow(me, dm_a, &[me, a]);
+        assert_eq!(none.partners().count(), 0);
+    }
+
+    #[test]
+    fn own_dm_events_say_whom_to_follow() {
+        let (dm, me, other) = (ChannelId::new(), UserId::new(), UserId::new());
+        let created = format!(
+            r#"{{"serverEvent":"channel","type":"create","id":"{}","community":null,"ty":"dm","name":"","sortIndex":0,"recipients":["{}","{}"]}}"#,
+            dm.0, me.0, other.0
+        );
+        assert_eq!(
+            own_dm_change(&created),
+            Some(DmChange {
+                channel: dm,
+                recipients: vec![me, other],
+            })
+        );
+        let left = format!(
+            r#"{{"serverEvent":"channel","type":"update","id":"{}","recipients":["{}"]}}"#,
+            dm.0, other.0
+        );
+        assert_eq!(
+            own_dm_change(&left),
+            Some(DmChange {
+                channel: dm,
+                recipients: vec![other],
+            })
+        );
+        let text = format!(
+            r#"{{"serverEvent":"channel","type":"create","id":"{}","community":"{}","ty":"text","name":"","sortIndex":0,"recipients":[]}}"#,
+            dm.0,
+            CommunityId::new().0
+        );
+        assert_eq!(own_dm_change(&text), None);
+        assert_eq!(
+            own_dm_change(&format!(
+                r#"{{"serverEvent":"channel","type":"update","id":"{}","name":"n"}}"#,
+                dm.0
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn profile_events_reach_those_following_the_profile_and_follow_their_dms() {
+        let (me, partner, newcomer, stranger) =
+            (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+        let mut routes = Routes::default();
+        let mut following = Following::new(10);
+        let dm = ChannelId::new();
+        following.follow(me, dm, &[me, partner]);
+        let mut rx = following_connection(&mut routes, 1, me, following);
+        let mut other_rx = following_connection(&mut routes, 2, stranger, Following::new(10));
+        // The partner's profile reaches the follower; a stranger's and the user's own
+        // profile copy reach nobody here.
+        routes.route(&event(1, SubjectOwner::Profile(partner), None));
+        routes.route(&event(2, SubjectOwner::Profile(stranger), None));
+        routes.route(&event(3, SubjectOwner::Profile(me), None));
+        assert_eq!(received(&mut rx), vec![1]);
+        assert_eq!(received(&mut other_rx), Vec::<u64>::new());
+        // A group DM made with a newcomer, told on the user's own subject, follows them.
+        let group = ChannelId::new();
+        let mut made = plain(4, SubjectOwner::User(me), None);
+        made.dm = Some(DmChange {
+            channel: group,
+            recipients: vec![me, partner, newcomer],
+        });
+        routes.route(&Arc::new(made));
+        routes.route(&event(5, SubjectOwner::Profile(newcomer), None));
+        assert_eq!(received(&mut rx), vec![4, 5]);
+        assert_eq!(routes.by_profile.get(&newcomer), Some(&vec![1]));
+        // Leaving the group lets go of the newcomer; the partner stays through the DM.
+        let mut left = plain(6, SubjectOwner::User(me), None);
+        left.dm = Some(DmChange {
+            channel: group,
+            recipients: vec![partner, newcomer],
+        });
+        routes.route(&Arc::new(left));
+        routes.route(&event(7, SubjectOwner::Profile(newcomer), None));
+        routes.route(&event(8, SubjectOwner::Profile(partner), None));
+        assert_eq!(received(&mut rx), vec![6, 8]);
+        assert!(!routes.by_profile.contains_key(&newcomer));
+        routes.remove(1);
+        assert!(routes.by_profile.is_empty());
+    }
+
+    #[test]
+    fn catch_up_delivers_followed_profiles_from_where_each_is_followed() {
+        let (me, partner, newcomer) = (UserId::new(), UserId::new(), UserId::new());
+        let own = SubjectOwner::User(me);
+        let group = ChannelId::new();
+        let mut retained = Retained::default();
+        let mut made = plain(3, own, None);
+        made.dm = Some(DmChange {
+            channel: group,
+            recipients: vec![me, newcomer],
+        });
+        let mut left = plain(5, own, None);
+        left.dm = Some(DmChange {
+            channel: group,
+            recipients: vec![newcomer],
+        });
+        for e in [
+            event(1, SubjectOwner::Profile(partner), None),
+            event(2, SubjectOwner::Profile(newcomer), None),
+            Arc::new(made),
+            event(4, SubjectOwner::Profile(newcomer), None),
+            Arc::new(left),
+            event(6, SubjectOwner::Profile(newcomer), None),
+            event(7, SubjectOwner::Profile(partner), None),
+        ] {
+            retained.push(e);
+        }
+        let mut following = Following::new(10);
+        following.follow(me, ChannelId::new(), &[me, partner]);
+        let initial = Reading {
+            communities: HashSet::new(),
+            roles: HashMap::new(),
+            moderator: false,
+            following,
+        };
+        let none = HashMap::new();
+        let (missed, caught_up, complete) = retained
+            .catch_up(me, &SignIn::default(), initial.clone(), 0, &none)
+            .unwrap();
+        // The newcomer's events from before the DM and after leaving it are not read.
+        assert_eq!(sequences(&missed), vec![1, 3, 4, 5, 7]);
+        assert!(complete);
+        assert!(caught_up.following.follows(partner) && !caught_up.following.follows(newcomer));
+        // A shard's snapshot, taken as the dispatcher takes it, reads the same.
+        let own_events: Vec<Arc<FeedEvent>> = retained.since(own, 0).cloned().collect();
+        let profiles = [partner, newcomer]
+            .into_iter()
+            .map(|p| {
+                (
+                    p,
+                    retained
+                        .since(SubjectOwner::Profile(p), 2)
+                        .cloned()
+                        .collect(),
+                )
+            })
+            .collect();
+        let snapshot = Snapshot {
+            user: me,
+            own: own_events.clone(),
+            communities: HashMap::new(),
+            profiles,
+        };
+        let (part, _, _) =
+            catch_up(&snapshot, me, &SignIn::default(), initial.clone(), 2, &none).unwrap();
+        let (whole, _, _) = retained
+            .catch_up(me, &SignIn::default(), initial.clone(), 2, &none)
+            .unwrap();
+        assert_eq!(sequences(&part), sequences(&whole));
+        assert_eq!(sequences(&whole), vec![3, 4, 5, 7]);
+        // A resumed connection whose database read already showed the DM left follows as the
+        // events leave it.
+        assert!(
+            !reading_after(&initial, &own_events, me)
+                .following
+                .follows(newcomer)
+        );
+    }
+
+    #[test]
+    fn a_model_adopted_after_a_change_to_who_views_makes_the_window_incomplete() {
+        let community = CommunityId::new();
+        let (open, hidden, moderator) = (ChannelId::new(), ChannelId::new(), RoleId::new());
+        let everyone = RoleId::new();
+        let mut retained = Retained::default();
+        let in_window = |sequence: u64, channel: ChannelId, change: ModelChange| {
+            let mut e = plain(sequence, SubjectOwner::Community(community), None);
+            e.channel = Some(channel);
+            e.change = Some(change);
+            Arc::new(e)
+        };
+        let new = ChannelId::new();
+        retained.push(in_window(
+            1,
+            new,
+            ModelChange::ChannelCreated {
+                channel: new,
+                category: None,
+            },
+        ));
+        retained.push(in_window(
+            2,
+            open,
+            ModelChange::ChannelOverride {
+                channel: open,
+                role: everyone,
+                set: Some((Permissions::empty(), Permissions::VIEW_CHANNEL)),
+            },
+        ));
+        retained.push(event(3, SubjectOwner::Community(community), None));
+        // The database, read after both, already shows the channel and the override.
+        let mut snapshot = two_channels_with(community, open, hidden, moderator, everyone);
+        snapshot.apply(&ModelChange::ChannelCreated {
+            channel: new,
+            category: None,
+        });
+        snapshot.apply(&ModelChange::ChannelOverride {
+            channel: open,
+            role: everyone,
+            set: Some((Permissions::empty(), Permissions::VIEW_CHANNEL)),
+        });
+        let mut models = Models::default();
+        models.adopt(&retained, community, snapshot);
+        models.readers.insert(community, 1);
+        // The creation it already reflects costs nobody a view; the override does.
+        assert_eq!(models.adopted_over.get(&community), Some(&2));
+        let passed = HashSet::from([community]);
+        assert!(!models.vouch_for(&passed, 0));
+        assert!(!models.vouch_for(&passed, 1));
+        assert!(models.vouch_for(&passed, 2));
+        assert!(models.vouch_for(&HashSet::from([CommunityId::new()]), 0));
+        // A model read before the change, brought up to date by it, vouches for the window.
+        let mut fresh = Models::default();
+        fresh.adopt(
+            &retained,
+            community,
+            two_channels_with(community, open, hidden, moderator, everyone),
+        );
+        assert!(fresh.vouch_for(&passed, 0));
+        // The note goes with the model.
+        models.unread(community);
+        assert!(models.adopted_over.is_empty());
+    }
+
+    #[test]
+    fn a_short_window_says_where_it_begins() {
+        let mut retained = Retained::default();
+        let now = Instant::now();
+        // Nothing before the process started reading is vouched for, so just started the
+        // window is short, and a minute on it is whole.
+        assert!(retained.replayed_since(now).is_some());
+        assert!(retained.replayed_since(now + MAX_EVENT_AGE).is_none());
+        retained.vouch_since(now - MAX_EVENT_AGE);
+        assert!(retained.replayed_since(now).is_none());
+        // Letting an event go early for the cap moves the start to it.
+        let mut capped = Retained::with_cap(1);
+        capped.vouch_since(now - MAX_EVENT_AGE);
+        let old = plain(1, SubjectOwner::User(UserId::new()), None);
+        let old_published = old.published;
+        capped.push(Arc::new(old));
+        capped.push(event(2, SubjectOwner::User(UserId::new()), None));
+        assert_eq!(capped.holds_since, old_published);
+        assert!(capped.replayed_since(Instant::now()).is_some());
+        // A gap vouches for nothing before it.
+        let mut cleared = Retained::default();
+        cleared.vouch_since(now - MAX_EVENT_AGE);
+        cleared.clear();
+        assert!(cleared.replayed_since(Instant::now()).is_some());
+    }
+
+    #[test]
+    fn a_notice_reaches_every_connection_and_skips_a_full_queue() {
+        let mut routes = Routes::default();
+        let mut first = following_connection(&mut routes, 1, UserId::new(), Following::default());
+        let (full_tx, mut full_rx) = mpsc::channel(1);
+        routes.add(
+            2,
+            Connection {
+                user: UserId::new(),
+                sign_in: SignIn::default(),
+                communities: HashSet::new(),
+                roles: HashMap::new(),
+                moderator: false,
+                following: Following::default(),
+                deliveries: full_tx,
+                viewing: HashSet::new(),
+            },
+        );
+        let payload: Arc<RawValue> = Arc::from(
+            serde_json::value::to_raw_value(&EphemeralEvent::PluginCatalogueChanged).unwrap(),
+        );
+        routes.tell_everyone(&payload);
+        routes.tell_everyone(&payload);
+        let notices = |rx: &mut mpsc::Receiver<Delivery>| {
+            let mut n = 0;
+            while let Ok(Delivery::Notice(got)) = rx.try_recv() {
+                assert_eq!(got.get(), r#"{"type":"pluginCatalogueChanged"}"#);
+                n += 1;
+            }
+            n
+        };
+        assert_eq!(notices(&mut first), 2);
+        assert_eq!(notices(&mut full_rx), 1);
+        assert_eq!(routes.connections.len(), 2);
     }
 
     #[test]

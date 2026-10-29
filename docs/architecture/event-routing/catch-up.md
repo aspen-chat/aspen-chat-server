@@ -8,13 +8,19 @@ from the stream at startup.
 - It holds at most `event_retained_mib` (256) MiB of event text. Past that, the oldest events go
   early.
 - A client resuming from before the oldest event held is answered `resumed: false`.
+- It knows from when it holds every event (`Retained::holds_since`): from the moment the server
+  began reading the stream, moved back to the whole window once the stream is read to its end and
+  found well under its own `max_bytes` (NATS lets its oldest events go past it whatever their age),
+  and moved forward by each event let go of early and by a gap.
 
 It serves every catch-up from it:
 
 - `resumeAfter`;
 - a first connection's replay window.
 
-It applies the membership changes it passes over.
+It applies the membership, role, moderation, and DM changes it passes over, and delivers the profile
+events of the partners the connection follows (see
+[Subjects and the feed](subjects-and-feed.md#profiles-of-dm-partners)) from where each is followed.
 
 ## Judging a catch-up by its moment
 
@@ -26,18 +32,41 @@ window. So a community's events from before them are judged as they stood then. 
   not known);
 - nothing that a deployment moderator alone reads from before a change of whether they moderate.
 
-When the last two leave out what the database's reading would have shown, a resuming connection is
-answered `resumed: false`. Its client reads its state again rather than miss it.
+The model of a community a catch-up judges by must also have stood as it does at each retained
+event. One the dispatcher adopts from the database (`Models::adopt`) after a retained change to who
+may view a channel or category there already reflects the change, so the events before it carry a
+model newer than their moment, and the model from before the change, which decided who was losing a
+view, is lost. A catch-up through such a community from before that change is incomplete too. A
+creation the adopted model already reflects is not counted: nobody viewed the channel before it.
+
+## What `ready` says of the replay
+
+Every `ready` frame carries what the catch-up could not vouch for, on a first connection as on a
+resumed one:
+
+| Field            | Says                                                                                                                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `resumed`        | Whether `resumeAfter` was honoured.                                                                                                                                                              |
+| `replayComplete` | Whether the replay holds everything the connection may read of the window it covers: `false` when either of the two cases above left something out. The client reads its state again on `false`. |
+| `replayedSince`  | When the window begins, when that is later than `MAX_EVENT_AGE` ago; `null` when the whole window was held, or the connection resumed. A client whose REST reads began before it reads again.    |
+| `catchUpFollows` | Always `true`: the replay follows, ended by a `caughtUp` frame.                                                                                                                                  |
+
+The replay is queued with the connection, so it is written right after `ready`, and a `caughtUp`
+frame (`Delivery::CaughtUp`) follows it, written whether or not the replay held anything. Every
+`event` after it happened live. A client connecting to a server whose `ready` lacks `catchUpFollows`
+treats the stream as live from `ready`.
 
 ## Registering a connection
 
 A connection is registered inside the dispatcher's loop:
 
-1. Registering gives its database connection back before it waits for the dispatcher. Connections
-   waiting their turn hold none of the pool.
+1. Registering reads the user's communities, roles, models, and the people of their most recent DMs
+   (`recent_dms`), then gives its database connection back before it waits for the dispatcher.
+   Connections waiting their turn hold none of the pool.
 2. The dispatcher decides, from the user's own events alone, whether the sign-in ended and what the
    connection reads once caught up.
-3. It takes the retained events the catch-up may pass through (`Snapshot`).
+3. It takes the retained events the catch-up may pass through (`Snapshot`): the user's own, each
+   community's, and each followed profile's.
 4. It sends them with the connection down its shard's ordered channel, ahead of the next event.
 5. The shard judges and orders what the connection missed (`catch_up`, timed by
    `aspen_event_catch_up_duration_seconds`) and queues it.
@@ -57,7 +86,8 @@ shared by the rest.
 | ----------------------------------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------- |
 | `[limits] max_event_streams_per_user`: streams one user holds on one API server                                               | 20      | 4429, `tooManyStreams`                            |
 | `[limits] max_event_streams_per_address`: streams one client address holds that have not identified, counted from the upgrade | 200     | 4429, `tooManyStreamsFromAddress`                 |
-| `event_queue_size`: events one connection's queue holds                                                                       | 512     | The connection is dropped and its client resumes. |
+| `event_queue_size`: events one connection's queue holds (at least two, for a catch-up and its `caughtUp`)                     | 512     | The connection is dropped and its client resumes. |
+| `[limits] max_followed_dm_partners`: DM partners whose profiles one connection follows                                        | 100     | The oldest DMs' partners are not followed.        |
 
 - The stream counts are kept in the process (`app::event_feed::StreamCaps`), so a server that stops
   leaves no count behind.

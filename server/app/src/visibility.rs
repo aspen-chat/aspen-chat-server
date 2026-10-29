@@ -8,7 +8,8 @@
 //! `ModelChange::read` recognises in an event's payload. Every change is a value to set (a
 //! role's permissions, an override, a channel's category), so applying a change the model
 //! already reflects, or replaying a stretch of events over a model loaded partway through it,
-//! ends in the same state as the database.
+//! ends in the same state as the database; `apply` says whether it changed anything, which
+//! tells the feed that a model loaded from the database was read after the change.
 //!
 //! What a member holds besides everyone's role is not part of the model: the feed tracks it per
 //! connection, from the member's own `userCommunity` events.
@@ -52,7 +53,14 @@ pub enum ModelChange {
     RoleDeleted(RoleId),
     /// A channel deleted, and its overrides with it.
     ChannelDeleted(ChannelId),
-    /// A channel made or moved.
+    /// A channel made, in a category or none. Applied as `ChannelCategory` is; kept apart from
+    /// it since a creation the model already reflects cost nobody a view (nobody viewed the
+    /// channel before), where a move it already reflects may have.
+    ChannelCreated {
+        channel: ChannelId,
+        category: Option<CategoryId>,
+    },
+    /// A channel moved.
     ChannelCategory {
         channel: ChannelId,
         category: Option<CategoryId>,
@@ -159,7 +167,7 @@ impl ModelChange {
                         if matches!(g.parent_channel, Some(None) | None)
                             && matches!(g.community, Some(Some(_))) =>
                     {
-                        Some(ModelChange::ChannelCategory {
+                        Some(ModelChange::ChannelCreated {
                             channel,
                             category: g.parent_category.flatten(),
                         })
@@ -189,11 +197,24 @@ impl ModelChange {
     }
 }
 
-fn set_override(list: &mut Vec<Override>, role: RoleId, set: Option<(Permissions, Permissions)>) {
+/// Sets, or with `None` clears, `role`'s override in `list`; whether that changed it.
+fn set_override(
+    list: &mut Vec<Override>,
+    role: RoleId,
+    set: Option<(Permissions, Permissions)>,
+) -> bool {
+    let had = list
+        .iter()
+        .find(|o| o.role == role)
+        .map(|o| (o.allow, o.deny));
+    if had == set {
+        return false;
+    }
     list.retain(|o| o.role != role);
     if let Some((allow, deny)) = set {
         list.push(Override { role, allow, deny });
     }
+    true
 }
 
 impl CommunityModel {
@@ -209,14 +230,17 @@ impl CommunityModel {
         }
     }
 
-    pub fn apply(&mut self, change: &ModelChange) {
+    /// Applies `change`; whether the model changed, which it does not when it already
+    /// reflected the change.
+    pub fn apply(&mut self, change: &ModelChange) -> bool {
         match change {
-            ModelChange::Owner(owner) => self.owner = *owner,
+            ModelChange::Owner(owner) => std::mem::replace(&mut self.owner, *owner) != *owner,
             ModelChange::Role {
                 id,
                 permissions,
                 everyone,
             } => {
+                let before = self.roles.get(id).copied();
                 let entry = self
                     .roles
                     .entry(*id)
@@ -227,34 +251,37 @@ impl CommunityModel {
                 if let Some(everyone) = everyone {
                     entry.1 = *everyone;
                 }
+                before != Some(*entry)
             }
             ModelChange::RoleDeleted(id) => {
-                self.roles.remove(id);
+                let mut changed = self.roles.remove(id).is_some();
                 for list in self
                     .channel_overrides
                     .values_mut()
                     .chain(self.category_overrides.values_mut())
                 {
+                    let had = list.len();
                     list.retain(|o| o.role != *id);
+                    changed |= list.len() != had;
                 }
+                changed
             }
             ModelChange::ChannelDeleted(channel) => {
-                self.categories.remove(channel);
-                self.channel_overrides.remove(channel);
+                self.categories.remove(channel).is_some()
+                    | self.channel_overrides.remove(channel).is_some()
             }
             ModelChange::CategoryDeleted(category) => {
-                self.category_overrides.remove(category);
+                self.category_overrides.remove(category).is_some()
             }
-            ModelChange::ChannelCategory { channel, category } => {
-                self.categories.insert(*channel, *category);
+            ModelChange::ChannelCreated { channel, category }
+            | ModelChange::ChannelCategory { channel, category } => {
+                self.categories.insert(*channel, *category) != Some(*category)
             }
-            ModelChange::ChannelOverride { channel, role, set } => {
-                set_override(
-                    self.channel_overrides.entry(*channel).or_default(),
-                    *role,
-                    *set,
-                );
-            }
+            ModelChange::ChannelOverride { channel, role, set } => set_override(
+                self.channel_overrides.entry(*channel).or_default(),
+                *role,
+                *set,
+            ),
             ModelChange::CategoryOverride {
                 category,
                 role,
@@ -782,6 +809,17 @@ mod tests {
         );
         assert_eq!(
             ModelChange::read(&format!(
+                r#"{{"serverEvent":"channel","type":"create","id":"{}","community":"{}","parentCategory":null,"name":"n","ty":"text","sortIndex":0}}"#,
+                channel.0,
+                id(9)
+            )),
+            Some(ModelChange::ChannelCreated {
+                channel,
+                category: None,
+            })
+        );
+        assert_eq!(
+            ModelChange::read(&format!(
                 r#"{{"serverEvent":"community","type":"update","id":"{}","owner":"{}"}}"#,
                 id(9),
                 user.0
@@ -827,19 +865,23 @@ mod tests {
             permissions: Some(Permissions::empty()),
             everyone: Some(false),
         });
-        model.apply(&ModelChange::ChannelCategory {
+        assert!(model.apply(&ModelChange::ChannelCreated {
             channel,
             category: None,
-        });
+        }));
         assert!(model.can_view(member, &[], channel));
         let hidden = ModelChange::ChannelOverride {
             channel,
             role: everyone,
             set: Some((Permissions::empty(), Permissions::VIEW_CHANNEL)),
         };
-        model.apply(&hidden);
-        // Applying a change twice is applying it once.
-        model.apply(&hidden);
+        assert!(model.apply(&hidden));
+        // Applying a change twice is applying it once, and the second says it changed nothing.
+        assert!(!model.apply(&hidden));
+        assert!(!model.apply(&ModelChange::ChannelCategory {
+            channel,
+            category: None,
+        }));
         assert!(!model.can_view(member, &[], channel));
         // A category's overrides come before the channel's own, so a moderator allowance on
         // the category does not lift the channel's denial for everyone...
@@ -865,9 +907,13 @@ mod tests {
             set: Some((Permissions::empty(), Permissions::VIEW_CHANNEL)),
         });
         assert!(model.can_view(member, &[moderator], channel));
-        model.apply(&ModelChange::RoleDeleted(moderator));
+        assert!(model.apply(&ModelChange::RoleDeleted(moderator)));
+        assert!(!model.apply(&ModelChange::RoleDeleted(moderator)));
         assert!(!model.can_view(member, &[moderator], channel));
-        model.apply(&ModelChange::Owner(Some(member)));
+        assert!(model.apply(&ModelChange::Owner(Some(member))));
+        assert!(!model.apply(&ModelChange::Owner(Some(member))));
         assert!(model.can_view(member, &[], channel));
+        assert!(model.apply(&ModelChange::ChannelDeleted(channel)));
+        assert!(!model.apply(&ModelChange::ChannelDeleted(channel)));
     }
 }

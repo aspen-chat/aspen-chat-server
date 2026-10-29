@@ -9,7 +9,10 @@
 //! - `aspen.events.c.{community}.all` for the community itself, its channels, categories,
 //!   invites, and memberships;
 //! - `aspen.events.u.{user}` for what is the user's alone: their preferences, and their own
-//!   membership changes, which are how their connection learns to change what it reads.
+//!   membership changes, which are how their connection learns to change what it reads;
+//! - `aspen.events.p.{user}` for what is about the user and wanted by their DM partners
+//!   (`EventScope::UserEverywhere`), which a connection follows for the partners of its user's
+//!   recent DMs (`app::event_feed::Following`).
 //!
 //! Every event about a community channel, or happening in one, also carries the
 //! `Aspen-Channel` header naming the channel whose View channel permission decides who
@@ -21,10 +24,11 @@
 //! Where a channel belongs is its `ChannelHome`, which never changes and is cached.
 //!
 //! An event about a user (their profile) is wanted by everyone who shares a community with
-//! them, so it is published once to every community they are in, and once to themselves. A
-//! reader in several of those communities receives it more than once; every copy carries the
-//! same `Aspen-Event-Id` header, which the client uses to drop repeats. The number of copies
-//! is bounded by the membership cap (`limits.max_communities_per_user`).
+//! them and by those they have DMs with, so it is published once to every community they are
+//! in, once to themselves, and once to their profile subject. A reader in several of those
+//! communities receives it more than once; every copy carries the same `Aspen-Event-Id`
+//! header, which the client uses to drop repeats. The number of copies is bounded by the
+//! membership cap (`limits.max_communities_per_user`) plus two.
 //!
 //! `expected_kind` decides the kind of scope every event must be published with, in a match
 //! with no wildcard arm, so adding an entity without deciding its routing does not compile,
@@ -95,9 +99,11 @@ pub enum EventScope {
     User(UserId),
     /// About the user, for everyone who shares a community with them and for themself.
     UserEverywhere(UserId),
-    /// About the user, for themself and for those who share one of `communities` with them: a
-    /// plugin's note on a person, shown only where the plugin runs. `communities` are the
-    /// user's own, at most `[limits] max_communities_per_user`.
+    /// About the user, for themself and for those who share one of `communities` with them,
+    /// and not for their DM partners: a plugin's note on a person, shown only where the plugin
+    /// runs, or with no communities at all, what one person alone is told of another (a bot's
+    /// making and deletion reach its owner this way). `communities` are the user's own, at most
+    /// `[limits] max_communities_per_user`.
     UserIn {
         user: UserId,
         communities: Vec<CommunityId>,
@@ -222,20 +228,32 @@ pub fn user_subject(user: UserId) -> String {
     format!("{SUBJECT_ROOT}.u.{}", user.0)
 }
 
-/// Whose a subject is: every event subject belongs to one user or one community.
+/// The subject of what is about `user` for those who follow them without sharing a community:
+/// their DM partners' connections (`app::event_feed::Following`). `UserEverywhere` publishes a
+/// copy here beside the user's own subject's and each community's; `UserIn` does not, since what
+/// it carries is for the named communities alone.
+pub fn profile_subject(user: UserId) -> String {
+    format!("{SUBJECT_ROOT}.p.{}", user.0)
+}
+
+/// Whose a subject is: every event subject belongs to one user, one user's followers, or one
+/// community.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SubjectOwner {
     User(UserId),
+    /// `profile_subject`: read by the connections following the user, not by their own.
+    Profile(UserId),
     Community(CommunityId),
 }
 
-/// The owner named by an event subject, the inverse of `user_subject`, `community_subject`,
-/// and `channel_subject`; `None` for anything else.
+/// The owner named by an event subject, the inverse of `user_subject`, `profile_subject`,
+/// `community_subject`, and `channel_subject`; `None` for anything else.
 pub fn subject_owner(subject: &str) -> Option<SubjectOwner> {
     let rest = subject.strip_prefix(SUBJECT_ROOT)?.strip_prefix('.')?;
     let mut tokens = rest.split('.');
     let owner = match (tokens.next()?, tokens.next()?) {
         ("u", id) if tokens.next().is_none() => SubjectOwner::User(UserId(id.parse().ok()?)),
+        ("p", id) if tokens.next().is_none() => SubjectOwner::Profile(UserId(id.parse().ok()?)),
         ("c", id) => {
             let community = CommunityId(id.parse().ok()?);
             match (tokens.next()?, tokens.next(), tokens.next()) {
@@ -595,6 +613,7 @@ async fn subjects(
                 .map(community_subject)
                 .collect();
             all.push(user_subject(user));
+            all.push(profile_subject(user));
             all
         }
         EventScope::UserIn { user, communities } => communities
@@ -1136,7 +1155,10 @@ async fn send_event(
                 Some(SubjectOwner::Community(community)) => {
                     published.communities.insert(community);
                 }
-                Some(SubjectOwner::User(user)) => {
+                // A profile copy is the user's as their own subject's is: a rollback is
+                // answered on their subject, which every connection following them resumes
+                // from as it would from any copy.
+                Some(SubjectOwner::User(user) | SubjectOwner::Profile(user)) => {
                     published.users.insert(user);
                 }
                 None => {}
@@ -1210,7 +1232,15 @@ mod tests {
             subject_owner(&user_subject(user)),
             Some(SubjectOwner::User(user))
         );
+        assert_eq!(
+            subject_owner(&profile_subject(user)),
+            Some(SubjectOwner::Profile(user))
+        );
         assert_eq!(subject_owner("aspen.events.u.nope"), None);
+        assert_eq!(
+            subject_owner(&format!("aspen.events.p.{}.more", user.0)),
+            None
+        );
         assert_eq!(
             subject_owner(&format!("aspen.events.c.{}.other", community.0)),
             None

@@ -27,7 +27,9 @@ The reasons behind the [event routing](index.md) design.
   learn they have, those gaining it learn they may look the channel up, and nobody else learns the
   channel exists.
 - **An unknown channel is viewed by nobody.** A new channel's overrides, published ahead of it,
-  reach only those they let view it.
+  reach nobody; they build the model the creation is judged by, so the creation reaches only those
+  they let view it. The same overrides are published again after the creation, so that those readers
+  hold them too.
 - **An unknown permission name is passed over.** A newer server's permission does not cost the whole
   change.
 
@@ -66,8 +68,20 @@ The reasons behind the [event routing](index.md) design.
   database the connection was read from may already show those changes. See
   [Catch-up](catch-up.md#judging-a-catch-up-by-its-moment).
 - **Events from before a role change are left out.** Which roles the user held before is not known.
-  When that hides what the database's reading would have shown, `resumed: false` makes the client
-  read its state again rather than miss it.
+  When that hides what the database's reading would have shown, `replayComplete: false` makes the
+  client read its state again rather than miss it.
+- **`ready` says what the replay could not vouch for, to every connection.** A first connection's
+  replay is judged as a resumed one's is, and a model adopted after a retained change, or a window
+  cut short by the byte cap or a server just started, leaves gaps a client cannot otherwise see.
+  Rather than every first connection reading its state twice, the frame names the two cases
+  (`replayComplete`, `replayedSince`) and the client reads again only in them.
+- **A `caughtUp` frame ends the replay.** The client otherwise cannot tell a replay burst from live
+  events, and would reconcile a REST read that lands in the middle of one against what the replay
+  has yet to write.
+- **Profiles are followed by connection, not published per partner.** Appending each DM partner's
+  subject where a profile event is published would publish a copy per partner, with no bound. One
+  profile subject per user keeps the fan-out at one copy, and each connection follows the bounded
+  set of partners it holds.
 - **Stream counts are kept in the process.** A server that stops leaves no count behind.
 
 ## Reconnect storms

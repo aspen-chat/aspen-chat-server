@@ -50,6 +50,7 @@ or in the environment, separated by commas:
 | `max_event_streams_per_user`    | `20`                         | The most live connections (event streams) one account may hold open on each API server. Each window or device of the app holds one. |
 | `max_event_streams_per_address` | `200`                        | The most live connections one client address may hold open on each API server before they sign in. See below.                       |
 | `max_identifying_event_streams` | half of `database_pool_size` | The most live connections each API server signs in at once. See below.                                                              |
+| `max_followed_dm_partners`      | `100`                        | The most DM partners whose profile changes one live connection is told of. See below.                                               |
 
 - One event stream more than either of the first two limits is closed with code 4429.
 - `max_event_streams_per_address` counts an IPv6 address by its `[rate_limits] ipv6_prefix` network.
@@ -57,6 +58,11 @@ or in the environment, separated by commas:
 - Raise `max_event_streams_per_address` when so many people reach the deployment from one address at
   once that some are closed before they sign in: behind one NAT, or one proxy you have not listed in
   `trusted_proxies`.
+- `max_followed_dm_partners` bounds how many people's profile changes (a new name or picture, a
+  deleted account) one connection hears of without sharing a community with them: the people in the
+  account's most recently active DMs, as many DMs as keep them within the limit. Someone from an
+  older DM is shown as last read until the app reads them again. Each is one entry in the server's
+  memory per connection; raise it for a deployment whose people keep many DMs open at once.
 - When many people connect at once (a server restarting, an ISP's customers coming back from an
   outage), each API server signs in at most `max_identifying_event_streams` at a time, and turns new
   ones away while requests already queue for a database connection, so those already connected stay

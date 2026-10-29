@@ -12,13 +12,18 @@
 //! position is still inside the stream's retention window the server replays exactly what was
 //! missed and reports `resumed: true`; otherwise it replays the whole `MAX_EVENT_AGE` window
 //! and reports `resumed: false`, which tells the client its cached state has a gap it must
-//! repair from REST.
+//! repair from REST. `ready` also says what the replay could not vouch for: `replayComplete`
+//! is false when the feed had to leave out events it could not judge (`app::event_feed`), and
+//! `replayedSince` names where the window begins when it is shorter than `MAX_EVENT_AGE`, for
+//! the client to compare with when it began reading its state. The replay is written right
+//! after `ready` and ends with a `caughtUp` frame, after which every `event` happened live.
 //!
 //! Besides events, the stream carries what happens and is never kept (`ephemeral` frames: who
-//! is typing, `app::typing`, and changes to the presence of those the client watches,
-//! `app::presence_feed`), which has no sequence and is not replayed; the client says what its
-//! user is typing, and whose presence it shows, on the same connection, and its closing ends
-//! both.
+//! is typing, `app::typing`, changes to the presence of those the client watches,
+//! `app::presence_feed`, and notices every connection of the server gets at once, such as a
+//! change to the installed plugins), which has no sequence and is not replayed; the client
+//! says what its user is typing, and whose presence it shows, on the same connection, and its
+//! closing ends both.
 //!
 //! Errors are written in the language `?locale=` names on the upgrade URL, which the client
 //! sets from its own language setting as it would `Accept-Language` (which a browser does not
@@ -219,7 +224,8 @@ impl EventStreamErrorCode {
 #[derive(Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ServerMessage<'a> {
-    /// Acknowledges a successful `identify`. Events follow.
+    /// Acknowledges a successful `identify`. The replay follows, then `caughtUp`, then live
+    /// events.
     #[serde(rename_all = "camelCase")]
     Ready {
         user_id: UserId,
@@ -227,6 +233,23 @@ pub enum ServerMessage<'a> {
         /// `false` on a first connection, or when the requested position has already left the
         /// stream: the client must rebuild its cached state from REST.
         resumed: bool,
+        /// Whether the replay holds everything this connection may read of the window it
+        /// covers. `false` when the server had to leave out events it could not judge: those
+        /// of a community from before a change of the user's roles there, or from before a
+        /// change to who may view one of its channels that the server's model of it was read
+        /// after. The client then rebuilds its cached state from REST, whether or not it
+        /// resumed.
+        replay_complete: bool,
+        /// When the replayed window begins, if it is shorter than the usual minute: events
+        /// retained here were let go of early (`event_retained_mib`), or the server started
+        /// reading the stream less than a minute ago. A client that began reading its state
+        /// from REST before this moment may have missed events between, and rebuilds it.
+        /// `null` when the whole minute was available, or the connection resumed.
+        replayed_since: Option<chrono::DateTime<chrono::Utc>>,
+        /// Always `true`: the frames after this one are the replay, ended by a `caughtUp`
+        /// frame. A server without this field writes no `caughtUp`, and its client treats the
+        /// stream as live from `ready`.
+        catch_up_follows: bool,
         /// The build of the web client this server serves, as that build names itself. A web
         /// client this deployment served that is of another build is out of date, and reloads:
         /// the files it would load later may be gone. Absent when the web client names none. A
@@ -247,6 +270,9 @@ pub enum ServerMessage<'a> {
         #[schemars(with = "ServerEvent")]
         event: &'a RawValue,
     },
+    /// The replay that followed `ready` is written, whether it held anything or not; every
+    /// `event` after this one happened live. Sent once per connection.
+    CaughtUp,
     /// Something that happens and is never kept: no sequence, never replayed on resuming, and
     /// lost with the connection. A client that loses its connection forgets what these told it.
     Ephemeral {
@@ -466,6 +492,9 @@ async fn handle_socket_conn(
     let ready = ServerMessage::Ready {
         user_id: session.user.id,
         resumed: subscription.resumed,
+        replay_complete: subscription.replay_complete,
+        replayed_since: subscription.replayed_since,
+        catch_up_follows: true,
         web_client_build: crate::web_client::build(&state.config).await,
     };
     if let Err(e) = send_json(&mut socket, &ready).await {
@@ -653,7 +682,31 @@ async fn feed_delivery(socket: &mut WebSocket, delivery: Delivery) -> Result<Fed
                 email_unverified: None,
             })
         }
+        Delivery::CaughtUp => {
+            socket.feed(json_frame(&ServerMessage::CaughtUp)?).await?;
+            Ok(Fed {
+                written: 1,
+                ends: None,
+                email_unverified: None,
+            })
+        }
+        Delivery::Notice(payload) => {
+            socket
+                .feed(json_frame(&ServerMessage::Ephemeral { event: &payload })?)
+                .await?;
+            Ok(Fed {
+                written: 1,
+                ends: None,
+                email_unverified: None,
+            })
+        }
     }
+}
+
+/// `message` as a text frame.
+fn json_frame(message: &ServerMessage<'_>) -> Result<Message, axum::Error> {
+    let text = serde_json::to_string(message).map_err(axum::Error::new)?;
+    Ok(Message::Text(text.into()))
 }
 
 /// Whether `settings` require a verified email address and `user`'s, as it is now, is not. A
@@ -898,8 +951,7 @@ async fn send_presence(socket: &mut WebSocket, told: &EphemeralEvent) -> Result<
 }
 
 async fn send_json(socket: &mut WebSocket, message: &ServerMessage<'_>) -> Result<(), axum::Error> {
-    let text = serde_json::to_string(message).map_err(axum::Error::new)?;
-    socket.send(Message::Text(text.into())).await
+    socket.send(json_frame(message)?).await
 }
 
 /// Tells the peer why it is being dropped, then closes with the matching close code. Both
@@ -1006,6 +1058,44 @@ mod tests {
         ))
         .unwrap();
         assert!(matches!(frame, ClientMessage::StoppedTyping { .. }));
+    }
+
+    #[test]
+    fn ready_says_what_the_replay_vouches_for_and_caught_up_ends_it() {
+        let user = aspen_app::UserId::new();
+        let ready = ServerMessage::Ready {
+            user_id: user,
+            resumed: false,
+            replay_complete: true,
+            replayed_since: None,
+            catch_up_follows: true,
+            web_client_build: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&ready).unwrap(),
+            format!(
+                r#"{{"type":"ready","userId":"{}","resumed":false,"replayComplete":true,"replayedSince":null,"catchUpFollows":true}}"#,
+                user.0
+            )
+        );
+        let since = chrono::DateTime::parse_from_rfc3339("2026-10-29T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let short = ServerMessage::Ready {
+            user_id: user,
+            resumed: false,
+            replay_complete: false,
+            replayed_since: Some(since),
+            catch_up_follows: true,
+            web_client_build: None,
+        };
+        let json: serde_json::Value = serde_json::to_value(&short).unwrap();
+        assert_eq!(json["replayComplete"], false);
+        assert_eq!(json["replayedSince"], "2026-10-29T12:00:00Z");
+        assert_eq!(
+            serde_json::to_string(&ServerMessage::CaughtUp).unwrap(),
+            r#"{"type":"caughtUp"}"#
+        );
     }
 
     #[test]

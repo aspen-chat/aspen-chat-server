@@ -19,7 +19,13 @@ import {
   type CommunityTakedown,
   type CommunityTakedownRequest,
 } from "./admin";
-import { EventStream, type EventStreamOptions, reconnectDelayMs, serverDelayMs } from "./events";
+import {
+  EventStream,
+  type EventStreamOptions,
+  type ReadyInfo,
+  reconnectDelayMs,
+  serverDelayMs,
+} from "./events";
 import type {
   CommunityPlugin,
   CustomEmoji,
@@ -192,9 +198,16 @@ export const MESSAGE_AROUND_RADIUS = 25;
 export const EVENT_REPLAY_WINDOW_MS = 60_000;
 /**
  * A bootstrap that took longer than this before the stream connected may have missed events
- * that fell out of the replay window, so it is redone once the stream is up.
+ * that fell out of the replay window, so it is redone once the stream is up. The fallback for a
+ * server whose `ready` does not say when its replay begins (`replayedSince`).
  */
 const BOOTSTRAP_STALE_AFTER_MS = EVENT_REPLAY_WINDOW_MS - 10_000;
+/**
+ * How far before this sync's bootstrap began a connection's replay may begin and still be taken
+ * to cover it, allowing for the server's clock and the device's disagreeing: `replayedSince` is
+ * the server's clock, the bootstrap's start the device's.
+ */
+const REPLAY_CLOCK_SLACK_MS = 5_000;
 /**
  * How often the online counts of the channels shown are read while the sync is live and the
  * page is visible.
@@ -292,7 +305,10 @@ export type SyncStatus =
   | "stopped"
   /** Reading the initial state from REST; nothing is cached yet. */
   | "bootstrapping"
-  /** The cache is loaded and usable; the event stream has not connected yet. */
+  /**
+   * The cache is loaded and usable; the event stream has not connected yet, or is still
+   * replaying what the cache may have missed (`ReadyInfo.catchUpFollows`).
+   */
   | "connecting"
   /** Cache is current and the event stream is connected. */
   | "live"
@@ -400,6 +416,18 @@ export class AspenSync {
   /** Events received while a bootstrap is in flight, applied once it lands. `null` when live. */
   #held: ServerEvent[] | null = null;
   #bootstrappedAt = 0;
+  /**
+   * Whether the stream is delivering the replay its connection started with, which ends with
+   * `caughtUp`: the cache is not current until then, so the sync is not live, and window reads
+   * wait (`#whenCaughtUp`).
+   */
+  #catchingUp = false;
+  readonly #caughtUpWaiters = new Set<() => void>();
+  /**
+   * Whether a `ready` that arrived while a bootstrap was in flight said the replay may lack
+   * events, so the bootstrap is to be done again once it lands.
+   */
+  #rereadWanted = false;
   /** Increments on every start/stop so a stale async step can notice and bail. */
   #generation = 0;
   /** Whether a further page of the DM list is being read. */
@@ -551,7 +579,10 @@ export class AspenSync {
       authenticate: (o) => options.client.freshSessionToken(o),
       onReady: (info) => {
         this.#setWebClientBuild(info.webClientBuild);
-        this.#onReady(info.resumed);
+        this.#onReady(info);
+      },
+      onCaughtUp: () => {
+        this.#onCaughtUp();
       },
       onEvent: (event) => {
         this.#onEvent(event);
@@ -577,6 +608,11 @@ export class AspenSync {
           });
           return;
         }
+        if (event.type === "pluginCatalogueChanged") {
+          // What the deployment runs changed: installed, removed, turned on or off, or upgraded.
+          void this.loadPlugins().catch(() => undefined);
+          return;
+        }
         if (kind !== "typing") {
           return;
         }
@@ -592,9 +628,12 @@ export class AspenSync {
       },
       onConnectionLost: () => {
         // Nobody will say when those shown typing stop, and the server let go of what this
-        // connection said; a channel's mana is told again once it is viewed anew.
+        // connection said; a channel's mana is told again once it is viewed anew. A replay
+        // under way ended with the connection; the next starts afresh.
         this.#forgetTyping();
         this.store.forgetMana();
+        this.#catchingUp = false;
+        this.#releaseCaughtUp();
         if (this.#status === "live" || this.#status === "connecting") {
           this.#setStatus("reconnecting");
         }
@@ -742,7 +781,7 @@ export class AspenSync {
     void this.#bootstrap(generation).then((ok) => {
       if (ok && generation === this.#generation) {
         if (this.#stream.status === "open") {
-          this.#setStatus("live");
+          this.#goLive();
           return;
         }
         this.#setStatus("connecting");
@@ -767,6 +806,9 @@ export class AspenSync {
     }
     this.#forgetTyping();
     this.#held = null;
+    this.#rereadWanted = false;
+    this.#catchingUp = false;
+    this.#releaseCaughtUp();
     this.#windowLoads.clear();
     this.#userLoads.clear();
     this.#channelLoads.clear();
@@ -3957,6 +3999,11 @@ export class AspenSync {
       for (const event of held) {
         this.#apply(event);
       }
+      if (this.#rereadWanted) {
+        // A connection made meanwhile could not replay everything since this read began.
+        this.#rereadWanted = false;
+        return await this.#bootstrap(generation);
+      }
       return true;
     } catch (error) {
       if (generation !== this.#generation) {
@@ -4171,7 +4218,33 @@ export class AspenSync {
     this.#setStatus("resyncing");
     const generation = this.#generation;
     if (await this.#bootstrap(generation)) {
-      this.#setStatus("live");
+      this.#goLive();
+    }
+  }
+
+  /**
+   * The cache is read and the stream connected: live, unless the stream is still replaying what
+   * the cache may have missed, which `caughtUp` ends.
+   */
+  #goLive(): void {
+    this.#setStatus(this.#catchingUp ? "connecting" : "live");
+  }
+
+  /** Resolves once the connection's replay has been applied; at once when none is under way. */
+  #whenCaughtUp(): Promise<void> {
+    if (!this.#catchingUp) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this.#caughtUpWaiters.add(resolve);
+    });
+  }
+
+  #releaseCaughtUp(): void {
+    const waiters = Array.from(this.#caughtUpWaiters);
+    this.#caughtUpWaiters.clear();
+    for (const waiter of waiters) {
+      waiter();
     }
   }
 
@@ -4279,7 +4352,7 @@ export class AspenSync {
     }
   }
 
-  #onReady(resumed: boolean): void {
+  #onReady(info: ReadyInfo): void {
     this.#reportActivity();
     this.#tellViewing();
     // A new connection watches nobody, and what it missed meanwhile is read whole once the
@@ -4288,16 +4361,48 @@ export class AspenSync {
     this.#tellWatching();
     this.#firstWatchAt = this.#watchSent === "" ? null : this.#now();
     this.#presenceReadAt = null;
-    if (this.#status === "resyncing" || this.#status === "failed") {
+    this.#catchingUp = info.catchUpFollows;
+    if (this.#status === "failed") {
       return;
     }
-    if (!resumed && this.#now() - this.#bootstrappedAt > BOOTSTRAP_STALE_AFTER_MS) {
-      // The stream replays a fixed window before its connection; a bootstrap older than that
-      // may predate events the replay no longer holds.
-      void this.#resync();
+    if (this.#replayMayLack(info)) {
+      if (this.#held !== null) {
+        this.#rereadWanted = true;
+      } else {
+        void this.#resync();
+      }
       return;
     }
-    this.#setStatus("live");
+    if (this.#held !== null) {
+      // A bootstrap is in flight; whatever started it goes live once it lands.
+      return;
+    }
+    this.#goLive();
+  }
+
+  /**
+   * Whether the replay this connection starts with may lack events the cache missed, so that it
+   * must be read again: the server left some out (`replayComplete`), the window it replays
+   * begins after the bootstrap did (`replayedSince`), or, from a server that does not say when
+   * it begins, a first connection's bootstrap took most of the window the stream replays.
+   */
+  #replayMayLack(info: ReadyInfo): boolean {
+    if (!info.replayComplete) {
+      return true;
+    }
+    if (info.replayedSince !== null) {
+      return Date.parse(info.replayedSince) > this.#bootstrappedAt - REPLAY_CLOCK_SLACK_MS;
+    }
+    return !info.resumed && this.#now() - this.#bootstrappedAt > BOOTSTRAP_STALE_AFTER_MS;
+  }
+
+  /** The connection's replay has all been applied: what follows is live, and reads may go. */
+  #onCaughtUp(): void {
+    this.#catchingUp = false;
+    this.#releaseCaughtUp();
+    if (this.#status === "connecting") {
+      this.#setStatus("live");
+    }
   }
 
   #onEvent(event: ServerEvent): void {
@@ -4779,7 +4884,13 @@ export class AspenSync {
       return pending;
     }
     const generation = this.#generation;
-    const promise = load()
+    // A read sent while the connection's replay is still arriving would be installed over
+    // events that predate it; the replay is applied first. One `stop` released goes nowhere.
+    const promise = (
+      this.#catchingUp
+        ? this.#whenCaughtUp().then(() => (generation === this.#generation ? load() : undefined))
+        : load()
+    )
       .catch((error: unknown) => {
         if (generation === this.#generation) {
           throw error;

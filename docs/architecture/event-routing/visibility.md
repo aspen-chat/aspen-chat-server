@@ -56,7 +56,10 @@ A category the model holds no overrides of is decided by the community's permiss
   model and a client as once does.
 - A model adopted for a community whose events were retained before the dispatcher held it attaches
   to each of those the model as it stood there. So a catch-up judges them by the permissions of
-  their moment.
+  their moment, as far as the adopted model stood as it did then: one read from the database after a
+  retained change to who views a channel or category already reflects it, and the catch-ups through
+  the community from before the change are told `replayComplete: false` (see
+  [Catch-up](catch-up.md#judging-a-catch-up-by-its-moment)).
 - A permission name the model does not know (from a newer server) is passed over, rather than
   costing the whole change.
 

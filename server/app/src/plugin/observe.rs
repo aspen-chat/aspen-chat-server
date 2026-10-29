@@ -244,6 +244,8 @@ async fn handle(
             Some(crate::events::SubjectOwner::User(_)) if !plugin.holds(PluginPermission::Dms) => {
                 return Ok(());
             }
+            // A profile subject carries what is about a user, never a message.
+            Some(crate::events::SubjectOwner::Profile(_)) => return Ok(()),
             Some(crate::events::SubjectOwner::User(_)) | None => {}
         }
         if !first_copy(state, &plugin.id, event_id, subject).await? {

@@ -18,13 +18,17 @@ channel, a message, a session, a community, a membership, or a user.
 
 ## Events about a user
 
-An event about a user (their profile) is published once to every community they belong to, and once
-to themselves.
+An event about a user (their profile) is published once to every community they belong to, once to
+themselves, and once to their profile subject `aspen.events.p.{user}`, which the connections of
+their DM partners follow (see
+[Subjects and the feed](subjects-and-feed.md#profiles-of-dm-partners)).
 
 - Every copy carries the same `Aspen-Event-Id` header, surfaced as `eventId` on the frame.
 - The client drops repeats.
 - The copies are bounded by `[limits] max_communities_per_user` (500 by default), enforced where
-  memberships are made.
+  memberships are made, plus the two of the user's own.
+- The profile copy is noted under the user as their own subject's copy is (`events::noting`), so a
+  rollback after publishing is answered with `userResync` on their own subject.
 
 ## `publish_events`
 

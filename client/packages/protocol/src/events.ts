@@ -55,6 +55,24 @@ export interface ReadyInfo {
   userId: string;
   /** Whether the server replayed everything since the last sequence this client had seen. */
   resumed: boolean;
+  /**
+   * Whether the replay holds everything this connection may read of the window it covers.
+   * `false` when the server left out events it could not judge (those of a community from
+   * before a change of the user's roles there, say): the cache must be rebuilt from REST,
+   * resumed or not. A server that does not say is taken to have left nothing out.
+   */
+  replayComplete: boolean;
+  /**
+   * When the replayed window begins, as the server's clock had it, if it is shorter than the
+   * usual minute; `null` when the whole minute was available, when the connection resumed, or
+   * when the server does not say. A cache read from REST before this moment may lack events.
+   */
+  replayedSince: string | null;
+  /**
+   * Whether the server ends the replay with a `caughtUp` frame (`onCaughtUp`), so the caller
+   * can tell the replay from live events. `false` from a server that writes none.
+   */
+  catchUpFollows: boolean;
   /** The build of the web client the server serves, or `null` when it names none. */
   webClientBuild: string | null;
 }
@@ -69,6 +87,11 @@ export interface EventStreamHandlers {
   onEphemeral?: (event: EphemeralEvent) => void;
   /** The server accepted `identify`. Fires on the first connect and after every reconnect. */
   onReady?: (info: ReadyInfo) => void;
+  /**
+   * The replay the connection started with has all been delivered, and what follows is live.
+   * Fires once per connection whose `ReadyInfo.catchUpFollows` was `true`, after `onReady`.
+   */
+  onCaughtUp?: () => void;
   /** The connection dropped or could not be made; reconnection is being attempted. */
   onConnectionLost?: (reason: string) => void;
   /**
@@ -123,8 +146,11 @@ export interface EventStreamOptions extends EventStreamHandlers {
  *
  * On every connection the first frame sent is `identify`, carrying the session token and, on
  * reconnects, the sequence of the last event processed. The server replies `ready`, after
- * which `event` frames flow. If the server could not resume from that sequence it says so in
- * `ready`, and `onResyncRequired` fires so the caller can rebuild from REST.
+ * which `event` frames flow: first the replay of what the connection may have missed, ended by
+ * `caughtUp` (`onCaughtUp`) when `ready` promised one, then live events. If the server could not
+ * resume from that sequence it says so in `ready`, and `onResyncRequired` fires so the caller
+ * can rebuild from REST. Frames of a type this client does not know are dropped, since a newer
+ * server may write some.
  *
  * A dropped connection enters an outage: `onConnectionLost` fires once, reconnection follows
  * `reconnectDelayMs`, or the server's `retryAfterSeconds` when it turned the stream away as busy
@@ -377,13 +403,22 @@ export class EventStream {
           this.#lastSequence = null;
           this.#options.onResyncRequired?.();
         }
+        // A server from before these fields replays the whole minute it holds, leaves nothing
+        // out of it, and writes no `caughtUp`.
+        const older: Partial<Pick<typeof frame, "replayComplete" | "catchUpFollows">> = frame;
         this.#options.onReady?.({
           userId: frame.userId,
           resumed: frame.resumed,
+          replayComplete: older.replayComplete ?? true,
+          replayedSince: frame.replayedSince ?? null,
+          catchUpFollows: older.catchUpFollows ?? false,
           webClientBuild: frame.webClientBuild ?? null,
         });
         break;
       }
+      case "caughtUp":
+        this.#options.onCaughtUp?.();
+        break;
       case "event":
         this.#lastSequence = frame.sequence;
         // An event about a user reaches this connection once per community shared with them,
