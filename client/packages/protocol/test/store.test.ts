@@ -2196,6 +2196,37 @@ describe("RecordStore notifications", () => {
   });
 });
 
+describe("RecordStore bots", () => {
+  it("lists a bot the caller made on another device, until it is deleted", () => {
+    const store = bootstrapped();
+    const listener = vi.fn();
+    store.subscribe("bots", listener);
+    expect(store.ownedBots()).toEqual([]);
+    const helper: User = {
+      ...bob,
+      id: id(7),
+      name: "helper",
+      bot: true,
+      botOwner: me.id,
+    };
+    store.applyEvent({ serverEvent: "user", type: "create", ...helper });
+    expect(store.ownedBots()).toEqual([helper]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    // Someone else's bot is not the caller's.
+    store.applyEvent({
+      serverEvent: "user",
+      type: "create",
+      ...helper,
+      id: id(8),
+      botOwner: bob.id,
+    });
+    expect(store.ownedBots()).toEqual([helper]);
+    store.applyEvent({ serverEvent: "user", type: "delete", id: helper.id });
+    expect(store.ownedBots()).toEqual([]);
+    expect(store.user(helper.id)).toBeUndefined();
+  });
+});
+
 describe("RecordStore plugins", () => {
   const filter = {
     id: "org.example.filter",

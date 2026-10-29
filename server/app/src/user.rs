@@ -672,16 +672,38 @@ pub async fn retire(
     conn: &mut AsyncPgConnection,
     id: UserId,
 ) -> Result<Retired, crate::Error> {
-    let retired: Option<(String, Option<String>, bool)> = diesel::update(user::table)
+    /// What of the account its retirement needs.
+    #[derive(Queryable)]
+    struct Retiring {
+        name: String,
+        display_name: Option<String>,
+        bot: bool,
+        bot_owner: Option<UserId>,
+    }
+    let retired: Option<Retiring> = diesel::update(user::table)
         .set(user::deleted_at.eq(diesel::dsl::now))
         .filter(user::id.eq(id).and(user::deleted_at.is_null()))
-        .returning((user::name, user::display_name, user::bot))
+        .returning((
+            user::name,
+            user::display_name,
+            user::bot,
+            user::bot_owner,
+        ))
         .get_result(conn)
         .await
         .optional()?;
-    let Some((name, display_name, bot)) = retired else {
+    let Some(Retiring {
+        name,
+        display_name,
+        bot,
+        bot_owner,
+    }) = retired
+    else {
         return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
     };
+    // Where the deletion is announced is read before a bot leaves its communities, since by
+    // the time it is published the memberships are gone.
+    let communities = crate::events::memberships(conn, id).await?;
     let mut handovers = Vec::new();
     let owned: Vec<(crate::CommunityId, String)> = schema::community::table
         .select((schema::community::id, schema::community::name))
@@ -700,8 +722,8 @@ pub async fn retire(
         }
     }
     if bot {
-        for community in crate::events::memberships(conn, id).await? {
-            crate::community::end_membership(state, conn, id, community).await?;
+        for community in &communities {
+            crate::community::end_membership(state, conn, id, *community).await?;
         }
     }
     crate::login::revoke_all_sessions(state, conn, id).await?;
@@ -743,10 +765,27 @@ pub async fn retire(
     publish_event(
         state,
         conn,
-        crate::EventScope::UserEverywhere(id),
+        crate::EventScope::UserIn {
+            user: id,
+            communities,
+        },
         &message_enum::server_event::ServerEvent::User(UserEvent::Delete { id }),
     )
     .await?;
+    // A bot's owner need share no community with it; their other devices list it from the
+    // records they hold and drop it from this copy, published to them alone.
+    if let Some(owner) = bot_owner {
+        publish_event(
+            state,
+            conn,
+            crate::EventScope::UserIn {
+                user: owner,
+                communities: Vec::new(),
+            },
+            &message_enum::server_event::ServerEvent::User(UserEvent::Delete { id }),
+        )
+        .await?;
+    }
     Ok(Retired {
         name: display_name.unwrap_or(name),
         handovers,

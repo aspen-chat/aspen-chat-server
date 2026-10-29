@@ -41,7 +41,9 @@ A new place that shows something with an id gives it a copy control.
 ## Managing bots: `BotsDialog`
 
 The dialog lists the caller's bots: `RecordStore.ownedBots` (topic `bots`). It is derived from the
-cached users whose `botOwner` is the caller, and filled by `AspenSync.loadBots`.
+cached users whose `botOwner` is the caller, filled by `AspenSync.loadBots`, and kept by the `user`
+`create` and `delete` events the server sends the owner on their own subject when one of their bots
+is made or deleted, so a bot made or deleted on one of their devices shows, or goes, on the others.
 
 | Action                                                      | How                                                                 |
 | ----------------------------------------------------------- | ------------------------------------------------------------------- |
@@ -53,8 +55,8 @@ cached users whose `botOwner` is the caller, and filled by `AspenSync.loadBots`.
 | Hand it to someone                                          | `PeoplePicker`, `AspenSync.transferBot`                             |
 | Delete it                                                   | `AspenSync.deleteBot`                                               |
 
-These writes are applied from their answers. **Why:** a bot's own events reach only those who share
-a community with it.
+These writes are applied from their answers. **Why:** a bot's own events, but for its making and
+deletion, reach only those who share a community with it.
 
 ## Adding a bot to a community
 

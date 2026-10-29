@@ -60,6 +60,19 @@ The person who made a bot owns it (`user.bot_owner`). A bot acts for its owner.
 **Why issuing a token needs a fresh verification:** whoever holds a stolen session could otherwise
 take the bot's token.
 
+## Announcing a bot's making and deletion
+
+A bot's owner need share no community with it, and their devices list their bots from the `user`
+records they hold, so the owner is told on their own subject:
+
+- Making a bot publishes its `user` `create` to the owner alone (`EventScope::UserIn` with no
+  communities), in the transaction that makes it; their other devices list it. Everyone else meets
+  the bot as it joins their communities.
+- Deleting a bot (`app::user::retire`) publishes its `user` `delete` twice: to the communities it
+  was in, read before it leaves them, and to its owner alone, so their other devices drop it.
+  Members keep its name on its old messages until the `delete` reaches them, and then show it as any
+  deleted user's.
+
 ## When the owner's account is deleted
 
 Deleting an account (`app::user::retire`) leaves its bots working and ownerless:

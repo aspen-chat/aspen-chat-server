@@ -21,6 +21,7 @@ use crate::{CommunityId, EventScope, UserId, publish_event};
 use aspen_schema::{bot_token, bot_transfer, community_user, user};
 use aspen_wire::message_enum;
 use aspen_wire::message_enum::server_event::{ServerEvent, UserEvent};
+use aspen_wire::user::UserOnlineStatus;
 use chrono::{DateTime, Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
@@ -270,6 +271,23 @@ pub async fn create(
                     ))
                     .execute(conn.as_mut())
                     .await?;
+                // The owner's other devices list the new bot from this, published to them
+                // alone; everyone else meets it as it joins their communities. It has not
+                // signed in yet, so it is offline.
+                let record = User {
+                    user_pg: bot.clone(),
+                    online_status: UserOnlineStatus::Offline,
+                };
+                publish_event(
+                    state,
+                    conn.as_mut(),
+                    EventScope::UserIn {
+                        user: owner,
+                        communities: Vec::new(),
+                    },
+                    &ServerEvent::User(UserEvent::Create(record.into())),
+                )
+                .await?;
                 Ok::<_, crate::Error>(bot)
             }
             .scope_boxed()
