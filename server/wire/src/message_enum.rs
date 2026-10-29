@@ -310,6 +310,11 @@ enum MessageEnumSource {
         options: Vec<u32>,
         write_ins: Vec<u32>,
     },
+    // The user began using another deployment, signing in there from one of their devices
+    // (`used` is `true`), or stopped using it from one (`false`); the others sign in there or
+    // out. See `app::federation::abroad`.
+    #[message_gen(custom_event)]
+    ForeignDeploymentsChanged { domain: String, used: bool },
     Message {
         #[message_gen(id)]
         id: MessageId,

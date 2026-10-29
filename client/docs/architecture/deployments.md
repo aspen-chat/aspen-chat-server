@@ -22,6 +22,12 @@ Design notes: [deployments-design-notes.md](deployments-design-notes.md).
 
 - The home lists the user's other deployments (`GET /users/@me/foreign-deployments`), so every
   device signs in to the same ones.
+- The home tells the user's own devices when that list changes (`foreignDeploymentsChanged`, with
+  the domain and whether it is now used; `AspenSync.onForeignDeployments`): a device's first sign-in
+  somewhere, or its leaving. `DeploymentsProvider` hands each to `Deployments.follow`, which signs
+  in there as at start, or signs out there and drops that deployment's session and store, as `leave`
+  does but without asking the home, whose list already changed. A deployment this device is signing
+  in to, or already uses, is left as it is; one it never used is nothing to leave.
 - A session abroad comes from an assertion the home signs (`AspenClient.issueAssertion`), handed to
   the other deployment (`signInWithAssertion`).
 - A session that ends is replaced the same way, at most once per `REACQUIRE_INTERVAL_MS`.

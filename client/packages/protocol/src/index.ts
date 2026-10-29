@@ -256,6 +256,7 @@ export {
   type ActivityFilter,
   type CommunityUpdateRequest,
   type ForeignDmNotice,
+  type ForeignDeploymentNotice,
   type PluginEvent,
   type PluginNotice,
 } from "./sync";

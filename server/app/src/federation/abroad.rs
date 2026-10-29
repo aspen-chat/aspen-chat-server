@@ -141,7 +141,7 @@ pub struct Issued {
 }
 
 /// Signs an assertion for `caller`, who is `user`, to sign in at `audience`, and remembers that
-/// they use it.
+/// they use it, telling their other devices (`foreignDeploymentsChanged`) the first time.
 pub async fn issue(
     state: &GlobalServerContext,
     caller: &Caller,
@@ -205,19 +205,40 @@ pub async fn issue(
             },
         },
     );
-    diesel::insert_into(user_foreign_deployment::table)
-        .values((
-            user_foreign_deployment::user.eq(user.id),
-            user_foreign_deployment::domain.eq(audience.as_str()),
-        ))
-        .on_conflict((
-            user_foreign_deployment::user,
-            user_foreign_deployment::domain,
-        ))
-        .do_update()
-        .set(user_foreign_deployment::last_used_at.eq(diesel::dsl::now))
-        .execute(&mut conn)
-        .await?;
+    conn.transaction(|conn| {
+        async move {
+            // A row it made has no deleting transaction (`xmax`) yet; one it updated has.
+            let added: bool = diesel::insert_into(user_foreign_deployment::table)
+                .values((
+                    user_foreign_deployment::user.eq(user.id),
+                    user_foreign_deployment::domain.eq(audience.as_str()),
+                ))
+                .on_conflict((
+                    user_foreign_deployment::user,
+                    user_foreign_deployment::domain,
+                ))
+                .do_update()
+                .set(user_foreign_deployment::last_used_at.eq(diesel::dsl::now))
+                .returning(diesel::dsl::sql::<diesel::sql_types::Bool>("xmax = 0"))
+                .get_result(conn.as_mut())
+                .await?;
+            if added {
+                publish_event(
+                    state,
+                    conn.as_mut(),
+                    EventScope::User(user.id),
+                    &ServerEvent::ForeignDeploymentsChanged {
+                        domain: audience.to_string(),
+                        used: true,
+                    },
+                )
+                .await?;
+            }
+            Ok::<_, crate::Error>(())
+        }
+        .scope_boxed()
+    })
+    .await?;
     Ok(Issued {
         assertion,
         audience: audience.clone(),
@@ -251,21 +272,41 @@ pub async fn foreign_deployments(
         .await?)
 }
 
-/// Forgets that `user_id` uses `domain`, so their other devices stop signing in there. Their
-/// account there is untouched. Forgetting one they never used is not an error.
+/// Forgets that `user_id` uses `domain`, telling their other devices
+/// (`foreignDeploymentsChanged`) so they sign out there. Their account there is untouched.
+/// Forgetting one they never used is not an error, and tells nobody.
 pub async fn forget_foreign_deployment(
     state: &GlobalServerContext,
     user_id: UserId,
     domain: &Domain,
 ) -> crate::Result<()> {
-    diesel::delete(
-        user_foreign_deployment::table
-            .filter(user_foreign_deployment::user.eq(user_id))
-            .filter(user_foreign_deployment::domain.eq(domain.as_str())),
-    )
-    .execute(&mut state.connection_pool.get().await?)
-    .await?;
-    Ok(())
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction(|conn| {
+        async move {
+            let gone = diesel::delete(
+                user_foreign_deployment::table
+                    .filter(user_foreign_deployment::user.eq(user_id))
+                    .filter(user_foreign_deployment::domain.eq(domain.as_str())),
+            )
+            .execute(conn.as_mut())
+            .await?;
+            if gone > 0 {
+                publish_event(
+                    state,
+                    conn.as_mut(),
+                    EventScope::User(user_id),
+                    &ServerEvent::ForeignDeploymentsChanged {
+                        domain: domain.to_string(),
+                        used: false,
+                    },
+                )
+                .await?;
+            }
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 /// Signs in the foreign user `token` asserts, making their local row the first time.

@@ -202,7 +202,8 @@ pub fn expected_kind(event: &ServerEvent) -> ScopeKind {
         | ServerEvent::HeldMessagePosted { .. }
         | ServerEvent::HeldMessageFailed { .. }
         | ServerEvent::HeldMessageCancelled { .. }
-        | ServerEvent::PollVotesChanged { .. } => ScopeKind::User,
+        | ServerEvent::PollVotesChanged { .. }
+        | ServerEvent::ForeignDeploymentsChanged { .. } => ScopeKind::User,
         ServerEvent::User(_)
         | ServerEvent::BotCommandsChanged { .. }
         | ServerEvent::UserAnnotation(_) => ScopeKind::UserEverywhere,
@@ -750,8 +751,10 @@ pub fn rechecks_of(event: &ServerEvent, scope: &EventScope) -> Vec<Recheck> {
         | ServerEvent::HeldMessagePosted { .. }
         | ServerEvent::HeldMessageFailed { .. }
         | ServerEvent::HeldMessageCancelled { .. }
-        // Which answers are a voter's changes what nobody may do here.
-        | ServerEvent::PollVotesChanged { .. } => Vec::new(),
+        // Which answers are a voter's, and which deployments a user signs in to, change what
+        // nobody may do here.
+        | ServerEvent::PollVotesChanged { .. }
+        | ServerEvent::ForeignDeploymentsChanged { .. } => Vec::new(),
     }
 }
 

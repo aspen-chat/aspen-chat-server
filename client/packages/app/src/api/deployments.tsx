@@ -95,6 +95,14 @@ export function DeploymentsProvider({
       }),
     [hub, homeSync],
   );
+  // The home says another device signed in to a deployment, or left one: this one follows.
+  useEffect(
+    () =>
+      homeSync.onForeignDeployments(({ domain, used }) => {
+        hub.follow(domain, used);
+      }),
+    [hub, homeSync],
+  );
   const list = useSyncExternalStore(hub.subscribe, () => hub.list);
   useEffect(() => {
     const stops = list.flatMap((entry) =>

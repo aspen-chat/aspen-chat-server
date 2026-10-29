@@ -357,6 +357,16 @@ export interface ForeignDmNotice {
   readonly byDisplayName: string | null;
 }
 
+/**
+ * The home says the user now signs in to another deployment (`used`), or no longer does: the
+ * `foreignDeploymentsChanged` event, which follows a device's first sign-in there or its
+ * leaving it, so every other device does the same.
+ */
+export interface ForeignDeploymentNotice {
+  readonly domain: string;
+  readonly used: boolean;
+}
+
 /** How many members one page of a member search holds. */
 export const MEMBER_SEARCH_PAGE = 20;
 
@@ -451,6 +461,7 @@ export class AspenSync {
   /** Reads of a channel's newest page under way, which a second ask joins. */
   readonly #latestLoads = new Map<string, Promise<void>>();
   readonly #foreignDmListeners = new Set<(notice: ForeignDmNotice) => void>();
+  readonly #foreignDeploymentListeners = new Set<(notice: ForeignDeploymentNotice) => void>();
   readonly #notifyListeners = new Set<(message: Message) => void>();
   readonly #arrivalListeners = new Set<(message: Message) => void>();
   readonly #pluginEventListeners = new Set<(event: PluginEvent) => void>();
@@ -642,6 +653,20 @@ export class AspenSync {
     this.#foreignDmListeners.add(listener);
     return () => {
       this.#foreignDmListeners.delete(listener);
+    };
+  };
+
+  /**
+   * Registers for the home's word that the user now signs in to another deployment, or no
+   * longer does (`foreignDeploymentsChanged`), and returns the unsubscribe function. Following
+   * it is the app's: sign in there, or sign out and forget it.
+   */
+  readonly onForeignDeployments = (
+    listener: (notice: ForeignDeploymentNotice) => void,
+  ): (() => void) => {
+    this.#foreignDeploymentListeners.add(listener);
+    return () => {
+      this.#foreignDeploymentListeners.delete(listener);
     };
   };
 
@@ -4329,6 +4354,12 @@ export class AspenSync {
           byName: event.byName,
           byDisplayName: event.byDisplayName ?? null,
         });
+      }
+      return;
+    }
+    if (event.serverEvent === "foreignDeploymentsChanged") {
+      for (const listener of this.#foreignDeploymentListeners) {
+        listener({ domain: event.domain, used: event.used });
       }
       return;
     }

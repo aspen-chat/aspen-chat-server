@@ -20,7 +20,9 @@ three.
    `POST /auth/assertions` with `audience`.
 2. The home signs it only when its emigration gate admits that deployment for their kind of account.
 3. The home records it in `user_foreign_deployment`. `GET /users/@me/foreign-deployments` reads it,
-   for their other devices. It is not shown to moderators.
+   for their other devices, and the first time a deployment is recorded the home publishes
+   `foreignDeploymentsChanged` (`domain`, `used: true`) to the user, in the transaction that records
+   it, so devices already open sign in there without a restart. It is not shown to moderators.
 4. The user hands the assertion to the other deployment: `POST /auth/federated-sign-in`,
    unauthenticated.
 5. The other deployment verifies it (below) and signs the user in with an ordinary session, owing it
@@ -144,7 +146,10 @@ together (`Deployments`; see `client/docs/architecture/deployments.md`).
 - One DM list.
 - Another deployment's routes are under `/at/{domain}/…`.
 - A user stops using a deployment with `DELETE /users/@me/foreign-deployments/{domain}`, which their
-  other devices follow.
+  other devices follow: the home publishes `foreignDeploymentsChanged` (`used: false`) to the user
+  in the transaction that forgets it, when a row went, and they sign out there.
+- Devices that were closed read the list on starting (`GET /users/@me/foreign-deployments`); those
+  open follow `foreignDeploymentsChanged`.
 - Signing out at home signs out everywhere.
 - `GET /auth/methods` names the deployment's `federationDomain`, which a client needs to offer
   signing in elsewhere.

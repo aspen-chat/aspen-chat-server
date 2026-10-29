@@ -164,6 +164,30 @@ describe("Deployments", () => {
     expect(home.issueAssertion).toHaveBeenCalledTimes(1);
   });
 
+  it("follows another device's sign-in to a deployment, and its leaving one", async () => {
+    const { deployments, clients, home, syncs } = world({ listed: ["b.example"] });
+    await deployments.start();
+    deployments.follow("c.example", true);
+    await vi.waitFor(() => {
+      expect(deployments.get("c.example")?.status).toBe("ready");
+    });
+    expect(home.issueAssertion).toHaveBeenCalledTimes(2);
+    // Told again of one it uses, or is signing in to, it does nothing more.
+    deployments.follow("c.example", true);
+    deployments.follow("b.example", true);
+    expect(home.issueAssertion).toHaveBeenCalledTimes(2);
+    deployments.follow("b.example", false);
+    expect(deployments.list.map((d) => d.domain)).toEqual(["c.example"]);
+    expect(clients.get("b.example")?.logout).toHaveBeenCalled();
+    expect(syncs[0]?.stop).toHaveBeenCalled();
+    // The home's list already changed; it is not asked to forget anything.
+    expect(home.forgetForeignDeployment).not.toHaveBeenCalled();
+    // One this device never used, or already dropped, is nothing to leave.
+    deployments.follow("b.example", false);
+    deployments.follow("d.example", false);
+    expect(deployments.list.map((d) => d.domain)).toEqual(["c.example"]);
+  });
+
   it("signing out everywhere signs out of each and replaces none", async () => {
     const { deployments, clients, home } = world({ listed: ["b.example", "c.example"] });
     await deployments.start();

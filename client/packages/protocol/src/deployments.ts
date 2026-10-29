@@ -146,6 +146,30 @@ export class Deployments {
     await this.#options.home.forgetForeignDeployment(domain);
   }
 
+  /**
+   * Follows the home's word (`foreignDeploymentsChanged`) that the user now signs in to
+   * `domain` from another device, or stopped: signs in there as at start, or signs out there
+   * and drops its session and store, as `leave` does but for the home's list, which already
+   * changed. A deployment this device is signing in to, or already uses, is left as it is.
+   */
+  follow(domain: string, used: boolean): void {
+    const entry = this.#entries.get(domain);
+    if (used) {
+      if (entry === undefined || entry.status === "failed") {
+        void this.#open(domain, undefined, this.#generation).catch(() => undefined);
+      }
+      return;
+    }
+    if (entry === undefined || entry.leaving) {
+      return;
+    }
+    entry.leaving = true;
+    this.#close(entry);
+    void entry.client.logout().catch(() => {
+      entry.client.forgetSession();
+    });
+  }
+
   /** Signs out of every other deployment on this device, as signing out at home does. */
   async signOutAll(): Promise<void> {
     this.#generation += 1;
