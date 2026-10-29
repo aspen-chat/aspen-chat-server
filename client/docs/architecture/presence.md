@@ -35,7 +35,7 @@ it watches as they happen.
   for up to a second, and each user a later list adds as they are now. The users of a connection's
   first list are not told as they are: the whole read below covers them, so a crowd reconnecting at
   once puts that work on requests, which a busy server can refuse, rather than on its presence
-  router. `applyStatuses` takes them.
+  router. `noteStatuses` takes them.
 - The server answers each list it takes up with a `presenceWatching` frame (`#onWatching`).
 
 ### Reading whole
@@ -54,8 +54,11 @@ members shown for every community, and everyone in a call) in batches of `PRESEN
 It catches what the stream could not tell: a change lost on the way, and those beyond the 500
 watched.
 
-`applyStatuses` is the only way someone else's `onlineStatus` changes after the bootstrap. The
-user's own also follows what they choose at once (below).
+`applyStatuses` takes a read's answer, leaving alone anyone a frame or the user's own choice changed
+since the read was sent (`ReadOptions`, see
+[history pages](message-list/history-pages.md#reads-that-land-after-events)). Frames through
+`noteStatuses` and reads through `applyStatuses` are the only ways someone else's `onlineStatus`
+changes after the bootstrap. The user's own also follows what they choose at once (below).
 
 ## Reporting activity
 
@@ -115,8 +118,13 @@ deployment that refuses says so in a toast naming it.
 
 The store holds it (`RecordStore.chosenPresence`) from `GET /users/@me/presence-override` at
 bootstrap, the answer to a change, and `presenceOverrideChanged` events from the user's other
-devices. Holding one shows the user's own status by it at once. A timed one ends by this device's
-clock, as a mute does (`AspenSync`'s `#scheduleChosenPresenceEnd`).
+devices. Holding one shows the user's own status by it at once, and ending one by hand, here or on
+another device, shows them online, since they just acted. A timed one ends by this device's clock,
+as a mute does (`AspenSync`'s `#scheduleChosenPresenceEnd`): the server publishes nothing when it
+runs out, only telling watchers the status it leaves. Whether that is online or away is for the
+user's connections to say, so the store leaves their own status as it was shown
+(`expireChosenPresence`) and `AspenSync` reads it at once (`GET /users/statuses` for the user
+alone).
 
 ### Do not disturb
 

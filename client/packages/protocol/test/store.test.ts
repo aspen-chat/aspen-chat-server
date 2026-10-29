@@ -4,6 +4,8 @@ import {
   LOOSE_MESSAGES_MAX,
   RecordStore,
   TEMPLATES,
+  TOUCH_MEMORY_MS,
+  TOUCHES_MAX,
   WINDOW_MAX_MESSAGES,
   groupChannels,
   type Category,
@@ -2370,5 +2372,354 @@ describe("RecordStore previews and held messages", () => {
     ]);
     store.forgetHeldMessage(reply.id);
     expect(store.heldMessages(`thread-of:${starter}`)).toEqual([]);
+  });
+});
+
+describe("RecordStore reads that land after events", () => {
+  /** A store on a clock the test moves, bootstrapped as `bootstrapped()` is. */
+  function clocked() {
+    const clock = { now: 0 };
+    const store = new RecordStore({ now: () => clock.now });
+    store.setBootstrap(me, [aspen, birch], {
+      channels: [general, dev],
+      categories: [work],
+      users: [me, bob],
+      userCommunities: [
+        { community: aspen.id, user: me.id, sortIndex: 0, roles: [] },
+        { community: aspen.id, user: bob.id, sortIndex: 0, roles: [] },
+        { community: birch.id, user: me.id, sortIndex: 0, roles: [] },
+      ],
+    });
+    return { store, clock };
+  }
+  const tagging = (n: number): Message => ({
+    ...message(n, general.id, bob.id),
+    mentions: { users: [me.id], roles: [], everyone: false },
+  });
+
+  it("keeps an edit the stream made while a window read was in flight", () => {
+    const { store, clock } = clocked();
+    const since = 20;
+    clock.now = 30;
+    store.replaceWindow(general.id, [message(1)], { hasOlder: false, atLatest: true });
+    store.applyEvent({ serverEvent: "message", type: "update", id: message(1).id, content: "new" });
+    // The response, sent before the edit, carries the text from before it.
+    store.replaceWindow(
+      general.id,
+      [message(1), message(2)],
+      { hasOlder: false, atLatest: true },
+      { since },
+    );
+    expect(store.message(message(1).id)?.content).toBe("new");
+    expect(store.messages(general.id)?.ids).toEqual([message(1).id, message(2).id]);
+    // A read sent after the edit is as new as the stream.
+    store.prependWindow(general.id, [message(1)], false, { since: 40 });
+    expect(store.message(message(1).id)?.content).toBe("message 1");
+  });
+
+  it("does not bring back a message deleted while a read was in flight", () => {
+    const { store, clock } = clocked();
+    store.replaceWindow(general.id, [message(1), message(2)], { hasOlder: true, atLatest: true });
+    clock.now = 30;
+    store.applyEvent({ serverEvent: "message", type: "delete", id: message(2).id });
+    store.prependWindow(general.id, [message(0), message(2)], false, { since: 20 });
+    expect(store.messages(general.id)?.ids).toEqual([message(0).id, message(1).id]);
+    expect(store.message(message(2).id)).toBeUndefined();
+    // A deleted poll is not brought back by its read either.
+    const lunch = poll(3);
+    store.applyEvent({ serverEvent: "poll", type: "create", ...lunch });
+    store.applyEvent({ serverEvent: "poll", type: "delete", id: lunch.id });
+    store.ingest({ polls: [lunch] }, { since: 20 });
+    expect(store.poll(lunch.id)).toBeUndefined();
+    store.ingest({ polls: [lunch] }, { since: 40 });
+    expect(store.poll(lunch.id)).toEqual(lunch);
+  });
+
+  it("keeps a message that arrived while an at-latest read was in flight in the window", () => {
+    const { store, clock } = clocked();
+    store.replaceWindow(general.id, [message(1)], { hasOlder: false, atLatest: true });
+    clock.now = 30;
+    store.applyEvent({ serverEvent: "message", type: "create", ...message(3) });
+    store.replaceWindow(
+      general.id,
+      [message(1), message(2)],
+      { hasOlder: false, atLatest: true },
+      { since: 20 },
+    );
+    expect(store.messages(general.id)?.ids).toEqual([1, 2, 3].map((n) => message(n).id));
+    // One that arrived loose while the window was behind joins it as a read reaches the latest.
+    const inDev = (n: number) => message(n, dev.id);
+    store.replaceWindow(dev.id, [inDev(1)], { hasOlder: false, atLatest: false });
+    store.applyEvent({ serverEvent: "message", type: "create", ...inDev(5) });
+    expect(store.messages(dev.id)?.ids).toEqual([inDev(1).id]);
+    store.appendWindow(dev.id, [inDev(2)], true, { since: 20 });
+    expect(store.messages(dev.id)?.ids).toEqual([1, 2, 5].map((n) => inDev(n).id));
+    // A window not at the latest takes only what the read brought.
+    store.replaceWindow(dev.id, [inDev(1)], { hasOlder: false, atLatest: false }, { since: 20 });
+    expect(store.messages(dev.id)?.ids).toEqual([inDev(1).id]);
+  });
+
+  it("keeps a user renamed, and roles given, while a member read was in flight", () => {
+    const { store, clock } = clocked();
+    clock.now = 30;
+    store.applyEvent({ serverEvent: "user", type: "update", id: bob.id, name: "robert" });
+    store.applyEvent({
+      serverEvent: "userCommunity",
+      type: "update",
+      community: aspen.id,
+      user: bob.id,
+      roles: [id(40)],
+    });
+    store.ingest(
+      {
+        users: [bob],
+        userCommunities: [{ community: aspen.id, user: bob.id, sortIndex: 0, roles: [] }],
+      },
+      { since: 20 },
+    );
+    store.noteMemberships([{ community: aspen.id, user: bob.id, sortIndex: 0, roles: [] }], {
+      since: 20,
+    });
+    expect(store.user(bob.id)?.name).toBe("robert");
+    expect(store.memberRoles(aspen.id, bob.id)).toEqual([id(40)]);
+    // A frame's status outranks a read sent before it, and not one sent after.
+    store.noteStatuses([{ id: bob.id, onlineStatus: "online" }]);
+    store.applyStatuses([{ id: bob.id, onlineStatus: "offline" }], { since: 20 });
+    expect(store.user(bob.id)?.onlineStatus).toBe("online");
+    store.applyStatuses([{ id: bob.id, onlineStatus: "offline" }], { since: 40 });
+    expect(store.user(bob.id)?.onlineStatus).toBe("offline");
+    store.ingest({ users: [bob] }, { since: 40 });
+    expect(store.user(bob.id)?.name).toBe("bob");
+  });
+
+  it("keeps reactions the stream counted while a read was in flight", () => {
+    const { store, clock } = clocked();
+    store.replaceWindow(general.id, [message(1)], { hasOlder: false, atLatest: true });
+    clock.now = 30;
+    store.applyEvent({
+      serverEvent: "react",
+      type: "create",
+      messageId: message(1).id,
+      emoji: "👍",
+      userId: bob.id,
+    });
+    store.setReactions([message(1).id], [], { since: 20 });
+    expect(store.reactions(message(1).id).get("👍")?.count).toBe(1);
+    store.setReactions([message(1).id], [], { since: 40 });
+    expect(store.reactions(message(1).id).size).toBe(0);
+  });
+
+  it("never rolls a read state back to what a read brought", () => {
+    const { store, clock } = clocked();
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: id(1005), lastMessage: null, mentions: 0 }],
+    });
+    // Reading on here outranks a position a read brings.
+    store.setLastRead(general.id, id(1008));
+    store.ingest(
+      {
+        readStates: [
+          { channel: general.id, lastRead: id(1003), lastMessage: id(1009), mentions: 0 },
+        ],
+      },
+      { since: 20 },
+    );
+    expect(store.readState(general.id)).toEqual({
+      channel: general.id,
+      lastRead: id(1008),
+      lastMessage: id(1009),
+      mentions: 0,
+    });
+    // A message that arrived while the read was in flight outranks what the read says is newest.
+    clock.now = 30;
+    store.applyEvent({ serverEvent: "message", type: "create", ...tagging(10) });
+    store.ingest(
+      {
+        readStates: [
+          { channel: general.id, lastRead: id(1008), lastMessage: id(1009), mentions: 0 },
+        ],
+      },
+      { since: 20 },
+    );
+    expect(store.readState(general.id)?.lastMessage).toBe(id(1010));
+    expect(store.mentions(general.id)).toBe(1);
+    // A bootstrap's read states stand whole, with the events held back meanwhile applied after.
+    store.setBootstrap(me, [aspen, birch], {
+      channels: [general, dev],
+      categories: [work],
+      users: [me, bob],
+      userCommunities: [{ community: aspen.id, user: me.id, sortIndex: 0, roles: [] }],
+      readStates: [{ channel: general.id, lastRead: id(1003), lastMessage: id(1009), mentions: 0 }],
+    });
+    expect(store.readState(general.id)?.lastRead).toBe(id(1003));
+  });
+
+  it("forgets what an event changed after a while, and the oldest past a bound", () => {
+    const { store, clock } = clocked();
+    clock.now = 30;
+    store.applyEvent({ serverEvent: "user", type: "update", id: bob.id, name: "robert" });
+    clock.now = 31 + TOUCH_MEMORY_MS;
+    // Another event's touch prunes the stale ones as it is remembered.
+    store.applyEvent({ serverEvent: "user", type: "update", id: me.id, name: "kate2" });
+    store.ingest({ users: [bob] }, { since: 20 });
+    expect(store.user(bob.id)?.name).toBe("bob");
+    expect(TOUCHES_MAX).toBeGreaterThan(0);
+  });
+});
+
+describe("RecordStore counting tags once", () => {
+  const tagging = (n: number): Message => ({
+    ...message(n, general.id, bob.id),
+    mentions: { users: [me.id], roles: [], everyone: false },
+  });
+
+  it("does not count a tag the state already reckons with, as a replay brings it", () => {
+    const store = bootstrapped();
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: id(1001), lastMessage: id(1002), mentions: 1 }],
+    });
+    store.applyEvent({ serverEvent: "message", type: "create", ...tagging(2) });
+    expect(store.mentions(general.id)).toBe(1);
+    store.applyEvent({ serverEvent: "message", type: "create", ...tagging(3) });
+    expect(store.mentions(general.id)).toBe(2);
+    store.applyEvent({ serverEvent: "message", type: "create", ...tagging(3) });
+    expect(store.mentions(general.id)).toBe(2);
+    expect(store.readState(general.id)?.lastMessage).toBe(id(1003));
+  });
+});
+
+describe("RecordStore unread counts after deletions and edits", () => {
+  const tagging = (n: number): Message => ({
+    ...message(n, general.id, bob.id),
+    mentions: { users: [me.id], roles: [], everyone: false },
+  });
+  const none = { users: [], roles: [], everyone: false };
+
+  it("counts again from the window when a tagging message goes or loses its tag", () => {
+    const store = bootstrapped();
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: id(1001), lastMessage: null, mentions: 0 }],
+    });
+    store.replaceWindow(general.id, [message(1)], { hasOlder: false, atLatest: true });
+    for (const n of [2, 3, 4]) {
+      store.applyEvent({ serverEvent: "message", type: "create", ...tagging(n) });
+    }
+    store.applyEvent({ serverEvent: "message", type: "create", ...message(5, general.id, bob.id) });
+    expect(store.mentions(general.id)).toBe(3);
+    expect(store.readState(general.id)?.lastMessage).toBe(id(1005));
+    // The newest goes: the one before it is newest now.
+    store.applyEvent({ serverEvent: "message", type: "delete", id: id(1005) });
+    expect(store.readState(general.id)?.lastMessage).toBe(id(1004));
+    expect(store.mentions(general.id)).toBe(3);
+    store.applyEvent({ serverEvent: "message", type: "delete", id: id(1004) });
+    expect(store.readState(general.id)?.lastMessage).toBe(id(1003));
+    expect(store.mentions(general.id)).toBe(2);
+    // A tag edited out, and one edited in.
+    store.applyEvent({ serverEvent: "message", type: "update", id: id(1003), mentions: none });
+    expect(store.mentions(general.id)).toBe(1);
+    store.applyEvent({
+      serverEvent: "message",
+      type: "update",
+      id: id(1003),
+      mentions: { ...none, everyone: true },
+    });
+    expect(store.mentions(general.id)).toBe(2);
+    // Deleting every message by someone else leaves the channel read.
+    store.applyEvent({ serverEvent: "message", type: "delete", id: id(1003) });
+    store.applyEvent({ serverEvent: "message", type: "delete", id: id(1002) });
+    expect(store.readState(general.id)?.lastMessage).toBeNull();
+    expect(store.unread(general.id)).toBe(false);
+    expect(store.mentions(general.id)).toBe(0);
+  });
+
+  it("leaves the server's count when the window does not hold everything that counts", () => {
+    const store = bootstrapped();
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: id(1001), lastMessage: id(1004), mentions: 2 }],
+    });
+    // A window at the latest that starts after the position may miss unread tags before it.
+    store.replaceWindow(general.id, [tagging(3), tagging(4)], { hasOlder: true, atLatest: true });
+    store.applyEvent({ serverEvent: "message", type: "delete", id: id(1004) });
+    expect(store.readState(general.id)).toEqual({
+      channel: general.id,
+      lastRead: id(1001),
+      lastMessage: id(1004),
+      mentions: 2,
+    });
+    // And a window behind the latest may miss newer ones.
+    store.replaceWindow(general.id, [message(1), tagging(3)], { hasOlder: false, atLatest: false });
+    store.applyEvent({ serverEvent: "message", type: "update", id: id(1003), mentions: none });
+    expect(store.mentions(general.id)).toBe(2);
+  });
+});
+
+describe("RecordStore threads of a removed channel", () => {
+  const thread: Channel = {
+    ...general,
+    id: id(29),
+    ty: "thread",
+    parentChannel: general.id,
+    starterMessage: id(1001),
+  };
+
+  it("takes a deleted channel's threads with it, their windows and follows too", () => {
+    const store = bootstrapped();
+    store.ingest({ channels: [thread] });
+    store.replaceWindow(thread.id, [message(120, thread.id, bob.id)], {
+      hasOlder: false,
+      atLatest: true,
+    });
+    store.applyEvent({ serverEvent: "threadFollowChanged", thread: thread.id, following: true });
+    store.applyEvent({ serverEvent: "channelRead", channel: thread.id, lastRead: id(1120) });
+    expect(store.threadRead(thread.id)).toBe(id(1120));
+    store.applyEvent({ serverEvent: "channel", type: "delete", id: general.id });
+    expect(store.channel(thread.id)).toBeUndefined();
+    expect(store.channelRemoved(thread.id)).toBe(true);
+    expect(store.messages(thread.id)).toBeUndefined();
+    expect(store.message(id(1120))).toBeUndefined();
+    expect(store.follows(thread.id)).toBe(false);
+    expect(store.threadRead(thread.id)).toBeUndefined();
+  });
+
+  it("keeps a thread whose parent is not held out of the activity feed", () => {
+    const store = bootstrapped();
+    const orphan: Channel = { ...thread, id: id(28), parentChannel: id(99) };
+    store.ingest({ channels: [thread, orphan] });
+    expect(store.inActivity(message(121, thread.id, bob.id), "all")).toBe(true);
+    expect(store.inActivity(message(122, orphan.id, bob.id), "all")).toBe(false);
+  });
+});
+
+describe("RecordStore letting go of a category", () => {
+  it("drops the caller's mute, fold, and level of a deleted category", () => {
+    const store = bootstrapped();
+    store.ingest({
+      categoryMutes: [{ category: work.id, until: "2026-10-09T12:00:00Z" }],
+      categoryCollapses: [{ category: work.id }],
+      notificationSettings: [{ category: work.id, level: "all" }],
+    });
+    expect(store.categoryMute(work.id)).toBeDefined();
+    expect(store.nextMuteEnd()).toBe(Date.parse("2026-10-09T12:00:00Z"));
+    expect(store.collapsed(work.id)).toBe(true);
+    expect(store.categoryNotificationLevel(work.id, aspen.id).own).toBe("all");
+    store.applyEvent({ serverEvent: "category", type: "delete", id: work.id });
+    expect(store.categoryMute(work.id)).toBeUndefined();
+    expect(store.nextMuteEnd()).toBeNull();
+    expect(store.collapsed(work.id)).toBe(false);
+    expect(store.categoryNotificationLevel(work.id, aspen.id).own).toBeNull();
+  });
+});
+
+describe("RecordStore ending a chosen presence by the clock", () => {
+  it("leaves the caller's own status to the next read when a timed override runs out", () => {
+    const store = bootstrapped();
+    store.setChosenPresence({ presenceOverride: "away", until: "2026-10-09T12:00:00Z" });
+    expect(store.me()?.onlineStatus).toBe("away");
+    expect(store.expireChosenPresence(Date.parse("2026-10-09T11:59:59Z"))).toBe(false);
+    expect(store.expireChosenPresence(Date.parse("2026-10-09T12:00:00Z"))).toBe(true);
+    expect(store.chosenPresence()).toBeNull();
+    expect(store.me()?.onlineStatus).toBe("away");
+    store.applyStatuses([{ id: me.id, onlineStatus: "online" }]);
+    expect(store.me()?.onlineStatus).toBe("online");
   });
 });

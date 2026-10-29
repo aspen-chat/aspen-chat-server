@@ -131,6 +131,33 @@ export const LOOSE_MESSAGES_MAX = 1000;
 
 const NO_VOICE: ChannelVoice = { session: null, participants: [], rings: [] };
 
+/**
+ * How a REST read's records are judged against the stream. The server publishes an event before
+ * it answers the request that made the change, so a response can carry a record older than an
+ * event this store has applied: a read never overwrites a record the stream changed since the
+ * read began, and never brings back a message the stream deleted since. `since` is the store's
+ * clock (`now`) when the request was sent; without it the read is installed whole, as a
+ * bootstrap is, whose events are held back and applied after it.
+ */
+export interface ReadOptions {
+  readonly since?: number;
+}
+
+/**
+ * How long the store remembers when an event last changed each record, and when it deleted
+ * each message, for judging reads: longer than any request stays in flight (the server answers
+ * or refuses one within its `request_seconds`, a minute, and the client's own retry of a read
+ * waits `RATE_LIMIT_RETRY_MAX_MS` at most). A read that outlasts it is installed as if nothing
+ * had changed.
+ */
+export const TOUCH_MEMORY_MS = 120_000;
+/**
+ * The most records and deletions remembered at once, past which the oldest are forgotten
+ * early, so a deployment busier than this costs memory bounded here rather than its event rate
+ * times two minutes.
+ */
+export const TOUCHES_MAX = 20_000;
+
 /** How many of an emoji's reactors a summary names, as the server's `SUMMARY_USERS`. */
 export const REACTION_SUMMARY_USERS = 4;
 
@@ -367,6 +394,15 @@ export class RecordStore {
    * showing one can tell it is gone rather than not yet read.
    */
   readonly #removedChannels = new Set<string>();
+  /**
+   * When an event last changed each record (`message:<id>`, `user:<id>`, `channel:<id>`,
+   * `community:<id>`, `category:<id>`, `poll:<id>`, `reactions:<id>`,
+   * `member:<community>:<user>`, `read:<channel>`), by the store's clock, oldest first, for
+   * judging reads (`ReadOptions`); forgotten after `TOUCH_MEMORY_MS` or past `TOUCHES_MAX`.
+   */
+  readonly #touchedAt = new Map<string, number>();
+  /** When an event deleted each message, kept as `#touchedAt` is, so no read brings one back. */
+  readonly #tombstones = new Map<string, number>();
 
   readonly #listeners = new Map<Topic, Set<Listener>>();
   readonly #changeListeners = new Set<(topics: readonly Topic[]) => void>();
@@ -450,6 +486,14 @@ export class RecordStore {
 
   community(id: string): Community | undefined {
     return this.#communities.get(id);
+  }
+
+  /**
+   * Whether the caller belongs to the community, as their own memberships say, whether or not
+   * its record is held.
+   */
+  isMember(communityId: string): boolean {
+    return this.#myCommunities.has(communityId);
   }
 
   /** Topic `channel:<id>`: whether the channel was held and has since been removed. */
@@ -825,11 +869,13 @@ export class RecordStore {
    * Records the roles and nicknames of members a search or a read found, without making them
    * part of the community's member sample, which stays what the community read gave.
    */
-  noteMemberships(memberships: readonly UserCommunity[]): void {
+  noteMemberships(memberships: readonly UserCommunity[], options: ReadOptions = {}): void {
     this.#batch(() => {
       for (const membership of memberships) {
-        this.#setMemberRoles(membership.community, membership.user, membership.roles);
-        this.#setNickname(membership.community, membership.user, membership.nickname);
+        if (this.#fresh(`member:${membership.community}:${membership.user}`, options.since)) {
+          this.#setMemberRoles(membership.community, membership.user, membership.roles);
+          this.#setNickname(membership.community, membership.user, membership.nickname);
+        }
       }
     });
   }
@@ -1158,6 +1204,13 @@ export class RecordStore {
       return false;
     }
     const channel = this.#channels.get(message.channelId);
+    // A thread whose parent channel is gone went with it, as the server reads the feed.
+    if (
+      channel?.ty === "thread" &&
+      (channel.parentChannel == null || !this.#channels.has(channel.parentChannel))
+    ) {
+      return false;
+    }
     const place = channel?.parentChannel ?? message.channelId;
     if (this.#muted(place)) {
       return false;
@@ -1497,21 +1550,28 @@ export class RecordStore {
    * or was never told of.
    */
   mana(channelId: string): ChannelMana | undefined {
-    return this.#mana.get(channelId);
+    const mana = this.#mana.get(channelId);
+    return mana !== undefined && manaFullAt(mana) > this.#now() ? mana : undefined;
   }
 
-  /** Notes a channel's mana as the server told it. */
+  /**
+   * Notes a channel's mana as the server told it. Frames come from whichever API server last
+   * spent or saw the channel's mana, and one from another server may arrive after a later one,
+   * so a frame older than the one held (by its `at`) is dropped.
+   */
   noteMana(channelId: string, mana: ChannelMana): void {
+    const held = this.#mana.get(channelId);
+    if (held !== undefined && mana.at < held.at) {
+      return;
+    }
     this.#mana.delete(channelId);
-    if (manaFullAt(mana) > this.#now()) {
-      this.#mana.set(channelId, mana);
-      for (const oldest of this.#mana.keys()) {
-        if (this.#mana.size <= MANA_KEPT) {
-          break;
-        }
-        this.#mana.delete(oldest);
-        this.#touch(`mana:${oldest}`);
+    this.#mana.set(channelId, mana);
+    for (const oldest of this.#mana.keys()) {
+      if (this.#mana.size <= MANA_KEPT) {
+        break;
       }
+      this.#mana.delete(oldest);
+      this.#touch(`mana:${oldest}`);
     }
     this.#touch(`mana:${channelId}`);
   }
@@ -1911,7 +1971,7 @@ export class RecordStore {
           this.#replaceMembers(id, []);
         }
       }
-      this.ingest(included);
+      this.#ingest(included, {}, true);
 
       for (const channelId of this.#windows.keys()) {
         this.#touch(`messages:${channelId}`);
@@ -1959,29 +2019,51 @@ export class RecordStore {
       this.#voiceParticipants.clear();
       this.#voiceRings.clear();
       this.#touch("rings");
-      this.ingest({
-        voiceSessions: included.voiceSessions ?? [],
-        voiceParticipants: included.voiceParticipants ?? [],
-      });
+      this.#ingest(
+        {
+          voiceSessions: included.voiceSessions ?? [],
+          voiceParticipants: included.voiceParticipants ?? [],
+        },
+        {},
+        true,
+      );
     });
   }
 
-  /** Stores the records a sideloading read returned under `included`. */
-  ingest(included: Included): void {
+  /**
+   * Stores the records a sideloading read returned under `included`, each but those the stream
+   * changed since the read began (`options.since`, see `ReadOptions`). Read states move a
+   * position only forward, as `putReadState` does.
+   */
+  ingest(included: Included, options: ReadOptions = {}): void {
+    this.#ingest(included, options, false);
+  }
+
+  /**
+   * `ingest`, with `replaceReadStates` for a bootstrap, whose read states stand whole: it is
+   * what the store is rebuilt from, and the events held back meanwhile are applied after it.
+   */
+  #ingest(included: Included, options: ReadOptions, replaceReadStates: boolean): void {
+    const { since } = options;
     this.#batch(() => {
       for (const community of included.communities ?? []) {
-        this.#putCommunity(community);
+        if (this.#fresh(`community:${community.id}`, since)) {
+          this.#putCommunity(community);
+        }
       }
       for (const user of included.users ?? []) {
-        this.#putUser(user);
+        if (this.#fresh(`user:${user.id}`, since)) {
+          this.#putUser(user);
+        }
       }
       for (const channel of included.channels ?? []) {
-        this.#putChannel(channel);
+        if (this.#fresh(`channel:${channel.id}`, since)) {
+          this.#putChannel(channel);
+        }
       }
       // Messages outside any loaded window, such as the thread replies echoes show.
-      for (const message of included.messages ?? []) {
-        this.#putMessage(message);
-        this.#noteLoose(message.id);
+      for (const id of this.#installRead(included.messages ?? [], options)) {
+        this.#noteLoose(id);
       }
       for (const link of included.linkedMessages ?? []) {
         this.#links.set(link.id, link);
@@ -1992,19 +2074,25 @@ export class RecordStore {
         this.#touch(`warned:${kept.message.id}`);
       }
       for (const category of included.categories ?? []) {
-        this.#putCategory(category);
+        if (this.#fresh(`category:${category.id}`, since)) {
+          this.#putCategory(category);
+        }
       }
       for (const attachment of included.attachments ?? []) {
         this.#putAttachment(attachment);
       }
       for (const poll of included.polls ?? []) {
-        this.#putPoll(poll);
+        if (this.#fresh(`poll:${poll.id}`, since)) {
+          this.#putPoll(poll);
+        }
       }
       for (const state of included.readStates ?? []) {
         if (this.#channels.get(state.channel)?.ty === "thread") {
           this.#moveThreadRead(state.channel, state.lastRead);
-        } else {
+        } else if (replaceReadStates) {
           this.#putReadState(state);
+        } else if (this.#fresh(`read:${state.channel}`, since)) {
+          this.#mergeReadState(state);
         }
       }
       for (const mute of included.channelMutes ?? []) {
@@ -2059,7 +2147,9 @@ export class RecordStore {
       if (included.pollVotes !== undefined) {
         const byPoll = new Map<string, Set<number>>();
         for (const poll of included.polls ?? []) {
-          byPoll.set(poll.id, new Set());
+          if (this.#fresh(`poll:${poll.id}`, since)) {
+            byPoll.set(poll.id, new Set());
+          }
         }
         for (const vote of included.pollVotes) {
           let options = byPoll.get(vote.poll);
@@ -2069,13 +2159,15 @@ export class RecordStore {
           }
           options.add(vote.option);
         }
-        for (const [pollId, options] of byPoll) {
-          this.#setMyVotes(pollId, options);
+        for (const [pollId, votes] of byPoll) {
+          this.#setMyVotes(pollId, votes);
         }
         // The caller's own write-ins come the same way, with the same polls.
         const written = new Map<string, Set<number>>();
         for (const poll of included.polls ?? []) {
-          written.set(poll.id, new Set());
+          if (this.#fresh(`poll:${poll.id}`, since)) {
+            written.set(poll.id, new Set());
+          }
         }
         for (const own of included.ownWriteIns ?? []) {
           let options = written.get(own.poll);
@@ -2085,8 +2177,8 @@ export class RecordStore {
           }
           options.add(own.option);
         }
-        for (const [pollId, options] of written) {
-          this.#myWriteIns.set(pollId, options);
+        for (const [pollId, writeIns] of written) {
+          this.#myWriteIns.set(pollId, writeIns);
           this.#touch(`poll:${pollId}`);
         }
       }
@@ -2100,6 +2192,9 @@ export class RecordStore {
             byCommunity.set(membership.community, ids);
           }
           ids.push(membership.user);
+          if (!this.#fresh(`member:${membership.community}:${membership.user}`, since)) {
+            continue;
+          }
           this.#setMemberRoles(membership.community, membership.user, membership.roles);
           this.#setNickname(membership.community, membership.user, membership.nickname);
           // Only the caller's own membership says where it sits in their list.
@@ -2116,18 +2211,21 @@ export class RecordStore {
 
   /**
    * Installs a freshly read window of a channel's history, replacing whatever was loaded. Pass
-   * the messages in any order.
+   * the messages in any order. A message the stream changed since the read began keeps the
+   * stream's record, and one it deleted since is left out (`ReadOptions`); a window at the
+   * latest also holds every message of the channel held that is newer than the read's newest,
+   * which can only have come by event or the caller's own send since the read's snapshot.
    */
   replaceWindow(
     channelId: string,
     messages: readonly Message[],
     flags: { hasOlder: boolean; atLatest: boolean },
+    options: ReadOptions = {},
   ): void {
     this.#batch(() => {
-      const ids = messages.map((m) => m.id).sort();
-      for (const message of messages) {
-        this.#putMessage(message);
-        this.#loose.delete(message.id);
+      const ids = this.#installRead(messages, options).sort();
+      if (flags.atLatest) {
+        ids.push(...this.#heldAfter(channelId, ids.at(-1) ?? ""));
       }
       const replaced = this.#windows.get(channelId);
       // Last, as the window shown most recently.
@@ -2148,17 +2246,18 @@ export class RecordStore {
    * `WINDOW_MAX_MESSAGES`, the newest messages are dropped and the window is no longer at the
    * latest.
    */
-  prependWindow(channelId: string, messages: readonly Message[], hasOlder: boolean): void {
+  prependWindow(
+    channelId: string,
+    messages: readonly Message[],
+    hasOlder: boolean,
+    options: ReadOptions = {},
+  ): void {
     this.#batch(() => {
       const window = this.#windows.get(channelId);
       if (window === undefined) {
         return;
       }
-      const older = messages.map((m) => m.id).sort();
-      for (const message of messages) {
-        this.#putMessage(message);
-        this.#loose.delete(message.id);
-      }
+      const older = this.#installRead(messages, options).sort();
       let ids = older.concat(window.ids.filter((id) => !older.includes(id)));
       let atLatest = window.atLatest;
       if (ids.length > WINDOW_MAX_MESSAGES) {
@@ -2176,17 +2275,23 @@ export class RecordStore {
   /**
    * Adds messages newer than the window's newest, as returned by an `after` read. Over
    * `WINDOW_MAX_MESSAGES`, the oldest messages are dropped and there are older ones to read.
+   * A read that reaches the latest brings the held messages newer than its newest into the
+   * window too, as `replaceWindow` does.
    */
-  appendWindow(channelId: string, messages: readonly Message[], atLatest: boolean): void {
+  appendWindow(
+    channelId: string,
+    messages: readonly Message[],
+    atLatest: boolean,
+    options: ReadOptions = {},
+  ): void {
     this.#batch(() => {
       const window = this.#windows.get(channelId);
       if (window === undefined) {
         return;
       }
-      const newer = messages.map((m) => m.id).sort();
-      for (const message of messages) {
-        this.#putMessage(message);
-        this.#loose.delete(message.id);
+      const newer = this.#installRead(messages, options).sort();
+      if (atLatest) {
+        newer.push(...this.#heldAfter(channelId, newer.at(-1) ?? window.ids.at(-1) ?? ""));
       }
       let ids = window.ids.filter((id) => !newer.includes(id)).concat(newer);
       let hasOlder = window.hasOlder;
@@ -2289,12 +2394,21 @@ export class RecordStore {
     });
   }
 
-  /** Ends the caller's presence override if its time is up at `now` (milliseconds since the epoch). */
-  expireChosenPresence(now: number): void {
+  /**
+   * Ends the caller's presence override if its time is up at `now` (milliseconds since the
+   * epoch), and answers whether it did. Their own status is left as it was shown until a read
+   * says what their connections make it, since nothing here knows whether they are active.
+   */
+  expireChosenPresence(now: number): boolean {
     const end = this.chosenPresenceEnd();
-    if (end !== null && end <= now) {
-      this.setChosenPresence(null);
+    if (end === null || end > now) {
+      return false;
     }
+    this.#batch(() => {
+      this.#chosenPresence = null;
+      this.#touch("presence");
+    });
+    return true;
   }
 
   /**
@@ -2308,6 +2422,7 @@ export class RecordStore {
     if (me !== null) {
       const onlineStatus: UserOnlineStatus = chosen?.presenceOverride ?? "online";
       if (me.onlineStatus !== onlineStatus) {
+        this.#touchRecord(`user:${me.id}`);
         this.#putUser({ ...me, onlineStatus });
       }
     }
@@ -2400,13 +2515,18 @@ export class RecordStore {
    */
   putReadState(state: ReadState): void {
     this.#batch(() => {
-      const held = this.#readStates.get(state.channel);
-      this.#putReadState(
-        held !== undefined && held.lastRead > state.lastRead
-          ? { ...state, lastRead: held.lastRead }
-          : state,
-      );
+      this.#mergeReadState(state);
     });
+  }
+
+  /** `putReadState`, inside a batch. */
+  #mergeReadState(state: ReadState): void {
+    const held = this.#readStates.get(state.channel);
+    this.#putReadState(
+      held !== undefined && held.lastRead > state.lastRead
+        ? { ...state, lastRead: held.lastRead }
+        : state,
+    );
   }
 
   /** Records that the caller's write-in at `option` was added or removed. */
@@ -2599,6 +2719,8 @@ export class RecordStore {
       this.#dmsComplete = true;
       this.#dmActivity.clear();
       this.#removedChannels.clear();
+      this.#touchedAt.clear();
+      this.#tombstones.clear();
       this.#myUserId = null;
       this.#memo.clear();
     });
@@ -2617,6 +2739,7 @@ export class RecordStore {
     this.#batch(() => {
       switch (event.serverEvent) {
         case "user":
+          this.#touchRecord(`user:${event.id}`);
           if (event.type === "create") {
             this.#putUser(created(event));
           } else if (event.type === "update") {
@@ -2629,6 +2752,7 @@ export class RecordStore {
           }
           break;
         case "community":
+          this.#touchRecord(`community:${event.id}`);
           if (event.type === "create") {
             this.#putCommunity(created(event));
           } else if (event.type === "update") {
@@ -2724,6 +2848,7 @@ export class RecordStore {
           }
           break;
         case "userCommunity":
+          this.#touchRecord(`member:${event.community}:${event.user}`);
           if (event.type === "create") {
             this.#addMember(event.community, event.user);
             this.#setMemberRoles(event.community, event.user, event.roles);
@@ -2757,6 +2882,7 @@ export class RecordStore {
           }
           break;
         case "channel":
+          this.#touchRecord(`channel:${event.id}`);
           if (event.type === "create") {
             this.#putChannel(created(event));
           } else if (event.type === "update") {
@@ -2789,6 +2915,7 @@ export class RecordStore {
           }
           break;
         case "category":
+          this.#touchRecord(`category:${event.id}`);
           if (event.type === "create") {
             this.#putCategory(created(event));
           } else if (event.type === "update") {
@@ -2801,6 +2928,7 @@ export class RecordStore {
           }
           break;
         case "message":
+          this.#touchRecord(`message:${event.id}`);
           if (event.type === "create") {
             const message = created(event);
             if (!this.#messages.has(message.id)) {
@@ -2817,14 +2945,22 @@ export class RecordStore {
           } else if (event.type === "update") {
             const message = this.#messages.get(event.id);
             if (message !== undefined) {
-              this.#putMessage(mergePatch(message, event));
+              const updated = mergePatch(message, event);
+              this.#putMessage(updated);
+              if (event.mentions != null) {
+                this.#recountUnread(updated, false);
+              }
             }
           } else {
-            if (this.#messages.has(event.id)) {
+            const message = this.#messages.get(event.id);
+            if (message !== undefined) {
               this.#departures.set(event.id, this.#now());
               this.#trimArrivals(this.#departures);
             }
             this.#removeMessage(event.id);
+            if (message !== undefined) {
+              this.#recountUnread(message, true);
+            }
           }
           break;
         case "react":
@@ -2846,6 +2982,7 @@ export class RecordStore {
           }
           break;
         case "poll":
+          this.#touchRecord(`poll:${event.id}`);
           if (event.type === "create") {
             this.#putPoll(created(event));
           } else if (event.type === "update") {
@@ -2958,11 +3095,13 @@ export class RecordStore {
           }
           const state = this.#readStates.get(event.channel);
           if (state !== undefined && event.lastRead > state.lastRead) {
+            this.#touchRecord(`read:${event.channel}`);
             this.#putReadState({ ...state, lastRead: event.lastRead });
           }
           break;
         }
         case "channelMarkedUnread":
+          this.#touchRecord(`read:${event.channel}`);
           this.#markUnread({
             channel: event.channel,
             lastRead: event.lastRead,
@@ -3200,14 +3339,36 @@ export class RecordStore {
   }
 
   /**
-   * The presence of users, as `GET /users/statuses` answered. Presence is pulled for the users
-   * on screen rather than pushed, so this is the only way it changes after a bootstrap.
+   * The presence of users, as `GET /users/statuses` answered. The read leaves alone anyone the
+   * stream changed since it began (`ReadOptions`), the caller's own chosen status among them.
    */
-  applyStatuses(statuses: readonly { id: string; onlineStatus: UserOnlineStatus }[]): void {
+  applyStatuses(
+    statuses: readonly { id: string; onlineStatus: UserOnlineStatus }[],
+    options: ReadOptions = {},
+  ): void {
+    this.#setStatuses(statuses, options.since, false);
+  }
+
+  /** The presence of watched users, as a `presence` frame of the event stream told it. */
+  noteStatuses(statuses: readonly { id: string; onlineStatus: UserOnlineStatus }[]): void {
+    this.#setStatuses(statuses, undefined, true);
+  }
+
+  #setStatuses(
+    statuses: readonly { id: string; onlineStatus: UserOnlineStatus }[],
+    since: number | undefined,
+    told: boolean,
+  ): void {
     this.#batch(() => {
       for (const { id, onlineStatus } of statuses) {
         const user = this.#users.get(id);
-        if (user !== undefined && user.onlineStatus !== onlineStatus) {
+        if (user === undefined || !this.#fresh(`user:${id}`, since)) {
+          continue;
+        }
+        if (told) {
+          this.#touchRecord(`user:${id}`);
+        }
+        if (user.onlineStatus !== onlineStatus) {
           this.#putUser({ ...user, onlineStatus });
         }
       }
@@ -3345,6 +3506,7 @@ export class RecordStore {
   }
 
   #removeCommunity(id: string): void {
+    this.#touchRecord(`community:${id}`);
     for (const channel of Array.from(this.#channels.values())) {
       if (channel.community === id) {
         this.#removeChannel(channel.id);
@@ -3860,23 +4022,72 @@ export class RecordStore {
     };
     if (message.author === this.#myUserId) {
       if (message.id > state.lastRead) {
+        this.#touchRecord(`read:${message.channelId}`);
         this.#putReadState({ ...state, lastRead: message.id });
       }
     } else if (this.#blocked.has(message.author)) {
       // Someone the caller blocked never makes a channel unread for them.
     } else {
-      const newest =
-        state.lastMessage == null || message.id > state.lastMessage
-          ? message.id
-          : state.lastMessage;
-      const tagged = message.id > state.lastRead && this.mentionsMe(message);
-      if (newest !== state.lastMessage || tagged) {
+      // A tag counts once: a message the state already reckons with, as the stream's replay
+      // of the last minute brings over a bootstrap that counted it, is not a new tag.
+      const newer = message.id > (state.lastMessage ?? "");
+      const tagged = newer && message.id > state.lastRead && this.mentionsMe(message);
+      if (newer) {
+        this.#touchRecord(`read:${message.channelId}`);
         this.#putReadState({
           ...state,
-          lastMessage: newest,
+          lastMessage: message.id,
           mentions: state.mentions + (tagged ? 1 : 0),
         });
       }
+    }
+  }
+
+  /**
+   * Puts a channel's read state right after `message`, past its position, was deleted or had
+   * its tags changed, from the window: `lastMessage` becomes the newest held message by someone
+   * else when the deleted one was it, and the tags are counted again from what is held past the
+   * position. Only when the window is at the latest and reaches the position, so that it holds
+   * every message that could count; otherwise the server's count stands, and `AspenSync` reads
+   * it again. A thread has no read state here.
+   */
+  #recountUnread(message: Message, deleted: boolean): void {
+    const state = this.#readStates.get(message.channelId);
+    if (state === undefined || message.id <= state.lastRead) {
+      return;
+    }
+    const window = this.#windows.get(message.channelId);
+    const oldest = window?.ids[0];
+    if (
+      window === undefined ||
+      !window.atLatest ||
+      (window.hasOlder && (oldest === undefined || oldest > state.lastRead))
+    ) {
+      return;
+    }
+    const counts = (held: Message | undefined): held is Message =>
+      held !== undefined && held.author !== this.#myUserId && !this.#blocked.has(held.author);
+    let lastMessage: string | null = state.lastMessage ?? null;
+    if (deleted && lastMessage === message.id) {
+      lastMessage = null;
+      for (let i = window.ids.length - 1; i >= 0; i -= 1) {
+        const held = this.#messages.get(window.ids[i] ?? "");
+        if (counts(held)) {
+          lastMessage = held.id;
+          break;
+        }
+      }
+    }
+    let mentions = 0;
+    for (const id of window.ids) {
+      const held = this.#messages.get(id);
+      if (id > state.lastRead && counts(held) && this.mentionsMe(held)) {
+        mentions += 1;
+      }
+    }
+    if (lastMessage !== state.lastMessage || mentions !== state.mentions) {
+      this.#touchRecord(`read:${message.channelId}`);
+      this.#putReadState({ ...state, lastMessage, mentions });
     }
   }
 
@@ -3894,15 +4105,29 @@ export class RecordStore {
     return tagsMe(message.mentions, me, held);
   }
 
+  /**
+   * Lets go of a channel and everything held of it: its read state, mute, call, pins, messages,
+   * and, for a channel, its threads, which the server hides with it and tells nothing more of.
+   */
   #removeChannel(id: string): void {
     const channel = this.#channels.get(id);
     if (channel === undefined) {
       return;
     }
+    this.#touchRecord(`channel:${id}`);
+    for (const thread of Array.from(this.#channels.values())) {
+      if (thread.parentChannel === id) {
+        this.#removeChannel(thread.id);
+      }
+    }
     if (this.#readStates.delete(id)) {
       this.#touch(`read:${id}`);
       this.#touch("unread");
     }
+    if (this.#threadReads.delete(id)) {
+      this.#touch(`read:${id}`);
+    }
+    this.#setFollowing(id, false);
     this.#removeMute(id);
     // A thread removed with the dropped first reply that made it leaves that reply waiting on the
     // message it started from, to be sent again as a reply that makes the thread anew.
@@ -3999,6 +4224,10 @@ export class RecordStore {
         this.#categoryOverrides.delete(key);
       }
     }
+    // The caller's settings on it go with it: nothing of the category is told of again.
+    this.#removeCategoryMute(id);
+    this.#setCollapsed(id, false);
+    this.#putNotificationSetting({ category: id }, null);
     this.#touch(`overrides:${id}`);
     this.#touch(`category:${id}`);
     this.#touch(`categories:${category.community}`);
@@ -4033,6 +4262,88 @@ export class RecordStore {
   #putMessage(message: Message): void {
     this.#messages.set(message.id, message);
     this.#touch(`message:${message.id}`);
+  }
+
+  /**
+   * Stores a read's messages, each but one the stream changed since the read began, whose
+   * record the stream's stays (unless it was let go of meanwhile, when the read's is as new),
+   * and leaving out each the stream deleted since. Answers the ids of those held, in the
+   * read's order; none is loose any longer.
+   */
+  #installRead(messages: readonly Message[], options: ReadOptions): string[] {
+    const ids: string[] = [];
+    for (const message of messages) {
+      if (this.#removedSince(message.id, options.since)) {
+        continue;
+      }
+      if (this.#fresh(`message:${message.id}`, options.since) || !this.#messages.has(message.id)) {
+        this.#putMessage(message);
+      }
+      this.#loose.delete(message.id);
+      ids.push(message.id);
+    }
+    return ids;
+  }
+
+  /**
+   * The held messages of `channelId` with ids after `newest`, ascending: after a read that
+   * showed nothing newer than `newest`, those that came since its snapshot, by event or as the
+   * caller's own send, which the window at the latest keeps.
+   */
+  #heldAfter(channelId: string, newest: string): string[] {
+    const ids: string[] = [];
+    for (const message of this.#messages.values()) {
+      if (message.channelId === channelId && message.id > newest) {
+        this.#loose.delete(message.id);
+        ids.push(message.id);
+      }
+    }
+    return ids.sort();
+  }
+
+  /** Notes that an event changed the record `key` names now, for `#fresh`. */
+  #touchRecord(key: string): void {
+    this.#remember(this.#touchedAt, key);
+  }
+
+  /**
+   * Whether a read sent at `since` may install the record `key` names: when no event changed it
+   * at or after `since`. A read with no `since` may install anything.
+   */
+  #fresh(key: string, since: number | undefined): boolean {
+    if (since === undefined) {
+      return true;
+    }
+    const touched = this.#touchedAt.get(key);
+    return touched === undefined || touched < since;
+  }
+
+  /**
+   * Whether an event deleted message `id` at or after `since`, so that a read sent then may not
+   * bring it back.
+   */
+  #removedSince(id: string, since: number | undefined): boolean {
+    if (since === undefined) {
+      return false;
+    }
+    const removed = this.#tombstones.get(id);
+    return removed !== undefined && removed >= since;
+  }
+
+  /**
+   * Records `key` in `times` as of now, newest last, forgetting what is older than
+   * `TOUCH_MEMORY_MS` and the oldest past `TOUCHES_MAX`.
+   */
+  #remember(times: Map<string, number>, key: string): void {
+    const now = this.#now();
+    times.delete(key);
+    times.set(key, now);
+    for (const [oldest, at] of times) {
+      if (at >= now - TOUCH_MEMORY_MS && times.size <= TOUCHES_MAX) {
+        break;
+      }
+      times.delete(oldest);
+    }
   }
 
   #putVoiceSession(session: VoiceSession): void {
@@ -4123,6 +4434,7 @@ export class RecordStore {
   }
 
   #removePoll(id: string): void {
+    this.#touchRecord(`poll:${id}`);
     const writeIns = this.#myWriteIns.delete(id);
     if (this.#polls.delete(id) || this.#myVotes.delete(id) || writeIns) {
       this.#touch(`poll:${id}`);
@@ -4215,7 +4527,11 @@ export class RecordStore {
    * Installs the reactions a message read brought for `messageIds`, replacing what was held for
    * each; a message the read brought no summary for has none.
    */
-  setReactions(messageIds: readonly string[], summaries: readonly ReactionSummary[]): void {
+  setReactions(
+    messageIds: readonly string[],
+    summaries: readonly ReactionSummary[],
+    options: ReadOptions = {},
+  ): void {
     this.#batch(() => {
       const byMessage = new Map<string, Map<string, EmojiReactions>>();
       for (const summary of summaries) {
@@ -4231,6 +4547,9 @@ export class RecordStore {
         });
       }
       for (const id of messageIds) {
+        if (!this.#fresh(`reactions:${id}`, options.since)) {
+          continue;
+        }
         const byEmoji = byMessage.get(id);
         if (byEmoji === undefined) {
           if (!this.#reactions.delete(id)) {
@@ -4300,6 +4619,7 @@ export class RecordStore {
     } else {
       this.#reactions.set(messageId, next);
     }
+    this.#touchRecord(`reactions:${messageId}`);
     this.#touch(`reactions:${messageId}`);
   }
 
@@ -4317,6 +4637,7 @@ export class RecordStore {
       this.#links.set(id, { ...link, state: "deleted" });
       this.#touch(`link:${id}`);
     }
+    this.#remember(this.#tombstones, id);
     const message = this.#messages.get(id);
     if (message === undefined) {
       return;

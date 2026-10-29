@@ -948,8 +948,10 @@ describe("AspenSync", () => {
             giveOlder = resolve;
           });
         }
+        // Around the anchor lie a full page of newer messages, so that read is not at the latest.
+        const around = [anchor, ...page.slice(0, MESSAGE_AROUND_RADIUS)];
         return json({
-          data: url.searchParams.has("around") ? [anchor] : page,
+          data: url.searchParams.has("around") ? around : page,
           included: { users: [], attachments: [] },
         });
       },
@@ -967,7 +969,11 @@ describe("AspenSync", () => {
     expect(calls.find((u) => u.searchParams.has("around"))?.searchParams.get("around")).toBe(
       anchor.id,
     );
-    expect(sync.store.messages(general.id)?.ids).toEqual([anchor.id]);
+    expect(sync.store.messages(general.id)?.ids).toEqual([
+      anchor.id,
+      ...page.slice(0, MESSAGE_AROUND_RADIUS).map((m) => m.id),
+    ]);
+    expect(sync.store.messages(general.id)?.atLatest).toBe(false);
   });
 
   it("fetches an unknown author once when a message event names one", async () => {
@@ -1874,5 +1880,92 @@ describe("AspenSync", () => {
     sync.stop();
     expect(sync.status).toBe("stopped");
     expect(sync.store.communities()).toEqual([]);
+  });
+});
+
+describe("AspenSync following the caller's other devices", () => {
+  it("reads a community the caller joined elsewhere, and not one it holds", async () => {
+    const cedar: Community = { id: id(12), name: "Cedar", icon: null };
+    const lobby: Channel = { ...general, id: id(40), community: cedar.id, name: "lobby" };
+    const reads: string[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/communities/${cedar.id}`]: () => {
+        reads.push(cedar.id);
+        return json({
+          data: cedar,
+          included: {
+            channels: [lobby],
+            categories: [],
+            users: [me],
+            userCommunities: [{ community: cedar.id, user: me.id, sortIndex: 1 }],
+          },
+        });
+      },
+      [`/api/v1/communities/${aspen.id}`]: () => {
+        reads.push(aspen.id);
+        return json({ data: aspen, included: { channels: [general] } });
+      },
+    });
+    const socket = await goLive(sync);
+    socket.frame({
+      type: "event",
+      sequence: 1,
+      event: {
+        serverEvent: "userCommunity",
+        type: "create",
+        community: cedar.id,
+        user: me.id,
+        sortIndex: 1,
+        roles: [],
+      },
+    });
+    await settle();
+    expect(reads).toEqual([cedar.id]);
+    expect(sync.store.communities().map((c) => c.name)).toEqual(["Aspen", "Cedar"]);
+    expect(sync.store.channels(cedar.id)).toEqual([lobby]);
+    // The membership of a community already held, as the joining device's own copy of the
+    // event is, brings no read.
+    socket.frame({
+      type: "event",
+      sequence: 2,
+      event: {
+        serverEvent: "userCommunity",
+        type: "create",
+        community: aspen.id,
+        user: me.id,
+        sortIndex: 0,
+        roles: [],
+      },
+    });
+    await settle();
+    expect(reads).toEqual([cedar.id]);
+    sync.stop();
+  });
+
+  it("reads the caller's own status when their timed override runs out", async () => {
+    const statusReads: string[] = [];
+    // On a running clock, since the read is sent after the override's end changed the record.
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        "/api/v1/users/@me/presence-override": () =>
+          json({ presenceOverride: "away", until: new Date(Date.now() + 20).toISOString() }),
+        "/api/v1/users/statuses": (url) => {
+          const ids = url.searchParams.get("ids") ?? "";
+          statusReads.push(ids);
+          return json(ids.split(",").map((id) => ({ id, onlineStatus: "online" })));
+        },
+      },
+      () => Date.now(),
+    );
+    await goLive(sync);
+    expect(sync.store.me()?.onlineStatus).toBe("away");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await settle();
+    expect(sync.store.chosenPresence()).toBeNull();
+    expect(statusReads).toEqual([me.id]);
+    expect(sync.store.me()?.onlineStatus).toBe("online");
+    sync.stop();
   });
 });

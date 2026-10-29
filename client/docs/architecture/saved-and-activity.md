@@ -129,7 +129,8 @@ Muted channels are in none of them.
 
 What arrives while a view is open (`AspenSync.onArrival`) joins the top of its deployment's feed if
 the view holds it (`RecordStore.inActivity`, the server's rule for each view) and the filter shows
-it.
+it. A reply in a thread whose parent channel the store does not hold is outside every view, as the
+server hides a deleted channel's threads.
 
 ### Unread
 

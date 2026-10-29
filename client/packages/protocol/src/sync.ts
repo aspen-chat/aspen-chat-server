@@ -46,7 +46,7 @@ import {
 } from "./preferences";
 import type { ActivityView } from "./notifyRules";
 import type { OverrideGrant } from "./permissions";
-import { REACTION_SUMMARY_USERS, RecordStore } from "./store";
+import { REACTION_SUMMARY_USERS, type ReadOptions, RecordStore } from "./store";
 import type {
   HeldMessage,
   Included,
@@ -549,7 +549,7 @@ export class AspenSync {
         // A newer server may tell of what this client does not know, which changes nothing.
         const kind: string = event.type;
         if (event.type === "presence") {
-          this.store.applyStatuses(event.statuses);
+          this.store.noteStatuses(event.statuses);
           return;
         }
         if (event.type === "presenceWatching") {
@@ -780,11 +780,15 @@ export class AspenSync {
       .catch(() => undefined)
       .then(() =>
         this.#loadWindow(channelId, async () => {
-          const messages = await this.#readMessages(channelId, { limit: MESSAGE_PAGE_SIZE });
-          this.store.replaceWindow(channelId, messages, {
-            hasOlder: messages.length === MESSAGE_PAGE_SIZE,
-            atLatest: true,
+          const { messages, since } = await this.#readMessages(channelId, {
+            limit: MESSAGE_PAGE_SIZE,
           });
+          this.store.replaceWindow(
+            channelId,
+            messages,
+            { hasOlder: messages.length === MESSAGE_PAGE_SIZE, atLatest: true },
+            { since },
+          );
         }),
       )
       .finally(() => {
@@ -804,11 +808,13 @@ export class AspenSync {
       if (window === undefined || oldest === undefined || !window.hasOlder) {
         return;
       }
-      const messages = await this.#readMessages(channelId, {
+      const { messages, since } = await this.#readMessages(channelId, {
         before: oldest,
         limit: HISTORY_PAGE_SIZE,
       });
-      this.store.prependWindow(channelId, messages, messages.length === HISTORY_PAGE_SIZE);
+      this.store.prependWindow(channelId, messages, messages.length === HISTORY_PAGE_SIZE, {
+        since,
+      });
     });
   }
 
@@ -823,11 +829,13 @@ export class AspenSync {
       if (window === undefined || newest === undefined || window.atLatest) {
         return;
       }
-      const messages = await this.#readMessages(channelId, {
+      const { messages, since } = await this.#readMessages(channelId, {
         after: newest,
         limit: HISTORY_PAGE_SIZE,
       });
-      this.store.appendWindow(channelId, messages, messages.length < HISTORY_PAGE_SIZE);
+      this.store.appendWindow(channelId, messages, messages.length < HISTORY_PAGE_SIZE, {
+        since,
+      });
     });
   }
 
@@ -848,7 +856,7 @@ export class AspenSync {
       await pending.catch(() => undefined);
     }
     return this.#loadWindow(channelId, async () => {
-      const messages = await this.#readMessages(channelId, {
+      const { messages, since } = await this.#readMessages(channelId, {
         around: messageId,
         limit: MESSAGE_AROUND_RADIUS,
       });
@@ -861,10 +869,12 @@ export class AspenSync {
           newer += 1;
         }
       }
-      this.store.replaceWindow(channelId, messages, {
-        hasOlder: older >= MESSAGE_AROUND_RADIUS,
-        atLatest: newer < MESSAGE_AROUND_RADIUS,
-      });
+      this.store.replaceWindow(
+        channelId,
+        messages,
+        { hasOlder: older >= MESSAGE_AROUND_RADIUS, atLatest: newer < MESSAGE_AROUND_RADIUS },
+        { since },
+      );
     });
   }
 
@@ -1281,13 +1291,14 @@ export class AspenSync {
     if (held !== undefined) {
       return held;
     }
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/channels/{channel}", {
       params: { path: { channel: channelId } },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ channels: [result.data] });
+    this.store.ingest({ channels: [result.data] }, { since });
     return result.data;
   }
 
@@ -1304,11 +1315,12 @@ export class AspenSync {
     ) {
       return;
     }
+    const since = this.#now();
     const load = this.#client.api
       .GET("/api/v1/channels/{channel}", { params: { path: { channel: channelId } } })
       .then(({ data, response }) => {
         if (data !== undefined) {
-          this.store.ingest({ channels: [data] });
+          this.store.ingest({ channels: [data] }, { since });
         } else if (response.status === 403 || response.status === 404) {
           this.store.markMissing("channel", channelId);
         }
@@ -1332,6 +1344,7 @@ export class AspenSync {
     if (held !== undefined) {
       return held;
     }
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/messages/{message}", {
       params: {
         path: { message: messageId },
@@ -1356,8 +1369,10 @@ export class AspenSync {
       }
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.#ingestMessageRead(result.data.included, [result.data.data]);
-    this.store.setReactions([result.data.data.id], result.data.included.reactions ?? []);
+    this.#ingestMessageRead(result.data.included, { since }, [result.data.data]);
+    this.store.setReactions([result.data.data.id], result.data.included.reactions ?? [], {
+      since,
+    });
     this.store.setAnnotations([result.data.data.id], result.data.included.messageAnnotations ?? []);
     return result.data.data;
   }
@@ -1510,6 +1525,7 @@ export class AspenSync {
     if (pending !== undefined) {
       return pending;
     }
+    const since = this.#now();
     const promise = this.#client.api
       .GET("/api/v1/messages/{message}", {
         params: {
@@ -1521,7 +1537,7 @@ export class AspenSync {
         if (result.data === undefined) {
           throw new ApiProblemError(problemOf(result.error, result.response));
         }
-        this.#ingestMessageRead(result.data.included);
+        this.#ingestMessageRead(result.data.included, { since });
       })
       .finally(() => {
         this.#linkLoads.delete(messageId);
@@ -1715,6 +1731,7 @@ export class AspenSync {
    * stored as they come.
    */
   async loadReactors(messageId: string, emoji: string, after?: string): Promise<User[]> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/messages/{message}/reactions/{emoji}", {
       params: {
         path: { message: messageId, emoji },
@@ -1724,7 +1741,7 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ users: result.data });
+    this.store.ingest({ users: result.data }, { since });
     return result.data;
   }
 
@@ -1734,6 +1751,7 @@ export class AspenSync {
    * stored as they come.
    */
   async loadVoters(pollId: string, option: number, after?: string): Promise<User[]> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/polls/{poll}/votes/{option}", {
       params: {
         path: { poll: pollId, option },
@@ -1743,7 +1761,7 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ users: result.data });
+    this.store.ingest({ users: result.data }, { since });
     return result.data;
   }
 
@@ -2125,12 +2143,13 @@ export class AspenSync {
    * screen can show one, and reading any is logged by the server.
    */
   async userDms(userId: string): Promise<Channel[]> {
+    const since = this.#now();
     const dms = adminRead(
       await this.#client.api.GET("/api/v1/admin/users/{user}/dms", {
         params: { path: { user: userId } },
       }),
     );
-    this.store.ingest({ channels: dms });
+    this.store.ingest({ channels: dms }, { since });
     for (const dm of dms) {
       for (const recipient of dm.recipients) {
         this.ensureUser(recipient);
@@ -2359,13 +2378,14 @@ export class AspenSync {
     ) {
       return;
     }
+    const since = this.#now();
     const load = this.#client.api
       .GET("/api/v1/polls/{poll}", {
         params: { path: { poll: pollId }, query: { include: ["votes"] } },
       })
       .then(({ data, response }) => {
         if (data !== undefined) {
-          this.store.ingest({ ...data.included, polls: [data.data] });
+          this.store.ingest({ ...data.included, polls: [data.data] }, { since });
         } else if (response.status === 404) {
           this.store.markMissing("poll", pollId);
         }
@@ -2474,20 +2494,22 @@ export class AspenSync {
    * owner replaces the stale one.
    */
   async loadBots(): Promise<void> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/users/@me/bots");
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     const owned = new Set(result.data.map((bot) => bot.id));
     const stale = this.store.ownedBots().filter((bot) => !owned.has(bot.id));
-    this.store.ingest({ users: result.data });
+    this.store.ingest({ users: result.data }, { since });
+    const rereadSince = this.#now();
     const reread = await Promise.all(
       stale.map((bot) =>
         this.#client.api.GET("/api/v1/users/{user}", { params: { path: { user: bot.id } } }),
       ),
     );
     const found = reread.flatMap((answer) => (answer.data === undefined ? [] : [answer.data]));
-    this.store.ingest({ users: found });
+    this.store.ingest({ users: found }, { since: rereadSince });
     for (const [index, answer] of reread.entries()) {
       const bot = stale[index];
       if (answer.response.status === 404 && bot !== undefined) {
@@ -2718,13 +2740,14 @@ export class AspenSync {
     const generation = this.#generation;
     this.#loadingDms = true;
     try {
+      const since = this.#now();
       const page = await this.#client.api.GET("/api/v1/users/@me/dms", {
         params: { query: { include: ["users", "readStates", "voice"], before, limit: DM_PAGE } },
       });
       if (generation !== this.#generation || page.data === undefined) {
         return;
       }
-      this.store.ingest(page.data.included);
+      this.store.ingest(page.data.included, { since });
       this.store.appendDms(page.data.data, page.data.data.length < DM_PAGE);
     } finally {
       this.#loadingDms = false;
@@ -2785,6 +2808,7 @@ export class AspenSync {
         if (middle === undefined) {
           return;
         }
+        const since = this.#now();
         const result = await this.#client.api
           .GET("/api/v1/channels/{channel}/messages", {
             params: {
@@ -2798,7 +2822,7 @@ export class AspenSync {
           })
           .catch(() => undefined);
         if (result?.data !== undefined && generation === this.#generation) {
-          this.store.setReactions(ids, result.data.included.reactions ?? []);
+          this.store.setReactions(ids, result.data.included.reactions ?? [], { since });
         }
       }),
     );
@@ -3116,6 +3140,7 @@ export class AspenSync {
    * too, but not added to the sample.
    */
   async searchMembers(communityId: string, name: string, after?: string): Promise<User[]> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/communities/{community}/members", {
       params: {
         path: { community: communityId },
@@ -3128,23 +3153,24 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ users: result.data.data });
-    this.store.noteMemberships(result.data.included.userCommunities ?? []);
+    this.store.ingest({ users: result.data.data }, { since });
+    this.store.noteMemberships(result.data.included.userCommunities ?? [], { since });
     return result.data.data;
   }
 
   /** Reads a community's member sample again, replacing the one the store holds. */
   async loadMemberSample(communityId: string): Promise<void> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/communities/{community}/members", {
       params: { path: { community: communityId } },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({
-      users: result.data.data,
-      userCommunities: result.data.included.userCommunities ?? [],
-    });
+    this.store.ingest(
+      { users: result.data.data, userCommunities: result.data.included.userCommunities ?? [] },
+      { since },
+    );
   }
 
   /**
@@ -3152,6 +3178,7 @@ export class AspenSync {
    * answers whether they are a member at all.
    */
   async loadMember(communityId: string, userId: string): Promise<boolean> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/communities/{community}/members/{user}", {
       params: { path: { community: communityId, user: userId } },
     });
@@ -3161,7 +3188,7 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.noteMemberships([result.data]);
+    this.store.noteMemberships([result.data], { since });
     return true;
   }
 
@@ -3353,6 +3380,7 @@ export class AspenSync {
    * `before`. Their authors, channels, attachments, polls, and reactions are cached.
    */
   async loadSavedMessages(before?: string): Promise<Message[]> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/users/@me/saved-messages/messages", {
       params: {
         query: {
@@ -3365,7 +3393,7 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.#ingestListed(result.data);
+    this.#ingestListed(result.data, { since });
     return result.data.data;
   }
 
@@ -3387,6 +3415,7 @@ export class AspenSync {
    * read positions, attachments, polls, and reactions are cached.
    */
   async readActivity(filter: ActivityFilter): Promise<Message[]> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/users/@me/activity", {
       params: {
         query: {
@@ -3405,7 +3434,7 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.#ingestListed(result.data);
+    this.#ingestListed(result.data, { since });
     return result.data.data;
   }
 
@@ -3517,6 +3546,7 @@ export class AspenSync {
    * while it reads further back, for many seconds; `signal` gives it up.
    */
   async searchMessages(search: MessageSearch, signal?: AbortSignal): Promise<SearchPage> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/messages", {
       ...(signal === undefined ? {} : { signal }),
       params: {
@@ -3536,10 +3566,11 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.#ingestMessageRead(result.data.included, result.data.data);
+    this.#ingestMessageRead(result.data.included, { since }, result.data.data);
     this.store.setReactions(
       result.data.data.map((m) => m.id),
       result.data.included.reactions ?? [],
+      { since },
     );
     return {
       messages: result.data.data,
@@ -3690,6 +3721,7 @@ export class AspenSync {
 
   /** Reads one community with its channels, categories, and members into the store. */
   async loadCommunity(communityId: string): Promise<void> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/communities/{community}", {
       params: {
         path: { community: communityId },
@@ -3712,7 +3744,7 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ ...result.data.included, communities: [result.data.data] });
+    this.store.ingest({ ...result.data.included, communities: [result.data.data] }, { since });
   }
 
   /**
@@ -3727,11 +3759,12 @@ export class AspenSync {
     ) {
       return;
     }
+    const since = this.#now();
     const load = this.#client.api
       .GET("/api/v1/users/{user}", { params: { path: { user: userId } } })
       .then(({ data, response }) => {
         if (data !== undefined) {
-          this.store.ingest({ users: [data] });
+          this.store.ingest({ users: [data] }, { since });
         } else if (response.status === 404) {
           this.store.markMissing("user", userId);
         }
@@ -3978,13 +4011,14 @@ export class AspenSync {
    * senders themselves go into the store, since a raid's are mostly unknown to its readers.
    */
   async topManaSenders(channelId: string): Promise<ManaSender[]> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/channels/{channel}/mana/top-senders", {
       params: { path: { channel: channelId }, query: { include: ["users"] } },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ users: result.data.included.users ?? [] });
+    this.store.ingest({ users: result.data.included.users ?? [] }, { since });
     return result.data.data;
   }
 
@@ -4070,14 +4104,7 @@ export class AspenSync {
         batches.push(ids.slice(i, i + PRESENCE_BATCH));
       }
       await Promise.all([
-        ...batches.map(async (batch) => {
-          const result = await this.#client.api.GET("/api/v1/users/statuses", {
-            params: { query: { ids: batch.join(",") } },
-          });
-          if (result.data !== undefined) {
-            this.store.applyStatuses(result.data);
-          }
-        }),
+        ...batches.map((batch) => this.#readStatuses(batch)),
         ...Array.from(this.#presenceChannels.keys(), (id) => this.#loadChannelPresence(id)),
       ]).catch(() => undefined);
     }
@@ -4321,12 +4348,23 @@ export class AspenSync {
     const retagged = this.#unreadTagsChangedBy(event);
     const blockChanged =
       event.serverEvent === "userBlockChanged" && this.store.blocked(event.user) !== event.blocked;
+    // Joining on another device brings the caller's membership and nothing of the community
+    // itself, which is read here; the joining device reads it in `joinCommunity`, and holds
+    // the membership already when its own copy of the event arrives.
+    const joined =
+      event.serverEvent === "userCommunity" &&
+      event.type === "create" &&
+      event.user === this.store.myUserId &&
+      !this.store.isMember(event.community);
     if (this.#namesUnknownPlugin(event)) {
       void this.loadPlugins().catch(() => undefined);
     }
     this.store.applyEvent(event);
     if (blockChanged) {
       this.#blockChanged();
+    }
+    if (joined) {
+      void this.loadCommunity(event.community).catch(() => undefined);
     }
     for (const channelId of orphaned) {
       void this.#reloadReadState(channelId);
@@ -4594,36 +4632,63 @@ export class AspenSync {
     }, this.#random() * ACCESS_RELOAD_SPREAD_MS);
   }
 
-  /** Caches a list of messages read from outside any one channel, and what came with them. */
-  #ingestListed(read: { data: NonNullable<Included["messages"]>; included: Included }): void {
-    this.#ingestMessageRead(read.included, read.data);
+  /**
+   * Caches a list of messages read from outside any one channel, and what came with them;
+   * `options.since` is when the read was sent (`ReadOptions`).
+   */
+  #ingestListed(
+    read: { data: NonNullable<Included["messages"]>; included: Included },
+    options: ReadOptions,
+  ): void {
+    this.#ingestMessageRead(read.included, options, read.data);
     this.store.setReactions(
       read.data.map((m) => m.id),
       read.included.reactions ?? [],
+      options,
     );
   }
 
   /**
    * Takes in what a message read sideloaded, with `messages` when the read's own are to be
-   * stored too. Its memberships say which roles the authors hold and what they are called
-   * there, for drawing their names in their roles' colours and by their nicknames; they are not
-   * the community's member sample, which they leave alone.
+   * stored too; `options.since` is when the read was sent (`ReadOptions`). Its memberships say
+   * which roles the authors hold and what they are called there, for drawing their names in
+   * their roles' colours and by their nicknames; they are not the community's member sample,
+   * which they leave alone.
    */
-  #ingestMessageRead(included: Included, messages?: Included["messages"]): void {
+  #ingestMessageRead(
+    included: Included,
+    options: ReadOptions,
+    messages?: Included["messages"],
+  ): void {
     const { userCommunities, ...rest } = included;
-    this.store.ingest(messages === undefined ? rest : { ...rest, messages: [...messages] });
-    this.store.noteMemberships(userCommunities ?? []);
+    this.store.ingest(
+      messages === undefined ? rest : { ...rest, messages: [...messages] },
+      options,
+    );
+    this.store.noteMemberships(userCommunities ?? [], options);
   }
 
   async #reloadReactions(messageId: string): Promise<void> {
     const generation = this.#generation;
+    const since = this.#now();
     const result = await this.#client.api
       .GET("/api/v1/messages/{message}", {
         params: { path: { message: messageId }, query: { include: ["reactions"] } },
       })
       .catch(() => undefined);
     if (result?.data !== undefined && generation === this.#generation) {
-      this.store.setReactions([messageId], result.data.included.reactions ?? []);
+      this.store.setReactions([messageId], result.data.included.reactions ?? [], { since });
+    }
+  }
+
+  /** Reads the presence of `ids`, at most `PRESENCE_BATCH`, into the store. */
+  async #readStatuses(ids: readonly string[]): Promise<void> {
+    const since = this.#now();
+    const result = await this.#client.api.GET("/api/v1/users/statuses", {
+      params: { query: { ids: ids.join(",") } },
+    });
+    if (result.data !== undefined) {
+      this.store.applyStatuses(result.data, { since });
     }
   }
 
@@ -4649,7 +4714,11 @@ export class AspenSync {
     }, delay);
   }
 
-  /** Ends the caller's timed presence override when its time comes, by this device's clock, as a mute's. */
+  /**
+   * Ends the caller's timed presence override when its time comes, by this device's clock, as a
+   * mute's, and then reads what their own status is without it: whether they are online or away
+   * is their connections' to say, not this device's to assume.
+   */
   #scheduleChosenPresenceEnd(): void {
     if (this.#chosenPresenceTimer !== null) {
       clearTimeout(this.#chosenPresenceTimer);
@@ -4662,7 +4731,13 @@ export class AspenSync {
     const delay = Math.min(Math.max(end - Date.now(), 0), MAX_TIMER_MS);
     this.#chosenPresenceTimer = setTimeout(() => {
       this.#chosenPresenceTimer = null;
-      this.store.expireChosenPresence(Date.now());
+      // `stop()` clears this timer, so the sync holds a session here, live or on its way.
+      if (this.store.expireChosenPresence(Date.now())) {
+        const me = this.store.myUserId;
+        if (me !== null) {
+          void this.#readStatuses([me]).catch(() => undefined);
+        }
+      }
       this.#scheduleChosenPresenceEnd();
     }, delay);
   }
@@ -4688,10 +4763,16 @@ export class AspenSync {
     return promise;
   }
 
+  /**
+   * Reads a page of a channel's messages with everything shown with them, storing what came
+   * with them; answers the messages, for the window, and when the read was sent (`since`), for
+   * installing them (`ReadOptions`).
+   */
   async #readMessages(
     channelId: string,
     query: { before?: string; after?: string; around?: string; limit: number },
-  ): Promise<Message[]> {
+  ): Promise<{ messages: Message[]; since: number }> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/channels/{channel}/messages", {
       params: {
         path: { channel: channelId },
@@ -4715,10 +4796,11 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.#ingestMessageRead(result.data.included);
+    this.#ingestMessageRead(result.data.included, { since });
     this.store.setReactions(
       result.data.data.map((m) => m.id),
       result.data.included.reactions ?? [],
+      { since },
     );
     // Annotations come for the messages read and for those the read names (echoes' replies).
     this.store.setAnnotations(
@@ -4728,6 +4810,6 @@ export class AspenSync {
       ],
       result.data.included.messageAnnotations ?? [],
     );
-    return result.data.data;
+    return { messages: result.data.data, since };
   }
 }

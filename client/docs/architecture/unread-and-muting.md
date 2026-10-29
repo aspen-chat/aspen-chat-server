@@ -19,17 +19,35 @@
 ### Read states
 
 Unread is `RecordStore` state, one `ReadState` per channel. It comes from the `readStates` sideload
-of the community list and the DM list.
+of the community list and the DM list; what a later read sideloads (a community read again, a page
+of DMs, the activity feed) merges in through `putReadState`, which never moves a position back, and
+leaves a channel's state alone when the stream moved it since the read began (see
+[history pages](message-list/history-pages.md#reads-that-land-after-events)).
 
 A channel is unread while `lastMessage` sorts after `lastRead`.
 
-| Event                                                | Effect                                                |
-| ---------------------------------------------------- | ----------------------------------------------------- |
-| Someone else's new message                           | Moves `lastMessage`                                   |
-| The caller's own new message                         | Moves `lastRead`                                      |
-| `channelRead`                                        | Brings another device's reading                       |
-| `channelMarkedUnread`                                | Moves the position back, and holds the channel unread |
-| A deleted message that was a channel's `lastMessage` | `AspenSync` reads that channel's state again          |
+| Event                                                   | Effect                                                                                                                                                                    |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Someone else's new message                              | Moves `lastMessage`, and counts its tag of the caller once: a message the state already reckons with (one the stream replays over a bootstrap that counted it) is not new |
+| The caller's own new message                            | Moves `lastRead`                                                                                                                                                          |
+| `channelRead`                                           | Brings another device's reading                                                                                                                                           |
+| `channelMarkedUnread`                                   | Moves the position back, and holds the channel unread                                                                                                                     |
+| A message past the position deleted, or its tags edited | Counted again from the window (below), and `AspenSync` reads the channel's state again when the message was its `lastMessage` or tagged the caller                        |
+
+#### Counting again from the window
+
+When a message past the position is deleted, or an edit changes its `mentions`, the store puts the
+channel's state right itself when its window can say: the window is at the latest and reaches the
+position (its oldest message is at or before it, or it reaches the channel's start), so it holds
+every message that could count. Then `lastMessage` becomes the newest held message by someone else
+not blocked when the deleted one was it, and `mentions` is counted again from the held messages past
+the position that tag the caller. Otherwise the server's count stands until `AspenSync` reads it
+again (the reads above), or the caller opens the channel.
+
+The gap that leaves: a tagging message deleted outside the held window, in a channel the server does
+not re-read for it (one that was not its `lastMessage` and whose record the store does not hold, so
+`AspenSync` cannot tell it tagged the caller), keeps its tag counted here until the channel's state
+is next read, while a client that reloads shows the server's count.
 
 ### Unread places
 
@@ -117,6 +135,9 @@ A thread's list marks it read the same way. A thread's position is kept apart (`
 - `channelMuteChanged` and `categoryMuteChanged` events keep them current.
 - `AspenSync` ends timed mutes by the device's clock (`nextMuteEnd`, `expireMutes`), since the
   server announces no end it did not make.
+- A deleted category takes the caller's mute of it, its fold, and its notification level with it
+  (`#forgetCategory`), and a deleted channel its threads, with their windows, positions, and follows
+  (`#removeChannel`): the server tells nothing more of either.
 - `RecordStore.mute` says the mute in force on a channel (topic `mute:<channelId>`), as the server
   decides it (`docs/architecture/muting.md`): its own setting in force, else its category's mute,
   naming that category. A category's mute, and a channel arriving in or moving to another category,

@@ -79,3 +79,23 @@ describe("waiting for a channel's mana", () => {
     expect(store.heldMessage(id(2))).toBeUndefined();
   });
 });
+
+describe("mana frames out of order", () => {
+  it("keeps the latest frame by its time, whichever server's arrives last", () => {
+    const store = new RecordStore({ now: () => at });
+    const channel = id(10);
+    store.noteMana(channel, busy);
+    // A frame from before the one held, overtaken on its way from another server.
+    store.noteMana(channel, { ...busy, level: -5_000, at: at - 1_000 });
+    expect(store.mana(channel)).toEqual(busy);
+    const later: ChannelMana = { ...busy, level: -2_000, at: at + 1_000 };
+    store.noteMana(channel, later);
+    expect(store.mana(channel)).toEqual(later);
+    // One that said the channel was full stands against an older one that says it was not.
+    const other = id(11);
+    store.noteMana(other, { ...busy, level: 100_000, at: at - 1_000 });
+    expect(store.mana(other)).toBeUndefined();
+    store.noteMana(other, { ...busy, at: at - 2_000 });
+    expect(store.mana(other)).toBeUndefined();
+  });
+});

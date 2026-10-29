@@ -104,6 +104,9 @@ while:
 
 - Messages in a thread cannot start threads.
 - `RecordStore.channels` leaves threads out of their community's list, though they record its id.
+- A deleted channel takes its threads with it in the store (`#removeChannel`), with their windows,
+  read positions, and follows, as the server hides them everywhere and announces nothing more of
+  them; the activity feed leaves out a reply whose thread's parent is not held (`inActivity`).
 - A thread's own link, like any channel link that names one, redirects to it open beside its parent.
 
 ## DMs and group DMs

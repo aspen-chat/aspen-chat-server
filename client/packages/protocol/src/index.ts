@@ -111,8 +111,11 @@ export {
   LOOSE_MESSAGES_MAX,
   REACTION_SUMMARY_USERS,
   RecordStore,
+  TOUCH_MEMORY_MS,
+  TOUCHES_MAX,
   WINDOW_MAX_MESSAGES,
   heldPlace,
+  type ReadOptions,
 } from "./store";
 export { UNREAD_DMS, type ActivityView, type UnreadChannel } from "./notifyRules";
 export { groupChannels, isDm } from "./channels";

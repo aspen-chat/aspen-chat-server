@@ -46,3 +46,42 @@ app runs.
 
 So a message's record may be gone whenever nothing subscribes to it. What shows a message by id
 outside a window reads it on demand (`useMessageOnDemand`, `loadMessage`).
+
+## Reads that land after events
+
+The server publishes an event before it answers the request that made the change, so a REST response
+can carry a record older than an event the store has already applied: a page of history read while
+someone edits or deletes a message on it, a member read while someone is renamed. The rule for
+writes, that a response never overwrites a record the stream already holds, holds for reads too: **a
+read never overwrites a record the stream changed since the read began, and never brings back a
+message the stream deleted since.**
+
+- `AspenSync` notes the store's clock before every read is sent and passes it as `since`
+  (`ReadOptions`) to whatever installs the answer: `ingest`, `replaceWindow`, `prependWindow`,
+  `appendWindow`, `setReactions`, `noteMemberships`, `applyStatuses`. A read with no `since`, the
+  bootstrap, is installed whole; the events that arrive during it are held back and applied after.
+- The store remembers when an event last changed each record (`message:<id>`, `user:<id>`,
+  `channel:<id>`, `community:<id>`, `category:<id>`, `poll:<id>`, `reactions:<id>`,
+  `member:<community>:<user>`, `read:<channel>`), and when it deleted each message. Only events
+  touch them (`applyEvent`, the cascades it runs, a `presence` frame through `noteStatuses`, the
+  caller's own chosen status), never reads, so a read never blocks another. A record touched at or
+  after `since` keeps the stream's version; a message deleted at or after `since` is left out of the
+  window and the store.
+- A window read that reaches the latest also keeps every held message of the channel newer than the
+  read's newest: those can only have come by event or the caller's own send since the read's
+  snapshot, and dropping them would leave a hole no later read fills, since a window at the latest
+  reads no further pages.
+- Read states a read sideloads merge forward (`putReadState`: a position never moves back) and are
+  skipped when the stream moved the channel's state since; a read `AspenSync` makes because of an
+  event (a channel's state after its newest message was deleted) carries no `since`, since its
+  answer is the recount the event asked for.
+- A touch is remembered for `TOUCH_MEMORY_MS` (two minutes, longer than any request stays in
+  flight), and the oldest are forgotten past `TOUCHES_MAX`; a read that outlasts that is installed
+  as if nothing had changed.
+
+What this does not cover: an event replayed _after_ a read's response that already reflected it (a
+`react` for a fifth-or-later reactor landing after a window read that counted them) counts twice
+until the message's reactions are read again, since neither side carries the feed's sequence. The
+replay a connection starts with cannot land so, since window reads wait for it (below); only a
+server that writes no `caughtUp` leaves the chance. Annotations and attachments have no touches, and
+the attachment record keeps a preview a read lacks on its own (`#putAttachment`).
