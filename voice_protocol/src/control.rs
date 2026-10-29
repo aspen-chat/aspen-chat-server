@@ -180,6 +180,12 @@ pub struct ParticipantSnapshot {
     pub muted: bool,
     pub deafened: bool,
     pub sharing_screen: bool,
+    /// The sign-in their join token was issued to, as `ParticipantJoined::sign_in` names it,
+    /// so a participant the snapshot records (their join's report lost) is taken out if it has
+    /// ended, as a reported joiner is. Absent from a voice server that predates it, and for a
+    /// bot's token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<String>,
 }
 
 /// Something a voice server tells the API server.
@@ -452,6 +458,7 @@ mod tests {
                 muted: true,
                 deafened: false,
                 sharing_screen: true,
+                sign_in: Some("s1".to_string()),
             }],
         };
         let json = serde_json::to_value(&report).unwrap();

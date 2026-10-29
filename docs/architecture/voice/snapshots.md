@@ -16,7 +16,8 @@ than ended first.
 ## What a snapshot holds
 
 1. A `sessionSnapshot` for every call the server holds: its session, its channel, and each
-   participant's mute, deafen, and sharing state.
+   participant's mute, deafen, and sharing state, and the sign-in their join token was issued to (as
+   `participantJoined` names it).
 2. Then a `sessionsHeld` for every lane, empty ones included, listing the server's calls in that
    lane's channels.
 
@@ -36,6 +37,17 @@ The API server makes the record match:
   does.
 
 It logs a warning for each repair, since one means a report was lost.
+
+Once the snapshot's transaction commits:
+
+- A participant it newly recorded is treated as a reported joiner is (see
+  [Rechecks](rechecks.md#when-a-recheck-runs)): noted as having reached the server, rechecked, and
+  taken out if the sign-in their token names has ended.
+- Everyone in the call is rechecked (`Recheck::Channel`, on its own task with the other rechecks).
+  Commands to a voice server (a kick, a grant, a mute) go over core NATS and are never acknowledged,
+  so one lost would otherwise stand uncorrected for as long as the call; the recheck sends each
+  participant their grants and mute as they stand, or a kick, and the voice server changes nothing
+  for a command that says what already stands. It costs the call's size once a minute.
 
 A snapshot's new calls and participants pass the same
 [offer checks](voice-reports.md#only-where-a-server-was-sent) as `sessionStarted` and

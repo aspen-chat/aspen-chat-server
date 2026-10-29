@@ -37,8 +37,11 @@ in line when access changes, and the voice server enforces the grants as they no
    - on tasks of their own, at most `RECHECKS_AT_ONCE` (16) at a time on each server;
    - or, for every call on the deployment (turning file transfers on or off), by a job a batch of
      seats at a time (`recheckAllCalls`; see [Jobs](../jobs/index.md)).
-4. Whenever a join's report is applied, the joiner is rechecked. A token issued before a change is
-   brought in line this way.
+4. Whenever a join's report is applied, the joiner is rechecked, once its transaction commits. A
+   token issued before a change is brought in line this way. A participant a snapshot records (their
+   join's report lost) is rechecked the same way.
+5. Whenever a snapshot is applied, everyone in the call is rechecked (`Recheck::Channel`), since a
+   command may have been lost (see [Snapshots](snapshots.md#what-the-api-server-does-with-it)).
 
 ## What a recheck does
 

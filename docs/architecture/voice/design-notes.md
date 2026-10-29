@@ -57,6 +57,12 @@ Why the voice pieces are shaped as they are. The how is in the [voice pages](ind
 - **A recheck always sends `Mute` with the mute as it stands, and the voice server ignores no-ops.**
   A token issued before a change is brought in line once its join is recorded.
   ([Moderation](moderation.md#how-it-reaches-the-call))
+- **Every snapshot rechecks everyone in the call.** Commands go over core NATS with no
+  acknowledgement, so a lost kick, grant, or mute has nothing else to repair it; the voice server
+  ignores a command that changes nothing, so the recheck costs the call's size once a minute and
+  changes nothing when nothing was lost. Acknowledged commands would need a reply from the voice
+  server and a retry on each API server for every command in flight.
+  ([Snapshots](snapshots.md#what-the-api-server-does-with-it))
 
 ## Server selection
 

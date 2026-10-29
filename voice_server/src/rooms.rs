@@ -491,6 +491,7 @@ impl Rooms {
                         muted: participant.silenced(),
                         deafened: participant.deafened,
                         sharing_screen: participant.sharing_screen(),
+                        sign_in: participant.sign_in.clone(),
                     })
                     .collect(),
             })

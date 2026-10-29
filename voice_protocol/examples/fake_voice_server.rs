@@ -164,6 +164,7 @@ async fn main() {
                         muted: marks.contains(&"muted"),
                         deafened: marks.contains(&"deafened"),
                         sharing_screen: marks.contains(&"sharing"),
+                        sign_in: None,
                     }
                 })
                 .collect(),

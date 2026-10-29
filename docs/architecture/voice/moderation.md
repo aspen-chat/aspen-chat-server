@@ -21,7 +21,8 @@ and stands across calls.
 
 Both answer `202` because the voice server applies the command and its report is what changes the
 participant record. The caller watches for the `voiceParticipant` event rather than reading the
-response as the result.
+response as the result. A kick lost on the way is repeated by the snapshot's recheck only where the
+person may no longer be in the call; a moderator whose kick was lost removes them again.
 
 ### Who may
 
@@ -59,6 +60,9 @@ too.
 3. Every recheck of a participant in a community's call sends `VoiceCommand::Mute` with the mute as
    it stands. The voice server leaves it alone when nothing changed.
 4. A token issued before a change is brought in line once its join is recorded.
+5. Commands are published on core NATS and never acknowledged. One lost is repaired by the recheck
+   of everyone in the call that each of the voice server's snapshots causes, within a minute (see
+   [Snapshots](snapshots.md#what-the-api-server-does-with-it)).
 
 At join time:
 

@@ -528,224 +528,262 @@ pub(super) async fn apply_report(
         }
         return Ok(());
     }
-    // Someone who joined on a token issued before a change to what they may do, or before
-    // the sign-in it was issued to ended, is brought in line with it once their joining is
-    // recorded.
-    let joined = match &report {
-        VoiceReport::ParticipantJoined {
-            session,
-            channel,
-            user,
-            sign_in,
-        } => Some((
-            VoiceSessionId::from(*session),
-            ChannelId::from(*channel),
-            UserId::from(*user),
-            sign_in.clone(),
-        )),
-        _ => None,
-    };
-    conn.transaction(|conn| {
-        async move {
-            match report {
-                // Applied above, without a transaction.
-                VoiceReport::Load { .. } => {}
-                VoiceReport::SessionStarted {
-                    server,
-                    session,
-                    channel,
-                } => {
-                    record_session(state, conn.as_mut(), server, session, channel).await?;
-                }
-                VoiceReport::ParticipantJoined { session, user, .. } => {
-                    let session_id = VoiceSessionId::from(session);
-                    let Some(mut existing) = find_session(conn.as_mut(), session_id).await? else {
-                        warn!(
-                            session = session.to_string(),
-                            "participant reported for an unknown session"
-                        );
-                        return Ok(());
-                    };
-                    record_participant(
-                        state,
-                        conn.as_mut(),
-                        &mut existing,
-                        &ParticipantSnapshot {
+    let after = conn
+        .transaction(|conn| {
+            async move {
+                let mut after = AfterCommit::default();
+                match report {
+                    // Applied above, without a transaction.
+                    VoiceReport::Load { .. } => {}
+                    VoiceReport::SessionStarted {
+                        server,
+                        session,
+                        channel,
+                    } => {
+                        record_session(state, conn.as_mut(), server, session, channel).await?;
+                    }
+                    VoiceReport::ParticipantJoined {
+                        session,
+                        user,
+                        sign_in,
+                        ..
+                    } => {
+                        let session_id = VoiceSessionId::from(session);
+                        let Some(mut existing) = find_session(conn.as_mut(), session_id).await?
+                        else {
+                            warn!(
+                                session = session.to_string(),
+                                "participant reported for an unknown session"
+                            );
+                            return Ok(after);
+                        };
+                        let joined = ParticipantSnapshot {
                             user,
                             muted: false,
                             deafened: false,
                             sharing_screen: false,
-                        },
-                    )
-                    .await?;
-                }
-                VoiceReport::ParticipantLeft { session, user, .. } => {
-                    let session_id = VoiceSessionId::from(session);
-                    let Some(existing) = find_session(conn.as_mut(), session_id).await? else {
-                        return Ok(());
-                    };
-                    remove_participant(state, conn.as_mut(), &existing, UserId::from(user)).await?;
-                    let remaining = note_company(conn.as_mut(), &existing).await?;
-                    if remaining == 0 {
-                        end_session(
+                            sign_in,
+                        };
+                        record_participant(state, conn.as_mut(), &mut existing, &joined).await?;
+                        // Whether or not this delivery recorded them: a report delivered again
+                        // has them brought in line again, which changes nothing.
+                        after.joiners.push(Joiner::new(&existing, joined));
+                    }
+                    VoiceReport::ParticipantLeft { session, user, .. } => {
+                        let session_id = VoiceSessionId::from(session);
+                        let Some(existing) = find_session(conn.as_mut(), session_id).await? else {
+                            return Ok(after);
+                        };
+                        remove_participant(state, conn.as_mut(), &existing, UserId::from(user))
+                            .await?;
+                        let remaining = note_company(conn.as_mut(), &existing).await?;
+                        if remaining == 0 {
+                            end_session(
+                                state,
+                                conn.as_mut(),
+                                &existing,
+                                VoiceSessionEndReason::Empty,
+                            )
+                            .await?;
+                        }
+                    }
+                    // Applied above, outside any transaction.
+                    VoiceReport::Speaking { .. } => {}
+                    VoiceReport::ParticipantState {
+                        session,
+                        user,
+                        muted,
+                        deafened,
+                        sharing_screen,
+                        ..
+                    } => {
+                        record_state(
                             state,
                             conn.as_mut(),
-                            &existing,
-                            VoiceSessionEndReason::Empty,
+                            VoiceSessionId::from(session),
+                            &ParticipantSnapshot {
+                                user,
+                                muted,
+                                deafened,
+                                sharing_screen,
+                                sign_in: None,
+                            },
                         )
                         .await?;
                     }
-                }
-                // Applied above, outside any transaction.
-                VoiceReport::Speaking { .. } => {}
-                VoiceReport::ParticipantState {
-                    session,
-                    user,
-                    muted,
-                    deafened,
-                    sharing_screen,
-                    ..
-                } => {
-                    record_state(
-                        state,
-                        conn.as_mut(),
-                        VoiceSessionId::from(session),
-                        &ParticipantSnapshot {
-                            user,
-                            muted,
-                            deafened,
-                            sharing_screen,
-                        },
-                    )
-                    .await?;
-                }
-                VoiceReport::SessionEnded { session, .. } => {
-                    if let Some(existing) =
-                        find_session(conn.as_mut(), VoiceSessionId::from(session)).await?
-                    {
-                        end_session(
-                            state,
+                    VoiceReport::SessionEnded { session, .. } => {
+                        if let Some(existing) =
+                            find_session(conn.as_mut(), VoiceSessionId::from(session)).await?
+                        {
+                            end_session(
+                                state,
+                                conn.as_mut(),
+                                &existing,
+                                VoiceSessionEndReason::Empty,
+                            )
+                            .await?;
+                        }
+                    }
+                    VoiceReport::FileOffered {
+                        channel,
+                        record,
+                        sender,
+                        name,
+                        size,
+                        allow_direct,
+                        valid_for_seconds,
+                    } => {
+                        crate::file_transfer::record_offer(
                             conn.as_mut(),
-                            &existing,
-                            VoiceSessionEndReason::Empty,
+                            crate::file_transfer::NewOffer {
+                                channel,
+                                record,
+                                sender,
+                                name,
+                                size,
+                                allow_direct,
+                                valid_for_seconds,
+                            },
                         )
                         .await?;
                     }
-                }
-                VoiceReport::FileOffered {
-                    channel,
-                    record,
-                    sender,
-                    name,
-                    size,
-                    allow_direct,
-                    valid_for_seconds,
-                } => {
-                    crate::file_transfer::record_offer(
-                        conn.as_mut(),
-                        crate::file_transfer::NewOffer {
-                            channel,
-                            record,
-                            sender,
-                            name,
-                            size,
-                            allow_direct,
-                            valid_for_seconds,
-                        },
-                    )
-                    .await?;
-                }
-                VoiceReport::TransferStarted {
-                    record,
-                    receiver,
-                    mode,
-                    ..
-                } => {
-                    crate::file_transfer::record_start(conn.as_mut(), record, receiver, mode)
-                        .await?;
-                }
-                VoiceReport::TransferEnded {
-                    record,
-                    receiver,
-                    ended_by,
-                    reason,
-                    ..
-                } => {
-                    crate::file_transfer::record_end(
-                        conn.as_mut(),
+                    VoiceReport::TransferStarted {
+                        record,
+                        receiver,
+                        mode,
+                        ..
+                    } => {
+                        crate::file_transfer::record_start(conn.as_mut(), record, receiver, mode)
+                            .await?;
+                    }
+                    VoiceReport::TransferEnded {
                         record,
                         receiver,
                         ended_by,
                         reason,
-                    )
-                    .await?;
-                }
-                VoiceReport::SessionSnapshot {
-                    server,
-                    session,
-                    channel,
-                    participants,
-                } => {
-                    apply_snapshot(
-                        state,
-                        conn.as_mut(),
+                        ..
+                    } => {
+                        crate::file_transfer::record_end(
+                            conn.as_mut(),
+                            record,
+                            receiver,
+                            ended_by,
+                            reason,
+                        )
+                        .await?;
+                    }
+                    VoiceReport::SessionSnapshot {
                         server,
                         session,
                         channel,
-                        &participants,
-                    )
-                    .await?;
+                        participants,
+                    } => {
+                        if let Some((channel, joiners)) = apply_snapshot(
+                            state,
+                            conn.as_mut(),
+                            server,
+                            session,
+                            channel,
+                            participants,
+                        )
+                        .await?
+                        {
+                            after.joiners.extend(joiners);
+                            after.snapshot_of = Some(channel);
+                        }
+                    }
+                    VoiceReport::SessionsHeld {
+                        server,
+                        partition,
+                        sessions,
+                    } => {
+                        end_sessions_not_held(state, conn.as_mut(), server, partition, &sessions)
+                            .await?;
+                    }
                 }
-                VoiceReport::SessionsHeld {
-                    server,
-                    partition,
-                    sessions,
-                } => {
-                    end_sessions_not_held(state, conn.as_mut(), server, partition, &sessions)
-                        .await?;
-                }
+                Ok::<_, crate::Error>(after)
             }
-            Ok::<_, crate::Error>(())
-        }
-        .scope_boxed()
-    })
-    .await?;
-    if let Some((session, channel, user, sign_in)) = joined {
-        let server: Option<VoiceServerId> = voice_session::table
-            .select(voice_session::voice_server)
-            .filter(voice_session::id.eq(session))
-            .first(conn.as_mut())
-            .await
-            .optional_not_found()?;
-        if let Some(server) = server {
-            super::servers::note_joined(state, server, user).await;
-        }
-        let file_transfers = state.settings().file_transfers;
-        if let Some(server) = server
-            && let Err(e) = recheck_seat(
-                state,
-                conn.as_mut(),
-                file_transfers,
-                Seat {
-                    session,
-                    server,
-                    channel,
-                    user,
-                },
-            )
-            .await
+            .scope_boxed()
+        })
+        .await?;
+    let file_transfers = state.settings().file_transfers;
+    for joiner in after.joiners {
+        let Joiner {
+            session,
+            server,
+            channel,
+            user,
+            sign_in,
+        } = joiner;
+        super::servers::note_joined(state, server, user).await;
+        if let Err(e) = recheck_seat(
+            state,
+            conn.as_mut(),
+            file_transfers,
+            Seat {
+                session,
+                server,
+                channel,
+                user,
+            },
+        )
+        .await
         {
             // The join is recorded; the next change to what they may do brings them in line.
             warn!(session = %session.0, error = %e, "could not recheck a joiner");
         }
-        if let (Some(server), Some(sign_in)) = (server, sign_in)
+        if let Some(sign_in) = sign_in
             && let Err(e) =
                 end_if_signed_out(state, conn.as_mut(), session, server, user, sign_in).await
         {
             warn!(session = %session.0, error = %e, "could not check a joiner's sign-in");
         }
     }
+    if let Some(channel) = after.snapshot_of {
+        // Commands go to a voice server over core NATS and are never acknowledged, so one lost
+        // (a kick for access lost, a grant, a mute) would stand uncorrected for as long as the
+        // call: each snapshot has everyone in the call rechecked instead, which sends each of
+        // them their grants and mute as they stand, or a kick, once a minute, and a voice server
+        // changes nothing for a command that says what already stands.
+        recheck(state, Recheck::Channel(channel));
+    }
     Ok(())
+}
+
+/// What a report's handling leaves for after its transaction commits.
+#[derive(Default)]
+struct AfterCommit {
+    /// Those it recorded as joining (a `participantJoined`, or a snapshot naming someone not
+    /// recorded), who are noted as having reached their server (`servers::note_joined`),
+    /// brought in line with what they may do now (`recheck_seat`), since their token may
+    /// predate a change to it, and taken out if the sign-in their token names has ended since
+    /// (`end_if_signed_out`).
+    joiners: Vec<Joiner>,
+    /// The channel whose call a snapshot described, everyone in which is rechecked.
+    snapshot_of: Option<ChannelId>,
+}
+
+/// Someone a report recorded as joining, as the work after its commit needs them.
+struct Joiner {
+    session: VoiceSessionId,
+    server: VoiceServerId,
+    channel: ChannelId,
+    user: UserId,
+    /// The sign-in their join token was issued to; none for a bot's, or from a voice server
+    /// whose snapshots predate naming it.
+    sign_in: Option<String>,
+}
+
+impl Joiner {
+    fn new(session: &VoiceSession, joined: ParticipantSnapshot) -> Self {
+        Joiner {
+            session: session.id,
+            server: session.voice_server,
+            channel: session.channel,
+            user: UserId::from(joined.user),
+            sign_in: joined.sign_in,
+        }
+    }
 }
 
 /// Takes `user`'s participant in `session` out of the call if the sign-in its join token was
@@ -986,13 +1024,14 @@ async fn record_session(
 }
 
 /// Records someone joining `session` in the state `joined` gives, unless they are recorded in
-/// it already. The first to join starts the call, which in a DM rings everyone else.
+/// it already, answering whether this recorded them. The first to join starts the call, which in
+/// a DM rings everyone else.
 async fn record_participant(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     session: &mut VoiceSession,
     joined: &ParticipantSnapshot,
-) -> crate::Result<()> {
+) -> crate::Result<bool> {
     if !super::servers::offered_for(
         state,
         session.voice_server,
@@ -1007,7 +1046,7 @@ async fn record_participant(
             "a voice server reported someone joining a call they were not sent to it for; \
              ignoring it"
         );
-        return Ok(());
+        return Ok(false);
     }
     let row = VoiceParticipant {
         session: session.id,
@@ -1023,7 +1062,7 @@ async fn record_participant(
         .execute(conn)
         .await?;
     if inserted == 0 {
-        return Ok(());
+        return Ok(false);
     }
     publish_event(
         state,
@@ -1041,7 +1080,7 @@ async fn record_participant(
         start_call(state, conn, session, row.user).await?;
         session.started_by = Some(row.user);
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Records a participant's mute, deafen, and sharing state as `now` gives it.
@@ -1085,20 +1124,22 @@ async fn record_state(
 
 /// Makes the record of one call match what its voice server says of it: the session recorded,
 /// everyone in it recorded in the state they are in, and no one else. Nothing changes when the
-/// record was already right; a change means a report was lost, and is logged.
+/// record was already right; a change means a report was lost, and is logged. Answers the call's
+/// channel and whoever it newly recorded, for the work after the commit, or `None` when the
+/// session is not the channel's call.
 async fn apply_snapshot(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     server: uuid::Uuid,
     session: uuid::Uuid,
     channel: uuid::Uuid,
-    participants: &[ParticipantSnapshot],
-) -> crate::Result<()> {
+    participants: Vec<ParticipantSnapshot>,
+) -> crate::Result<Option<(ChannelId, Vec<Joiner>)>> {
     let known = find_session(conn, VoiceSessionId::from(session))
         .await?
         .is_some();
     let Some(mut existing) = record_session(state, conn, server, session, channel).await? else {
-        return Ok(());
+        return Ok(None);
     };
     let recorded: Vec<VoiceParticipant> = voice_participant::table
         .select(VoiceParticipant::as_select())
@@ -1111,10 +1152,13 @@ async fn apply_snapshot(
         recorded.iter().map(|row| (row.user.0, row)).collect();
     let reported: std::collections::HashSet<uuid::Uuid> =
         participants.iter().map(|p| p.user).collect();
+    let mut joiners = Vec::new();
     for participant in participants {
         match recorded_by_user.get(&participant.user) {
             None => {
-                record_participant(state, conn, &mut existing, participant).await?;
+                if record_participant(state, conn, &mut existing, &participant).await? {
+                    joiners.push(Joiner::new(&existing, participant));
+                }
                 repairs += 1;
             }
             Some(row)
@@ -1125,7 +1169,7 @@ async fn apply_snapshot(
                         participant.sharing_screen,
                     ) =>
             {
-                record_state(state, conn, existing.id, participant).await?;
+                record_state(state, conn, existing.id, &participant).await?;
                 repairs += 1;
             }
             Some(_) => {}
@@ -1151,7 +1195,7 @@ async fn apply_snapshot(
             "a voice server's snapshot repaired the record of a call, so reports about it were lost"
         );
     }
-    Ok(())
+    Ok(Some((existing.channel, joiners)))
 }
 
 /// Ends every session recorded on `server`, in a channel of lane `partition`, that it no
