@@ -896,6 +896,13 @@ queries should occur inside a SQL transaction. The correct sequence is:
 This ensures that if JetStream rejects or fails to acknowledge the event, the database change is
 rolled back, and the two sources of truth never diverge in ordering.
 
+Publishing before committing has a consequence every reader of the database lives with: a REST read
+whose snapshot falls between an event's publish and its commit answers with the state from before
+the event, which the client may already hold. So a REST response is never newer than an event the
+client applied while the request was in flight, and the client keeps what the stream touched since
+the request began (see What a client already holds stays in step). No sequence number, header, or
+timestamp on a response can tell which events it reflects; only the stream can, so the stream wins.
+
 ## `message_gen` Procedural Macro
 
 `message_gen` is a procedural macro system which generates, for each record type Aspen handles, the
@@ -1084,6 +1091,70 @@ wildcard, so a new event cannot be published until its routing and its effect on
 `rechecks_of` runs those rechecks after the work commits, so no call site needs to remember them;
 `ChannelAccess` and `Visibility` cannot be made without the check they stand for. Prefer extending
 these to adding a rule here.
+
+### What a client already holds stays in step
+
+The other half of stale state is not about access: two clients looking at the same record show
+different things because one of them was told of a change and the other was not, or was told and
+then overwrote it. Clients never poll a record they hold; what they hold stays right only through
+events, so every field a client can hold has exactly one way to change, an event, and a change that
+reaches one holder reaches them all within the stream's latency. Every feature that stores something
+a client holds answers these in its architecture file in the commit that adds it, and a scenario in
+`scripts/check_permissions.py` checks a second client, open throughout, against one that loads
+afterwards:
+
+1. **Who holds this record, and by which routes did they get it?** Members of the communities it is
+   published to, the user alone, DM partners (`aspen.events.p.{user}`, which every event about a
+   user is also published to), moderators through a report, anyone through a message link or a pin.
+   Each route needs the record's changes too, so publish to a scope that reaches every route
+   (`EventScope::UserEverywhere` reaches communities, the user, and their DM partners), not to the
+   one the feature was written for. Resolve the scope's subjects before the transaction removes what
+   they are resolved from: an event about a user whose memberships the same transaction ends is
+   published to no community unless they were read first.
+2. **Is every field a client holds changed only through an event?** Every write to a client-held
+   column, including a job's, an operator command's, a plugin host call's, a setting's side effect
+   (the system account's name), and a soft delete's effect on its children (a deleted message's
+   pin), publishes in the same transaction, with the fields as written (trimmed, clamped, stamped),
+   and with every field that changed set in the `Update` event. A field left `None` because "it
+   rarely changes" is a desync waiting for the first time it does.
+3. **Is the caller's own state announced to their other devices?** A vote, a save, a read position,
+   a mute, a device's sign-in to another deployment, a bot made or deleted: whatever one device
+   writes about its user, their other devices hold too, so it is published to `EventScope::User`
+   even when the write also publishes to a channel. The device that wrote it applies the response
+   and then the same event, idempotently.
+4. **Are counts carried as absolute values, or applied idempotently?** The stream replays its last
+   minute to every new connection on top of a REST bootstrap that already reflects it, and a resume
+   replays what a connection missed. A count built by adding one per event double-counts under
+   replay unless the event carries the new total (`Poll.results`, `Channel.replyCount`,
+   `ReadState.mentions`) or the client can tell a repeat (a message id it already counted, a reactor
+   it already named). Prefer the total.
+5. **What does a REST read overwrite?** Nothing the stream touched since the read began: the
+   client's `RecordStore` keeps, per record, when an event last changed it, and every read installer
+   takes the time its request was sent and keeps the held record when it is newer, never
+   resurrecting a message removed since. A new read path passes that time like the rest; a new
+   record type gets a touch time and, if it can be deleted, a tombstone. A list read (a window, a
+   reaction summary, a member sample) is installed the same way, record by record, and a window at
+   the latest keeps the messages that arrived while it was read.
+6. **What does the client infer from a parent's deletion?** A soft delete publishes one event; the
+   server's reads hide the children (threads of a deleted channel, pins and saves of a deleted
+   message, mutes of a deleted category) through their filters. The client's store prunes the same
+   children on that one event (`RecordStore`'s `#remove*` functions), or the server announces each
+   child; one or the other, decided and written down.
+7. **What does a catch-up leave out, and does the client hear so?** A first connection's replay and
+   a resume judge each retained event by the roles and models of its moment and leave some out;
+   whatever they leave out that the database's reading would have shown is reported on `ready`
+   (`replayComplete`, `replayedSince`), and the client reads its state again on it. A new reason to
+   leave events out of a catch-up sets `complete` false or moves `replayedSince`.
+8. **When the server's copy of a thing clients cache changes outside the stream** (the plugin
+   catalogue, the deployment profile, a server-side cache with a TTL), what tells open clients? A
+   deployment-wide change needs a frame to every connection (`pluginCatalogueChanged`), not a
+   re-read on the next mount.
+
+A finding of this kind is cheap to make and dear to find: the server is right, the fresh client is
+right, and only the client that has been open since before the change is wrong, which no test that
+starts a client and reads sees. `scripts/check_permissions.py` holds two streams open across each
+change for that reason; a scenario for a new record compares what the open client holds with what a
+fresh read returns, field by field.
 
 ### Work grows with the answer, not with what is stored
 

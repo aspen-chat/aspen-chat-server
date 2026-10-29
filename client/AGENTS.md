@@ -180,8 +180,14 @@ same commit, as with comments.
 - The event stream (`packages/protocol/src/events.ts`) authenticates with an `identify` first frame,
   tracks the sequence of the last event it delivered, and asks the server to resume from it on
   reconnect. When it reports `onResyncRequired`, the server could not replay the gap: throw away
-  cached state and re-bootstrap from REST before applying further events. Supply `authenticate` from
-  `AspenClient.freshSessionToken` so a rejected token is refreshed rather than retried.
+  cached state and re-bootstrap from REST before applying further events. The `ready` frame also
+  says what the replay could not vouch for: `replayComplete: false` (the catch-up left out events
+  the database's reading would have shown) or a `replayedSince` later than the bootstrap began (the
+  retained window was shorter than a minute) each make `AspenSync` read its state again, and
+  `catchUpFollows` promises a `caughtUp` frame after the replay, on which the sync goes live, so no
+  window is read while the replay is still arriving. A server without those fields is treated as one
+  whose replay was whole. Supply `authenticate` from `AspenClient.freshSessionToken` so a rejected
+  token is refreshed rather than retried.
 - Whatever tries the server again after a failure waits a random time in a window that grows with
   each failure (`reconnectDelayMs`), and at least what the server asked, spread over as long again
   (`serverDelayMs`): the event stream after a drop, or after an `error` frame with
@@ -208,10 +214,23 @@ same commit, as with comments.
   a message's record may be gone whenever nothing subscribes to it: whatever shows a message by id
   reads it on demand (`useMessageOnDemand`), and a new map keyed by message, channel, or user says
   what removes its entries.
-- A write's REST response never overwrites a record the stream already holds. The server publishes
-  events before it answers, so an event that arrives while the request is in flight is newer than
-  the response; the response only fills in a record the stream has not delivered yet. Updates to
-  existing records are left to their events entirely.
+- A REST response never overwrites a record the stream touched while the request was in flight. The
+  server publishes events before it commits, so a response's snapshot can predate an event the
+  client already applied, and nothing on the response can say which events it reflects. A write's
+  response only fills in a record the stream has not delivered yet; updates to existing records are
+  left to their events entirely. A read's response is installed record by record: `RecordStore`
+  keeps when an event last changed each record and which messages events removed, every read
+  installer takes the time its request was sent (`since`) and keeps the held record when the stream
+  touched it at or after that, and a window read at the latest keeps the messages that arrived while
+  it was in flight. A new read passes `since` like the rest; a new record type gets a touch time,
+  and a tombstone if events can remove it. The one place a read installs without `since` is the
+  bootstrap, whose events are held and applied after it lands.
+- Counts the client keeps up by events are idempotent under replay. Every new connection replays the
+  stream's last minute over a bootstrap that already reflects it, and a resume replays what was
+  missed, so a count that adds one per event double-counts unless the event carries the total (poll
+  results, thread reply counts) or the client can tell a repeat (a message id at or before the read
+  state's `lastMessage` was already counted). When the server can send the total, ask for it rather
+  than counting.
 - Motion. Every animation and transition takes its duration from the tokens in `styles.css`
   (`--motion-fast`, `--motion-base`, `--motion-slow`, `--motion-highlight`), which scale with the
   account preference `MOTION_SPEED` (`look.motionSpeed`, 0 for off to 2 for twice as fast, set by
