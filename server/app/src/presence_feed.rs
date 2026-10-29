@@ -9,9 +9,14 @@
 //!   [`PRESENCE_SUBJECT`], outside the event stream's, so JetStream neither keeps nor replays
 //!   them.
 //! - **Expiries.** What changes presence by running out (a connection's key, activity's, a
-//!   timed override) is hinted when it runs out, by a timer kept on the server that set it
-//!   ([`PresenceFeed::expires`]). A key renewed elsewhere meanwhile makes a hint that changes
-//!   nothing, which is then told to no one.
+//!   timed override) is hinted when it runs out, by a timer ([`PresenceFeed::expires`]) kept on
+//!   the server that set it, and on every server whose router read the user's presence for a
+//!   telling, from how long each key had left then (`user_status::raw_statuses_with_expiries`).
+//!   So the timers live wherever someone watches the user, and a server restarting loses only
+//!   its own: the next telling anywhere sets them again, and so does each renewal of the user's
+//!   `online` key wherever their devices are (`user_status::mark_user_online_id`). A key renewed
+//!   elsewhere meanwhile makes a hint that changes nothing, which is then told to no one, and the
+//!   telling it causes sets the timer again from the renewed key.
 //! - **Watching.** Each event stream connection says which users it shows (`watchPresence`, at
 //!   most [`MAX_WATCHED_PRESENCE`]), kept by one router task per server. The users of its first
 //!   list are told only of changes: its client reads them whole over REST once the list is taken
@@ -29,12 +34,12 @@
 //!   what it was last told. Someone a watcher may no longer learn the presence of is told to them
 //!   as offline.
 //!
-//! A hint lost (a full queue, a server that stopped with timers pending, NATS dropping a core
-//! message) leaves a watcher behind until the next change or its client's slower full read.
+//! A hint lost (a full queue, NATS dropping a core message) leaves a watcher behind until the
+//! next change, the next of its own timers, or its client's slower full read.
 
 use crate::UserId;
 use crate::database::Pool;
-use crate::user_status::{presence_visible_pairs, raw_statuses, seen_by_others};
+use crate::user_status::{presence_visible_pairs, raw_statuses_with_expiries, seen_by_others};
 use aspen_wire::ephemeral::EphemeralEvent;
 pub use aspen_wire::ephemeral::{MAX_WATCHED_PRESENCE, PRESENCE_WINDOW_MILLIS};
 use aspen_wire::user::{UserOnlineStatus, UserStatusRecord};
@@ -92,11 +97,21 @@ const MAX_PAIRS_PER_TELLING: usize = 10 * PAIR_BATCH;
 /// A viewer and a user whose presence they watch.
 type ViewerPair = (UserId, UserId);
 
-/// What a telling reads: each user's presence, and the viewer pairs that may learn it.
-type Read = (HashMap<UserId, UserOnlineStatus>, HashSet<ViewerPair>);
+/// What a telling reads: each user's presence, how long what makes it has left, and the viewer
+/// pairs that may learn it.
+type Read = (
+    HashMap<UserId, UserOnlineStatus>,
+    Vec<(UserId, Expiry, Duration)>,
+    HashSet<ViewerPair>,
+);
 
 /// A little after a key's expiry, so the hint finds it gone.
 const EXPIRY_SLACK: Duration = Duration::from_secs(1);
+
+/// When to hint what runs out `after` from now.
+fn expiry_at(after: Duration) -> Instant {
+    Instant::now() + after + EXPIRY_SLACK
+}
 
 /// What runs out and so may change someone's presence when it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -166,6 +181,7 @@ impl PresenceFeed {
             nats,
             valkey,
             pool,
+            expiries.clone(),
             registered,
             lists.clone(),
             listed.clone(),
@@ -191,7 +207,7 @@ impl PresenceFeed {
     /// replaces the last for the same user and kind.
     pub fn expires(&self, user: UserId, kind: Expiry, after: Duration) {
         if let Some(expiries) = &self.expiries {
-            let _ = expiries.try_send((user, kind, Instant::now() + after + EXPIRY_SLACK));
+            let _ = expiries.try_send((user, kind, expiry_at(after)));
         }
     }
 
@@ -287,8 +303,8 @@ async fn publish_hints(nats: async_nats::Client, mut hints: mpsc::Receiver<UserI
     }
 }
 
-/// When each user's keys and timed overrides set on this server run out: one entry per user
-/// and kind, the latest set.
+/// When each user's keys and timed overrides run out, as set on this server or read for its
+/// watchers: one entry per user and kind, the latest set.
 #[derive(Default)]
 struct Expiries {
     at: HashMap<(UserId, Expiry), Instant>,
@@ -705,14 +721,15 @@ impl Router {
     }
 }
 
-/// Reads the presence of the users in `pairs`, and which viewers may learn it.
+/// Reads the presence of `users`, how long what makes it has left, and which viewers may learn
+/// it.
 async fn read(
     valkey: &fred::clients::Client,
     pool: &Pool,
     users: Vec<UserId>,
     viewer_pairs: Vec<(UserId, UserId)>,
 ) -> crate::Result<Read> {
-    let statuses = raw_statuses(valkey, users).await?;
+    let (statuses, expiries) = raw_statuses_with_expiries(valkey, users).await?;
     let mut visible = HashSet::new();
     if !viewer_pairs.is_empty() {
         let mut conn = pool.get().await?;
@@ -720,7 +737,7 @@ async fn read(
             visible.extend(presence_visible_pairs(conn.as_mut(), batch).await?);
         }
     }
-    Ok((statuses, visible))
+    Ok((statuses, expiries, visible))
 }
 
 /// Subscribes to presence hints, retried until NATS answers.
@@ -764,11 +781,14 @@ fn register(router: &mut Router, registration: Option<Registration>) -> bool {
     true
 }
 
-/// This server's router: keeps who watches whom, gathers hints, and tells.
+/// This server's router: keeps who watches whom, gathers hints, and tells. Each telling's read
+/// says how long what makes each user's presence has left, and a timer for each is kept here
+/// (`expiries`), so the hint when it runs out is made wherever the user is watched.
 async fn route_presence(
     nats: async_nats::Client,
     valkey: fred::clients::Client,
     pool: Pool,
+    expiries: mpsc::Sender<(UserId, Expiry, Instant)>,
     mut registrations: mpsc::UnboundedReceiver<Registration>,
     lists: Arc<Mutex<HashMap<u64, Vec<UserId>>>>,
     listed: Arc<Notify>,
@@ -814,7 +834,10 @@ async fn route_presence(
                     }
                 };
                 match read {
-                    Ok((statuses, visible)) => {
+                    Ok((statuses, runs_out, visible)) => {
+                        for (user, kind, left) in runs_out {
+                            let _ = expiries.try_send((user, kind, expiry_at(left)));
+                        }
                         router.decisions.note(&decided, &visible, began);
                         known.extend(visible);
                         router.tell(pairs, &statuses, &known);

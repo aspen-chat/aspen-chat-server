@@ -114,9 +114,12 @@ away, each of them reads its whole state again, ten reads at once. See
   notice.
 - **Who may learn it is decided when telling, not when watching.** A block or a community left takes
   effect at the next telling, which tells the watcher `offline`.
-- **Expiries are hinted by timers on the server that set the key.** Valkey's notices of expired keys
-  are lazy and cost every server a subscription to every expiry; a timer costs nothing beyond the
-  one entry, and a key renewed elsewhere only makes a hint that changes nothing.
+- **Expiries are hinted by in-process timers, kept by every server that sets or reads the key.**
+  Valkey's notices of expired keys are lazy and cost every server a subscription to every expiry; a
+  timer costs nothing beyond the one entry, and a key renewed elsewhere only makes a hint that
+  changes nothing. The server that marks a user online re-arms the timers of all three keys on each
+  mark, and a server whose router reads the user for a telling arms them from the keys' time left,
+  so a restart loses one server's timers and the next mark or telling rebuilds them.
 - **Clients still read presence whole now and then.** It catches what a lost hint or the 500-user
   cap left behind.
 - **A connection's first watch list is told only of changes; its client reads those users over

@@ -19,10 +19,13 @@
 //!
 //! A user is online while both exist, away while only the first does, and offline otherwise,
 //! unless the third says otherwise while they are connected. Someone invisible is offline to
-//! everyone but themself, and is neither counted nor listed as online. Because the keys are the user's, not a connection's, any active device keeps them online and
-//! any connected one keeps them from going offline, whichever API server each device talks to.
-//! Nothing announces a change: clients ask for the status of the users they show
-//! (`GET /users/statuses`) when they need it.
+//! everyone but themself, and is neither counted nor listed as online. Because the keys are the
+//! user's, not a connection's, any active device keeps them online and any connected one keeps
+//! them from going offline, whichever API server each device talks to. Clients read the status of
+//! the users they show (`GET /users/statuses`), and an event stream connection that watches them
+//! is told as it changes (`app::presence_feed`): whatever sets a key says so, and a key running
+//! out is hinted by a timer, kept by the server that set it and by every server whose watchers
+//! were told of the user.
 //!
 //! To find who is online among a community's members without reading every member's keys, each
 //! community has a sorted set, `community:{uuid}:online`, of the members who may be online, each
@@ -400,6 +403,94 @@ pub async fn raw_statuses(
     Ok(batches.into_iter().flatten().collect())
 }
 
+/// How long a presence key has left, from Valkey's answer to `PTTL`: `None` for a key not set
+/// (-2) or set with no expiry (-1, an override that lasts until changed).
+fn time_left(pttl_millis: i64) -> Option<Duration> {
+    u64::try_from(pttl_millis).ok().map(Duration::from_millis)
+}
+
+/// What running out of each of a user's keys makes of their presence, in the order the keys are
+/// read: their connection's, their activity's, their chosen status's.
+const KEY_EXPIRIES: [Expiry; 3] = [Expiry::Connection, Expiry::Activity, Expiry::Chosen];
+
+/// As [`raw_statuses`], with how long each of the keys that make each user's presence has left,
+/// for the router telling watchers (`app::presence_feed`), which sets a timer for each of them so
+/// that a key running out is hinted wherever someone watches the user, whichever server set the
+/// key and whether or not that server still runs. A key not set, or set with no expiry, is left
+/// out.
+pub async fn raw_statuses_with_expiries(
+    valkey: &fred::clients::Client,
+    users: Vec<UserId>,
+) -> crate::Result<(
+    HashMap<UserId, UserOnlineStatus>,
+    Vec<(UserId, Expiry, Duration)>,
+)> {
+    let batches = futures_util::future::try_join_all(
+        users
+            .chunks(STATUS_BATCH)
+            .map(|batch| users_presence_with_expiries(valkey, batch.to_vec())),
+    )
+    .await?;
+    let mut statuses = HashMap::new();
+    let mut expiries = Vec::new();
+    for (user, status, left) in batches.into_iter().flatten() {
+        statuses.insert(user, status);
+        expiries.extend(left.into_iter().map(|(kind, left)| (user, kind, left)));
+    }
+    Ok((statuses, expiries))
+}
+
+/// As [`users_online_status`], with the time each key has left, read in the same round trip:
+/// the `MGET` and then a `PTTL` for each key, in one pipeline.
+async fn users_presence_with_expiries(
+    valkey: &fred::clients::Client,
+    user_ids: Vec<UserId>,
+) -> crate::Result<Vec<(UserId, UserOnlineStatus, Vec<(Expiry, Duration)>)>> {
+    if user_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let keys: Vec<String> = user_ids
+        .iter()
+        .flat_map(|user_id| {
+            [
+                online_key(*user_id),
+                active_key(*user_id),
+                crate::presence_override::override_key(*user_id),
+            ]
+        })
+        .collect();
+    let pipeline = valkey.pipeline();
+    let () = pipeline.mget(keys.clone()).await?;
+    for key in &keys {
+        let () = pipeline.pttl(key.as_str()).await?;
+    }
+    let mut answers = pipeline.all::<Vec<fred::types::Value>>().await?.into_iter();
+    let values: Vec<Option<String>> = answers
+        .next()
+        .ok_or_else(|| fred::error::Error::new(fred::error::ErrorKind::Parse, "no MGET answer"))?
+        .convert()?;
+    let left: Vec<i64> = answers
+        .map(fred::types::Value::convert)
+        .collect::<Result<_, _>>()?;
+    Ok(user_ids
+        .into_iter()
+        .zip(values.as_chunks::<3>().0)
+        .zip(left.as_chunks::<3>().0)
+        .map(|((user, [online, active, chosen]), left)| {
+            let expiries = KEY_EXPIRIES
+                .into_iter()
+                .zip(left)
+                .filter_map(|(kind, left)| time_left(*left).map(|left| (kind, left)))
+                .collect();
+            (
+                user,
+                status(online.as_deref(), active.as_deref(), chosen.as_deref()),
+                expiries,
+            )
+        })
+        .collect())
+}
+
 /// The presence of each user (`app::user_status`) as they themself are told it, read in one
 /// round trip, whoever asks: for counting and ordering members (`online_among`,
 /// `connected_members`, through [`seen_by_others`]). What a person is told of someone's presence
@@ -458,7 +549,9 @@ pub fn mark_user_online(state: &GlobalServerContext, user: &UserPg) {
 /// Each server marks one user at most every [`MARK_EVERY`]: a client making many requests, or
 /// many of a user's devices on one server, cost a write each quarter of the key's life rather
 /// than one each, and the key, living [`ONLINE_TTL_SECONDS`], is always renewed before it runs
-/// out.
+/// out. Each mark also sets this server's timers for all three of the user's keys running out,
+/// from how long each has left, so a server that set one and then restarted, losing its timer,
+/// is covered by the next mark wherever the user's devices are.
 pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool) {
     if state.presence_marked.get(&user).is_some() {
         return;
@@ -469,19 +562,28 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
         let state = state_for_task;
         // Renewed only if it is set: answering its previous value says whether it was. A user
         // not online yet is brought online by their arrival, which sets the key once their
-        // override is copied (`app::presence_upkeep`).
-        let renewed: Option<i64> = match state
-            .valkey
-            .set(
-                online_key(user),
-                1,
-                Some(Expiration::EX(ONLINE_TTL_SECONDS)),
-                Some(SetOptions::XX),
-                true,
-            )
-            .await
-        {
-            Ok(previous) => previous,
+        // override is copied (`app::presence_upkeep`). The other keys' time left is read in the
+        // same round trip.
+        let pipeline = state.valkey.pipeline();
+        let marked: Result<(Option<i64>, i64, i64), fred::error::Error> = async {
+            let () = pipeline
+                .set(
+                    online_key(user),
+                    1,
+                    Some(Expiration::EX(ONLINE_TTL_SECONDS)),
+                    Some(SetOptions::XX),
+                    true,
+                )
+                .await?;
+            let () = pipeline.pttl(active_key(user)).await?;
+            let () = pipeline
+                .pttl(crate::presence_override::override_key(user))
+                .await?;
+            pipeline.all().await
+        }
+        .await;
+        let (renewed, active_left, override_left) = match marked {
+            Ok(marked) => marked,
             Err(e) => {
                 tracing::warn!(error = %e, "failed to record the user as online");
                 return;
@@ -496,6 +598,14 @@ pub fn mark_user_online_id(state: &GlobalServerContext, user: UserId, bot: bool)
             Expiry::Connection,
             Duration::from_secs(ONLINE_TTL_SECONDS as u64),
         );
+        for (kind, left) in [
+            (Expiry::Activity, active_left),
+            (Expiry::Chosen, override_left),
+        ] {
+            if let Some(left) = time_left(left) {
+                state.presence_feed.expires(user, kind, left);
+            }
+        }
         if bot
             && let Err(e) = state
                 .valkey
@@ -568,6 +678,14 @@ mod tests {
         assert_eq!(status(None, None, None), UserOnlineStatus::Offline);
         // Activity outliving the last connection does not keep anyone online.
         assert_eq!(status(None, set(), None), UserOnlineStatus::Offline);
+    }
+
+    #[test]
+    fn a_key_has_time_left_only_while_set_with_an_expiry() {
+        assert_eq!(time_left(-2), None);
+        assert_eq!(time_left(-1), None);
+        assert_eq!(time_left(0), Some(Duration::ZERO));
+        assert_eq!(time_left(1_500), Some(Duration::from_millis(1_500)));
     }
 
     #[test]

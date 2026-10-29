@@ -121,9 +121,19 @@ A hint says only that someone's presence may have changed. It is made:
 | `block`                            | They blocked someone or lifted a block, once it is committed        |
 | A timer at each expiry             | Their `online` key, `active` key, or timed override ran out         |
 
-- The timers are kept by the server that set what runs out (`PresenceFeed::expires`), one per user
-  and kind, the latest replacing the last, a second after the expiry. A key renewed by another
-  server meanwhile makes a hint that changes nothing.
+- The timers (`PresenceFeed::expires`) are one per user and kind on each server, the latest
+  replacing the last, a second after the expiry. They are set:
+  - by the server that sets what runs out: a key, or an override's copy;
+  - by every mark of a user's `online` key (`user_status::mark_user_online_id`, at most every
+    fifteen seconds per server while they are connected), which reads how long their `active` and
+    override keys have left in the same round trip and sets this server's timers for all three;
+  - by every server whose router reads the user's presence for a telling
+    (`user_status::raw_statuses_with_expiries`), from how long each key has left then, so the timers
+    live wherever the user is watched.
+- A server that restarts loses its own timers alone. The next mark of the user's `online` key, from
+  any of their devices, and the next telling of them on any server set them again. A key renewed by
+  another server meanwhile makes a hint that changes nothing, and the telling it causes sets the
+  timer again from the renewed key.
 - One task per server gathers the hints made meanwhile into one message, at most 4096 users.
 - A user's coming online is hinted once their override is copied and their `online` key set
   (`app::presence_upkeep`).
@@ -154,19 +164,21 @@ A hint says only that someone's presence may have changed. It is made:
    up is never answered.
 7. Someone a watcher may no longer learn the presence of is told to them as `offline`.
 
-A lost hint (a full queue, a server that stopped with timers pending, a core NATS message dropped)
-leaves a watcher behind until the next change or the client's next whole read.
+A lost hint (a full queue, a core NATS message dropped) leaves a watcher behind until the next
+change, the watching server's own timer for the user, or the client's next whole read.
 
 ### Cost
 
 - Nothing is done for a change no connection here watches but reading its hint.
-- A telling costs one batched read and one query per 5,000 pairs, per window per server.
+- A telling costs one batched read (an `MGET` of every user's three keys and a `PTTL` for each, in
+  one pipeline) and one query per 5,000 pairs, per window per server.
 - One telling decides at most `MAX_PAIRS_PER_TELLING` (50,000) connection and user pairs, so at most
   ten queries, changes first; the rest wait for the next window.
 - A client changing its lists fast gets no more users decided than its budget, and lists it named in
   the last ten seconds are decided from what the router kept.
 - Memory is one entry per connection per user watched, at most 500 per connection, one timer per
-  user and kind marked on this server, and the kept decisions.
+  user and kind marked or read for a telling on this server (an override's lasts until it runs out,
+  up to thirty days, whether or not the user is still watched here), and the kept decisions.
 
 ## Who may see it
 
@@ -247,8 +259,9 @@ invisible. Each server keeps a community's for ten seconds the same way.
    it now shows, and is told each of them at the next telling, as a user its watch list adds is; on
    a new connection, it reads them whole.
 5. **Does every path that changes it announce it?** Every change to a key or override hints, at once
-   or by a timer at its expiry. A change to who may learn it hints only for a block; the rest are
-   caught at the next change, or the client's next whole read.
+   or by a timer at its expiry, kept on the server that set it and on every server that watches the
+   user, so no one server's restart loses it. A change to who may learn it hints only for a block;
+   the rest are caught at the next change, or the client's next whole read.
 6. **Is it published inside the transaction that makes the change?** Hints from overrides and blocks
    are made once the transaction commits; the rest change Valkey, which has no transaction. A hint
    is published on core NATS and lost with no harm beyond lateness.
