@@ -810,6 +810,7 @@ a NATS stream or subject, or a client package updates them in the same commit.
 - `docs/architecture/background-tasks.md` — the poll closer, the voice report listener and reaper,
   closing polls, message kinds, and poll write-ins
 - `docs/architecture/reactions.md` — reactions, their canonical emoji, summaries, and reactor lists
+- `docs/architecture/pins.md` — pinning messages, the limit, and what deleting a pinned message does
 - `docs/architecture/threads-and-dms/index.md` — threads, following them, echoes, DMs and group DMs,
   their calls and rings, and the system account
 - `docs/architecture/sign-in-and-security/index.md` — password sign-in, second factors, recovery

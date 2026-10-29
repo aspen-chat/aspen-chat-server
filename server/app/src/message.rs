@@ -27,6 +27,7 @@ use aspen_schema::attachment;
 use aspen_schema::channel;
 use aspen_schema::message;
 use aspen_schema::message_attachment;
+use aspen_schema::pin;
 use aspen_wire::link_preview::LinkPreview;
 pub use aspen_wire::message::MessageKind;
 use aspen_wire::message_enum;
@@ -1480,8 +1481,9 @@ pub async fn delete_message(
 }
 
 /// Marks a message deleted inside the caller's transaction, announcing it and everything that
-/// goes with it: a reply's echo (first, so no client ever holds an echo whose reply is gone), a
-/// poll shown in it, and a thread's count. A deleted message is hidden, not erased: its text,
+/// goes with it: a reply's echo (first, so no client ever holds an echo whose reply is gone), its
+/// pin (before the message, so no client holds a pin of a message it has dropped), a poll shown
+/// in it, and a thread's count. A deleted message is hidden, not erased: its text,
 /// attachments, and link previews stay, for the warnings and report reviews that show it
 /// (`app::report`), and readers never see it again otherwise.
 pub async fn soft_delete(
@@ -1508,6 +1510,7 @@ pub async fn soft_delete(
     crate::attachment::evidence::keep_deleted(conn, id).await?;
     crate::saved_message::forget(state, conn, id).await?;
     crate::link_preview::note_deleted(conn, &[id]).await?;
+    unpin_deleted(state, conn, &[id]).await?;
     publish_event(
         state,
         conn,
@@ -1540,9 +1543,9 @@ pub async fn soft_delete(
 }
 
 /// Deletes `ids` as [`soft_delete`] deletes each, as one set: one statement marks them deleted,
-/// one their echoes, one keeps their files as evidence, their threads' summaries are taken down
-/// once per thread, and every deletion is announced together. Messages already deleted are
-/// passed over. Answers how many it deleted.
+/// one their echoes, one keeps their files as evidence, one takes their pins down, their
+/// threads' summaries are taken down once per thread, and every deletion is announced together.
+/// Messages already deleted are passed over. Answers how many it deleted.
 pub async fn soft_delete_many(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -1578,7 +1581,13 @@ pub async fn soft_delete_many(
     // previews' pictures are kept as long.
     crate::attachment::evidence::keep_deleted_many(conn, &gone).await?;
     crate::link_preview::note_deleted(conn, &gone).await?;
-    let mut events: Vec<(EventScope, ServerEvent)> = deleted
+    let all_gone: Vec<MessageId> = gone
+        .iter()
+        .copied()
+        .chain(echoes.iter().map(|(id, _)| *id))
+        .collect();
+    unpin_deleted(state, conn, &all_gone).await?;
+    let events: Vec<(EventScope, ServerEvent)> = deleted
         .iter()
         .map(|m| (*m.channel.id(), m.id))
         .chain(echoes.iter().map(|(id, channel)| (*channel, *id)))
@@ -1589,7 +1598,7 @@ pub async fn soft_delete_many(
             )
         })
         .collect();
-    crate::events::publish_events(state, conn, std::mem::take(&mut events)).await?;
+    crate::events::publish_events(state, conn, events).await?;
     for message in &deleted {
         // An echo deleted alone leaves its reply free to be echoed again.
         if message.kind == MessageKind::ThreadEcho
@@ -1629,6 +1638,33 @@ pub async fn soft_delete_many(
         thread::record_removals(state, conn, thread, count).await?;
     }
     Ok(deleted.len())
+}
+
+/// Takes the pins of the deleted messages `ids` down, announcing each in its channel, in the
+/// caller's transaction and before the messages' own `delete`s. A deleted message is hidden
+/// from its channel's pins and refused by `set_pinned`, so a pin left standing could never be
+/// taken down and would count toward `MAX_PINS` for good. Bounded by how many of `ids` were
+/// pinned.
+async fn unpin_deleted(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    ids: &[MessageId],
+) -> Result<(), crate::Error> {
+    let unpinned: Vec<(MessageId, ChannelId)> =
+        diesel::delete(pin::table.filter(pin::message_id.eq_any(ids)))
+            .returning((pin::message_id, pin::channel))
+            .load(conn)
+            .await?;
+    let events = unpinned
+        .into_iter()
+        .map(|(message_id, channel)| {
+            (
+                EventScope::Channel(channel),
+                ServerEvent::Pin(PinEvent::Delete { message_id }),
+            )
+        })
+        .collect();
+    crate::events::publish_events(state, conn, events).await
 }
 
 /// Starts deleting every message `author` posted since `since` in the channels `visible` covers
@@ -1676,7 +1712,6 @@ pub async fn set_pinned(
     id: MessageId,
     pinned: bool,
 ) -> Result<(Option<crate::channel::Pin>, bool), crate::Error> {
-    use aspen_schema::pin;
     let mut conn = state.connection_pool.get().await?;
     let channel_id: ChannelId = message::table
         .select(message::channel)
