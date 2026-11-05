@@ -81,6 +81,11 @@ server, the voice server, and SeaweedFS, each at a name of its own on port 443:
 | `https://s3.$HOST`    | SeaweedFS's S3 API, uploads        |
 | `https://media.$HOST` | SeaweedFS's filer, downloads       |
 
+Plain HTTP on port 80 is sent on to HTTPS at the same name and path, but for requests under `/api/`,
+which are refused as a box's Caddy refuses them (`docs/operators/installing/4-api-server.md`, Plain
+HTTP). Caddy does not start when another program holds a port it listens on: `ASPEN_DEV_HTTP_PORT`
+moves it from 80, as `ASPEN_DEV_HTTPS_PORT` moves it from 443.
+
 The filer lists directories and takes uploads and deletes from anyone, so Caddy lets through to it
 only `GET` and `HEAD` of a single file under the bucket's four prefixes clients read
 (`attachments/`, `attachment-previews/`, `icons/`, `link-preview-images/`), as the box does

@@ -7,6 +7,7 @@ Only these need to be reachable by the people using the deployment:
 | What                                               | Where                                                                              |
 | -------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | The API servers (or the reverse proxy before them) | TCP 443 at `public_url`                                                            |
+| The reverse proxy's answers to plain HTTP          | TCP 80 at `public_url`'s host (see [Plain HTTP](4-api-server.md#plain-http))       |
 | Each voice server's signalling                     | TCP 443 at its registered `url`, through its TLS proxy                             |
 | Each voice server's media                          | UDP and TCP `min_port` to `max_port`                                               |
 | Each voice server's file transfers                 | UDP `[transfer] port` (3478)                                                       |

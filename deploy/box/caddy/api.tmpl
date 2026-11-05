@@ -13,3 +13,16 @@ ${domain} {
 		lb_try_interval 250ms
 	}
 }
+
+# The same name over plain HTTP, which Caddy sends on to HTTPS for every name it serves. The
+# API's requests are refused instead: a client set up with an `http://` address would follow
+# the redirect and go on working, sending its token in the clear ahead of every one, where a
+# refusal fails the first time it is tried.
+http://${domain} {
+	handle /api/* {
+		respond "This deployment answers its API over HTTPS only: use https://${domain}. Whatever was sent with this request, a session or bot token included, crossed the network unencrypted, so replace it." 403
+	}
+	handle {
+		redir https://${domain}{uri} permanent
+	}
+}

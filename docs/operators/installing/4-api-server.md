@@ -20,6 +20,9 @@ aspen-chat-server --cert fullchain.pem --key privkey.pem
 
 The server does not notice a renewed certificate. Restart it after renewing.
 
+The server answers nothing over plain HTTP. Someone who types the deployment's name with `http://`
+reaches nothing, unless a proxy on port 80 sends them on (see [Plain HTTP](#plain-http)).
+
 Without `--cert` and `--key`, and without `--no-https` (below), it refuses to start.
 
 ## Behind a reverse proxy
@@ -49,6 +52,34 @@ browsers, which give up at a redirect or at anything but the server's own answer
   [Android apps and passkeys](../configuration/accounts.md#android-apps-and-passkeys)). It must
   answer `200` with `Content-Type: application/json`, over `https` at port 443, with no redirect. Do
   not serve a file of your own there: the server's names the apps it accepts.
+
+### Plain HTTP
+
+The server listens on one port, so what answers port 80 is the proxy. Have it:
+
+- send every request on to the same path over HTTPS, so someone who types the deployment's name
+  without `https://` arrives;
+- refuse every request under `/api/` instead, with a `403`.
+
+**A redirect under `/api/` hides a client set up with an `http://` address.** It follows the
+redirect and goes on working, sending its token unencrypted ahead of every request.
+
+With Caddy:
+
+```
+http://chat.example.org {
+    handle /api/* {
+        respond "This deployment answers its API over HTTPS only: use https://chat.example.org. Whatever was sent with this request, a session or bot token included, crossed the network unencrypted, so replace it." 403
+    }
+    handle {
+        redir https://chat.example.org{uri} permanent
+    }
+}
+```
+
+Open port 80 over both families, as port 443 is. See
+[A client is told the API answers over HTTPS only](../troubleshooting/web-and-storage.md#a-client-is-told-the-api-answers-over-https-only)
+for what to do when someone meets the refusal.
 
 ## Health checks
 

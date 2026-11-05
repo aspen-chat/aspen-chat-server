@@ -142,6 +142,30 @@ resource "aws_lb_listener" "http" {
   }
 }
 
+# The API's requests over plain HTTP are refused rather than sent on with everything else: a
+# client set up with an `http://` address would follow the redirect and go on working, sending
+# its token in the clear ahead of every one, where a refusal fails the first time it is tried.
+resource "aws_lb_listener_rule" "http_api" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 1
+
+  condition {
+    path_pattern {
+      values = ["/api/*"]
+    }
+  }
+
+  action {
+    type = "fixed-response"
+
+    fixed_response {
+      status_code  = "403"
+      content_type = "text/plain"
+      message_body = "This deployment answers its API over HTTPS only: use https://${var.domain}. Whatever was sent with this request, a session or bot token included, crossed the network unencrypted, so replace it."
+    }
+  }
+}
+
 resource "aws_ecs_service" "api" {
   name            = "api"
   cluster         = module.cluster.id

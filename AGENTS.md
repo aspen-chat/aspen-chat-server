@@ -429,19 +429,20 @@ every service on loopback behind Caddy, PostgreSQL and storage each bundled (sto
 kept elsewhere, voice servers on other machines (each a box of its own, `init-voice`, reaching NATS
 over TLS from the box's own authority), upgrades that start the new API server beside the old,
 backups, `export` (the database and people's files, for a deployment that replaces the box), and
-`doctor`, which checks the machine, DNS, certificates, and the storage's read path and says what to
-fix; `scripts/check_box.py` checks all of it against built images. `deploy/aws/` is an OpenTofu
-configuration for a whole deployment on AWS, and `deploy/aws-single/` runs the box on one AWS
-machine with its files in S3, releasing through Session Manager; both are prototypes that have been
-planned (`tofu test` in each, which needs no account) and never applied. All three write
-`aspen.toml`, `voice_server.toml`, and NATS's configuration from `deploy/templates/`, which hold
-only `${name}` placeholders so that OpenTofu and `aspen-box` fill them alike: a setting a deployment
-cannot start without is added there and to each caller. `deploy/aws/migrate.py` moves a box to the
-larger configuration: a box from `aws-single` hands over its bucket and read path (`media_bucket`,
-the media module's `handed_over`), any other has its files copied from its export, and both have
-their database restored from a dump, so whatever a deployment keeps outside PostgreSQL and the
-bucket must be added to `aspen-box export` and that move. See `deploy/README.md`, and
-`docs/architecture/operations/deploying-from-files-design-notes.md` for why it is the way it is.
+`doctor`, which checks the machine, DNS, certificates, what plain HTTP is answered with, and the
+storage's read path and says what to fix; `scripts/check_box.py` checks all of it against built
+images. `deploy/aws/` is an OpenTofu configuration for a whole deployment on AWS, and
+`deploy/aws-single/` runs the box on one AWS machine with its files in S3, releasing through Session
+Manager; both are prototypes that have been planned (`tofu test` in each, which needs no account)
+and never applied. All three write `aspen.toml`, `voice_server.toml`, and NATS's configuration from
+`deploy/templates/`, which hold only `${name}` placeholders so that OpenTofu and `aspen-box` fill
+them alike: a setting a deployment cannot start without is added there and to each caller.
+`deploy/aws/migrate.py` moves a box to the larger configuration: a box from `aws-single` hands over
+its bucket and read path (`media_bucket`, the media module's `handed_over`), any other has its files
+copied from its export, and both have their database restored from a dump, so whatever a deployment
+keeps outside PostgreSQL and the bucket must be added to `aspen-box export` and that move. See
+`deploy/README.md`, and `docs/architecture/operations/deploying-from-files-design-notes.md` for why
+it is the way it is.
 
 ### Continuous integration
 

@@ -17,6 +17,8 @@ chat.example.org {
 }
 ```
 
+What it answers plain HTTP with is in [Plain HTTP](4-api-server.md#plain-http).
+
 ## Caching
 
 | Files            | Caching                                                  |

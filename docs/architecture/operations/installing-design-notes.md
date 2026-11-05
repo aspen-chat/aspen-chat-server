@@ -33,6 +33,25 @@ Why the operator's installation guide
   server half listening, and an operator who asked for an address learns at startup that it is not
   there.
 
+## Plain HTTP
+
+- **The proxy answers port 80, not the server.** The server listens on one port, and behind a proxy
+  it never sees port 80. The box's Caddy (`deploy/box/caddy/api.tmpl`), the development one
+  (`scripts/caddy/Caddyfile`), and the AWS load balancer (`deploy/aws/servers.tf`) each do what the
+  guide asks of a proxy.
+- **Requests under `/api/` are refused, never redirected.** A client set up with an `http://`
+  address follows a redirect and goes on working, sending its token unencrypted ahead of every
+  request, and nobody notices. A refusal fails the first time it is tried. A browser's preflight is
+  refused with the rest, so the request it asked leave for is never sent.
+- **Only `/api/` is refused.** A session's or a bot's token is sent to no other path of the
+  server's, and telling the web client's paths from the rest would copy the server's routes into the
+  proxy's configuration, where they would fall behind.
+- **The refusal is the proxy's plain text, not a Problem.** The server never sees the request, so
+  the answer cannot be in the reader's language, and a `code` the server does not send would have to
+  be listed among those it does.
+
+See [Step 4](../../operators/installing/4-api-server.md#plain-http).
+
 ## Outbound requests
 
 - **Fetches to addresses others choose ignore `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`.** A

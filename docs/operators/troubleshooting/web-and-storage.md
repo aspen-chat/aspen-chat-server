@@ -5,6 +5,16 @@
 1. Open `https://<your domain>/api/v1/auth/methods` in a browser. It should answer JSON.
 2. If it answers a page instead, your proxy sends `/api/` to something other than the API servers.
 
+## A client is told the API answers over HTTPS only
+
+The reverse proxy answers any request under `/api/` over plain HTTP with `403` and that text, in
+English (see [Plain HTTP](../installing/4-api-server.md#plain-http)). The server never saw the
+request.
+
+1. Give the client, bot, or script the deployment's address as `public_url` has it, with `https://`.
+2. Replace whatever it sent, which crossed the network unencrypted. A person signs out and in again;
+   a bot's owner issues it a new token under Settings, then Developer.
+
 ## Uploads fail
 
 The browser uploads straight to `[media.s3] public_endpoint`. It must:

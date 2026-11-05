@@ -87,6 +87,25 @@ def status_of(url: str, method: str = "GET") -> int | None:
         return None
 
 
+class Unfollowed(urllib.request.HTTPRedirectHandler):
+    """Follows no redirect, so that one is read as the answer it is."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def unfollowed(url: str) -> tuple:
+    """The status a GET of `url` is answered with and the `Location` it names, following no
+    redirect; `(None, None)` when nothing answers."""
+    try:
+        with urllib.request.build_opener(Unfollowed).open(url, timeout=10) as response:
+            return response.status, None
+    except urllib.error.HTTPError as error:
+        return error.code, error.headers.get("Location")
+    except (OSError, ValueError):
+        return None, None
+
+
 def nats_says(host: str, port: int = 4222) -> dict | None:
     """What a NATS server says first to whoever connects (its `INFO`), before any TLS."""
     try:
@@ -311,11 +330,37 @@ def check_from_outside(box: dict, report: Report, network: dict) -> None:
         else:
             report.ok(f"NATS at {host}:4222 answers, over TLS")
     else:
+        check_plain_http(box, report)
         check_read_path(box, report)
     report.note(
         "Not checked: whether the internet reaches the voice server's media ports",
         "Join a call from a phone off the Wi-Fi. If it connects and no one is heard, those ports are not forwarded.",
     )
+
+
+def check_plain_http(box: dict, report: Report) -> None:
+    """What `caddy/api.tmpl` answers plain HTTP with: a page is sent on to HTTPS, and the API's
+    requests are refused, never redirected."""
+    domain = box["domain"]
+    rewrite = "`aspen-box up` writes Caddy's configuration again. If it still does, something other than this box answers port 80 at that address."
+    status, location = unfollowed(f"http://{domain}/")
+    if status is None:
+        report.fail(
+            f"http://{domain} did not answer",
+            "Someone who types the name without https:// gets nothing. Port 80 must reach this machine: check the router and any firewall.",
+        )
+        return
+    if status not in (301, 308) or not (location or "").startswith(f"https://{domain}/"):
+        report.fail(f"http://{domain} answered {status}, rather than sending browsers on to https://{domain}", rewrite)
+        return
+    status, _ = unfollowed(f"http://{domain}/api/v1/health")
+    if status != 403:
+        report.fail(
+            f"http://{domain}/api/v1/health answered {status}, rather than refusing",
+            "A client set up with an http:// address would go on working, sending its token unencrypted on every request. " + rewrite,
+        )
+        return
+    report.ok("Plain HTTP is sent on to HTTPS, but for the API, which refuses it")
 
 
 def check_read_path(box: dict, report: Report) -> None:

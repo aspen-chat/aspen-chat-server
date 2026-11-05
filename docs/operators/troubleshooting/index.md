@@ -25,8 +25,8 @@ The server logs to standard error. `ASPEN_LOG` sets how much, as `RUST_LOG` does
 - [Plugins](plugins.md): plugins refusing messages or failing.
 - [The live connection](live-connection.md): the event stream's close codes, and connections that
   drop or never open.
-- [Web client and storage](web-and-storage.md): the web client cannot reach the server, uploads,
-  pictures, and videos.
+- [Web client and storage](web-and-storage.md): the web client cannot reach the server, the API
+  refused over plain HTTP, uploads, pictures, and videos.
 - [Calls](calls.md): nobody can join, no sound, Silent or unregistered voice servers, repaired call
   records, and suspended voice servers.
 - [Phones](phones.md): phones that are not woken.

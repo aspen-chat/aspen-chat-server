@@ -8,10 +8,11 @@ service of the box shares, so it works under rootless Docker too, and leaves the
 ports alone):
 
 - a whole deployment, files and database on the machine: the API, the web client, and the voice
-  server through Caddy; the read path's refusals; the build the event stream names; an upgrade
-  under load that loses no request; a changed setting taking effect without a gap; a backup and
-  a restore, with a session from before it still good; an export of the database and people's
-  files, which stops it, and `up`, which starts it again;
+  server through Caddy; plain HTTP sent on to HTTPS, but for the API, which refuses it; the read
+  path's refusals; the build the event stream names; an upgrade under load that loses no request;
+  a changed setting taking effect without a gap; a backup and a restore, with a session from
+  before it still good; an export of the database and people's files, which stops it, and `up`,
+  which starts it again;
 - a second box holding a voice server of that deployment's, on "another machine": the
   deployment opens NATS over TLS for it, registers it, and gives it a NATS user of its own,
   which it reaches the deployment with; then its removal, which closes NATS again;
@@ -121,7 +122,7 @@ class Box:
         (self.dir / "box.json").write_text(json.dumps(box, indent=2) + "\n")
 
     def curl(self, *args: str, resolve: tuple = (DOMAIN,)) -> str:
-        names = [flag for name in resolve for flag in ("--resolve", f"{name}:443:127.0.0.1")]
+        names = [flag for name in resolve for port in (80, 443) for flag in ("--resolve", f"{name}:{port}:127.0.0.1")]
         return run("docker", "run", "--rm", "--network", f"container:{self.netns}", CURL, "-sk", "-m", "10",
                    *names, *args, check=False).stdout  # fmt: skip
 
@@ -199,6 +200,9 @@ def check_main(images: dict) -> Box:
     expect("the API is up", box.status(f"https://{DOMAIN}/api/v1/health"), 204)
     expect("the API is ready", box.status(f"https://{DOMAIN}/api/v1/health/ready"), 204)
     expect("the web client is served", box.status(f"https://{DOMAIN}/"), 200)
+    sent_on = box.curl("-o", "/dev/null", "-w", "%{http_code} %{redirect_url}", f"http://{DOMAIN}/invite/abc?at=elsewhere.example")
+    expect("plain HTTP is sent on to HTTPS", sent_on, f"301 https://{DOMAIN}/invite/abc?at=elsewhere.example")
+    expect("but for the API, which refuses it", box.status(f"http://{DOMAIN}/api/v1/health"), 403)
     expect("the voice server answers", box.status(f"https://voice.{DOMAIN}/health", resolve=resolve), 204)
     media = f"https://media.{DOMAIN}"
     for path, method in (("/", "GET"), ("/?list-type=2", "GET"), ("/evidence/x", "GET"), ("/attachments/a/b", "GET"), ("/attachments/w", "PUT")):

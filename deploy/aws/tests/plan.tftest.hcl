@@ -127,6 +127,15 @@ run "release" {
 
   assert {
     condition = (
+      aws_lb_listener.http.default_action[0].redirect[0].protocol == "HTTPS"
+      && one(aws_lb_listener_rule.http_api.condition).path_pattern[0].values == toset(["/api/*"])
+      && aws_lb_listener_rule.http_api.action[0].fixed_response[0].status_code == "403"
+    )
+    error_message = "Plain HTTP is sent on to HTTPS, but for the API's requests, which are refused, never redirected (docs/operators/installing/4-api-server.md)."
+  }
+
+  assert {
+    condition = (
       local.voice_placement["voice-1"].ipv6 == "2001:db8:42:ab01:0:1:7666:a5f9"
       && local.voice_placement["voice-2"].ipv6 == "2001:db8:42:ab00:0:1:e858:41dc"
       && aws_instance.voice["voice-2"].ipv6_addresses == tolist(["2001:db8:42:ab00:0:1:e858:41dc"])

@@ -2,10 +2,11 @@
 # service in docker-compose.yaml, with the certificate `scripts/dev_ca.py issue $ASPEN_DEV_HOST
 # '*.$ASPEN_DEV_HOST'` writes (docs/development/local-https.md). The deployment, its voice
 # server, and SeaweedFS's S3 API and filer each answer at a name of their own under the host, all
-# on one port. Every upstream is this machine's, speaking plain HTTP.
+# on one port. Every upstream is this machine's, speaking plain HTTP. Plain HTTP, on a port of
+# its own, is sent on to HTTPS.
 {
-	# The certificates are given; nothing is fetched from an ACME authority, and nothing listens
-	# on port 80 to redirect.
+	# The certificates are given, so nothing is fetched from an ACME authority, and what plain
+	# HTTP is answered with is the sites at the end.
 	auto_https off
 	servers {
 		protocols h1 h2
@@ -51,4 +52,20 @@ https://media.{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTPS_PORT:443} {
 		reverse_proxy 127.0.0.1:8888
 	}
 	respond 404
+}
+
+# The deployment's name over plain HTTP, sent on to HTTPS but for the API's requests, which are
+# refused as a box refuses them (deploy/box/caddy/api.tmpl says why).
+http://{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTP_PORT:80} {
+	handle /api/* {
+		respond "This deployment answers its API over HTTPS only: use https://{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTPS_PORT:443}. Whatever was sent with this request, a session or bot token included, crossed the network unencrypted, so replace it." 403
+	}
+	handle {
+		redir https://{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTPS_PORT:443}{uri} permanent
+	}
+}
+
+# The names under it, sent on whole.
+http://*.{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTP_PORT:80} {
+	redir https://{host}:{$ASPEN_DEV_HTTPS_PORT:443}{uri} permanent
 }
