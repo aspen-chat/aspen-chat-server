@@ -17,6 +17,8 @@ import {
 import { inputClass, labelClass, primaryButtonClass } from "@/features/auth/styles";
 import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { useUnsavedChanges } from "@/features/layout/unsavedChanges";
+import { UnsavedChangesGuard } from "@/features/layout/UnsavedChangesGuard";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -47,34 +49,38 @@ export function AttachmentDescriptionButton({
   const described = description.trim().length > 0;
   const label = format(described ? m.editAttachmentDescription : m.describeAttachment, { name });
   return (
-    <DialogTrigger>
-      <Tooltip text={label}>
-        <Button aria-label={label} className={className}>
-          <TextAlignLeftIcon
-            size={14}
-            weight={described ? "bold" : "regular"}
-            aria-hidden="true"
-            className={described ? "text-accent" : undefined}
-          />
-        </Button>
-      </Tooltip>
-      <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={modalClass}>
-          <Dialog className={dialogClass}>
-            {({ close }) => (
-              <DescriptionForm
-                name={name}
-                description={description}
-                onSave={(text) => {
-                  onSave(text);
-                  close();
-                }}
+    <UnsavedChangesGuard>
+      {(guard) => (
+        <DialogTrigger isOpen={guard.isOpen} onOpenChange={guard.onOpenChange}>
+          <Tooltip text={label}>
+            <Button aria-label={label} className={className}>
+              <TextAlignLeftIcon
+                size={14}
+                weight={described ? "bold" : "regular"}
+                aria-hidden="true"
+                className={described ? "text-accent" : undefined}
               />
-            )}
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
-    </DialogTrigger>
+            </Button>
+          </Tooltip>
+          <ModalOverlay isDismissable className={overlayClass}>
+            <Modal className={modalClass}>
+              <Dialog className={dialogClass}>
+                {({ close }) => (
+                  <DescriptionForm
+                    name={name}
+                    description={description}
+                    onSave={(text) => {
+                      onSave(text);
+                      close();
+                    }}
+                  />
+                )}
+              </Dialog>
+            </Modal>
+          </ModalOverlay>
+        </DialogTrigger>
+      )}
+    </UnsavedChangesGuard>
   );
 }
 
@@ -90,6 +96,7 @@ function DescriptionForm({
 }) {
   const m = useMessages();
   const [text, setText] = useState(description);
+  const saved = useUnsavedChanges(text !== description);
   return (
     <Form
       onSubmit={(event) => {
@@ -97,6 +104,7 @@ function DescriptionForm({
         // React carries events up through the portal the modal is in, and the message box this
         // opens from is a form too, which would send the message.
         event.stopPropagation();
+        saved();
         onSave(text.trim());
       }}
       className="flex flex-col gap-4"

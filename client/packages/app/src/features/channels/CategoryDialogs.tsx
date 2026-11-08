@@ -27,6 +27,7 @@ import {
   overlayClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { UnsavedChangesGuard } from "@/features/layout/UnsavedChangesGuard";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -46,55 +47,69 @@ export function RenameCategoryDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
-    <ModalOverlay
+    <UnsavedChangesGuard
+      dirty={name.trim() !== category.name}
       isOpen={isOpen}
       onOpenChange={onOpenChange}
-      isDismissable
-      className={overlayClass}
     >
-      <Modal className={modalClass}>
-        <Dialog className={dialogClass}>
-          <DialogHeading>
-            {format(m.channelLayout.renameCategory, { category: category.name })}
-          </DialogHeading>
-          <Form
-            onSubmit={(event) => {
-              event.preventDefault();
-              setSaving(true);
-              setError(null);
-              sync.renameCategory(category.id, name.trim()).then(
-                () => {
-                  setSaving(false);
-                  onOpenChange(false);
-                },
-                (e: unknown) => {
-                  setSaving(false);
-                  setError(problemText(e));
-                },
-              );
-            }}
-            className="flex flex-col gap-3"
-          >
-            <TextField value={name} onChange={setName} isRequired autoFocus className={fieldClass}>
-              <Label className={labelClass}>{m.categoryNameLabel}</Label>
-              <Input className={inputClass} />
-            </TextField>
-            {error !== null && (
-              <p role="alert" className={alertClass}>
-                {error}
-              </p>
-            )}
-            <Button
-              type="submit"
-              isDisabled={saving || name.trim() === "" || name.trim() === category.name}
-              className={primaryButtonClass + " self-start"}
-            >
-              {m.channelActions.save}
-            </Button>
-          </Form>
-        </Dialog>
-      </Modal>
-    </ModalOverlay>
+      {(guard) => (
+        <ModalOverlay
+          isOpen={guard.isOpen}
+          onOpenChange={guard.onOpenChange}
+          isDismissable
+          className={overlayClass}
+        >
+          <Modal className={modalClass}>
+            <Dialog className={dialogClass}>
+              <DialogHeading>
+                {format(m.channelLayout.renameCategory, { category: category.name })}
+              </DialogHeading>
+              <Form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  setSaving(true);
+                  setError(null);
+                  sync.renameCategory(category.id, name.trim()).then(
+                    () => {
+                      setSaving(false);
+                      guard.close();
+                    },
+                    (e: unknown) => {
+                      setSaving(false);
+                      setError(problemText(e));
+                    },
+                  );
+                }}
+                className="flex flex-col gap-3"
+              >
+                <TextField
+                  value={name}
+                  onChange={setName}
+                  isRequired
+                  autoFocus
+                  className={fieldClass}
+                >
+                  <Label className={labelClass}>{m.categoryNameLabel}</Label>
+                  <Input className={inputClass} />
+                </TextField>
+                {error !== null && (
+                  <p role="alert" className={alertClass}>
+                    {error}
+                  </p>
+                )}
+                <Button
+                  type="submit"
+                  isDisabled={saving || name.trim() === "" || name.trim() === category.name}
+                  className={primaryButtonClass + " self-start"}
+                >
+                  {m.channelActions.save}
+                </Button>
+              </Form>
+            </Dialog>
+          </Modal>
+        </ModalOverlay>
+      )}
+    </UnsavedChangesGuard>
   );
 }
 

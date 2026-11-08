@@ -40,6 +40,7 @@ import { ReauthProvider } from "@/features/security/reauth";
 import { useReauth } from "@/features/security/reauthContext";
 import { useSecuritySettings } from "@/features/security/useSecuritySettings";
 import { formString } from "@/forms";
+import { useUnsavedChanges } from "@/features/layout/unsavedChanges";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
@@ -158,6 +159,9 @@ function AddressSection({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<string | null>(null);
+  /** The address as typed so far, which closing the dialog would lose. */
+  const [draft, setDraft] = useState("");
+  useUnsavedChanges(editing && draft.trim() !== "");
   const address = account.address ?? null;
 
   async function save(form: HTMLFormElement) {
@@ -234,8 +238,9 @@ function AddressSection({
             autoComplete="email"
             // A field marked invalid blocks the form's next submission, so its error goes as
             // soon as the field is edited.
-            onChange={() => {
+            onChange={(value) => {
               setFieldError(null);
+              setDraft(value);
             }}
             isInvalid={fieldError !== null}
             className={fieldClass}
@@ -268,6 +273,7 @@ function AddressSection({
         <div className="flex flex-wrap gap-2">
           <Button
             onPress={() => {
+              setDraft("");
               setEditing(true);
             }}
             className={secondaryButtonClass}

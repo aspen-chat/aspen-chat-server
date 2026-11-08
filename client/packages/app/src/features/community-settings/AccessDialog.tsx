@@ -49,6 +49,8 @@ import {
   wideModalClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { useUnsavedChanges } from "@/features/layout/unsavedChanges";
+import { UnsavedChangesGuard } from "@/features/layout/UnsavedChangesGuard";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { primaryButtonClass } from "@/features/auth/styles";
@@ -76,24 +78,28 @@ export function AccessDialog({
 }) {
   const m = useMessages();
   return (
-    <ModalOverlay
-      isOpen={isOpen}
-      onOpenChange={onOpenChange}
-      isDismissable
-      className={overlayClass}
-    >
-      <Modal className={wideModalClass}>
-        <Dialog className={dialogClass}>
-          <DialogHeading>
-            {target.kind === "channel"
-              ? format(m.access.channelHeading, { channel: target.name })
-              : format(m.access.categoryHeading, { category: target.name })}
-          </DialogHeading>
-          {target.kind === "category" && <p className={hintClass}>{m.access.categoryNote}</p>}
-          <AccessEditor target={target} />
-        </Dialog>
-      </Modal>
-    </ModalOverlay>
+    <UnsavedChangesGuard isOpen={isOpen} onOpenChange={onOpenChange}>
+      {(guard) => (
+        <ModalOverlay
+          isOpen={guard.isOpen}
+          onOpenChange={guard.onOpenChange}
+          isDismissable
+          className={overlayClass}
+        >
+          <Modal className={wideModalClass}>
+            <Dialog className={dialogClass}>
+              <DialogHeading>
+                {target.kind === "channel"
+                  ? format(m.access.channelHeading, { channel: target.name })
+                  : format(m.access.categoryHeading, { category: target.name })}
+              </DialogHeading>
+              {target.kind === "category" && <p className={hintClass}>{m.access.categoryNote}</p>}
+              <AccessEditor target={target} />
+            </Dialog>
+          </Modal>
+        </ModalOverlay>
+      )}
+    </UnsavedChangesGuard>
   );
 }
 
@@ -141,6 +147,11 @@ function Presets({
   const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set(current.roles));
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useUnsavedChanges(
+    preset !== current.preset ||
+      chosen.size !== current.roles.length ||
+      current.roles.some((role) => !chosen.has(role)),
+  );
   const others = roles.filter((r) => !r.everyone).reverse();
 
   async function apply() {
@@ -237,6 +248,7 @@ function Advanced({
   const [roleId, setRoleId] = useState<string | null>(highestFirst.at(-1)?.id ?? null);
   const [draft, setDraft] = useState<ReadonlyMap<Permission, Setting> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useUnsavedChanges(draft !== null);
   const saved = overrides.find((o) => o.role === roleId);
   const settingOf = (p: Permission): Setting =>
     draft?.get(p) ??

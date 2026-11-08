@@ -29,6 +29,7 @@ import {
 } from "@/features/auth/styles";
 import { optionClass, selectButtonClass, selectPopoverClass } from "@/features/invites/dialog";
 import { ChoiceCheckbox } from "@/features/layout/choices";
+import { useUnsavedChanges } from "@/features/layout/unsavedChanges";
 import { useMessages } from "@/i18n/context";
 
 /** A value as a form holds it, before it becomes what the server takes. */
@@ -103,11 +104,12 @@ export function SettingsForm({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const original = start();
+  const changed = fields.filter((f) => !same(drafts[f.name] ?? null, original[f.name] ?? null));
+  useUnsavedChanges(changed.length > 0);
   if (fields.length === 0) {
     return <p className={hintClass}>{m.plugins.noSettings}</p>;
   }
-  const original = start();
-  const changed = fields.filter((f) => !same(drafts[f.name] ?? null, original[f.name] ?? null));
 
   function set(name: string, draft: Draft) {
     setSaved(false);

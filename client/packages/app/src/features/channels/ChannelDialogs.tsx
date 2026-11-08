@@ -28,6 +28,7 @@ import {
   overlayClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { UnsavedChangesGuard } from "@/features/layout/UnsavedChangesGuard";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useDomain, communityLink } from "@/features/messages/links";
@@ -49,56 +50,80 @@ export function RenameChannelDialog({
   const [name, setName] = useState(channel.name);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The dialog stays mounted beside its channel while closed, so each opening starts from the
+  // channel's name as it is, and a draft discarded at the last one is gone.
+  const [shownOpen, setShownOpen] = useState(isOpen);
+  if (isOpen !== shownOpen) {
+    setShownOpen(isOpen);
+    if (isOpen) {
+      setName(channel.name);
+      setError(null);
+    }
+  }
   return (
-    <ModalOverlay
+    <UnsavedChangesGuard
+      dirty={name.trim() !== channel.name}
       isOpen={isOpen}
       onOpenChange={onOpenChange}
-      isDismissable
-      className={overlayClass}
     >
-      <Modal className={modalClass}>
-        <Dialog className={dialogClass}>
-          <DialogHeading>
-            {format(m.channelActions.renameHeading, { channel: channel.name })}
-          </DialogHeading>
-          <Form
-            onSubmit={(event) => {
-              event.preventDefault();
-              setSaving(true);
-              setError(null);
-              sync.renameChannel(channel.id, name.trim()).then(
-                () => {
-                  setSaving(false);
-                  onOpenChange(false);
-                },
-                (e: unknown) => {
-                  setSaving(false);
-                  setError(problemText(e));
-                },
-              );
-            }}
-            className="flex flex-col gap-3"
-          >
-            <TextField value={name} onChange={setName} isRequired autoFocus className={fieldClass}>
-              <Label className={labelClass}>{m.channelActions.nameLabel}</Label>
-              <Input className={inputClass} />
-            </TextField>
-            {error !== null && (
-              <p role="alert" className={alertClass}>
-                {error}
-              </p>
-            )}
-            <Button
-              type="submit"
-              isDisabled={saving || name.trim() === "" || name.trim() === channel.name}
-              className={primaryButtonClass + " self-start"}
-            >
-              {m.channelActions.save}
-            </Button>
-          </Form>
-        </Dialog>
-      </Modal>
-    </ModalOverlay>
+      {(guard) => (
+        <ModalOverlay
+          isOpen={guard.isOpen}
+          onOpenChange={guard.onOpenChange}
+          isDismissable
+          className={overlayClass}
+        >
+          <Modal className={modalClass}>
+            <Dialog className={dialogClass}>
+              <DialogHeading>
+                {format(m.channelActions.renameHeading, { channel: channel.name })}
+              </DialogHeading>
+              <Form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  setSaving(true);
+                  setError(null);
+                  sync.renameChannel(channel.id, name.trim()).then(
+                    () => {
+                      setSaving(false);
+                      guard.close();
+                    },
+                    (e: unknown) => {
+                      setSaving(false);
+                      setError(problemText(e));
+                    },
+                  );
+                }}
+                className="flex flex-col gap-3"
+              >
+                <TextField
+                  value={name}
+                  onChange={setName}
+                  isRequired
+                  autoFocus
+                  className={fieldClass}
+                >
+                  <Label className={labelClass}>{m.channelActions.nameLabel}</Label>
+                  <Input className={inputClass} />
+                </TextField>
+                {error !== null && (
+                  <p role="alert" className={alertClass}>
+                    {error}
+                  </p>
+                )}
+                <Button
+                  type="submit"
+                  isDisabled={saving || name.trim() === "" || name.trim() === channel.name}
+                  className={primaryButtonClass + " self-start"}
+                >
+                  {m.channelActions.save}
+                </Button>
+              </Form>
+            </Dialog>
+          </Modal>
+        </ModalOverlay>
+      )}
+    </UnsavedChangesGuard>
   );
 }
 
@@ -189,6 +214,17 @@ export function ChannelManaDialog({
   const [max, setMax] = useState(channel.manaMax ?? NaN);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // As `RenameChannelDialog`: mounted while closed, each opening starts from the channel's own
+  // limits as they are.
+  const [shownOpen, setShownOpen] = useState(isOpen);
+  if (isOpen !== shownOpen) {
+    setShownOpen(isOpen);
+    if (isOpen) {
+      setRecharge(channel.manaRecharge ?? NaN);
+      setMax(channel.manaMax ?? NaN);
+      setError(null);
+    }
+  }
   const own = (value: number) => (Number.isNaN(value) ? null : value);
   const field = (
     value: number,
@@ -214,55 +250,70 @@ export function ChannelManaDialog({
     </NumberField>
   );
   return (
-    <ModalOverlay
+    <UnsavedChangesGuard
+      dirty={
+        own(recharge) !== (channel.manaRecharge ?? null) || own(max) !== (channel.manaMax ?? null)
+      }
       isOpen={isOpen}
       onOpenChange={onOpenChange}
-      isDismissable
-      className={overlayClass}
     >
-      <Modal className={modalClass}>
-        <Dialog className={dialogClass}>
-          <DialogHeading>
-            {format(m.channelActions.manaHeading, { channel: channel.name })}
-          </DialogHeading>
-          <p className={hintClass}>{m.channelActions.manaHint}</p>
-          <Form
-            onSubmit={(event) => {
-              event.preventDefault();
-              setSaving(true);
-              setError(null);
-              sync
-                .setChannelMana(channel.id, { manaRecharge: own(recharge), manaMax: own(max) })
-                .then(
-                  () => {
-                    setSaving(false);
-                    onOpenChange(false);
-                  },
-                  (e: unknown) => {
-                    setSaving(false);
-                    setError(problemText(e));
-                  },
-                );
-            }}
-            className="flex flex-col gap-3"
-          >
-            {field(recharge, setRecharge, m.channelActions.manaRecharge, deployment?.maxRecharge)}
-            {field(max, setMax, m.channelActions.manaMax, deployment?.max)}
-            {error !== null && (
-              <p role="alert" className={alertClass}>
-                {error}
-              </p>
-            )}
-            <Button
-              type="submit"
-              isDisabled={saving}
-              className={primaryButtonClass + " self-start"}
-            >
-              {m.channelActions.manaSave}
-            </Button>
-          </Form>
-        </Dialog>
-      </Modal>
-    </ModalOverlay>
+      {(guard) => (
+        <ModalOverlay
+          isOpen={guard.isOpen}
+          onOpenChange={guard.onOpenChange}
+          isDismissable
+          className={overlayClass}
+        >
+          <Modal className={modalClass}>
+            <Dialog className={dialogClass}>
+              <DialogHeading>
+                {format(m.channelActions.manaHeading, { channel: channel.name })}
+              </DialogHeading>
+              <p className={hintClass}>{m.channelActions.manaHint}</p>
+              <Form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  setSaving(true);
+                  setError(null);
+                  sync
+                    .setChannelMana(channel.id, { manaRecharge: own(recharge), manaMax: own(max) })
+                    .then(
+                      () => {
+                        setSaving(false);
+                        guard.close();
+                      },
+                      (e: unknown) => {
+                        setSaving(false);
+                        setError(problemText(e));
+                      },
+                    );
+                }}
+                className="flex flex-col gap-3"
+              >
+                {field(
+                  recharge,
+                  setRecharge,
+                  m.channelActions.manaRecharge,
+                  deployment?.maxRecharge,
+                )}
+                {field(max, setMax, m.channelActions.manaMax, deployment?.max)}
+                {error !== null && (
+                  <p role="alert" className={alertClass}>
+                    {error}
+                  </p>
+                )}
+                <Button
+                  type="submit"
+                  isDisabled={saving}
+                  className={primaryButtonClass + " self-start"}
+                >
+                  {m.channelActions.manaSave}
+                </Button>
+              </Form>
+            </Dialog>
+          </Modal>
+        </ModalOverlay>
+      )}
+    </UnsavedChangesGuard>
   );
 }

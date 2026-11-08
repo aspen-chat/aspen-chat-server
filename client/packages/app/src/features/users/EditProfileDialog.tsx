@@ -36,6 +36,8 @@ import { IconPicker } from "@/features/media/IconPicker";
 import { profileForm, profilePatch, type ProfileForm } from "@/features/users/profile";
 import { EmojiChoiceButton } from "@/features/emoji/EmojiPickerOverlay";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { useUnsavedChanges } from "@/features/layout/unsavedChanges";
+import { UnsavedChangesGuard } from "@/features/layout/UnsavedChangesGuard";
 import { useMessages } from "@/i18n/context";
 
 /** Bounds mirrored from the server's `app::user`, so the form refuses what it would refuse. */
@@ -63,24 +65,28 @@ export function EditProfileDialog({
 }) {
   const m = useMessages();
   return (
-    <DialogTrigger>
-      {bot ? (
-        <Button className={triggerClassName}>{m.profile.edit}</Button>
-      ) : (
-        <Tooltip text={m.profile.edit}>
-          <Button aria-label={m.profile.edit} className={triggerClassName}>
-            <PencilSimpleIcon size={24} aria-hidden="true" />
-          </Button>
-        </Tooltip>
+    <UnsavedChangesGuard>
+      {(guard) => (
+        <DialogTrigger isOpen={guard.isOpen} onOpenChange={guard.onOpenChange}>
+          {bot ? (
+            <Button className={triggerClassName}>{m.profile.edit}</Button>
+          ) : (
+            <Tooltip text={m.profile.edit}>
+              <Button aria-label={m.profile.edit} className={triggerClassName}>
+                <PencilSimpleIcon size={24} aria-hidden="true" />
+              </Button>
+            </Tooltip>
+          )}
+          <ModalOverlay className={overlayClass} isDismissable>
+            <Modal className={modalClass}>
+              <Dialog className={dialogClass}>
+                {({ close }) => <ProfileEditor user={user} bot={bot} close={close} />}
+              </Dialog>
+            </Modal>
+          </ModalOverlay>
+        </DialogTrigger>
       )}
-      <ModalOverlay className={overlayClass} isDismissable>
-        <Modal className={modalClass}>
-          <Dialog className={dialogClass}>
-            {({ close }) => <ProfileEditor user={user} bot={bot} close={close} />}
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
-    </DialogTrigger>
+    </UnsavedChangesGuard>
   );
 }
 
@@ -92,6 +98,7 @@ function ProfileEditor({ user, bot, close }: { user: User; bot: boolean; close: 
   const [form, setForm] = useState<ProfileForm>(() => profileForm(user));
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const saved = useUnsavedChanges(Object.keys(profilePatch(user, form)).length > 0);
 
   function set<K extends keyof ProfileForm>(key: K, value: ProfileForm[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -114,6 +121,7 @@ function ProfileEditor({ user, bot, close }: { user: User; bot: boolean; close: 
           void signalProfileToPasskeys(client, transport, updated);
         }
       }
+      saved();
       close();
     } catch (e) {
       setError(e instanceof ApiProblemError ? e.message : String(e));

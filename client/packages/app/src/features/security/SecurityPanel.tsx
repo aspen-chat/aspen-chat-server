@@ -25,6 +25,7 @@ import {
 } from "@/features/auth/styles";
 import { planeClass, secondaryButtonClass } from "@/features/invites/dialog";
 import { formString } from "@/forms";
+import { useUnsavedChanges } from "@/features/layout/unsavedChanges";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
 import { format } from "@/i18n/messages";
@@ -182,6 +183,9 @@ function PasswordSection({ hasPassword, onSet }: { hasPassword: boolean; onSet: 
   const withReauth = useReauth();
   const me = useMe();
   const [open, setOpen] = useState(false);
+  /** Whether anything has been typed into the open form, which closing the dialog would lose. */
+  const [typed, setTyped] = useState(false);
+  useUnsavedChanges(open && typed);
   const [pending, setPending] = useState(false);
   /** What was last done, as the section then says: a password changed, or a first one set. */
   const [changed, setChanged] = useState<"changed" | "set" | null>(null);
@@ -259,6 +263,7 @@ function PasswordSection({ hasPassword, onSet }: { hasPassword: boolean; onSet: 
             onPress={() => {
               setErrors({});
               setChanged(null);
+              setTyped(false);
               setOpen(true);
             }}
             className={secondaryButtonClass + " shrink-0"}
@@ -288,6 +293,7 @@ function PasswordSection({ hasPassword, onSet }: { hasPassword: boolean; onSet: 
               name="currentPassword"
               type="password"
               onChange={() => {
+                setTyped(true);
                 clearError("current");
               }}
               isRequired
@@ -305,6 +311,7 @@ function PasswordSection({ hasPassword, onSet }: { hasPassword: boolean; onSet: 
             name="newPassword"
             type="password"
             onChange={() => {
+              setTyped(true);
               clearError("password");
             }}
             isRequired
@@ -327,6 +334,7 @@ function PasswordSection({ hasPassword, onSet }: { hasPassword: boolean; onSet: 
             name="confirmPassword"
             type="password"
             onChange={() => {
+              setTyped(true);
               clearError("confirm");
             }}
             isRequired
@@ -575,6 +583,8 @@ function PasskeyRow({ passkey, change }: { passkey: Passkey; change: Change }) {
   const client = useAspenClient();
   const withReauth = useReauth();
   const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(passkey.name);
+  useUnsavedChanges(renaming && draft !== passkey.name);
   const added = format(m.security.passkeyAdded, {
     date: dateFormat.format(new Date(passkey.createdAt)),
   });
@@ -602,6 +612,7 @@ function PasskeyRow({ passkey, change }: { passkey: Passkey; change: Change }) {
           <TextField
             name="name"
             defaultValue={passkey.name}
+            onChange={setDraft}
             maxLength={64}
             autoFocus
             aria-label={m.security.passkeyNameLabel}
@@ -634,6 +645,7 @@ function PasskeyRow({ passkey, change }: { passkey: Passkey; change: Change }) {
         <Button
           aria-label={`${m.security.rename} ${passkey.name}`}
           onPress={() => {
+            setDraft(passkey.name);
             setRenaming(true);
           }}
           className={secondaryButtonClass}

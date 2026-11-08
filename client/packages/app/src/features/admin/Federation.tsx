@@ -49,6 +49,8 @@ import {
 import { copyText } from "@/features/layout/clipboard";
 import { ChoiceCheckbox } from "@/features/layout/choices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { useUnsavedChanges } from "@/features/layout/unsavedChanges";
+import { UnsavedChangesGuard } from "@/features/layout/UnsavedChangesGuard";
 import { useMessages } from "@/i18n/context";
 import { format, type Messages } from "@/i18n/messages";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
@@ -878,74 +880,87 @@ function NoteEditor({
   onChanged: () => void;
 }) {
   const m = useMessages();
+  return (
+    <UnsavedChangesGuard>
+      {(guard) => (
+        <DialogTrigger isOpen={guard.isOpen} onOpenChange={guard.onOpenChange}>
+          <Button className={smallButtonClass + " self-start"}>
+            {deployment.note == null ? m.federation.addNote : m.federation.editNote}
+          </Button>
+          <ModalOverlay isDismissable className={overlayClass}>
+            <Modal className={modalClass}>
+              <Dialog className={dialogClass}>
+                {({ close }) => (
+                  <NoteForm deployment={deployment} onChanged={onChanged} close={close} />
+                )}
+              </Dialog>
+            </Modal>
+          </ModalOverlay>
+        </DialogTrigger>
+      )}
+    </UnsavedChangesGuard>
+  );
+}
+
+/** The note's form, made afresh each time the modal opens, so it starts from the note as kept. */
+function NoteForm({
+  deployment,
+  onChanged,
+  close,
+}: {
+  deployment: FederatedDeployment;
+  onChanged: () => void;
+  close: () => void;
+}) {
+  const m = useMessages();
   const sync = useSync();
   const [text, setText] = useState(deployment.note ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const saved = useUnsavedChanges(text !== (deployment.note ?? ""));
   return (
-    <DialogTrigger
-      onOpenChange={(open) => {
-        if (open) {
-          setText(deployment.note ?? "");
-          setError(null);
-        }
+    <Form
+      onSubmit={(event) => {
+        event.preventDefault();
+        const note = text.trim();
+        setSaving(true);
+        setError(null);
+        sync.admin.setFederatedDeploymentNote(deployment.domain, note === "" ? null : note).then(
+          () => {
+            setSaving(false);
+            saved();
+            onChanged();
+            close();
+          },
+          (e: unknown) => {
+            setSaving(false);
+            setError(problemText(e));
+          },
+        );
       }}
+      className="flex flex-col gap-4"
     >
-      <Button className={smallButtonClass + " self-start"}>
-        {deployment.note == null ? m.federation.addNote : m.federation.editNote}
+      <DialogHeading>
+        {format(m.federation.noteHeading, { domain: deployment.domain })}
+      </DialogHeading>
+      <TextField
+        value={text}
+        onChange={setText}
+        maxLength={MAX_NOTE_CHARS}
+        autoFocus
+        className={fieldClass}
+      >
+        <Label className={labelClass}>{m.federation.note}</Label>
+        <Input placeholder={m.federation.notePlaceholder} className={inputClass} />
+      </TextField>
+      {error !== null && (
+        <p role="alert" className={alertClass}>
+          {error}
+        </p>
+      )}
+      <Button type="submit" isDisabled={saving} className={primaryButtonClass}>
+        {m.save}
       </Button>
-      <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={modalClass}>
-          <Dialog className={dialogClass}>
-            {({ close }) => (
-              <Form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const note = text.trim();
-                  setSaving(true);
-                  setError(null);
-                  sync.admin
-                    .setFederatedDeploymentNote(deployment.domain, note === "" ? null : note)
-                    .then(
-                      () => {
-                        setSaving(false);
-                        onChanged();
-                        close();
-                      },
-                      (e: unknown) => {
-                        setSaving(false);
-                        setError(problemText(e));
-                      },
-                    );
-                }}
-                className="flex flex-col gap-4"
-              >
-                <DialogHeading>
-                  {format(m.federation.noteHeading, { domain: deployment.domain })}
-                </DialogHeading>
-                <TextField
-                  value={text}
-                  onChange={setText}
-                  maxLength={MAX_NOTE_CHARS}
-                  autoFocus
-                  className={fieldClass}
-                >
-                  <Label className={labelClass}>{m.federation.note}</Label>
-                  <Input placeholder={m.federation.notePlaceholder} className={inputClass} />
-                </TextField>
-                {error !== null && (
-                  <p role="alert" className={alertClass}>
-                    {error}
-                  </p>
-                )}
-                <Button type="submit" isDisabled={saving} className={primaryButtonClass}>
-                  {m.save}
-                </Button>
-              </Form>
-            )}
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
-    </DialogTrigger>
+    </Form>
   );
 }

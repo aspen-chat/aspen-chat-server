@@ -1454,6 +1454,11 @@
   "delete": "Delete",
   "deleteMessage": "Delete message",
   "save": "Save",
+  "unsaved": {
+    "heading": "Discard your changes?",
+    "explanation": "What you changed here has not been saved. Closing now loses it.",
+    "discard": "Discard changes"
+  },
   "cancel": "Cancel",
   "editedFiles": "Files in this message",
   "editingHint": "Enter to save, Escape to cancel",

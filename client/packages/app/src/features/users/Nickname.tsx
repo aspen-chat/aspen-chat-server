@@ -17,6 +17,7 @@ import { toast } from "@/features/layout/toast";
 import { ReportModal } from "@/features/reports/ReportDialog";
 import { useMayClearNickname } from "@/features/users/nameIn";
 import { displayNameOf } from "@/features/users/profile";
+import { useUnsavedChanges } from "@/features/layout/unsavedChanges";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -41,6 +42,7 @@ export function NicknameForm({ communityId, me }: { communityId: string; me: Use
   }
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useUnsavedChanges(mayChange && draft !== (nickname ?? ""));
   if (!mayChange && nickname === undefined) {
     return null;
   }
