@@ -16,7 +16,7 @@ or for a busy channel, messages scheduled for later, the mana bar, and drafts.
 | Mana bar        | `ManaBar.tsx`, `manaDrawnAt` (`@aspen/protocol`), `TopSendersDialog.tsx`                    |
 | Replying        | `ReplyBar`, `composerTargets.ts`; the line above a reply is `ReplyLine`                     |
 | Drafts          | `src/features/messages/drafts.ts`                                                           |
-| Emoji keyboard  | `EmojiKeyboard`, `useEmojiCompletion`'s `insert` (`src/features/emoji`)  |
+| Emoji keyboard  | `EmojiKeyboard`, `useEmojiCompletion`'s `insert` (`src/features/emoji`)                     |
 
 ## Layout
 
