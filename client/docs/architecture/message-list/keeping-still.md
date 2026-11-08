@@ -10,8 +10,11 @@ note.
 Which row:
 
 - normally, the topmost in view;
-- while a linked message is shown, that message, held by its middle. A jump then lands on it and it
-  stays centred whatever loads around it or inside it.
+- while a linked message is shown, that message, held by its middle as long as that keeps its
+  beginning in view (`linkedTop`). A jump then lands on it, centred, or with its beginning at the
+  top of the view when it is taller than the view, and it stays so whatever loads around it or
+  inside it: a picture of its own arriving moves its top up by half of the growth, no further than
+  the top of the view.
 
 The reader's first scroll drops the link, and the hold returns to the topmost row.
 

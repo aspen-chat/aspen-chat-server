@@ -44,8 +44,14 @@ interface Picture {
   known: boolean;
 }
 
+/** A message as the server pages it, with the pictures it holds, which `serveHistory` serves. */
+interface Entry {
+  record: Record<string, unknown>;
+  pictures: Picture[];
+}
+
 /** Message `n` (1 the oldest): a tall picture every third, a paragraph or a line otherwise. */
-function messageOf(n: number): { record: Record<string, unknown>; picture: Picture | null } {
+function messageOf(n: number): Entry {
   const picture: Picture | null =
     n % 3 === 0
       ? {
@@ -77,7 +83,7 @@ function messageOf(n: number): { record: Record<string, unknown>; picture: Pictu
       attachments: picture === null ? [] : [picture.id],
       mentions: { users: [], roles: [], everyone: false },
     },
-    picture,
+    pictures: picture === null ? [] : [picture],
   };
 }
 
@@ -123,7 +129,7 @@ async function serveHistory(page: Page, messages: typeof history = history) {
         data: slice.map((m) => m.record),
         included: {
           users: [],
-          attachments: slice.flatMap((m) => (m.picture === null ? [] : [attachmentOf(m.picture)])),
+          attachments: slice.flatMap((m) => m.pictures.map(attachmentOf)),
         },
       },
     });
@@ -131,8 +137,8 @@ async function serveHistory(page: Page, messages: typeof history = history) {
   // Each picture arrives in its own time, as pictures do.
   await page.route("https://media.test/**", async (route) => {
     const name = new URL(route.request().url()).pathname.slice(1).replace(".svg", "");
-    const picture = history.find((m) => m.picture?.id === name)?.picture;
-    if (picture === undefined || picture === null) {
+    const picture = messages.flatMap((m) => m.pictures).find((p) => p.id === name);
+    if (picture === undefined) {
       await route.fulfill({ status: 404 });
       return;
     }
@@ -142,6 +148,8 @@ async function serveHistory(page: Page, messages: typeof history = history) {
     await new Promise((resolve) => setTimeout(resolve, delay));
     await route.fulfill({
       contentType: "image/svg+xml",
+      // Fetched afresh by every visit, so a message visited twice grows twice.
+      headers: { "cache-control": "no-store" },
       body:
         `<svg xmlns="http://www.w3.org/2000/svg" width="${String(picture.width)}" height="${String(picture.height)}">` +
         `<rect width="100%" height="100%" fill="#${(spread(picture.height, 0xffffff) | 0x404040).toString(16)}"/></svg>`,
@@ -620,7 +628,7 @@ const shortHistory = Array.from({ length: SHORT_COUNT }, (_, i) => {
       content: `Line ${String(n)}`,
       attachments: [],
     },
-    picture: null,
+    pictures: [],
   };
 });
 
@@ -901,6 +909,132 @@ for (const { name, ios } of SCROLLERS) {
           `after message ${String(n)}, the latest sits ${String(Math.round(gap))}px off the bottom`,
         );
       }
+    }
+    expect(misses).toEqual([]);
+  });
+}
+
+/** A message of many paragraphs, taller than any phone's view. */
+const TALL = COUNT - 200;
+/**
+ * A message of a paragraph and two pictures whose sizes are not known, which each keep a square
+ * until they arrive and are then each too wide at their full height to share a row: the test
+ * sizes its view to lie between the message's height before and after they arrive.
+ */
+const GROWING = COUNT - 300;
+const tallHistory: Entry[] = history.map((m) => {
+  if (m.record.id === id(TALL)) {
+    return {
+      record: { ...m.record, content: PARAGRAPH.repeat(14), attachments: [] },
+      pictures: [],
+    };
+  }
+  if (m.record.id === id(GROWING)) {
+    const pictures = [1, 2].map((k) => ({
+      id: attachmentId(COUNT + k),
+      width: 1200,
+      height: 1500,
+      known: false,
+    }));
+    return {
+      record: { ...m.record, content: PARAGRAPH, attachments: pictures.map((p) => p.id) },
+      pictures,
+    };
+  }
+  return m;
+});
+
+for (const { name, ios } of SCROLLERS) {
+  test(`a jump to a message taller than the view lands its beginning at the top, and keeps it there as it grows${name}`, async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(!isMobile, "measured on the phones, Safari's among them, which rounds positions");
+    test.setTimeout(120_000);
+    if (ios) {
+      await asIos(page);
+    }
+    await signInToWorld(page, (p) => serveHistory(p, tallHistory));
+    await page.waitForFunction(() => localStorage.getItem("aspen.session") !== null);
+    /**
+     * Jumps to message `n` and measures it against the view where it lands, as soon as it has,
+     * and once every picture has arrived: where its top and middle stand against the view's,
+     * and how tall each is.
+     */
+    const jumpTo = async (n: number) => {
+      await page.goto(`/communities/${community}/channels/${general}/messages/${id(n)}`);
+      const target = page.locator(`article[data-message-id="${id(n)}"]`);
+      await target.waitFor({ timeout: 60_000 });
+      await expect(target).toBeVisible();
+      const place = () =>
+        target.evaluate((element) => {
+          const view = element.closest("[data-message-list]")?.getBoundingClientRect();
+          const rect = element.getBoundingClientRect();
+          return view === undefined
+            ? { top: NaN, centred: NaN, height: NaN, view: NaN }
+            : {
+                top: rect.top - view.top,
+                centred: rect.top + rect.height / 2 - (view.top + view.height / 2),
+                height: rect.height,
+                view: view.height,
+              };
+        });
+      await page.waitForTimeout(100);
+      const landed = await place();
+      await page.waitForTimeout(3000);
+      return { landed, settled: await place() };
+    };
+    const misses: string[] = [];
+
+    // Taller than the view from the start: its beginning at the top, where it stays while the
+    // pictures around it arrive.
+    const tall = await jumpTo(TALL);
+    if (tall.landed.height <= tall.landed.view) {
+      misses.push(
+        `the tall message, ${String(Math.round(tall.landed.height))}px, fits the view, ${String(Math.round(tall.landed.view))}px, so tests nothing`,
+      );
+    }
+    for (const [when, at] of Object.entries(tall)) {
+      if (Math.abs(at.top) > 1) {
+        misses.push(`the tall message sits ${String(Math.round(at.top))}px from the top, ${when}`);
+      }
+    }
+
+    // Fits when it lands, so it is centred; its pictures then make it taller than the view, and
+    // its beginning stops at the top rather than leaving the view. The view is made as tall as
+    // the message is midway through its growth, measured on a visit of its own.
+    const measured = await jumpTo(GROWING);
+    const growth = measured.settled.height - measured.landed.height;
+    if (growth < 100) {
+      misses.push(`the growing message grew only ${String(Math.round(growth))}px`);
+    }
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    if (viewport !== null) {
+      const chrome = viewport.height - measured.landed.view;
+      await page.setViewportSize({
+        width: viewport.width,
+        height: Math.round(chrome + (measured.landed.height + measured.settled.height) / 2),
+      });
+    }
+    const growing = await jumpTo(GROWING);
+    if (growing.landed.height > growing.landed.view) {
+      misses.push(
+        `the growing message, ${String(Math.round(growing.landed.height))}px, does not fit the view, ${String(Math.round(growing.landed.view))}px, before its pictures arrive`,
+      );
+    } else if (Math.abs(growing.landed.centred) > 1) {
+      misses.push(
+        `the growing message landed ${String(Math.round(growing.landed.centred))}px off the middle`,
+      );
+    }
+    if (growing.settled.height <= growing.settled.view) {
+      misses.push(
+        `the growing message, ${String(Math.round(growing.settled.height))}px, fits the view, ${String(Math.round(growing.settled.view))}px, after its pictures arrive`,
+      );
+    } else if (Math.abs(growing.settled.top) > 1) {
+      misses.push(
+        `the growing message sits ${String(Math.round(growing.settled.top))}px from the top once its pictures have arrived`,
+      );
     }
     expect(misses).toEqual([]);
   });
