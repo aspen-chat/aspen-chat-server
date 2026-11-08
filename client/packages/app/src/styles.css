@@ -444,11 +444,28 @@ body,
 }
 
 /* The page is laid out edge to edge (`viewport-fit=cover`), so on a phone with a notch or a
-   home indicator, and in the mobile shell, the app keeps clear of both. A keyboard drawn over the
-   page (`--visible-bottom`) covers the home indicator, so its room goes while one is up. */
+   home indicator, and in the mobile shell, the app keeps clear of both; of the home indicator
+   only while no keyboard covers it (`--foot-inset`). */
 #root {
   padding: calc(env(safe-area-inset-top) + var(--title-bar-height)) env(safe-area-inset-right)
-    max(0px, env(safe-area-inset-bottom) - var(--visible-bottom)) env(safe-area-inset-left);
+    var(--foot-inset) env(safe-area-inset-left);
+}
+
+/* While the emoji keyboard is docked at the page's foot (`EmojiKeyboard`), the page keeps its full
+   height, whatever a phone's keyboard takes of it, and the emoji keyboard keeps clear of the home
+   indicator itself; the body clips what the phone's keyboard leaves outside the web view, so the
+   page has nothing to scroll to it (as WebKit would, to show the message box taking the focus).
+   The root's own overflow keeps the body's on the body: left visible, the body's would be given to
+   the viewport instead, as a scroll position scripts and WebKit can still move. */
+:root[data-docked-emoji-keyboard] {
+  overflow: hidden;
+}
+:root[data-docked-emoji-keyboard] body {
+  overflow: clip;
+}
+:root[data-docked-emoji-keyboard] #root {
+  height: var(--page-height, 100%);
+  padding-bottom: 0;
 }
 
 /* The title bar's strip is where the window is dragged by, and a drag region takes every click
@@ -463,6 +480,28 @@ body,
 :root {
   --visible-top: 0px;
   --visible-bottom: 0px;
+}
+
+/* How much of the page's foot a touch screen's keyboard takes by making the page shorter, as the
+   iOS app's web view and Chromium's do: the page's full height (`--page-height`, which
+   `theme/visibleArea.ts` gives only on a touch screen) less the body's height now (`100cqh`, the
+   body being the size container its descendants measure by). It is worked out here rather than
+   by script, since the page is laid out at its new height before any resize event runs, and what
+   gives the room back must change in that same layout; viewport units follow a layout later in
+   WebKit, where the body's height does not. */
+:root {
+  --keyboard-cover: max(0px, var(--page-height, 100cqh) - 100cqh);
+  /* The room the home indicator needs at the page's foot now: none while a keyboard covers it,
+     whether drawn over the page (`--visible-bottom`) or making it shorter (`--keyboard-cover`),
+     which the system's inset follows only a layout later. */
+  --foot-inset: max(
+    0px,
+    env(safe-area-inset-bottom) - var(--visible-bottom) - var(--keyboard-cover)
+  );
+}
+
+body {
+  container-type: size;
 }
 
 /* A modal's overlay covers the whole screen outside `#root`, so it keeps its content clear of the

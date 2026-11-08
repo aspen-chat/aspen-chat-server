@@ -91,20 +91,21 @@ then reaches the app as a tap on the extension's notification would.
 
 ## The tests
 
-| Test                                      | What it checks                                                                                                                                              |
-| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `testSignsIn`                             | Names the deployment and signs in                                                                                                                           |
-| `testShowsOnlyTheNoticeToAnUnderageUser`  | Shows only the age gate's notice when the simulator is told the user is underage (`-AspenAgeCheck underage`)                                                |
-| `testReadingBackMovesOnlyWithTheFinger`   | Safari's own answer to `historyScroll.spec.ts`                                                                                                              |
-| `testReadingBackQuicklyNeverJumps`        | Reads back at a reader's pace, with flicks; the list counts its own jumps, so the web build needs `VITE_SCROLL_DEBUG=1`                                     |
-| `testJoinsAndLeavesACall`                 | Joins a call, with the microphone the simulator takes from the Mac                                                                                          |
-| `testTextFollowsLargerText`               | Draws a channel's name over twice as tall at Larger Text's Accessibility Extra Large, with Settings still on the screen                                     |
-| `testOpensATappedNotification`            | Opens a message from its notification, tapped as its banner comes down, with the push woken through the stand-in                                            |
-| `testSendsAMessageFromTheKeyboard`        | Keeps the message box above the keyboard, and sends what is typed there                                                                                     |
-| `testEmojiKeyboardTakesTheKeyboardsPlace` | Swaps the keyboard for the emoji keyboard: the web view ends at the keyboard, and the emoji keyboard takes its height, edge to edge, without the box moving |
-| `testCatchesUpAfterTheBackground`         | Shows what was written while the app was suspended, once it is back, without a reload                                                                       |
-| `testOpensAnInviteLink`                   | Opens an `aspen://app/invite/…` link from outside the app on its invite                                                                                     |
-| `testReactsFromALongPress`                | Opens a message's actions with a held finger, reacts from the sheet, and takes the reaction back                                                            |
-| `testSendsAPictureFromThePhotoLibrary`    | Attaches a picture through the system's photo picker, describes it with the description dialog's Save above the keyboard, and sends it                      |
+| Test                                      | What it checks                                                                                                                                                              |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `testSignsIn`                             | Names the deployment and signs in                                                                                                                                           |
+| `testShowsOnlyTheNoticeToAnUnderageUser`  | Shows only the age gate's notice when the simulator is told the user is underage (`-AspenAgeCheck underage`)                                                                |
+| `testReadingBackMovesOnlyWithTheFinger`   | Safari's own answer to `historyScroll.spec.ts`                                                                                                                              |
+| `testReadingBackQuicklyNeverJumps`        | Reads back at a reader's pace, with flicks; the list counts its own jumps, so the web build needs `VITE_SCROLL_DEBUG=1`                                                     |
+| `testJoinsAndLeavesACall`                 | Joins a call, with the microphone the simulator takes from the Mac                                                                                                          |
+| `testTextFollowsLargerText`               | Draws a channel's name over twice as tall at Larger Text's Accessibility Extra Large, with Settings still on the screen                                                     |
+| `testOpensATappedNotification`            | Opens a message from its notification, tapped as its banner comes down, with the push woken through the stand-in                                                            |
+| `testSendsAMessageFromTheKeyboard`        | Keeps the message box above the keyboard, and sends what is typed there                                                                                                     |
+| `testEmojiKeyboardTakesTheKeyboardsPlace` | Swaps the keyboard for the emoji keyboard: the web view ends at the keyboard, and the emoji keyboard takes its height, edge to edge, without the box moving                 |
+| `testKeyboardsLeaveTheMessagesInPlace`    | Brings the keyboard up, swaps it for the emoji keyboard and back, and puts it away, at the newest messages and read back: the messages stay where they belong at every step |
+| `testCatchesUpAfterTheBackground`         | Shows what was written while the app was suspended, once it is back, without a reload                                                                                       |
+| `testOpensAnInviteLink`                   | Opens an `aspen://app/invite/…` link from outside the app on its invite                                                                                                     |
+| `testReactsFromALongPress`                | Opens a message's actions with a held finger, reacts from the sheet, and takes the reaction back                                                                            |
+| `testSendsAPictureFromThePhotoLibrary`    | Attaches a picture through the system's photo picker, describes it with the description dialog's Save above the keyboard, and sends it                                      |
 
 Only a device shows the extension launched for a push, and its replacement of the placeholder.

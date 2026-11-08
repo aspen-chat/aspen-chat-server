@@ -756,9 +756,9 @@ test.describe("on a phone", () => {
       expect(fit.left).toBeGreaterThanOrEqual(0);
       expect(fit.right).toBeLessThanOrEqual(fit.screen);
       expect(fit.listOverflow).toBeLessThanOrEqual(0);
-      // As many whole 40px emoji as the screen holds beside the picker's padding, as far from
-      // each side.
-      expect(fit.perRow).toBe(Math.floor((width - 20) / 40));
+      // As many whole 40px emoji as the screen holds, edge to edge (`emoji-picker-fill`), as far
+      // from each side.
+      expect(fit.perRow).toBe(Math.floor(width / 40));
       expect(Math.abs(fit.before - fit.after)).toBeLessThanOrEqual(1);
       // Its search waits for a tap, so the keyboard does not rise over the emoji.
       await expect(sheet.getByRole("searchbox").or(sheet.locator("input"))).not.toBeFocused();

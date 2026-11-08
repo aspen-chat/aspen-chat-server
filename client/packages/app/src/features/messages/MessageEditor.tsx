@@ -207,19 +207,18 @@ export function MessageEditor({
           {m.save}
         </Button>
       </div>
-      {keyboard && (
-        <EmojiKeyboard
-          id={keyboardId}
-          communityId={emoji.communityId}
-          onPick={(picked) => {
-            emoji.insert(picked, box.current);
-            if (!touchOnly) {
-              box.current?.focus();
-            }
-          }}
-          onClose={closeKeyboard}
-        />
-      )}
+      <EmojiKeyboard
+        id={keyboardId}
+        open={keyboard}
+        communityId={emoji.communityId}
+        onPick={(picked) => {
+          emoji.insert(picked, box.current);
+          if (!touchOnly) {
+            box.current?.focus();
+          }
+        }}
+        onClose={closeKeyboard}
+      />
     </div>
   );
 }

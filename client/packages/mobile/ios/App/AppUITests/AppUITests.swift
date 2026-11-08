@@ -329,6 +329,59 @@ final class AppUITests: XCTestCase {
         XCTAssertTrue(picker.waitForNonExistence(timeout: 5), "the emoji keyboard stayed")
     }
 
+    /// The messages stay where they belong as the keyboards come and go: at the newest, the
+    /// newest stay above the box; read back, the view keeps its bottom edge as the keyboard
+    /// takes the room and stays where it is as the keyboard gives it back; and the emoji
+    /// keyboard and the phone's take each other's place without anything moving. Each place is
+    /// read once the screen has settled, so a frame's flicker between is left to the list's own
+    /// count of jumps, which the read-back tests check.
+    func testKeyboardsLeaveTheMessagesInPlace() throws {
+        try signIn()
+        openChannel(readBackChannel)
+        let smiley = web.buttons["Insert an emoji"].firstMatch
+        let header = web.staticTexts[readBackChannel].firstMatch
+        func settled() { Thread.sleep(forTimeInterval: 1.5) }
+        func checkSwapping(_ row: XCUIElement, at top: CGFloat, _ when: String) {
+            smiley.tap()
+            settled()
+            XCTAssertEqual(row.frame.minY, top, accuracy: 2, "\(when): the emoji keyboard moved the messages")
+            smiley.tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "\(when): the keyboard did not come back")
+            settled()
+            XCTAssertEqual(row.frame.minY, top, accuracy: 2, "\(when): the keyboard back moved the messages")
+        }
+
+        settled()
+        let newest = try XCTUnwrap(middleText(), "nothing in view: \(lastSearch)").element
+        let resting = newest.frame.minY
+        let box = composer.frame.minY
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "no keyboard came up")
+        settled()
+        let typing = newest.frame.minY
+        XCTAssertEqual(resting - typing, box - composer.frame.minY, accuracy: 2, "at the newest, the messages did not rise with the box")
+        checkSwapping(newest, at: typing, "at the newest")
+        header.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "the keyboard stayed")
+        settled()
+        XCTAssertEqual(newest.frame.minY, resting, accuracy: 2, "at the newest, the messages did not return with the box")
+
+        web.swipeDown(velocity: .slow)
+        settled()
+        let row = try XCTUnwrap(middleText(), "nothing in view after reading back: \(lastSearch)").element
+        let read = row.frame.minY
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "no keyboard came up")
+        settled()
+        let kept = row.frame.minY
+        XCTAssertEqual(read - kept, box - composer.frame.minY, accuracy: 2, "read back, the view did not keep its bottom edge")
+        checkSwapping(row, at: kept, "read back")
+        header.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "the keyboard stayed")
+        settled()
+        XCTAssertEqual(row.frame.minY, kept, accuracy: 2, "read back, the messages moved as the keyboard went")
+    }
+
     /// Back from the background, the app shows what was written while it was away without being
     /// reloaded. The helper (`away`) freezes it as iOS suspends a phone's, which iOS does not do
     /// to an app a test drives, until the deployment has dropped its silent connection.

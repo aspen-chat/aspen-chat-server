@@ -49,6 +49,12 @@ interface Measured {
   pageHeight: number;
   /** The keyboard's last height in the present orientation; `null` until one has been seen. */
   keyboard: number | null;
+  /**
+   * How much of the page's foot the device's keyboard takes now: 0 without a keyboard, and
+   * always 0 off a touch screen. Styles have it as `--keyboard-cover` where the keyboard makes
+   * the page shorter, laid out with the change.
+   */
+  cover: number;
 }
 
 /**
@@ -67,7 +73,7 @@ export function keyboardOver(
 
 let full = { width: 0, height: 0 };
 let heights: KeyboardHeights = storedHeights();
-let measured: Measured = { pageHeight: 0, keyboard: null };
+let measured: Measured = { pageHeight: 0, keyboard: null, cover: 0 };
 const listeners = new Set<() => void>();
 
 function storedHeights(): KeyboardHeights {
@@ -108,9 +114,17 @@ function show(viewport: VisualViewport): void {
   }
   const turned = orientation();
   // A window made shorter by hand is not a keyboard; only a device typed on screen has one.
-  const keyboard = window.matchMedia(TOUCH_ONLY).matches
-    ? keyboardOver(full.height, window.innerHeight, bottom)
-    : null;
+  const typedOnScreen = window.matchMedia(TOUCH_ONLY).matches;
+  const keyboard = typedOnScreen ? keyboardOver(full.height, window.innerHeight, bottom) : null;
+  const cover = typedOnScreen ? Math.max(0, full.height - window.innerHeight + bottom) : 0;
+  // Only the page's full height is given to styles, which work out what a keyboard takes from
+  // it themselves (`--keyboard-cover`, from the body's height), in the same layout as the page
+  // changes: the resize event this runs in comes after the page has been laid out at its new size.
+  if (typedOnScreen) {
+    style.setProperty("--page-height", `${full.height.toString()}px`);
+  } else {
+    style.removeProperty("--page-height");
+  }
   if (keyboard !== null && heights[turned] !== keyboard) {
     heights = { ...heights, [turned]: keyboard };
     try {
@@ -119,8 +133,12 @@ function show(viewport: VisualViewport): void {
       // Not kept; the next launch learns it again the first time the keyboard rises.
     }
   }
-  const next = { pageHeight: full.height, keyboard: heights[turned] ?? null };
-  if (next.pageHeight !== measured.pageHeight || next.keyboard !== measured.keyboard) {
+  const next = { pageHeight: full.height, keyboard: heights[turned] ?? null, cover };
+  if (
+    next.pageHeight !== measured.pageHeight ||
+    next.keyboard !== measured.keyboard ||
+    next.cover !== measured.cover
+  ) {
     measured = next;
     for (const listener of listeners) {
       listener();
@@ -133,7 +151,7 @@ export function followVisibleArea(): void {
   const viewport = window.visualViewport;
   if (viewport === null) {
     full = { width: window.innerWidth, height: window.innerHeight };
-    measured = { pageHeight: full.height, keyboard: null };
+    measured = { pageHeight: full.height, keyboard: null, cover: 0 };
     return;
   }
   const follow = () => {
