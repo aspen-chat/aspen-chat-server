@@ -1,11 +1,4 @@
-import {
-  MAX_USER_VOLUME,
-  streamMuted,
-  streamVolume,
-  userMuted,
-  userVolume,
-  type User,
-} from "@aspen/protocol";
+import { streamMuted, streamVolume, userMuted, userVolume, type User } from "@aspen/protocol";
 import {
   DotsThreeVerticalIcon,
   MicrophoneSlashIcon,
@@ -15,11 +8,11 @@ import {
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
 import type { RefObject } from "react";
-import { Button, Label, Slider, SliderOutput, type PressEvent } from "react-aria-components";
+import { Button, type PressEvent } from "react-aria-components";
 import type { ContextMenuState } from "@/features/layout/contextMenuState";
 import { MenuAction } from "@/features/layout/menu";
-import { SliderRail } from "@/features/layout/SliderRail";
 import { UserMenu } from "@/features/users/UserMenu";
+import { VolumeSlider } from "@/features/voice/VolumeSlider";
 import {
   useBlocked,
   useChannel,
@@ -31,8 +24,6 @@ import {
 } from "@/api/hooks";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
-
-const STEP = 5;
 
 /**
  * Everything one can do to someone in a call, opened by right-clicking them (`menu`) or by the
@@ -190,43 +181,6 @@ function CallItems({
         </>
       )}
     </>
-  );
-}
-
-/** A volume, 0 to `MAX_USER_VOLUME` as a percentage, in steps of `STEP`. */
-function VolumeSlider({
-  label,
-  gain,
-  isDisabled,
-  onChange,
-}: {
-  label: string;
-  gain: number;
-  isDisabled: boolean;
-  onChange: (gain: number) => void;
-}) {
-  return (
-    <Slider
-      value={Math.round(gain * 100)}
-      minValue={0}
-      maxValue={MAX_USER_VOLUME * 100}
-      step={STEP}
-      isDisabled={isDisabled}
-      onChange={(value) => {
-        if (typeof value === "number") {
-          onChange(value / 100);
-        }
-      }}
-      className="flex w-full flex-col gap-1 px-1 disabled:opacity-60"
-    >
-      <div className="flex items-center justify-between gap-2">
-        <Label className="truncate text-sm font-medium">{label}</Label>
-        <SliderOutput className="text-sm tabular-nums text-ink-muted">
-          {({ state }) => `${String(state.getThumbValue(0))}%`}
-        </SliderOutput>
-      </div>
-      <SliderRail />
-    </Slider>
   );
 }
 

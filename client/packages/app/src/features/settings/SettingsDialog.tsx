@@ -5,26 +5,12 @@ import {
   NOTIFICATION_OUTPUT,
   SAME_AS_VOICE,
   VIDEO_INPUT,
+  INPUT_VOLUME,
+  OUTPUT_VOLUME,
   canChooseOutput,
-  resolveDevice,
-  type DeviceChoice,
-  type NotificationChoice,
-  type PreferenceDefinition,
 } from "@aspen/protocol";
-import { CaretDownIcon, GearSixIcon, SignOutIcon } from "@phosphor-icons/react";
-import {
-  Button,
-  Dialog,
-  DialogTrigger,
-  Label,
-  ListBox,
-  ListBoxItem,
-  Modal,
-  ModalOverlay,
-  Popover,
-  Select,
-  SelectValue,
-} from "react-aria-components";
+import { GearSixIcon, SignOutIcon } from "@phosphor-icons/react";
+import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-components";
 import { useSignOut } from "@/api/deploymentsContext";
 import { AboutDialog } from "@/features/about/AboutDialog";
 import { OtherServersSection } from "@/features/deployments/OtherServersSection";
@@ -33,11 +19,8 @@ import {
   columnPlanesModalClass,
   dialogClass,
   fullScreenOverlayClass,
-  optionClass,
   planeClass,
   secondaryButtonClass,
-  selectButtonClass,
-  selectPopoverClass,
   touchFullScreenClass,
 } from "@/features/invites/dialog";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -49,12 +32,9 @@ import { FontsSection } from "@/features/settings/FontsSection";
 import { LanguageSection } from "@/features/settings/LanguageSection";
 import { NotificationsSection } from "@/features/settings/NotificationsSection";
 import { PrivacySection } from "@/features/settings/PrivacySection";
-import { type AudioDevice } from "@/features/settings/audioDevices";
-import {
-  type DeviceAccess,
-  type DeviceKind,
-  useAudioDevices,
-} from "@/features/settings/useAudioDevices";
+import { AccessNotice, DeviceSelect } from "@/features/settings/DeviceSelect";
+import { useAudioDevices } from "@/features/settings/useAudioDevices";
+import { VolumeSlider } from "@/features/voice/VolumeSlider";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { PlaneColumns } from "@/features/layout/PlaneColumns";
 import { useMessages } from "@/i18n/context";
@@ -153,6 +133,9 @@ function AudioSection() {
   const inCall = useVoiceCall().status === "connected";
   const { devices, access, requestAccess } = useAudioDevices(inCall);
   const outputs = canChooseOutput();
+  const sync = useSync();
+  const inputVolume = usePreference(INPUT_VOLUME);
+  const outputVolume = usePreference(OUTPUT_VOLUME);
   return (
     <section aria-labelledby="settings-audio" className={planeClass}>
       <h3 id="settings-audio" className="text-lg font-semibold text-ink-muted">
@@ -165,6 +148,13 @@ function AudioSection() {
         devices={devices.inputs}
         defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
       />
+      <VolumeSlider
+        label={m.voice.inputVolume}
+        gain={inputVolume}
+        onChange={(value) => {
+          void sync.preferences.set(INPUT_VOLUME, value);
+        }}
+      />
       <DeviceSelect
         label={m.settings.speaker}
         definition={AUDIO_OUTPUT}
@@ -172,6 +162,13 @@ function AudioSection() {
         defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
         disabled={!outputs}
         hint={outputs ? undefined : m.settings.outputUnsupported}
+      />
+      <VolumeSlider
+        label={m.voice.outputVolume}
+        gain={outputVolume}
+        onChange={(value) => {
+          void sync.preferences.set(OUTPUT_VOLUME, value);
+        }}
       />
       <DeviceSelect
         label={m.settings.notificationOutput}
@@ -191,123 +188,5 @@ function AudioSection() {
         defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
       />
     </section>
-  );
-}
-
-/**
- * What stands in for a list of devices the browser will not name yet: a button that asks for the
- * permission while it can still be asked, or what to do once it was refused.
- */
-function AccessNotice({
-  kind,
-  access,
-  onAllow,
-}: {
-  kind: DeviceKind;
-  access: DeviceAccess;
-  onAllow: (kind: DeviceKind) => Promise<void>;
-}) {
-  const m = useMessages();
-  const microphone = kind === "microphone";
-  switch (access) {
-    case "granted":
-      return null;
-    case "denied":
-      return (
-        <p className="text-sm text-ink-muted">
-          {microphone ? m.settings.microphoneDenied : m.settings.cameraDenied}
-        </p>
-      );
-    case "absent":
-      return (
-        <p className="text-sm text-ink-muted">
-          {microphone ? m.settings.noMicrophone : m.settings.noCamera}
-        </p>
-      );
-    case "locked":
-      return (
-        <div className="flex flex-col items-start gap-1.5">
-          <p className="text-sm text-ink-muted">
-            {microphone ? m.settings.microphoneLocked : m.settings.cameraLocked}
-          </p>
-          <Button
-            onPress={() => {
-              void onAllow(kind);
-            }}
-            className={secondaryButtonClass}
-          >
-            {microphone ? m.settings.allowMicrophone : m.settings.allowCamera}
-          </Button>
-        </div>
-      );
-  }
-}
-
-const MISSING = "missing";
-
-function DeviceSelect({
-  label,
-  definition,
-  devices,
-  defaults,
-  disabled,
-  hint,
-}: {
-  label: string;
-  definition: PreferenceDefinition<NotificationChoice>;
-  devices: readonly AudioDevice[];
-  /** The choices that are not devices: the system default, and "same as voice chat". */
-  defaults: readonly AudioDevice[];
-  disabled?: boolean | undefined;
-  hint?: string | undefined;
-}) {
-  const m = useMessages();
-  const sync = useSync();
-  const chosen = usePreference(definition);
-  // The remembered device is found by id or by label; one that is not plugged in right now
-  // stays selected under a "missing" entry so the choice is not lost.
-  const selectedKey =
-    typeof chosen === "string"
-      ? chosen
-      : (resolveDevice(
-          chosen,
-          devices.map((d) => ({ deviceId: d.id, label: d.label })),
-        ) ?? MISSING);
-  const known = [...defaults, ...devices];
-  const options =
-    selectedKey === MISSING ? [...known, { id: MISSING, label: m.settings.missingDevice }] : known;
-  return (
-    <div className="flex flex-col gap-1">
-      <Select
-        value={selectedKey}
-        onChange={(key) => {
-          if (typeof key !== "string" || key === MISSING) {
-            return;
-          }
-          const device = devices.find((d) => d.id === key);
-          const choice: NotificationChoice =
-            device === undefined ? (key as DeviceChoice) : { id: device.id, label: device.label };
-          void sync.preferences.set(definition, choice);
-        }}
-        isDisabled={disabled ?? false}
-        className="flex flex-col gap-1"
-      >
-        <Label className="text-sm font-medium">{label}</Label>
-        <Button className={selectButtonClass}>
-          <SelectValue className="truncate" />
-          <CaretDownIcon size={14} aria-hidden="true" className="shrink-0 text-ink-faint" />
-        </Button>
-        <Popover className={selectPopoverClass}>
-          <ListBox items={options}>
-            {(device) => (
-              <ListBoxItem id={device.id} textValue={device.label} className={optionClass}>
-                {device.label}
-              </ListBoxItem>
-            )}
-          </ListBox>
-        </Popover>
-      </Select>
-      {hint !== undefined && <p className="text-xs text-ink-muted">{hint}</p>}
-    </div>
   );
 }

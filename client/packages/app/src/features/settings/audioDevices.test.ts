@@ -1,6 +1,13 @@
 import { AUDIO_OUTPUT, NOTIFICATION_OUTPUT, PreferenceStore } from "@aspen/protocol";
 import { describe, expect, it } from "vitest";
-import { notificationOutputDevice, sortDevices } from "./audioDevices";
+import {
+  type CameraDevice,
+  cameraFacing,
+  flippedCamera,
+  flipsBetweenSides,
+  notificationOutputDevice,
+  sortDevices,
+} from "./audioDevices";
 
 describe("sortDevices", () => {
   it("splits microphones from speakers and drops the browser's own defaults", () => {
@@ -21,6 +28,61 @@ describe("sortDevices", () => {
       { id: "m2", label: "Microphone 2" },
     ]);
     expect(sorted.outputs).toEqual([{ id: "s1", label: "Speakers" }]);
+  });
+});
+
+describe("cameraFacing", () => {
+  const camera = (label: string, facingMode?: string[]) => ({
+    deviceId: "c",
+    kind: "videoinput" as const,
+    label,
+    ...(facingMode === undefined ? {} : { getCapabilities: () => ({ facingMode }) }),
+  });
+
+  it("takes the browser's word first, and the name where it gives none", () => {
+    expect(cameraFacing(camera("Back Camera", ["user"]))).toBe("front");
+    expect(cameraFacing(camera("", ["environment"]))).toBe("back");
+    expect(cameraFacing(camera("Front Camera", ["left"]))).toBeNull();
+    expect(cameraFacing(camera("camera2 1, facing front", []))).toBe("front");
+    expect(cameraFacing(camera("Back Ultra Wide Camera"))).toBe("back");
+    expect(cameraFacing(camera("Rear camera"))).toBe("back");
+    expect(cameraFacing(camera("FaceTime HD Camera"))).toBeNull();
+    expect(cameraFacing(camera("Caméra avant"))).toBeNull();
+  });
+});
+
+describe("flipping between a phone's sides", () => {
+  const phone: CameraDevice[] = [
+    { id: "f", label: "Front Camera", facing: "front" },
+    { id: "b", label: "Back Camera", facing: "back" },
+    { id: "w", label: "Back Ultra Wide Camera", facing: "back" },
+  ];
+
+  it("flips where every camera faces front or back, to the first of the other side", () => {
+    expect(flipsBetweenSides(phone)).toBe(true);
+    expect(flippedCamera(phone, "front")?.id).toBe("b");
+    expect(flippedCamera(phone, "back")?.id).toBe("f");
+  });
+
+  it("does not flip with one side missing or a camera placed nowhere", () => {
+    expect(flipsBetweenSides(phone.slice(1))).toBe(false);
+    expect(flipsBetweenSides([...phone, { id: "u", label: "USB Camera", facing: null }])).toBe(
+      false,
+    );
+  });
+
+  it("keeps each camera's side as it sorts them", () => {
+    const sorted = sortDevices(
+      [
+        { deviceId: "f", kind: "videoinput", label: "Front Camera" },
+        { deviceId: "x", kind: "videoinput", label: "" },
+      ],
+      (index) => `Camera ${String(index)}`,
+    );
+    expect(sorted.cameras).toEqual([
+      { id: "f", label: "Front Camera", facing: "front" },
+      { id: "x", label: "Camera 2", facing: null },
+    ]);
   });
 });
 

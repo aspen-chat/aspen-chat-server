@@ -44,6 +44,10 @@ Volume and muting here are for this user alone. Nothing the server or the other 
 
 `VoiceCall` asks `userVolume(user, source)` for the gain of each consumer.
 
+The call's own volume (`OUTPUT_VOLUME`, from the deafen arrow or Settings) scales every person's
+voice and stream on top of their own volume: `AspenSync` multiplies the two, and sets every
+consumer's gain again (`refreshVolumes`) when it changes.
+
 ### Playback through Web Audio
 
 - Playback runs through a Web Audio gain node, since an element's own volume stops at 1.

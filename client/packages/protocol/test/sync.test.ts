@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { positionBefore } from "../src/sync";
 import {
   AspenClient,
   AspenSync,
   type AspenSyncOptions,
+  INPUT_VOLUME,
+  OUTPUT_VOLUME,
   MEMBER_SEARCH_PAGE,
   MESSAGE_AROUND_RADIUS,
   MESSAGE_PAGE_SIZE,
@@ -339,6 +341,23 @@ describe("AspenSync", () => {
     now += TYPING_REFRESH_MS;
     sync.noteTyping(general.id);
     expect(typing()).toHaveLength(5);
+    sync.stop();
+  });
+
+  it("sends the microphone at its volume and plays everyone under the call's", async () => {
+    const { sync } = makeSync({});
+    const input = vi.spyOn(sync.voice, "setInputVolume");
+    const refresh = vi.spyOn(sync.voice, "refreshVolumes");
+    const person = vi.spyOn(sync.voice, "setUserVolume");
+    await sync.preferences.set(INPUT_VOLUME, 1.5);
+    expect(input).toHaveBeenLastCalledWith(1.5);
+    expect(refresh).not.toHaveBeenCalled();
+    await sync.preferences.set(OUTPUT_VOLUME, 0.5);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await sync.setUserVolume("someone", 1.5);
+    expect(person).toHaveBeenLastCalledWith("someone", 0.75);
+    await sync.setStreamVolume("someone", 2);
+    expect(person).toHaveBeenLastCalledWith("someone", 1, "screenAudio");
     sync.stop();
   });
 

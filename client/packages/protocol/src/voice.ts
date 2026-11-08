@@ -344,6 +344,8 @@ export class VoiceCall {
     output: DEFAULT_DEVICE,
     camera: DEFAULT_DEVICE,
   };
+  /** The gain the microphone is sent at, from `setInputVolume`. */
+  #inputVolume = 1;
   #camera: CameraSend | null = null;
   #external: { producerIds: string[]; share: ExternalShare } | null = null;
   /** The consumer carrying the call's own preview of an external share. */
@@ -835,7 +837,7 @@ export class VoiceCall {
     }
     if (!sameChoice(devices.input, previous.input) && this.#microphoneProducer !== null) {
       const producer = this.#microphoneProducer;
-      const track = await this.#media.getMicrophone(devices.input);
+      const track = await this.#media.getMicrophone(devices.input, this.#inputVolume);
       // The call may have ended or been rejoined while the microphone opened.
       const current: typeof producer | null = this.#microphoneProducer;
       if (current !== producer) {
@@ -849,6 +851,15 @@ export class VoiceCall {
       this.#microphone = track;
       this.#holdMicrophone();
     }
+  }
+
+  /**
+   * How loud the user's microphone is sent, from their preference: a gain, 1 as captured.
+   * Takes effect at once on a microphone open now, and on every one opened after.
+   */
+  setInputVolume(gain: number): void {
+    this.#inputVolume = gain;
+    this.#media.setInputVolume(gain);
   }
 
   /** Sets every consumer's gain again from `userVolume`, after what it answers has changed. */
@@ -1016,7 +1027,7 @@ export class VoiceCall {
     } else if (this.#microphone === null) {
       let microphone: MediaStreamTrack;
       try {
-        microphone = await this.#media.getMicrophone(this.#devices.input);
+        microphone = await this.#media.getMicrophone(this.#devices.input, this.#inputVolume);
       } catch (error) {
         throw new MicrophoneError(error);
       }
@@ -1457,7 +1468,9 @@ export class VoiceCall {
     }
     const generation = this.#generation;
     try {
-      const microphone = this.#microphone ?? (await this.#media.getMicrophone(this.#devices.input));
+      const microphone =
+        this.#microphone ??
+        (await this.#media.getMicrophone(this.#devices.input, this.#inputVolume));
       if (generation !== this.#generation || this.#sendTransport !== transport) {
         if (microphone !== this.#microphone) {
           microphone.stop();

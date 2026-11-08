@@ -18,6 +18,12 @@ import { useDmTitle } from "@/features/dms/useDmTitle";
 import { channelLink, useDomain } from "@/features/messages/links";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { callBarButtonClass } from "@/features/voice/callBarButton";
+import {
+  CameraDevices,
+  InputDevices,
+  OutputDevices,
+  WithDeviceArrow,
+} from "@/features/voice/DeviceArrows";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { useMessages } from "@/i18n/context";
 import { useNumberFormat } from "@/i18n/format";
@@ -29,6 +35,7 @@ const SECONDS: Intl.NumberFormatOptions = { style: "unit", unit: "second", unitD
 /**
  * The call the user is in, above their user bar: where they are (a voice channel, or a DM's
  * people), which opens that room, and below it a row of mute, deafen, camera, share, leave.
+ * Mute, deafen, and camera each have an arrow at their end for choosing their device.
  */
 export function CallBar() {
   const m = useMessages();
@@ -72,61 +79,79 @@ export function CallBar() {
         </span>
       </CallPlaceLink>
       <div className="mt-3 flex items-center gap-1">
-        {/* Someone who may not speak here listens only, and has no microphone to mute; someone
-            a moderator muted stays muted until a moderator lifts it. */}
-        {call.serverMuted ? (
-          <Tooltip text={m.voice.serverMutedYou}>
-            <span
-              aria-label={m.voice.serverMutedYou}
-              className={callBarButtonClass + " text-danger"}
-            >
-              <MicrophoneSlashIcon size={24} aria-hidden="true" />
-            </span>
-          </Tooltip>
-        ) : call.canSpeak || call.status !== "connected" ? (
-          <Tooltip text={call.muted ? m.voice.unmute : m.voice.mute}>
-            <Button
-              aria-label={call.muted ? m.voice.unmute : m.voice.mute}
-              aria-pressed={call.muted}
-              onPress={() => {
-                sync.voice.setMuted(!call.muted);
-              }}
-              className={callBarButtonClass + (call.muted ? " text-danger" : "")}
-            >
-              {call.muted ? (
-                <MicrophoneSlashIcon size={24} aria-hidden="true" />
-              ) : (
-                <MicrophoneIcon size={24} aria-hidden="true" />
-              )}
-            </Button>
-          </Tooltip>
-        ) : (
-          <Tooltip text={m.voice.listeningOnly}>
-            <span
-              aria-label={m.voice.listeningOnly}
-              className={callBarButtonClass + " text-ink-faint"}
-            >
-              <MicrophoneSlashIcon size={24} aria-hidden="true" />
-            </span>
-          </Tooltip>
-        )}
-        <Tooltip text={call.deafened ? m.voice.undeafen : m.voice.deafen}>
-          <Button
-            aria-label={call.deafened ? m.voice.undeafen : m.voice.deafen}
-            aria-pressed={call.deafened}
-            onPress={() => {
-              sync.voice.setDeafened(!call.deafened);
-            }}
-            className={callBarButtonClass + (call.deafened ? " text-danger" : "")}
-          >
-            {call.deafened ? (
-              <SpeakerSlashIcon size={24} aria-hidden="true" />
+        <WithDeviceArrow
+          label={m.voice.microphoneOptions}
+          control={
+            // Someone who may not speak here listens only, and has no microphone to mute;
+            // someone a moderator muted stays muted until a moderator lifts it.
+            call.serverMuted ? (
+              <Tooltip text={m.voice.serverMutedYou}>
+                <span
+                  aria-label={m.voice.serverMutedYou}
+                  className={callBarButtonClass + " text-danger"}
+                >
+                  <MicrophoneSlashIcon size={24} aria-hidden="true" />
+                </span>
+              </Tooltip>
+            ) : call.canSpeak || call.status !== "connected" ? (
+              <Tooltip text={call.muted ? m.voice.unmute : m.voice.mute}>
+                <Button
+                  aria-label={call.muted ? m.voice.unmute : m.voice.mute}
+                  aria-pressed={call.muted}
+                  onPress={() => {
+                    sync.voice.setMuted(!call.muted);
+                  }}
+                  className={callBarButtonClass + (call.muted ? " text-danger" : "")}
+                >
+                  {call.muted ? (
+                    <MicrophoneSlashIcon size={24} aria-hidden="true" />
+                  ) : (
+                    <MicrophoneIcon size={24} aria-hidden="true" />
+                  )}
+                </Button>
+              </Tooltip>
             ) : (
-              <HeadphonesIcon size={24} aria-hidden="true" />
-            )}
-          </Button>
-        </Tooltip>
-        {call.status === "connected" && call.canCamera && <CameraToggle />}
+              <Tooltip text={m.voice.listeningOnly}>
+                <span
+                  aria-label={m.voice.listeningOnly}
+                  className={callBarButtonClass + " text-ink-faint"}
+                >
+                  <MicrophoneSlashIcon size={24} aria-hidden="true" />
+                </span>
+              </Tooltip>
+            )
+          }
+        >
+          <InputDevices />
+        </WithDeviceArrow>
+        <WithDeviceArrow
+          label={m.voice.speakerOptions}
+          control={
+            <Tooltip text={call.deafened ? m.voice.undeafen : m.voice.deafen}>
+              <Button
+                aria-label={call.deafened ? m.voice.undeafen : m.voice.deafen}
+                aria-pressed={call.deafened}
+                onPress={() => {
+                  sync.voice.setDeafened(!call.deafened);
+                }}
+                className={callBarButtonClass + (call.deafened ? " text-danger" : "")}
+              >
+                {call.deafened ? (
+                  <SpeakerSlashIcon size={24} aria-hidden="true" />
+                ) : (
+                  <HeadphonesIcon size={24} aria-hidden="true" />
+                )}
+              </Button>
+            </Tooltip>
+          }
+        >
+          <OutputDevices />
+        </WithDeviceArrow>
+        {call.status === "connected" && call.canCamera && (
+          <WithDeviceArrow label={m.voice.cameraOptions} control={<CameraToggle />}>
+            <CameraDevices />
+          </WithDeviceArrow>
+        )}
         {call.status === "connected" && <ShareControl variant="bar" />}
         <Tooltip text={m.voice.leave}>
           <Button

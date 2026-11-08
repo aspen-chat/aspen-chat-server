@@ -5,6 +5,17 @@ Code: `VoiceCall` in `packages/protocol/src/voice.ts`. Browser media (`getUserMe
 (`voiceMedia.ts`). It is loaded lazily so the protocol package stays importable in Node, and tests
 pass a fake.
 
+## The microphone
+
+- `getMicrophone` opens the chosen microphone with echo cancellation, noise suppression, and
+  automatic gain on, falling back to the default when the chosen one is gone.
+- What it captures is sent through a Web Audio gain node, so it goes out at the input volume
+  (`INPUT_VOLUME`, 0 to 200%) after the browser's own processing. The call is handed the gain node's
+  track, and stopping that track stops the capture too. Without Web Audio the capture is sent as it
+  is.
+- `VoiceCall.setInputVolume` changes the gain of the open microphone at once, and every microphone
+  opens at it. `AspenSync` applies the preference as it changes.
+
 ## Consuming
 
 Every `newConsumer` the server announces is consumed:

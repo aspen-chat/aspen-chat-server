@@ -71,6 +71,42 @@ export function browserVoiceMedia(): VoiceMedia {
     }
     return context;
   };
+  /** The gain of each microphone open now; two are open while one replaces the other. */
+  const microphones = new Set<GainNode>();
+  /**
+   * The captured track as sent: through a gain node, so it can go out louder or quieter than
+   * captured, the browser's own processing (echo cancellation and the rest) having already run
+   * on the capture. Stopping the track this returns stops the capture with it. Without Web Audio
+   * the capture is sent as it is, at its own level.
+   */
+  const scaled = (captured: MediaStreamTrack, gain: number): MediaStreamTrack => {
+    const ctx = audioContext();
+    if (ctx === null) {
+      return captured;
+    }
+    const source = ctx.createMediaStreamSource(new MediaStream([captured]));
+    const node = ctx.createGain();
+    node.gain.value = gain;
+    const destination = ctx.createMediaStreamDestination();
+    source.connect(node);
+    node.connect(destination);
+    const [sent] = destination.stream.getAudioTracks();
+    if (sent === undefined) {
+      source.disconnect();
+      return captured;
+    }
+    microphones.add(node);
+    // The call stops the track it was given; that must release the microphone as well.
+    const stopSent = sent.stop.bind(sent);
+    sent.stop = () => {
+      stopSent();
+      captured.stop();
+      source.disconnect();
+      node.disconnect();
+      microphones.delete(node);
+    };
+    return sent;
+  };
   let output: DeviceChoice = DEFAULT_DEVICE;
   const route = async (audio: HTMLAudioElement) => {
     if (!canChooseOutput()) {
@@ -87,7 +123,7 @@ export function browserVoiceMedia(): VoiceMedia {
       // The mediasoup-client types are the same shapes narrowed by `VoiceDevice`.
       return Promise.resolve(new Device() as unknown as VoiceDevice);
     },
-    async getMicrophone(choice: DeviceChoice): Promise<MediaStreamTrack> {
+    async getMicrophone(choice: DeviceChoice, gain: number): Promise<MediaStreamTrack> {
       const deviceId = await deviceIdFor(choice, "audioinput");
       const processing = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
       const open = (constraints: MediaTrackConstraints) =>
@@ -113,7 +149,12 @@ export function browserVoiceMedia(): VoiceMedia {
       if (track === undefined) {
         throw new Error("no microphone");
       }
-      return track;
+      return scaled(track, gain);
+    },
+    setInputVolume(gain: number): void {
+      for (const node of microphones) {
+        node.gain.value = gain;
+      }
     },
     async setOutput(choice: DeviceChoice): Promise<void> {
       output = choice;

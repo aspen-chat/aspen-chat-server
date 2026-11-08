@@ -110,6 +110,40 @@ export const AUDIO_OUTPUT: PreferenceDefinition<DeviceChoice> = {
   parse: parseDevice,
 };
 
+/**
+ * How loud the user's microphone is sent: a gain over what it captures, 1 as captured, up to
+ * `MAX_USER_VOLUME`.
+ */
+export const INPUT_VOLUME: PreferenceDefinition<number> = {
+  key: "audio.inputVolume",
+  scope: "device",
+  fallback: 1,
+  parse: parseVolume,
+};
+
+/**
+ * How loud voice chat plays on this install, everyone's voice and shared sound alike: a gain
+ * laid over each person's own volume, 1 as sent, up to `MAX_USER_VOLUME`.
+ */
+export const OUTPUT_VOLUME: PreferenceDefinition<number> = {
+  key: "audio.outputVolume",
+  scope: "device",
+  fallback: 1,
+  parse: parseVolume,
+};
+
+/**
+ * Whether a call on a phone plays through its loudspeaker rather than the receiver held to the
+ * ear. Only the mobile apps can choose, and only while nothing else (headphones, a car) is
+ * connected; on by default, since a group call is mostly held in front of the user.
+ */
+export const SPEAKERPHONE: PreferenceDefinition<boolean> = {
+  key: "audio.speakerphone",
+  scope: "device",
+  fallback: true,
+  parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
+};
+
 /** The speaker notification sounds play through; `SAME_AS_VOICE` follows `AUDIO_OUTPUT`. */
 export const NOTIFICATION_OUTPUT: PreferenceDefinition<NotificationChoice> = {
   key: "audio.notificationOutput",
@@ -149,18 +183,23 @@ export const NAME_COLORS: PreferenceDefinition<boolean> = {
   parse: (raw) => (typeof raw === "boolean" ? raw : undefined),
 };
 
-/** How loud one other person is to this user: a gain, 1 being as sent, up to double. */
+/** The loudest any voice volume goes, a person's or the whole call's: double as sent. */
 export const MAX_USER_VOLUME = 2;
 
+/** A volume as stored: a gain from 0 to `MAX_USER_VOLUME`, or nothing for anything else. */
+function parseVolume(raw: unknown): number | undefined {
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= MAX_USER_VOLUME
+    ? raw
+    : undefined;
+}
+
+/** How loud one other person is to this user: a gain, 1 being as sent. */
 export function userVolume(userId: string): PreferenceDefinition<number> {
   return {
     key: `voice.volume.${userId}`,
     scope: "device",
     fallback: 1,
-    parse: (raw) =>
-      typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= MAX_USER_VOLUME
-        ? raw
-        : undefined,
+    parse: parseVolume,
   };
 }
 
@@ -534,10 +573,7 @@ export function streamVolume(userId: string): PreferenceDefinition<number> {
     key: `voice.streamVolume.${userId}`,
     scope: "device",
     fallback: 1,
-    parse: (raw) =>
-      typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= MAX_USER_VOLUME
-        ? raw
-        : undefined,
+    parse: parseVolume,
   };
 }
 

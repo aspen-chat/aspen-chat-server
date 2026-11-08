@@ -4,6 +4,7 @@ import { useFollowMessageTextSize } from "@/features/layout/messageTextSize";
 import { useFollowMotionSpeed } from "@/features/layout/motion";
 import { useState } from "react";
 import { useAspenClient, useSession } from "@/api/context";
+import { useFollowSpeakerphone } from "@/api/audioRoute";
 import { useOneCallAtATime } from "@/api/calls";
 import { ShareBlocksAcrossDeployments } from "@/api/identity";
 import { WakeThisPhone } from "@/api/push";
@@ -165,6 +166,7 @@ function SignedIn() {
       <FollowLanguagePreference />
       <FollowMotionSpeed />
       <FollowMessageTextSize />
+      <FollowSpeakerphone />
       <Announcer />
       <div className="flex h-full flex-col">
         <SyncBanner />
@@ -183,6 +185,11 @@ function SignedIn() {
 }
 
 /** Keeps the user in one call across every deployment they use. */
+function FollowSpeakerphone() {
+  useFollowSpeakerphone();
+  return null;
+}
+
 function OneCall() {
   useOneCallAtATime();
   return null;
