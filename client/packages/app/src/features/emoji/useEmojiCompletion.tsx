@@ -11,7 +11,7 @@ import {
 } from "react";
 import { useChannel, useCustomEmoji } from "@/api/hooks";
 import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
-import { encodeCustomEmoji } from "@/features/emoji/customEmoji";
+import { decodeCustomEmoji, encodeCustomEmoji } from "@/features/emoji/customEmoji";
 import { useEmojiLanguage } from "@/features/emoji/emojiData";
 import { loadEmojiNames, searchEmojiNames, type NamedEmoji } from "@/features/emoji/emojiNames";
 import { SuggestionList, type Suggestion } from "@/features/mentions/SuggestionList";
@@ -45,6 +45,7 @@ export function emojiQueryAt(text: string, caret: number): { start: number; quer
  * writes the glyph; a custom pick writes `:name:`, which `encode` turns into the emoji's
  * reference as the message is sent. The unicode names are the picker's, in the reader's
  * language (`emojiData.ts`). The list is keyed as `useTagging`'s is, and reads the same way.
+ * `insert` writes what the box's emoji keyboard (`EmojiKeyboard`) picks the same way.
  */
 export function useEmojiCompletion({
   channelId,
@@ -146,8 +147,26 @@ export function useEmojiCompletion({
     [typing, draft, caret, setDraft],
   );
 
-  // The caret goes after the pick as the new text is committed, before anything else typed
-  // can land.
+  /**
+   * Puts `emoji`, as the keyboard names it (a glyph, or a custom emoji's reference, written
+   * as `:name:`), into the box where its caret is, in place of whatever is selected, and
+   * leaves the caret after it. The box's own selection is read, since the keyboard has the
+   * focus as it picks; a box not drawn yet takes it at the end.
+   */
+  const insert = useCallback(
+    (emoji: string, box: HTMLTextAreaElement | null) => {
+      const start = box?.selectionStart ?? draft.length;
+      const end = box?.selectionEnd ?? draft.length;
+      const before = draft.slice(0, start) + decodeCustomEmoji(emoji, custom);
+      setDraft(before + draft.slice(end));
+      setCaret(before.length);
+      placing.current = { box, at: before.length };
+    },
+    [draft, setDraft, custom],
+  );
+
+  // The caret goes after the pick or insertion as the new text is committed, before anything
+  // else typed can land.
   useLayoutEffect(() => {
     const pending = placing.current;
     if (pending !== null) {
@@ -206,6 +225,9 @@ export function useEmojiCompletion({
       />
     ) : null,
     announcement,
+    insert,
+    /** The community the box's channel is in, whose own emoji a keyboard offers; none in a DM. */
+    communityId,
     /** The text as it is sent: each `:name:` of the community's emoji as its reference. */
     encode: (text: string) => encodeCustomEmoji(text, custom),
     /** The community's emoji, for decoding a message being edited. */

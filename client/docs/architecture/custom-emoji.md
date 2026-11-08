@@ -12,6 +12,7 @@ message text and in reactions.
 | Reference parsing and encoding | `src/features/emoji/customEmoji.ts`                                                      |
 | Drawing                        | `remarkCustomEmoji`, `CustomEmojiGlyph`                                                  |
 | Completion                     | `useEmojiCompletion` (`src/features/emoji`)                                              |
+| Keyboard                       | `EmojiKeyboard`, below the message box and the editor                                    |
 | Picker data                    | `emojiData.ts`                                                                           |
 | Settings tab                   | `EmojiPanel`                                                                             |
 
@@ -40,6 +41,13 @@ The message box shows a custom emoji as `:name:`.
 - every unicode emoji, by its names
 
 A unicode pick writes the glyph. A custom pick writes `:name:`.
+
+### The keyboard
+
+The smiley left of Send docks the picker below the box (`EmojiKeyboard`; see
+[The emoji keyboard](composer-and-drafts.md#the-emoji-keyboard)). The community's emoji are its own
+section. A pick is written as the completion writes one, through `useEmojiCompletion`'s `insert`,
+which turns the picker's reference into `:name:`.
 
 ### Emoji data
 

@@ -724,7 +724,9 @@
     "suggestions": "Emoji para insertar",
     "suggestionsAnnouncement": "{count, plural, one {# emoji coincide. Enter o Tab lo inserta; Esc cierra.} other {# emojis coinciden. Las flechas arriba y abajo eligen, Enter o Tab inserta; Esc cierra.}}",
     "customDetail": "Emojis de esta comunidad",
-    "customCategory": "Esta comunidad"
+    "customCategory": "Esta comunidad",
+    "insert": "Insertar un emoji",
+    "keyboard": "Teclado de emojis"
   },
   "tagging": {
     "suggestions": "Personas y roles para mencionar",
