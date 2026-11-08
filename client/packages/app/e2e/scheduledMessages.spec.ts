@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { general, settleAnimations, signInToWorld } from "./world";
 
 /**
@@ -111,6 +111,17 @@ async function scheduleControl(page: Page) {
   return page.getByRole("menuitem", { name: "Schedule message" });
 }
 
+/**
+ * Chooses a time in the schedule dialog once the dialog has settled. The radio's input is
+ * hidden behind its mark, so checking it takes `force`, which also skips waiting for the
+ * arriving dialog to stop moving: clicked before it has, the small input is missed.
+ */
+async function choose(page: Page, dialog: Locator, name: string | RegExp) {
+  await expect(dialog).toBeVisible();
+  await settleAnimations(page);
+  await dialog.getByRole("radio", { name }).check({ force: true });
+}
+
 const strip = (page: Page) => page.locator("[data-scheduled-strip]");
 
 function failedOne(n: number): Scheduled {
@@ -161,7 +172,7 @@ test("a message is scheduled from the box and counted above it", async ({ page }
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("radio", { name: /In an hour/ })).toBeChecked();
   expect(await audit(page)).toEqual([]);
-  await dialog.getByRole("radio", { name: /Tomorrow morning/ }).check({ force: true });
+  await choose(page, dialog, /Tomorrow morning/);
   await dialog.getByRole("button", { name: "Schedule", exact: true }).click();
   await expect(dialog).toBeHidden();
 
@@ -191,7 +202,7 @@ test("a time of the reader's own is checked before it is asked for", async ({ pa
   await page.getByRole("textbox", { name: "Message" }).fill("much later");
   await (await scheduleControl(page)).click();
   const dialog = page.getByRole("dialog", { name: "Schedule message" });
-  await dialog.getByRole("radio", { name: "Another time" }).check({ force: true });
+  await choose(page, dialog, "Another time");
   const field = dialog.getByRole("group", { name: "Date and time" });
   const submit = dialog.getByRole("button", { name: "Schedule", exact: true });
   await expect(submit).toBeDisabled();

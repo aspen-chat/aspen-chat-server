@@ -200,7 +200,8 @@ test("a small community tells of every message, until it grows large and says so
     growth: { members: 200, mentionEveryoneTaken: false },
     mentions: { users: [], roles: [], everyone: true },
   });
-  const notice = page.locator("article").filter({ hasText: "large community" });
+  // The channel holds both notices; the later one is told without the tag.
+  const notice = page.locator("article").filter({ hasText: "large community" }).last();
   await expect(notice).toContainText(
     "Family now has 200 members, which makes it a large community.",
   );
