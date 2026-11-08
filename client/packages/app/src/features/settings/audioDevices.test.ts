@@ -7,6 +7,7 @@ import {
   flipsBetweenSides,
   notificationOutputDevice,
   sortDevices,
+  trackFacing,
 } from "./audioDevices";
 
 describe("sortDevices", () => {
@@ -48,6 +49,20 @@ describe("cameraFacing", () => {
     expect(cameraFacing(camera("Rear camera"))).toBe("back");
     expect(cameraFacing(camera("FaceTime HD Camera"))).toBeNull();
     expect(cameraFacing(camera("Caméra avant"))).toBeNull();
+  });
+});
+
+describe("trackFacing", () => {
+  const track = (label: string, facingMode?: string) => ({
+    label,
+    getSettings: () => (facingMode === undefined ? {} : { facingMode }),
+  });
+
+  it("takes the open camera's settings first, and its name where they say nothing", () => {
+    expect(trackFacing(track("Front Camera", "environment"))).toBe("back");
+    expect(trackFacing(track("", "user"))).toBe("front");
+    expect(trackFacing(track("Back Ultra Wide Camera"))).toBe("back");
+    expect(trackFacing(track("Integrated Webcam"))).toBeNull();
   });
 });
 

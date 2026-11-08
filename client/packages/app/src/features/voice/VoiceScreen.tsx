@@ -33,6 +33,7 @@ import { displayNameOf } from "@/features/users/profile";
 import { useNameIn } from "@/features/users/nameIn";
 import { ParticipantMenu, ParticipantMenuButton } from "@/features/voice/ParticipantMenu";
 import { useContextMenu } from "@/features/layout/contextMenuState";
+import { trackFacing } from "@/features/settings/audioDevices";
 import { CallBar } from "@/features/voice/CallBar";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { Identity } from "@/features/voice/VoiceParticipants";
@@ -367,7 +368,12 @@ function ParticipantTile({
         />
       )}
       {camera !== null && (
-        <CameraVideo track={camera} speaking={speaking} name={name} mirrored={self} />
+        <CameraVideo
+          track={camera}
+          speaking={speaking}
+          name={name}
+          mirrored={self && trackFacing(camera) !== "back"}
+        />
       )}
       <Identity
         user={user}
@@ -446,7 +452,8 @@ function TileAvatar({
 
 /**
  * A participant's camera, in their tile, where it can be made full screen. The user's own is
- * mirrored, as a mirror shows them; everyone else sees it as the camera does. Its sound is the
+ * mirrored while it faces them, as a mirror shows them, and a phone's back camera is not, since
+ * it shows what is in front of them; everyone else sees it as the camera does. Its sound is the
  * microphone's, played by the call. A ring shows while they speak.
  */
 function CameraVideo({

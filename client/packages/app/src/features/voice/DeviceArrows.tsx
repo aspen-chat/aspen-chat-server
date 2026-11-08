@@ -21,6 +21,7 @@ import {
   type CameraFacing,
   flippedCamera,
   flipsBetweenSides,
+  trackFacing,
 } from "@/features/settings/audioDevices";
 import { AccessNotice, DeviceSelect } from "@/features/settings/DeviceSelect";
 import { useAudioDevices } from "@/features/settings/useAudioDevices";
@@ -214,10 +215,10 @@ function CameraFlip({ cameras }: { cameras: readonly CameraDevice[] }) {
           chosen,
           cameras.map((camera) => ({ deviceId: camera.id, label: camera.label })),
         );
-  const open = call.localCamera?.getSettings().facingMode;
   const facing: CameraFacing =
     cameras.find((camera) => camera.id === chosenId)?.facing ??
-    (open === "environment" ? "back" : "front");
+    (call.localCamera === null ? null : trackFacing(call.localCamera)) ??
+    "front";
   const target = flippedCamera(cameras, facing);
   if (target === undefined) {
     return null;

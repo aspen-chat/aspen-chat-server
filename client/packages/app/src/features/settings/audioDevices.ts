@@ -52,6 +52,23 @@ export function cameraFacing(device: ListedDevice): CameraFacing | null {
 }
 
 /**
+ * Which way an open camera faces: as its track's settings say (`facingMode`, which phones'
+ * browsers give), or else as its name says.
+ */
+export function trackFacing(
+  track: Pick<MediaStreamTrack, "label" | "getSettings">,
+): CameraFacing | null {
+  const mode = track.getSettings().facingMode;
+  if (mode === "user") {
+    return "front";
+  }
+  if (mode === "environment") {
+    return "back";
+  }
+  return cameraFacing({ deviceId: "", kind: "videoinput", label: track.label });
+}
+
+/**
  * Whether the cameras are a phone's: some facing front, some back, and none either way unknown,
  * however many lenses the back has. Then one button flips between the two sides.
  */
