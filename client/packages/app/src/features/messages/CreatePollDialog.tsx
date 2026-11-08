@@ -31,11 +31,12 @@ import {
 } from "@/features/auth/styles";
 import {
   dialogClass,
+  fullScreenOverlayClass,
   modalClass,
   optionClass,
-  overlayClass,
   secondaryButtonClass,
   selectPopoverClass,
+  touchFullScreenClass,
 } from "@/features/invites/dialog";
 import { EmojiChoiceButton } from "@/features/emoji/EmojiPickerOverlay";
 import { DialogHeading } from "@/features/layout/DialogHeading";
@@ -106,10 +107,10 @@ export function CreatePollModal({
     <ModalOverlay
       isOpen={isOpen}
       onOpenChange={onOpenChange}
-      className={overlayClass}
+      className={fullScreenOverlayClass}
       isDismissable
     >
-      <Modal className={modalClass}>
+      <Modal className={modalClass + " " + touchFullScreenClass}>
         <Dialog className={dialogClass}>
           {({ close }) => <PollForm channelId={channelId} close={close} />}
         </Dialog>

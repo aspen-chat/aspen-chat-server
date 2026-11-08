@@ -36,7 +36,12 @@ import {
   primaryButtonClass,
 } from "@/features/auth/styles";
 import { MemberPicker } from "@/features/community-settings/MemberPicker";
-import { listModalClass, overlayClass, dialogClass } from "@/features/invites/dialog";
+import {
+  dialogClass,
+  fullScreenOverlayClass,
+  listModalClass,
+  touchFullScreenClass,
+} from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { decodeTags } from "@/features/mentions/tags";
@@ -83,8 +88,8 @@ export function SearchButton({
           <MagnifyingGlassIcon size={20} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={listModalClass}>
+      <ModalOverlay isDismissable className={fullScreenOverlayClass}>
+        <Modal className={listModalClass + " " + touchFullScreenClass}>
           <Dialog className={dialogClass}>
             {({ close }) => (
               <>

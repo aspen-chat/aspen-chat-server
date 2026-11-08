@@ -20,11 +20,12 @@ import { useBlockedUsers, useSync, useUsers } from "@/api/hooks";
 import { fieldClass, inputClass, labelClass } from "@/features/auth/styles";
 import {
   dialogClass,
-  overlayClass,
+  fullScreenOverlayClass,
   planeClass,
-  planeSurfaceClass,
   planesModalClass,
+  planeSurfaceClass,
   secondaryButtonClass,
+  touchFullScreenClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { PersonAvatar, PersonName } from "@/features/users/PersonName";
@@ -72,8 +73,8 @@ function BlockedUsersDialog({ count }: { count: number }) {
           {format(m.blocking.showBlocked, { count })}
         </Button>
       )}
-      <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={planesModalClass}>
+      <ModalOverlay isDismissable className={fullScreenOverlayClass}>
+        <Modal className={planesModalClass + " " + touchFullScreenClass}>
           <Dialog className={dialogClass}>
             <DialogHeading>{m.blocking.blockedUsers}</DialogHeading>
             <BlockedUsersList />

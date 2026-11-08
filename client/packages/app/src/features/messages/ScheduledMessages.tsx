@@ -6,9 +6,10 @@ import { useChannel, useScheduledMessages, useSync } from "@/api/hooks";
 import { decodeCustomEmoji } from "@/features/emoji/customEmoji";
 import {
   dialogClass,
+  fullScreenOverlayClass,
   listModalClass,
-  overlayClass,
   secondaryButtonClass,
+  touchFullScreenClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { decodeTags } from "@/features/mentions/tags";
@@ -76,8 +77,13 @@ export function ScheduledStrip({
           <CaretRightIcon size={14} aria-hidden="true" className="shrink-0 rtl:-scale-x-100" />
         </Button>
       )}
-      <ModalOverlay isOpen={open} onOpenChange={setOpen} className={overlayClass} isDismissable>
-        <Modal className={listModalClass}>
+      <ModalOverlay
+        isOpen={open}
+        onOpenChange={setOpen}
+        className={fullScreenOverlayClass}
+        isDismissable
+      >
+        <Modal className={listModalClass + " " + touchFullScreenClass}>
           <Dialog className={dialogClass}>
             {({ close }) => (
               <ScheduledList

@@ -30,14 +30,15 @@ import { AboutDialog } from "@/features/about/AboutDialog";
 import { OtherServersSection } from "@/features/deployments/OtherServersSection";
 import { usePreference, useSync, useVoiceCall } from "@/api/hooks";
 import {
-  dialogClass,
-  optionClass,
-  overlayClass,
-  planeClass,
   columnPlanesModalClass,
+  dialogClass,
+  fullScreenOverlayClass,
+  optionClass,
+  planeClass,
   secondaryButtonClass,
   selectButtonClass,
   selectPopoverClass,
+  touchFullScreenClass,
 } from "@/features/invites/dialog";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { SecurityDialog } from "@/features/security/SecurityDialog";
@@ -89,8 +90,8 @@ export function SettingsDialog({ triggerClassName }: { triggerClassName: string 
           <GearSixIcon size={24} aria-hidden="true" />
         </Button>
       </Tooltip>
-      <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={columnPlanesModalClass}>
+      <ModalOverlay isDismissable className={fullScreenOverlayClass}>
+        <Modal className={columnPlanesModalClass + " " + touchFullScreenClass}>
           <Dialog className={dialogClass}>
             {({ close }) => (
               <>

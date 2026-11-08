@@ -22,10 +22,11 @@ import { PeoplePicker } from "@/features/dms/PeoplePicker";
 import {
   dangerButtonClass,
   dialogClass,
-  overlayClass,
+  fullScreenOverlayClass,
   planeClass,
   planeSurfaceClass,
   secondaryButtonClass,
+  touchFullScreenClass,
   widePlanesModalClass,
 } from "@/features/invites/dialog";
 import { copyText } from "@/features/layout/clipboard";
@@ -58,8 +59,8 @@ export function BotsDialog() {
         <RobotIcon size={16} aria-hidden="true" />
         {m.bots.manage}
       </Button>
-      <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={widePlanesModalClass}>
+      <ModalOverlay isDismissable className={fullScreenOverlayClass}>
+        <Modal className={widePlanesModalClass + " " + touchFullScreenClass}>
           <Dialog className={dialogClass}>
             <DialogHeading>{m.bots.heading}</DialogHeading>
             <BotsReauth>

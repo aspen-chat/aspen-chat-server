@@ -2,6 +2,9 @@
 /* Exposes React Aria's render-prop states as Tailwind variants (`pressed:`, `focus-visible:`,
    `selected:`, `invalid:` ...) via the components' `data-*` attributes. */
 @plugin "tailwindcss-react-aria-components";
+/* A touch-only screen, a finger and nothing that hovers: a phone, or a tablet without a trackpad.
+   The same query as `TOUCH_ONLY` in `features/layout/useMediaQuery.ts`. */
+@custom-variant touch-only (@media (hover: none) and (pointer: coarse));
 
 /*
  * Colour is expressed through semantic tokens, never through Tailwind's named palette, so that a
@@ -466,6 +469,45 @@ body,
 @utility overlay-inset {
   padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
     max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+}
+
+/* The overlay of a modal that fills the screen (`fullScreenOverlayClass`): its content reaches
+   the notch and the home indicator and no further. */
+@utility overlay-inset-edge {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+/* The frame every modal is drawn in (`modalFrameClass` in `features/invites/dialog.ts`). It keeps
+   its padding, and the gap `dialogClass` leaves between the rows of a dialog, in variables for the
+   title row (`pinned-title`), which pads the top itself: a sticky row never leaves its parent's
+   content box, so padding the frame's top would hold the row that far below the top of the frame
+   once scrolled, with what scrolls showing above it. */
+@utility modal-frame {
+  --modal-pad: --spacing(4);
+  --modal-gap: --spacing(4);
+  padding: 0 var(--modal-pad) var(--modal-pad);
+  /* What is scrolled into view, a control taking focus among it, lands below the title row, not
+     under it; `DialogHeading` keeps the row's height here. */
+  scroll-padding-top: var(--pinned-title-height, 0px);
+  @variant sm {
+    --modal-pad: --spacing(5);
+  }
+}
+
+/* A modal's title row (`DialogHeading`), which stays at the top of the frame while the modal
+   scrolls: drawn on the modal's ground, padding the top of the frame in its place and reaching over
+   the frame's side padding and the gap below the row, so that what scrolls passes under it rather
+   than showing through beside it. It spans the frame whatever the dialog's alignment, so its ground
+   does too. Outside a modal frame the variables are unset and the row lies where it is. */
+@utility pinned-title {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  align-self: stretch;
+  margin: 0 calc(-1 * var(--modal-pad, 0px)) calc(-1 * var(--modal-gap, 0px));
+  padding: var(--modal-pad, 0px) var(--modal-pad, 0px) var(--modal-gap, 0px);
+  background-color: var(--modal-ground, transparent);
 }
 
 /* A control on a touch screen answers a finger anywhere in a 44px square around it, however

@@ -26,9 +26,10 @@ import {
 } from "@/features/auth/styles";
 import {
   dialogClass,
+  fullScreenOverlayClass,
   modalClass,
-  overlayClass,
   secondaryButtonClass,
+  touchFullScreenClass,
 } from "@/features/invites/dialog";
 import { Avatar } from "@/features/communities/Avatar";
 import { Tooltip } from "@/features/layout/Tooltip";
@@ -77,8 +78,8 @@ export function EditProfileDialog({
               </Button>
             </Tooltip>
           )}
-          <ModalOverlay className={overlayClass} isDismissable>
-            <Modal className={modalClass}>
+          <ModalOverlay className={fullScreenOverlayClass} isDismissable>
+            <Modal className={modalClass + " " + touchFullScreenClass}>
               <Dialog className={dialogClass}>
                 {({ close }) => <ProfileEditor user={user} bot={bot} close={close} />}
               </Dialog>

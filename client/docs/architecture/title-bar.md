@@ -48,8 +48,9 @@ the desktop app in its title bar.
   (`env(titlebar-area-height)`), and never less than 2rem, plus 1px for the line along its foot, so
   the line runs below the buttons rather than under them. Everything else keeps clear of it:
   - `#root` pads its top by it;
-  - every overlay (`overlayClass`, `Drawer`, `ImageGallery`, a screen share filling the window)
-    starts below it, so a dialog leaves the title bar undimmed, as the system's own does;
+  - every overlay (`overlayClass` and `fullScreenOverlayClass`, `Drawer`, `ImageGallery`, a screen
+    share filling the window) starts below it, so a dialog leaves the title bar undimmed, as the
+    system's own does;
   - the fallback toast region sits below it.
 - `TitleBar` (`src/features/layout/TitleBar.tsx`) draws the strip: fixed across the top, in
   `bg-surface-rail`, ruled off from the page below by a 1px `border-line`, the colour of the channel

@@ -14,10 +14,11 @@ import { DocumentLinks } from "@/features/documents/DocumentLinks";
 import { linkButtonClass } from "@/features/auth/styles";
 import {
   dialogClass,
-  overlayClass,
+  fullScreenOverlayClass,
   planeClass,
   planesModalClass,
   secondaryButtonClass,
+  touchFullScreenClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
@@ -41,8 +42,8 @@ export function AboutDialog({ onNavigate }: { onNavigate: () => void }) {
         <InfoIcon size={16} aria-hidden="true" />
         {m.about.heading}
       </Button>
-      <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={planesModalClass}>
+      <ModalOverlay isDismissable className={fullScreenOverlayClass}>
+        <Modal className={planesModalClass + " " + touchFullScreenClass}>
           <Dialog className={dialogClass}>
             <DialogHeading>{m.about.heading}</DialogHeading>
             <AboutPanel onNavigate={onNavigate} />

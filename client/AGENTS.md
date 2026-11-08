@@ -98,6 +98,9 @@ same commit, as with comments.
   arrivals, what a row and the store hold in memory, and the tests that hold it to that.
 - [`message-rendering.md`](docs/architecture/message-rendering/index.md): Markdown, code
   highlighting, spoilers, linkifying, attachments, inline images, and video cards.
+- [`modals.md`](docs/architecture/modals.md): the overlay, frame, and title row every modal shares,
+  the title row staying at the top while a modal scrolls, and the modals that fill a touch-only
+  screen.
 - [`new-release.md`](docs/architecture/new-release.md): telling a web client page it is of a release
   since replaced, the strip that offers to reload, and reloading when a part fails to load.
 - [`notifications.md`](docs/architecture/notifications.md): notification levels, the chime, system

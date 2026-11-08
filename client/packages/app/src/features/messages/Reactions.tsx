@@ -33,8 +33,9 @@ import {
 } from "@/api/hooks";
 import {
   dialogClass,
-  overlayClass,
+  fullScreenOverlayClass,
   secondaryButtonClass,
+  touchFullScreenClass,
   wideModalClass,
 } from "@/features/invites/dialog";
 import { MEDIUM_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
@@ -331,9 +332,9 @@ export function ReactionsDialog({
       isOpen={isOpen}
       onOpenChange={onOpenChange}
       isDismissable
-      className={overlayClass}
+      className={fullScreenOverlayClass}
     >
-      <Modal className={wideModalClass}>
+      <Modal className={wideModalClass + " " + touchFullScreenClass}>
         <Dialog className={dialogClass}>
           <DialogHeading>{m.reactionsHeading}</DialogHeading>
           {entries.length === 0 ? (
