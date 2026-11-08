@@ -78,9 +78,11 @@ The call bar shows it under its buttons with what to do.
 ### Showing cameras
 
 The call screen shows each camera above its owner's name in place of the avatar. The tile is four
-columns wide where they fit and the whole row where not. The user's own is mirrored while it faces
-them or its direction is unknown (`trackFacing`: the track's `facingMode`, else its name), and a
-phone's back camera is not. A camera goes full screen by its corner button or a double click
+columns wide where they fit and the whole row where not, and the camera's picture in it takes the
+camera's own shape (`ScreenTile`'s `natural`, read from the picture as its frames arrive), no taller
+than 70% of the screen, so tiles are as uneven as the cameras. The user's own is mirrored while it
+faces them or its direction is unknown (`trackFacing`: the track's `facingMode`, else its name), and
+a phone's back camera is not. A camera goes full screen by its corner button or a double click
 (`ScreenTile`), but not the F key, which means the shared screen.
 
 ## Signalling frames

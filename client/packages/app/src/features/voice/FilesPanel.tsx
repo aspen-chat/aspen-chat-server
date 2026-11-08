@@ -1,10 +1,27 @@
 import type { OfferState, TransferState } from "@aspen/protocol";
-import { ArrowDownIcon, ArrowUpIcon, FileArrowUpIcon } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
-import { Button, useLocale } from "react-aria-components";
-import { useSilenced, useSync, useUser, useVoiceCall } from "@/api/hooks";
+import { ArrowDownIcon, ArrowUpIcon, FileArrowUpIcon, FolderOpenIcon } from "@phosphor-icons/react";
+import { useState } from "react";
+import {
+  Button,
+  Dialog,
+  DialogTrigger,
+  Modal,
+  ModalOverlay,
+  useLocale,
+} from "react-aria-components";
+import { useSync, useUser, useVoiceCall } from "@/api/hooks";
 import { outlineButtonClass } from "@/features/auth/styles";
-import { secondaryButtonClass } from "@/features/invites/dialog";
+import {
+  dialogClass,
+  modalClass,
+  overlayClass,
+  secondaryButtonClass,
+} from "@/features/invites/dialog";
+import { DialogHeading } from "@/features/layout/DialogHeading";
+import { Tooltip } from "@/features/layout/Tooltip";
+import { MentionBadge } from "@/features/mentions/MentionBadge";
+import { callBarButtonClass } from "@/features/voice/callBarButton";
+import { hasFiles, useIncomingOffers } from "@/features/voice/callFiles";
 import { handleOf } from "@/features/users/profile";
 import { OfferFileDialog, ReceiveFileDialog } from "@/features/voice/FileDialogs";
 import { formatSize, formatTimeLeft } from "@/features/voice/files";
@@ -17,64 +34,35 @@ import { formatNodes } from "@/i18n/formatNodes";
 const smallButtonClass = secondaryButtonClass + " px-2 py-1 text-xs";
 
 /**
- * `Date.now()`, advancing every second while `ticking`, for the offers' countdowns, and read
- * afresh whenever `changed` does, so an offer that just arrived is not counted from a second ago.
- */
-function useNow(ticking: boolean, changed: unknown): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const tick = () => {
-      setNow(Date.now());
-    };
-    const fresh = setTimeout(tick, 0);
-    const timer = ticking ? setInterval(tick, 1000) : undefined;
-    return () => {
-      clearTimeout(fresh);
-      clearInterval(timer);
-    };
-  }, [ticking, changed]);
-  return now;
-}
-
-/**
  * The files of the call the user is in: offering one, what others offer them (not those they
  * blocked), their own offers with the time each has left, and their transfers with progress, a
- * way to cancel each, and, once a file has arrived, a way to save it.
+ * way to cancel each, and, once a file has arrived, a way to save it. `titled` heads it with its
+ * own title, which a dialog holding it gives instead.
  */
-export function FilesPanel() {
+export function FilesPanel({ titled = true }: { titled?: boolean }) {
   const m = useMessages();
   const call = useVoiceCall();
   const files = call.files;
   const [offering, setOffering] = useState(false);
   const [receiving, setReceiving] = useState<string | null>(null);
-  const now = useNow(files.offers.length > 0, files.offers);
-  const silenced = useSilenced(files.offers.map((offer) => offer.from));
-  // Offers the user is receiving or has received; one that failed or was cancelled can be
-  // accepted again while it stands.
-  const underway = new Set(
-    files.transfers
-      .filter(
-        (t) =>
-          t.role === "receiver" &&
-          (t.status === "connecting" || t.status === "moving" || t.status === "completed"),
-      )
-      .map((t) => t.offer),
-  );
-  const incoming = files.offers.filter(
-    (offer) =>
-      !offer.own && !silenced.has(offer.from) && offer.expiresAt > now && !underway.has(offer.id),
-  );
+  const { incoming, now } = useIncomingOffers();
   const own = files.offers.filter((offer) => offer.own && offer.expiresAt > now);
   const accepting = incoming.find((offer) => offer.id === receiving);
-  if (!call.canTransfer && incoming.length === 0 && files.transfers.length === 0) {
+  if (!hasFiles(call.canTransfer, incoming.length, files.transfers.length)) {
     return null;
   }
   return (
-    <section aria-labelledby="call-files" className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-2">
-        <h2 id="call-files" className="text-sm font-semibold text-ink-muted">
-          {m.files.heading}
-        </h2>
+    <section
+      aria-labelledby={titled ? "call-files" : undefined}
+      aria-label={titled ? undefined : m.files.heading}
+      className="flex flex-col gap-3"
+    >
+      <div className={"flex items-center gap-2 " + (titled ? "justify-between" : "justify-end")}>
+        {titled && (
+          <h2 id="call-files" className="text-sm font-semibold text-ink-muted">
+            {m.files.heading}
+          </h2>
+        )}
         {call.canTransfer && (
           <Button
             onPress={() => {
@@ -315,5 +303,45 @@ function Transfer({ transfer }: { transfer: TransferState }) {
         </span>
       )}
     </li>
+  );
+}
+
+/**
+ * The call bar's way to the call's files, where the call screen does not show them (a phone or
+ * tablet): a button opening them in a dialog, counting the offers waiting for the user, so one
+ * is not missed while the files are out of sight.
+ */
+export function FilesButton() {
+  const m = useMessages();
+  const call = useVoiceCall();
+  const { incoming } = useIncomingOffers();
+  if (!hasFiles(call.canTransfer, incoming.length, call.files.transfers.length)) {
+    return null;
+  }
+  const label =
+    incoming.length === 0
+      ? m.files.heading
+      : format(m.files.headingWithOffers, { count: incoming.length });
+  return (
+    <DialogTrigger>
+      <Tooltip text={label}>
+        <Button aria-label={label} className={callBarButtonClass + " relative"}>
+          <FolderOpenIcon size={24} aria-hidden="true" />
+          <MentionBadge
+            count={incoming.length}
+            title=""
+            className="absolute top-0.5 start-1/2 ms-2"
+          />
+        </Button>
+      </Tooltip>
+      <ModalOverlay isDismissable className={overlayClass}>
+        <Modal className={modalClass}>
+          <Dialog className={dialogClass}>
+            <DialogHeading>{m.files.heading}</DialogHeading>
+            <FilesPanel titled={false} />
+          </Dialog>
+        </Modal>
+      </ModalOverlay>
+    </DialogTrigger>
   );
 }

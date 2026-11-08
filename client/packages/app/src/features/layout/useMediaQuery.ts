@@ -1,13 +1,23 @@
 import { useCallback, useSyncExternalStore } from "react";
 
 /**
- * The width Tailwind's `md` variant starts at, for layout decisions made in code that must
- * agree with the ones made in class names.
+ * Where Tailwind's `md` variant applies (`styles.css`), for layout decisions made in code that
+ * must agree with the ones made in class names: 48rem wide, on a screen tall enough for panes
+ * side by side or with a mouse or trackpad, so a phone held sideways keeps one pane.
  */
-export const MEDIUM_SCREEN = "(min-width: 48rem)";
+export const MEDIUM_SCREEN = "(min-width: 48rem) and ((min-height: 30rem) or (pointer: fine))";
 
-/** The width Tailwind's `lg` variant starts at, from which the member list is a pane of its own. */
-export const LARGE_SCREEN = "(min-width: 64rem)";
+/**
+ * The width alone from which `MEDIUM_SCREEN` applies, however short the screen: a phone held
+ * upright is narrower, and held sideways is not.
+ */
+export const MEDIUM_WIDTH = "(min-width: 48rem)";
+
+/**
+ * Where Tailwind's `lg` variant applies, from which the member list is a pane of its own: as
+ * `MEDIUM_SCREEN`, from 64rem wide.
+ */
+export const LARGE_SCREEN = "(min-width: 64rem) and ((min-height: 30rem) or (pointer: fine))";
 
 /**
  * A pointer as coarse as a finger, which Tailwind's `pointer-coarse` variant gives larger

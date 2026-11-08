@@ -5,6 +5,13 @@
 /* A touch-only screen, a finger and nothing that hovers: a phone, or a tablet without a trackpad.
    The same query as `TOUCH_ONLY` in `features/layout/useMediaQuery.ts`. */
 @custom-variant touch-only (@media (hover: none) and (pointer: coarse));
+/* The widths from which a list and a conversation share the screen (`md`) and the member list is a
+   pane of its own (`lg`), Tailwind's own, on a screen tall enough for panes side by side: a phone
+   held sideways is wide but short, and keeps the one pane it shows upright. A mouse or trackpad
+   skips the height, so a short window on a computer keeps its panes. The same queries as
+   `MEDIUM_SCREEN` and `LARGE_SCREEN` in `features/layout/useMediaQuery.ts`. */
+@custom-variant md (@media (width >= 48rem) and ((height >= 30rem) or (pointer: fine)));
+@custom-variant lg (@media (width >= 64rem) and ((height >= 30rem) or (pointer: fine)));
 
 /*
  * Colour is expressed through semantic tokens, never through Tailwind's named palette, so that a

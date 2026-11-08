@@ -7,7 +7,6 @@ import {
   SPEAKERPHONE,
   VIDEO_INPUT,
   canChooseOutput,
-  resolveDevice,
 } from "@aspen/protocol";
 import { ArrowsClockwiseIcon, CaretUpIcon, SpeakerHighIcon } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
@@ -16,21 +15,12 @@ import { usePreference, useSync, useVoiceCall } from "@/api/hooks";
 import { choosesSpeakerphone, usePhoneOutputs } from "@/api/audioRoute";
 import { isMobilePlatform } from "@/features/layout/platform";
 import { Tooltip } from "@/features/layout/Tooltip";
-import {
-  type CameraDevice,
-  type CameraFacing,
-  flippedCamera,
-  flipsBetweenSides,
-  trackFacing,
-} from "@/features/settings/audioDevices";
+import { type CameraDevice } from "@/features/settings/audioDevices";
 import { AccessNotice, DeviceSelect } from "@/features/settings/DeviceSelect";
 import { useAudioDevices } from "@/features/settings/useAudioDevices";
+import { callBarButtonClass } from "@/features/voice/callBarButton";
 import { VolumeSlider } from "@/features/voice/VolumeSlider";
 import { useMessages } from "@/i18n/context";
-
-const rowClass =
-  "flex items-center gap-2 rounded-md p-1 text-sm font-medium outline-none hover:bg-surface-hover " +
-  "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
 
 /**
  * A call bar button with the small arrow at its end that opens `children` in a popover above
@@ -107,9 +97,9 @@ export function InputDevices() {
 }
 
 /**
- * Where the call plays and how loud. A phone with only its receiver and loudspeaker toggles
- * between the two; elsewhere on a phone or tablet the speaker is chosen only where there are
- * several and the browser can choose, and a computer shows the choice as Settings does.
+ * Where the call plays and how loud. On a phone or tablet the speaker is chosen only where there
+ * are several and the browser can choose, and not at all where the bar's Speaker button chooses
+ * between a phone's receiver and loudspeaker; a computer shows the choice as Settings does.
  */
 export function OutputDevices() {
   const m = useMessages();
@@ -120,21 +110,18 @@ export function OutputDevices() {
   const gain = usePreference(OUTPUT_VOLUME);
   const mobile = isMobilePlatform();
   const choosable = canChooseOutput();
+  const lists = !mobile || (!choosesSpeakerphone(phone) && choosable && devices.outputs.length > 1);
   return (
     <>
-      {mobile && choosesSpeakerphone(phone) ? (
-        <SpeakerphoneToggle />
-      ) : (
-        (!mobile || (choosable && devices.outputs.length > 1)) && (
-          <DeviceSelect
-            label={m.settings.speaker}
-            definition={AUDIO_OUTPUT}
-            devices={choosable ? devices.outputs : []}
-            defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
-            disabled={!choosable}
-            hint={choosable ? undefined : m.settings.outputUnsupported}
-          />
-        )
+      {lists && (
+        <DeviceSelect
+          label={m.settings.speaker}
+          definition={AUDIO_OUTPUT}
+          devices={choosable ? devices.outputs : []}
+          defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
+          disabled={!choosable}
+          hint={choosable ? undefined : m.settings.outputUnsupported}
+        />
       )}
       <VolumeSlider
         label={m.voice.outputVolume}
@@ -147,93 +134,73 @@ export function OutputDevices() {
   );
 }
 
-/** Plays the call through the loudspeaker while pressed, through the receiver while not. */
-function SpeakerphoneToggle() {
+/**
+ * Plays the call through the loudspeaker while pressed, through the receiver while not; its icon
+ * sits in a filled accent circle while on.
+ */
+export function SpeakerphoneButton() {
   const m = useMessages();
   const sync = useSync();
   const on = usePreference(SPEAKERPHONE);
   return (
-    <ToggleButton
-      isSelected={on}
-      onChange={(selected) => {
-        void sync.preferences.set(SPEAKERPHONE, selected);
-      }}
-      className={rowClass}
-    >
-      <span
-        className={
-          "flex size-8 shrink-0 items-center justify-center rounded-full " +
-          (on ? "forced-fill bg-accent text-accent-contrast" : "text-ink-muted")
-        }
+    <Tooltip text={m.voice.speakerphone}>
+      <ToggleButton
+        aria-label={m.voice.speakerphone}
+        isSelected={on}
+        onChange={(selected) => {
+          void sync.preferences.set(SPEAKERPHONE, selected);
+        }}
+        className={callBarButtonClass}
       >
-        <SpeakerHighIcon size={20} aria-hidden="true" />
-      </span>
-      {m.voice.speakerphone}
-    </ToggleButton>
+        {/* The circle is drawn past the icon's box, so the button is no taller than the rest. */}
+        <span
+          className={
+            "-m-1 flex rounded-full p-1 " + (on ? "forced-fill bg-accent text-accent-contrast" : "")
+          }
+        >
+          <SpeakerHighIcon size={24} aria-hidden="true" />
+        </span>
+      </ToggleButton>
+    </Tooltip>
   );
 }
 
-/**
- * The camera the call sends. A phone or tablet whose cameras all face front or back flips
- * between the two sides; anything else chooses from the list.
- */
+/** The camera the call sends, from the list. */
 export function CameraDevices() {
   const m = useMessages();
   const { devices, access, requestAccess } = useAudioDevices(false);
-  const flips = isMobilePlatform() && flipsBetweenSides(devices.cameras);
   return (
     <>
       <AccessNotice kind="camera" access={access.camera} onAllow={requestAccess} />
-      {flips ? (
-        <CameraFlip cameras={devices.cameras} />
-      ) : (
-        <DeviceSelect
-          label={m.settings.camera}
-          definition={VIDEO_INPUT}
-          devices={devices.cameras}
-          defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
-        />
-      )}
+      <DeviceSelect
+        label={m.settings.camera}
+        definition={VIDEO_INPUT}
+        devices={devices.cameras}
+        defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
+      />
     </>
   );
 }
 
 /**
- * Switches to the main camera of the other side, as the camera choice, so the next call starts
- * on it too. The side in use is the chosen camera's, or the open camera's while the system's
- * default is in use, or the front, which a phone's default is.
+ * Switches to `target`, as the camera choice: a camera that is on moves to it and stays on, and
+ * one that is off starts on it next.
  */
-function CameraFlip({ cameras }: { cameras: readonly CameraDevice[] }) {
+export function CameraFlipButton({ target }: { target: CameraDevice }) {
   const m = useMessages();
   const sync = useSync();
-  const call = useVoiceCall();
-  const chosen = usePreference(VIDEO_INPUT);
-  const chosenId =
-    chosen === DEFAULT_DEVICE
-      ? null
-      : resolveDevice(
-          chosen,
-          cameras.map((camera) => ({ deviceId: camera.id, label: camera.label })),
-        );
-  const facing: CameraFacing =
-    cameras.find((camera) => camera.id === chosenId)?.facing ??
-    (call.localCamera === null ? null : trackFacing(call.localCamera)) ??
-    "front";
-  const target = flippedCamera(cameras, facing);
-  if (target === undefined) {
-    return null;
-  }
+  const label = target.facing === "back" ? m.voice.useBackCamera : m.voice.useFrontCamera;
   return (
-    <Button
-      onPress={() => {
-        void sync.preferences.set(VIDEO_INPUT, { id: target.id, label: target.label });
-      }}
-      className={rowClass}
-    >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-muted">
-        <ArrowsClockwiseIcon size={20} aria-hidden="true" />
-      </span>
-      {target.facing === "back" ? m.voice.useBackCamera : m.voice.useFrontCamera}
-    </Button>
+    <Tooltip text={label}>
+      <Button
+        aria-label={label}
+        onPress={() => {
+          void sync.preferences.set(VIDEO_INPUT, { id: target.id, label: target.label });
+        }}
+        className={callBarButtonClass}
+      >
+        <ArrowsClockwiseIcon size={24} aria-hidden="true" />
+      </Button>
+    </Tooltip>
   );
 }

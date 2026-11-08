@@ -497,6 +497,7 @@
   },
   "files": {
     "heading": "Archivos",
+    "headingWithOffers": "Archivos, {count, plural, one {# que te ofrecen} other {# que te ofrecen}}",
     "offer": "Ofrecer un archivo",
     "offerHeading": "Ofrecer un archivo a la llamada",
     "offerHint": "Todos los demás en la llamada pueden aceptarlo hasta que la oferta se agote. Tu dispositivo lo envía a cada persona que acepta, incluso mientras no estás, así que mantén Aspen abierto hasta que terminen las transferencias.",
