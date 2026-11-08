@@ -25,6 +25,16 @@ export const KEEP_AWAKE_MS = 10_000;
  */
 export const START_LIMIT_MS = 2_000;
 
+/**
+ * How long past a sound's own length, in real time, it may go unfinished before it is counted as
+ * ended, though it is left to play. A context can report itself running while its clock stands
+ * still (WebKit on iOS, after a context was left open while the app was in the background; see
+ * `browserVoiceMedia`), and a sound it never plays never ends; counted as playing, it would keep
+ * its context open and its place among `MAX_PLAYING_PER_SOUND` taken for good. A clock that is
+ * only late, waiting for a device to wake, still plays the sound whole.
+ */
+export const END_GRACE_MS = 1_000;
+
 /** Chromium's choice of device for a context, which TypeScript's DOM types do not name. */
 interface SinkOptions extends AudioContextOptions {
   sinkId?: string;
@@ -188,15 +198,15 @@ async function wake(deviceId: string): Promise<Speaker> {
 export interface Playing {
   /** Stops it; it then counts as ended. */
   stop(): void;
-  /** Settles when it has ended or been stopped. */
+  /** Settles when it has ended or been stopped, or `END_GRACE_MS` past its length. */
   ended: Promise<void>;
 }
 
 /**
  * Plays the recording `decode` gives through `device`, or the system's default where the device
  * cannot be chosen or is gone, starting once the device is awake. A looped one plays until
- * stopped. Rejects when the browser does not start the speaker (`START_LIMIT_MS`) or the
- * recording cannot be decoded.
+ * stopped; one that has not ended `END_GRACE_MS` after its length counts as ended. Rejects when
+ * the browser does not start the speaker (`START_LIMIT_MS`) or the recording cannot be decoded.
  */
 export async function play(
   decode: (context: BaseAudioContext) => Promise<AudioBuffer>,
@@ -206,9 +216,11 @@ export async function play(
   const deviceId = await deviceIdOf(device);
   const speaker = await wake(deviceId);
   let source: AudioBufferSourceNode;
+  let buffer: AudioBuffer;
   try {
     source = speaker.context.createBufferSource();
-    source.buffer = await decode(speaker.context);
+    buffer = await decode(speaker.context);
+    source.buffer = buffer;
   } catch (error) {
     speaker.playing -= 1;
     sleepWhenIdle(deviceId, speaker);
@@ -216,19 +228,30 @@ export async function play(
   }
   source.loop = loop;
   source.connect(speaker.input);
+  const startAt = Math.max(speaker.context.currentTime, speaker.awakeAt);
   const ended = new Promise<void>((resolve) => {
-    source.addEventListener(
-      "ended",
-      () => {
-        source.disconnect();
+    let counted = true;
+    const release = () => {
+      if (counted) {
+        counted = false;
         speaker.playing -= 1;
         sleepWhenIdle(deviceId, speaker);
         resolve();
+      }
+    };
+    const lengthMs = (startAt - speaker.context.currentTime + buffer.duration) * 1000;
+    const overdue = loop ? undefined : setTimeout(release, lengthMs + END_GRACE_MS);
+    source.addEventListener(
+      "ended",
+      () => {
+        clearTimeout(overdue);
+        source.disconnect();
+        release();
       },
       { once: true },
     );
   });
-  source.start(Math.max(speaker.context.currentTime, speaker.awakeAt));
+  source.start(startAt);
   let stopped = false;
   return {
     stop: () => {

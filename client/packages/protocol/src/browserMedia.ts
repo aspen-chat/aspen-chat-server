@@ -61,6 +61,13 @@ interface Player {
 
 export function browserVoiceMedia(): VoiceMedia {
   const players = new Map<string, Player>();
+  /**
+   * The context the microphone and every consumer play through, open only while one of them
+   * uses it (`closeWhenUnused`), so each call opens its own. One left open between calls breaks
+   * Web Audio on iOS: once the app has gone to the background with nothing playing (the phone
+   * locked between calls), WebKit stops running every audio context of the page, new ones too,
+   * as soon as anything plays through the one left open, until the app starts again.
+   */
   let context: AudioContext | null = null;
   const audioContext = (): AudioContext | null => {
     if (context === null && typeof AudioContext !== "undefined") {
@@ -73,6 +80,12 @@ export function browserVoiceMedia(): VoiceMedia {
   };
   /** The gain of each microphone open now; two are open while one replaces the other. */
   const microphones = new Set<GainNode>();
+  const closeWhenUnused = () => {
+    if (context !== null && microphones.size === 0 && players.size === 0) {
+      void context.close().catch(() => undefined);
+      context = null;
+    }
+  };
   /**
    * The captured track as sent: through a gain node, so it can go out louder or quieter than
    * captured, the browser's own processing (echo cancellation and the rest) having already run
@@ -104,6 +117,7 @@ export function browserVoiceMedia(): VoiceMedia {
       source.disconnect();
       node.disconnect();
       microphones.delete(node);
+      closeWhenUnused();
     };
     return sent;
   };
@@ -258,6 +272,7 @@ export function browserVoiceMedia(): VoiceMedia {
           player.pull.srcObject = null;
         }
         players.delete(consumerId);
+        closeWhenUnused();
       }
     },
     setVolume(consumerId: string, gain: number): void {
