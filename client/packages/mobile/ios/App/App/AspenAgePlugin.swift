@@ -24,19 +24,33 @@ public class AspenAgePlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    /// How long the system may take to say whether the user's region requires age assurance
+    /// before the app goes on as where it does not. The question has been seen never to be
+    /// answered (and so the app never to start); the sheet a person answers is not timed.
+    static let eligibilityWaitNanoseconds: UInt64 = 5_000_000_000
+
+    /// The launch argument a simulator answers from (`-AspenAgeCheck underage`, or `adult`), in
+    /// place of Declared Age Range, which Apple supports only on devices and which leaves the
+    /// app waiting there. Without it a simulator answers adult. Devices never read it.
+    static let simulatorAnswerKey = "AspenAgeCheck"
+
     /// Whether the system says the user is under `adult`. It is asked only where the user's
     /// region requires age assurance (`isEligibleForAgeFeatures`), so nobody elsewhere is shown
-    /// the system's sheet. A system too old to say, a user who declines to share, or any failure
-    /// answers `false`, as a device that reports no age does.
+    /// the system's sheet. A system too old to say, one that does not say within
+    /// `eligibilityWaitNanoseconds` whether the region requires it, a user who declines to share,
+    /// or any failure answers `false`, as a device that reports no age does.
     @MainActor
     static func underage(in viewController: UIViewController?) async -> Bool {
+        #if targetEnvironment(simulator)
+        return UserDefaults.standard.string(forKey: simulatorAnswerKey) == "underage"
+        #else
         guard #available(iOS 26.2, *), let viewController else {
             return false
         }
+        guard await eligible() else {
+            return false
+        }
         do {
-            guard try await AgeRangeService.shared.isEligibleForAgeFeatures else {
-                return false
-            }
             let response = try await AgeRangeService.shared.requestAgeRange(
                 ageGates: adult,
                 in: viewController
@@ -48,5 +62,40 @@ public class AspenAgePlugin: CAPPlugin, CAPBridgedPlugin {
         } catch {
             return false
         }
+        #endif
+    }
+
+    /// Whether the user's region requires age assurance, or `false` once
+    /// `eligibilityWaitNanoseconds` has passed without an answer. The answer and the wait race to
+    /// resume one continuation, rather than run as a task group, which would wait on for a call
+    /// that never returns.
+    @available(iOS 26.2, *)
+    @MainActor
+    private static func eligible() async -> Bool {
+        await withCheckedContinuation { continuation in
+            let first = FirstAnswer(continuation)
+            Task { @MainActor in
+                first.give((try? await AgeRangeService.shared.isEligibleForAgeFeatures) ?? false)
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: eligibilityWaitNanoseconds)
+                first.give(false)
+            }
+        }
+    }
+}
+
+/// Resumes its continuation with the first answer given, and ignores the rest.
+@MainActor
+private final class FirstAnswer {
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    nonisolated init(_ continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = continuation
+    }
+
+    func give(_ answer: Bool) {
+        continuation?.resume(returning: answer)
+        continuation = nil
     }
 }

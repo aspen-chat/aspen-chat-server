@@ -136,6 +136,19 @@ final class AppUITests: XCTestCase {
         return try XCTUnwrap(body["text"] as? String, "the helper could not \(action): \(body["error"] ?? body)")
     }
 
+    /// Where the device says its user is under 18, the app shows only why it cannot be used.
+    /// The simulator answers from `-AspenAgeCheck` (`AspenAgePlugin`), as Declared Age Range
+    /// runs only on devices; this needs no deployment.
+    func testShowsOnlyTheNoticeToAnUnderageUser() throws {
+        app.terminate()
+        app.launchArguments = ["-AspenAgeCheck", "underage"]
+        app.launch()
+        XCTAssertTrue(shown("not old enough to use this app").waitForExistence(timeout: 20),
+                      "no notice: \(app.debugDescription)")
+        XCTAssertFalse(web.textFields["Deployment URL"].exists, "the app shows past the notice")
+        XCTAssertFalse(web.textFields["Username"].exists, "the app shows past the notice")
+    }
+
     func testSignsIn() throws {
         try signIn()
         // Signed in, the app shows the user's settings control at the foot of a list.
