@@ -116,8 +116,13 @@ export interface TransportParams {
 /** What the call needs from the browser: media capture, the mediasoup device, and playback. */
 export interface VoiceMedia {
   createDevice(): Promise<VoiceDevice>;
-  /** Opens the microphone the choice names, or the system's default. */
-  getMicrophone(choice: DeviceChoice): Promise<MediaStreamTrack>;
+  /**
+   * Opens the microphone the choice names, or the system's default, sent at `gain` (as
+   * `setInputVolume` takes it) until `setInputVolume` changes it.
+   */
+  getMicrophone(choice: DeviceChoice, gain: number): Promise<MediaStreamTrack>;
+  /** Scales what the open microphone sends: 1 as captured, 0 silent, up to 2. */
+  setInputVolume(gain: number): void;
   /** Opens a camera, the chosen one when it is present. */
   getCamera(choice: DeviceChoice): Promise<MediaStreamTrack>;
   /** Routes everything played to the speaker the choice names, or the system's default. */

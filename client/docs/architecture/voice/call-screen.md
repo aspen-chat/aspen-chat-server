@@ -13,6 +13,43 @@
 - On a narrow screen the call bar shows under the voice channel from the moment the user presses
   Join, so joining and a failure to join are visible there.
 
+### Device arrows
+
+Mute, deafen, and camera each have a small upward arrow at their end (`WithDeviceArrow`,
+`src/features/voice/DeviceArrows.tsx`), which opens a popover above the bar:
+
+| Arrow  | Popover         | Holds                                              |
+| ------ | --------------- | -------------------------------------------------- |
+| Mute   | `InputDevices`  | the microphone (`AUDIO_INPUT`) and its volume      |
+| Deafen | `OutputDevices` | the speaker (`AUDIO_OUTPUT`) and the call's volume |
+| Camera | `CameraDevices` | the camera (`VIDEO_INPUT`)                         |
+
+- The arrow lies over the end of its button's padding, out of the layout: each control sits in a box
+  that takes its equal share of the row and the control fills it, so the buttons keep the width and
+  place they have without arrows. The arrow is not made larger on a touch screen.
+- The mute arrow shows while a moderator has muted the user and while they only listen, since the
+  microphone's choice and volume still apply. The camera's shows with the camera button.
+- The popovers write the same preferences as Settings' Audio and video section, which also has the
+  two volumes, so both always agree.
+- Where the browser does not name devices yet, the popover shows the same notice and Allow button as
+  Settings (`AccessNotice`, `src/features/settings/DeviceSelect.tsx`).
+
+On a phone or tablet (`isMobilePlatform`: the mobile apps, or a browser on Android, iOS, or iPadOS,
+whatever the window's width):
+
+- The microphone and speaker lists show only when there are several to choose from; otherwise the
+  popover holds only the volume. A browser that cannot route output offers no speaker list there.
+- In the mobile apps, a phone with only its receiver and loudspeaker (`choosesSpeakerphone`) shows a
+  Speaker toggle instead of a list, its icon in a filled accent circle while on. It sets
+  `SPEAKERPHONE`, which `useFollowSpeakerphone` (`src/api/audioRoute.ts`) applies through the native
+  `AspenAudioRoute` plugin from the call's start to its end. While anything else is connected
+  (headphones, a headset, a car) the toggle is gone and the route is the system's.
+- Where every camera faces front or back (`flipsBetweenSides`), however many lenses the back has,
+  one button switches to the other side instead of a list: to its first listed camera, the side's
+  main one (`flippedCamera`), as the camera choice. A camera's side is the browser's `facingMode`,
+  or its name where the browser gives none; a name in another language places none, and the list
+  shows instead.
+
 ## Opening a voice channel
 
 Clicking a voice channel row:

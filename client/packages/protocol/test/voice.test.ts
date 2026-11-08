@@ -276,6 +276,8 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
   const loads = { count: 0 };
   const outputs: (string | null)[] = [];
   const volumes: string[] = [];
+  /** The gain each microphone opened at, then each change `setInputVolume` made. */
+  const inputVolumes: string[] = [];
   const cameras: (string | null)[] = [];
   /** Failures the next camera openings meet, in order; an empty queue opens one. */
   const cameraFailures: CameraFailure[] = [];
@@ -301,8 +303,9 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
   };
   const media: VoiceMedia = {
     createDevice: () => Promise.resolve(device),
-    getMicrophone: (choice) => {
+    getMicrophone: (choice, gain) => {
       microphones.push(choice === "default" ? null : choice.id);
+      inputVolumes.push(`open=${String(gain)}`);
       if (microphone !== "ok") {
         return Promise.reject(new Error("Permission denied"));
       }
@@ -323,6 +326,9 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
     },
     setVolume: (consumerId, gain) => {
       volumes.push(`${consumerId}=${String(gain)}`);
+    },
+    setInputVolume: (gain) => {
+      inputVolumes.push(`set=${String(gain)}`);
     },
     getScreen: () => {
       const capture = { video: new FakeTrack("video"), audio: new FakeTrack("audio") };
@@ -346,6 +352,7 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
     loads,
     outputs,
     volumes,
+    inputVolumes,
     cameras,
     cameraFailures,
   };
@@ -424,6 +431,7 @@ function makeCall(options: {
     loads,
     outputs,
     volumes,
+    inputVolumes,
     cameras,
     cameraFailures,
   } = fakeMedia(options.unreachableSendTransports ?? 0, options.microphone ?? "ok");
@@ -450,6 +458,7 @@ function makeCall(options: {
     loads,
     outputs,
     volumes,
+    inputVolumes,
     cameras,
     cameraFailures,
     timers,
@@ -1080,6 +1089,16 @@ describe("VoiceCall", () => {
     call.leave();
     await call.setAudioDevices({ input: { id: "mic-c", label: "C" }, output: "default" });
     expect(microphones).toEqual(["mic-a", "mic-b"]);
+  });
+
+  it("opens the microphone at the input volume and changes it on the open one", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, inputVolumes } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    call.setInputVolume(1.5);
+    await call.join(channel);
+    call.setInputVolume(0.5);
+    await call.setAudioDevices({ input: { id: "mic-b", label: "B" }, output: "default" });
+    expect(inputVolumes).toEqual(["set=1.5", "open=1.5", "set=0.5", "open=0.5"]);
   });
 
   it("moves to another call keeping the microphone and the loaded device", async () => {

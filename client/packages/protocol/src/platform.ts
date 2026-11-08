@@ -18,10 +18,14 @@ export function lazyBrowserMedia(): VoiceMedia {
   };
   return {
     createDevice: async () => (await media()).createDevice(),
-    getMicrophone: async (choice) => (await media()).getMicrophone(choice),
+    getMicrophone: async (choice, gain) => (await media()).getMicrophone(choice, gain),
     getCamera: async (choice) => (await media()).getCamera(choice),
     setOutput: async (choice) => (await media()).setOutput(choice),
     getScreen: async () => (await media()).getScreen(),
+    // Before the media exists there is no microphone to scale; each opens at its gain.
+    setInputVolume: (gain) => {
+      real?.setInputVolume(gain);
+    },
     setVolume: (consumerId, gain) => {
       if (real !== null) {
         real.setVolume(consumerId, gain);

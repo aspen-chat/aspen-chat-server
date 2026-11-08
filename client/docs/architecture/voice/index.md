@@ -32,4 +32,6 @@ bar, the call screen, DM calls and rings, and the per-person and moderation menu
 | The call's sounds (joining, leaving, shares, transfers, losing and regaining it) | `src/features/voice/callSounds.ts` (see [sounds](../notifications.md#sounds))                            |
 | Ring notifications                                                               | `src/features/voice/ringNotifications.ts`                                                                |
 | Full screen                                                                      | `ScreenTile`, `fullScreen.ts`, `useOrientationLock`                                                      |
+| The call bar's device arrows                                                     | `src/features/voice/DeviceArrows.tsx`                                                                    |
+| Receiver or loudspeaker in the mobile apps                                       | `src/api/audioRoute.ts`, `AspenAudioRoutePlugin` (Android's `audio` package, iOS's `App`)                |
 | Desktop screen picker                                                            | `packages/desktop/src/main/index.ts` (see [screen sharing](../screen-sharing-and-game-capture/index.md)) |

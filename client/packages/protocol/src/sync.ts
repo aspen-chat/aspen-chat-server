@@ -39,6 +39,8 @@ import { ApiProblemError, type Problem, transportProblem } from "./problem";
 import {
   AUDIO_INPUT,
   AUDIO_OUTPUT,
+  INPUT_VOLUME,
+  OUTPUT_VOLUME,
   TYPING_NOTICES,
   VIDEO_INPUT,
   PreferenceStore,
@@ -569,6 +571,18 @@ export class AspenSync {
     };
     this.preferences.subscribe(applyDevices);
     applyDevices();
+    // So do the microphone's volume and the call's, which every person's own volume is scaled by.
+    let outputVolume = this.preferences.get(OUTPUT_VOLUME);
+    const applyVolumes = () => {
+      this.voice.setInputVolume(this.preferences.get(INPUT_VOLUME));
+      const output = this.preferences.get(OUTPUT_VOLUME);
+      if (output !== outputVolume) {
+        outputVolume = output;
+        this.voice.refreshVolumes();
+      }
+    };
+    this.preferences.subscribe(applyVolumes);
+    applyVolumes();
     // Turning typing notices off says at once that the user stopped wherever they were typing.
     this.preferences.subscribe(() => {
       if (!this.preferences.get(TYPING_NOTICES)) {
@@ -2639,9 +2653,14 @@ export class AspenSync {
     this.voice.setUserVolume(userId, this.#userGain(userId));
   }
 
-  /** How loud `userId` plays here: silent while muted for this user, or blocked on any deployment. */
+  /**
+   * How loud `userId` plays here, their volume under the call's: silent while muted for this
+   * user, or blocked on any deployment.
+   */
   #userGain(userId: string): number {
-    return this.store.silenced(userId) ? 0 : effectiveUserVolume(this.preferences, userId);
+    return this.store.silenced(userId)
+      ? 0
+      : effectiveUserVolume(this.preferences, userId) * this.preferences.get(OUTPUT_VOLUME);
   }
 
   /**
@@ -2659,9 +2678,14 @@ export class AspenSync {
     this.voice.setUserVolume(userId, this.#streamGain(userId), "screenAudio");
   }
 
-  /** How loud `userId`'s stream plays here: silent while muted for this user, or blocked. */
+  /**
+   * How loud `userId`'s stream plays here, its volume under the call's: silent while muted for
+   * this user, or blocked.
+   */
   #streamGain(userId: string): number {
-    return this.store.silenced(userId) ? 0 : effectiveStreamVolume(this.preferences, userId);
+    return this.store.silenced(userId)
+      ? 0
+      : effectiveStreamVolume(this.preferences, userId) * this.preferences.get(OUTPUT_VOLUME);
   }
 
   /**

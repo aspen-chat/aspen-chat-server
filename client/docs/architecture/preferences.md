@@ -43,6 +43,10 @@ The palette (light or dark) and the fonts ([fonts.md](fonts.md)) are kept per in
 | --------------------- | ----------------------- | ------- | ------------------------------------------------------------------------------------------------------ |
 | `AUDIO_INPUT`         |                         | device  | Microphone: the system default or a `NamedDevice`                                                      |
 | `AUDIO_OUTPUT`        |                         | device  | Speaker: the system default or a `NamedDevice`                                                         |
+| `VIDEO_INPUT`         | `video.input`           | device  | Camera: the system default or a `NamedDevice`                                                          |
+| `INPUT_VOLUME`        | `audio.inputVolume`     | device  | How loud the microphone is sent, a gain up to 2 ([media](voice/media.md#the-microphone))               |
+| `OUTPUT_VOLUME`       | `audio.outputVolume`    | device  | How loud the call plays, over each person's own volume                                                 |
+| `SPEAKERPHONE`        | `audio.speakerphone`    | device  | In the mobile apps, the loudspeaker rather than the receiver; on by default                            |
 | `NOTIFICATION_OUTPUT` |                         | device  | Where notification sounds play; defaults to following the voice output                                 |
 | `NAME_COLORS`         |                         | device  | Whether names are drawn in their roles' colours ([roles-and-permissions.md](roles-and-permissions.md)) |
 | `TYPING_NOTICES`      | `privacy.typingNotices` | account | Whether others are told when the user is typing; on unless turned off under Privacy                    |
