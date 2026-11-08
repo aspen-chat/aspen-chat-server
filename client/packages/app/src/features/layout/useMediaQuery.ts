@@ -16,6 +16,12 @@ export const LARGE_SCREEN = "(min-width: 64rem)";
 export const COARSE_POINTER = "(pointer: coarse)";
 
 /**
+ * A touch screen among the device's inputs, whether or not it is the main one: a phone, a
+ * tablet, or a laptop with one, where a finger may swipe.
+ */
+export const TOUCH_SCREEN = "(any-pointer: coarse)";
+
+/**
  * A device typed on with an on-screen keyboard: touch alone, nothing to hover with. Its
  * keyboard has no Shift+Enter for a new line, so Enter writes one there and does not send.
  */

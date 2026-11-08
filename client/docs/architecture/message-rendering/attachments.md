@@ -42,7 +42,14 @@ the preview has no picture.
 
 `MessageMedia` gathers the pictures into one strip and shows at most `INLINE_IMAGE_LIMIT` (three)
 inline. Beyond that a `+N` tile, like any inline picture, opens `ImageGallery.tsx`, a modal that
-pages through the whole set.
+pages through the whole set with arrows, the arrow keys, and a strip of thumbnails. On a touch
+screen (`TOUCH_SCREEN`, any coarse pointer, a touch laptop's included) a finger swipes between the
+pictures too (`useSwipe`, the hook the drawers follow a finger with): the current picture and its
+neighbours are drawn side by side and follow the finger, and when it lifts they go the way it was
+thrown or to whichever picture is more than halfway in (`swipeOutcome` in `gallerySwipe.ts`), easing
+into place unless motion is reduced; pulled past the first or last picture they give a little
+(`rubberBand`) and spring back. On a touch-only device (`TOUCH_ONLY`) the arrows are left out, since
+they would take width from the picture on a phone.
 
 ## Previews and posters
 

@@ -1,8 +1,20 @@
 import { ArrowSquareOutIcon, CaretLeftIcon, CaretRightIcon, XIcon } from "@phosphor-icons/react";
-import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+  type TransitionEvent,
+} from "react";
 import { Button, Dialog, Link, Modal, ModalOverlay, useLocale } from "react-aria-components";
 import { overlayLayerClass } from "@/features/invites/dialog";
+import { useMotion } from "@/features/layout/motion";
+import { TOUCH_ONLY, TOUCH_SCREEN, useMediaQuery } from "@/features/layout/useMediaQuery";
+import { useSwipe } from "@/features/layout/useSwipe";
+import { swipeOutcome } from "@/features/messages/gallerySwipe";
 import { pictureAlt, type Picture } from "@/features/messages/images";
+import { rubberBand } from "@/features/messages/scrollPhysics";
 import { SpoilerCover } from "@/features/messages/SpoilerCard";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -12,10 +24,26 @@ const navButtonClass =
   "disabled:opacity-30 focus-visible:ring-2 focus-visible:ring-white/70";
 
 /**
+ * Where the pictures are under a finger: at rest on the current one; following a finger,
+ * `travel` pixels along the inline axis from their places; drawn `travel` from their places,
+ * about to ease into them; or easing into them.
+ */
+type Slide =
+  | { readonly kind: "still" }
+  | { readonly kind: "dragging"; readonly travel: number }
+  | { readonly kind: "placed"; readonly travel: number }
+  | { readonly kind: "easing" };
+
+/**
  * Every picture of a message, one at a time, over a darkened page, with its uploader's
  * description beneath it when it has one: arrows and the arrow keys move between them, a strip
  * of thumbnails jumps to one, and Escape, the close control, or a click on the empty space
- * around the picture leaves. Opens on the picture at `initial`. A spoiler the reader has not
+ * around the picture leaves. On a touch screen (`TOUCH_SCREEN`) a finger swipes between them:
+ * the pictures follow it, its neighbours drawn beside the current one, and when it lifts they
+ * go the way it was thrown, or, if it had come to rest, to whichever picture is more than
+ * halfway in; pulled past the first or last picture they give a little and spring back. On a
+ * touch-only device (`TOUCH_ONLY`) the arrows are left out, since the picture needs the width
+ * they take on a phone. Opens on the picture at `initial`. A spoiler the reader has not
  * revealed (`isCovered`) is covered here as in the message, its thumbnail blurred and its
  * description left out, until they reveal it (`onReveal`, with its attachment's id).
  */
@@ -81,6 +109,9 @@ function GalleryBody({
 }) {
   const m = useMessages();
   const { direction } = useLocale();
+  const touchOnly = useMediaQuery(TOUCH_ONLY);
+  const touchScreen = useMediaQuery(TOUCH_SCREEN);
+  const motion = useMotion();
   const [index, setIndex] = useState(Math.min(initial, pictures.length - 1));
   const current = pictures[index];
   const previous = () => {
@@ -109,6 +140,73 @@ function GalleryBody({
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [pictures.length, direction]);
+
+  const body = useRef<HTMLDivElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  const [slide, setSlide] = useState<Slide>({ kind: "still" });
+  const stageWidth = () => stage.current?.offsetWidth ?? window.innerWidth;
+  /** Where the pictures are shown for a finger `travel` from the current one's place. */
+  const shownTravel = (travel: number) => {
+    const pastAnEnd = (travel > 0 && index === 0) || (travel < 0 && index === pictures.length - 1);
+    return pastAnEnd ? rubberBand(travel, stageWidth()) : travel;
+  };
+  // Where motion is reduced the finger still moves the pictures, and lifting it puts them in
+  // their places at once rather than sliding them there.
+  const atOnce = motion.off || motion.reduced;
+  const settleFrom = (shown: number, toward: -1 | 0 | 1) => {
+    if (toward !== 0) {
+      setIndex(index + toward);
+    }
+    if (atOnce || shown === 0) {
+      setSlide({ kind: "still" });
+    } else if (toward === 0) {
+      setSlide({ kind: "easing" });
+    } else {
+      // The new current picture is drawn where the finger left it, and eases into place.
+      setSlide({ kind: "placed", travel: shown + toward * stageWidth() });
+    }
+  };
+  useSwipe(
+    body,
+    {
+      onStart: () => pictures.length > 1 && slide.kind !== "placed",
+      onMove: (travel) => {
+        setSlide({ kind: "dragging", travel: shownTravel(travel) });
+      },
+      onEnd: (travel, velocity) => {
+        settleFrom(
+          shownTravel(travel),
+          swipeOutcome(travel, velocity, stageWidth(), {
+            hasPrevious: index > 0,
+            hasNext: index < pictures.length - 1,
+          }),
+        );
+      },
+      onCancel: () => {
+        settleFrom(slide.kind === "dragging" ? slide.travel : 0, 0);
+      },
+    },
+    touchScreen && pictures.length > 1,
+  );
+  // Drawn first where the finger left them, so that they slide into place from there.
+  useEffect(() => {
+    if (slide.kind !== "placed") {
+      return;
+    }
+    void stage.current?.getBoundingClientRect();
+    const frame = requestAnimationFrame(() => {
+      setSlide({ kind: "easing" });
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [slide.kind]);
+  const onSlid = (event: TransitionEvent<HTMLDivElement>) => {
+    if (event.propertyName === "transform") {
+      setSlide((s) => (s.kind === "easing" ? { kind: "still" } : s));
+    }
+  };
+
   // The gallery fills the page, so the overlay's own click-outside never fires; a click that
   // lands on nothing in particular closes it instead. The press must start here too: the
   // control that opened the gallery fires its press on pointer-up, and the browser's click
@@ -129,8 +227,15 @@ function GalleryBody({
     return null;
   }
   const currentCovered = isCovered(current);
+  // The current picture, and on a touch screen its neighbours beside it, ready to be swiped
+  // in; the travel and the neighbours' sides are along the inline axis, so each is flipped
+  // where the page is laid out right to left.
+  const flip = direction === "rtl" ? -1 : 1;
+  const travel = slide.kind === "dragging" || slide.kind === "placed" ? slide.travel : 0;
+  const shown = touchScreen ? [index - 1, index, index + 1] : [index];
   return (
     <div
+      ref={body}
       role="group"
       aria-label={m.gallery.label}
       onPointerDown={onPointerDown}
@@ -160,53 +265,86 @@ function GalleryBody({
         </span>
       </div>
       <div className="flex min-h-0 flex-1 items-center gap-3">
-        <Button
-          onPress={previous}
-          isDisabled={index === 0}
-          aria-label={m.gallery.previous}
-          className={navButtonClass}
-        >
-          <CaretLeftIcon size={24} aria-hidden="true" className="rtl:-scale-x-100" />
-        </Button>
-        {/* Stretched so its height is definite and the picture's `max-h-full` has something to
-            resolve against; centred only, the wrapper would take the picture's own height and a
+        {!touchOnly && (
+          <Button
+            onPress={previous}
+            isDisabled={index === 0}
+            aria-label={m.gallery.previous}
+            className={navButtonClass}
+          >
+            <CaretLeftIcon size={24} aria-hidden="true" className="rtl:-scale-x-100" />
+          </Button>
+        )}
+        {/* Stretched so its height is definite and each picture's `max-h-full` has something to
+            resolve against; centred only, the stage would take the picture's own height and a
             tall photo would spill over the controls above it. */}
-        <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center self-stretch overflow-hidden">
-          {currentCovered ? (
-            <SpoilerCover
-              onReveal={() => {
-                if (current.attachmentId !== undefined) {
-                  onReveal(current.attachmentId);
-                }
-              }}
-              className="flex max-h-full max-w-full"
-            >
-              <img
-                key={current.src}
-                src={current.src}
-                alt=""
-                referrerPolicy="no-referrer"
-                className="max-h-full max-w-full object-contain"
-              />
-            </SpoilerCover>
-          ) : (
-            <img
-              key={current.src}
-              src={current.src}
-              alt={pictureAlt(current, format(m.imageAlt, { name: current.name }))}
-              referrerPolicy="no-referrer"
-              className="max-h-full max-w-full object-contain"
-            />
-          )}
-        </div>
-        <Button
-          onPress={next}
-          isDisabled={index === pictures.length - 1}
-          aria-label={m.gallery.next}
-          className={navButtonClass}
+        <div
+          ref={stage}
+          onTransitionEnd={onSlid}
+          className="relative min-h-0 min-w-0 flex-1 self-stretch overflow-hidden"
         >
-          <CaretRightIcon size={24} aria-hidden="true" className="rtl:-scale-x-100" />
-        </Button>
+          {shown.map((i) => {
+            const picture = pictures[i];
+            if (picture === undefined) {
+              return null;
+            }
+            const isCurrent = i === index;
+            const covered = isCovered(picture);
+            const image = (
+              <img
+                src={picture.src}
+                alt={
+                  isCurrent && !covered
+                    ? pictureAlt(picture, format(m.imageAlt, { name: picture.name }))
+                    : ""
+                }
+                referrerPolicy="no-referrer"
+                className={
+                  "max-h-full max-w-full object-contain" + (covered && !isCurrent ? " blur-md" : "")
+                }
+              />
+            );
+            return (
+              <div
+                key={picture.src + String(i)}
+                aria-hidden={isCurrent ? undefined : true}
+                className="absolute inset-0 flex items-center justify-center"
+                style={{
+                  transform: `translateX(calc(${String((i - index) * flip * 100)}% + ${String(travel * flip)}px))`,
+                  transition:
+                    slide.kind === "easing"
+                      ? "transform var(--motion-slow) var(--motion-ease-out)"
+                      : "none",
+                }}
+              >
+                {isCurrent && covered ? (
+                  <SpoilerCover
+                    onReveal={() => {
+                      if (picture.attachmentId !== undefined) {
+                        onReveal(picture.attachmentId);
+                      }
+                    }}
+                    className="flex max-h-full max-w-full"
+                  >
+                    {image}
+                  </SpoilerCover>
+                ) : (
+                  image
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {!touchOnly && (
+          <Button
+            onPress={next}
+            isDisabled={index === pictures.length - 1}
+            aria-label={m.gallery.next}
+            className={navButtonClass}
+          >
+            <CaretRightIcon size={24} aria-hidden="true" className="rtl:-scale-x-100" />
+          </Button>
+        )}
       </div>
       {current.description != null && !currentCovered && (
         // Its uploader's description, for every reader; the picture's text alternative already

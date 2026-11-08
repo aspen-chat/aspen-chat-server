@@ -10,7 +10,15 @@ import {
   signInToWorld,
   starterText,
 } from "./world";
-import { bob, generalMessages, message, threadRecord, users } from "./world/fixtures";
+import {
+  bob,
+  general,
+  generalMessages,
+  message,
+  PIXEL_PNG,
+  threadRecord,
+  users,
+} from "./world/fixtures";
 
 /**
  * The app on a phone: a narrow, touch-only screen, where there is no hover and one list or
@@ -498,6 +506,67 @@ test.describe("on a phone", () => {
     // The name and the picture both open the card; the picture comes first.
     await own.getByRole("button", { name: "Show profile of Kate" }).first().tap();
     await expect(page.getByRole("dialog", { name: /Kate/ })).toBeVisible();
+  });
+
+  test("a swipe across the gallery moves between a message's pictures, which has no arrows", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium", "only Chromium takes synthetic touch input");
+    // Newest in #general, a message carrying three pictures, each the one-pixel PNG drawn as
+    // large as a photo.
+    const pictures = ["one", "two", "three"].map((name, i) => ({
+      id: `0190f0a0-0000-7000-8002-00000000002${String(i)}`,
+      fileName: `${name}.png`,
+      mimeType: "image/png",
+      downloadUrl: PIXEL_PNG,
+      width: 200,
+      height: 150,
+    }));
+    await page.route(/\/api\/v1\/attachments\/[^/?]+$/, (route) => {
+      const id = new URL(route.request().url()).pathname.split("/").at(-1);
+      const picture = pictures.find((p) => p.id === id);
+      return picture === undefined ? route.fallback() : route.fulfill({ json: picture });
+    });
+    await page.route(new RegExp(`/api/v1/channels/${general}/messages(\\?.*)?$`), (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.has("before") || url.searchParams.has("after")) {
+        return route.fallback();
+      }
+      return route.fulfill({
+        json: {
+          data: [
+            message(208, bob, "Pictures", 1, { attachments: pictures.map((p) => p.id) }),
+            ...generalMessages,
+          ],
+          included: { users },
+        },
+      });
+    });
+    await openChannel(page, "general");
+    await page.getByRole("button", { name: "Image: one.png" }).tap();
+    const gallery = page.getByRole("dialog", { name: "Images" });
+    await expect(gallery.getByText("1 of 3")).toBeVisible();
+    await expect(gallery.getByRole("button", { name: "Next image" })).toHaveCount(0);
+    await expect(gallery.getByRole("button", { name: "Previous image" })).toHaveCount(0);
+    await settleAnimations(page);
+    const box = await gallery.boundingBox();
+    const y = (box?.y ?? 0) + (box?.height ?? 0) / 2;
+    const middle = (box?.x ?? 0) + (box?.width ?? 0) / 2;
+    // Thrown toward the start, the next picture comes in.
+    await swipeAcross(page, y, middle + 100, middle - 100);
+    await expect(gallery.getByText("2 of 3")).toBeVisible();
+    // A short drag that comes to rest springs back to the picture it was on.
+    await swipeAcross(page, y, middle, middle + 60, { rest: true });
+    await settleAnimations(page);
+    await expect(gallery.getByText("2 of 3")).toBeVisible();
+    // Thrown toward the end, the previous one comes back.
+    await swipeAcross(page, y, middle - 100, middle + 100);
+    await expect(gallery.getByText("1 of 3")).toBeVisible();
+    // Pulled past the first picture, nothing changes and the gallery stays open.
+    await swipeAcross(page, y, middle - 100, middle + 100);
+    await settleAnimations(page);
+    await expect(gallery.getByText("1 of 3")).toBeVisible();
   });
 
   test("an invite shows its code, and copies its link without the Clipboard API", async ({
