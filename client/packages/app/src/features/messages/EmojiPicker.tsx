@@ -50,6 +50,13 @@ export default function EmojiPicker({
   const filled = useFilledWidth(box, fill);
   const width = fill ? filled : wide ? WIDE : NARROW;
   const language = useEmojiLanguage();
+  // The library keeps the click handler its emoji were first drawn with, so each click reaches
+  // the latest `onPick` through a ref: a keyboard's changes with every pick, since it closes
+  // over the text the pick goes into.
+  const pick = useRef(onPick);
+  useLayoutEffect(() => {
+    pick.current = onPick;
+  });
   // The names and headings in the reader's language, with the community's own section called
   // what the app calls it; until they come, the room they will take.
   const [loaded, setLoaded] = useState<{ language: string; data: EmojiData } | null>(null);
@@ -102,7 +109,7 @@ export default function EmojiPicker({
       <Picker
         emojiData={emojiData}
         onEmojiClick={(picked) => {
-          onPick(picked.isCustom ? referenceOf(picked.unified) : picked.emoji);
+          pick.current(picked.isCustom ? referenceOf(picked.unified) : picked.emoji);
         }}
         customEmojis={customEmojis}
         emojiStyle={EmojiStyle.NATIVE}

@@ -724,7 +724,9 @@
     "suggestions": "Emoji to insert",
     "suggestionsAnnouncement": "{count, plural, one {# emoji matches. Enter or Tab inserts it; Escape closes.} other {# emoji match. Up and down arrows choose, Enter or Tab inserts; Escape closes.}}",
     "customDetail": "This community's emoji",
-    "customCategory": "This community"
+    "customCategory": "This community",
+    "insert": "Insert an emoji",
+    "keyboard": "Emoji keyboard"
   },
   "tagging": {
     "suggestions": "People and roles to tag",

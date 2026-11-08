@@ -1,9 +1,11 @@
 import { ApiProblemError, type Attachment } from "@aspen/protocol";
+import { SmileyIcon } from "@phosphor-icons/react";
 import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
-import { useState, type KeyboardEvent } from "react";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Button, TextArea, TextField } from "react-aria-components";
 import { useAttachments, useSync } from "@/api/hooks";
 import { decodeCustomEmoji } from "@/features/emoji/customEmoji";
+import { EmojiKeyboard } from "@/features/emoji/EmojiKeyboard";
 import { useEmojiCompletion } from "@/features/emoji/useEmojiCompletion";
 import { decodeTags } from "@/features/mentions/tags";
 import { useTagging } from "@/features/mentions/useTagging";
@@ -20,8 +22,9 @@ import { useMessages } from "@/i18n/context";
 /**
  * Replaces a message's text in place. Enter saves, Escape cancels, Shift+Enter breaks a line.
  * Its tags read as they were written (`@username`, `@Role`), and more can be picked as in the
- * message box. Its files stay as they are, but each can be described or marked a spoiler,
- * saved as soon as it is changed.
+ * message box, whose emoji keyboard it has too, docked below it; Escape puts that away before
+ * it cancels the edit. Its files stay as they are, but each can be described or marked a
+ * spoiler, saved as soon as it is changed.
  */
 export function MessageEditor({
   messageId,
@@ -54,6 +57,9 @@ export function MessageEditor({
   const [draft, setDraft] = useState(decoded.text);
   const tagging = useTagging({ channelId, draft, setDraft, initialPicks: decoded.picks });
   const emoji = useEmojiCompletion({ channelId, draft, setDraft });
+  const box = useRef<HTMLTextAreaElement>(null);
+  const [keyboard, setKeyboard] = useState(false);
+  const keyboardId = useId();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -80,13 +86,34 @@ export function MessageEditor({
     }
   }
 
+  /** Puts the emoji keyboard away, and the focus back in the box, as the message box does. */
+  function closeKeyboard() {
+    setKeyboard(false);
+    box.current?.focus();
+  }
+
+  function toggleKeyboard() {
+    if (keyboard) {
+      closeKeyboard();
+    } else {
+      setKeyboard(true);
+      if (touchOnly) {
+        box.current?.blur();
+      }
+    }
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (tagging.onKeyDown(event) || emoji.onKeyDown(event)) {
       return;
     }
     if (event.key === "Escape") {
       event.preventDefault();
-      onDone();
+      if (keyboard) {
+        setKeyboard(false);
+      } else {
+        onDone();
+      }
     } else if (
       event.key === "Enter" &&
       !event.shiftKey &&
@@ -113,6 +140,7 @@ export function MessageEditor({
         {tagging.list}
         {emoji.list}
         <TextArea
+          ref={box}
           {...tagging.boxProps}
           {...(emoji.open
             ? {
@@ -132,6 +160,11 @@ export function MessageEditor({
             tagging.boxProps.onClick(event);
             emoji.follow(event);
           }}
+          onFocus={() => {
+            if (touchOnly && keyboard) {
+              setKeyboard(false);
+            }
+          }}
           rows={1}
           onKeyDown={onKeyDown}
           className="message-box-text max-h-40 w-full resize-none rounded-md border border-line bg-surface-raised px-3 py-2 outline-none field-sizing-content focus:border-accent focus:ring-2 focus:ring-accent/30"
@@ -146,6 +179,18 @@ export function MessageEditor({
       )}
       <div className="flex items-center gap-2 text-xs text-ink-faint">
         <span className="flex-1">{m.editingHint}</span>
+        <Button
+          aria-label={m.emoji.insert}
+          aria-expanded={keyboard}
+          {...(keyboard ? { "aria-controls": keyboardId } : {})}
+          onPress={toggleKeyboard}
+          className={
+            "rounded p-1 outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50" +
+            (keyboard ? " text-accent" : "")
+          }
+        >
+          <SmileyIcon size={18} aria-hidden="true" />
+        </Button>
         <Button
           onPress={onDone}
           className="rounded px-2 py-0.5 outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/50"
@@ -162,6 +207,19 @@ export function MessageEditor({
           {m.save}
         </Button>
       </div>
+      {keyboard && (
+        <EmojiKeyboard
+          id={keyboardId}
+          communityId={emoji.communityId}
+          onPick={(picked) => {
+            emoji.insert(picked, box.current);
+            if (!touchOnly) {
+              box.current?.focus();
+            }
+          }}
+          onClose={closeKeyboard}
+        />
+      )}
     </div>
   );
 }

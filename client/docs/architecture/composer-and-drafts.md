@@ -16,11 +16,13 @@ or for a busy channel, messages scheduled for later, the mana bar, and drafts.
 | Mana bar        | `ManaBar.tsx`, `manaDrawnAt` (`@aspen/protocol`), `TopSendersDialog.tsx` |
 | Replying        | `ReplyBar`, `composerTargets.ts`; the line above a reply is `ReplyLine`  |
 | Drafts          | `src/features/messages/drafts.ts`                                        |
+| Emoji keyboard  | `EmojiKeyboard`, `useEmojiCompletion`'s `insert` (`src/features/emoji`)  |
 
 ## Layout
 
 - The box sits level with its buttons, all 42px tall.
-- Send is an icon (a paper plane), so the box keeps the room.
+- Send is an icon (a paper plane), so the box keeps the room. Left of it, at every width, a smiley
+  opens the emoji keyboard (below).
 - On a narrow screen, the other controls share one + button. Its menu offers attaching a file,
   making a poll (`CreatePollModal`, which the wide screen's own poll button opens too), and
   scheduling the message (`ScheduleMessageModal`, as the wide screen's clock button does).
@@ -69,6 +71,34 @@ ends where the keyboard begins, so a dialog's buttons stay above it.
    way.
 2. The list then moves to the end of what it holds.
 3. `AspenSync.loadLatest` follows any page already being read rather than settling for it.
+
+## The emoji keyboard
+
+The smiley left of Send opens `EmojiKeyboard`: the emoji picker (`EmojiPicker`, the one reactions
+and poll options use, fetched on first use through `LazyEmojiPicker`) docked below the box, across
+its width, where a phone's own keyboard would be. The message editor has the same, below the message
+being edited.
+
+- **What it offers:** every unicode emoji by category and search, skin tones, and the channel's
+  community's own emoji in a section of their own (`useEmojiCompletion`'s `communityId`; a DM has
+  none). See [Custom emoji](custom-emoji.md).
+- **A pick** goes into the box where its caret is, in place of any selection, through
+  `useEmojiCompletion`'s `insert`: a unicode emoji as its glyph, a custom emoji as `:name:`, as the
+  colon completion writes them. The caret ends after it.
+- **It stays open** until it is put away, so several can be picked in a row: by the smiley again, by
+  Escape in the box (ahead of a reply being cancelled, or an edit) or anywhere in the keyboard. Each
+  of those puts the focus back in the box. The box is made afresh for each channel, so going
+  elsewhere puts it away too.
+- **Height:** 45% of the window, at most 360px (`pickerHeight`), followed as the window is resized.
+  The message list keeps its bottom edge as the keyboard opens, as it does for a phone's own.
+- **On a touch-only device** it takes the phone's keyboard's place: opening it lets the box's focus
+  go, so the phone's keyboard withdraws; a pick leaves the focus where it is; touching the box again
+  puts the emoji keyboard away as the phone's keyboard rises. With a pointer, a pick returns the
+  focus to the box at once.
+- **Beside the form, not in it** (`MessageBox` holds the form in a local and draws the keyboard
+  after it). **Why:** Enter in the picker's search would submit the form and send the message.
+- The picker's width is capped at `max-w-3xl` and centred. **Why:** at the width of a large window a
+  row would hold more emoji than the eye can scan, and the category bar would spread too thin.
 
 ## Replying to a message
 

@@ -1,17 +1,18 @@
 import { SmileyIcon } from "@phosphor-icons/react";
-import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Button, Dialog, Popover, type PopoverProps } from "react-aria-components";
+import { LazyEmojiPicker } from "@/features/emoji/LazyEmojiPicker";
+import { pickerHeight } from "@/features/emoji/pickerHeight";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { Drawer } from "@/features/layout/Drawer";
 import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
-import { useMessages } from "@/i18n/context";
-
-/** The emoji picker is a sizeable chunk, fetched the first time anyone opens it. */
-const EmojiPicker = lazy(() => import("@/features/messages/EmojiPicker"));
 
 /** The tallest the picker is drawn in a sheet, and the share of the screen it may take. */
 const SHEET_PICKER_MAX_PX = 440;
 const SHEET_PICKER_SHARE = 0.6;
+
+/** The height of a popover's picker, `EmojiPicker`'s own. */
+const POPOVER_PICKER_HEIGHT_PX = 384;
 
 /**
  * The emoji picker, named `label`, wherever an emoji is chosen: on a touch screen a sheet
@@ -37,13 +38,9 @@ export function EmojiPickerOverlay({
   };
   children?: ReactNode;
 }) {
-  const m = useMessages();
   const touchOnly = useMediaQuery(TOUCH_ONLY);
   if (touchOnly) {
-    const height = Math.min(
-      SHEET_PICKER_MAX_PX,
-      Math.round(window.innerHeight * SHEET_PICKER_SHARE),
-    );
+    const height = pickerHeight(SHEET_PICKER_MAX_PX, SHEET_PICKER_SHARE);
     return (
       <Drawer
         edge="bottom"
@@ -52,18 +49,7 @@ export function EmojiPickerOverlay({
         title={label}
       >
         <div className="flex min-h-0 flex-col overflow-y-auto overscroll-contain pb-2">
-          <Suspense
-            fallback={
-              <div
-                className="flex items-center justify-center text-sm text-ink-muted"
-                style={{ height }}
-              >
-                {m.loading}
-              </div>
-            }
-          >
-            <EmojiPicker communityId={communityId} onPick={onPick} fill height={height} />
-          </Suspense>
+          <LazyEmojiPicker communityId={communityId} onPick={onPick} fill height={height} />
           {children}
         </div>
       </Drawer>
@@ -73,15 +59,11 @@ export function EmojiPickerOverlay({
     <Popover {...popover} className="rounded-lg border border-line bg-surface-raised shadow-lg">
       <Dialog aria-label={label} className="outline-none">
         <div className="flex flex-col">
-          <Suspense
-            fallback={
-              <div className="flex h-96 w-80 items-center justify-center text-sm text-ink-muted">
-                {m.loading}
-              </div>
-            }
-          >
-            <EmojiPicker communityId={communityId} onPick={onPick} />
-          </Suspense>
+          <LazyEmojiPicker
+            communityId={communityId}
+            onPick={onPick}
+            height={POPOVER_PICKER_HEIGHT_PX}
+          />
           {children}
         </div>
       </Dialog>

@@ -11,10 +11,12 @@ import {
   PaperclipIcon,
   PaperPlaneRightIcon,
   PlusIcon,
+  SmileyIcon,
   XIcon,
 } from "@phosphor-icons/react";
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type ChangeEvent,
@@ -31,6 +33,7 @@ import {
   TextArea,
   TextField,
 } from "react-aria-components";
+import { EmojiKeyboard } from "@/features/emoji/EmojiKeyboard";
 import { useEmojiCompletion } from "@/features/emoji/useEmojiCompletion";
 import { useTagging } from "@/features/mentions/useTagging";
 import { useCommandLine } from "@/features/commands/useCommandLine";
@@ -124,10 +127,12 @@ const menuItemClass =
   "flex cursor-default items-center gap-2 rounded px-2 py-1.5 text-sm outline-none " +
   "focus:bg-surface-hover pointer-coarse:py-2.5";
 
-/** The controls on a file waiting to be sent, in a column at its end. */
-const toolButtonClass =
-  "shrink-0 rounded-md border border-line p-2.5 text-ink-muted outline-none hover:bg-surface-hover hover:text-ink " +
-  "pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50";
+/** The box's own buttons beside it, and the emoji keyboard's while the keyboard is open. */
+const toolButtonShape =
+  "shrink-0 rounded-md border p-2.5 outline-none hover:bg-surface-hover pressed:bg-surface-hover " +
+  "focus-visible:ring-2 focus-visible:ring-accent/50";
+const toolButtonClass = toolButtonShape + " border-line text-ink-muted hover:text-ink";
+const openToolButtonClass = toolButtonShape + " border-accent text-accent";
 
 /**
  * The message box. Enter sends, Shift+Enter breaks a line. Files chosen with the attach button
@@ -231,6 +236,8 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   });
   const emoji = useEmojiCompletion({ channelId, draft, setDraft, off: commands.active });
   const box = useRef<HTMLTextAreaElement>(null);
+  const [keyboard, setKeyboard] = useState(false);
+  const keyboardId = useId();
   // The reader's focus goes to the box after the render that starts the reply, by when a menu
   // the Reply was chosen from has closed and given focus back where it was.
   const [replyAsked, setReplyAsked] = useState(0);
@@ -618,8 +625,38 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     setReply(null);
   }
 
+  /**
+   * Puts the emoji keyboard away, and the focus back in the box, so writing goes on where it
+   * left off (and a phone's own keyboard comes back).
+   */
+  function closeKeyboard() {
+    setKeyboard(false);
+    box.current?.focus();
+  }
+
+  /**
+   * Opens the emoji keyboard or puts it away. Opened on a touch screen, it takes the place of
+   * the phone's keyboard, so the box lets the focus go, and the phone's comes back when the
+   * box is touched again (`onFocus`).
+   */
+  function toggleKeyboard() {
+    if (keyboard) {
+      closeKeyboard();
+    } else {
+      setKeyboard(true);
+      if (touchOnly) {
+        box.current?.blur();
+      }
+    }
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (commands.onKeyDown(event) || tagging.onKeyDown(event) || emoji.onKeyDown(event)) {
+      return;
+    }
+    if (event.key === "Escape" && keyboard) {
+      event.preventDefault();
+      setKeyboard(false);
       return;
     }
     if (event.key === "Escape" && reply !== null) {
@@ -652,7 +689,9 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     );
   }
 
-  return (
+  // The emoji keyboard is drawn beside the form, not in it: Enter in the picker's search
+  // would send the message.
+  const form = (
     <form
       onSubmit={(event) => {
         event.preventDefault();
@@ -903,6 +942,11 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
               emoji.follow(event);
               commands.follow(event);
             }}
+            onFocus={() => {
+              if (touchOnly && keyboard) {
+                setKeyboard(false);
+              }
+            }}
             aria-placeholder={placeholder}
             rows={1}
             onKeyDown={onKeyDown}
@@ -920,6 +964,17 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
             </span>
           )}
         </TextField>
+        <Tooltip text={m.emoji.insert}>
+          <Button
+            aria-label={m.emoji.insert}
+            aria-expanded={keyboard}
+            {...(keyboard ? { "aria-controls": keyboardId } : {})}
+            onPress={toggleKeyboard}
+            className={keyboard ? openToolButtonClass : toolButtonClass}
+          >
+            <SmileyIcon size={20} aria-hidden="true" />
+          </Button>
+        </Tooltip>
         <Tooltip text={m.send}>
           <Button
             type="submit"
@@ -946,6 +1001,26 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
         </label>
       )}
     </form>
+  );
+  return (
+    <>
+      {form}
+      {keyboard && (
+        <EmojiKeyboard
+          id={keyboardId}
+          communityId={emoji.communityId}
+          onPick={(picked) => {
+            emoji.insert(picked, box.current);
+            // On a touch screen the box stays unfocused, so the phone's keyboard stays away.
+            if (!touchOnly) {
+              box.current?.focus();
+            }
+          }}
+          onClose={closeKeyboard}
+          className="border-t border-line px-4 py-2"
+        />
+      )}
+    </>
   );
 }
 
