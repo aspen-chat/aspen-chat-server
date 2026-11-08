@@ -58,10 +58,26 @@ When the message list shrinks, as when a phone's keyboard opens, it keeps its bo
 was. It stays pinned to the newest message, or moves down by what it lost, so what is being answered
 stays in view. The web app asks for this with `interactive-widget=resizes-content` in its viewport.
 
-WebKit on iOS ignores that setting: its keyboard is drawn over the page, which keeps its height, and
-WebKit scrolls only the focused field into view. Modals therefore follow the part of the page left
-visible (`theme/visibleArea.ts`, which sets `--visible-top` and `--visible-bottom`): their overlay
-ends where the keyboard begins, so a dialog's buttons stay above it.
+The iOS app does the same itself: its web view ends where the keyboard begins (`MainViewController`
+in `packages/mobile/ios/App/App`), so the box sits on the keyboard with nothing between them.
+
+- **WebKit's own following of the keyboard is turned off.** Left on, it scrolls the page up under
+  the status bar to show the focused field.
+- **The ⌃ ⌄ ✓ bar WebKit puts above a form's fields is hidden.** The app's fields are not a form to
+  step through.
+- **The home indicator's room goes while the keyboard is up.** The web view no longer reaches the
+  indicator, so the system gives it no inset there.
+
+Safari on iOS ignores `interactive-widget`: its keyboard is drawn over the page, which keeps its
+height, and WebKit scrolls only the focused field into view. Modals therefore follow the part of the
+page left visible (`theme/visibleArea.ts`, which sets `--visible-top` and `--visible-bottom`): their
+overlay ends where the keyboard begins, so a dialog's buttons stay above it. `#root` drops the home
+indicator's room while such a keyboard covers it.
+
+### Below the box
+
+The box keeps 4px below itself, and on a phone the home indicator's room below that. **Why:** the
+box sits on the screen's foot, or the keyboard's top, as a phone's own messaging apps do.
 
 ### Jump to latest
 
@@ -89,16 +105,24 @@ being edited.
   Escape in the box (ahead of a reply being cancelled, or an edit) or anywhere in the keyboard. Each
   of those puts the focus back in the box. The box is made afresh for each channel, so going
   elsewhere puts it away too.
-- **Height:** 45% of the window, at most 360px (`pickerHeight`), followed as the window is resized.
-  The message list keeps its bottom edge as the keyboard opens, as it does for a phone's own.
+- **Height:** on a touch-only device, the height of its own keyboard in the same orientation, so the
+  box stays where it is as one takes the other's place. `theme/visibleArea.ts` learns that height
+  whenever the device's keyboard rises, from how much it takes off the page's height or covers of
+  its foot, and keeps it between launches. Before the device's keyboard has risen once, it is 40% of
+  the page's height. With a pointer it is 45% of the page's height, at most 360px. Every share is of
+  the page's height with no keyboard taking from it, so opening it over the device's keyboard gives
+  it its full height. The message list keeps its bottom edge as the keyboard opens, as it does for a
+  phone's own.
+- **Edge to edge.** Below the box it spans the whole width, with no frame or padding around it; a
+  message being edited has it across the message. Its emoji run edge to edge too
+  (`emoji-picker-fill` in `styles.css`), each glyph kept off the edge by its own cell. Its ground
+  runs on under the home indicator, and the emoji stop above it.
 - **On a touch-only device** it takes the phone's keyboard's place: opening it lets the box's focus
   go, so the phone's keyboard withdraws; a pick leaves the focus where it is; touching the box again
   puts the emoji keyboard away as the phone's keyboard rises. With a pointer, a pick returns the
   focus to the box at once.
 - **Beside the form, not in it** (`MessageBox` holds the form in a local and draws the keyboard
   after it). **Why:** Enter in the picker's search would submit the form and send the message.
-- The picker's width is capped at `max-w-3xl` and centred. **Why:** at the width of a large window a
-  row would hold more emoji than the eye can scan, and the category bar would spread too thin.
 
 ## Replying to a message
 

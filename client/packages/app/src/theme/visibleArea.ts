@@ -1,3 +1,6 @@
+import { useSyncExternalStore } from "react";
+import { TOUCH_ONLY } from "@/features/layout/useMediaQuery";
+
 /**
  * Where the part of the page a person can see lies, as `--visible-top` and `--visible-bottom` on
  * <html>: how far below the page's top it starts, and how far above the page's foot it ends.
@@ -5,7 +8,11 @@
  * viewport's `interactive-widget`) and only scrolls the focused field into view, so a fixed
  * overlay the page's height has its foot, and a modal centred in it its buttons, under the
  * keyboard. Modals' overlays (`overlayClass`) take these insets instead, and centre in what is
- * left. Where the keyboard makes the page shorter, as Chromium's does, both stay 0.
+ * left. Where the keyboard makes the page shorter, as Chromium's does and the iOS app's web view
+ * does (`MainViewController`), both stay 0.
+ *
+ * It also learns how tall the device's own keyboard is (`useKeyboardHeight`), for the emoji
+ * keyboard to take the same room.
  */
 
 /** The insets, in CSS pixels, for a page `pageHeight` tall seen through `viewport`. */
@@ -25,17 +32,108 @@ export function visibleInsets(
   };
 }
 
+/**
+ * Less than this over the page's foot is not a keyboard: a bar of suggestions alone, or a
+ * browser's toolbar sliding away.
+ */
+const KEYBOARD_MIN_PX = 120;
+
+const STORAGE_KEY = "aspen.keyboardHeight";
+
+/** The keyboard's height in each orientation, which differ. */
+type KeyboardHeights = Partial<Record<"portrait" | "landscape", number>>;
+
+/** What `useKeyboardHeight` and `pageHeight` answer, replaced whole when either changes. */
+interface Measured {
+  /** The page's height with no keyboard over it or making it shorter. */
+  pageHeight: number;
+  /** The keyboard's last height in the present orientation; `null` until one has been seen. */
+  keyboard: number | null;
+}
+
+/**
+ * How much of the page's foot a keyboard takes: what it took off the page's height, where it
+ * makes the page shorter, and what it covers, where it is drawn over the page. `null` where that
+ * is too little to be a keyboard.
+ */
+export function keyboardOver(
+  fullHeight: number,
+  pageHeight: number,
+  covered: number,
+): number | null {
+  const height = fullHeight - pageHeight + covered;
+  return height >= KEYBOARD_MIN_PX ? height : null;
+}
+
+let full = { width: 0, height: 0 };
+let heights: KeyboardHeights = storedHeights();
+let measured: Measured = { pageHeight: 0, keyboard: null };
+const listeners = new Set<() => void>();
+
+function storedHeights(): KeyboardHeights {
+  try {
+    const stored: unknown = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}");
+    const heights: KeyboardHeights = {};
+    for (const turned of ["portrait", "landscape"] as const) {
+      const height: unknown =
+        typeof stored === "object" && stored !== null && turned in stored
+          ? (stored as Record<string, unknown>)[turned]
+          : undefined;
+      if (typeof height === "number" && height >= KEYBOARD_MIN_PX) {
+        heights[turned] = height;
+      }
+    }
+    return heights;
+  } catch {
+    return {};
+  }
+}
+
+/** Which way the device is turned, by the page's shape with no keyboard taking from it. */
+function orientation(): keyof KeyboardHeights {
+  return full.width > full.height ? "landscape" : "portrait";
+}
+
 function show(viewport: VisualViewport): void {
   const { top, bottom } = visibleInsets(window.innerHeight, viewport);
   const style = document.documentElement.style;
   style.setProperty("--visible-top", `${top.toString()}px`);
   style.setProperty("--visible-bottom", `${bottom.toString()}px`);
+  // A change of width is the device turned or the window resized: its height without a keyboard
+  // is found afresh. A keyboard never makes the page taller, so the tallest seen at a width is it.
+  if (window.innerWidth !== full.width) {
+    full = { width: window.innerWidth, height: window.innerHeight };
+  } else {
+    full.height = Math.max(full.height, window.innerHeight);
+  }
+  const turned = orientation();
+  // A window made shorter by hand is not a keyboard; only a device typed on screen has one.
+  const keyboard = window.matchMedia(TOUCH_ONLY).matches
+    ? keyboardOver(full.height, window.innerHeight, bottom)
+    : null;
+  if (keyboard !== null && heights[turned] !== keyboard) {
+    heights = { ...heights, [turned]: keyboard };
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(heights));
+    } catch {
+      // Not kept; the next launch learns it again the first time the keyboard rises.
+    }
+  }
+  const next = { pageHeight: full.height, keyboard: heights[turned] ?? null };
+  if (next.pageHeight !== measured.pageHeight || next.keyboard !== measured.keyboard) {
+    measured = next;
+    for (const listener of listeners) {
+      listener();
+    }
+  }
 }
 
-/** Sets the insets and follows them. Called once, as the page starts. */
+/** Sets the insets and follows them, and the keyboard's height. Called once, as the page starts. */
 export function followVisibleArea(): void {
   const viewport = window.visualViewport;
   if (viewport === null) {
+    full = { width: window.innerWidth, height: window.innerHeight };
+    measured = { pageHeight: full.height, keyboard: null };
     return;
   }
   const follow = () => {
@@ -44,4 +142,30 @@ export function followVisibleArea(): void {
   follow();
   viewport.addEventListener("resize", follow);
   viewport.addEventListener("scroll", follow);
+  window.addEventListener("resize", follow);
+}
+
+/** The page's height with no keyboard over it or making it shorter, in CSS pixels. */
+export function pageHeight(): number {
+  return measured.pageHeight || window.innerHeight;
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function snapshot(): Measured {
+  return measured;
+}
+
+/**
+ * The device's own keyboard's height in the present orientation, from the screen's foot to the
+ * keyboard's top, as it last rose (kept between launches), and the page's height without it;
+ * the keyboard's is `null` until it has risen once on this device.
+ */
+export function useKeyboardHeight(): Measured {
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
 }

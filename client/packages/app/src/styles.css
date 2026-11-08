@@ -444,10 +444,11 @@ body,
 }
 
 /* The page is laid out edge to edge (`viewport-fit=cover`), so on a phone with a notch or a
-   home indicator, and in the mobile shell, the app keeps clear of both. */
+   home indicator, and in the mobile shell, the app keeps clear of both. A keyboard drawn over the
+   page (`--visible-bottom`) covers the home indicator, so its room goes while one is up. */
 #root {
   padding: calc(env(safe-area-inset-top) + var(--title-bar-height)) env(safe-area-inset-right)
-    env(safe-area-inset-bottom) env(safe-area-inset-left);
+    max(0px, env(safe-area-inset-bottom) - var(--visible-bottom)) env(safe-area-inset-left);
 }
 
 /* The title bar's strip is where the window is dragged by, and a drag region takes every click
@@ -891,6 +892,15 @@ body {
   --epr-skin-tone-picker-menu-color: var(--color-surface-raised);
   /* The emoji keep the library's 40px size, which `EmojiPicker.tsx` sizes the picker for. */
   border: 0;
+}
+/* A picker across the screen (`fill`: the emoji keyboard, a touch screen's sheet) runs its rows of
+   emoji edge to edge, each glyph kept off the edge by its own cell's 5px, and lines the headings and
+   the search up with them. */
+.emoji-picker.emoji-picker-fill.epr-main {
+  --epr-horizontal-padding: 0px;
+  --epr-category-label-padding: 0 var(--epr-emoji-padding);
+  --epr-header-padding: 8px var(--epr-emoji-padding);
+  --epr-picker-border-radius: 0px;
 }
 
 /* A transfer's link between two call tiles: its dashes march from sender to receiver, one dash

@@ -287,6 +287,35 @@ final class AppUITests: XCTestCase {
         XCTAssertFalse((composer.value as? String ?? "").contains(text), "the box kept what was sent")
     }
 
+    /// The keyboard and the emoji keyboard take each other's place without the box moving: the
+    /// web view ends at the keyboard, the box sits on it, and the emoji keyboard, opened over
+    /// the keyboard, is as tall as the keyboard was, edge to edge across the screen.
+    func testEmojiKeyboardTakesTheKeyboardsPlace() throws {
+        try signIn()
+        openChannel(scratchChannel)
+        let screen = app.windows.firstMatch.frame
+        let smiley = web.buttons["Insert an emoji"].firstMatch
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "no keyboard came up")
+        Thread.sleep(forTimeInterval: 1)
+        let keyboardTop = web.frame.maxY
+        XCTAssertLessThan(keyboardTop, screen.maxY - 100, "the web view \(web.frame) runs on under the keyboard")
+        let typing = composer.frame
+        XCTAssertEqual(typing.maxY, keyboardTop - 4, accuracy: 2, "the box \(typing) is not on the keyboard at \(keyboardTop)")
+        smiley.tap()
+        let picker = web.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Emoji keyboard")).firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 10), "no emoji keyboard")
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertEqual(picker.frame.minY, keyboardTop, accuracy: 2, "the emoji keyboard \(picker.frame) is not the keyboard's height")
+        XCTAssertEqual(picker.frame.maxY, screen.maxY, accuracy: 1, "the emoji keyboard \(picker.frame) stops short of the screen's foot")
+        XCTAssertEqual(picker.frame.width, screen.width, accuracy: 1, "the emoji keyboard \(picker.frame) is not edge to edge")
+        XCTAssertEqual(composer.frame.minY, typing.minY, accuracy: 2, "the box moved from \(typing) to \(composer.frame)")
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the keyboard did not come back")
+        XCTAssertTrue(picker.waitForNonExistence(timeout: 5), "the emoji keyboard stayed")
+    }
+
     /// Back from the background, the app shows what was written while it was away without being
     /// reloaded. The helper (`away`) freezes it as iOS suspends a phone's, which iOS does not do
     /// to an app a test drives, until the deployment has dropped its silent connection.

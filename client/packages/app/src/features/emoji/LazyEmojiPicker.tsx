@@ -11,7 +11,9 @@ const POPOVER_LOADING_WIDTH_PX = 320;
  * `EmojiPicker`, fetched as it is first shown, with a note holding its room until it has
  * come: `height` tall, across its box where it `fill`s, else the width of a popover's picker.
  */
-export function LazyEmojiPicker(props: ComponentProps<typeof EmojiPicker> & { height: number }) {
+export function LazyEmojiPicker(
+  props: ComponentProps<typeof EmojiPicker> & { height: number | string },
+) {
   const m = useMessages();
   return (
     <Suspense

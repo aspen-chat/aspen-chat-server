@@ -33,10 +33,16 @@ test("the smiley docks the keyboard below the box, and picks go in at the caret"
   await expect(smiley).toHaveAttribute("aria-expanded", "true");
   const keyboard = page.getByRole("group", { name: "Emoji keyboard" });
   await expect(keyboard.locator(".emoji-picker")).toBeVisible();
-  // Docked: below the box, as wide as the form, not a popover or a sheet.
+  // Docked: below the box, not a popover or a sheet, edge to edge across the conversation, with
+  // its emoji running edge to edge too, at most one emoji's room short.
   const boxBounds = await box.boundingBox();
   const keyboardBounds = await keyboard.boundingBox();
+  const formBounds = await page.locator("form", { has: box }).boundingBox();
+  const pickerBounds = await keyboard.locator(".emoji-picker").boundingBox();
   expect(keyboardBounds?.y ?? 0).toBeGreaterThan((boxBounds?.y ?? 0) + (boxBounds?.height ?? 0));
+  expect(keyboardBounds?.x).toBe(formBounds?.x);
+  expect(keyboardBounds?.width).toBe(formBounds?.width);
+  expect(pickerBounds?.width ?? 0).toBeGreaterThan((keyboardBounds?.width ?? 0) - 40);
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
   // The community's own emoji are a section of the keyboard, written as the box shows them.

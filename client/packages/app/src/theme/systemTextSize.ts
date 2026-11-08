@@ -36,8 +36,11 @@ export function followSystemTextSize(): void {
   const probe = document.createElement("span");
   probe.setAttribute("aria-hidden", "true");
   probe.textContent = "M";
+  // Pinned to the corner: left where it falls, after `#root`, which fills the page, it would
+  // hang a line below the page's foot, and the page could be scrolled that far (as WebKit does,
+  // to show a field taking the focus), drawing the app a line above where it belongs.
   probe.style.cssText =
-    "font: -apple-system-body; position: absolute; visibility: hidden; pointer-events: none;";
+    "font: -apple-system-body; position: absolute; top: 0; left: 0; visibility: hidden; pointer-events: none;";
   document.body.append(probe);
   const follow = () => {
     document.documentElement.style.setProperty(

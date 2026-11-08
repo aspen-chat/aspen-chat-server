@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { visibleInsets } from "./visibleArea";
+import { keyboardOver, visibleInsets } from "./visibleArea";
 
 describe("visibleInsets", () => {
   it("is nothing when the whole page is seen", () => {
@@ -28,5 +28,19 @@ describe("visibleInsets", () => {
       top: 0,
       bottom: 0,
     });
+  });
+});
+
+describe("keyboardOver", () => {
+  it("is what a keyboard took off the page's height", () => {
+    expect(keyboardOver(874, 538, 0)).toBe(336);
+  });
+
+  it("is what a keyboard drawn over the page covers", () => {
+    expect(keyboardOver(844, 844, 336)).toBe(336);
+  });
+
+  it("is nothing for a bar of suggestions alone", () => {
+    expect(keyboardOver(874, 819, 0)).toBeNull();
   });
 });

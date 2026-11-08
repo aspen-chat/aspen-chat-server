@@ -718,7 +718,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
           void send();
         }
       }}
-      className="flex flex-col gap-2 border-t border-line px-4 py-3"
+      className="flex flex-col gap-2 border-t border-line px-4 pt-3 pb-1"
     >
       {!starting && <ScheduledStrip channelId={channelId} onEdit={edit} />}
       <HeldMessages place={draftKey} />
@@ -1042,7 +1042,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
             }
           }}
           onClose={closeKeyboard}
-          className="border-t border-line px-4 py-2"
+          className="-mb-[env(safe-area-inset-bottom)] border-t border-line pb-[env(safe-area-inset-bottom)]"
         />
       )}
     </>

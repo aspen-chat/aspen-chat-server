@@ -27,9 +27,10 @@ const FITS_WIDE = `(min-width: ${String(WIDE + 16)}px)`;
  * wrong spacing, past the edge, for as long as that takes.
  *
  * In a popover it is eight emoji across, or seven where that does not fit. `fill` instead fits
- * as many whole emoji as the width it is given holds, `height` tall, for a touch screen's sheet
- * across the screen, and leaves the search unfocused, so the keyboard does not rise over the
- * emoji the moment it opens.
+ * as many whole emoji as the width it is given holds, with none of the library's padding beside
+ * them (`emoji-picker-fill` in `styles.css`), `height` tall, for the emoji keyboard and a touch
+ * screen's sheet across the screen, and leaves the search unfocused, so the keyboard does not
+ * rise over the emoji the moment it opens.
  */
 export default function EmojiPicker({
   onPick,
@@ -42,7 +43,8 @@ export default function EmojiPicker({
   /** The community whose own emoji the picker offers too; none in a DM. */
   communityId: string | null;
   fill?: boolean;
-  height?: number;
+  /** In pixels, or a CSS length (`100%` of a box sized in CSS). */
+  height?: number | string;
 }) {
   const m = useMessages();
   const wide = useMediaQuery(FITS_WIDE);
@@ -121,12 +123,12 @@ export default function EmojiPicker({
         width={width}
         height={height}
         autoFocusSearch={!fill}
-        className="emoji-picker"
+        className={fill ? "emoji-picker emoji-picker-fill" : "emoji-picker"}
       />
     );
   // Filling, it is measured by a box that stays while the picker loads into it.
   return fill ? (
-    <div ref={box} className="flex w-full justify-center">
+    <div ref={box} className="flex h-full w-full justify-center">
       {content}
     </div>
   ) : (
@@ -135,8 +137,8 @@ export default function EmojiPicker({
 }
 
 /**
- * Where `fill`, the widest picker of whole 40px emoji, with the 20px of padding beside them,
- * that `box`'s width holds, followed as it is resized; `null` until measured.
+ * Where `fill`, the widest picker of whole 40px emoji that `box`'s width holds, followed as it
+ * is resized; `null` until measured.
  */
 function useFilledWidth(box: RefObject<HTMLDivElement | null>, fill: boolean): number | null {
   const [width, setWidth] = useState<number | null>(null);
@@ -146,8 +148,7 @@ function useFilledWidth(box: RefObject<HTMLDivElement | null>, fill: boolean): n
       return;
     }
     const measure = () => {
-      const across = Math.max(1, Math.floor((element.clientWidth - 20) / 40));
-      setWidth(across * 40 + 20);
+      setWidth(Math.max(1, Math.floor(element.clientWidth / 40)) * 40);
     };
     measure();
     const observer = new ResizeObserver(measure);
