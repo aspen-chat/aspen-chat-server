@@ -90,7 +90,15 @@ export async function stubSignedInBackend(page: Page, name: string): Promise<voi
         frame !== null &&
         (frame as { type?: unknown }).type === "identify"
       ) {
-        ws.send(JSON.stringify({ type: "ready", userId: uuid, resumed: false }));
+        ws.send(
+          JSON.stringify({
+            type: "ready",
+            userId: uuid,
+            resumed: false,
+            replayComplete: true,
+            catchUpFollows: false,
+          }),
+        );
       }
     });
   });

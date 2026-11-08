@@ -24,6 +24,12 @@ export interface HeldEntry {
   failure: string | null;
   startsThreadOf: string | null;
 }
+/**
+ * A message the caller scheduled for later, as the server holds it until it is posted:
+ * `scheduled` for `sendAt`, `waitingForMana` once that time came in a busy channel, or `failed`
+ * with why in `failure`, kept until they give it another time or delete it.
+ */
+export type ScheduledMessage = components["schemas"]["ScheduledMessage"];
 
 export type Included = components["schemas"]["Included"];
 /**
@@ -126,6 +132,7 @@ export type Listener = () => void;
  * - `channelAccess:<channelId>`: what the caller may do in one channel
  * - `pins:<channelId>`: a channel's pinned messages, once loaded
  * - `held:<channelId>`: the caller's messages there held for their attachments' previews
+ * - `scheduled:<channelId>`: the messages the caller scheduled for later there
  * - `commands:<channelId>`: the commands of the bots that can see a channel, once loaded
  * - `annotations:<messageId>`: what plugins say about a message
  * - `userAnnotations:<userId>`: what plugins say about a person, once loaded

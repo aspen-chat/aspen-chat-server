@@ -143,6 +143,11 @@ What waits is a held message ([Held messages](../attachment-previews/held-messag
 
 - **Its author's apps** list it with the rest (`GET /users/@me/held-messages`), saying what it waits
   for (`waiting`) and what it is (`kind`).
+- **A message scheduled for later** whose time came while the channel was busy waits here too, its
+  `send_at` still set ([Scheduled messages](../scheduled-messages.md#in-a-busy-channel)). It is
+  listed with its author's scheduled messages instead, is never dropped for waiting, and where a row
+  below is said to be dropped for want of room, it goes back to waiting for its job, which tries the
+  queue again every `BUSY_RETRY` (`queue::defer`, `Waited::NoRoom`).
 - **Posted:** `heldMessagePosted` names the message it became, or the message an edit changed.
 - **Dropped:** `heldMessageFailed` says why.
 - **Cancelled:** `DELETE /users/@me/held-messages/{held}` cancels it, announced by
@@ -158,7 +163,7 @@ An author's waiting rows in one pool are one item. Its rows post in the order se
 | -------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
 | An item              | 50 rows (`MAX_ITEM_MESSAGES`), or 2,000 mana in all (`MAX_ITEM_MANA`), its first row whatever it costs | `429` `channelBusy`, `Retry-After` 10 seconds (`BUSY_RETRY`)                         |
 | A pool's items       | 1,000 (`MAX_ITEMS`)                                                                                    | Room is made for an author above the last one waiting (below); anyone else, the same |
-| How long a row waits | 2 minutes (`MAX_WAIT`)                                                                                 | Dropped, its author told the channel was too busy                                    |
+| How long a row waits | 2 minutes (`MAX_WAIT`); a scheduled message, as long as it takes                                       | Dropped, its author told the channel was too busy                                    |
 
 ### Queue order
 
@@ -235,11 +240,11 @@ there.
 - **Standings** are read as each author is first seen waiting in a step, and kept for the step, so a
   role given or taken counts within ten seconds.
 - **Each tick** first drops what has waited `MAX_WAIT`, a hundred at a time, oldest first
-  (`held_message_mana_by_age`), telling each author. Then it reads each item's oldest row, one row
-  for each author however many they have waiting (skipping from author to author through
-  `held_message_mana_queue`, then a `LATERAL` read of each one's oldest), puts them in queue order,
-  and, up to ten times (`ROUNDS_PER_TICK`): shares what the pool has earned among the first three,
-  and posts the oldest row of each whose credit can pay for it.
+  (`held_message_mana_by_age`, which holds no scheduled message), telling each author. Then it reads
+  each item's oldest row, one row for each author however many they have waiting (skipping from
+  author to author through `held_message_mana_queue`, then a `LATERAL` read of each one's oldest),
+  puts them in queue order, and, up to ten times (`ROUNDS_PER_TICK`): shares what the pool has
+  earned among the first three, and posts the oldest row of each whose credit can pay for it.
 - **Higher priority earns more, not everything:** the first in the queue is credited at least a
   third of all the pool earns, and two thirds or all of it when fewer wait. A raid of new accounts
   holds at most two of the three places while one regular waits, and none while three do, so it is
@@ -249,7 +254,9 @@ there.
   by `message::post`, an edit by `update_message`, a poll by `create_poll`, each taking the row in
   its own transaction; an echo by `echo_reply`, its row going after, since echoing twice makes one
   echo. Permissions, blocks, and plugins decide it then; one that can no longer be posted is
-  dropped, its author told why, and one that fails for a reason that may pass is left to wait.
+  dropped, its author told why, and one that fails for a reason that may pass is left to wait. A
+  scheduled message left to wait so is failed once that has gone on for `MAX_WAIT`
+  (`held::note_failing`), since nothing else would ever stop the drainer trying it.
 - **Checked before paying:** before a row is paid for, the drainer checks that its author may still
   post there (`held::drop_if_unpostable`: `may_post`, or for an edit their access to the channel).
   One they no longer may is dropped unpaid, so what will be refused spends nothing of the channel's

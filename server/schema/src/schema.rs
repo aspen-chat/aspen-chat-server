@@ -404,6 +404,10 @@ diesel::table! {
         payload -> Nullable<Jsonb>,
         cost -> Int4,
         made_thread -> Bool,
+        send_at -> Nullable<Timestamptz>,
+        failure -> Nullable<Text>,
+        failed_at -> Nullable<Timestamptz>,
+        stuck_since -> Nullable<Timestamptz>,
     }
 }
 

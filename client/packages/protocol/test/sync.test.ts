@@ -93,6 +93,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
     "/api/v1/users/@me/blocks": () => json({ data: [], included: { users: [] } }),
     "/api/v1/plugins": () => json([]),
     "/api/v1/users/@me/held-messages": () => json([]),
+    "/api/v1/users/@me/scheduled-messages": () => json([]),
     "/api/v1/users/@me/saved-messages": () => json([]),
     "/api/v1/users/@me/thread-follows": () => json([]),
     "/api/v1/users/@me/presence-override": () => json({ presenceOverride: null, until: null }),
@@ -563,6 +564,7 @@ describe("AspenSync", () => {
       "/api/v1/users/@me/blocks",
       "/api/v1/plugins",
       "/api/v1/users/@me/held-messages",
+      "/api/v1/users/@me/scheduled-messages",
       "/api/v1/users/@me/saved-messages",
       "/api/v1/users/@me/thread-follows",
       "/api/v1/users/@me/presence-override",
@@ -1217,6 +1219,210 @@ describe("AspenSync", () => {
     expect(sync.store.heldMessage(held.id)?.message).toEqual(held);
     await sync.cancelHeld(held.id);
     expect(sync.store.heldMessage(held.id)).toBeUndefined();
+  });
+
+  it("keeps what is scheduled for later as the stream tells it, until it is posted", async () => {
+    const scheduled = {
+      id: id(82),
+      channelId: general.id,
+      content: "good morning",
+      attachments: [],
+      replyTo: null,
+      tagReplied: false,
+      sendAt: "2026-11-06T09:00:00Z",
+      status: "scheduled" as const,
+      failure: null,
+    };
+    const earlier = { ...scheduled, id: id(83), sendAt: "2026-11-05T18:00:00Z" };
+    const requests: { method: string; path: string; body: unknown }[] = [];
+    const note = async (url: URL, request: Request) => {
+      const text = await request.text();
+      requests.push({
+        method: request.method,
+        path: url.pathname,
+        body: text === "" ? null : (JSON.parse(text) as unknown),
+      });
+    };
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/scheduled-messages": () => json([earlier]),
+      [`/api/v1/channels/${general.id}/scheduled-messages`]: async (url, request) => {
+        await note(url, request);
+        return json(scheduled, 201);
+      },
+      [`/api/v1/users/@me/scheduled-messages/${scheduled.id}`]: async (url, request) => {
+        await note(url, request);
+        return json({ ...scheduled, sendAt: "2026-11-07T09:00:00Z" });
+      },
+      [`/api/v1/users/@me/scheduled-messages/${scheduled.id}/send`]: async (url, request) => {
+        await note(url, request);
+        return json(scheduled);
+      },
+      [`/api/v1/users/@me/scheduled-messages/${earlier.id}`]: async (url, request) => {
+        await note(url, request);
+        return new Response(null, { status: 204 });
+      },
+    });
+    const socket = await goLive(sync);
+    // What the bootstrap read is held, and what is scheduled joins it in the order due.
+    expect(sync.store.scheduledMessages(general.id)).toEqual([earlier]);
+    const sendAt = new Date("2026-11-06T09:00:00Z");
+    await sync.scheduleMessage(general.id, "good morning", [], sendAt, {
+      reply: { to: id(1001), tag: false },
+    });
+    expect(requests.at(-1)?.body).toEqual({
+      content: "good morning",
+      attachments: [],
+      sendAt: "2026-11-06T09:00:00.000Z",
+      replyTo: id(1001),
+      tagReplied: false,
+    });
+    expect(sync.store.scheduledMessages(general.id)).toEqual([earlier, scheduled]);
+
+    // Another time is asked for, and held only once the stream says so.
+    await sync.rescheduleMessage(scheduled.id, new Date("2026-11-07T09:00:00Z"));
+    expect(requests.at(-1)).toEqual({
+      method: "PATCH",
+      path: `/api/v1/users/@me/scheduled-messages/${scheduled.id}`,
+      body: { sendAt: "2026-11-07T09:00:00.000Z" },
+    });
+    expect(sync.store.scheduledMessage(scheduled.id)?.sendAt).toBe(scheduled.sendAt);
+    socket.frame({
+      type: "event",
+      sequence: 5,
+      event: {
+        serverEvent: "scheduledMessageChanged",
+        scheduled: { ...scheduled, sendAt: "2026-11-07T09:00:00Z" },
+      },
+    });
+    expect(sync.store.scheduledMessage(scheduled.id)?.sendAt).toBe("2026-11-07T09:00:00Z");
+
+    // Its time comes in a busy channel, then it fails, and each is told whole.
+    socket.frame({
+      type: "event",
+      sequence: 6,
+      event: {
+        serverEvent: "scheduledMessageChanged",
+        scheduled: { ...scheduled, status: "waitingForMana" },
+      },
+    });
+    expect(sync.store.scheduledMessage(scheduled.id)?.status).toBe("waitingForMana");
+    socket.frame({
+      type: "event",
+      sequence: 7,
+      event: {
+        serverEvent: "scheduledMessageChanged",
+        scheduled: { ...scheduled, status: "failed", failure: "You can no longer post here." },
+      },
+    });
+    expect(sync.store.scheduledMessage(scheduled.id)).toMatchObject({
+      status: "failed",
+      failure: "You can no longer post here.",
+    });
+
+    // Sent now, it leaves when the stream says it was posted.
+    await sync.sendScheduledNow(scheduled.id);
+    expect(requests.at(-1)?.method).toBe("POST");
+    expect(sync.store.scheduledMessage(scheduled.id)).toBeDefined();
+    socket.frame({
+      type: "event",
+      sequence: 8,
+      event: {
+        serverEvent: "heldMessagePosted",
+        held: scheduled.id,
+        channel: general.id,
+        message: id(1009),
+      },
+    });
+    expect(sync.store.scheduledMessages(general.id)).toEqual([earlier]);
+    // A response that arrives after its posting was told does not bring it back.
+    sync.store.fillScheduledMessage(scheduled);
+    expect(sync.store.scheduledMessage(scheduled.id)).toBeUndefined();
+
+    // Deleted here, it is let go at once.
+    await sync.deleteScheduled(earlier.id);
+    expect(requests.at(-1)).toEqual({
+      method: "DELETE",
+      path: `/api/v1/users/@me/scheduled-messages/${earlier.id}`,
+      body: null,
+    });
+    expect(sync.store.scheduledMessages(general.id)).toEqual([]);
+  });
+
+  it("lets a scheduled message go when another device deletes it or the server drops it", async () => {
+    const scheduled = {
+      id: id(84),
+      channelId: general.id,
+      content: "later",
+      attachments: [],
+      replyTo: null,
+      tagReplied: false,
+      sendAt: "2026-11-06T09:00:00Z",
+      status: "scheduled",
+      failure: null,
+    };
+    const dropped = { ...scheduled, id: id(85) };
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/scheduled-messages": () => json([scheduled, dropped]),
+    });
+    const socket = await goLive(sync);
+    socket.frame({
+      type: "event",
+      sequence: 5,
+      event: { serverEvent: "heldMessageCancelled", held: scheduled.id, channel: general.id },
+    });
+    expect(sync.store.scheduledMessages(general.id)).toEqual([dropped]);
+    socket.frame({
+      type: "event",
+      sequence: 6,
+      event: {
+        serverEvent: "heldMessageFailed",
+        held: dropped.id,
+        channel: general.id,
+        detail: "You can no longer post here, so this was not posted.",
+      },
+    });
+    expect(sync.store.scheduledMessages(general.id)).toEqual([]);
+    // It was never among the messages held for their previews, so nothing waits to be resent.
+    expect(sync.store.heldMessages(general.id)).toEqual([]);
+  });
+
+  it("takes a scheduled message back with its files' records, deleting it there", async () => {
+    const file = {
+      id: id(901),
+      fileName: "plan.txt",
+      mimeType: "text/plain",
+      downloadUrl: "https://files.test/attachments/901",
+    };
+    const scheduled = {
+      id: id(86),
+      channelId: general.id,
+      content: "see the plan",
+      attachments: [file.id],
+      replyTo: null,
+      tagReplied: false,
+      sendAt: "2026-11-06T09:00:00Z",
+      status: "failed",
+      failure: "No.",
+    };
+    const methods: string[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/scheduled-messages": () => json([scheduled]),
+      [`/api/v1/users/@me/scheduled-messages/${scheduled.id}`]: (url, request) => {
+        methods.push(request.method);
+        if (request.method === "DELETE") {
+          return new Response(null, { status: 204 });
+        }
+        expect(url.searchParams.get("include")).toBe("attachments");
+        return json({ data: scheduled, included: { attachments: [file] } });
+      },
+    });
+    await goLive(sync);
+    expect(await sync.unschedule(scheduled.id)).toEqual({ scheduled, attachments: [file] });
+    expect(methods).toEqual(["GET", "DELETE"]);
+    expect(sync.store.scheduledMessages(general.id)).toEqual([]);
   });
 
   it("uploads an attachment in two phases and caches the record", async () => {

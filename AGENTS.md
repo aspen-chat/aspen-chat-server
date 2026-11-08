@@ -873,6 +873,9 @@ a NATS stream or subject, or a client package updates them in the same commit.
   how they are sideloaded
 - `docs/architecture/replies.md` — replying to a message of the same channel, tagging its author,
   and what is shown of a deleted original
+- `docs/architecture/scheduled-messages.md` — messages scheduled for later: what can be, the limits,
+  the job that posts each at its time, giving one another time, waiting in a busy channel's mana
+  queue without expiring, and failed ones kept for their author
 - `docs/architecture/roles-and-permissions/index.md` — community permissions, roles, overrides,
   ranking, bans, large communities, and member search
 - `docs/architecture/web-client/index.md` — the web client every API server serves at `public_url`,

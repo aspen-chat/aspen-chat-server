@@ -589,7 +589,7 @@ pub async fn echo_reply(
 /// for the parent's mana.
 pub enum Echoed {
     Done(Box<Message>, bool),
-    Waiting(crate::message::held::HeldMessage),
+    Waiting(Box<crate::message::held::HeldMessage>),
 }
 
 /// Echoes the caller's thread reply to the thread's parent (`echo_reply`), spending the
@@ -661,7 +661,7 @@ pub async fn request_echo(
                 },
             )
             .await?;
-            return Ok(Echoed::Waiting(held));
+            return Ok(Echoed::Waiting(Box::new(held)));
         }
     }
     drop(conn);

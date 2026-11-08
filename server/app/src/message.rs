@@ -87,6 +87,7 @@ pub struct Message {
 
 pub mod held;
 pub mod reply;
+pub mod scheduled;
 
 /// The message's wire record, with the relations it carries from child tables.
 pub fn record(
@@ -1131,7 +1132,7 @@ pub async fn update_message(
                 },
             )
             .await?;
-            return Ok(Edited::Waiting(held));
+            return Ok(Edited::Waiting(Box::new(held)));
         }
     }
     // Plugins decide an edit as they decide a new message, whether it changes the text, a
@@ -1369,7 +1370,7 @@ pub async fn invoke_command(
             },
         )
         .await?;
-        return Ok(held::Posted::Held(held));
+        return Ok(held::Posted::Held(Box::new(held)));
     }
     drop(conn);
     let attachments = invocation.attachments.clone();
@@ -1391,7 +1392,7 @@ pub async fn invoke_command(
 /// What became of an edit: made, or waiting for its channel's mana.
 pub enum Edited {
     Done(Box<MessageWithRelations>),
-    Waiting(held::HeldMessage),
+    Waiting(Box<held::HeldMessage>),
 }
 
 /// An edit waiting for its channel's mana, as it was asked for (`held_message.payload`).

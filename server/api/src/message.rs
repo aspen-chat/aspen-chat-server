@@ -647,7 +647,7 @@ async fn post(
     let msg = match posted {
         app::message::held::Posted::Sent(msg) => *msg,
         app::message::held::Posted::Held(held) => {
-            return Ok((StatusCode::ACCEPTED, Json(HeldMessage::from(held))).into_response());
+            return Ok((StatusCode::ACCEPTED, Json(HeldMessage::from(*held))).into_response());
         }
     };
     let location = format!("{API_PREFIX}/messages/{}", msg.id.0);
@@ -842,7 +842,7 @@ pub async fn update_message(
         match app::message::update_message(&state, user.id, message, request.into(), None).await? {
             app::message::Edited::Done(m) => Json(Message::from(*m)).into_response(),
             app::message::Edited::Waiting(held) => {
-                (StatusCode::ACCEPTED, Json(HeldMessage::from(held))).into_response()
+                (StatusCode::ACCEPTED, Json(HeldMessage::from(*held))).into_response()
             }
         },
     )
@@ -958,7 +958,7 @@ pub async fn echo_reply(
     let (echo, created) = match app::thread::request_echo(&state, user.id, message).await? {
         app::thread::Echoed::Done(echo, created) => (*echo, created),
         app::thread::Echoed::Waiting(held) => {
-            return Ok((StatusCode::ACCEPTED, Json(HeldMessage::from(held))).into_response());
+            return Ok((StatusCode::ACCEPTED, Json(HeldMessage::from(*held))).into_response());
         }
     };
     let status = if created {

@@ -24,6 +24,14 @@
 //! failed [`MAX_ATTEMPTS`] times, is dropped, and `heldMessageFailed` tells them why. A first
 //! reply that made its thread as it was held takes the thread with it when it is dropped, if
 //! nothing else was posted or waits there.
+//!
+//! A message scheduled for later (`super::scheduled`) is a held message too, `send_at` saying
+//! when: its job comes due then and posts it as above. One that cannot be posted is kept for
+//! its author with why ([`fail_held`]) rather than dropped, while they can still see where it
+//! would go. Whatever changes when it is due replaces its job (`scheduled::reschedule`), and
+//! what a step does to a row is done only while the row still stands as the step read it
+//! ([`take`], [`fail_held`], `queue::wait_held`), so a step whose job was replaced as it ran
+//! does nothing.
 
 use super::Message;
 use crate::attachment::preview;
@@ -91,16 +99,25 @@ pub struct HeldMessage {
     /// What it spends of its channel's mana when posted, in mana.
     #[diesel(sql_type = diesel::sql_types::Integer)]
     pub cost: i32,
+    /// When a message scheduled for later is due (`super::scheduled`), which stays set while
+    /// it then waits for its channel's mana; `None` for everything else.
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    pub send_at: Option<DateTime<Utc>>,
+    /// Why a scheduled message could not be posted, in the language it was scheduled in: it
+    /// is kept for its author, and nothing posts it until they schedule it again.
+    #[diesel(sql_type = Nullable<Text>)]
+    pub failure: Option<String>,
 }
 
 /// The columns a [`HeldMessage`] is read from.
 pub(crate) const COLUMNS: &str = "id, author, channel, content, attachments, echo_to_parent, \
-    reply_to, tags_replied, locale, held_at, waiting, kind, target, payload, cost";
+    reply_to, tags_replied, locale, held_at, waiting, kind, target, payload, cost, send_at, \
+    failure";
 
 /// What became of a message sent: posted, or held for its previews.
 pub enum Posted {
     Sent(Box<Message>),
-    Held(HeldMessage),
+    Held(Box<HeldMessage>),
 }
 
 /// Posts a message where `to` says, or holds it while one of its attachments' previews is being
@@ -187,6 +204,8 @@ pub async fn post(
                             target: None,
                             payload: None,
                             cost: 0,
+                            send_at: None,
+                            failure: None,
                         };
                         diesel::insert_into(held_message::table)
                             .values((
@@ -217,7 +236,7 @@ pub async fn post(
                 .await?;
             drop(conn);
             jobs::wake(state).await;
-            return Ok(Posted::Held(held));
+            return Ok(Posted::Held(Box::new(held)));
         }
     }
     // A busy channel's mana (`app::mana`): decided once the author is known to be allowed to
@@ -271,7 +290,7 @@ pub async fn post(
                 },
             )
             .await?;
-            return Ok(Posted::Held(held));
+            return Ok(Posted::Held(Box::new(held)));
         }
     }
     drop(conn);
@@ -393,7 +412,8 @@ async fn held_back(
 }
 
 /// A page of the held messages of `author`, oldest first, for their apps to show waiting: `limit`
-/// of them (at most [`crate::LIST_PAGE`]) after `after`, through `held_message_by_author`.
+/// of them (at most [`crate::LIST_PAGE`]) after `after`, through `held_message_by_author`. Those
+/// they scheduled for later are read apart (`super::scheduled::read_scheduled`).
 pub async fn read_held(
     state: &GlobalServerContext,
     author: UserId,
@@ -404,7 +424,7 @@ pub async fn read_held(
         r#"
         SELECT {COLUMNS}
         FROM held_message
-        WHERE author = $1
+        WHERE author = $1 AND send_at IS NULL
           AND ($2::uuid IS NULL OR (held_at, id) > (
               SELECT held_at, id FROM held_message WHERE author = $1 AND id = $2))
         ORDER BY held_at, id
@@ -419,10 +439,17 @@ pub async fn read_held(
 }
 
 /// Takes a held message off the table as it is posted, in the posting's transaction; not found
-/// when it is no longer there, posted by another server.
+/// when it is no longer there, posted by another server, or is a scheduled one no longer to be
+/// posted now: failed, or given a later time since the posting began.
 pub(super) async fn take(conn: &mut AsyncPgConnection, id: HeldMessageId) -> crate::Result<()> {
     let taken = diesel::delete(held_message::table)
         .filter(held_message::id.eq(id))
+        .filter(held_message::failure.is_null())
+        .filter(
+            held_message::send_at
+                .is_null()
+                .or(held_message::send_at.le(diesel::dsl::now)),
+        )
         .execute(conn)
         .await?;
     if taken == 0 {
@@ -433,21 +460,48 @@ pub(super) async fn take(conn: &mut AsyncPgConnection, id: HeldMessageId) -> cra
 
 /// Cancels a held message of `author`'s that has not been posted, whatever it waits for, and
 /// tells their apps. A first reply that made its thread as it was held (`made_thread`) takes
-/// the thread with it, as a dropped one does. Not found when it is not theirs, or already
-/// posted.
+/// the thread with it, as a dropped one does. A scheduled one's job goes with it, and its files,
+/// which its author may send another way, are kept as long from now as a new upload is
+/// (`attachment::renew_unsent`). Not found when it is not theirs, or already posted.
 pub async fn cancel(
     state: &GlobalServerContext,
     author: UserId,
     id: HeldMessageId,
 ) -> crate::Result<()> {
+    cancel_of(state, author, id, false).await
+}
+
+/// [`cancel`], of a scheduled message alone when `scheduled_only`.
+pub(super) async fn cancel_of(
+    state: &GlobalServerContext,
+    author: UserId,
+    id: HeldMessageId,
+    scheduled_only: bool,
+) -> crate::Result<()> {
+    use diesel::IntoSql;
     let mut conn = state.connection_pool.get().await?;
     conn.transaction::<_, crate::Error, _>(|conn| {
         async move {
-            let (channel, made_thread): (ChannelId, bool) = diesel::delete(
+            let (channel, made_thread, send_at, attachments): (
+                ChannelId,
+                bool,
+                Option<DateTime<Utc>>,
+                Vec<Option<AttachmentId>>,
+            ) = diesel::delete(
                 held_message::table
-                    .filter(held_message::id.eq(id).and(held_message::author.eq(author))),
+                    .filter(held_message::id.eq(id).and(held_message::author.eq(author)))
+                    .filter(
+                        held_message::send_at
+                            .is_not_null()
+                            .or((!scheduled_only).into_sql::<Bool>()),
+                    ),
             )
-            .returning((held_message::channel, held_message::made_thread))
+            .returning((
+                held_message::channel,
+                held_message::made_thread,
+                held_message::send_at,
+                held_message::attachments,
+            ))
             .get_result(conn)
             .await?;
             crate::publish_event(
@@ -460,11 +514,32 @@ pub async fn cancel(
             if made_thread {
                 crate::thread::remove_if_unreplied(state, conn, channel).await?;
             }
+            if send_at.is_some() {
+                forget_job(conn, id).await?;
+                let attachments: Vec<AttachmentId> = attachments.into_iter().flatten().collect();
+                crate::attachment::renew_unsent(conn, &attachments).await?;
+            }
             Ok(())
         }
         .scope_boxed()
     })
     .await
+}
+
+/// Deletes the job of the held message `id`, running or not, in the transaction that removes
+/// the message or gives it another job: a scheduled message's job may be due years from now,
+/// and would otherwise be kept until then to find nothing. A step of it running now does
+/// nothing more to the row, and what the runner then records of that step finds no job.
+pub(crate) async fn forget_job(
+    conn: &mut AsyncPgConnection,
+    id: HeldMessageId,
+) -> crate::Result<()> {
+    diesel::sql_query("DELETE FROM job WHERE kind = $1 AND key = $2")
+        .bind::<Text, _>(JobKind::ReleaseHeldMessage)
+        .bind::<Text, _>(id.0.to_string())
+        .execute(conn)
+        .await?;
+    Ok(())
 }
 
 /// [`take`] for what waits outside `app::message` (a poll), in its posting's transaction.
@@ -555,7 +630,8 @@ struct Behind {
 }
 
 /// Whether a message `held`'s author sent before it is still held, its own job not given up:
-/// through `held_message_by_author`.
+/// through `held_message_by_author`. Those scheduled for later are not waited for; they keep an
+/// order of their own (`scheduled::behind_another`).
 async fn behind_another(conn: &mut AsyncPgConnection, held: &HeldMessage) -> crate::Result<bool> {
     let found: Behind = diesel::sql_query(
         r#"
@@ -563,6 +639,7 @@ async fn behind_another(conn: &mut AsyncPgConnection, held: &HeldMessage) -> cra
             SELECT 1 FROM held_message earlier
             JOIN job ON job.kind = $4 AND job.key = earlier.id::text AND job.failed_at IS NULL
             WHERE earlier.author = $1 AND (earlier.held_at, earlier.id) < ($2, $3)
+              AND earlier.send_at IS NULL
         ) AS behind
         "#,
     )
@@ -597,7 +674,23 @@ pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::
         let Some(held) = held else {
             return Ok(Outcome::Done);
         };
-        if behind_another(conn.as_mut(), &held).await? {
+        // Failed, it waits for its author; released already, for its channel's mana, whose
+        // drainer posts it.
+        if held.failure.is_some() || held.waiting == HeldWaiting::Mana {
+            return Ok(Outcome::Done);
+        }
+        let behind = match held.send_at {
+            Some(send_at) => {
+                if let Ok(left) = (send_at - Utc::now()).to_std()
+                    && !left.is_zero()
+                {
+                    return Ok(Outcome::Later(left));
+                }
+                super::scheduled::behind_another(conn.as_mut(), &held).await?
+            }
+            None => behind_another(conn.as_mut(), &held).await?,
+        };
+        if behind {
             return Ok(Outcome::Later(BEHIND_WAIT));
         }
         if let Some(until) = held_until(conn.as_mut(), &held.attachments).await? {
@@ -609,10 +702,6 @@ pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::
         }
         held
     };
-    if held.waiting == HeldWaiting::Mana {
-        // Released already: it waits for its channel's mana, whose drainer posts it.
-        return Ok(Outcome::Done);
-    }
     // Released, it is posted as any message is, and so waits for its channel's mana when the
     // channel is busy.
     let cost = mana::message_cost(&state.settings(), &held.content, held.attachments.len());
@@ -621,22 +710,103 @@ pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::
         mana::decide_for(state, conn.as_mut(), held.author, held.channel, cost).await
     };
     if let Ok(Decision::Wait) = decided {
-        queue::wait_held(state, held.id, held.author, held.channel, cost).await?;
-        return Ok(Outcome::Done);
+        return Ok(match queue::wait_held(state, &held, cost).await? {
+            queue::Waited::Queued => Outcome::Done,
+            // No longer as it was read: the next look finds how it stands now.
+            queue::Waited::Changed => Outcome::Later(BEHIND_WAIT),
+            queue::Waited::NoRoom => Outcome::Later(queue::BUSY_RETRY),
+        });
     }
     release(state, held, jobs::last_attempt(job)).await
 }
 
 /// Posts what waited for its channel's mana, once its drainer has paid for it, by what it is.
 /// One that can no longer be posted is dropped, its author told why; one that fails for a
-/// reason that may pass is left to wait, and is dropped if it waits too long.
+/// reason that may pass is left to wait, and is dropped if it waits too long. A scheduled
+/// message is never dropped for waiting, so one whose posting goes on failing is failed instead
+/// ([`note_failing`]).
 pub(crate) async fn post_waiting(state: &GlobalServerContext, row: HeldMessage) {
     let id = row.id;
+    let scheduled = row
+        .send_at
+        .is_some()
+        .then(|| (row.author, row.channel, row.locale.clone()));
     // Boxed: posting by any of the kinds is a large future, which would otherwise sit inside the
     // drainer's on the stack of the thread running it.
     if let Err(e) = Box::pin(release(state, row, false)).await {
         tracing::warn!(held = %id.0, error = %e, "could not post what waited for a channel's mana");
+        if let Some((author, channel, locale)) = scheduled
+            && let Err(e) = note_failing(state, id, author, channel, &locale).await
+        {
+            tracing::warn!(held = %id.0, error = %e, "could not record that posting a scheduled message failed");
+        }
     }
+}
+
+#[derive(QueryableByName)]
+struct Spent {
+    #[diesel(sql_type = Bool)]
+    spent: bool,
+}
+
+/// Records that the due scheduled message `id` found no room in its channel's queue, telling
+/// its author's apps that it waits for mana the first time (`stuck_since`): its job tries
+/// again every `queue::BUSY_RETRY`, and this says nothing more meanwhile.
+pub(crate) async fn note_stuck(
+    state: &GlobalServerContext,
+    id: HeldMessageId,
+) -> crate::Result<()> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction::<_, crate::Error, _>(|conn| {
+        async move {
+            let stuck: Option<HeldMessage> = diesel::sql_query(format!(
+                "UPDATE held_message SET stuck_since = now() \
+                 WHERE id = $1 AND stuck_since IS NULL AND waiting = 'scheduled' \
+                   AND failure IS NULL AND send_at <= now() RETURNING {COLUMNS}"
+            ))
+            .bind::<PgUuid, _>(id)
+            .get_result(conn)
+            .await
+            .optional()?;
+            if let Some(stuck) = stuck {
+                super::scheduled::announce(state, conn, &stuck).await?;
+            }
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+/// Records that posting the scheduled message `id`, which waits for its channel's mana, failed
+/// for a reason that may pass, and fails it once that has gone on as long as anything else may
+/// wait there (`queue::MAX_WAIT`): the drainer tries it again every tick until then.
+async fn note_failing(
+    state: &GlobalServerContext,
+    id: HeldMessageId,
+    author: UserId,
+    channel: ChannelId,
+    locale: &str,
+) -> crate::Result<()> {
+    let failing: Option<Spent> = diesel::sql_query(
+        "UPDATE held_message SET stuck_since = COALESCE(stuck_since, now()) \
+         WHERE id = $1 AND waiting = 'mana' \
+         RETURNING stuck_since < now() - make_interval(secs => $2) AS spent",
+    )
+    .bind::<PgUuid, _>(id)
+    .bind::<diesel::sql_types::Double, _>(queue::MAX_WAIT.as_seconds_f64())
+    .get_result(state.connection_pool.get().await?.as_mut())
+    .await
+    .optional()?;
+    if failing.is_some_and(|failing| failing.spent) {
+        tracing::error!(held = %id.0, "gave up posting a scheduled message");
+        let reason = crate::locale::scope(crate::locale::negotiate(locale), async {
+            t!("heldMessageNotPosted")
+        })
+        .await;
+        fail_held(state, id, author, channel, true, reason).await?;
+    }
+    Ok(())
 }
 
 /// Posts one held row by what it is, taking the row in the posting's transaction where the
@@ -713,8 +883,8 @@ async fn post_row(state: &GlobalServerContext, row: HeldMessage) -> crate::Resul
     }
 }
 
-/// Posts one held row, or drops it with the reason when it can no longer be posted, or this
-/// is its `last` attempt.
+/// Posts one held row, or fails it with the reason ([`fail_held`]) when it can no longer be
+/// posted, or this is its `last` attempt.
 async fn release(
     state: &GlobalServerContext,
     row: HeldMessage,
@@ -722,6 +892,7 @@ async fn release(
 ) -> crate::Result<Outcome> {
     let locale = crate::locale::negotiate(&row.locale);
     let (id, author, channel) = (row.id, row.author, row.channel);
+    let read = Standing::of(&row);
     let (posted, noted) =
         crate::locale::scope(locale, crate::events::noting(post_row(state, row))).await;
     crate::events::settle(state, noted, posted.is_err()).await;
@@ -729,11 +900,14 @@ async fn release(
         Ok(()) => return Ok(Outcome::Done),
         Err(error) => error,
     };
-    // Not found may be its having been posted already, by a run of its job whose lease ran out.
-    if matches!(error, crate::Error::Diesel(diesel::result::Error::NotFound))
-        && !still_held(state, id).await
-    {
-        return Ok(Outcome::Done);
+    // Not found may be its having been posted already, by a run of its job whose lease ran out,
+    // or its no longer standing as it was read, so that this was not to post it ([`take`]).
+    if matches!(error, crate::Error::Diesel(diesel::result::Error::NotFound)) {
+        match standing(state, id).await {
+            Ok(None) => return Ok(Outcome::Done),
+            Ok(Some(now)) if now != read => return Ok(Outcome::Later(BEHIND_WAIT)),
+            _ => {}
+        }
     }
     let reason = match refusal(&error) {
         Some(reason) => reason,
@@ -743,7 +917,7 @@ async fn release(
         }
         None => return Err(error),
     };
-    drop_held(state, id, author, channel, reason).await?;
+    fail_held(state, id, author, channel, read.send_at.is_some(), reason).await?;
     Ok(Outcome::Done)
 }
 
@@ -761,21 +935,46 @@ fn refusal(error: &crate::Error) -> Option<Cow<'static, str>> {
     }
 }
 
-async fn still_held(state: &GlobalServerContext, id: HeldMessageId) -> bool {
-    let Ok(mut conn) = state.connection_pool.get().await else {
-        return true;
-    };
-    diesel::select(diesel::dsl::exists(
-        held_message::table.filter(held_message::id.eq(id)),
-    ))
-    .get_result(conn.as_mut())
-    .await
-    .unwrap_or(true)
+/// What decides who is to post a held row, and when: what a step read of it is compared with
+/// how it stands once posting it found it not to be taken.
+#[derive(Debug, PartialEq, Eq, Queryable)]
+struct Standing {
+    waiting: HeldWaiting,
+    send_at: Option<DateTime<Utc>>,
+    failed: bool,
 }
 
-/// Drops `row`, telling its author why, when they can no longer post it where it would go: as
-/// posting would refuse it (`may_post`; an edit, their access to the channel), checked before
-/// the drainer pays for it, so what will be refused spends nothing. Whether it was dropped.
+impl Standing {
+    fn of(row: &HeldMessage) -> Self {
+        Standing {
+            waiting: row.waiting,
+            send_at: row.send_at,
+            failed: row.failure.is_some(),
+        }
+    }
+}
+
+/// How the held row `id` stands now; `None` when it is gone.
+async fn standing(
+    state: &GlobalServerContext,
+    id: HeldMessageId,
+) -> crate::Result<Option<Standing>> {
+    Ok(held_message::table
+        .select((
+            held_message::waiting,
+            held_message::send_at,
+            held_message::failure.is_not_null(),
+        ))
+        .filter(held_message::id.eq(id))
+        .first(state.connection_pool.get().await?.as_mut())
+        .await
+        .optional()?)
+}
+
+/// Fails `row` ([`fail_held`]), telling its author why, when they can no longer post it where
+/// it would go: as posting would refuse it (`may_post`; an edit, their access to the channel),
+/// checked before the drainer pays for it, so what will be refused spends nothing. Whether it
+/// was failed.
 pub(crate) async fn drop_if_unpostable(
     state: &GlobalServerContext,
     row: &HeldMessage,
@@ -801,7 +1000,15 @@ pub(crate) async fn drop_if_unpostable(
     let Some(reason) = crate::locale::scope(locale, async { refusal(&error) }).await else {
         return Err(error);
     };
-    drop_held(state, row.id, row.author, row.channel, reason).await?;
+    fail_held(
+        state,
+        row.id,
+        row.author,
+        row.channel,
+        row.send_at.is_some(),
+        reason,
+    )
+    .await?;
     Ok(true)
 }
 
@@ -876,9 +1083,9 @@ async fn held_in(
 }
 
 /// Saves, in the caller's transaction, a job dropping everything `author` has held in `scope`,
-/// waiting for its previews or for its channel's mana, telling them why: they can no longer
-/// post there, so none of it ever will be, and what waits for mana would take up the queue
-/// until then. Saves nothing when they have nothing held there.
+/// waiting for its previews, for its channel's mana, or for the time it was scheduled for,
+/// telling them why: they can no longer post there, so none of it ever will be, and what waits
+/// for mana would take up the queue until then. Saves nothing when they have nothing held there.
 pub async fn drop_held_by(
     conn: &mut AsyncPgConnection,
     author: UserId,
@@ -925,10 +1132,59 @@ pub async fn drop_held_by_step(
     })
 }
 
+/// Fails a held message that cannot be posted, telling its author's apps why. Anything but a
+/// `scheduled` message is dropped ([`drop_held`]): its author sent it moments ago and is told
+/// at once. A scheduled message's author may be away, so it is kept with `detail` as its
+/// failure, off the mana queue if it waited there, until they schedule it again or delete it
+/// (`super::scheduled`), and their apps are told by `scheduledMessageChanged`; it is dropped
+/// all the same when its author can no longer see where it would go, where they could never
+/// find it. One already failed, gone, or given another time since it was read is left as it is.
+pub(crate) async fn fail_held(
+    state: &GlobalServerContext,
+    id: HeldMessageId,
+    author: UserId,
+    channel: ChannelId,
+    scheduled: bool,
+    detail: Cow<'static, str>,
+) -> crate::Result<()> {
+    if !scheduled {
+        return drop_held(state, id, author, channel, detail).await;
+    }
+    let mut conn = state.connection_pool.get().await?;
+    match crate::permissions::channel_access(state, conn.as_mut(), author, channel).await {
+        Ok(_) => {}
+        Err(error) if refusal(&error).is_some() => {
+            drop(conn);
+            return drop_held(state, id, author, channel, detail).await;
+        }
+        Err(error) => return Err(error),
+    }
+    conn.transaction::<_, crate::Error, _>(|conn| {
+        async move {
+            let failed: Option<HeldMessage> = diesel::sql_query(format!(
+                "UPDATE held_message SET failure = $2, failed_at = now(), stuck_since = NULL, \
+                     waiting = 'scheduled' \
+                 WHERE id = $1 AND failure IS NULL AND send_at <= now() RETURNING {COLUMNS}"
+            ))
+            .bind::<PgUuid, _>(id)
+            .bind::<Text, _>(detail.as_ref())
+            .get_result(conn)
+            .await
+            .optional()?;
+            if let Some(failed) = failed {
+                super::scheduled::announce(state, conn, &failed).await?;
+            }
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
 /// Drops a held message that will not be posted and tells its author's apps why. When it was the
 /// first reply of a thread, which it made as it was held (`post`, `made_thread`), and nothing
 /// else was posted or waits there, the thread goes with it (`thread::remove_if_unreplied`), in
-/// the same transaction.
+/// the same transaction; a scheduled message's job goes with it too.
 pub(crate) async fn drop_held(
     state: &GlobalServerContext,
     id: HeldMessageId,
@@ -939,15 +1195,19 @@ pub(crate) async fn drop_held(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction::<_, crate::Error, _>(|conn| {
         async move {
-            let made_thread: Option<bool> = diesel::delete(held_message::table)
-                .filter(held_message::id.eq(id))
-                .returning(held_message::made_thread)
-                .get_result(conn)
-                .await
-                .optional()?;
-            let Some(made_thread) = made_thread else {
+            let dropped: Option<(bool, Option<DateTime<Utc>>)> =
+                diesel::delete(held_message::table)
+                    .filter(held_message::id.eq(id))
+                    .returning((held_message::made_thread, held_message::send_at))
+                    .get_result(conn)
+                    .await
+                    .optional()?;
+            let Some((made_thread, send_at)) = dropped else {
                 return Ok(());
             };
+            if send_at.is_some() {
+                forget_job(conn, id).await?;
+            }
             crate::publish_event(
                 state,
                 conn,

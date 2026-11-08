@@ -705,7 +705,11 @@ test.describe("on a phone", () => {
     expect(new Set(tops.map((b) => Math.round(b?.y ?? -1))).size).toBe(1);
     expect(new Set(tops.map((b) => Math.round(b?.height ?? -1))).size).toBe(1);
     await more.tap();
-    await expect(page.getByRole("menuitem")).toHaveText(["Attach a file", "Create a new poll"]);
+    await expect(page.getByRole("menuitem")).toHaveText([
+      "Attach a file",
+      "Create a new poll",
+      "Schedule message",
+    ]);
   });
 
   test("Enter writes a new line, and only the button sends", async ({ page }) => {

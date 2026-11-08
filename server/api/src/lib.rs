@@ -65,6 +65,7 @@ pub mod read_state;
 pub mod report;
 pub mod role;
 pub mod saved_message;
+pub mod scheduled_message;
 mod schema;
 pub mod security;
 pub mod thread_follow;
@@ -128,6 +129,7 @@ pub const TAG_PLUGINS: &str = "plugins";
         poll::PollInclude,
         poll::PollOption,
         poll::PollVote,
+        scheduled_message::ScheduledMessageInclude,
         invite::InviteInclude,
         invite::RegistrationInviteInclude
     )),
@@ -357,6 +359,14 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         .routes(routes!(message::search_messages))
         .routes(routes!(message::list_held_messages))
         .routes(routes!(message::cancel_held_message))
+        .routes(routes!(scheduled_message::schedule_message))
+        .routes(routes!(scheduled_message::list_scheduled_messages))
+        .routes(routes!(
+            scheduled_message::get_scheduled_message,
+            scheduled_message::update_scheduled_message,
+            scheduled_message::delete_scheduled_message
+        ))
+        .routes(routes!(scheduled_message::send_scheduled_message))
         .routes(routes!(push::create_push_subscription))
         .routes(routes!(push::delete_push_subscription))
         .routes(routes!(message::open_thread))

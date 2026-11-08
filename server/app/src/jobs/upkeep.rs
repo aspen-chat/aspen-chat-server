@@ -126,6 +126,9 @@ pub async fn sweep_expired(state: &GlobalServerContext, _job: &Claimed) -> crate
             outcome = Outcome::Progress(serde_json::Value::Null);
         }
     }
+    if crate::message::scheduled::sweep_failed(state).await? {
+        outcome = Outcome::Progress(serde_json::Value::Null);
+    }
     Ok(outcome)
 }
 

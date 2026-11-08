@@ -5,6 +5,7 @@
 
 import type {
   HeldEntry,
+  ScheduledMessage,
   AspenSync,
   Attachment,
   BotCommands,
@@ -285,6 +286,11 @@ export function useIdWizard(): boolean {
 /** The caller's messages in a channel held for their attachments' previews. */
 export function useHeldMessages(place: string): readonly HeldEntry[] {
   return useTopic(`held:${place}`, (s) => s.heldMessages(place));
+}
+
+/** The messages the caller scheduled for later in a channel, the soonest due first. */
+export function useScheduledMessages(channelId: string): readonly ScheduledMessage[] {
+  return useTopic(`scheduled:${channelId}`, (s) => s.scheduledMessages(channelId));
 }
 
 /** An attachment record by id, fetched on demand when the cache lacks it. */

@@ -15,15 +15,20 @@ checks that:
 - a poll waits and is posted, and a thread reply posts while its echo waits in the parent;
 - what waits two minutes is dropped, its author told why, and a viewer hears the priority queue
   come into force and end;
+- a message scheduled for later whose time comes while its channel is busy waits for its mana, its
+  author told so, leaves the queue when given another time and comes back when sent now, is not
+  dropped for waiting past two minutes, and is posted once the channel can pay for it;
 - a waiting message can be cancelled;
 - past 50 waiting rows, sending is refused with `channelBusy`.
 
-Needs what `stack.Stack` needs, and takes about four minutes, two of them the wait to be dropped.
+Needs what `stack.Stack` needs, and takes about six minutes: two the wait to be dropped, and two
+more the scheduled message's wait past that.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import shutil
@@ -90,7 +95,7 @@ def run(stack: Stack) -> None:
         assert status in expect, (status, text)
         return status, json.loads(text) if text else {}
 
-    def posted_texts():
+    def posted_texts(channel=channel):
         status, text = stack.request("GET", f"/channels/{channel}/messages?limit=100", token=owner["token"])
         body = json.loads(text)
         rows = body["data"] if isinstance(body, dict) else body
@@ -182,6 +187,32 @@ def run(stack: Stack) -> None:
     got = until("the echo is made", lambda: not held(m1), 40)
     check("and its echo waits in the parent, then is made", bool(got), held(m1))
 
+    # A message scheduled for a minute from now, in a channel the owner keeps in debt until
+    # well past two minutes after that: recharging 1 a second from half its capacity in debt, the
+    # pool would otherwise pay for it within a minute.
+    patient = stack.api("POST", "/channels", {"name": "patient", "ty": "text", "community": community,
+                                              "sortIndex": 3}, owner["token"])["id"]
+    stack.api("PATCH", f"/channels/{patient}", {"manaMax": 100, "manaRecharge": 1}, owner["token"])
+    spent_at = [0.0]
+
+    def keep_down():
+        if time.monotonic() - spent_at[0] > 30:
+            stack.request("POST", f"/channels/{patient}/messages", {"content": "z" * 100, "attachments": []},
+                          owner["token"])
+            spent_at[0] = time.monotonic()
+
+    def scheduled():
+        return stack.api("GET", "/users/@me/scheduled-messages", token=m1["token"])
+
+    keep_down()
+    due = time.time() + 62
+    send_at = datetime.datetime.fromtimestamp(due, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    status, text = stack.request("POST", f"/channels/{patient}/scheduled-messages",
+                                 {"content": "later", "attachments": [], "sendAt": send_at}, m1["token"])
+    check("a message is scheduled in a busy channel", status == 201, (status, text[:200]))
+    later = json.loads(text).get("id")
+    author = stack.events(m1["token"])
+
     # What waits too long is dropped, its author told.
     slow = stack.api("POST", "/channels", {"name": "slow", "ty": "text", "community": community, "sortIndex": 2},
                      owner["token"])["id"]
@@ -195,7 +226,8 @@ def run(stack: Stack) -> None:
     # views the channel, so it hears the queue come into force and go.
     watching = stack.events(m2["token"])
     watching.send({"type": "viewing", "channelIds": [slow]})
-    got = until("it is dropped", lambda: (watching.gather(0.25), not held(m2))[1], 150)
+    got = until("it is dropped", lambda: (keep_down(), author.gather(0.1), watching.gather(0.25), not held(m2))[3],
+                150)
     watching.gather(2.0)
     failures = [e for e in watching.events if e.get("serverEvent") == "heldMessageFailed"]
     check("after two minutes it is dropped", bool(got), held(m2))
@@ -207,6 +239,39 @@ def run(stack: Stack) -> None:
           bool(levels) and levels[0].get("queued") is True, levels[:1])
     check("and that it is no longer once the queue empties", bool(levels) and levels[-1].get("queued") is False,
           levels[-1:])
+
+    # The scheduled message's time came meanwhile.
+    got = until("its time comes",
+                lambda: (keep_down(), author.gather(0.25), [s["status"] for s in scheduled()] == ["waitingForMana"])[2],
+                90)
+    check("a scheduled message whose time comes in a busy channel waits for its mana", bool(got), scheduled())
+    told = [e["scheduled"]["status"] for e in author.events if e.get("serverEvent") == "scheduledMessageChanged"]
+    check("and its author is told so", "waitingForMana" in told, told)
+    check("it is not among the messages their apps show waiting", not held(m1), held(m1))
+    status, text = stack.request("PATCH", f"/users/@me/scheduled-messages/{later}",
+                                 {"sendAt": datetime.datetime.fromtimestamp(time.time() + 3600, datetime.timezone.utc)
+                                  .strftime("%Y-%m-%dT%H:%M:%SZ")}, m1["token"])
+    check("given another time while it waits there, it leaves the queue",
+          status == 200 and json.loads(text).get("status") == "scheduled", (status, text[:200]))
+    author.gather(0.5)
+    stack.api("POST", f"/users/@me/scheduled-messages/{later}/send", token=m1["token"])
+    got = until("sent now, it waits for mana again",
+                lambda: (keep_down(), author.gather(0.25), [s["status"] for s in scheduled()] == ["waitingForMana"])[2],
+                30)
+    check("and sent now, it waits for mana again", bool(got), scheduled())
+    while time.time() < due + 125:
+        keep_down()
+        author.gather(1.0)
+    check("it is not dropped for waiting past two minutes",
+          [s["status"] for s in scheduled()] == ["waitingForMana"], scheduled())
+    check("nor is its author told it failed",
+          not [e for e in author.events if e.get("serverEvent") == "heldMessageFailed"])
+    got = until("it posts", lambda: (author.gather(0.5), "later" in posted_texts(patient))[1], 120)
+    check("and it is posted once the channel can pay for it", bool(got), posted_texts(patient)[-2:])
+    author.gather(1.0)
+    check("leaving what its author has scheduled",
+          scheduled() == [] and any(e.get("serverEvent") == "heldMessagePosted" and e.get("held") == later
+                                    for e in author.events), scheduled())
 
     # Cancelling.
     post(owner, "z" * 150)

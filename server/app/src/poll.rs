@@ -192,7 +192,7 @@ pub async fn create_poll(
                 },
             )
             .await?;
-            return Ok(CreatedPoll::Waiting(held));
+            return Ok(CreatedPoll::Waiting(Box::new(held)));
         }
     }
     // Plugins decide its question and answers as they decide a message, once the creator is
@@ -308,7 +308,7 @@ pub async fn create_poll(
 /// What became of a poll asked for: posted, with its message, or waiting for its channel's mana.
 pub enum CreatedPoll {
     Posted(Box<(message_enum::Poll, message_enum::Message)>),
-    Waiting(crate::message::held::HeldMessage),
+    Waiting(Box<crate::message::held::HeldMessage>),
 }
 
 /// A poll's text as plugins decide it: its question, then each answer on a line of its own.

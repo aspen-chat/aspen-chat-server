@@ -6,6 +6,7 @@ import {
 } from "@aspen/protocol";
 import {
   ChartBarIcon,
+  ClockIcon,
   FileIcon,
   PaperclipIcon,
   PaperPlaneRightIcon,
@@ -53,6 +54,10 @@ import { HeldMessages } from "@/features/messages/HeldMessages";
 import { ManaBar } from "@/features/messages/ManaBar";
 import { TypingIndicator } from "@/features/messages/TypingIndicator";
 import { CreatePollDialog, CreatePollModal } from "@/features/messages/CreatePollDialog";
+import { ScheduleMessageModal } from "@/features/messages/ScheduleMessageDialog";
+import { ScheduledStrip } from "@/features/messages/ScheduledMessages";
+import { decodeCustomEmoji } from "@/features/emoji/customEmoji";
+import { decodeTags } from "@/features/mentions/tags";
 import { MEDIUM_SCREEN, useMediaQuery, TOUCH_ONLY } from "@/features/layout/useMediaQuery";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
@@ -90,6 +95,19 @@ interface Pending {
 
 let nextKey = 1;
 
+/** A file already on the server, as the box holds it for the next message. */
+function pendingOf(attachment: Attachment): Pending {
+  return {
+    key: nextKey++,
+    name: attachment.fileName,
+    mimeType: attachment.mimeType,
+    description: attachment.description ?? "",
+    spoiler: attachment.spoiler ?? false,
+    thumbnail: isImageType(attachment.mimeType) ? (mediaUrl(attachment.downloadUrl) ?? null) : null,
+    state: { kind: "ready", attachment },
+  };
+}
+
 /** The most attachments the server takes in one message (`app::message::MAX_ATTACHMENTS`). */
 const MAX_ATTACHMENTS = 50;
 
@@ -114,7 +132,10 @@ const toolButtonClass =
 /**
  * The message box. Enter sends, Shift+Enter breaks a line. Files chosen with the attach button
  * upload at once and are sent with the next message; a message may be files alone. Text pasted
- * that would take the message past its length limit is attached as a text file instead. A message's
+ * that would take the message past its length limit is attached as a text file instead. The
+ * schedule control sends what the box holds at a time chosen (`ScheduleMessageModal`) rather
+ * than now, and what is scheduled here is counted above the box (`ScheduledStrip`), from where
+ * one may be taken back into the box to be changed. A message's
  * Reply makes the next message a reply to it (`replyIn`), shown in a bar over the box
  * (`ReplyBar`) until it is sent, cancelled, or Escape is pressed in the box. In a thread,
  * `echoTarget` names the parent channel and a checkbox offers to show the reply there too; it
@@ -167,17 +188,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   const [echo, setEcho] = useState(saved?.echo ?? false);
   const [reply, setReply] = useState<Reply | null>(saved?.reply ?? null);
   const [pending, setPending] = useState<Pending[]>(() =>
-    (saved?.attachments ?? []).map((attachment) => ({
-      key: nextKey++,
-      name: attachment.fileName,
-      mimeType: attachment.mimeType,
-      description: attachment.description ?? "",
-      spoiler: attachment.spoiler ?? false,
-      thumbnail: isImageType(attachment.mimeType)
-        ? (mediaUrl(attachment.downloadUrl) ?? null)
-        : null,
-      state: { kind: "ready", attachment },
-    })),
+    (saved?.attachments ?? []).map(pendingOf),
   );
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -210,6 +221,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   const commands = useCommandLine({ channelId, draft, setDraft });
   const wide = useMediaQuery(MEDIUM_SCREEN);
   const [polling, setPolling] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
   const tagging = useTagging({
     channelId,
     draft,
@@ -312,6 +324,8 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     !uploading &&
     length <= MESSAGE_MAX_CHARS &&
     (draft.trim().length > 0 || readyIds.length > 0);
+  // A message is scheduled where it will be posted, so not as the reply that makes a thread.
+  const canSchedule = canSend && !starting;
 
   // Object URLs hold their file's bytes until revoked; release them once no chip shows them.
   const thumbnails = useRef(new Set<string>());
@@ -473,26 +487,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
       if (text.startsWith("/") && sync.store.commands(channelId) === undefined) {
         await sync.loadCommands(channelId).catch(() => undefined);
       }
-      // Changes that have not reached the server yet (one made just as its upload ended, or
-      // one whose saving failed) go before the message that carries their files.
-      await Promise.all(
-        pending.flatMap((p) => {
-          if (p.state.kind !== "ready") {
-            return [];
-          }
-          const record = p.state.attachment;
-          const described = p.description !== (record.description ?? "");
-          const spoiled = p.spoiler !== (record.spoiler ?? false);
-          return described || spoiled
-            ? [
-                sync.updateAttachment(record.id, {
-                  ...(described ? { description: p.description || null } : {}),
-                  ...(spoiled ? { spoiler: p.spoiler } : {}),
-                }),
-              ]
-            : [];
-        }),
-      );
+      await saveFileChanges();
       const prepared = commands.prepare(text, readyIds);
       if (prepared.kind === "refused") {
         setError(prepared.reason);
@@ -518,23 +513,109 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
       } else {
         await sync.sendMessage(channelId, emoji.encode(tagging.encode(text)), readyIds, options);
       }
-      setDraft("");
-      tagging.reset();
-      commands.reset();
-      if (me !== null) {
-        // A box that started a thread gives way to the thread's as soon as the thread is known,
-        // perhaps before it draws again, so what it would keep on going is forgotten now.
-        keep.current = null;
-        writeDraft(me.id, draftKey, null);
-      }
-      setPending([]);
-      setEcho(false);
-      setReply(null);
+      clearBox();
     } catch (e) {
       setError(e instanceof ApiProblemError ? e.message : String(e));
     } finally {
       setSending(false);
     }
+  }
+
+  /**
+   * Schedules what the box holds for `at` and empties the box, as sending it would. What cannot
+   * be scheduled is thrown for the schedule dialog to say: a command, which is run when it is
+   * sent, and a reply also shown in the thread's parent channel.
+   */
+  async function schedule(at: Date) {
+    const text = draft.trim();
+    if (echoTarget !== undefined && echo) {
+      throw new Error(format(m.scheduled.noEcho, { channel: echoTarget }));
+    }
+    if (text.startsWith("/") && sync.store.commands(channelId) === undefined) {
+      await sync.loadCommands(channelId).catch(() => undefined);
+    }
+    const prepared = commands.prepare(text, readyIds);
+    if (prepared.kind !== "message") {
+      throw new Error(prepared.kind === "refused" ? prepared.reason : m.scheduled.noCommands);
+    }
+    await saveFileChanges();
+    await sync.scheduleMessage(
+      channelId,
+      emoji.encode(tagging.encode(text)),
+      readyIds,
+      at,
+      reply === null ? {} : { reply },
+    );
+    clearBox();
+  }
+
+  /**
+   * Takes a scheduled message back into the box to be changed: it is deleted where it waited,
+   * and its text, tags, files, and what it replied to become what the box holds. Refused while
+   * the box holds something else, which this would replace.
+   */
+  async function edit(scheduledId: string) {
+    if (draft.trim() !== "" || pending.length > 0) {
+      throw new Error(m.scheduled.boxInUse);
+    }
+    const { scheduled, attachments } = await sync.unschedule(scheduledId);
+    const roles = community === null ? [] : sync.store.roles(community);
+    const tags = decodeTags(
+      scheduled.content,
+      (id) => sync.store.user(id)?.name,
+      (id) => roles.find((role) => role.id === id)?.name,
+    );
+    setDraft(
+      decodeCustomEmoji(tags.text, community === null ? [] : sync.store.customEmoji(community)),
+    );
+    tagging.restore(tags.picks);
+    setPending(attachments.map(pendingOf));
+    setEcho(false);
+    setReply(
+      scheduled.replyTo == null ? null : { to: scheduled.replyTo, tag: scheduled.tagReplied },
+    );
+    setReplyAsked((asked) => asked + 1);
+  }
+
+  /**
+   * Gives the server the changes to the box's files that have not reached it yet (one made just
+   * as its upload ended, or one whose saving failed), before the message that carries them.
+   */
+  async function saveFileChanges() {
+    await Promise.all(
+      pending.flatMap((p) => {
+        if (p.state.kind !== "ready") {
+          return [];
+        }
+        const record = p.state.attachment;
+        const described = p.description !== (record.description ?? "");
+        const spoiled = p.spoiler !== (record.spoiler ?? false);
+        return described || spoiled
+          ? [
+              sync.updateAttachment(record.id, {
+                ...(described ? { description: p.description || null } : {}),
+                ...(spoiled ? { spoiler: p.spoiler } : {}),
+              }),
+            ]
+          : [];
+      }),
+    );
+  }
+
+  /** Empties the box once what it held is sent or scheduled, and forgets its draft. */
+  function clearBox() {
+    setDraft("");
+    tagging.reset();
+    commands.reset();
+    if (me !== null) {
+      // A box that started a thread gives way to the thread's as soon as the thread is known,
+      // perhaps before it draws again, so what it would keep on going is forgotten now.
+      keep.current = null;
+      writeDraft(me.id, draftKey, null);
+    }
+    setPending([]);
+    setEcho(false);
+    setReply(null);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -556,10 +637,18 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     if (systemPeer !== null) {
       return <SystemNote userId={systemPeer} />;
     }
-    return blockedPeer === null ? (
-      <p className="border-t border-line px-4 py-4 text-sm text-ink-muted">{m.cannotSendHere}</p>
-    ) : (
-      <BlockedNote userId={blockedPeer} />
+    return (
+      <>
+        {/* What was scheduled here while the caller could post is still theirs to delete. */}
+        {!starting && <ScheduledStrip channelId={channelId} standalone />}
+        {blockedPeer === null ? (
+          <p className="border-t border-line px-4 py-4 text-sm text-ink-muted">
+            {m.cannotSendHere}
+          </p>
+        ) : (
+          <BlockedNote userId={blockedPeer} />
+        )}
+      </>
     );
   }
 
@@ -567,10 +656,15 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        void send();
+        // A dialog opened from the box is drawn elsewhere on the page but is the box's child
+        // here, so its form's submit reaches this handler too; only the box's own sends.
+        if (event.target === event.currentTarget) {
+          void send();
+        }
       }}
       className="flex flex-col gap-2 border-t border-line px-4 py-3"
     >
+      {!starting && <ScheduledStrip channelId={channelId} onEdit={edit} />}
       <HeldMessages place={draftKey} />
       {reply !== null && (
         <ReplyBar
@@ -699,9 +793,23 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
             {mayPoll && (
               <CreatePollDialog channelId={channelId} triggerClassName={toolButtonClass} />
             )}
+            {!starting && (
+              <Tooltip text={m.scheduled.open}>
+                <Button
+                  aria-label={m.scheduled.open}
+                  isDisabled={!canSchedule}
+                  onPress={() => {
+                    setScheduling(true);
+                  }}
+                  className={toolButtonClass + " disabled:opacity-50"}
+                >
+                  <ClockIcon size={20} aria-hidden="true" />
+                </Button>
+              </Tooltip>
+            )}
           </>
         ) : (
-          (permissions.has("attachFiles") || mayPoll) && (
+          (permissions.has("attachFiles") || mayPoll || !starting) && (
             // On a narrow screen the box's other controls share one button, leaving it room.
             <MenuTrigger>
               <Button aria-label={m.composerMore} className={toolButtonClass}>
@@ -710,11 +818,14 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
               <Popover className="rounded-md border border-line bg-surface-raised p-1 shadow-lg">
                 <Menu
                   className="min-w-44 outline-none"
+                  disabledKeys={canSchedule ? [] : ["schedule"]}
                   onAction={(key) => {
                     if (key === "attach") {
                       fileInput.current?.click();
                     } else if (key === "poll") {
                       setPolling(true);
+                    } else if (key === "schedule") {
+                      setScheduling(true);
                     }
                   }}
                 >
@@ -730,12 +841,27 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
                       {m.poll.open}
                     </MenuItem>
                   )}
+                  {!starting && (
+                    <MenuItem
+                      id="schedule"
+                      textValue={m.scheduled.open}
+                      className={menuItemClass + " disabled:opacity-50"}
+                    >
+                      <ClockIcon size={18} aria-hidden="true" />
+                      {m.scheduled.open}
+                    </MenuItem>
+                  )}
                 </Menu>
               </Popover>
               <CreatePollModal channelId={channelId} isOpen={polling} onOpenChange={setPolling} />
             </MenuTrigger>
           )
         )}
+        <ScheduleMessageModal
+          isOpen={scheduling}
+          onOpenChange={setScheduling}
+          onSchedule={schedule}
+        />
         <TextField
           aria-label={m.messageLabel}
           value={draft}

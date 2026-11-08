@@ -94,7 +94,7 @@ pub async fn create_poll(
             }
             app::poll::CreatedPoll::Waiting(held) => (
                 StatusCode::ACCEPTED,
-                Json(crate::message::HeldMessage::from(held)),
+                Json(crate::message::HeldMessage::from(*held)),
             )
                 .into_response(),
         },

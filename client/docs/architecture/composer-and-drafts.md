@@ -2,7 +2,7 @@
 
 The message box (`Composer`) is where a user writes and sends messages. This page covers its layout,
 replying to a message, the typing line above it, the length limit, messages held for their previews
-or for a busy channel, the mana bar, and drafts.
+or for a busy channel, messages scheduled for later, the mana bar, and drafts.
 
 ## Where it lives
 
@@ -12,6 +12,7 @@ or for a busy channel, the mana bar, and drafts.
 | Typing line     | `TypingIndicator`, `TypingDots`, `typingSentence`                        |
 | Length counting | `messageLength.ts`, `MessageLengthNote`                                  |
 | Held messages   | `HeldMessages.tsx`                                                       |
+| Scheduling      | `ScheduleMessageDialog.tsx`, `ScheduledMessages.tsx`, `scheduleTimes.ts` |
 | Mana bar        | `ManaBar.tsx`, `manaDrawnAt` (`@aspen/protocol`), `TopSendersDialog.tsx` |
 | Replying        | `ReplyBar`, `composerTargets.ts`; the line above a reply is `ReplyLine`  |
 | Drafts          | `src/features/messages/drafts.ts`                                        |
@@ -20,8 +21,9 @@ or for a busy channel, the mana bar, and drafts.
 
 - The box sits level with its buttons, all 42px tall.
 - Send is an icon (a paper plane), so the box keeps the room.
-- On a narrow screen, the other controls share one + button. Its menu offers attaching a file and
-  making a poll (`CreatePollModal`, which the wide screen's own poll button opens too).
+- On a narrow screen, the other controls share one + button. Its menu offers attaching a file,
+  making a poll (`CreatePollModal`, which the wide screen's own poll button opens too), and
+  scheduling the message (`ScheduleMessageModal`, as the wide screen's clock button does).
 - The user bar (`SidebarFooter`) at the sidebar's foot is at least as tall as the typing line and an
   empty box together (`composer-foot-height` in `styles.css`), at every message text size and
   spacing, so its top rule meets the typing line's in one line.
@@ -226,6 +228,41 @@ A held message's place (`heldPlace`) is one of:
 
 `AspenSync.sendHeldAgain` sends such a first reply with `replyInThread`, making the thread anew (see
 [Threads, DMs, and the system account](threads-and-dms.md#starting-a-thread)).
+
+## Scheduling a message
+
+The clock button (an item of the + menu on a narrow screen) sends what the box holds at a time
+chosen rather than now. The server's side is `docs/architecture/scheduled-messages.md`.
+
+- **When it is offered:** wherever the box sends, but not in a thread not made yet. It is disabled
+  while the box holds nothing to send, as Send is.
+- **Choosing the time** (`ScheduleTimeForm`): an hour from now, tomorrow morning, the coming
+  Monday's morning (left out when tomorrow is that Monday), each with its date and time written out,
+  or a date and time of the reader's own, typed segment by segment in a React Aria `DateField` in
+  the app's language (`@internationalized/date` holds its value; `localDateTime` and `toDate`
+  convert). Mornings are nine o'clock on the reader's clock (`quickTimes`). The time is checked
+  against the server's bounds (`timeProblem`: a minute to two years ahead) as it is submitted.
+- **Scheduling** (`AspenSync.scheduleMessage`) sends the text as Send would, tags and custom emoji
+  written out, with the box's files and what it replies to, and empties the box. A slash command is
+  refused, since a command is run when it is sent, and so is a reply also to be shown in the
+  thread's channel.
+- **What is scheduled here** is counted in one row above the box (`ScheduledStrip`, topic
+  `scheduled:<channelId>`): how many are still to be sent, and apart, in the danger colour with a
+  warning mark, how many could not be. Each count shows only when it is more than none, and with
+  nothing scheduled the row is not drawn. Where the reader may no longer post, the row is still
+  drawn above the note that says so.
+- **The row opens the list** (`ScheduledList`), the soonest first. Each says when it is sent,
+  "Waiting for mana" once its time came in a busy channel, or why it could not be sent, with its
+  text, its files' count, and whether it is a reply. Each can be sent now, given another time (a
+  second step of the same dialog), edited, or deleted; one waiting for mana is due already, so Send
+  now is not offered for it.
+- **Edit** takes the message back into the box (`AspenSync.unschedule`, then the box's own state):
+  it is read with its files' records and deleted on the server, and its text, tags, files, and reply
+  become what the box holds. It is refused while the box already holds something.
+- **The store** (`RecordStore`) holds every scheduled message of the caller's, at most the server's
+  hundred: read at bootstrap, replaced whole by `scheduledMessageChanged`, and let go by
+  `heldMessagePosted`, `heldMessageCancelled`, and `heldMessageFailed`. A request's response fills
+  in only a record the stream has not told of, and never one already posted or deleted.
 
 ## The mana bar
 

@@ -127,7 +127,7 @@ pub async fn invoke_command(
         app::message::held::Posted::Held(held) => {
             return Ok((
                 StatusCode::ACCEPTED,
-                Json(crate::message::HeldMessage::from(held)),
+                Json(crate::message::HeldMessage::from(*held)),
             )
                 .into_response());
         }
