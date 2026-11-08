@@ -5,34 +5,53 @@
  */
 export const overlayLayerClass = "z-100000";
 /** Tailwind class strings shared by the modal dialogs. */
-export const overlayClass =
-  "overlay-inset fixed inset-x-0 top-[calc(var(--title-bar-height)+var(--visible-top))] bottom-(--visible-bottom) flex items-center justify-center bg-black/40 motion-backdrop " +
+const overlayFrameClass =
+  "fixed inset-x-0 top-[calc(var(--title-bar-height)+var(--visible-top))] bottom-(--visible-bottom) flex items-center justify-center bg-black/40 motion-backdrop " +
   overlayLayerClass;
+export const overlayClass = "overlay-inset " + overlayFrameClass;
+/**
+ * The overlay of a modal whose frame is `touchFullScreenClass`: on a touch-only screen it leaves
+ * no margin around the frame, only the notch and home indicator insets.
+ */
+export const fullScreenOverlayClass =
+  "overlay-inset touch-only:overlay-inset-edge " + overlayFrameClass;
 /**
  * The frame every modal is drawn in. It is never taller than the overlay leaves room for, and
  * scrolls within itself when its content is taller than that, as a long form is on a phone;
- * the scroll stays in the dialog rather than passing to the page behind it.
+ * the scroll stays in the dialog rather than passing to the page behind it. Its title row
+ * (`DialogHeading`) stays at the top while it scrolls, drawn on the ground `--modal-ground`
+ * names, which each frame sets to its background (`pinned-title` in `styles.css`).
  */
 // Clipped sideways: the heading's close button reaches a few pixels into the end padding for
 // its tap area, which a scroll container would count as overflow and give a scrollbar for.
 const modalFrameClass =
-  "max-h-full w-full overflow-x-hidden overflow-y-auto overscroll-contain rounded-lg border " +
-  "border-line p-4 shadow-xl outline-none sm:p-5 motion-dialog";
-export const modalClass = modalFrameClass + " bg-surface-raised max-w-md";
+  "modal-frame max-h-full w-full overflow-x-hidden overflow-y-auto overscroll-contain rounded-lg " +
+  "border border-line bg-(--modal-ground) shadow-xl outline-none motion-dialog";
+const raisedGroundClass = "[--modal-ground:var(--color-surface-raised)]";
+const plainGroundClass = "[--modal-ground:var(--color-surface)]";
+export const modalClass = modalFrameClass + " " + raisedGroundClass + " max-w-md";
 /** A modal with room for a list of results beside its controls, such as message search. */
-export const listModalClass = modalFrameClass + " bg-surface-raised max-w-xl";
+export const listModalClass = modalFrameClass + " " + raisedGroundClass + " max-w-xl";
 /** A modal with room for a grid of choices, such as the screen share picker. */
-export const wideModalClass = modalFrameClass + " bg-surface-raised max-w-3xl";
+export const wideModalClass = modalFrameClass + " " + raisedGroundClass + " max-w-3xl";
 /**
  * A modal of several sections, such as Sign-in and security, each drawn as a plane
  * (`planeClass`) raised off the modal's plainer ground, so the eye finds where one ends and the
  * next begins.
  */
-export const planesModalClass = modalFrameClass + " bg-surface max-w-md";
+export const planesModalClass = modalFrameClass + " " + plainGroundClass + " max-w-md";
 /** The same, wider, for a modal that lays its planes out side by side, as Community settings. */
-export const widePlanesModalClass = modalFrameClass + " bg-surface max-w-3xl";
+export const widePlanesModalClass = modalFrameClass + " " + plainGroundClass + " max-w-3xl";
 /** The same, wide enough for the planes to stand in three columns (`PlaneColumns`), as Settings. */
-export const columnPlanesModalClass = modalFrameClass + " bg-surface max-w-6xl";
+export const columnPlanesModalClass = modalFrameClass + " " + plainGroundClass + " max-w-6xl";
+/**
+ * Added to a frame class for a modal that fills a touch-only screen edge to edge, with
+ * `fullScreenOverlayClass` on its overlay: one that holds enough to fill a phone's screen
+ * anyway, such as Settings or a list of results, which a margin and rounded corners would only
+ * take room from. On any other screen it is the frame it is added to.
+ */
+export const touchFullScreenClass =
+  "touch-only:h-full touch-only:max-w-none touch-only:rounded-none touch-only:border-0";
 const planeLookClass = "break-inside-avoid rounded-lg border bg-surface-raised shadow-sm";
 const planeShapeClass = planeLookClass + " px-3 py-1.5";
 /** A plane's look alone, for an element that lays out its own contents, such as a list. */

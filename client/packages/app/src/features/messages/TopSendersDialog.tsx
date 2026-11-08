@@ -9,9 +9,10 @@ import { NEW_BAN, type BanChoice } from "@/features/community-settings/banChoice
 import { useMemberModeration } from "@/features/community-settings/roleAssignment";
 import {
   dialogClass,
+  fullScreenOverlayClass,
   listModalClass,
-  overlayClass,
   secondaryButtonClass,
+  touchFullScreenClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { displayNameOf } from "@/features/users/profile";
@@ -79,9 +80,9 @@ export function TopSendersDialog({
         isOpen={isOpen}
         onOpenChange={onOpenChange}
         isDismissable
-        className={overlayClass}
+        className={fullScreenOverlayClass}
       >
-        <Modal className={listModalClass}>
+        <Modal className={listModalClass + " " + touchFullScreenClass}>
           <Dialog className={dialogClass}>
             <DialogHeading>
               {format(m.mana.topSendersHeading, { channel: channel?.name ?? "" })}

@@ -19,7 +19,12 @@ import {
 } from "@/features/auth/styles";
 import { BanFields } from "@/features/community-settings/BanFields";
 import { NEW_BAN, banRequest, type BanChoice } from "@/features/community-settings/banChoice";
-import { dialogClass, overlayClass, wideModalClass } from "@/features/invites/dialog";
+import {
+  dialogClass,
+  fullScreenOverlayClass,
+  touchFullScreenClass,
+  wideModalClass,
+} from "@/features/invites/dialog";
 import { ChoiceCheckbox } from "@/features/layout/choices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { toast } from "@/features/layout/toast";
@@ -116,9 +121,9 @@ export function ResolveDialog({
       isOpen={isOpen}
       onOpenChange={onOpenChange}
       isDismissable
-      className={overlayClass}
+      className={fullScreenOverlayClass}
     >
-      <Modal className={wideModalClass}>
+      <Modal className={wideModalClass + " " + touchFullScreenClass}>
         <Dialog className={dialogClass}>
           <DialogHeading>{format(m.reports.resolveHeading, { name: subjectName })}</DialogHeading>
           <p className="text-sm text-ink-muted">{m.reports.resolveHint}</p>

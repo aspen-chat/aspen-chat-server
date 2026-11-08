@@ -54,12 +54,13 @@ import {
   dangerButtonClass,
   dangerPlaneClass,
   dialogClass,
+  fullScreenOverlayClass,
   optionClass,
-  overlayClass,
   planeClass,
   secondaryButtonClass,
   selectButtonClass,
   selectPopoverClass,
+  touchFullScreenClass,
   widePlanesModalClass,
 } from "@/features/invites/dialog";
 import { ChoiceCheckbox } from "@/features/layout/choices";
@@ -128,7 +129,7 @@ export function CommunitySettingsModal({
 }) {
   return (
     <ModalOverlay
-      className={overlayClass}
+      className={fullScreenOverlayClass}
       isDismissable
       {...(isOpen === undefined ? {} : { isOpen })}
       {...(onOpenChange === undefined ? {} : { onOpenChange })}
@@ -149,7 +150,13 @@ function CommunitySettingsFrame({ community }: { community: Community }) {
   const pluginTab = access?.has("managePlugins") === true;
   const [tab, setTab] = useState<Key>("overview");
   return (
-    <Modal className={tab === "roles" ? columnPlanesModalClass : widePlanesModalClass}>
+    <Modal
+      className={
+        (tab === "roles" ? columnPlanesModalClass : widePlanesModalClass) +
+        " " +
+        touchFullScreenClass
+      }
+    >
       <Dialog className={dialogClass}>
         <DialogHeading>
           {format(m.communitySettings.heading, { community: community.name })}

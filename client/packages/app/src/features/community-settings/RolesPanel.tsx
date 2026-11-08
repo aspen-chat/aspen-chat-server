@@ -78,7 +78,7 @@ export function RolesPanel({ communityId }: { communityId: string }) {
 
   return (
     <div className="flex flex-col gap-4 md:flex-row">
-      <div className="flex flex-col gap-2 md:sticky md:top-0 md:w-56 md:shrink-0 md:self-start">
+      <div className="flex flex-col gap-2 md:sticky md:top-(--pinned-title-height,0px) md:w-56 md:shrink-0 md:self-start">
         <GridList
           aria-label={m.roles.listLabel}
           items={highestFirst}

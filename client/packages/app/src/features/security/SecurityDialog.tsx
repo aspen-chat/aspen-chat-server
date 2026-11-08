@@ -3,9 +3,10 @@ import { Button, Dialog, DialogTrigger, Modal, ModalOverlay } from "react-aria-c
 import { usePasskeyTransport } from "@/features/auth/passkeyTransport";
 import {
   dialogClass,
-  overlayClass,
+  fullScreenOverlayClass,
   planesModalClass,
   secondaryButtonClass,
+  touchFullScreenClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useMessages } from "@/i18n/context";
@@ -21,8 +22,8 @@ export function SecurityDialog() {
         <ShieldCheckIcon size={16} aria-hidden="true" />
         {m.security.open}
       </Button>
-      <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={planesModalClass}>
+      <ModalOverlay isDismissable className={fullScreenOverlayClass}>
+        <Modal className={planesModalClass + " " + touchFullScreenClass}>
           <Dialog className={dialogClass}>
             <DialogHeading>{m.security.title}</DialogHeading>
             <SecurityPanel transport={transport} />
