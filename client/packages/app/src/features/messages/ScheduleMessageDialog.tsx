@@ -25,6 +25,7 @@ import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog
 import { RadioMark, choiceClass } from "@/features/layout/choices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import {
+  describeTimeProblem,
   localDateTime,
   MAX_AHEAD_MS,
   MIN_AHEAD_MS,
@@ -35,7 +36,6 @@ import {
 } from "@/features/messages/scheduleTimes";
 import { useMessages } from "@/i18n/context";
 import { useDateFormat } from "@/i18n/format";
-import { format } from "@/i18n/messages";
 
 const CUSTOM = "custom";
 
@@ -46,21 +46,24 @@ const segmentClass =
 
 /**
  * The form that picks when a message is sent: one of the times offered outright (`quickTimes`)
- * or a date and time of the reader's own, on their clock. `onSubmit` is given the time and does
- * what it is for (scheduling what is in the message box, giving a scheduled message another
- * time); what it throws is shown here, and the form stays for another try. With `onBack` it is
- * a later step of its dialog.
+ * or a date and time of the reader's own, on their clock. With `initial`, a time already chosen,
+ * the form opens on the reader's own choice holding it, for it to be changed. `onSubmit` is
+ * given the time and does what it is for (setting the message box to schedule what it holds,
+ * giving a scheduled message another time); what it throws is shown here, and the form stays
+ * for another try. With `onBack` it is a later step of its dialog.
  */
 export function ScheduleTimeForm({
   heading,
   submitLabel,
   pendingLabel,
+  initial,
   onSubmit,
   onBack,
 }: {
   heading: string;
   submitLabel: string;
   pendingLabel: string;
+  initial?: Date;
   onSubmit: (at: Date) => Promise<void>;
   onBack?: () => void;
 }) {
@@ -70,8 +73,12 @@ export function ScheduleTimeForm({
   // reader; what is chosen is checked against the clock again as it is submitted.
   const [opened] = useState(() => new Date());
   const [quick] = useState(() => quickTimes(opened));
-  const [choice, setChoice] = useState<string>(quick[0]?.key ?? CUSTOM);
-  const [custom, setCustom] = useState<CalendarDateTime | null>(null);
+  const [choice, setChoice] = useState<string>(
+    initial === undefined ? (quick[0]?.key ?? CUSTOM) : CUSTOM,
+  );
+  const [custom, setCustom] = useState<CalendarDateTime | null>(() =>
+    initial === undefined ? null : localDateTime(initial),
+  );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -86,11 +93,7 @@ export function ScheduleTimeForm({
     }
     const problem = timeProblem(chosen, new Date());
     if (problem !== null) {
-      setError(
-        problem === "tooSoon"
-          ? format(m.scheduled.tooSoon, { minutes: MIN_AHEAD_MS / 60_000 })
-          : format(m.scheduled.tooFar, { years: Math.floor(MAX_AHEAD_MS / (365 * 86_400_000)) }),
-      );
+      setError(describeTimeProblem(m, problem));
       return;
     }
     setPending(true);
@@ -179,17 +182,20 @@ export function ScheduleTimeForm({
 }
 
 /**
- * The schedule form in a modal, opened by the message box's schedule control. `onSchedule`
- * schedules what the box holds for the time chosen; the modal closes once it has.
+ * The schedule form in a modal, opened by the message box's schedule control. `onSchedule` is
+ * given the time chosen, which the box then schedules its next message for (`ScheduleBar`), and
+ * the modal closes. With `initial`, the time the box already holds, the form opens on it.
  */
 export function ScheduleMessageModal({
   isOpen,
   onOpenChange,
+  initial,
   onSchedule,
 }: {
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
-  onSchedule: (at: Date) => Promise<void>;
+  initial?: Date;
+  onSchedule: (at: Date) => void;
 }) {
   const m = useMessages();
   return (
@@ -204,11 +210,13 @@ export function ScheduleMessageModal({
           {({ close }) => (
             <ScheduleTimeForm
               heading={m.scheduled.heading}
-              submitLabel={m.scheduled.schedule}
-              pendingLabel={m.scheduled.scheduling}
-              onSubmit={async (at) => {
-                await onSchedule(at);
+              submitLabel={m.scheduled.setTime}
+              pendingLabel={m.scheduled.setTime}
+              {...(initial === undefined ? {} : { initial })}
+              onSubmit={(at) => {
+                onSchedule(at);
                 close();
+                return Promise.resolve();
               }}
             />
           )}

@@ -17,6 +17,13 @@ describe("drafts", () => {
     expect(readDraft("kate", "general")).toBeNull();
   });
 
+  it("keeps the time a draft is to be sent at, only with text or files", () => {
+    writeDraft("kate", "general", { ...draft("later"), scheduledFor: 1_700_000_000_000 });
+    expect(readDraft("kate", "general")?.scheduledFor).toBe(1_700_000_000_000);
+    writeDraft("kate", "general", { ...draft(""), scheduledFor: 1_700_000_000_000 });
+    expect(readDraft("kate", "general")).toBeNull();
+  });
+
   it("keeps a draft that is only files", () => {
     const file = { id: "a" } as never;
     writeDraft("kate", "general", { ...draft(""), attachments: [file] });

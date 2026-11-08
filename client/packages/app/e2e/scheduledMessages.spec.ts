@@ -1,12 +1,13 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
-import { general, settleAnimations, signInToWorld } from "./world";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import { general, settleAnimations, signInToWorld, thread } from "./world";
 
 /**
  * Scheduling a message for later, against the stubbed world: the message box's schedule control
- * and its dialog, the row above the box that counts what is scheduled there (and, apart and in
- * the danger colour, what could not be sent), and the list it opens, from which one is sent now,
- * given another time, taken back into the box, or deleted.
+ * and its dialog, the bar over the box that holds the time chosen until the message is sent, the
+ * row above the box that counts what is scheduled there (and, apart and in the danger colour,
+ * what could not be sent), and the list it opens, from which one is sent now, given another
+ * time, taken back into the box, or deleted.
  */
 
 interface Scheduled {
@@ -44,10 +45,11 @@ async function withScheduled(page: Page, held: Scheduled[], asked: Asked[]) {
     if (method === "GET" && path === "/users/@me/scheduled-messages") {
       return route.fulfill({ json: held });
     }
-    if (method === "POST" && path === `/channels/${general}/scheduled-messages`) {
+    const posted = /^\/channels\/([^/]+)\/scheduled-messages$/.exec(path);
+    if (method === "POST" && posted?.[1] !== undefined) {
       const made: Scheduled = {
         id: scheduledId(held.length + 1),
-        channelId: general,
+        channelId: posted[1],
         content: body?.content ?? "",
         attachments: [],
         replyTo: null,
@@ -99,19 +101,63 @@ async function openGeneral(page: Page) {
   await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible();
 }
 
-/** The box's schedule control: its own button on a wide screen, an item of the + menu on a narrow one. */
-async function scheduleControl(page: Page) {
-  const button = page.getByRole("button", { name: "Schedule message" });
+/**
+ * The schedule control of the box in `scope` (the page's main box unless given): its own button
+ * on a wide screen, an item of the + menu on a narrow one.
+ */
+async function scheduleControl(page: Page, scope: Page | Locator = page) {
+  const button = scope.getByRole("button", { name: "Schedule message" });
   if (await button.isVisible()) {
     return button;
   }
-  await page
+  await scope
     .getByRole("button", { name: "Add a file or a poll, or schedule this message" })
     .click();
   return page.getByRole("menuitem", { name: "Schedule message" });
 }
 
+/** Opens the channel named, from the channel list, which a phone goes back to first. */
+async function openChannel(page: Page, name: string) {
+  const back = page.getByRole("link", { name: "Back to channels" });
+  if (await back.isVisible()) {
+    await back.click();
+  }
+  await page.getByText(name, { exact: true }).click();
+}
+
+const scheduled = (asked: Asked[]) => asked.filter((request) => request.method === "POST");
+
 const strip = (page: Page) => page.locator("[data-scheduled-strip]");
+const bar = (page: Page) => page.locator("[data-schedule-bar]");
+
+/** Opens the schedule dialog of the box in `scope`, settled, so its choices take a press. */
+async function openSchedule(page: Page, scope: Page | Locator = page) {
+  await (await scheduleControl(page, scope)).click();
+  const dialog = page.getByRole("dialog", { name: "Schedule message" });
+  await expect(dialog).toBeVisible();
+  await settleAnimations(page);
+  return dialog;
+}
+
+/** Opens the schedule dialog of the box in `scope` and takes the time it offers first, an hour from now. */
+async function setTime(page: Page, scope: Page | Locator = page) {
+  const dialog = await openSchedule(page, scope);
+  await dialog.getByRole("button", { name: "Set time", exact: true }).click();
+  await expect(dialog).toBeHidden();
+}
+
+/**
+ * Sends what the box in `scope` holds as a person would: Enter with a keyboard, the Schedule
+ * button on a phone, where Enter breaks a line.
+ */
+async function sendScheduled(page: Page, isMobile: boolean, scope: Page | Locator = page) {
+  if (isMobile) {
+    await scope.getByRole("button", { name: "Schedule", exact: true }).click();
+  } else {
+    await scope.getByRole("textbox", { name: "Message" }).focus();
+    await page.keyboard.press("Enter");
+  }
+}
 
 function failedOne(n: number): Scheduled {
   return {
@@ -136,7 +182,7 @@ async function audit(page: Page): Promise<string[]> {
   );
 }
 
-test("a message is scheduled from the box and counted above it", async ({ page }) => {
+test("a message is scheduled from the box and counted above it", async ({ page, isMobile }) => {
   const held: Scheduled[] = [];
   const asked: Asked[] = [];
   await signInToWorld(page, (p) => withScheduled(p, held, asked));
@@ -148,52 +194,76 @@ test("a message is scheduled from the box and counted above it", async ({ page }
   });
   await openGeneral(page);
   await expect(strip(page)).toHaveCount(0);
-
-  // With nothing written there is nothing to schedule.
-  const empty = await scheduleControl(page);
-  await expect(empty).toBeDisabled();
-  await page.keyboard.press("Escape");
-
   const box = page.getByRole("textbox", { name: "Message" });
-  await box.fill("see you tomorrow");
-  await (await scheduleControl(page)).click();
-  const dialog = page.getByRole("dialog", { name: "Schedule message" });
-  await expect(dialog).toBeVisible();
+  const send = page.getByRole("button", { name: "Send", exact: true });
+  const scheduleSend = page.getByRole("button", { name: "Schedule", exact: true });
+
+  // A time is chosen before anything is written, and shown over the box until the message is
+  // sent; Send becomes Schedule meanwhile. The bar's X sends now after all.
+  const dialog = await openSchedule(page);
   await expect(dialog.getByRole("radio", { name: /In an hour/ })).toBeChecked();
   expect(await audit(page)).toEqual([]);
   await dialog.getByRole("radio", { name: /Tomorrow morning/ }).check({ force: true });
-  await dialog.getByRole("button", { name: "Schedule", exact: true }).click();
+  await dialog.getByRole("button", { name: "Set time", exact: true }).click();
   await expect(dialog).toBeHidden();
+  await expect(bar(page)).toContainText("Scheduling a message for");
+  await expect(scheduleSend).toBeVisible();
+  await expect(send).toHaveCount(0);
+  expect(scheduled(asked)).toEqual([]);
+  expect(await audit(page)).toEqual([]);
+  await bar(page).getByRole("button", { name: "Don't schedule" }).click();
+  await expect(bar(page)).toHaveCount(0);
+  await expect(send).toBeVisible();
+  await expect(box).toBeFocused();
+
+  // Chosen again with the message written, the dialog opens on the time already held; Enter
+  // then schedules rather than sends.
+  await box.fill("see you tomorrow");
+  await openSchedule(page);
+  await dialog.getByRole("radio", { name: /Tomorrow morning/ }).check({ force: true });
+  await dialog.getByRole("button", { name: "Set time", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await openSchedule(page);
+  await expect(dialog.getByRole("radio", { name: "Another time" })).toBeChecked();
+  const expectedTime = await page.evaluate(() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(9, 0, 0, 0);
+    return { iso: tomorrow.toISOString(), day: tomorrow.getDate() };
+  });
+  await expect(
+    dialog.getByRole("group", { name: "Date and time" }).getByRole("spinbutton", { name: /^day/ }),
+  ).toHaveText(String(expectedTime.day));
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(bar(page)).toBeVisible();
+  await sendScheduled(page, isMobile);
 
   // Sent as written, for nine tomorrow morning on the reader's own clock, and the box is empty.
   const posted = asked.find((request) => request.method === "POST");
   expect(posted?.body?.content).toBe("see you tomorrow");
-  const expected = await page.evaluate(() => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(9, 0, 0, 0);
-    return tomorrow.toISOString();
-  });
-  expect(posted?.body?.sendAt).toBe(expected);
+  expect(posted?.body?.sendAt).toBe(expectedTime.iso);
   await expect(box).toHaveValue("");
+  await expect(bar(page)).toHaveCount(0);
+  await expect(send).toBeVisible();
   await expect(strip(page)).toContainText("1 message scheduled here");
   await expect(page.locator("[data-scheduled-failures]")).toHaveCount(0);
-  // Scheduled, not also sent: the dialog's form is not the box's.
+  // Scheduled, not also sent.
   expect(sent).toEqual([]);
   await expect(page.getByText("see you tomorrow")).toHaveCount(0);
 });
 
-test("a time of the reader's own is checked before it is asked for", async ({ page }) => {
+test("a time of the reader's own is checked before it is asked for", async ({ page, isMobile }) => {
   const held: Scheduled[] = [];
   const asked: Asked[] = [];
   await signInToWorld(page, (p) => withScheduled(p, held, asked));
   await openGeneral(page);
-  await page.getByRole("textbox", { name: "Message" }).fill("much later");
-  await (await scheduleControl(page)).click();
-  const dialog = page.getByRole("dialog", { name: "Schedule message" });
+  const box = page.getByRole("textbox", { name: "Message" });
+  await box.fill("much later");
+  const dialog = await openSchedule(page);
   await dialog.getByRole("radio", { name: "Another time" }).check({ force: true });
   const field = dialog.getByRole("group", { name: "Date and time" });
-  const submit = dialog.getByRole("button", { name: "Schedule", exact: true });
+  const submit = dialog.getByRole("button", { name: "Set time", exact: true });
   await expect(submit).toBeDisabled();
 
   // Typed segment by segment, as the app's English writes a date: month, day, year, then the
@@ -228,7 +298,10 @@ test("a time of the reader's own is checked before it is asked for", async ({ pa
   await type(new Date(chosen.time));
   await submit.click();
   await expect(dialog).toBeHidden();
-  expect(asked.find((request) => request.method === "POST")?.body?.sendAt).toBe(chosen.iso);
+  await expect(bar(page)).toBeVisible();
+  await sendScheduled(page, isMobile);
+  await expect(bar(page)).toHaveCount(0);
+  expect(scheduled(asked)[0]?.body?.sendAt).toBe(chosen.iso);
 });
 
 test("what could not be sent is counted apart, in the danger colour", async ({ page }) => {
@@ -254,11 +327,8 @@ test("what could not be sent is counted apart, in the danger colour", async ({ p
 
   // One more scheduled: both counts, each its own.
   await page.getByRole("textbox", { name: "Message" }).fill("and another");
-  await (await scheduleControl(page)).click();
-  await page
-    .getByRole("dialog", { name: "Schedule message" })
-    .getByRole("button", { name: "Schedule", exact: true })
-    .click();
+  await setTime(page);
+  await page.getByRole("button", { name: "Schedule", exact: true }).click();
   await expect(strip(page)).toContainText("1 message scheduled here");
   await expect(failures).toHaveText("1 could not be sent");
   expect(await audit(page)).toEqual([]);
@@ -327,9 +397,17 @@ test("the list sends one now, gives one another time, and deletes one", async ({
   await expect(strip(page)).toHaveCount(0);
 });
 
-test("editing takes a scheduled message back into the box", async ({ page }) => {
+test("editing takes a scheduled message back into the box, its time with it", async ({ page }) => {
+  const tomorrow = new Date(Date.now() + 86_400_000);
   const held: Scheduled[] = [
-    { ...failedOne(1), content: "a first draft", status: "scheduled", failure: null },
+    {
+      ...failedOne(1),
+      content: "a first draft",
+      status: "scheduled",
+      failure: null,
+      sendAt: tomorrow.toISOString(),
+    },
+    { ...failedOne(2), content: "too late now" },
   ];
   const asked: Asked[] = [];
   await signInToWorld(page, (p) => withScheduled(p, held, asked));
@@ -340,14 +418,15 @@ test("editing takes a scheduled message back into the box", async ({ page }) => 
   await box.fill("already writing");
   await strip(page).click();
   const dialog = page.getByRole("dialog", { name: "Scheduled messages" });
-  await dialog.getByRole("button", { name: "Edit" }).click();
+  const row = (n: number) => dialog.locator(`[data-scheduled-message="${scheduledId(n)}"]`);
+  await row(1).getByRole("button", { name: "Edit" }).click();
   await expect(dialog.getByRole("alert")).toContainText("already holds a message");
   expect(asked.some((request) => request.method === "DELETE")).toBe(false);
   await page.keyboard.press("Escape");
 
   await box.fill("");
   await strip(page).click();
-  await dialog.getByRole("button", { name: "Edit" }).click();
+  await row(1).getByRole("button", { name: "Edit" }).click();
   await expect(dialog).toBeHidden();
   await expect(box).toHaveValue("a first draft");
   expect(
@@ -355,5 +434,63 @@ test("editing takes a scheduled message back into the box", async ({ page }) => 
       .filter((request) => request.path.endsWith(scheduledId(1)))
       .map((request) => request.method),
   ).toEqual(["GET", "DELETE"]);
+  // Its time is held over the box, so sending schedules it again.
+  await expect(bar(page)).toContainText("Scheduling a message for");
+  await expect(bar(page)).toContainText(String(tomorrow.getDate()));
+  await expect(page.getByRole("button", { name: "Schedule", exact: true })).toBeVisible();
+  await bar(page).getByRole("button", { name: "Don't schedule" }).click();
+  await box.fill("");
+
+  // A failed one's time has passed, so none is held: it is sent now or given a time.
+  await strip(page).click();
+  await row(2).getByRole("button", { name: "Edit" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(box).toHaveValue("too late now");
+  await expect(bar(page)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
   await expect(strip(page)).toHaveCount(0);
+});
+
+test("a time waits with the draft, and a refusal leaves it", async ({ page, isMobile }) => {
+  const held: Scheduled[] = [];
+  const asked: Asked[] = [];
+  await signInToWorld(page, (p) => withScheduled(p, held, asked));
+  await openGeneral(page);
+  const box = page.getByRole("textbox", { name: "Message" });
+  await box.fill("back in a moment");
+  await setTime(page);
+  await expect(bar(page)).toBeVisible();
+
+  // Kept with the draft: still there on coming back to the channel.
+  await openChannel(page, "roadmap");
+  await expect(box).toHaveAttribute("aria-placeholder", "Message #roadmap");
+  await expect(bar(page)).toHaveCount(0);
+  await openChannel(page, "general");
+  await expect(box).toHaveValue("back in a moment");
+  await expect(bar(page)).toBeVisible();
+  await bar(page).getByRole("button", { name: "Don't schedule" }).click();
+  await box.fill("");
+
+  // In a thread, a reply also shown in the channel cannot be scheduled: Enter says so over the
+  // box and the time stays, for the reader to turn that off and try again.
+  await page
+    .getByRole("link", { name: /^View thread/ })
+    .first()
+    .click();
+  const panel = page.locator("section[aria-label='Thread']");
+  const threadBox = panel.getByRole("textbox", { name: "Message" });
+  await threadBox.fill("one more thing");
+  await panel.getByRole("checkbox", { name: /^Also send to/ }).check();
+  await setTime(page, panel);
+  await sendScheduled(page, isMobile, panel);
+  await expect(panel.getByRole("alert")).toContainText("can't also be shown in");
+  await expect(panel.locator("[data-schedule-bar]")).toBeVisible();
+  await expect(threadBox).toHaveValue("one more thing");
+  expect(scheduled(asked)).toEqual([]);
+  await panel.getByRole("checkbox", { name: /^Also send to/ }).uncheck();
+  await sendScheduled(page, isMobile, panel);
+  await expect(threadBox).toHaveValue("");
+  const posted = scheduled(asked)[0];
+  expect(posted?.path).toBe(`/channels/${thread}/scheduled-messages`);
+  expect(posted?.body?.content).toBe("one more thing");
 });

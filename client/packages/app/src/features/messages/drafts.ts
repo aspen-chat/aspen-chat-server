@@ -25,6 +25,8 @@ export interface Draft {
   readonly echo: boolean;
   /** The message it replies to, kept with what was written. */
   readonly reply?: Reply;
+  /** When it is to be sent, as epoch milliseconds, while the box is set to schedule it. */
+  readonly scheduledFor?: number;
   readonly savedAt: number;
 }
 

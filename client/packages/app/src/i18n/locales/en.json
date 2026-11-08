@@ -1624,7 +1624,7 @@
     "tooSoon": "Choose a time at least {minutes, plural, one {# minute} other {# minutes}} from now.",
     "tooFar": "Choose a time within {years, plural, one {# year} other {# years}} of now.",
     "schedule": "Schedule",
-    "scheduling": "Scheduling…",
+    "setTime": "Set time",
     "noCommands": "A command can't be scheduled. Send it now, or schedule a message instead.",
     "noEcho": "A scheduled reply can't also be shown in {channel}. Turn that off, then schedule it.",
     "count": "{count, plural, one {# message scheduled here} other {# messages scheduled here}}",
@@ -1643,7 +1643,9 @@
     "changing": "Changing…",
     "edit": "Edit",
     "delete": "Delete",
-    "boxInUse": "The message box already holds a message. Send or clear it, then edit this one."
+    "boxInUse": "The message box already holds a message. Send or clear it, then edit this one.",
+    "schedulingFor": "Scheduling a message for {time}",
+    "cancel": "Don't schedule"
   },
   "playVideo": "Play {title}",
   "audio": {

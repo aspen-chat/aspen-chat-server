@@ -1624,7 +1624,7 @@
     "tooSoon": "Elige una hora al menos {minutes, plural, one {# minuto} other {# minutos}} después de ahora.",
     "tooFar": "Elige una hora dentro de {years, plural, one {# año} other {# años}} a partir de ahora.",
     "schedule": "Programar",
-    "scheduling": "Programando…",
+    "setTime": "Fijar hora",
     "noCommands": "Un comando no se puede programar. Envíalo ahora, o programa un mensaje.",
     "noEcho": "Una respuesta programada no se puede mostrar también en {channel}. Desactiva esa opción y luego prográmala.",
     "count": "{count, plural, one {# mensaje programado aquí} other {# mensajes programados aquí}}",
@@ -1643,7 +1643,9 @@
     "changing": "Cambiando…",
     "edit": "Editar",
     "delete": "Eliminar",
-    "boxInUse": "El cuadro de mensaje ya tiene un mensaje. Envíalo o bórralo, y luego edita este."
+    "boxInUse": "El cuadro de mensaje ya tiene un mensaje. Envíalo o bórralo, y luego edita este.",
+    "schedulingFor": "Programando un mensaje para {time}",
+    "cancel": "No programar"
   },
   "playVideo": "Reproducir {title}",
   "audio": {

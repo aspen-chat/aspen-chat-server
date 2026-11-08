@@ -9,7 +9,8 @@ import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { formatNodes } from "@/i18n/formatNodes";
 
-const barButtonClass =
+/** A control at the end of a bar over the message box (`ReplyBar`, `ScheduleBar`). */
+export const barButtonClass =
   "flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-ink-muted outline-none " +
   "hover:bg-surface-hover hover:text-ink pressed:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50 tap-target";
 

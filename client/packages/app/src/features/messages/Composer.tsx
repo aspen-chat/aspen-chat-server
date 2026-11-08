@@ -58,7 +58,9 @@ import { ManaBar } from "@/features/messages/ManaBar";
 import { TypingIndicator } from "@/features/messages/TypingIndicator";
 import { CreatePollDialog, CreatePollModal } from "@/features/messages/CreatePollDialog";
 import { ScheduleMessageModal } from "@/features/messages/ScheduleMessageDialog";
+import { ScheduleBar } from "@/features/messages/ScheduleBar";
 import { ScheduledStrip } from "@/features/messages/ScheduledMessages";
+import { describeTimeProblem, timeProblem } from "@/features/messages/scheduleTimes";
 import { decodeCustomEmoji } from "@/features/emoji/customEmoji";
 import { decodeTags } from "@/features/mentions/tags";
 import { MEDIUM_SCREEN, useMediaQuery, TOUCH_ONLY } from "@/features/layout/useMediaQuery";
@@ -138,9 +140,11 @@ const openToolButtonClass = toolButtonShape + " border-accent text-accent";
  * The message box. Enter sends, Shift+Enter breaks a line. Files chosen with the attach button
  * upload at once and are sent with the next message; a message may be files alone. Text pasted
  * that would take the message past its length limit is attached as a text file instead. The
- * schedule control sends what the box holds at a time chosen (`ScheduleMessageModal`) rather
- * than now, and what is scheduled here is counted above the box (`ScheduledStrip`), from where
- * one may be taken back into the box to be changed. A message's
+ * schedule control chooses a time (`ScheduleMessageModal`), shown in a bar over the box
+ * (`ScheduleBar`) until the next message is sent, which then is scheduled for that time rather
+ * than posted; the bar's X sends now after all, and the control opens the dialog on the time
+ * to change it. What is scheduled here is counted above the box (`ScheduledStrip`), from where
+ * one may be taken back into the box to be changed, its time with it. A message's
  * Reply makes the next message a reply to it (`replyIn`), shown in a bar over the box
  * (`ReplyBar`) until it is sent, cancelled, or Escape is pressed in the box. In a thread,
  * `echoTarget` names the parent channel and a checkbox offers to show the reply there too; it
@@ -192,6 +196,9 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   const [draft, setDraft] = useState(saved?.text ?? "");
   const [echo, setEcho] = useState(saved?.echo ?? false);
   const [reply, setReply] = useState<Reply | null>(saved?.reply ?? null);
+  const [scheduledFor, setScheduledFor] = useState<Date | null>(
+    saved?.scheduledFor === undefined ? null : new Date(saved.scheduledFor),
+  );
   const [pending, setPending] = useState<Pending[]>(() =>
     (saved?.attachments ?? []).map(pendingOf),
   );
@@ -274,6 +281,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
       attachments: pending.flatMap((p) => (p.state.kind === "ready" ? [p.state.attachment] : [])),
       echo,
       ...(reply === null ? {} : { reply }),
+      ...(scheduledFor === null ? {} : { scheduledFor: scheduledFor.getTime() }),
     };
     noteDraft(me.id, draftKey, current);
     keep.current = () => {
@@ -285,7 +293,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     return () => {
       clearTimeout(timer);
     };
-  }, [draft, pending, echo, reply, tagging.picks]);
+  }, [draft, pending, echo, reply, scheduledFor, tagging.picks]);
   useEffect(() => {
     const flush = () => keep.current?.();
     window.addEventListener("pagehide", flush);
@@ -331,8 +339,6 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     !uploading &&
     length <= MESSAGE_MAX_CHARS &&
     (draft.trim().length > 0 || readyIds.length > 0);
-  // A message is scheduled where it will be posted, so not as the reply that makes a thread.
-  const canSchedule = canSend && !starting;
 
   // Object URLs hold their file's bytes until revoked; release them once no chip shows them.
   const thumbnails = useRef(new Set<string>());
@@ -494,6 +500,10 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
       if (text.startsWith("/") && sync.store.commands(channelId) === undefined) {
         await sync.loadCommands(channelId).catch(() => undefined);
       }
+      if (scheduledFor !== null) {
+        await schedule(text, scheduledFor);
+        return;
+      }
       await saveFileChanges();
       const prepared = commands.prepare(text, readyIds);
       if (prepared.kind === "refused") {
@@ -529,17 +539,19 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   }
 
   /**
-   * Schedules what the box holds for `at` and empties the box, as sending it would. What cannot
-   * be scheduled is thrown for the schedule dialog to say: a command, which is run when it is
-   * sent, and a reply also shown in the thread's parent channel.
+   * Schedules `text`, the box's trimmed draft, with its files for `at`, and empties the box as
+   * sending it would. What cannot be scheduled is thrown for `send` to say, the bar staying so
+   * the reader may change the message or the time: a reply also shown in the thread's parent
+   * channel, a time no longer far enough ahead (the bar was set a while ago) or too far, and a
+   * command, which is run when it is sent.
    */
-  async function schedule(at: Date) {
-    const text = draft.trim();
+  async function schedule(text: string, at: Date) {
     if (echoTarget !== undefined && echo) {
       throw new Error(format(m.scheduled.noEcho, { channel: echoTarget }));
     }
-    if (text.startsWith("/") && sync.store.commands(channelId) === undefined) {
-      await sync.loadCommands(channelId).catch(() => undefined);
+    const problem = timeProblem(at, new Date());
+    if (problem !== null) {
+      throw new Error(describeTimeProblem(m, problem));
     }
     const prepared = commands.prepare(text, readyIds);
     if (prepared.kind !== "message") {
@@ -558,7 +570,9 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
 
   /**
    * Takes a scheduled message back into the box to be changed: it is deleted where it waited,
-   * and its text, tags, files, and what it replied to become what the box holds. Refused while
+   * and its text, tags, files, what it replied to, and its time become what the box holds, so
+   * sending schedules it again. A time that has passed or is about to (a failed one's, one
+   * waiting for mana) is not kept: the message is then sent now or given a time. Refused while
    * the box holds something else, which this would replace.
    */
   async function edit(scheduledId: string) {
@@ -581,6 +595,8 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     setReply(
       scheduled.replyTo == null ? null : { to: scheduled.replyTo, tag: scheduled.tagReplied },
     );
+    const sendAt = new Date(scheduled.sendAt);
+    setScheduledFor(timeProblem(sendAt, new Date()) === null ? sendAt : null);
     setReplyAsked((asked) => asked + 1);
   }
 
@@ -623,6 +639,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     setPending([]);
     setEcho(false);
     setReply(null);
+    setScheduledFor(null);
   }
 
   /**
@@ -715,6 +732,15 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
           }}
           onCancel={() => {
             setReply(null);
+            box.current?.focus();
+          }}
+        />
+      )}
+      {scheduledFor !== null && (
+        <ScheduleBar
+          at={scheduledFor}
+          onCancel={() => {
+            setScheduledFor(null);
             box.current?.focus();
           }}
         />
@@ -836,11 +862,10 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
               <Tooltip text={m.scheduled.open}>
                 <Button
                   aria-label={m.scheduled.open}
-                  isDisabled={!canSchedule}
                   onPress={() => {
                     setScheduling(true);
                   }}
-                  className={toolButtonClass + " disabled:opacity-50"}
+                  className={toolButtonClass}
                 >
                   <ClockIcon size={20} aria-hidden="true" />
                 </Button>
@@ -857,7 +882,6 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
               <Popover className="rounded-md border border-line bg-surface-raised p-1 shadow-lg">
                 <Menu
                   className="min-w-44 outline-none"
-                  disabledKeys={canSchedule ? [] : ["schedule"]}
                   onAction={(key) => {
                     if (key === "attach") {
                       fileInput.current?.click();
@@ -881,11 +905,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
                     </MenuItem>
                   )}
                   {!starting && (
-                    <MenuItem
-                      id="schedule"
-                      textValue={m.scheduled.open}
-                      className={menuItemClass + " disabled:opacity-50"}
-                    >
+                    <MenuItem id="schedule" textValue={m.scheduled.open} className={menuItemClass}>
                       <ClockIcon size={18} aria-hidden="true" />
                       {m.scheduled.open}
                     </MenuItem>
@@ -899,7 +919,8 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
         <ScheduleMessageModal
           isOpen={scheduling}
           onOpenChange={setScheduling}
-          onSchedule={schedule}
+          {...(scheduledFor === null ? {} : { initial: scheduledFor })}
+          onSchedule={setScheduledFor}
         />
         <TextField
           aria-label={m.messageLabel}
@@ -975,14 +996,18 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
             <SmileyIcon size={20} aria-hidden="true" />
           </Button>
         </Tooltip>
-        <Tooltip text={m.send}>
+        <Tooltip text={scheduledFor === null ? m.send : m.scheduled.schedule}>
           <Button
             type="submit"
-            aria-label={m.send}
+            aria-label={scheduledFor === null ? m.send : m.scheduled.schedule}
             isDisabled={!canSend}
             className="shrink-0 rounded-md border border-transparent bg-accent p-2.5 text-accent-contrast outline-none hover:bg-accent-strong pressed:opacity-80 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-accent/50"
           >
-            <PaperPlaneRightIcon size={20} aria-hidden="true" className="rtl:-scale-x-100" />
+            {scheduledFor === null ? (
+              <PaperPlaneRightIcon size={20} aria-hidden="true" className="rtl:-scale-x-100" />
+            ) : (
+              <ClockIcon size={20} aria-hidden="true" />
+            )}
           </Button>
         </Tooltip>
       </div>

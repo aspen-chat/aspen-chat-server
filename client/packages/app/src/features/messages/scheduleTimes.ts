@@ -9,6 +9,7 @@ import {
   getLocalTimeZone,
   toCalendarDateTime,
 } from "@internationalized/date";
+import { format, type Messages } from "@/i18n/messages";
 
 export const MIN_AHEAD_MS = 60 * 1000;
 export const MAX_AHEAD_MS = 730 * 24 * 60 * 60 * 1000;
@@ -69,4 +70,11 @@ export function timeProblem(at: Date, now: Date): "tooSoon" | "tooFar" | null {
     return "tooSoon";
   }
   return ahead > MAX_AHEAD_MS ? "tooFar" : null;
+}
+
+/** What a time out of bounds (`timeProblem`) is refused with, wherever one is. */
+export function describeTimeProblem(m: Messages, problem: "tooSoon" | "tooFar"): string {
+  return problem === "tooSoon"
+    ? format(m.scheduled.tooSoon, { minutes: MIN_AHEAD_MS / 60_000 })
+    : format(m.scheduled.tooFar, { years: Math.floor(MAX_AHEAD_MS / (365 * 86_400_000)) });
 }
