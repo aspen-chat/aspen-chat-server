@@ -65,8 +65,9 @@ import { useMessages } from "@/i18n/context";
  * are heading (`useHistoryPaging`), the store keeps the window bounded, and the jump control
  * returns to the present.
  *
- * A linked message is scrolled to the middle of the view once, as soon as it is in the window,
- * even when a window around it had to be read first; staying at the bottom gives way to it.
+ * A linked message is scrolled into view once, as soon as it is in the window, even when a
+ * window around it had to be read first: to the middle of the view, or, when it is taller than
+ * the view, with its beginning at the top (`linkedTop`); staying at the bottom gives way to it.
  * The first scroll the user makes afterwards drops the message from the URL, so the link is
  * shareable but does not keep pulling the view back. A message jumped to from within the list
  * (`JumpToMessageContext`, as a reply's line jumps to what it answers) is brought into view and

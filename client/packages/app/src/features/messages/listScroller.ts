@@ -80,13 +80,23 @@ interface Still {
   /** Where the row's top stood in the content, which only a change of the rows can move. */
   offsetTop: number;
   height: number;
-  /** Whether the row is a linked message, held by its middle rather than its top. */
+  /** Whether the row is a linked message, held where `linkedTop` puts it rather than by its top. */
   linked: boolean;
 }
 
 /** The row with a message's id in the list, or `null` while it is not rendered. */
 function rowOf(box: HTMLElement, id: string): HTMLElement | null {
   return box.querySelector<HTMLElement>(`[data-message-id="${id}"]`);
+}
+
+/**
+ * Where the top of a linked message `height` tall stands in a view `viewHeight` tall: centred
+ * while that keeps its beginning in view, and at the top of the view once it is taller than
+ * the view, so that a jump always lands on the beginning of what it jumped to, and a message
+ * growing as its pictures arrive never pushes its own beginning out of view.
+ */
+export function linkedTop(height: number, viewHeight: number): number {
+  return Math.max(0, (viewHeight - height) / 2);
 }
 
 /**
@@ -165,7 +175,7 @@ export class ListScroller {
   /**
    * The row kept still, and where it stands in the content, which does not change with
    * scrolling, noted after every move and change: a linked message while it is shown, so a
-   * jump lands on it whatever loads around it, and otherwise the topmost row in view. Every
+   * jump stays on it whatever loads around it, and otherwise the topmost row in view. Every
    * change of the rows' sizes is measured by how far it has moved (`settle`, and `#catchUp`
    * before every move notes it afresh).
    */
@@ -240,13 +250,13 @@ export class ListScroller {
   };
 
   /**
-   * Places the view after the window or the link changed: a linked message goes to the middle
-   * of the view once it is in the window, whatever view was being kept, and the list lets go
-   * of the bottom so that nothing arriving or growing later pulls the view away from it. A
-   * linked message not yet in the window keeps the view for it. Otherwise the view holds
-   * through the change, at the bottom or by the noted row, a linked message shown included:
-   * the pages read around it arrive just after it is centred. Either way, what is seen and
-   * what is near have changed, which `moved` is told.
+   * Places the view after the window or the link changed: a linked message goes where
+   * `linkedTop` puts it, the middle of the view or its top, once it is in the window, whatever
+   * view was being kept, and the list lets go of the bottom so that nothing arriving or growing
+   * later pulls the view away from it. A linked message not yet in the window keeps the view
+   * for it. Otherwise the view holds through the change, at the bottom or by the noted row, a
+   * linked message shown included: the pages read around it arrive just after it is placed.
+   * Either way, what is seen and what is near have changed, which `moved` is told.
    */
   position() {
     const box = this.viewport.current;
@@ -264,11 +274,11 @@ export class ListScroller {
         this.#highlightShown = link;
         this.stickToBottom = false;
         this.#stopMotion();
-        // Centred here rather than by `scrollIntoView`, and at a whole pixel, which every box
+        // Placed here rather than by `scrollIntoView`, and at a whole pixel, which every box
         // holds exactly: WebKit truncates a position between pixels, which would leave the
-        // message up to a pixel below the middle, where rounding leaves it within half of one.
+        // message up to a pixel below its place, where rounding leaves it within half of one.
         const { top, height } = placeOf(content, target);
-        this.#place(clamp(Math.round(top + height / 2 - box.clientHeight / 2), this.range));
+        this.#place(clamp(Math.round(top - linkedTop(height, box.clientHeight)), this.range));
         this.#afterMove(false);
         return;
       }
@@ -605,8 +615,9 @@ export class ListScroller {
 
   /**
    * The noted row as it stands now, with how much of its growth counts as a move of what is
-   * in view: half, for a linked message held by its middle, so it stays centred as what it
-   * holds, a picture of its own, takes its size; none for a row held by its top.
+   * in view: for a linked message, half of its growth, so it stays centred as what it holds, a
+   * picture of its own, takes its size, but never so much that its beginning leaves the view,
+   * as `linkedTop` lands it; none for a row held by its top.
    */
   #stillRow(): { noted: Still; top: number; grown: number } | null {
     const box = this.viewport.current;
@@ -617,7 +628,11 @@ export class ListScroller {
       return null;
     }
     const { top, height } = placeOf(content, row);
-    const grown = noted.linked ? (height - noted.height) / 2 : 0;
+    // Held by its middle, the row's top would move up by half of its growth; it stops at the
+    // top of the view, and comes back down from there by half of any shrinking.
+    const grown = noted.linked
+      ? noted.screenTop - Math.max(0, noted.screenTop - (height - noted.height) / 2)
+      : 0;
     return { noted, top, grown };
   }
 

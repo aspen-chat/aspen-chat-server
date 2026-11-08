@@ -40,8 +40,11 @@ See [who scrolls the list](scrolling.md).
 See [keeping the view still](keeping-still.md).
 
 - **The browser's scroll anchoring is off on every platform.** The list keeps its own view still.
-- **A linked message is held by its middle.** A jump lands on it, and it stays centred whatever
-  loads around it or inside it.
+- **A linked message is held by its middle, as long as its beginning stays in view.** A jump lands
+  on it centred, and it stays centred whatever loads around it or inside it. One taller than the
+  view lands with its beginning at the top of the view instead, and one that grows past the view as
+  its pictures arrive stops there: the beginning of a message jumped to is always in view, since it
+  is what the reader came for.
 - **The list's own moves catch up first (`catchUp`).** They run before the frame's resize observers
   are told, and would otherwise note the row where the change put it.
 - **Pinning is judged against the content's height measured afresh.** The browser also scrolls the
