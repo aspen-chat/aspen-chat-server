@@ -36,7 +36,8 @@ export function DialogHeading({
   useLayoutEffect(() => {
     const element = row.current;
     const frame = element?.closest<HTMLElement>(".modal-frame");
-    if (!element || !frame) {
+    // Without `ResizeObserver` (jsdom) the frame keeps its `scroll-padding-top` fallback.
+    if (!element || !frame || typeof ResizeObserver === "undefined") {
       return;
     }
     const observer = new ResizeObserver(() => {
