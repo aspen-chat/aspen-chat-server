@@ -1456,6 +1456,11 @@
   "delete": "Eliminar",
   "deleteMessage": "Eliminar mensaje",
   "save": "Guardar",
+  "unsaved": {
+    "heading": "¿Descartar los cambios?",
+    "explanation": "Lo que cambiaste aquí no se ha guardado. Si cierras ahora, se perderá.",
+    "discard": "Descartar cambios"
+  },
   "cancel": "Cancelar",
   "editedFiles": "Archivos de este mensaje",
   "editingHint": "Enter para guardar, Esc para cancelar",

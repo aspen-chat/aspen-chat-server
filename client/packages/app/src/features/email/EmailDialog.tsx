@@ -8,6 +8,7 @@ import {
   secondaryButtonClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { UnsavedChangesGuard } from "@/features/layout/UnsavedChangesGuard";
 import { useMessages } from "@/i18n/context";
 import { EmailPanel } from "./EmailPanel";
 import { useEmailPolicy } from "./policy";
@@ -26,19 +27,23 @@ export function EmailDialog() {
     return null;
   }
   return (
-    <DialogTrigger>
-      <Button className={secondaryButtonClass + " flex items-center gap-1.5 self-start"}>
-        <EnvelopeSimpleIcon size={16} aria-hidden="true" />
-        {m.email.open}
-      </Button>
-      <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={planesModalClass}>
-          <Dialog className={dialogClass}>
-            <DialogHeading>{m.email.title}</DialogHeading>
-            <EmailPanel changes={changes} />
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
-    </DialogTrigger>
+    <UnsavedChangesGuard>
+      {(guard) => (
+        <DialogTrigger isOpen={guard.isOpen} onOpenChange={guard.onOpenChange}>
+          <Button className={secondaryButtonClass + " flex items-center gap-1.5 self-start"}>
+            <EnvelopeSimpleIcon size={16} aria-hidden="true" />
+            {m.email.open}
+          </Button>
+          <ModalOverlay isDismissable className={overlayClass}>
+            <Modal className={planesModalClass}>
+              <Dialog className={dialogClass}>
+                <DialogHeading>{m.email.title}</DialogHeading>
+                <EmailPanel changes={changes} />
+              </Dialog>
+            </Modal>
+          </ModalOverlay>
+        </DialogTrigger>
+      )}
+    </UnsavedChangesGuard>
   );
 }

@@ -21,6 +21,7 @@ import { fieldClass, inputClass, labelClass, primaryButtonClass } from "@/featur
 import { Avatar } from "@/features/communities/Avatar";
 import { dialogClass, modalClass, overlayClass } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { UnsavedChangesGuard } from "@/features/layout/UnsavedChangesGuard";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { FOLDER_TINT, folderName } from "@/features/communities/folders";
@@ -181,38 +182,46 @@ export function RenameFolderDialog({
   const m = useMessages();
   const [name, setName] = useState(folder.name);
   return (
-    <ModalOverlay
+    <UnsavedChangesGuard
+      dirty={name.trim() !== folder.name}
       isOpen={isOpen}
       onOpenChange={onOpenChange}
-      isDismissable
-      className={overlayClass}
     >
-      <Modal className={modalClass}>
-        <Dialog className={dialogClass}>
-          <DialogHeading>{m.folders.renameHeading}</DialogHeading>
-          <Form
-            onSubmit={(event) => {
-              event.preventDefault();
-              onSave(name.trim());
-              onOpenChange(false);
-            }}
-            className="flex flex-col gap-3"
-          >
-            <TextField value={name} onChange={setName} autoFocus className={fieldClass}>
-              <Label className={labelClass}>{m.folders.nameLabel}</Label>
-              <Input placeholder={m.folders.untitled} className={inputClass} />
-            </TextField>
-            <Button
-              type="submit"
-              isDisabled={name.trim() === folder.name}
-              className={primaryButtonClass + " self-start"}
-            >
-              {m.folders.save}
-            </Button>
-          </Form>
-        </Dialog>
-      </Modal>
-    </ModalOverlay>
+      {(guard) => (
+        <ModalOverlay
+          isOpen={guard.isOpen}
+          onOpenChange={guard.onOpenChange}
+          isDismissable
+          className={overlayClass}
+        >
+          <Modal className={modalClass}>
+            <Dialog className={dialogClass}>
+              <DialogHeading>{m.folders.renameHeading}</DialogHeading>
+              <Form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onSave(name.trim());
+                  guard.close();
+                }}
+                className="flex flex-col gap-3"
+              >
+                <TextField value={name} onChange={setName} autoFocus className={fieldClass}>
+                  <Label className={labelClass}>{m.folders.nameLabel}</Label>
+                  <Input placeholder={m.folders.untitled} className={inputClass} />
+                </TextField>
+                <Button
+                  type="submit"
+                  isDisabled={name.trim() === folder.name}
+                  className={primaryButtonClass + " self-start"}
+                >
+                  {m.folders.save}
+                </Button>
+              </Form>
+            </Dialog>
+          </Modal>
+        </ModalOverlay>
+      )}
+    </UnsavedChangesGuard>
   );
 }
 

@@ -16,6 +16,7 @@ import {
   planeSurfaceClass,
   secondaryButtonClass,
 } from "@/features/invites/dialog";
+import { useUnsavedChanges } from "@/features/layout/unsavedChanges";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -210,6 +211,7 @@ function EmojiRow({
   const [removing, setRemoving] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  useUnsavedChanges(renaming !== null && renaming.trim() !== name);
 
   async function rename() {
     if (renaming === null || busy) {

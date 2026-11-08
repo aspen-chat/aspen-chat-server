@@ -8,6 +8,7 @@ import {
   secondaryButtonClass,
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { UnsavedChangesGuard } from "@/features/layout/UnsavedChangesGuard";
 import { useMessages } from "@/i18n/context";
 import { SecurityPanel } from "./SecurityPanel";
 
@@ -16,19 +17,23 @@ export function SecurityDialog() {
   const m = useMessages();
   const transport = usePasskeyTransport();
   return (
-    <DialogTrigger>
-      <Button className={secondaryButtonClass + " flex items-center gap-1.5 self-start"}>
-        <ShieldCheckIcon size={16} aria-hidden="true" />
-        {m.security.open}
-      </Button>
-      <ModalOverlay isDismissable className={overlayClass}>
-        <Modal className={planesModalClass}>
-          <Dialog className={dialogClass}>
-            <DialogHeading>{m.security.title}</DialogHeading>
-            <SecurityPanel transport={transport} />
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
-    </DialogTrigger>
+    <UnsavedChangesGuard>
+      {(guard) => (
+        <DialogTrigger isOpen={guard.isOpen} onOpenChange={guard.onOpenChange}>
+          <Button className={secondaryButtonClass + " flex items-center gap-1.5 self-start"}>
+            <ShieldCheckIcon size={16} aria-hidden="true" />
+            {m.security.open}
+          </Button>
+          <ModalOverlay isDismissable className={overlayClass}>
+            <Modal className={planesModalClass}>
+              <Dialog className={dialogClass}>
+                <DialogHeading>{m.security.title}</DialogHeading>
+                <SecurityPanel transport={transport} />
+              </Dialog>
+            </Modal>
+          </ModalOverlay>
+        </DialogTrigger>
+      )}
+    </UnsavedChangesGuard>
   );
 }

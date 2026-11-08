@@ -64,6 +64,8 @@ import {
 } from "@/features/invites/dialog";
 import { ChoiceCheckbox } from "@/features/layout/choices";
 import { DialogHeading } from "@/features/layout/DialogHeading";
+import { useUnsavedChanges } from "@/features/layout/unsavedChanges";
+import { UnsavedChangesGuard } from "@/features/layout/UnsavedChangesGuard";
 import { CommunityNotifications } from "@/features/notifications/CommunityNotifications";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { displayNameOf } from "@/features/users/profile";
@@ -94,17 +96,21 @@ export function CommunitySettingsDialog({
 }) {
   const m = useMessages();
   return (
-    <DialogTrigger
+    <UnsavedChangesGuard
       {...(isOpen === undefined ? {} : { isOpen })}
       {...(onOpenChange === undefined ? {} : { onOpenChange })}
     >
-      <Tooltip text={m.communitySettings.open}>
-        <Button aria-label={m.communitySettings.open} className={triggerClassName}>
-          <WrenchIcon size={18} aria-hidden="true" />
-        </Button>
-      </Tooltip>
-      <CommunitySettingsModal community={community} />
-    </DialogTrigger>
+      {(guard) => (
+        <DialogTrigger isOpen={guard.isOpen} onOpenChange={guard.onOpenChange}>
+          <Tooltip text={m.communitySettings.open}>
+            <Button aria-label={m.communitySettings.open} className={triggerClassName}>
+              <WrenchIcon size={18} aria-hidden="true" />
+            </Button>
+          </Tooltip>
+          <CommunitySettingsModal community={community} />
+        </DialogTrigger>
+      )}
+    </UnsavedChangesGuard>
   );
 }
 
@@ -116,6 +122,9 @@ export function CommunitySettingsDialog({
  * may do. Opened by the trigger it is in, or by `isOpen` (from the community's menu on the
  * rail). It is as wide as Settings while the Roles tab is open, whose permissions stand in up to
  * four columns (`PermissionChecklist`), and narrower for the rest, which read best as a column.
+ * Closing it on a form with unsaved changes (the name, a nickname, a role, an emoji's name, a
+ * plugin's settings) asks first: through the `UnsavedChangesGuard` of the trigger it is in, or
+ * one of its own when it is opened by `isOpen`.
  */
 export function CommunitySettingsModal({
   community,
@@ -126,15 +135,21 @@ export function CommunitySettingsModal({
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
+  const overlay = (state: { isOpen?: boolean; onOpenChange?: (open: boolean) => void }) => (
+    <ModalOverlay className={overlayClass} isDismissable {...state}>
+      <CommunitySettingsFrame community={community} />
+    </ModalOverlay>
+  );
+  if (isOpen === undefined && onOpenChange === undefined) {
+    return overlay({});
+  }
   return (
-    <ModalOverlay
-      className={overlayClass}
-      isDismissable
+    <UnsavedChangesGuard
       {...(isOpen === undefined ? {} : { isOpen })}
       {...(onOpenChange === undefined ? {} : { onOpenChange })}
     >
-      <CommunitySettingsFrame community={community} />
-    </ModalOverlay>
+      {(guard) => overlay({ isOpen: guard.isOpen, onOpenChange: guard.onOpenChange })}
+    </UnsavedChangesGuard>
   );
 }
 
@@ -270,6 +285,7 @@ function Rename({ community, icon }: { community: Community; icon: boolean }) {
   const [iconError, setIconError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useUnsavedChanges(name.trim() !== community.name);
   return (
     <Form
       onSubmit={(event) => {

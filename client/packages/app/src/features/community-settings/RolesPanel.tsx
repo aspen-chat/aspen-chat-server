@@ -23,6 +23,7 @@ import { Tooltip } from "@/features/layout/Tooltip";
 import { HuePicker } from "@/features/users/HuePicker";
 import { RoleSwatch } from "@/features/users/RoleSwatch";
 import { displayNameOf } from "@/features/users/profile";
+import { useUnsavedChanges } from "@/features/layout/unsavedChanges";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { CopyIdButton } from "@/features/layout/CopyId";
@@ -214,6 +215,7 @@ function RoleEditor({
   const hueChanged = hue !== (role.hue ?? null);
   const hoistChanged = hoist !== (role.hoist ?? false);
   const dirty = nameChanged || permissionsChanged || hueChanged || hoistChanged;
+  useUnsavedChanges(dirty);
 
   async function save() {
     setSaving(true);

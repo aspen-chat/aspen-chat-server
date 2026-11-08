@@ -431,13 +431,17 @@ same commit, as with comments.
   corner; a control a title needs beside it is a prop of `DialogHeading`. A modal has no other
   button that only closes it (no Cancel, Close, Done, or OK); whatever closing must do (answering
   the screen picker, abandoning a crop) goes in the overlay's `onOpenChange`, which the X, Escape,
-  and a click outside all reach. The exceptions are a modal that must not be left before the reader
-  acts, such as the recovery codes, and an incoming call (`DialogHeading closeButton={false}`),
-  whose Accept and Decline are the ways out; a click beside it does nothing, and Escape declines. A
-  sheet of choices at the bottom of the screen (`Drawer` at the `bottom` edge, as a message's
-  actions on a touch screen) is a menu more than a dialog: it is named for assistive technology
-  alone, shows a handle rather than a title, and is put away by a tap above it, a pull down, Escape,
-  or the Android back button.
+  and a click outside all reach. A modal with a Save button is wrapped in `UnsavedChangesGuard`
+  (`src/features/layout/UnsavedChangesGuard.tsx`), which asks before closing on changes not yet
+  saved: a modal that is one form passes it `dirty`, each form of a modal of several reports through
+  `useUnsavedChanges`, and a close right after a save goes through the guard
+  (`docs/architecture/unsaved-changes.md`). The exceptions are a modal that must not be left before
+  the reader acts, such as the recovery codes, and an incoming call
+  (`DialogHeading closeButton={false}`), whose Accept and Decline are the ways out; a click beside
+  it does nothing, and Escape declines. A sheet of choices at the bottom of the screen (`Drawer` at
+  the `bottom` edge, as a message's actions on a touch screen) is a menu more than a dialog: it is
+  named for assistive technology alone, shows a handle rather than a title, and is put away by a tap
+  above it, a pull down, Escape, or the Android back button.
 - User-facing strings live in `packages/app/src/i18n/locales/en.json`, nested by feature, with
   camelCase keys matching the server's locale files; `messages.ts` gives it to the app as `en` and
   its shape as `Messages`. It is plain JSON so translation platforms read and write it as they find

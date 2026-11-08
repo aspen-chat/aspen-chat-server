@@ -97,3 +97,39 @@ test("a modal never scrolls sideways, and settings' planes stand in three column
     )
     .toEqual({ overflow: 0, columns: 3 });
 });
+
+test("a modal with a Save button asks before closing on unsaved changes", async ({ page }) => {
+  await page.getByRole("button", { name: "Edit profile" }).click();
+  const profile = page.getByRole("dialog", { name: "Your profile" });
+  const displayName = profile.getByRole("textbox", { name: "Display name" });
+  await displayName.fill("Kat");
+  await page.keyboard.press("Escape");
+  const question = page.getByRole("alertdialog", { name: "Discard your changes?" });
+  await expect(question).toBeVisible();
+  await expect(profile).toBeVisible();
+  // Dismissing the question keeps editing, with what was typed.
+  await question.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(question).toBeHidden();
+  await expect(displayName).toHaveValue("Kat");
+  // The X asks the same, and discarding closes the modal.
+  await profile.getByRole("button", { name: "Close", exact: true }).click();
+  await question.getByRole("button", { name: "Discard changes" }).click();
+  await expect(profile).toBeHidden();
+  // Opened again it starts from the profile as saved, and closes without asking.
+  await page.getByRole("button", { name: "Edit profile" }).click();
+  await expect(displayName).not.toHaveValue("Kat");
+  await page.keyboard.press("Escape");
+  await expect(profile).toBeHidden();
+  await expect(question).toBeHidden();
+});
+
+test("a modal of several forms asks for any one of them", async ({ page }) => {
+  await page.getByRole("button", { name: "Community settings" }).click();
+  const settings = page.getByRole("dialog").last();
+  await settings.getByRole("textbox", { name: "Community name" }).fill("Allotment");
+  await settings.getByRole("button", { name: "Close", exact: true }).click();
+  const question = page.getByRole("alertdialog", { name: "Discard your changes?" });
+  await expect(question).toBeVisible();
+  await question.getByRole("button", { name: "Discard changes" }).click();
+  await expect(settings).toBeHidden();
+});
