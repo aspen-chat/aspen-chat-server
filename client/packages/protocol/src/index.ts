@@ -123,6 +123,7 @@ export type {
   Attachment,
   HeldEntry,
   HeldMessage,
+  ScheduledMessage,
   ManaSender,
   ChannelMute,
   CategoryMute,

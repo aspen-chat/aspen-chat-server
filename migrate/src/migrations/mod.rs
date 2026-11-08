@@ -134,3 +134,4 @@ pub mod m20261025_060007_deployment_documents;
 pub mod m20261025_143903_large_communities;
 pub mod m20261026_071540_community_takedown_keys;
 pub mod m20261027_064938_search_text;
+pub mod m20261105_143743_scheduled_messages;

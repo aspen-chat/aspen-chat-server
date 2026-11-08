@@ -14,6 +14,13 @@
 //! channel, so one runner holds it anywhere): it ticks at 5 Hz for [`STEP`] at a time. What has
 //! waited [`MAX_WAIT`] is dropped, and its author told; a full queue makes room for a higher
 //! author by dropping the last one's ([`make_room`]).
+//!
+//! A message scheduled for later whose time came while its channel was busy
+//! (`app::message::scheduled`, `send_at` set) waits here like the rest, but is never dropped for
+//! waiting: its author is likely away, and nobody would send it again. Where anything else
+//! would be dropped for want of room (its author's item full, the queue making room for someone
+//! above them), it goes back to waiting for its job, which tries the queue again every
+//! [`BUSY_RETRY`] ([`Waited::NoRoom`], [`defer`]).
 
 use super::{Pool, TICK, Turn};
 use crate::context::GlobalServerContext;
@@ -127,6 +134,8 @@ pub async fn wait(state: &GlobalServerContext, waiting: Waiting) -> crate::Resul
                     target: waiting.target,
                     payload: waiting.payload,
                     cost: i32::try_from(waiting.cost).unwrap_or(i32::MAX),
+                    send_at: None,
+                    failure: None,
                 };
                 diesel::insert_into(held_message::table)
                     .values((
@@ -225,30 +234,59 @@ const AUTHORS: &str = r#"
     SELECT author FROM authors
 "#;
 
-/// Turns a message held for its previews, released, into one waiting for its channel's mana,
-/// in its author's item, costing `cost`, within the bounds of what may wait ([`make_room`],
-/// [`check_bounds`]): one past them is dropped, its author told the channel is too busy.
+/// What [`wait_held`] did with a released held message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Waited {
+    /// It waits in its channel's queue, or, past the bounds of what may wait there, was dropped
+    /// and its author told; either way its job is done with it.
+    Queued,
+    /// It no longer stands as it was read (failed, given another time, waiting already, or
+    /// gone), so nothing was done.
+    Changed,
+    /// A scheduled message that found no room in the queue: it stays due, and is to be tried
+    /// again after [`BUSY_RETRY`].
+    NoRoom,
+}
+
+/// Turns `held`, a message held for its previews or scheduled for now, released, into one
+/// waiting for its channel's mana, in its author's item, costing `cost`, within the bounds of
+/// what may wait ([`make_room`], [`check_bounds`]): one past them is dropped
+/// (`held::drop_held`), its author told the channel is too busy, unless it is a scheduled
+/// message, which is left due for its job to try again ([`Waited::NoRoom`]), its author's apps
+/// told once that it waits (`stuck_since`). A scheduled message that gets in takes its place in
+/// its author's item from now, when it would have been sent, and its author's apps are told.
 pub async fn wait_held(
     state: &GlobalServerContext,
-    id: HeldMessageId,
-    author: UserId,
-    channel: ChannelId,
+    held: &HeldMessage,
     cost: u32,
-) -> crate::Result<()> {
+) -> crate::Result<Waited> {
+    let (id, author, channel) = (held.id, held.author, held.channel);
     let bounded = match make_room(state, channel, author).await {
         Ok(()) => {
             let mut conn = state.connection_pool.get().await?;
             conn.transaction::<_, crate::Error, _>(|conn| {
                 async move {
                     check_bounds(conn.as_mut(), channel, author, cost).await?;
-                    diesel::update(held_message::table.filter(held_message::id.eq(id)))
-                        .set((
-                            held_message::waiting.eq(HeldWaiting::Mana),
-                            held_message::cost.eq(i32::try_from(cost).unwrap_or(i32::MAX)),
-                        ))
-                        .execute(conn.as_mut())
-                        .await?;
-                    ensure_drainer(conn.as_mut(), channel).await
+                    let waiting: Option<HeldMessage> = diesel::sql_query(format!(
+                        "UPDATE held_message SET waiting = 'mana', cost = $2, stuck_since = NULL, \
+                             held_at = CASE WHEN send_at IS NULL THEN held_at ELSE now() END \
+                         WHERE id = $1 AND waiting <> 'mana' AND failure IS NULL \
+                           AND (send_at IS NULL OR send_at <= now()) \
+                         RETURNING {COLUMNS}"
+                    ))
+                    .bind::<PgUuid, _>(id)
+                    .bind::<Integer, _>(i32::try_from(cost).unwrap_or(i32::MAX))
+                    .get_result(conn.as_mut())
+                    .await
+                    .optional()?;
+                    let Some(waiting) = waiting else {
+                        return Ok(Waited::Changed);
+                    };
+                    if waiting.send_at.is_some() {
+                        crate::message::scheduled::announce(state, conn.as_mut(), &waiting).await?;
+                    }
+                    ensure_drainer(conn.as_mut(), channel).await?;
+                    Ok(Waited::Queued)
                 }
                 .scope_boxed()
             })
@@ -257,14 +295,55 @@ pub async fn wait_held(
         Err(error) => Err(error),
     };
     match bounded {
-        Ok(()) => {}
+        Ok(Waited::Queued) => {}
+        Ok(waited) => return Ok(waited),
         Err(crate::Error::ChannelBusy(reason)) => {
-            return held::drop_held(state, id, author, channel, reason).await;
+            if held.send_at.is_some() {
+                held::note_stuck(state, id).await?;
+                return Ok(Waited::NoRoom);
+            }
+            held::drop_held(state, id, author, channel, reason).await?;
+            return Ok(Waited::Queued);
         }
         Err(error) => return Err(error),
     }
     jobs::wake(state).await;
-    tell_level(state, channel).await
+    tell_level(state, channel).await?;
+    Ok(Waited::Queued)
+}
+
+/// Takes the scheduled message `id` out of `channel`'s queue, where room is being made for
+/// someone above its author, back to waiting for its job, due again after [`BUSY_RETRY`]: it
+/// is never dropped for want of room. Nothing changes for its author's apps, which show it
+/// waiting for mana either way.
+async fn defer(state: &GlobalServerContext, id: HeldMessageId) -> crate::Result<()> {
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction::<_, crate::Error, _>(|conn| {
+        async move {
+            let deferred = diesel::sql_query(
+                "UPDATE held_message SET waiting = 'scheduled', \
+                     stuck_since = COALESCE(stuck_since, now()) \
+                 WHERE id = $1 AND waiting = 'mana' AND send_at IS NOT NULL",
+            )
+            .bind::<PgUuid, _>(id)
+            .execute(conn.as_mut())
+            .await?;
+            if deferred == 0 {
+                return Ok(());
+            }
+            held::forget_job(conn.as_mut(), id).await?;
+            jobs::enqueue(
+                conn.as_mut(),
+                NewJob::new(JobKind::ReleaseHeldMessage, JobClass::Interactive, &())?
+                    .keyed(id.0.to_string())
+                    .not_before(Utc::now() + BUSY_RETRY),
+            )
+            .await?;
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await
 }
 
 /// Tells viewers of `channel` its level and that its priority queue is in force or no longer,
@@ -296,13 +375,16 @@ struct Evicted {
     id: HeldMessageId,
     #[diesel(sql_type = diesel::sql_types::Text)]
     locale: String,
+    #[diesel(sql_type = Bool)]
+    scheduled: bool,
 }
 
 /// When `channel`'s queue holds [`MAX_ITEMS`] authors and `author` is not among them, drops
-/// every waiting row of the last of them in queue order, telling them why, if `author` is of
-/// higher priority; refuses with `channelBusy` if not. A raid of more accounts than
-/// the queue holds so cannot keep out those who rank above them. The check is made before the
-/// row is saved, apart from its transaction (dropping announces each row, on connections of
+/// every waiting row of the last of them in queue order, telling them why (a scheduled message
+/// among them is deferred instead, [`defer`]), if `author` is of higher priority; refuses with
+/// `channelBusy` if not. A raid of more accounts
+/// than the queue holds so cannot keep out those who rank above them. The check is made before
+/// the row is saved, apart from its transaction (dropping announces each row, on connections of
 /// its own); two newcomers at once may both find room, and the queue then holds a few more.
 async fn make_room(
     state: &GlobalServerContext,
@@ -338,8 +420,8 @@ async fn make_room(
         )));
     }
     let rows: Vec<Evicted> = diesel::sql_query(
-        "SELECT id, locale FROM held_message WHERE channel = $1 AND author = $2 \
-         AND waiting = 'mana'",
+        "SELECT id, locale, send_at IS NOT NULL AS scheduled FROM held_message \
+         WHERE channel = $1 AND author = $2 AND waiting = 'mana'",
     )
     .bind::<PgUuid, _>(channel)
     .bind::<PgUuid, _>(victim)
@@ -347,6 +429,10 @@ async fn make_room(
     .await?;
     drop(conn);
     for row in rows {
+        if row.scheduled {
+            defer(state, row.id).await?;
+            continue;
+        }
         let reason = crate::locale::scope(crate::locale::negotiate(&row.locale), async {
             t!("manaMadeRoom")
         })
@@ -555,13 +641,15 @@ async fn oldest(
 }
 
 /// Drops what has waited past [`MAX_WAIT`], a batch a tick, telling each author, oldest first
-/// through `held_message_mana_by_age`.
+/// through `held_message_mana_by_age`, which holds no scheduled message: those wait as long as
+/// it takes.
 async fn expire(state: &GlobalServerContext, channel: ChannelId) -> crate::Result<()> {
     let old: Vec<HeldMessage> = {
         let mut conn = state.connection_pool.get().await?;
         diesel::sql_query(format!(
-            "SELECT {COLUMNS} FROM held_message WHERE channel = $1 AND waiting = 'mana' \
-             AND held_at < now() - make_interval(secs => $2) ORDER BY held_at, id LIMIT $3"
+            "SELECT {COLUMNS} FROM held_message \
+             WHERE channel = $1 AND waiting = 'mana' AND send_at IS NULL \
+               AND held_at < now() - make_interval(secs => $2) ORDER BY held_at, id LIMIT $3"
         ))
         .bind::<PgUuid, _>(channel)
         .bind::<diesel::sql_types::Double, _>(MAX_WAIT.as_seconds_f64())

@@ -32,7 +32,8 @@
 //! [`delete_attachment`] removes an unsent row of the caller's, confirmed or
 //! not, and best-effort deletes the S3 object. A confirmed attachment that has
 //! never been in a message (`attachment.sent`, set as it is put in one) nor is
-//! held in one waiting for its preview is swept [`UNSENT_LIFETIME`] after it
+//! held in one (waiting for its preview, for its channel's mana, or for the time
+//! it was scheduled for) is swept [`UNSENT_LIFETIME`] after it
 //! was confirmed, with its object and preview ([`sweep_unsent`], run by
 //! `media_store::spawn_upload_sweeper`), so storage is not a file host for
 //! uploads nobody sends. One taken out of its message, or whose message is deleted, is kept as
@@ -641,7 +642,7 @@ pub(crate) async fn retouch(
 /// How long a confirmed attachment may wait to be sent before [`sweep_unsent`] deletes it.
 pub const UNSENT_LIFETIME: chrono::Duration = chrono::Duration::hours(24);
 
-/// The most attachments one statement of [`sweep_unsent`] deletes.
+/// The most attachments one statement of [`sweep_unsent`] reads, and so deletes.
 const SWEEP_BATCH: i64 = 500;
 
 /// Records that `ids` have been in a message, so [`sweep_unsent`] leaves them.
@@ -660,11 +661,46 @@ pub async fn mark_sent(
     Ok(())
 }
 
+/// Counts `ids` that are still unsent as confirmed now, in the transaction that lets go of the
+/// scheduled message holding them (`message::held::cancel`): their uploader may send them
+/// another way, their app holding only the records and not the files to upload again, and has
+/// [`UNSENT_LIFETIME`] from now to, as with a new upload.
+pub async fn renew_unsent(
+    conn: &mut diesel_async::AsyncPgConnection,
+    ids: &[AttachmentId],
+) -> crate::Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    diesel::update(attachment::table)
+        .filter(
+            attachment::id
+                .eq_any(ids)
+                .and(attachment::sent.eq(false))
+                .and(attachment::ready_at.is_not_null()),
+        )
+        .set(attachment::ready_at.eq(diesel::dsl::now))
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 /// Deletes every confirmed attachment confirmed more than [`UNSENT_LIFETIME`] ago that has never
 /// been in a message and is not held in one (`held_message`), with its object and its preview,
 /// answering how many it deleted. Rows a message being saved has locked
 /// (`message::ensure_attachments_ready`) are passed by, so every server may run it at once.
+///
+/// It walks the unsent attachments confirmed that long ago once, oldest first through
+/// `attachment_unsent_idx`, [`SWEEP_BATCH`] a statement: those in a message scheduled for later
+/// stay unsent for as long as it waits, so each sweep reads them, once each.
 pub async fn sweep_unsent(state: &GlobalServerContext) -> crate::Result<usize> {
+    #[derive(diesel::QueryableByName)]
+    struct Candidate {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        id: AttachmentId,
+        #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+        ready_at: DateTime<Utc>,
+    }
     #[derive(diesel::QueryableByName)]
     struct Swept {
         #[diesel(sql_type = diesel::sql_types::Text)]
@@ -673,21 +709,43 @@ pub async fn sweep_unsent(state: &GlobalServerContext) -> crate::Result<usize> {
         preview_storage_key: Option<String>,
     }
     let cutoff = Utc::now() - UNSENT_LIFETIME;
+    let mut after = (DateTime::UNIX_EPOCH, AttachmentId(uuid::Uuid::nil()));
     let mut total = 0;
     loop {
+        let mut conn = state.connection_pool.get().await?;
+        let candidates: Vec<Candidate> = diesel::sql_query(
+            "SELECT id, ready_at FROM attachment \
+             WHERE NOT sent AND ready_at < $1 AND (ready_at, id) > ($2, $3) \
+             ORDER BY ready_at, id LIMIT $4",
+        )
+        .bind::<diesel::sql_types::Timestamptz, _>(cutoff)
+        .bind::<diesel::sql_types::Timestamptz, _>(after.0)
+        .bind::<diesel::sql_types::Uuid, _>(after.1)
+        .bind::<diesel::sql_types::BigInt, _>(SWEEP_BATCH)
+        .load(conn.as_mut())
+        .await?;
+        let Some(last) = candidates.last() else {
+            return Ok(total);
+        };
+        after = (last.ready_at, last.id);
+        let full = candidates.len() as i64 == SWEEP_BATCH;
+        let ids: Vec<AttachmentId> = candidates.into_iter().map(|c| c.id).collect();
+        // Checked again as each is locked: one may have been sent, or counted as confirmed
+        // afresh (`renew_unsent`), since the walk read it.
         let swept: Vec<Swept> = diesel::sql_query(
             "DELETE FROM attachment WHERE id IN ( \
                 SELECT a.id FROM attachment a \
-                WHERE NOT a.sent AND a.ready_at < $1 \
+                WHERE a.id = ANY($1) AND NOT a.sent AND a.ready_at < $2 \
                   AND NOT EXISTS (SELECT 1 FROM message_attachment ma WHERE ma.attachment_id = a.id) \
                   AND NOT EXISTS (SELECT 1 FROM held_message h WHERE h.attachments @> ARRAY[a.id]) \
-                LIMIT $2 FOR UPDATE SKIP LOCKED \
+                FOR UPDATE SKIP LOCKED \
              ) RETURNING storage_key, preview_storage_key",
         )
+        .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(ids)
         .bind::<diesel::sql_types::Timestamptz, _>(cutoff)
-        .bind::<diesel::sql_types::BigInt, _>(SWEEP_BATCH)
-        .load(state.connection_pool.get().await?.as_mut())
+        .load(conn.as_mut())
         .await?;
+        drop(conn);
         let count = swept.len();
         for Swept {
             storage_key,
@@ -704,7 +762,7 @@ pub async fn sweep_unsent(state: &GlobalServerContext) -> crate::Result<usize> {
             }
         }
         total += count;
-        if count < SWEEP_BATCH as usize {
+        if !full {
             return Ok(total);
         }
     }

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime
 import hashlib
 import json
 import shutil
@@ -3752,6 +3753,117 @@ def profiles_reach_dm_partners(world: World, check: Checks) -> None:
     stack.command("admin", "revoke", alice["name"])
 
 
+def scheduled_messages(world: World, check: Checks) -> None:
+    say("a message scheduled for later: its author's alone until it is posted, and checked again when it is")
+    stack, member, owner = world.stack, world.member, world.owner
+    later = world.channel("later")
+    other = stack.events(member["token"])
+    bystander = stack.events(owner["token"])
+    for stream in (world.stream, other, bystander):
+        stream.gather(0.5)
+
+    def at(seconds: float) -> str:
+        when = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=seconds)
+        return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def schedule(content: str, seconds: float = 3600, token: str = member["token"]) -> tuple[int, dict]:
+        status, text = stack.request("POST", f"/channels/{later}/scheduled-messages",
+                                     {"content": content, "attachments": [], "sendAt": at(seconds)}, token)
+        return status, json.loads(text)
+
+    def told(stream: EventStream) -> list[dict]:
+        return [e["scheduled"] for e in of(stream.gather(1.0), "scheduledMessageChanged")]
+
+    def fresh(token: str = member["token"]) -> list[dict]:
+        return stack.api("GET", "/users/@me/scheduled-messages", token=token)
+
+    def said() -> list[str]:
+        read = stack.api("GET", f"/channels/{later}/messages?limit=50", token=owner["token"])
+        return [m["content"] for m in (read["data"] if isinstance(read, dict) else read)]
+
+    def jobs() -> int:
+        return int(psql("SELECT count(*) FROM job WHERE kind = 'releaseHeldMessage'", stack.database))
+
+    status, scheduled = schedule("see you tomorrow")
+    check("a member schedules a message", status == 201 and scheduled.get("status") == "scheduled", (status, scheduled))
+    mine = scheduled["id"]
+    check("both of the author's devices are told of it, as a fresh read says",
+          told(other) == [scheduled] and told(world.stream) == [scheduled] and fresh() == [scheduled])
+    heard = bystander.gather(1.0)
+    check("nobody else hears of it", not of(heard, "scheduledMessageChanged") and not of(heard, "message"),
+          [e["serverEvent"] for e in heard])
+    check("nor finds it among what they scheduled, or in the channel",
+          fresh(owner["token"]) == [] and "see you tomorrow" not in said())
+    check("and it is not among the messages its author's apps show waiting",
+          stack.api("GET", "/users/@me/held-messages", token=member["token"]) == [])
+    path = f"/users/@me/scheduled-messages/{mine}"
+    check("another cannot read it, give it another time, send it, or delete it",
+          [stack.status("GET", path, token=owner["token"]),
+           stack.status("PATCH", path, {"sendAt": at(7200)}, owner["token"]),
+           stack.status("POST", path + "/send", token=owner["token"]),
+           stack.status("DELETE", path, token=owner["token"])] == [404] * 4)
+    check("a time under a minute or over two years from now is refused",
+          schedule("too soon", 20)[0] == 400 and schedule("too far", 731 * 86400)[0] == 400)
+
+    moved = stack.api("PATCH", path, {"sendAt": at(7200)}, member["token"])
+    check("another time is told to both devices, as a fresh read says",
+          moved["sendAt"] != scheduled["sendAt"] and told(other) == [moved] and told(world.stream) == [moved]
+          and fresh() == [moved], moved)
+
+    # The right to post is checked again when it is posted.
+    world.as_owner("PUT", f"/channels/{later}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    for stream in (world.stream, other, bystander):
+        stream.gather(0.5)
+    stack.api("POST", path + "/send", token=member["token"])
+    check("sent once its author may no longer post there, it fails and is kept",
+          eventually(lambda: [m["status"] for m in fresh()] == ["failed"]), fresh())
+    failed = fresh()[0]
+    check("with why", bool(failed.get("failure")), failed)
+    check("which both devices hear, as a fresh read says",
+          told(other)[-1:] == [failed] and told(world.stream)[-1:] == [failed])
+    heard = bystander.gather(1.0)
+    check("and still nobody else hears of it, nor is it posted",
+          not of(heard, "scheduledMessageChanged") and not of(heard, "message") and "see you tomorrow" not in said())
+    check("a failed one keeps no job", jobs() == 0, jobs())
+
+    world.as_owner("DELETE", f"/channels/{later}/overrides/{world.everyone}")
+    for stream in (world.stream, other, bystander):
+        stream.gather(0.5)
+    stack.api("POST", path + "/send", token=member["token"])
+    check("sent again once they may, it is posted", eventually(lambda: "see you tomorrow" in said()), said())
+    check("and leaves both devices, as a fresh read says",
+          bool(of(other.gather(1.0), "heldMessagePosted", held=mine))
+          and bool(of(world.stream.gather(1.0), "heldMessagePosted", held=mine)) and fresh() == [])
+    check("everyone in the channel hears the message", bool(of(bystander.gather(1.0), "message", type="create")))
+
+    _, second = schedule("never mind")
+    for stream in (world.stream, other):
+        stream.gather(0.5)
+    deleted = stack.status("DELETE", f"/users/@me/scheduled-messages/{second['id']}", token=member["token"])
+    check("one deleted leaves both devices, and its job goes with it",
+          deleted == 204 and bool(of(other.gather(1.0), "heldMessageCancelled", held=second["id"]))
+          and bool(of(world.stream.gather(1.0), "heldMessageCancelled", held=second["id"]))
+          and fresh() == [] and jobs() == 0, (deleted, fresh(), jobs()))
+
+    bot_token = stack.api("POST", "/users/@me/bots", {"name": f"sbot{world.run}"}, member["token"])["token"]
+    check("a bot schedules nothing", schedule("from a bot", token=bot_token)[0] == 403)
+
+    # One person keeps at most a hundred.
+    statuses = [schedule(f"number {n}")[0] for n in range(101)]
+    check("past a hundred scheduled, another is refused",
+          statuses[:100] == [201] * 100 and statuses[100] == 400 and len(fresh()) == 100, statuses[-3:])
+
+    # Removed from the community, they can post none of it, and could not find it to delete.
+    world.stream.gather(0.5)
+    world.as_owner("DELETE", f"/communities/{world.community}/members/{member['id']}")
+    check("what a removed member scheduled is dropped", eventually(lambda: fresh() == [], 30), len(fresh()))
+    check("each told to their devices", len(of(world.stream.gather(2.0), "heldMessageFailed")) == 100)
+    check("and no job is left to post any of it", jobs() == 0, jobs())
+    check("nothing of it was posted", not any(text.startswith("number ") for text in said()))
+    other.close()
+    bystander.close()
+
+
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, replies, calls, attachments,
@@ -3762,7 +3874,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
              marking_unread, join_messages, identity_providers, sent_files, invite_codes, usernames, large_communities,
              pins_of_deleted_messages, own_votes_elsewhere, new_channel_overrides, bot_deletion_reaches_everyone,
-             profiles_reach_dm_partners]
+             profiles_reach_dm_partners, scheduled_messages]
 
 
 def main() -> None:

@@ -254,6 +254,11 @@ export function useTagging({
     /** The text as it is sent, picked tags and all. */
     encode: (text: string) => encodeTags(text, picks),
     insert,
+    /** Takes `held` as the picks, of text put in the box whole (`decodeTags`). */
+    restore: (held: readonly PickedTag[]) => {
+      setPicks(held);
+      setDismissedAt(null);
+    },
     /** Forgets the picks, once what they were for is sent. */
     reset: () => {
       setPicks([]);

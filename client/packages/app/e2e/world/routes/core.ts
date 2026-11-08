@@ -427,6 +427,8 @@ export function coreRoutes({
     ["GET", /^\/plugins$/, () => []],
     // Nothing of the caller's is held for its previews.
     ["GET", /^\/users\/@me\/held-messages$/, () => []],
+    // Nor is anything scheduled for later; `scheduledMessages.spec.ts` answers these itself.
+    ["GET", /^\/users\/@me\/scheduled-messages$/, () => []],
     ["GET", /^\/users\/[^/]+\/annotations$/, () => []],
     // Blocking answers as the server does, and tells the caller's devices by event.
     [

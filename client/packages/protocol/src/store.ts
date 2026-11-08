@@ -36,6 +36,7 @@ import type {
   Attachment,
   HeldEntry,
   HeldMessage,
+  ScheduledMessage,
   BotCommands,
   FrequentEmojiEntry,
   ChannelMute,
@@ -248,6 +249,12 @@ export class RecordStore {
    * bring back.
    */
   readonly #settledHeld = new Set<string>();
+  /**
+   * The messages the caller scheduled for later, by id: every one the server holds, at most
+   * the hundred it lets one person schedule. Each leaves as the server's does, by the events
+   * that end a held message, or when a bootstrap no longer reads it.
+   */
+  readonly #scheduledMessages = new Map<string, ScheduledMessage>();
   readonly #icons = new Map<string, Icon>();
   readonly #voiceSessions = new Map<string, VoiceSession>();
   /** `session -> user -> participant`. */
@@ -552,8 +559,10 @@ export class RecordStore {
     if (this.#settledHeld.has(message.id)) {
       return;
     }
-    this.#heldMessages.set(message.id, { message, failure: null, startsThreadOf: null });
-    this.#touch(`held:${message.channelId}`);
+    this.#batch(() => {
+      this.#heldMessages.set(message.id, { message, failure: null, startsThreadOf: null });
+      this.#touch(`held:${message.channelId}`);
+    });
   }
 
   /**
@@ -578,8 +587,73 @@ export class RecordStore {
   forgetHeldMessage(id: string): void {
     const entry = this.#heldMessages.get(id);
     if (entry !== undefined) {
-      this.#heldMessages.delete(id);
-      this.#touch(`held:${heldPlace(entry)}`);
+      this.#batch(() => {
+        this.#heldMessages.delete(id);
+        this.#touch(`held:${heldPlace(entry)}`);
+      });
+    }
+  }
+
+  /**
+   * Topic `scheduled:<channelId>`: the messages the caller scheduled for later in a channel,
+   * the soonest due first, those that failed and those waiting for the channel's mana among
+   * them.
+   */
+  scheduledMessages(channelId: string): readonly ScheduledMessage[] {
+    return this.#memoized(`scheduled:${channelId}`, () =>
+      Array.from(this.#scheduledMessages.values())
+        .filter((scheduled) => scheduled.channelId === channelId)
+        .sort((a, b) => a.sendAt.localeCompare(b.sendAt) || a.id.localeCompare(b.id)),
+    );
+  }
+
+  scheduledMessage(id: string): ScheduledMessage | undefined {
+    return this.#scheduledMessages.get(id);
+  }
+
+  /** Keeps a scheduled message as the stream told it, in place of what was held of it. */
+  #putScheduledMessage(scheduled: ScheduledMessage): void {
+    const held = this.#scheduledMessages.get(scheduled.id);
+    this.#scheduledMessages.set(scheduled.id, scheduled);
+    this.#touch(`scheduled:${scheduled.channelId}`);
+    if (held !== undefined && held.channelId !== scheduled.channelId) {
+      this.#touch(`scheduled:${held.channelId}`);
+    }
+  }
+
+  /**
+   * Keeps a scheduled message a request made, unless the stream told of it first: its record
+   * there is the newer, and one already posted or deleted is not brought back.
+   */
+  fillScheduledMessage(scheduled: ScheduledMessage): void {
+    if (this.#scheduledMessages.has(scheduled.id) || this.#settledHeld.has(scheduled.id)) {
+      return;
+    }
+    this.#batch(() => {
+      this.#putScheduledMessage(scheduled);
+    });
+  }
+
+  /** Replaces the scheduled messages held with `scheduled`, the complete list a bootstrap read. */
+  replaceScheduledMessages(scheduled: readonly ScheduledMessage[]): void {
+    this.#batch(() => {
+      for (const id of Array.from(this.#scheduledMessages.keys())) {
+        this.forgetScheduledMessage(id);
+      }
+      for (const message of scheduled) {
+        this.#putScheduledMessage(message);
+      }
+    });
+  }
+
+  /** Lets go of a scheduled message that was posted, deleted, or dropped. */
+  forgetScheduledMessage(id: string): void {
+    const scheduled = this.#scheduledMessages.get(id);
+    if (scheduled !== undefined) {
+      this.#batch(() => {
+        this.#scheduledMessages.delete(id);
+        this.#touch(`scheduled:${scheduled.channelId}`);
+      });
     }
   }
 
@@ -2691,6 +2765,7 @@ export class RecordStore {
       this.#attachments.clear();
       this.#heldMessages.clear();
       this.#settledHeld.clear();
+      this.#scheduledMessages.clear();
       this.#icons.clear();
       this.#voiceSessions.clear();
       this.#voiceParticipants.clear();
@@ -3264,13 +3339,21 @@ export class RecordStore {
           // The message itself arrives by its own event.
           this.#settledHeld.add(event.held);
           this.forgetHeldMessage(event.held);
+          this.forgetScheduledMessage(event.held);
           break;
         case "heldMessageCancelled":
           this.#settledHeld.add(event.held);
           this.forgetHeldMessage(event.held);
+          this.forgetScheduledMessage(event.held);
+          break;
+        case "scheduledMessageChanged":
+          this.#putScheduledMessage(event.scheduled);
           break;
         case "heldMessageFailed": {
           this.#settledHeld.add(event.held);
+          // A scheduled message dropped rather than kept failed: its author can no longer see
+          // where it would have gone.
+          this.forgetScheduledMessage(event.held);
           const entry = this.#heldMessages.get(event.held);
           if (entry !== undefined) {
             this.#heldMessages.set(event.held, { ...entry, failure: event.detail });

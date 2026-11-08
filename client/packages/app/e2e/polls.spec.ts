@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { pollQuestion, signInToWorld } from "./world";
+import { general, pollQuestion, signInToWorld } from "./world";
 
 /**
  * Written-in poll answers, against Bob's poll in the stubbed world of `world.ts`: it lists
@@ -46,4 +46,53 @@ test("the caller writes in an answer, votes for it, and can remove it", async ({
   await confirm.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(tacos).toHaveCount(0);
   await expect(poll.getByRole("textbox", { name: "Add your own answer" })).toBeVisible();
+});
+
+test("creating a poll leaves what the message box holds unsent", async ({ page }) => {
+  await openPoll(page);
+  // The channel is busy, so the poll waits its turn: the server answers with what it holds.
+  await page.route(/\/api\/v1\/channels\/[^/]+\/polls$/, (route) =>
+    route.fulfill({
+      status: 202,
+      json: {
+        id: "0190f0a0-0000-7000-8004-000000000001",
+        channelId: general,
+        content: "Tea?",
+        attachments: [],
+        echoToParent: false,
+        replyTo: null,
+        heldAt: new Date().toISOString(),
+        waiting: "mana",
+        kind: "poll",
+        target: null,
+      },
+    }),
+  );
+  const sent: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && /\/channels\/[^/]+\/messages$/.test(request.url())) {
+      sent.push(request.url());
+    }
+  });
+  const box = page.getByRole("textbox", { name: "Message" });
+  await box.fill("still writing this");
+  // Its own button on a wide screen, an item of the + menu on a narrow one.
+  const button = page.getByRole("button", { name: "Create a new poll" });
+  if (await button.isVisible()) {
+    await button.click();
+  } else {
+    await page
+      .getByRole("button", { name: "Add a file or a poll, or schedule this message" })
+      .click();
+    await page.getByRole("menuitem", { name: "Create a new poll" }).click();
+  }
+  const dialog = page.getByRole("dialog", { name: "New poll" });
+  await dialog.getByLabel("Question").fill("Tea?");
+  await dialog.getByPlaceholder("Option 1").fill("Yes");
+  await dialog.getByPlaceholder("Option 2").fill("No");
+  await dialog.getByRole("button", { name: "Create a poll" }).click();
+  await expect(dialog).toBeHidden();
+  // The poll's form is drawn apart from the box, and submitting it sends nothing of the box's.
+  await expect(box).toHaveValue("still writing this");
+  expect(sent).toEqual([]);
 });

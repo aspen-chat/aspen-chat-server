@@ -5,8 +5,14 @@ ready (`app::message::held`). [Why](design-notes.md#held-messages)
 
 Held messages also hold what waits for a busy channel's mana: messages, slash commands, edits,
 polls, and echoes (`held_message.waiting` is `mana`; see
-[Channel mana](../channel-mana/index.md#waiting-messages)). This page is about waiting for previews;
+[Channel mana](../channel-mana/index.md#waiting-rows)). This page is about waiting for previews;
 both kinds are listed, cancelled, and announced alike.
+
+A message scheduled for later is a held message too (`waiting` is `scheduled`, `send_at` its time;
+see [Scheduled messages](../scheduled-messages.md)). It is posted by the same job, which comes due
+at its time, but it is listed apart (`GET /users/@me/held-messages` leaves it out), keeps an order
+of its own, and is kept for its author when it cannot be posted, where what is described here is
+dropped.
 
 ## Holding a message
 
@@ -36,6 +42,7 @@ keyed by the held message (`held::release_step`; see [Jobs](../jobs/index.md)).
   five seconds (`held::LOOK_EVERY`).
 - A job whose author sent a message before it that is still held waits a second. So an author's held
   messages are posted in the order they were sent (through the index `held_message_by_author`).
+  Scheduled messages are not waited for.
 
 Once nothing holds it, the job:
 
@@ -43,7 +50,8 @@ Once nothing holds it, the job:
    for mana (`mana::queue::wait_held`), and the job is done.
 2. Posts the message as it was sent (`app::message::post`), in its language, with the author's
    permissions as they are then and the channel's plugins deciding it then.
-3. Deletes the held row in the same transaction, so it is posted once however its job is run.
+3. Deletes the held row in the same transaction (`held::take`), so it is posted once however its job
+   is run.
 4. Tells the author's apps which message it became, with `heldMessagePosted`.
 
 A preview finished after the hold ran out reaches the message's readers by `attachmentPreviewed`.

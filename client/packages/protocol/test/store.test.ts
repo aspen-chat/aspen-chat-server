@@ -2436,6 +2436,51 @@ describe("RecordStore previews and held messages", () => {
     expect(store.heldMessages(general.id)).toEqual([]);
   });
 
+  it("tells whoever shows a place's held messages when one is kept or let go", () => {
+    const store = new RecordStore();
+    const told = vi.fn();
+    store.subscribe(`held:${general.id}`, told);
+    store.putHeldMessage(held);
+    expect(told).toHaveBeenCalledTimes(1);
+    store.forgetHeldMessage(held.id);
+    expect(told).toHaveBeenCalledTimes(2);
+    expect(store.heldMessages(general.id)).toEqual([]);
+  });
+
+  it("tells whoever shows a channel's scheduled messages of each change, soonest first", () => {
+    const store = new RecordStore();
+    const scheduled = {
+      id: id(6300),
+      channelId: general.id,
+      content: "later",
+      attachments: [],
+      replyTo: null,
+      tagReplied: false,
+      sendAt: "2026-11-06T09:00:00Z",
+      status: "scheduled" as const,
+      failure: null,
+    };
+    const sooner = { ...scheduled, id: id(6301), sendAt: "2026-11-05T09:00:00Z" };
+    const told = vi.fn();
+    store.subscribe(`scheduled:${general.id}`, told);
+    store.fillScheduledMessage(scheduled);
+    expect(told).toHaveBeenCalledTimes(1);
+    store.applyEvent({ serverEvent: "scheduledMessageChanged", scheduled: sooner });
+    expect(told).toHaveBeenCalledTimes(2);
+    expect(store.scheduledMessages(general.id)).toEqual([sooner, scheduled]);
+    expect(store.scheduledMessages(dev.id)).toEqual([]);
+    // A response does not replace what the stream told.
+    store.fillScheduledMessage({ ...sooner, status: "failed", failure: "stale" });
+    expect(store.scheduledMessage(sooner.id)).toEqual(sooner);
+    expect(told).toHaveBeenCalledTimes(2);
+    store.forgetScheduledMessage(scheduled.id);
+    expect(told).toHaveBeenCalledTimes(3);
+    store.replaceScheduledMessages([scheduled]);
+    expect(store.scheduledMessages(general.id)).toEqual([scheduled]);
+    store.clear();
+    expect(store.scheduledMessages(general.id)).toEqual([]);
+  });
+
   it("does not bring back a held message whose posting was heard of before its 202", () => {
     const store = new RecordStore();
     store.applyEvent({

@@ -230,7 +230,15 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
     ws.onMessage((frame) => {
       const parsed = JSON.parse(String(frame)) as { type?: string };
       if (parsed.type === "identify") {
-        ws.send(JSON.stringify({ type: "ready", userId: meThere, resumed: false }));
+        ws.send(
+          JSON.stringify({
+            type: "ready",
+            userId: meThere,
+            resumed: false,
+            replayComplete: true,
+            catchUpFollows: false,
+          }),
+        );
       }
     });
   });

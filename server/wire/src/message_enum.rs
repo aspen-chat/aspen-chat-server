@@ -167,6 +167,14 @@ enum MessageEnumSource {
         held: HeldMessageId,
         channel: ChannelId,
     },
+    // A message its author scheduled for later was scheduled, given another time, began waiting
+    // for its channel's mana, or failed (`app::message::scheduled`): the author's apps keep
+    // `scheduled` in place of what they held of it. It leaves by `heldMessagePosted`,
+    // `heldMessageCancelled`, or `heldMessageFailed`.
+    #[message_gen(custom_event)]
+    ScheduledMessageChanged {
+        scheduled: crate::held::ScheduledMessage,
+    },
     // Something announced about the community may not have happened: a request published
     // events about it inside a transaction that was then rolled back. Whoever holds the
     // community's state reads it again. See `app::events::settle`.

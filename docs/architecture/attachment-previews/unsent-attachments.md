@@ -9,10 +9,23 @@ uploads nobody sends.
 
 - it was confirmed a day ago (`app::attachment::UNSENT_LIFETIME`);
 - it has never been in a message; and
-- it is not held in one.
+- it is not held in one: waiting for its preview, for its channel's mana, or for the time it was
+  scheduled for ([Scheduled messages](../scheduled-messages.md)).
 
 It runs as part of the recurring `sweepUploads` job (`media_store::sweep_step`, hourly; see
 [Jobs](../jobs/kinds.md#sweepuploads)), 500 at a time under `FOR UPDATE SKIP LOCKED`.
+
+A file in a scheduled message stays unsent, and confirmed over a day ago, for as long as the message
+waits: up to two years. So the sweep walks the unsent attachments confirmed a day ago once, oldest
+first through `attachment_unsent_idx`, each statement going on from where the last ended, and reads
+each such file once a sweep rather than once a batch.
+
+## Scheduled messages deleted
+
+A scheduled message its author deletes, to change it or to send it another way, lets its files go
+long after they were confirmed. Each still unsent is counted as confirmed at that moment
+(`attachment::renew_unsent`), in the deletion's transaction, so it is kept a day more: the app that
+takes the message back into its box holds the files' records, not the files to upload again.
 
 ## Sent attachments
 

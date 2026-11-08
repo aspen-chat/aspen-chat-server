@@ -603,6 +603,18 @@ user = { requests = 600, per_seconds = 60, burst = 200 }
 [rate_limits.endpoints."POST /channels/{channel}/polls"]
 user_per_channel = { requests = 3, per_seconds = 60, burst = 3 }
 
+# A scheduled message is a row and a job kept until its time, up to two years on, and one
+# person keeps at most a hundred (`app::message::scheduled`); giving one another time replaces
+# its job, and sending one now posts a message.
+[rate_limits.endpoints."POST /channels/{channel}/scheduled-messages"]
+user = { requests = 30, per_seconds = 60, burst = 10 }
+
+[rate_limits.endpoints."PATCH /users/@me/scheduled-messages/{scheduled}"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
+[rate_limits.endpoints."POST /users/@me/scheduled-messages/{scheduled}/send"]
+user = { requests = 60, per_seconds = 60, burst = 20 }
+
 # Lengthening a message spends its channel's mana as posting does.
 [rate_limits.endpoints."PATCH /messages/{message}"]
 user = { requests = 300, per_seconds = 60, burst = 100 }

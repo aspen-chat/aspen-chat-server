@@ -55,6 +55,7 @@ import type { OverrideGrant } from "./permissions";
 import { REACTION_SUMMARY_USERS, type ReadOptions, RecordStore } from "./store";
 import type {
   HeldMessage,
+  ScheduledMessage,
   Included,
   Invocation,
   ManaSender,
@@ -1222,6 +1223,116 @@ export class AspenSync {
     const message = result.data as Message;
     this.store.addMessage(message);
     return { kind: "posted", message };
+  }
+
+  /**
+   * Schedules a message to be posted in a channel at `sendAt`, as `sendMessage` would post it
+   * now: the server checks it then and again when it posts it, and until then only the caller's
+   * apps know of it (`scheduledMessages`). It is kept at once unless the stream told of it
+   * first.
+   */
+  async scheduleMessage(
+    channelId: string,
+    content: string,
+    attachments: readonly string[],
+    sendAt: Date,
+    options: { reply?: Reply } = {},
+  ): Promise<ScheduledMessage> {
+    const result = await this.#client.api.POST("/api/v1/channels/{channel}/scheduled-messages", {
+      params: { path: { channel: channelId } },
+      body: {
+        content,
+        attachments: [...attachments],
+        sendAt: sendAt.toISOString(),
+        ...(options.reply === undefined
+          ? {}
+          : { replyTo: options.reply.to, tagReplied: options.reply.tag }),
+      },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.fillScheduledMessage(result.data);
+    return result.data;
+  }
+
+  /**
+   * Gives one of the caller's scheduled messages another time, a failed one among them, which
+   * is tried again then. The change reaches the store by `scheduledMessageChanged`.
+   */
+  async rescheduleMessage(scheduledId: string, sendAt: Date): Promise<void> {
+    const result = await this.#client.api.PATCH(
+      "/api/v1/users/@me/scheduled-messages/{scheduled}",
+      {
+        params: { path: { scheduled: scheduledId } },
+        body: { sendAt: sendAt.toISOString() },
+      },
+    );
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Posts one of the caller's scheduled messages now, a failed one among them. The server posts
+   * it moments later as it would have at its time; the stream tells what became of it.
+   */
+  async sendScheduledNow(scheduledId: string): Promise<void> {
+    const result = await this.#client.api.POST(
+      "/api/v1/users/@me/scheduled-messages/{scheduled}/send",
+      { params: { path: { scheduled: scheduledId } } },
+    );
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+  }
+
+  /**
+   * Deletes one of the caller's scheduled messages before it is posted. It is let go at once;
+   * `heldMessageCancelled` tells the caller's other apps.
+   */
+  async deleteScheduled(scheduledId: string): Promise<void> {
+    const result = await this.#client.api.DELETE(
+      "/api/v1/users/@me/scheduled-messages/{scheduled}",
+      { params: { path: { scheduled: scheduledId } } },
+    );
+    // Not found: it was posted, or dropped, meanwhile, which its own event tells.
+    if (result.error !== undefined && result.response.status !== 404) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    this.store.forgetScheduledMessage(scheduledId);
+  }
+
+  /**
+   * Takes one of the caller's scheduled messages back to be changed: reads it as the server
+   * holds it, with its files' records, and deletes it there, so it will not be posted. The
+   * caller puts what this answers in the message box; the server keeps the files a day for it
+   * to be sent or scheduled again.
+   */
+  async unschedule(
+    scheduledId: string,
+  ): Promise<{ scheduled: ScheduledMessage; attachments: Attachment[] }> {
+    const result = await this.#client.api.GET("/api/v1/users/@me/scheduled-messages/{scheduled}", {
+      params: { path: { scheduled: scheduledId }, query: { include: ["attachments"] } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    const { data: scheduled, included } = result.data;
+    const deleted = await this.#client.api.DELETE(
+      "/api/v1/users/@me/scheduled-messages/{scheduled}",
+      { params: { path: { scheduled: scheduledId } } },
+    );
+    // Not found here means it was posted between the two requests: nothing is left to change.
+    if (deleted.error !== undefined) {
+      throw new ApiProblemError(problemOf(deleted.error, deleted.response));
+    }
+    this.store.forgetScheduledMessage(scheduledId);
+    const records = new Map((included.attachments ?? []).map((a) => [a.id, a]));
+    return {
+      scheduled,
+      attachments: scheduled.attachments.flatMap((id) => records.get(id) ?? []),
+    };
   }
 
   /**
@@ -3931,6 +4042,7 @@ export class AspenSync {
         blocks,
         plugins,
         heldMessages,
+        scheduledMessages,
         saves,
         follows,
         chosenPresence,
@@ -3969,6 +4081,7 @@ export class AspenSync {
         }),
         this.#client.api.GET("/api/v1/plugins"),
         this.#readHeldMessages(),
+        this.#client.api.GET("/api/v1/users/@me/scheduled-messages"),
         this.#client.api.GET("/api/v1/users/@me/saved-messages"),
         this.#client.api.GET("/api/v1/users/@me/thread-follows"),
         this.#client.api.GET("/api/v1/users/@me/presence-override"),
@@ -4019,6 +4132,8 @@ export class AspenSync {
       // Read before the events held back meanwhile, applied below, which settle any posted
       // since; a deployment that does not hold messages has none.
       this.store.replaceHeldMessages(heldMessages);
+      // The same holds of those scheduled for later.
+      this.store.replaceScheduledMessages(scheduledMessages.data ?? []);
       // A deployment that keeps no saves or follows has none.
       this.store.replaceSaves(saves.data ?? []);
       this.store.replaceFollows((follows.data ?? []).map((follow) => follow.thread));

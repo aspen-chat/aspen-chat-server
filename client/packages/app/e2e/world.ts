@@ -74,7 +74,16 @@ async function events(page: Page): Promise<Publish> {
     ws.onMessage((frame) => {
       const parsed = JSON.parse(String(frame)) as Record<string, unknown>;
       if (parsed.type === "identify") {
-        ws.send(JSON.stringify({ type: "ready", userId: me, resumed: false }));
+        // Live from `ready`: nothing is replayed, so no `caughtUp` follows.
+        ws.send(
+          JSON.stringify({
+            type: "ready",
+            userId: me,
+            resumed: false,
+            replayComplete: true,
+            catchUpFollows: false,
+          }),
+        );
       } else {
         sent.push(parsed);
       }
