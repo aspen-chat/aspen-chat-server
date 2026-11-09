@@ -51,6 +51,13 @@ consumer's gain again (`refreshVolumes`) when it changes.
 ### Playback through Web Audio
 
 - Playback runs through a Web Audio gain node, since an element's own volume stops at 1.
+- The call's media keeps one context, which the microphone (see [media](media.md#the-microphone))
+  and every consumer play through, open only while one of them uses it (`browserMedia.ts`), so each
+  call opens its own. One left open between calls breaks Web Audio on iOS: once the app has gone to
+  the background with nothing playing, as when the phone locks between calls, WebKit stops running
+  every audio context of the page, new ones too, as soon as anything plays through the one left
+  open, so the next call's voices, its microphone, and the app's sounds go silent until the app
+  starts again.
 - Each participant's raw stream also plays through a muted element (`browserMedia.ts`). Chromium,
   and so the desktop app, feeds a remote WebRTC track into Web Audio only while the track also plays
   through a media element. Without it the graph is silent there. Firefox plays either way.

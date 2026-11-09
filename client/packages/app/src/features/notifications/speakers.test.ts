@@ -89,7 +89,8 @@ class FakeElement {
 
 const desk = { id: "desk", label: "Desk speakers" };
 
-const decode = () => Promise.resolve({} as AudioBuffer);
+/** A recording a second long. */
+const decode = () => Promise.resolve({ duration: 1 } as AudioBuffer);
 
 /** A fresh copy of the module, so its speakers do not carry between tests. */
 async function speakers() {
@@ -174,6 +175,44 @@ describe("speakers", () => {
     FakeContext.refuse = false;
     await play(decode, null);
     expect(FakeContext.made).toHaveLength(2);
+  });
+
+  it("counts a sound whose context's clock stands still as ended after its length", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { play, END_GRACE_MS, KEEP_AWAKE_MS, WAKE_SECONDS } = await speakers();
+    const playing = await play(decode, null);
+    let ended = false;
+    void playing.ended.then(() => {
+      ended = true;
+    });
+    const lengthMs = (WAKE_SECONDS + 1) * 1000;
+    await vi.advanceTimersByTimeAsync(lengthMs + END_GRACE_MS - 1);
+    expect(ended).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ended).toBe(true);
+    // Left to play, should the clock only be late.
+    expect(lastSource().input).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(KEEP_AWAKE_MS);
+    expect(lastContext().state).toBe("closed");
+    await play(decode, null);
+    expect(FakeContext.made).toHaveLength(2);
+  });
+
+  it("lets a sound whose device was slow to wake play on, counting it once", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { play, END_GRACE_MS, KEEP_AWAKE_MS, WAKE_SECONDS } = await speakers();
+    await play(decode, null);
+    const late = lastSource();
+    await vi.advanceTimersByTimeAsync((WAKE_SECONDS + 1) * 1000 + END_GRACE_MS);
+    late.dispatchEvent(new Event("ended"));
+    expect(late.input).toBeNull();
+    // Counted as playing, the loop keeps its speaker open through another sound's end, as it
+    // would not had the late sound been counted as ending twice.
+    const looping = await play(decode, null, true);
+    (await play(decode, null)).stop();
+    await vi.advanceTimersByTimeAsync(KEEP_AWAKE_MS * 2);
+    expect(lastContext().state).toBe("running");
+    looping.stop();
   });
 
   it("wakes a speaker the system suspended as it wakes a new one", async () => {

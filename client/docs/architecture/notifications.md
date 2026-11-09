@@ -127,6 +127,12 @@ loses its start. A speaker therefore:
 - is given up when the browser has not started it within `START_LIMIT_MS` (two seconds), as before
   the page has been interacted with: the sound is not heard, rather than heard late;
 - wakes as a new one does when the system suspends it (Safari, during a phone call).
+- counts a sound as ended once it has gone `END_GRACE_MS` (one second) past its length, in real
+  time, without ending, though it is left to play. A context can report itself running while its
+  clock stands still, so its sounds never play or end; counted as playing, they would keep it open
+  and their places among `MAX_PLAYING_PER_SOUND` taken until the app restarts. Counted as ended, the
+  speaker closes when idle and the next sound opens a new one. A clock that is only late, waiting
+  for a device to wake, still plays its sound whole, since the sound is never stopped.
 
 How a speaker reaches the chosen device depends on the browser:
 
