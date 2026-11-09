@@ -648,7 +648,9 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
    */
   function closeKeyboard() {
     setKeyboard(false);
-    box.current?.focus();
+    // The box is in view, above the emoji keyboard; left to it, WebKit scrolls the whole page to
+    // show the box as the phone's keyboard comes, for a frame, before the page fits above it.
+    box.current?.focus({ preventScroll: true });
   }
 
   /**
@@ -1030,21 +1032,20 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   return (
     <>
       {form}
-      {keyboard && (
-        <EmojiKeyboard
-          id={keyboardId}
-          communityId={emoji.communityId}
-          onPick={(picked) => {
-            emoji.insert(picked, box.current);
-            // On a touch screen the box stays unfocused, so the phone's keyboard stays away.
-            if (!touchOnly) {
-              box.current?.focus();
-            }
-          }}
-          onClose={closeKeyboard}
-          className="-mb-[env(safe-area-inset-bottom)] border-t border-line pb-[env(safe-area-inset-bottom)]"
-        />
-      )}
+      <EmojiKeyboard
+        id={keyboardId}
+        open={keyboard}
+        communityId={emoji.communityId}
+        onPick={(picked) => {
+          emoji.insert(picked, box.current);
+          // On a touch screen the box stays unfocused, so the phone's keyboard stays away.
+          if (!touchOnly) {
+            box.current?.focus();
+          }
+        }}
+        onClose={closeKeyboard}
+        docked
+      />
     </>
   );
 }

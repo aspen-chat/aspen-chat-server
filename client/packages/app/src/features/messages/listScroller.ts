@@ -48,6 +48,8 @@ const INDICATOR_MS = 700;
 const THUMB_MIN_PX = 24;
 /** How close to the bottom, in pixels, a reader's move leaves the list pinned there. */
 const PIN_SLACK_PX = 8;
+/** How soon after the viewport's last resize another counts as part of the same change. */
+const RESIZE_BURST_MS = 250;
 
 export type Heading = "older" | "newer";
 
@@ -161,6 +163,17 @@ export class ListScroller {
   #ownScrollTop: number | null = null;
   /** The box's position at its last scroll event, by which the browser's own scrolls are measured. */
   #lastScrollTop = 0;
+  /**
+   * The viewport's height as `observeViewport` last followed it. A scroll event that finds it
+   * otherwise is the browser keeping the box's position within a viewport that has just grown,
+   * which `observeViewport` follows, not the reader's.
+   */
+  #viewportHeight: number | null = null;
+  /**
+   * The viewport's resizes that follow one another closely, as one change: its height before
+   * the first, and how far `observeViewport` has moved the view for them so far.
+   */
+  #resizing: { from: number; kept: number; timer?: ReturnType<typeof setTimeout> } | null = null;
   /**
    * The position the list last scrolled its box to, exactly. A box holds whole pixels, and
    * WebKit truncates a position set between them (999.7 reads back as 999), so a list that
@@ -359,28 +372,54 @@ export class ListScroller {
 
   /**
    * The viewport changes size: something takes the screen's space, as the keyboard does when
-   * the message box is chosen on a phone, or gives it back. Its bottom edge stays where it was,
-   * so what was just above the box, likely what is being answered, stays in view: pinned to
-   * the newest message, or moved by what the viewport lost or gained.
+   * the message box is chosen on a phone, or gives it back. Pinned to the newest message, the
+   * list stays there. Otherwise, losing space it keeps its bottom edge where it was, so what
+   * was just above the box, likely what is being answered, stays in view; gaining it, what is
+   * in view stays where it is on the screen, and the space shows what lies below, as far as
+   * there is any. Moving what is in view down by the space gained would show the reader
+   * history they had not scrolled to.
+   *
+   * Resizes that follow one another within `RESIZE_BURST_MS` are one change, judged by what
+   * the viewport lost or gained across them all: a keyboard's comes in steps (the room for the
+   * home indicator follows a layout after the keyboard's), and judging each step alone would
+   * keep the bottom edge through one and the view through the next, moving it by the step.
    */
   observeViewport(): () => void {
     const box = this.viewport.current;
     if (box === null || typeof ResizeObserver === "undefined") {
       return () => undefined;
     }
-    let height = box.clientHeight;
+    this.#viewportHeight = box.clientHeight;
     const observer = new ResizeObserver(() => {
-      const lost = height - box.clientHeight;
-      height = box.clientHeight;
+      const before = this.#viewportHeight ?? box.clientHeight;
+      this.#viewportHeight = box.clientHeight;
       this.measureRange();
-      if (lost === 0) {
+      if (before === box.clientHeight) {
         return;
       }
-      this.#moveTo(this.#pinned ? this.range.max : clamp(this.current() + lost, this.range), false);
+      const resizing = this.#resizing ?? { from: before, kept: 0 };
+      clearTimeout(resizing.timer);
+      resizing.timer = setTimeout(() => {
+        this.#resizing = null;
+      }, RESIZE_BURST_MS);
+      this.#resizing = resizing;
+      const lost = resizing.from - box.clientHeight;
+      const keep = Math.max(0, lost);
+      const by = keep - resizing.kept;
+      resizing.kept = keep;
+      this.diagnostics?.note(
+        `viewport ${String(before)}->${String(box.clientHeight)}${this.#pinned ? ", pinned" : `, moved ${String(by)}`}`,
+      );
+      this.#moveTo(this.#pinned ? this.range.max : clamp(this.current() + by, this.range), false);
     });
     observer.observe(box);
     return () => {
       observer.disconnect();
+      this.#viewportHeight = null;
+      if (this.#resizing !== null) {
+        clearTimeout(this.#resizing.timer);
+        this.#resizing = null;
+      }
     };
   }
 
@@ -402,6 +441,14 @@ export class ListScroller {
       return;
     }
     this.diagnostics?.moved(by);
+    if (this.#viewportHeight !== null && box.clientHeight !== this.#viewportHeight) {
+      // The browser held the box within a viewport that grew, before `observeViewport` has
+      // followed the change. It can land short of the bottom (the room for the home indicator
+      // comes back a layout after the keyboard's goes), which taken as the reader's doing would
+      // let go of the newest message; `observeViewport` decides instead.
+      this.diagnostics?.note(`held by the browser at ${String(Math.round(box.scrollTop))}`);
+      return;
+    }
     this.diagnostics?.note(
       `${OWNS_SCROLLING ? "scrolled by a script" : "scrolled"} to ${String(Math.round(box.scrollTop))}`,
     );

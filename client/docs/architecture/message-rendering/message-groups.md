@@ -18,7 +18,10 @@ A message continues the group before it when all of these hold:
 - Nothing is between them (the New Messages line, a run of blocked messages).
 - Neither is a kind that stands alone. Only `standard` and `poll` group. Notices, calls, closed
   polls, thread echoes, commands, and warnings stand alone.
-- The group's height stays within three quarters of the list's (`GROUP_HEIGHT_SHARE`).
+- The group's height stays within three quarters of the list's (`GROUP_HEIGHT_SHARE`). The list's
+  height is taken down to the page's foot with no keyboard taking from it, past the message box
+  (`useListMetrics`). **Why:** a keyboard, the emoji keyboard, or a longer draft takes from the list
+  as it comes and goes, and regrouping each time would move every row above the view.
 
 ## Estimated height
 

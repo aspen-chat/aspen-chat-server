@@ -10,12 +10,14 @@ import {
   type MessageContents,
   type TextMetrics,
 } from "@/features/messages/messageGroups";
+import { pageHeight } from "@/theme/visibleArea";
 
 /** What a message's picture, name, and gap beside its column take of a row's width. */
 const BESIDE_COLUMN_PX = 36 + 12 + 16;
 
 /** The list's size and how it sets text, as grouping estimates with it. */
 interface ListMetrics extends TextMetrics {
+  /** From the list's top to the page's foot, with no keyboard taking from the page. */
   readonly height: number;
 }
 
@@ -25,8 +27,9 @@ interface ListMetrics extends TextMetrics {
  * the groups around it, nor the first under the New Messages line, which follows the message
  * at `lineIndex` (`-1`: the line is above them all). Worked out again whenever the parts or
  * the line change, each message keeping what it was decided to be while it stays in the
- * window, and afresh as the list (`viewport`, its text set in `content`) is resized. Nothing
- * is grouped until the list is `drawn` and measured, which is done before it is painted.
+ * window, and afresh as the list (`viewport`, its text set in `content`) is resized, except by
+ * what takes from the page's foot: a keyboard, the emoji keyboard, a draft growing. Nothing is
+ * grouped until the list is `drawn` and measured, which is done before it is painted.
  */
 export function useGroupContinuations(
   parts: readonly WindowPart[],
@@ -154,7 +157,10 @@ function useListMetrics(
       const fontSize = Number.parseFloat(style.fontSize) || 16;
       const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.5;
       const next: ListMetrics = {
-        height: box.clientHeight,
+        // To the page's foot with no keyboard taking from it, past the message box: what a
+        // keyboard, the emoji keyboard, or a longer draft takes from the list then regroups
+        // nothing, which would move every row above the view as it rose and fell.
+        height: Math.max(box.clientHeight, pageHeight() - box.getBoundingClientRect().top),
         column: Math.max(1, text.clientWidth - BESIDE_COLUMN_PX),
         lineHeight,
         // An average narrow character in the sans faces is about half the text's size.

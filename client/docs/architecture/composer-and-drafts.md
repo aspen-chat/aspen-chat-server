@@ -52,11 +52,13 @@ The box grows with what is written, up to its row's width and no further:
 - A word too long for the line (a link, say) breaks anywhere.
 - The buttons beside it never shrink, so Send stays on screen however wide the text.
 
-### When the list shrinks
+### When the list shrinks or grows
 
 When the message list shrinks, as when a phone's keyboard opens, it keeps its bottom edge where it
 was. It stays pinned to the newest message, or moves down by what it lost, so what is being answered
-stays in view. The web app asks for this with `interactive-widget=resizes-content` in its viewport.
+stays in view. When it grows again, what is in view stays where it is
+([Keeping the view still](message-list/keeping-still.md)). The web app asks for the page to shrink
+with `interactive-widget=resizes-content` in its viewport.
 
 The iOS app does the same itself: its web view ends where the keyboard begins (`MainViewController`
 in `packages/mobile/ios/App/App`), so the box sits on the keyboard with nothing between them.
@@ -113,6 +115,28 @@ being edited.
   the page's height with no keyboard taking from it, so opening it over the device's keyboard gives
   it its full height. The message list keeps its bottom edge as the keyboard opens, as it does for a
   phone's own.
+- **Taking the phone's keyboard's place, nothing above moves.** While the emoji keyboard is below
+  the box (`docked`), the page keeps its full height however much of it the phone's keyboard takes
+  (`KeepsPageHeight`, and `data-docked-emoji-keyboard` in `styles.css`), and clips what lies outside
+  the web view. The phone's keyboard coming or going then changes no layout: it covers the emoji
+  keyboard or uncovers it.
+  - Opened over the phone's keyboard, it is uncovered as that keyboard leaves.
+  - Put away as the phone's keyboard rises (the smiley, Escape, or touching the box), its room
+    stays, empty and as tall as that keyboard, for as long as the keyboard is up. It goes once the
+    keyboard has gone, or after `HANDOVER_MS` when none rises, when the page's full height is its
+    height anyway. **Why not give the room up as soon as the keyboard covers it:** the page would
+    change height then, with the web view, and WebKit lays the page out a step out of order with
+    such a change and keeps the list's position from it.
+  - **Why not follow the web view's size in styles instead:** WebKit lays the page out at the web
+    view's new size before styles that follow the size are worked out. The list's position from that
+    layout is kept, and it lands a keyboard's height off.
+  - **Why a component of its own sets the page's height:** the page's height and the emoji
+    keyboard's elements must change in one layout. React takes out a component's elements and runs
+    its layout effects' cleanups in one step; any other way of setting the height lets the list's
+    own effects read a layout between the two.
+  - **The smiley gives the box its focus back without scrolling** (`preventScroll`). The box is in
+    view; left to it, WebKit scrolls the whole page to show the box for a frame as the phone's
+    keyboard comes.
 - **Edge to edge.** Below the box it spans the whole width, with no frame or padding around it; a
   message being edited has it across the message. Its emoji run edge to edge too
   (`emoji-picker-fill` in `styles.css`), each glyph kept off the edge by its own cell. Its ground
