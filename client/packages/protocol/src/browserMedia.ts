@@ -6,8 +6,16 @@
 
 import { Device } from "mediasoup-client";
 import { DEFAULT_DEVICE, type DeviceChoice, resolveDevice } from "./preferences";
+import { soundsEnded } from "./soundActivity";
 import { CameraError } from "./voice";
 import type { ScreenCapture, VoiceDevice, VoiceMedia } from "./voiceMedia";
+
+/**
+ * The longest a stopped microphone is kept open, capturing for nothing, while the app's sounds
+ * play (`soundsEnded`): every sound that is not looped is under two seconds long, and may wait up
+ * to two more for its speaker to start.
+ */
+export const MICROPHONE_HOLD_LIMIT_MS = 5_000;
 
 /** The device id a choice means right now, among the devices of `kind`; `null` is the default. */
 async function deviceIdFor(choice: DeviceChoice, kind: MediaDeviceKind): Promise<string | null> {
@@ -109,15 +117,21 @@ export function browserVoiceMedia(): VoiceMedia {
       return captured;
     }
     microphones.add(node);
-    // The call stops the track it was given; that must release the microphone as well.
+    // The call stops the track it was given; that must release the microphone as well, once
+    // the app's sounds have ended (`soundActivity`). A sound the stop leads to, as leaving the
+    // call plays one, is asked for in the same task, so the wait starts in the next.
     const stopSent = sent.stop.bind(sent);
     sent.stop = () => {
       stopSent();
-      captured.stop();
       source.disconnect();
       node.disconnect();
       microphones.delete(node);
       closeWhenUnused();
+      setTimeout(() => {
+        void soundsEnded(MICROPHONE_HOLD_LIMIT_MS).then(() => {
+          captured.stop();
+        });
+      }, 0);
     };
     return sent;
   };

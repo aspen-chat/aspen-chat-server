@@ -13,6 +13,11 @@ pass a fake.
   (`INPUT_VOLUME`, 0 to 200%) after the browser's own processing. The call is handed the gain node's
   track, and stopping that track stops the capture too. Without Web Audio the capture is sent as it
   is.
+- A stopped microphone's capture is released only once the app's sounds that are not looped have
+  ended, starting with any asked for in the same task as the stop, such as the leave sound
+  (`soundsEnded` in `soundActivity.ts`, which `playSound` counts sounds for), and at most
+  `MICROPHONE_HOLD_LIMIT_MS` (five seconds) after the stop. Nothing is sent or read from it
+  meanwhile, though the system shows the microphone in use.
 - `VoiceCall.setInputVolume` changes the gain of the open microphone at once, and every microphone
   opens at it. `AspenSync` applies the preference as it changes.
 

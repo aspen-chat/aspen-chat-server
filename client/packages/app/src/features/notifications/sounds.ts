@@ -1,4 +1,4 @@
-import type { DeviceChoice } from "@aspen/protocol";
+import { type DeviceChoice, playingSound } from "@aspen/protocol";
 import { play, type Playing } from "./speakers";
 
 /** The app's sounds, each a recording in `sounds/` (`SOUND_FILES`). */
@@ -126,7 +126,8 @@ function takePlace(sound: Sound): (() => void) | null {
 /**
  * Plays `sound` through `device` (`play`), unless it played less than its `REPEAT_GAP_MS` ago or
  * `MAX_PLAYING_PER_SOUND` of it are playing. Settles once it has started; a sound the browser
- * refuses to play is simply not heard.
+ * refuses to play is simply not heard. A call's microphone stopped meanwhile stays open until it
+ * ends (`playingSound`), so the browser does not change how it plays the page's sound under it.
  */
 export async function playSound(sound: Sound, device: DeviceChoice | null): Promise<void> {
   const now = Date.now();
@@ -138,17 +139,23 @@ export async function playSound(sound: Sound, device: DeviceChoice | null): Prom
     return;
   }
   lastPlayed.set(sound, now);
+  const counted = playingSound();
+  const ended = () => {
+    release();
+    counted();
+  };
   try {
     const playing = await play((context) => bufferOf(sound, context), device);
-    void playing.ended.then(release);
+    void playing.ended.then(ended);
   } catch {
-    release();
+    ended();
   }
 }
 
 /**
  * Plays `sound` through `device` over and over until the function it answers is called, unless
- * `MAX_PLAYING_PER_SOUND` of it are playing, when it is not heard at all.
+ * `MAX_PLAYING_PER_SOUND` of it are playing, when it is not heard at all. Unlike `playSound`'s,
+ * it keeps no stopped microphone open: a ring can go on for as long as nobody answers.
  */
 export function loopSound(sound: Sound, device: DeviceChoice | null): () => void {
   const release = takePlace(sound);

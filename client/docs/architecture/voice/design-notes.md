@@ -33,6 +33,15 @@ See [media](media.md).
   in Node, and tests pass a fake.
 - **`getCamera` tries every camera.** One held by another app does not leave the user without the
   rest.
+- **A stopped microphone is released after the app's sounds.** While a capture with echo
+  cancellation is open, Chromium (the desktop app and Android among it) mixes everything the page
+  plays to a device, to take it out of what the microphone hears. About a second after the last such
+  capture closes, it takes the page's outputs out of that mix: what they play drops out for 10 to 20
+  ms and resumes about 7 dB quieter, a click in the leave sound, which starts as the call stops its
+  microphone. Released after the sound, the capture closes and the outputs change while they play
+  silence. Turning Chromium's browser-wide echo cancellation off would avoid the switch, but the
+  call's voices play through Web Audio, which only that cancellation takes out of the microphone;
+  playing the sound a second later would avoid it too, but lag the button.
 
 ## Playback
 

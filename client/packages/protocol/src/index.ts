@@ -386,6 +386,7 @@ export {
   type TransferStatus,
 } from "./transfers";
 export { browserVoiceMedia, canChooseOutput } from "./browserMedia";
+export { playingSound } from "./soundActivity";
 export { nameHueOf, shownApartRole } from "./nameHue";
 export {
   AUDIO_INPUT,

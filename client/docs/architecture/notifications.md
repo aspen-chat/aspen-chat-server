@@ -100,6 +100,9 @@ uses: `watchCallSounds` (`src/features/voice/callSounds.ts`) and `watchConnectio
   sound counted on its own; one asked for past that is not heard, rather than waiting its turn, so a
   burst of messages cannot queue a run of chimes. A sound gives its place back when it ends, fails,
   or the browser refuses it, and a loop when it is stopped.
+- A call's microphone stopped while a `playSound` sound plays, or in the same task as one is asked
+  for, stays open until the sound ends, since Chromium would otherwise cut the sound a second later
+  (see [the microphone](voice/media.md#the-microphone)). A loop holds no microphone open.
 
 The files are WAV (16-bit PCM, mono, 48 kHz), which every browser and web view the apps run in
 decodes; Ogg Opus would be smaller but Safari before 18.4 cannot decode it. `sounds.ts` imports them
