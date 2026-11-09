@@ -72,15 +72,17 @@ changes after the bootstrap. The user's own also follows what they choose at onc
 
 ## A channel's online count
 
-A channel's header shows how many people who may view it are online (not away), behind the online
-status's mark (`OnlineCount` in `ChannelHeader`).
+A channel's header shows how many people who may view it are online (not away), the reader always
+among them, behind the online status's mark (`OnlineCount` in `ChannelHeader`).
 
 - No client knows every member of a large community, so the server counts
   (`GET /channels/{channel}/presence`).
 - `useChannelOnline` asks `AspenSync.watchChannelPresence` to keep the count current while the
-  header is shown.
-- The count is read at once, then every `PRESENCE_POLL_MS` (thirty seconds), into
-  `RecordStore.channelOnline`.
+  header is shown. It names the channel in `viewing` as `watchTyping` does, and the stream tells
+  `channelOnline` frames as the count changes with someone's presence.
+- The count is read at once, then every `PRESENCE_POLL_MS` (thirty seconds) for changes the stream
+  does not tell (members and roles), into `RecordStore.channelOnline`. A read sent before the stream
+  last told the count does not replace it (`setChannelOnline`'s `since`).
 
 ## Drawing a status
 

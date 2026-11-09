@@ -75,12 +75,15 @@ pub async fn get_channel(
 #[serde(rename_all = "camelCase")]
 pub struct ChannelPresence {
     /// How many people who may view the channel are online, not away: the members of its
-    /// community who may view it, or a DM's recipients. The caller is among them when online.
+    /// community who may view it, or a DM's recipients. The caller is always among them,
+    /// whatever their own status, so it is at least 1.
     pub online: u32,
 }
 
-/// How many people who may view a channel are online. Each server works a channel's count out
-/// at most every ten seconds, so it may be that old.
+/// How many people who may view a channel are online. Each server reads who of a community is
+/// online at most every ten seconds, and again when one of them changes while a connection to
+/// it views the community's channels, so it may be up to ten seconds old. An event stream that
+/// views the channel (`viewing`) is told of changes by `channelOnline` frames.
 #[utoipa::path(
     get,
     path = "/channels/{channel}/presence",

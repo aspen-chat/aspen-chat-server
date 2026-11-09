@@ -491,10 +491,6 @@ export function useBlocked(userId: string | undefined): boolean {
 }
 
 /**
- * Who else is typing in a channel, in the order they began, leaving out the caller and anyone
- * they block. While it is used the server sends typing for the channel (`AspenSync.watchTyping`).
- */
-/**
  * A channel's mana as the server last told it (`ChannelMana`), or `undefined` while it is full.
  * The channel is watched while this is used, as typing is.
  */
@@ -504,6 +500,10 @@ export function useChannelMana(channelId: string): ChannelMana | undefined {
   return useTopic(`mana:${channelId}`, (s) => s.mana(channelId));
 }
 
+/**
+ * Who else is typing in a channel, in the order they began, leaving out the caller and anyone
+ * they block. While it is used the server sends typing for the channel (`AspenSync.watchTyping`).
+ */
 export function useTypers(channelId: string): readonly string[] {
   const sync = useSync();
   useEffect(() => sync.watchTyping(channelId), [sync, channelId]);
@@ -958,8 +958,8 @@ export function useCategoryOverrides(categoryId: string): readonly CategoryOverr
 }
 
 /**
- * How many people who may view a channel are online, `undefined` until read; kept current with
- * the presence poll while in use.
+ * How many people who may view a channel are online, the caller always among them, `undefined`
+ * until read; kept current by the stream and the presence poll while in use.
  */
 export function useChannelOnline(channelId: string): number | undefined {
   const sync = useSync();

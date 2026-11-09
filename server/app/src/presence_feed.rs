@@ -741,7 +741,7 @@ async fn read(
 }
 
 /// Subscribes to presence hints, retried until NATS answers.
-async fn subscribe_hints(nats: &async_nats::Client) -> async_nats::Subscriber {
+pub(crate) async fn subscribe_hints(nats: &async_nats::Client) -> async_nats::Subscriber {
     let mut wait = Duration::from_millis(250);
     loop {
         match nats.subscribe(PRESENCE_SUBJECT).await {
@@ -924,6 +924,7 @@ mod tests {
                 EphemeralEvent::PresenceWatching => continue,
                 EphemeralEvent::Typing { .. }
                 | EphemeralEvent::Mana { .. }
+                | EphemeralEvent::ChannelOnline { .. }
                 | EphemeralEvent::PluginCatalogueChanged => {
                     panic!("a relay from the presence router")
                 }

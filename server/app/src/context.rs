@@ -41,12 +41,13 @@ pub struct GlobalServerContext {
     pub readiness: Arc<crate::health::LastChecked>,
     /// The places for rechecks of calls this server runs at once (`app::voice::recheck`).
     pub rechecks: Arc<tokio::sync::Semaphore>,
-    /// Each channel's recent count of who is online in it (`app::channel_presence`).
-    pub channel_presence: Arc<crate::recent::Recent<crate::ChannelId, u32>>,
+    /// Telling event stream connections how many are online in the channels they view
+    /// (`app::channel_presence::live`).
+    pub channel_online: Arc<crate::channel_presence::live::OnlineFeed>,
     /// Who of each community is online, by the roles they hold, for its channels' counts
     /// (`app::channel_presence`).
     pub community_online: Arc<
-        crate::recent::Recent<crate::CommunityId, Option<Arc<crate::visibility::OnlineGroups>>>,
+        crate::recent::Recent<crate::CommunityId, Arc<crate::channel_presence::CommunityOnline>>,
     >,
     /// Where each call recently reported speaking in is, its voice server and channel, which
     /// never change (`app::voice::sessions`), so speaking changes are checked without a read.
@@ -229,7 +230,7 @@ impl GlobalServerContext {
         );
         Ok(Self {
             channel_homes: crate::events::channel_homes(),
-            channel_presence: Arc::default(),
+            channel_online: Default::default(),
             standing_backoff: Arc::new(tokio::sync::Mutex::new(
                 crate::federation::standing::StandingBackoff::new(&config.federation),
             )),

@@ -116,9 +116,10 @@ pub enum ClientMessage {
     /// it. A connection that closes says so on its own for every channel it was typing in.
     #[serde(rename_all = "camelCase")]
     StoppedTyping { channel_id: ChannelId },
-    /// The channels the client has open where it shows who is typing, at most eight: it hears
-    /// typing in these alone, so send it on every `ready` and whenever they change, an empty
-    /// list when none is open. Each replaces the last. Nothing answers it.
+    /// The channels the client has open where it shows who is typing, a channel's mana, or how
+    /// many are online in it, at most eight: it hears typing, mana, and `channelOnline` for
+    /// these alone, so send it on every `ready` and whenever they change, an empty list when
+    /// none is open. Each replaces the last. Nothing answers it directly.
     #[serde(rename_all = "camelCase")]
     Viewing { channel_ids: Vec<ChannelId> },
     /// The users whose presence the client shows, at most `MAX_WATCHED_PRESENCE` (500), the
@@ -757,6 +758,8 @@ async fn pump_events(
     let mut presence = state.presence_feed.watch(user);
     // Dropped with the connection, which ends its task.
     let (viewer, mut mana_levels) = app::mana::live::Viewer::spawn(state.clone(), user);
+    // Dropped with the connection, which ends its watch.
+    let mut online = state.channel_online.watch(state, user);
     let mut viewing_taken: Option<tokio::time::Instant> = None;
     let mut viewing_waiting: Option<Vec<ChannelId>> = None;
     loop {
@@ -769,11 +772,17 @@ async fn pump_events(
             } => {
                 if let Some(channel_ids) = viewing_waiting.take() {
                     viewing_taken = Some(tokio::time::Instant::now());
-                    take_viewing(&viewer, &subscription, channel_ids);
+                    take_viewing(&viewer, &online, &subscription, channel_ids);
                 }
             },
             Some(level) = mana_levels.recv() => {
                 if let Err(e) = send_presence(&mut socket, &level).await {
+                    log_send_error(&e);
+                    return;
+                }
+            },
+            Some(count) = online.next() => {
+                if let Err(e) = send_presence(&mut socket, &count).await {
                     log_send_error(&e);
                     return;
                 }
@@ -904,7 +913,7 @@ async fn pump_events(
                             if viewing_taken.is_none_or(|at| now.duration_since(at) >= VIEWING_EVERY) {
                                 viewing_taken = Some(now);
                                 viewing_waiting = None;
-                                take_viewing(&viewer, &subscription, channel_ids);
+                                take_viewing(&viewer, &online, &subscription, channel_ids);
                             } else {
                                 viewing_waiting = Some(channel_ids);
                             }
@@ -932,19 +941,22 @@ async fn pump_events(
     }
 }
 
-/// Hands a `viewing` list, cut to `event_feed::MAX_VIEWING`, to the connection's shard and mana
-/// viewer.
+/// Hands a `viewing` list, cut to `event_feed::MAX_VIEWING`, to the connection's shard, mana
+/// viewer, and online count watch.
 fn take_viewing(
     viewer: &app::mana::live::Viewer,
+    online: &app::channel_presence::live::OnlineWatch,
     subscription: &Subscription,
     channel_ids: Vec<ChannelId>,
 ) {
     viewer.viewing(channel_ids.clone());
+    online.viewing(channel_ids.clone());
     subscription.viewing(channel_ids);
 }
 
 /// Writes an ephemeral frame the connection was told of directly: the presence router's
-/// (`presence`, `presenceWatching`), and a channel's mana as the connection starts to view it.
+/// (`presence`, `presenceWatching`), a channel's mana as the connection starts to view it, and
+/// the online counts of the channels it views.
 async fn send_presence(socket: &mut WebSocket, told: &EphemeralEvent) -> Result<(), axum::Error> {
     let event = serde_json::value::to_raw_value(told).map_err(axum::Error::new)?;
     send_json(socket, &ServerMessage::Ephemeral { event: &event }).await
