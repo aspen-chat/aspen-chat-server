@@ -56,6 +56,13 @@ pub enum EphemeralEvent {
         #[serde(default)]
         queued: bool,
     },
+    /// How many people who may view a channel the connection views (`viewing`) are online, not
+    /// away, as `GET /channels/{channel}/presence` counts them: the reader always among them.
+    /// Told when a change to the presence of someone who may view it changes the count, at
+    /// most once every two seconds; changes to who may view it are not told, so a client reads
+    /// the count again now and then.
+    #[serde(rename_all = "camelCase")]
+    ChannelOnline { channel_id: ChannelId, online: u32 },
     /// The deployment's installed plugins changed: one was installed, upgraded, turned on or
     /// off, reordered, or removed (`app::plugin::registry`). Told once per change to every
     /// connection of each API server as it takes the change up. The client reads `GET /plugins`

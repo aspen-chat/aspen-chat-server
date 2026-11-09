@@ -625,6 +625,10 @@ export class AspenSync {
           });
           return;
         }
+        if (event.type === "channelOnline") {
+          this.store.noteChannelOnline(event.channelId, event.online, this.#now());
+          return;
+        }
         if (event.type === "pluginCatalogueChanged") {
           // What the deployment runs changed: installed, removed, turned on or off, or upgraded.
           void this.#reloadPlugins().catch(() => undefined);
@@ -4233,9 +4237,12 @@ export class AspenSync {
 
   /**
    * Keeps a channel's online count current while it is shown: read at once when the sync is
-   * live, then with every presence poll. Returns what stops it.
+   * live, told by the stream as it changes while the channel is viewed (`watchTyping`), and
+   * read again with every presence poll for what the stream does not tell. Returns what stops
+   * it.
    */
   watchChannelPresence(channelId: string): () => void {
+    const unview = this.watchTyping(channelId);
     const watchers = this.#presenceChannels.get(channelId) ?? 0;
     this.#presenceChannels.set(channelId, watchers + 1);
     // Its community's members come first among those watched.
@@ -4244,6 +4251,7 @@ export class AspenSync {
       void this.#loadChannelPresence(channelId).catch(() => undefined);
     }
     return () => {
+      unview();
       const left = (this.#presenceChannels.get(channelId) ?? 1) - 1;
       if (left > 0) {
         this.#presenceChannels.set(channelId, left);
@@ -4270,11 +4278,12 @@ export class AspenSync {
   }
 
   async #loadChannelPresence(channelId: string): Promise<void> {
+    const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/channels/{channel}/presence", {
       params: { path: { channel: channelId } },
     });
     if (result.data !== undefined) {
-      this.store.setChannelOnline(channelId, result.data.online);
+      this.store.setChannelOnline(channelId, result.data.online, since);
     }
   }
 
@@ -4434,9 +4443,9 @@ export class AspenSync {
   }
 
   /**
-   * Shows who is typing in a channel, and its mana while it is busy, while the returned
-   * function is not yet called: the server sends both only for channels the app says it shows
-   * (`viewing`), at most `MAX_VIEWING`.
+   * Shows who is typing in a channel, its mana while it is busy, and changes to how many are
+   * online in it, while the returned function is not yet called: the server sends them only
+   * for channels the app says it shows (`viewing`), at most `MAX_VIEWING`.
    */
   watchTyping(channelId: string): () => void {
     this.#viewing.set(channelId, (this.#viewing.get(channelId) ?? 0) + 1);

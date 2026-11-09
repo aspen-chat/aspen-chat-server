@@ -334,6 +334,8 @@ export class RecordStore {
   readonly #threadReads = new Map<string, string>();
   /** How many people are online in each channel whose count has been read. */
   readonly #channelOnline = new Map<string, number>();
+  /** When the stream last told each channel's online count, by the sync's clock. */
+  readonly #channelOnlineToldAt = new Map<string, number>();
   /**
    * Who is typing in each channel, `channel -> user -> until` (by `now()`), in the order they
    * began. Never read from the server: only the event stream's `ephemeral` frames tell of it.
@@ -990,8 +992,25 @@ export class RecordStore {
     return this.#channelOnline.get(channelId);
   }
 
-  /** Installs a channel's online count as read. */
-  setChannelOnline(channelId: string, online: number): void {
+  /**
+   * Installs a channel's online count as read by a request sent at `since`, unless the stream
+   * told a count after that, which is newer.
+   */
+  setChannelOnline(channelId: string, online: number, since: number): void {
+    const told = this.#channelOnlineToldAt.get(channelId);
+    if (told !== undefined && told > since) {
+      return;
+    }
+    this.#installChannelOnline(channelId, online);
+  }
+
+  /** Installs a channel's online count as the stream told it at `at`. */
+  noteChannelOnline(channelId: string, online: number, at: number): void {
+    this.#channelOnlineToldAt.set(channelId, at);
+    this.#installChannelOnline(channelId, online);
+  }
+
+  #installChannelOnline(channelId: string, online: number): void {
     if (this.#channelOnline.get(channelId) === online) {
       return;
     }
@@ -2800,6 +2819,7 @@ export class RecordStore {
       this.#follows.clear();
       this.#threadReads.clear();
       this.#channelOnline.clear();
+      this.#channelOnlineToldAt.clear();
       this.#forgetCommands();
       this.#staleFrequentEmoji();
       this.#channelOverrides.clear();

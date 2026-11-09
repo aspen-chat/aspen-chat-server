@@ -537,6 +537,42 @@ describe("AspenSync", () => {
     sync.stop();
   });
 
+  it("views a channel whose online count is shown, and keeps what the stream told over an older read", async () => {
+    let now = 0;
+    const answers: (() => void)[] = [];
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        [`/api/v1/channels/${general.id}/presence`]: () =>
+          new Promise<Response>((resolve) => {
+            answers.push(() => {
+              resolve(json({ online: 1 }));
+            });
+          }),
+      },
+      () => now,
+    );
+    const socket = await goLive(sync);
+    const unwatch = sync.watchChannelPresence(general.id);
+    const viewing = socket.sent.filter((f) => (f as { type: string }).type === "viewing");
+    expect(viewing.at(-1)).toEqual({ type: "viewing", channelIds: [general.id] });
+    await settle();
+    now = 10;
+    socket.frame({
+      type: "ephemeral",
+      event: { type: "channelOnline", channelId: general.id, online: 4 },
+    });
+    expect(sync.store.channelOnline(general.id)).toBe(4);
+    // The read was sent before the stream told the count, so what it answers is older.
+    expect(answers).toHaveLength(1);
+    answers.shift()?.();
+    await settle();
+    expect(sync.store.channelOnline(general.id)).toBe(4);
+    unwatch();
+    expect(socket.sent.at(-1)).toEqual({ type: "viewing", channelIds: [] });
+    sync.stop();
+  });
+
   it("reads the caller's chosen presence at bootstrap, and sets and ends it", async () => {
     const writes: { method: string; body: unknown }[] = [];
     const { sync } = makeSync({

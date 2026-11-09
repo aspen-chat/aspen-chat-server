@@ -51,4 +51,19 @@ impl<K: Hash + Eq, V: Clone> Recent<K, V> {
         };
         cell.get_or_try_init(work).await.cloned()
     }
+
+    /// A new value for `key` from `work`, whatever is kept: for one known to have changed. It
+    /// replaces what was kept as it starts, so requests from then on wait for it.
+    pub async fn renew<F, Fut>(&self, key: K, work: F) -> crate::Result<V>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = crate::Result<V>>,
+    {
+        let cell = Arc::new(OnceCell::new());
+        self.values
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .put(key, (Instant::now(), cell.clone()));
+        cell.get_or_try_init(work).await.cloned()
+    }
 }

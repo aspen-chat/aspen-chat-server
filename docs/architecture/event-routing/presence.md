@@ -195,10 +195,13 @@ To everyone else it answers `offline`. The member sample leaves out those who bl
 ## Online count of a channel
 
 `GET /channels/{channel}/presence` (`app::channel_presence`) counts how many people are online in a
-channel. It counts those whose status is online or do not disturb, not away or invisible:
+channel, and `channelOnline` frames tell a connection viewing it of changes. It counts those whose
+status is online or do not disturb, not away or invisible:
 
 - among the community's members who may view the channel (`app::visibility::viewers`); or
-- among a DM's recipients.
+- among a DM's recipients;
+- and always the reader, whatever their own status: they are using Aspen to read it. Others count
+  them as their status says.
 
 A thread counts as its parent.
 
@@ -222,15 +225,58 @@ Each is scored with the Unix time their listing runs out.
 
 It costs as much as the number connected.
 
-- Each server keeps a channel's count for ten seconds (`app::recent`). Requests that arrive while
-  one is being worked out wait for it rather than starting their own.
+- Each server keeps who of a community is online, by the roles they hold, for all its channels and
+  readers (`CommunityOnline`, in an `app::recent` `Recent`): for ten seconds, or until the router
+  below reads it again. Requests that arrive while one is being worked out wait for it rather than
+  starting their own.
+- The reader is added to what is kept, less themself when it holds them, so their own status never
+  takes them off their count.
 - Nobody is counted for someone who may not learn their presence (`presence_visible`):
   - a DM's count keeps only those the caller may;
-  - a community channel's shared count has the caller's blockers who are online and may view it now
-    taken off.
-- For the up to ten seconds the shared count lags a blocker coming online or leaving, the blocked
-  caller's count is one off.
-- The reference client asks for the open channel's count with each presence poll.
+  - a community channel's count has the caller's blockers who are online and may view it taken off,
+    from the same reading.
+
+### Telling of changes
+
+| Part    | Where                                                                       |
+| ------- | --------------------------------------------------------------------------- |
+| Logic   | `app::channel_presence::live`                                               |
+| Viewing | The client frame `viewing`, at most `event_feed::MAX_VIEWING` (8) channels  |
+| Telling | `ephemeral` frames of type `channelOnline`, `{channelId, online}`           |
+| Hints   | The presence hints of `aspen.presence` (above), read by a router per server |
+| Window  | `WINDOW` (two seconds)                                                      |
+
+1. Each connection's `viewing` list is looked up by a task of its own: `channel_access`, then where
+   each channel is counted from (a community and its governing channel, or a DM and its recipients).
+   A channel it may not view is left out. A channel looked up is not looked up again for five
+   seconds (`LOOKED_UP_FOR`).
+2. One router per API server keeps which connections view which communities' channels and which DMs,
+   and reads every presence hint.
+3. Every window with hints, it finds in one query per 5,000 hinted users which communities viewed
+   here they belong to (`community_user (community, "user")`); a DM is due when a hinted user is a
+   recipient. More than 65,536 hinted users between windows (`MAX_HINTED`) make every community
+   viewed here due.
+4. It counts at most 500 due communities a window (`COMMUNITIES_PER_WINDOW`), four at once, the rest
+   in the next. For each it reads who is online again (the `CommunityOnline` REST reads then reuse),
+   checks in one query that each reader may still view the channel (`visibility::may_view`), and
+   reads their blockers among those online in one more. A DM's count reads its recipients again, so
+   a reader who left is told nothing.
+5. Each connection is told a channel's count when it differs from what it was last told. A full
+   queue (four frames) drops it, and the next change tells it.
+
+What changes a count without changing anyone's presence (a member joining, leaving, or removed, a
+role or an override) is not told. The reference client reads the count when the header appears and
+with each presence poll (thirty seconds) for that, and keeps a count the stream told after a read
+was sent over what the read answers.
+
+#### Cost
+
+- A community is read at most once a window on each server where a connection views one of its
+  channels and one of its members' presence changed: the reading REST counts make anyway, one query
+  for who may view, and one for blocks.
+- Finding the communities is one query per window per server for every 5,000 hinted users.
+- Memory is one entry per connection per channel viewed (at most eight) and the hinted users held
+  between windows (at most 65,536).
 
 ### The member sample
 
@@ -242,19 +288,24 @@ invisible. Each server keeps a community's for ten seconds the same way.
 
 1. **Who can observe it, and by which routes?** Those who may learn it (above), by REST
    (`GET /users/statuses`, and every record carrying `onlineStatus`) and by `presence` frames on an
-   event stream that watches them. It is never pushed to a phone, searched, or carried by a stored
-   event.
+   event stream that watches them. Counts of it, by `GET /channels/{channel}/presence` and
+   `channelOnline` frames, to those who may view the channel. It is never pushed to a phone,
+   searched, or carried by a stored event.
 2. **What decides it, and where is that checked?** `presence_visible`, for REST reads in
    `statuses_for`, and for frames by `presence_visible_pairs` at each telling, never when a
-   connection names whom it watches.
+   connection names whom it watches. A count is told only to a reader `channel_access` let view the
+   channel when the connection named it, and whom `visibility::may_view` (or a DM's recipients, read
+   again) still lets at each counting.
 3. **When the deciding permission is lost, what happens to what is already open?** A block hints the
    blocker, so the blocked watcher is told `offline` within a window, and no decision kept from
    before the hint is used. Leaving a community, a removal, a ban, or a DM ending takes effect at
    the next change to that person, which the watcher is told as `offline` (a user the watcher names
    again within ten seconds may be told by a decision kept from before); meanwhile the watcher's
-   client drops the member with the community's events, and so stops watching them. A sign-out, a
-   password change, a ban from the deployment, or an account deleted closes the watcher's streams,
-   which ends their watches.
+   client drops the member with the community's events, and so stops watching them. A reader who may
+   no longer view a channel is told no more of its count from the next counting, whatever their
+   client still names in `viewing`, and a REST read is refused. A sign-out, a password change, a ban
+   from the deployment, or an account deleted closes the watcher's streams, which ends their
+   watches.
 4. **When it is gained, how does a client already open find out without a reload?** It watches whom
    it now shows, and is told each of them at the next telling, as a user its watch list adds is; on
    a new connection, it reads them whole.

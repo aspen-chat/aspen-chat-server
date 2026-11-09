@@ -1324,6 +1324,55 @@ def chosen_presence(world: World, check: Checks) -> None:
     check("ending it shows them connected again", status_of(world.member["token"], world.owner["id"]) != "offline")
 
 
+def channel_online(world: World, check: Checks) -> None:
+    say("a channel's online count: the reader always among it, told as presence changes it, to its viewers alone")
+    counted = world.channel("online-count")
+    hidden = world.channel("online-count-hidden")
+
+    def online_in(channel: str) -> int:
+        return world.stack.api("GET", f"/channels/{channel}/presence", token=world.member["token"])["online"]
+
+    def member_chooses(body: dict | None) -> None:
+        if body is None:
+            world.stack.api("DELETE", "/users/@me/presence-override", token=world.member["token"])
+        else:
+            world.stack.api("PUT", "/users/@me/presence-override", body, world.member["token"])
+
+    def told(seconds: float = 5.0) -> dict[str, int]:
+        """The last count the member's stream is told of each channel within `seconds`."""
+        seen = len(world.stream.ephemeral)
+        world.stream.gather(seconds)
+        return {e["channelId"]: e["online"] for e in world.stream.ephemeral[seen:]
+                if e.get("type") == "channelOnline"}
+
+    before = online_in(counted)
+    check("a reader is counted online in what they read", before >= 1, before)
+    for chosen in ("away", "invisible"):
+        member_chooses({"presenceOverride": chosen})
+        check(f"and still counted there while they show {chosen}", online_in(counted) == before,
+              (before, online_in(counted)))
+    member_chooses(None)
+
+    world.as_owner("GET", "/users/@me")
+    world.as_owner("PUT", "/users/@me/presence-override", {"presenceOverride": "invisible"})
+    world.stream.send({"type": "viewing", "channelIds": [counted, hidden]})
+    # The connection looks up what it views, and the router counts every two seconds.
+    world.stream.gather(3.0)
+    world.as_owner("PUT", f"/channels/{hidden}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
+    world.as_owner("PUT", "/users/@me/presence-override", {"presenceOverride": "doNotDisturb"})
+    heard = told()
+    check("a member viewing a channel is told its count as the owner's presence changes it",
+          counted in heard and heard[counted] == online_in(counted), (heard, online_in(counted)))
+    check("and nothing of a channel they may no longer view, though their client still names it",
+          hidden not in heard, heard)
+    world.as_owner("PUT", f"/users/@me/blocks/{world.member['id']}")
+    blocked = told()
+    check("once the owner blocks them, they are told a count without the owner",
+          counted in heard and blocked.get(counted) == heard[counted] - 1, (heard, blocked))
+    world.as_owner("DELETE", f"/users/@me/blocks/{world.member['id']}")
+    world.as_owner("DELETE", "/users/@me/presence-override")
+
+
 def typing(world: World, check: Checks) -> None:
     say("typing, told only to those who may view the channel, and only by those who may send there")
     owner = world.stack.events(world.owner["token"])
@@ -3867,7 +3916,7 @@ def scheduled_messages(world: World, check: Checks) -> None:
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, replies, calls, attachments,
-             operators, deployment_settings, deployment_documents, sign_ins, removal, presence, chosen_presence, lost_presence_keys, typing, channel_mana, name_colours, dual_invites, device_links, typed_device_links,
+             operators, deployment_settings, deployment_documents, sign_ins, removal, presence, chosen_presence, lost_presence_keys, channel_online, typing, channel_mana, name_colours, dual_invites, device_links, typed_device_links,
              passkeys,
              nicknames, review_powers, evidence, ban_ranks, banned_owners_bots, bot_transfers, moderator_ranks, ban_deletions, community_takedowns, job_preview, dm_reads, frequent_emoji, emoji_deletions,
              group_dm_moderators, plugins, profile_annotations, calendar_channels, blackjack_tables, plugin_removal, email, invite_previews,

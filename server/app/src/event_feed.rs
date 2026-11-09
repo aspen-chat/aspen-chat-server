@@ -2148,11 +2148,12 @@ fn relayed_events(payload: &[u8], models: &Models) -> Vec<FeedEvent> {
     let place = match relay.event {
         crate::typing::EphemeralEvent::Typing { channel_id, .. }
         | crate::typing::EphemeralEvent::Mana { channel_id, .. } => channel_id,
-        // Presence is told by each server's own router (`app::presence_feed`), never relayed,
-        // and a change to the plugins is told by each server to all its connections
-        // (`EventFeed::tell_everyone`).
+        // Presence and online counts are told by each server's own routers
+        // (`app::presence_feed`, `app::channel_presence::live`), never relayed, and a change to
+        // the plugins is told by each server to all its connections (`EventFeed::tell_everyone`).
         crate::typing::EphemeralEvent::Presence { .. }
         | crate::typing::EphemeralEvent::PresenceWatching
+        | crate::typing::EphemeralEvent::ChannelOnline { .. }
         | crate::typing::EphemeralEvent::PluginCatalogueChanged => return Vec::new(),
     };
     match relay.audience {

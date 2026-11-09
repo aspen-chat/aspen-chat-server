@@ -741,6 +741,51 @@ pub async fn viewers(
         .collect())
 }
 
+/// Which of `pairs`, each a user and a channel of `community` that is not a thread, the user
+/// belongs to the community and may view. Three queries however many there are.
+pub async fn may_view(
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+    pairs: &[(UserId, ChannelId)],
+) -> crate::Result<HashSet<(UserId, ChannelId)>> {
+    let users: HashSet<UserId> = pairs.iter().map(|(user, _)| *user).collect();
+    let listed: Vec<UserId> = users.into_iter().collect();
+    let members: HashSet<UserId> = community_user::table
+        .select(community_user::user)
+        .filter(community_user::community.eq(community))
+        .filter(community_user::user.eq_any(&listed))
+        .load::<UserId>(conn)
+        .await?
+        .into_iter()
+        .collect();
+    let Some(model) = CommunityModel::load(conn, &[community])
+        .await?
+        .remove(&community)
+    else {
+        return Ok(HashSet::new());
+    };
+    let members_listed: Vec<UserId> = members.iter().copied().collect();
+    let mut roles: HashMap<UserId, Vec<RoleId>> = HashMap::new();
+    for (user, role) in community_member_role::table
+        .select((community_member_role::user, community_member_role::role))
+        .filter(community_member_role::community.eq(community))
+        .filter(community_member_role::user.eq_any(&members_listed))
+        .load::<(UserId, RoleId)>(conn)
+        .await?
+    {
+        roles.entry(user).or_default().push(role);
+    }
+    let none = Vec::new();
+    Ok(pairs
+        .iter()
+        .copied()
+        .filter(|(user, place)| {
+            members.contains(user)
+                && model.can_view(*user, roles.get(user).unwrap_or(&none), *place)
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

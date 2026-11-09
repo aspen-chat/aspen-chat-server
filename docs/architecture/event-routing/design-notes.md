@@ -178,5 +178,18 @@ away, each of them reads its whole state again, ten reads at once. See
   as the community is large; the set makes a count cost as much as the number connected.
 - **`user:{uuid}:listed` throttles the listing.** The fan-out stays at one write per community per
   half lifetime.
-- **Counts are cached ten seconds per server and shared.** Every viewer sees the same count. The
-  trade-off is that a blocked caller's count can be one off for those ten seconds.
+- **Who of a community is online is read once per server and shared.** Every channel and reader of
+  the community counts from the same reading, for ten seconds or until a change to a member's
+  presence has it read again. A reader's blockers come off and the reader goes on from that same
+  reading, so the two corrections never disagree with what was counted.
+- **The reader always counts themself.** Someone reading a channel is using Aspen whatever their
+  status says, and "0 online" read by one person is false on its face. Away still keeps everyone
+  else off the count, since a count of who has Aspen open somewhere would say little about who is
+  there.
+- **Counts are told by each server's own router, not relayed.** A count differs by reader (the
+  reader, their blockers), so one relayed count could not serve every connection. Every server reads
+  the presence hints anyway, and counting a community once per window per server where it is viewed
+  costs no more than the reads the poll made.
+- **Counts follow presence, not membership or roles.** Telling them on every change to roles,
+  overrides, and members would mean counting again on events that rarely move the count; the
+  client's poll catches those within thirty seconds.
