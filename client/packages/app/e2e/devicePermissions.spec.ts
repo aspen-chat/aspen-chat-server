@@ -63,3 +63,20 @@ test("Settings asks for no device permission until the user allows one", async (
   await expect(allowCamera).toBeHidden();
   expect(await page.evaluate(() => window.mediaRequests)).toEqual(["audio", "video"]);
 });
+
+test("Settings offers no button for a permission the page already holds", async ({ page }) => {
+  // As the desktop app answers: granted without a prompt, though no device has been named yet.
+  await page.addInitScript(() => {
+    const status = Object.assign(new EventTarget(), { state: "granted" });
+    Object.defineProperty(navigator, "permissions", {
+      value: { query: () => Promise.resolve(status) },
+    });
+  });
+  await signInToWorld(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+  await expect(settings.getByRole("button", { name: "System default Microphone" })).toBeVisible();
+  await expect(settings.getByRole("button", { name: "Allow microphone" })).toBeHidden();
+  await expect(settings.getByRole("button", { name: "Allow camera" })).toBeHidden();
+  expect(await page.evaluate(() => window.mediaRequests)).toEqual([]);
+});

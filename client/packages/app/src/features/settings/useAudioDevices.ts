@@ -23,6 +23,46 @@ function mediaDevicesAvailable(): boolean {
 }
 
 /**
+ * The page's standing permission for `kind`, kept current, or `undefined` where the browser
+ * cannot say. Querying it never shows a prompt, unlike `getUserMedia`. The desktop app grants
+ * the permission without asking, so a list it does not name (no such device is plugged in) is
+ * still not worth a button that asks.
+ */
+function usePermissionState(kind: DeviceKind): PermissionState | undefined {
+  const [state, setState] = useState<PermissionState>();
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("permissions" in navigator)) {
+      return;
+    }
+    let status: PermissionStatus | undefined;
+    let current = true;
+    const onChange = () => {
+      if (status !== undefined) {
+        setState(status.state);
+      }
+    };
+    navigator.permissions.query({ name: kind }).then(
+      (answer) => {
+        if (!current) {
+          return;
+        }
+        status = answer;
+        setState(answer.state);
+        answer.addEventListener("change", onChange);
+      },
+      // A browser that does not know the permission's name refuses the query, and is left to
+      // say through the device list alone.
+      () => undefined,
+    );
+    return () => {
+      current = false;
+      status?.removeEventListener("change", onChange);
+    };
+  }, [kind]);
+  return state;
+}
+
+/**
  * The microphones, speakers, and cameras the browser can offer, kept current as devices come and go.
  * Browsers name devices only once the page holds a media permission, and asking for one shows the
  * user a prompt, so the microphone is asked for on its own only during a call, when the call already
@@ -39,6 +79,8 @@ export function useAudioDevices(inCall: boolean): {
   const [listed, setListed] = useState<readonly MediaDeviceInfo[]>([]);
   const [refused, setRefused] = useState<Partial<Record<DeviceKind, "denied" | "absent">>>({});
   const mounted = useRef(false);
+  const microphonePermission = usePermissionState("microphone");
+  const cameraPermission = usePermissionState("camera");
 
   const refresh = useCallback(async () => {
     if (!mediaDevicesAvailable()) {
@@ -94,6 +136,13 @@ export function useAudioDevices(inCall: boolean): {
       if (ofKind.some((d) => d.label !== "")) {
         return "granted";
       }
+      const standing = kind === "microphone" ? microphonePermission : cameraPermission;
+      if (standing === "granted") {
+        return ofKind.length > 0 ? "granted" : "absent";
+      }
+      if (standing === "denied") {
+        return "denied";
+      }
       // A device plugged in since the request found none is worth asking for again.
       const refusal = refused[kind];
       return refusal === "absent" && ofKind.length > 0 ? "locked" : (refusal ?? "locked");
@@ -116,5 +165,5 @@ export function useAudioDevices(inCall: boolean): {
       access,
       requestAccess,
     };
-  }, [listed, refused, m, requestAccess]);
+  }, [listed, refused, microphonePermission, cameraPermission, m, requestAccess]);
 }
