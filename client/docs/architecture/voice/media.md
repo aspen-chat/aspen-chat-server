@@ -83,7 +83,9 @@ camera's own shape (`ScreenTile`'s `natural`, read from the picture as its frame
 than 70% of the screen, so tiles are as uneven as the cameras. The user's own is mirrored while it
 faces them or its direction is unknown (`trackFacing`: the track's `facingMode`, else its name), and
 a phone's back camera is not. A camera goes full screen by its corner button or a double click
-(`ScreenTile`), but not the F key, which means the shared screen.
+(`ScreenTile`), but not the F key, which means the shared screen. Each track plays in a `<video>` of
+its own, since WebKit on iOS draws a phone's other camera, put on the element that played the first,
+at the first one's rotated size, a portrait picture shrunk inside a black square.
 
 ## Signalling frames
 

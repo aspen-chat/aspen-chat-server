@@ -13,6 +13,11 @@ import { useMessages } from "@/i18n/context";
  * it leaves out. A `natural` tile takes the picture's own shape, whatever it is, as its frames
  * arrive (16:9 until the first does), no taller than `NATURAL_MAX_HEIGHT`, narrowing to keep the
  * shape where that would be exceeded; its `className` then only decorates it.
+ *
+ * Each track gets a `<video>` of its own. WebKit on iOS, handed a phone's other camera on the
+ * element that played the first, keeps laying the picture out as the first camera's rotated
+ * frames were and turns it upright afterwards, so a portrait picture is drawn at the size of a
+ * landscape one fitted to the tile, in a black square.
  */
 /** The tallest a `natural` tile grows, so a portrait camera on a phone leaves room around it. */
 const NATURAL_MAX_HEIGHT = "70vh";
@@ -67,7 +72,7 @@ export function ScreenTile({
       element.srcObject = null;
     };
   }, [track]);
-  const shape = usePictureShape(natural ? video : null);
+  const shape = usePictureShape(natural ? video : null, track);
   const sized: CSSProperties | undefined =
     natural && shape !== null
       ? {
@@ -91,6 +96,7 @@ export function ScreenTile({
       style={filling ? undefined : sized}
     >
       <video
+        key={track.id}
         ref={video}
         autoPlay
         playsInline
@@ -126,9 +132,11 @@ export function ScreenTile({
 /**
  * The size of the picture `video` plays, as its first frame arrives and whenever it changes (a
  * camera's resolution climbing, a phone turning); `null` before the first, or with no element.
+ * The element is made again for each `track`, which keeps the last shape until its own arrives.
  */
 function usePictureShape(
   video: RefObject<HTMLVideoElement | null> | null,
+  track: MediaStreamTrack,
 ): { width: number; height: number } | null {
   const [shape, setShape] = useState<{ width: number; height: number } | null>(null);
   useEffect(() => {
@@ -150,6 +158,6 @@ function usePictureShape(
       element.removeEventListener("loadedmetadata", read);
       element.removeEventListener("resize", read);
     };
-  }, [video]);
+  }, [video, track]);
   return shape;
 }
