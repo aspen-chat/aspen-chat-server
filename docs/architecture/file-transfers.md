@@ -121,12 +121,12 @@ Where the receiver can choose a place first, accepting opens a picker and the fi
 as it arrives (a `FileSink`). The file is closed only when every byte is in, and discarded when the
 transfer ends otherwise.
 
-| Platform                                                                   | How                                                                                                                                                         |
-| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Browser with the File System Access API (Chromium, so the desktop app too) | Picker, written as it arrives                                                                                                                               |
-| Android                                                                    | `AspenFilesPlugin`: the system create-document picker names the file                                                                                        |
-| iOS                                                                        | `AspenFilesPlugin`: iOS has no picker for a file yet to be written, so the user chooses a folder and the file is made there under the name it was sent with |
-| Elsewhere (Firefox and Safari)                                             | Held until it has all arrived, then saved                                                                                                                   |
+| Platform                                                                   | How                                                                                                                                       |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser with the File System Access API (Chromium, so the desktop app too) | Picker, written as it arrives                                                                                                             |
+| Android                                                                    | `AspenFilesPlugin`: the system create-document picker names the file                                                                      |
+| iOS                                                                        | `AspenFilesPlugin`: the system's save picker moves an empty file of that name where the user says, and the file is written there in place |
+| Elsewhere (Firefox and Safari)                                             | Held until it has all arrived, then saved                                                                                                 |
 
 ## The record
 

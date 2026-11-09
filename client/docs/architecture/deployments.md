@@ -166,10 +166,10 @@ read as `exe.jpg`.
 
 In the mobile apps, a receiver chooses where a file goes through `AspenFilesPlugin`:
 
-| Platform | Code                                 | Behaviour                                                                           |
-| -------- | ------------------------------------ | ----------------------------------------------------------------------------------- |
-| Android  | `android/.../files/`                 | `DocumentSinkTest` checks the native side on a device                               |
-| iOS      | `ios/App/App/AspenFilesPlugin.swift` | The user picks a folder, and the file is made in it under the name it was sent with |
+| Platform | Code                                 | Behaviour                                                                             |
+| -------- | ------------------------------------ | ------------------------------------------------------------------------------------- |
+| Android  | `android/.../files/`                 | `DocumentSinkTest` checks the native side on a device                                 |
+| iOS      | `ios/App/App/AspenFilesPlugin.swift` | The system's save picker moves an empty file where the user says; it is written there |
 
 `filesBridge.ts` wraps the plugin as a `FileSink`, writing through the bridge in base64 pieces of
 about a megabyte.

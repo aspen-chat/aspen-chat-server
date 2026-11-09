@@ -3,10 +3,9 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 
 /**
  * The mobile apps' native side of receiving files (`AspenFilesPlugin`, in each): the system's
- * picker chooses where a file goes before it arrives (on Android the file itself, on iOS the
- * folder it is made in, under the name it was sent with), and the transfer writes to it by id
- * as it comes. Writes cross the bridge as base64, gathered into pieces of about
- * `PIECE_BYTES` so that the bridge is crossed rarely.
+ * picker chooses where a file goes before it arrives, offering the name it was sent with, and
+ * the transfer writes to it by id as it comes. Writes cross the bridge as base64, gathered into
+ * pieces of about `PIECE_BYTES` so that the bridge is crossed rarely.
  */
 interface AspenFilesPlugin {
   create(options: { name: string; mimeType?: string }): Promise<{ id: string | null }>;
