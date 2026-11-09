@@ -87,6 +87,26 @@ test.describe("login", () => {
     await expect(page.locator("main img")).toHaveAttribute("src", ASPEN_ICON);
   });
 
+  test("the page's ground reaches the foot of a sign-in screen taller than the window", async ({
+    page,
+  }) => {
+    // Dark, where no palette's ground is the browser's own.
+    await page.emulateMedia({ colorScheme: "dark" });
+    const height = 320;
+    await page.setViewportSize({ width: page.viewportSize()?.width ?? 0, height });
+    await page.goto("/");
+    await expect(page.getByRole("link", { name: "Privacy Policy" })).toBeVisible();
+    // A pixel at the screen's edge, in its padding, where only the ground is drawn.
+    const ground = (y: number) =>
+      page.screenshot({ clip: { x: 2, y, width: 1, height: 1 }, animations: "disabled" });
+    const head = await ground(2);
+    await page.evaluate(() => {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+    });
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+    expect((await ground(height - 2)).equals(head)).toBe(true);
+  });
+
   test("shows the server's Problem text when credentials are rejected", async ({ page }) => {
     await page.route("**/api/v1/auth/login", (route) =>
       route.fulfill({

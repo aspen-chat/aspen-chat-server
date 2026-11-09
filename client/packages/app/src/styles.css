@@ -624,8 +624,16 @@ body {
   }
 }
 
+/* The ground is the root's, which the page's canvas takes, so it lies under everything the page
+   can scroll to. The body's would stop at the body's own box, one window tall: a size
+   container's background is not handed to the canvas, and the signed-out screens scroll the page
+   when they are taller than the window. */
+:root {
+  @apply bg-surface;
+}
+
 body {
-  @apply bg-surface text-base text-ink antialiased;
+  @apply text-base text-ink antialiased;
   font-family: var(--font-sans);
 }
 

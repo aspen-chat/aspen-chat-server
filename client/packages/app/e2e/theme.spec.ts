@@ -6,7 +6,7 @@ import { signInToWorld } from "./world";
 const isDark = (page: Page) =>
   page.evaluate(() => {
     const [r = 0, g = 0, b = 0] = (
-      getComputedStyle(document.body).backgroundColor.match(/\d+/g) ?? []
+      getComputedStyle(document.documentElement).backgroundColor.match(/\d+/g) ?? []
     ).map(Number);
     return r + g + b < 200;
   });
