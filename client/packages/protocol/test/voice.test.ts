@@ -279,6 +279,8 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
   /** The gain each microphone opened at, then each change `setInputVolume` made. */
   const inputVolumes: string[] = [];
   const cameras: (string | null)[] = [];
+  /** Each camera opened, and whether another was still open as it opened. */
+  const cameraTracks: { track: FakeTrack; besideOpen: boolean }[] = [];
   /** Failures the next camera openings meet, in order; an empty queue opens one. */
   const cameraFailures: CameraFailure[] = [];
   let sendTransports = 0;
@@ -316,9 +318,12 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
     getCamera: (choice) => {
       cameras.push(choice === "default" ? null : choice.id);
       const failure = cameraFailures.shift();
-      return failure === undefined
-        ? Promise.resolve(new FakeTrack("video") as unknown as MediaStreamTrack)
-        : Promise.reject(new CameraError(failure));
+      if (failure !== undefined) {
+        return Promise.reject(new CameraError(failure));
+      }
+      const track = new FakeTrack("video");
+      cameraTracks.push({ track, besideOpen: cameraTracks.some((c) => !c.track.stopped) });
+      return Promise.resolve(track as unknown as MediaStreamTrack);
     },
     setOutput: (choice) => {
       outputs.push(choice === "default" ? null : choice.id);
@@ -354,6 +359,7 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
     volumes,
     inputVolumes,
     cameras,
+    cameraTracks,
     cameraFailures,
   };
 }
@@ -433,6 +439,7 @@ function makeCall(options: {
     volumes,
     inputVolumes,
     cameras,
+    cameraTracks,
     cameraFailures,
   } = fakeMedia(options.unreachableSendTransports ?? 0, options.microphone ?? "ok");
   const call = new VoiceCall({
@@ -460,6 +467,7 @@ function makeCall(options: {
     volumes,
     inputVolumes,
     cameras,
+    cameraTracks,
     cameraFailures,
     timers,
   };
@@ -751,6 +759,56 @@ describe("VoiceCall", () => {
     call.stopCamera();
     expect(call.state.localCamera).toBeNull();
     expect(transports[0]?.closedProducers).toContain("p-camera");
+  });
+
+  it("keeps the camera on as it moves to another, letting the one in use go first", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, transports, cameras, cameraTracks, cameraFailures } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+    });
+    await call.join(channel);
+    await call.startCamera();
+    const front = cameraTracks[0]?.track;
+    await call.setAudioDevices({
+      input: "default",
+      output: "default",
+      camera: { id: "back", label: "Back Camera" },
+    });
+    expect(cameras).toEqual([null, "back"]);
+    const back = cameraTracks[1]?.track;
+    expect(front?.stopped).toBe(true);
+    expect(cameraTracks.map((c) => c.besideOpen)).toEqual([false, false]);
+    expect(call.state.localCamera).toBe(back);
+    expect(transports[0]?.closedProducers).not.toContain("p-camera");
+    // The camera it moved from ending, as iOS ends it, leaves the camera on; the one in use
+    // ending turns it off.
+    front?.end();
+    expect(call.state.localCamera).toBe(back);
+    back?.end();
+    expect(call.state.localCamera).toBeNull();
+    // With no camera to move to, the camera turns off and says why.
+    await call.startCamera();
+    cameraFailures.push("failed");
+    await call.setAudioDevices({ input: "default", output: "default", camera: "default" });
+    expect(call.state.localCamera).toBeNull();
+    expect(call.state.cameraError).toBe("failed");
+  });
+
+  it("moves the camera to the latest choice when moves overlap", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, cameraTracks } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    await call.startCamera();
+    const devices = { input: "default", output: "default" } as const;
+    await Promise.all([
+      call.setAudioDevices({ ...devices, camera: { id: "back", label: "Back Camera" } }),
+      call.setAudioDevices({ ...devices, camera: { id: "front", label: "Front Camera" } }),
+    ]);
+    const latest = cameraTracks.at(-1)?.track;
+    expect(call.state.localCamera).toBe(latest);
+    expect(latest?.stopped).toBe(false);
+    expect(cameraTracks.filter((c) => !c.track.stopped)).toHaveLength(1);
   });
 
   it("keeps why the camera failed until it turns on, is dismissed, or the call ends", async () => {

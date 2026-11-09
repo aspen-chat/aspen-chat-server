@@ -4,14 +4,21 @@
 
 - `CallBar` sits above the user footer.
 - It shows the call's status and place, which link to the call's room.
-- Under them is a row of mute, deafen, camera, share, and leave buttons that share its width
-  equally.
+- Under them are its buttons (`CallControls`), each an equal share of its row: mute, deafen,
+  Speaker, camera, the camera flip, share, files, and leave, which is filled in the danger colour,
+  as the call screen's Leave Call is. Those that do not apply are left out, and the next takes the
+  place.
+- On a phone or tablet held upright (`isMobilePlatform`, narrower than `MEDIUM_WIDTH`), too narrow
+  for them all with their arrows, they stand in two rows of four columns: mute, deafen, Speaker, and
+  leave, what is reached for during the call, above camera, flip, share, and files. Everywhere else,
+  a sideways phone included, they share one row.
 - Under its buttons it shows camera errors, refused state changes, and how long to wait after a
   refusal (see [media](media.md#camera-failures),
   [muting](muting-and-moderation.md#refused-state-changes), and
   [joining](joining.md#request-timeouts-and-refusals)).
-- On a narrow screen the call bar shows under the voice channel from the moment the user presses
-  Join, so joining and a failure to join are visible there.
+- Where one pane shows at a time (below `md`), the call bar shows under the voice channel from the
+  moment the user presses Join, so joining and a failure to join are visible there, and the call
+  screen leaves out its own Leave Call (`leaveInBar`).
 
 ### Device arrows
 
@@ -25,30 +32,41 @@ Mute, deafen, and camera each have a small upward arrow at their end (`WithDevic
 | Camera | `CameraDevices` | the camera (`VIDEO_INPUT`)                         |
 
 - The arrow lies over the end of its button's padding, out of the layout: each control sits in a box
-  that takes its equal share of the row and the control fills it, so the buttons keep the width and
-  place they have without arrows. The arrow is not made larger on a touch screen.
+  that takes its share of the row and the control fills it, so the arrows take no room of their own.
+  The arrow is not made larger on a touch screen.
 - The mute arrow shows while a moderator has muted the user and while they only listen, since the
-  microphone's choice and volume still apply. The camera's shows with the camera button.
+  microphone's choice and volume still apply. The camera's shows with the camera button, unless the
+  camera flips.
 - The popovers write the same preferences as Settings' Audio and video section, which also has the
   two volumes, so both always agree.
 - Where the browser does not name devices yet, the popover shows the same notice and Allow button as
   Settings (`AccessNotice`, `src/features/settings/DeviceSelect.tsx`).
 
-On a phone or tablet (`isMobilePlatform`: the mobile apps, or a browser on Android, iOS, or iPadOS,
-whatever the window's width):
+### On a phone or tablet
+
+`isMobilePlatform` is the mobile apps, or a browser on Android, iOS, or iPadOS, whatever the
+window's size.
 
 - The microphone and speaker lists show only when there are several to choose from; otherwise the
   popover holds only the volume. A browser that cannot route output offers no speaker list there.
-- In the mobile apps, a phone with only its receiver and loudspeaker (`choosesSpeakerphone`) shows a
-  Speaker toggle instead of a list, its icon in a filled accent circle while on. It sets
-  `SPEAKERPHONE`, which `useFollowSpeakerphone` (`src/api/audioRoute.ts`) applies through the native
-  `AspenAudioRoute` plugin from the call's start to its end. While anything else is connected
-  (headphones, a headset, a car) the toggle is gone and the route is the system's.
-- Where every camera faces front or back (`flipsBetweenSides`), however many lenses the back has,
-  one button switches to the other side instead of a list: to its first listed camera, the side's
-  main one (`flippedCamera`), as the camera choice. A camera's side is the browser's `facingMode`,
-  or its name where the browser gives none; a name in another language places none, and the list
-  shows instead.
+- **Speaker** (`SpeakerphoneButton`, `useSpeakerphoneButton` in `deviceControls.ts`): in the mobile
+  apps, a phone with only its receiver and loudspeaker (`choosesSpeakerphone`) has a Speaker button
+  on the bar, its icon in a filled accent circle while on, and the deafen popover then has no
+  speaker list. It sets `SPEAKERPHONE`, which `useFollowSpeakerphone` (`src/api/audioRoute.ts`)
+  applies through the native `AspenAudioRoute` plugin from the call's start to its end. While
+  anything else is connected (headphones, a headset, a car) the button is gone and the route is the
+  system's.
+- **Camera flip** (`CameraFlipButton`, `useCameraFlip`): where every camera faces front or back
+  (`flipsBetweenSides`), however many lenses the back has, a button beside the camera's switches to
+  the other side, in place of the camera's arrow, whether the camera is on or off: to that side's
+  first listed camera, its main one (`flippedCamera`), as the camera choice. A camera's side is the
+  browser's `facingMode`, or its name where the browser gives none; a name in another language
+  places none, and the camera keeps its arrow and list. Cameras are named, and so placed, only once
+  the camera is allowed, so the button first appears then.
+- **Files** (`FilesButton`, `FilesPanel.tsx`): the call screen does not show the call's files; a
+  folder button on the bar opens them (`FilesPanel`) in a dialog, counting the offers waiting for
+  the user (`useIncomingOffers`, `callFiles.ts`) so none is missed out of sight. It shows when the
+  panel would.
 
 ## Opening a voice channel
 

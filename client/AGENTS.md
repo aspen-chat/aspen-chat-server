@@ -350,22 +350,23 @@ same commit, as with comments.
 - Styling is Tailwind CSS 4 with `tailwindcss-react-aria-components`, so interaction states are the
   `pressed:`, `selected:`, `focus-visible:`, `invalid:` variants driven by React Aria's data
   attributes. Do not add `:hover`/`:active` CSS by hand for those states.
-- Phones get the same app, one pane at a time. Below Tailwind's `md` breakpoint a list (the channel
-  list, the DM list) and a conversation never share the screen: a conversation takes the whole
-  width, the community rail included, and its back link leads to the list. Layout choices made in
-  code use `useMediaQuery(MEDIUM_SCREEN)` (`src/features/layout/useMediaQuery.ts`) so they agree
-  with the class names; `CommunityIndex`, for one, opens the first channel only on a wide screen,
-  since on a narrow one the index is the channel list. Below Tailwind's `lg` breakpoint, where there
-  is no room for the member list beside a channel, it is a drawer over the channel instead
-  (`Drawer`, `src/features/layout/Drawer.tsx`, a modal at the inline end, or at the bottom for a
-  sheet): the channel header's members button opens it, and a finger swiping across the channel
-  toward the inline start draws it out and back toward the end puts it away (`useSwipe`,
-  `src/features/layout/useSwipe.ts`). It follows the finger and, as the finger lifts, goes the way
-  it was thrown or, if it came to rest, whichever way it is more than half; where motion is reduced
-  it fades in and out in place. A finger moving mostly up or down, or across something that scrolls
-  sideways, is left to scroll, and a swipe's moves stop at the swipe, so the message list, which
-  follows a finger itself on iOS, does not move with one. The Android back button puts the drawer
-  away.
+- Phones get the same app, one pane at a time. Below Tailwind's `md` breakpoint, which `styles.css`
+  redefines as 48rem wide on a screen at least 30rem tall or with a mouse or trackpad, so a phone
+  held sideways keeps its one pane, a list (the channel list, the DM list) and a conversation never
+  share the screen: a conversation takes the whole width, the community rail included, and its back
+  link leads to the list. Layout choices made in code use `useMediaQuery(MEDIUM_SCREEN)`
+  (`src/features/layout/useMediaQuery.ts`) so they agree with the class names; `CommunityIndex`, for
+  one, opens the first channel only on a wide screen, since on a narrow one the index is the channel
+  list. Below Tailwind's `lg` breakpoint, where there is no room for the member list beside a
+  channel, it is a drawer over the channel instead (`Drawer`, `src/features/layout/Drawer.tsx`, a
+  modal at the inline end, or at the bottom for a sheet): the channel header's members button opens
+  it, and a finger swiping across the channel toward the inline start draws it out and back toward
+  the end puts it away (`useSwipe`, `src/features/layout/useSwipe.ts`). It follows the finger and,
+  as the finger lifts, goes the way it was thrown or, if it came to rest, whichever way it is more
+  than half; where motion is reduced it fades in and out in place. A finger moving mostly up or
+  down, or across something that scrolls sideways, is left to scroll, and a swipe's moves stop at
+  the swipe, so the message list, which follows a finger itself on iOS, does not move with one. The
+  Android back button puts the drawer away.
 - A row of a list holds as little as it can, since a list draws hundreds: every React Aria control
   holds its own state (a `Button` close to a hundred hooks, a closed `Popover` or `ModalOverlay`
   more), drawn or not. A popover, modal, or menu that each row of a list has is wrapped in

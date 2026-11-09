@@ -33,6 +33,7 @@ import { displayNameOf } from "@/features/users/profile";
 import { useNameIn } from "@/features/users/nameIn";
 import { ParticipantMenu, ParticipantMenuButton } from "@/features/voice/ParticipantMenu";
 import { useContextMenu } from "@/features/layout/contextMenuState";
+import { trackFacing } from "@/features/settings/audioDevices";
 import { CallBar } from "@/features/voice/CallBar";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { Identity } from "@/features/voice/VoiceParticipants";
@@ -44,6 +45,7 @@ import { format } from "@/i18n/messages";
 import { useNow } from "@/features/layout/useNow";
 import { dangerButtonClass } from "@/features/invites/dialog";
 import { CopyIdButton } from "@/features/layout/CopyId";
+import { isMobilePlatform } from "@/features/layout/platform";
 
 /**
  * A voice channel's screen: its header, with the share control while the user is in its call,
@@ -78,6 +80,7 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
         channel={channel}
         joinLabel={format(m.voice.join, { channel: channel.name })}
         className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4"
+        leaveInBar
       />
     </main>
   );
@@ -87,21 +90,29 @@ export function VoiceScreen({ channel, communityId }: { channel: Channel; commun
  * A channel's call, in a voice channel or a DM: the shared screens, one of them large and the
  * rest as thumbnails to pick from, then everyone in the call as tiles, with the transfers under
  * way between them drawn over the tiles, those a DM's call is ringing as darkened tiles, the
- * call's files, and the way in, labelled `joinLabel`. While the user is in the call, or joining
- * it, Leave Call at the top left leaves it, across from `toolbarEnd`. The screens and file offers of people the user blocked, here or on another
- * deployment, are not shown. `className` lays out the scrolling area that holds it all.
+ * call's files (on a computer; a phone or tablet opens them from the call bar), and the way in,
+ * labelled `joinLabel`. While the user is in the call, or joining it, Leave Call at the top left
+ * leaves it, across from `toolbarEnd`, except where `leaveInBar` says the call bar does. The
+ * screens and file offers of people the user blocked, here or on another deployment, are not
+ * shown. `className` lays out the scrolling area that holds it all.
  */
 export function CallStage({
   channel,
   joinLabel,
   className,
   toolbarEnd,
+  leaveInBar = false,
 }: {
   channel: Channel;
   joinLabel: string;
   className: string;
   /** Controls for the toolbar's other end, across from Leave Call. */
   toolbarEnd?: ReactNode;
+  /**
+   * Whether the call bar shows under the call where only one pane fits (`md`), so Leave Call
+   * shows only where it does not.
+   */
+  leaveInBar?: boolean;
 }) {
   const m = useMessages();
   const sync = useSync();
@@ -157,17 +168,27 @@ export function CallStage({
 
   // Joining counts: Leave Call also calls off a join under way.
   const here = call.status !== "idle" && call.channelId === channel.id;
+  const copiesId = wizard && voice.session !== null;
   return (
     <>
       <div className={className}>
-        {(here || toolbarEnd !== undefined || (wizard && voice.session !== null)) && (
-          <div className="flex items-center justify-between gap-2">
+        {(here || toolbarEnd !== undefined || copiesId) && (
+          <div
+            className={
+              "items-center justify-between gap-2 " +
+              (leaveInBar && toolbarEnd === undefined && !copiesId ? "hidden md:flex" : "flex")
+            }
+          >
             {here ? (
               <Button
                 onPress={() => {
                   sync.voice.leave();
                 }}
-                className={dangerButtonClass + " flex items-center gap-1.5"}
+                className={
+                  dangerButtonClass +
+                  " items-center gap-1.5 " +
+                  (leaveInBar ? "hidden md:flex" : "flex")
+                }
               >
                 <PhoneDisconnectIcon size={18} aria-hidden="true" />
                 {m.voice.leaveCallButton}
@@ -229,7 +250,8 @@ export function CallStage({
             </div>
           )}
         </section>
-        {inThisCall && <FilesPanel />}
+        {/* A phone or tablet opens the files from the call bar, leaving the room to the call. */}
+        {inThisCall && !isMobilePlatform() && <FilesPanel />}
         {!inThisCall && mayJoin && (
           <div className="flex justify-center">
             <Button
@@ -367,7 +389,12 @@ function ParticipantTile({
         />
       )}
       {camera !== null && (
-        <CameraVideo track={camera} speaking={speaking} name={name} mirrored={self} />
+        <CameraVideo
+          track={camera}
+          speaking={speaking}
+          name={name}
+          mirrored={self && trackFacing(camera) !== "back"}
+        />
       )}
       <Identity
         user={user}
@@ -446,8 +473,10 @@ function TileAvatar({
 
 /**
  * A participant's camera, in their tile, where it can be made full screen. The user's own is
- * mirrored, as a mirror shows them; everyone else sees it as the camera does. Its sound is the
- * microphone's, played by the call. A ring shows while they speak.
+ * mirrored while it faces them, as a mirror shows them, and a phone's back camera is not, since
+ * it shows what is in front of them; everyone else sees it as the camera does. Its sound is the
+ * microphone's, played by the call. A ring shows while they speak. It takes the camera's own
+ * shape, so a phone held upright shows tall and a webcam wide, and tiles are as uneven as that.
  */
 function CameraVideo({
   track,
@@ -462,22 +491,19 @@ function CameraVideo({
 }) {
   const m = useMessages();
   return (
-    <div
-      data-camera
-      data-speaking={speaking ? "true" : undefined}
-      className={
-        "w-full rounded-lg transition-shadow " +
-        (speaking
-          ? "forced-outline ring-4 ring-online ring-offset-2 ring-offset-surface-raised"
-          : "")
-      }
-    >
+    <div data-camera data-speaking={speaking ? "true" : undefined} className="w-full">
       <ScreenTile
         track={track}
         label={
           speaking ? format(m.voice.speaking, { name }) : format(m.voice.usersCamera, { name })
         }
-        className="aspect-video w-full"
+        className={
+          "transition-shadow " +
+          (speaking
+            ? "forced-outline ring-4 ring-online ring-offset-2 ring-offset-surface-raised"
+            : "")
+        }
+        natural
         expandable
         shortcut={false}
         mirrored={mirrored}

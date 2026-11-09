@@ -51,7 +51,10 @@ own resolution up to 4K and 60 frames a second (`SCREEN_QUALITY`).
 - `startCamera()` asks `VoiceMedia.getCamera()` for the camera chosen in Settings (`video.input`, a
   device preference), up to 1080p at 30 frames a second (`CAMERA_QUALITY`).
 - It is produced as `camera`, up to 4 Mbps (`CAMERA_ENCODING`).
-- The user sees it as `state.localCamera`. It moves to another camera when the choice changes.
+- The user sees it as `state.localCamera`. It moves to another camera when the choice changes and
+  stays on: the camera in use is let go before the next opens, since a phone opens one camera at a
+  time (iOS ends the first one's track when a second opens). Only the latest of overlapping moves
+  takes effect, and where no camera opens the camera turns off with `cameraError` set.
 - `stopCamera()` ends it.
 - `state.canCamera` says whether the join offer allowed one (Use camera).
 - The Android app declares `CAMERA` (and the camera as optional hardware) so its WebView may ask for
@@ -75,9 +78,12 @@ The call bar shows it under its buttons with what to do.
 ### Showing cameras
 
 The call screen shows each camera above its owner's name in place of the avatar. The tile is four
-columns wide where they fit and the whole row where not. The user's own is mirrored. A camera goes
-full screen by its corner button or a double click (`ScreenTile`), but not the F key, which means
-the shared screen.
+columns wide where they fit and the whole row where not, and the camera's picture in it takes the
+camera's own shape (`ScreenTile`'s `natural`, read from the picture as its frames arrive), no taller
+than 70% of the screen, so tiles are as uneven as the cameras. The user's own is mirrored while it
+faces them or its direction is unknown (`trackFacing`: the track's `facingMode`, else its name), and
+a phone's back camera is not. A camera goes full screen by its corner button or a double click
+(`ScreenTile`), but not the F key, which means the shared screen.
 
 ## Signalling frames
 

@@ -1,5 +1,5 @@
 import { CornersInIcon, CornersOutIcon } from "@phosphor-icons/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { isFullScreenKey, useFullScreen, useOrientationLock } from "@/features/voice/fullScreen";
 import { useMessages } from "@/i18n/context";
 
@@ -10,8 +10,13 @@ import { useMessages } from "@/i18n/context";
  * made full screen with its button or a double click, and with the F key where `shortcut` says
  * it is the one tile on screen the key means; full screen also turns a phone to the picture's
  * orientation. `caption` names the picture over its corner, which a tile already named beside
- * it leaves out.
+ * it leaves out. A `natural` tile takes the picture's own shape, whatever it is, as its frames
+ * arrive (16:9 until the first does), no taller than `NATURAL_MAX_HEIGHT`, narrowing to keep the
+ * shape where that would be exceeded; its `className` then only decorates it.
  */
+/** The tallest a `natural` tile grows, so a portrait camera on a phone leaves room around it. */
+const NATURAL_MAX_HEIGHT = "70vh";
+
 export function ScreenTile({
   track,
   label,
@@ -20,6 +25,7 @@ export function ScreenTile({
   shortcut = expandable,
   mirrored = false,
   caption = true,
+  natural = false,
 }: {
   track: MediaStreamTrack;
   label: string;
@@ -28,6 +34,7 @@ export function ScreenTile({
   shortcut?: boolean;
   mirrored?: boolean;
   caption?: boolean;
+  natural?: boolean;
 }) {
   const m = useMessages();
   const figure = useRef<HTMLElement>(null);
@@ -60,6 +67,14 @@ export function ScreenTile({
       element.srcObject = null;
     };
   }, [track]);
+  const shape = usePictureShape(natural ? video : null);
+  const sized: CSSProperties | undefined =
+    natural && shape !== null
+      ? {
+          aspectRatio: `${String(shape.width)} / ${String(shape.height)}`,
+          width: `min(100%, calc(${NATURAL_MAX_HEIGHT} * ${String(shape.width / shape.height)}))`,
+        }
+      : undefined;
   const filling = full.state === "window";
   return (
     <figure
@@ -69,8 +84,11 @@ export function ScreenTile({
         "group overflow-hidden bg-black [&:fullscreen]:rounded-none " +
         (filling
           ? "fixed inset-x-0 top-(--title-bar-height) bottom-0 z-50 p-[env(safe-area-inset-top)_env(safe-area-inset-right)_env(safe-area-inset-bottom)_env(safe-area-inset-left)]"
-          : "relative rounded-lg " + (className ?? ""))
+          : "relative rounded-lg " +
+            (natural ? (sized === undefined ? "aspect-video w-full " : "mx-auto ") : "") +
+            (className ?? ""))
       }
+      style={filling ? undefined : sized}
     >
       <video
         ref={video}
@@ -103,4 +121,35 @@ export function ScreenTile({
       )}
     </figure>
   );
+}
+
+/**
+ * The size of the picture `video` plays, as its first frame arrives and whenever it changes (a
+ * camera's resolution climbing, a phone turning); `null` before the first, or with no element.
+ */
+function usePictureShape(
+  video: RefObject<HTMLVideoElement | null> | null,
+): { width: number; height: number } | null {
+  const [shape, setShape] = useState<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    const element = video?.current;
+    if (element === null || element === undefined) {
+      return;
+    }
+    const read = () => {
+      const { videoWidth: width, videoHeight: height } = element;
+      if (width > 0 && height > 0) {
+        setShape((current) =>
+          current?.width === width && current.height === height ? current : { width, height },
+        );
+      }
+    };
+    element.addEventListener("loadedmetadata", read);
+    element.addEventListener("resize", read);
+    return () => {
+      element.removeEventListener("loadedmetadata", read);
+      element.removeEventListener("resize", read);
+    };
+  }, [video]);
+  return shape;
 }

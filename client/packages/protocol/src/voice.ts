@@ -347,6 +347,8 @@ export class VoiceCall {
   /** The gain the microphone is sent at, from `setInputVolume`. */
   #inputVolume = 1;
   #camera: CameraSend | null = null;
+  /** Counts moves of the camera to another, so a move overtaken by a later one gives way. */
+  #cameraSwaps = 0;
   #external: { producerIds: string[]; share: ExternalShare } | null = null;
   /** The consumer carrying the call's own preview of an external share. */
   #previewConsumerId: string | null = null;
@@ -750,11 +752,7 @@ export class VoiceCall {
     const camera: CameraSend = { track, producer: null };
     this.#camera = camera;
     this.#set({ localCamera: track, cameraError: null });
-    track.addEventListener("ended", () => {
-      if (this.#camera === camera) {
-        this.stopCamera();
-      }
-    });
+    this.#endWithTrack(camera, track);
     try {
       camera.producer = await transport.produce({
         track,
@@ -800,21 +798,65 @@ export class VoiceCall {
     this.#set({ localCamera: null });
   }
 
-  /** Moves a camera that is on to the camera now chosen. */
+  /**
+   * Turns the camera off when `track` ends on its own (the camera unplugged, or taken by the
+   * system), while `track` is the one it sends; a track it has moved on from ends harmlessly.
+   */
+  #endWithTrack(camera: CameraSend, track: MediaStreamTrack): void {
+    track.addEventListener("ended", () => {
+      if (this.#camera === camera && camera.track === track) {
+        this.stopCamera();
+      }
+    });
+  }
+
+  /**
+   * Moves a camera that is on to the camera now chosen, keeping it on. The camera in use is let
+   * go before the next opens: a phone opens one of its cameras at a time, refusing a second or,
+   * on iOS, ending the first one's track, so the picture pauses until the next camera's
+   * arrives. Only the latest of several moves at once takes effect. Where no camera opens, the
+   * camera turns off and `cameraError` says why.
+   */
   async #swapCamera(): Promise<void> {
     const camera = this.#camera;
-    if (camera?.producer == null) {
+    const producer = camera?.producer;
+    if (camera == null || producer == null) {
       return;
     }
-    const track = await this.#media.getCamera(this.#devices.camera);
-    if (this.#camera !== camera) {
+    this.#cameraSwaps += 1;
+    const swap = this.#cameraSwaps;
+    const current = () => this.#camera === camera && this.#cameraSwaps === swap;
+    camera.track.stop();
+    let track: MediaStreamTrack;
+    try {
+      track = await this.#media.getCamera(this.#devices.camera);
+    } catch (error) {
+      if (current()) {
+        this.stopCamera();
+        this.#set({
+          cameraError: error instanceof CameraError ? error.failure : "failed",
+        });
+      }
+      return;
+    }
+    if (!current()) {
       track.stop();
       return;
     }
-    await camera.producer.replaceTrack({ track });
-    camera.track.stop();
     camera.track = track;
-    this.#set({ localCamera: track });
+    this.#endWithTrack(camera, track);
+    try {
+      await producer.replaceTrack({ track });
+    } catch {
+      if (this.#camera === camera) {
+        this.stopCamera();
+        this.#set({ cameraError: "unsent" });
+      }
+      return;
+    }
+    if (current()) {
+      this.#set({ localCamera: track });
+    }
   }
 
   /**
