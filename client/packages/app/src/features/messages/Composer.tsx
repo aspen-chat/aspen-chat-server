@@ -73,6 +73,7 @@ import {
   usePickedText,
   type PickedText,
 } from "@/features/messages/picks";
+import { useOnKeyboardDismissed } from "@/features/layout/dismissKeyboard";
 import { MEDIUM_SCREEN, useMediaQuery, TOUCH_ONLY } from "@/features/layout/useMediaQuery";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
@@ -289,6 +290,13 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   const box = useRef<HTMLTextAreaElement>(null);
   const [keyboard, setKeyboard] = useState(false);
   const keyboardId = useId();
+  // On a touch screen the emoji keyboard stands in the phone's keyboard's place, and goes as
+  // that one would when the keyboard is put away (a drag on the message list on iOS).
+  useOnKeyboardDismissed(() => {
+    if (touchOnly && keyboard) {
+      setKeyboard(false);
+    }
+  });
   // The reader's focus goes to the box after the render that starts the reply, by when a menu
   // the Reply was chosen from has closed and given focus back where it was.
   const [replyAsked, setReplyAsked] = useState(0);

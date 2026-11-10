@@ -9,6 +9,7 @@ import {
   type TouchEvent as ReactTouchEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
+import { dismissKeyboard } from "@/features/layout/dismissKeyboard";
 import { rowsInView } from "@/features/messages/rowsInView";
 import { SCROLL_DEBUG, ScrollDiagnostics } from "@/features/messages/scrollDiagnostics";
 import {
@@ -33,8 +34,9 @@ import {
 export const OWNS_SCROLLING =
   typeof CSS !== "undefined" && CSS.supports("-webkit-touch-callout", "none");
 /**
- * How far a finger moves before its touch is a drag rather than a tap: from then on nothing
- * under it may take a press, as nothing would under a pan the browser made.
+ * How far a finger goes from where it touched before its touch is a drag rather than a tap:
+ * until then the list stays still, so a tap with a little shake in it moves nothing, and from
+ * then on nothing under it may take a press, as nothing would under a pan the browser made.
  */
 const DRAG_SLOP_PX = 8;
 /** How far an arrow key moves the list, and how much of a screen a page key leaves in view. */
@@ -72,6 +74,19 @@ export interface ListElements {
   /** The scroll indicator, drawn where the list scrolls itself, and its thumb. */
   indicator: RefObject<HTMLDivElement | null>;
   thumb: RefObject<HTMLDivElement | null>;
+}
+
+/**
+ * A finger on the list: where it touched and where it last was, its speed, whether the content
+ * follows it yet, and whether what it touched has been told it is not a press.
+ */
+interface Drag {
+  from: number;
+  y: number;
+  dragging: boolean;
+  cancelled: boolean;
+  target: EventTarget;
+  tracker: VelocityTracker;
 }
 
 /** The row kept still, and where it stood when noted. */
@@ -193,9 +208,9 @@ export class ListScroller {
    * before every move notes it afresh).
    */
   #still: Still | null = null;
-  /** A finger on the list, where it last was, how far it has gone, and whether it drags yet. */
-  #drag: { y: number; travelled: number; dragging: boolean; tracker: VelocityTracker } | null =
-    null;
+  #drag: Drag | null = null;
+  /** Whether the list is yet to be placed since it was reset: it appears with that placing. */
+  #appearing = true;
   /**
    * The list coasting after a fling, or springing back from past an end. Its times are the
    * animation frames' clock, taken from the first frame that runs it.
@@ -293,6 +308,7 @@ export class ListScroller {
         const { top, height } = placeOf(content, target);
         this.#place(clamp(Math.round(top - linkedTop(height, box.clientHeight)), this.range));
         this.#afterMove(false);
+        this.#flashOnAppearing();
         return;
       }
       this.#events.moved();
@@ -306,6 +322,7 @@ export class ListScroller {
       this.#events.moved();
     }
     this.#noteStill();
+    this.#flashOnAppearing();
   }
 
   /** Back to the end of what the list holds, pinned there, while the newest are read. */
@@ -321,6 +338,7 @@ export class ListScroller {
   reset() {
     this.stickToBottom = true;
     this.heading = null;
+    this.#appearing = true;
     this.#stopMotion();
     this.#drag = null;
     this.#letRowsTakePointers();
@@ -490,11 +508,26 @@ export class ListScroller {
     if (touch === undefined || !this.#inList(event)) {
       return;
     }
+    const moving = this.#motion !== null;
     this.#stopMotion();
     const tracker = new VelocityTracker();
     tracker.add(touch.clientY, Date.now());
-    this.#drag = { y: touch.clientY, travelled: 0, dragging: false, tracker };
-    this.diagnostics?.note("touch start");
+    const drag: Drag = {
+      from: touch.clientY,
+      y: touch.clientY,
+      dragging: false,
+      cancelled: false,
+      target: event.target,
+      tracker,
+    };
+    this.#drag = drag;
+    this.diagnostics?.note(moving ? "touch stops" : "touch start");
+    if (moving) {
+      // A touch that catches the list coasting or springing stops it, and is nothing else: not
+      // a tap on whatever came to rest under it, as it is not on iOS's own lists, whose readers
+      // stop a fling with a finger wherever it lands. It may go on to drag.
+      this.#cancelPresses(drag);
+    }
   };
 
   readonly onTouchMove = (event: ReactTouchEvent<HTMLDivElement>) => {
@@ -505,27 +538,33 @@ export class ListScroller {
     }
     const dy = drag.y - touch.clientY;
     drag.y = touch.clientY;
-    drag.travelled += Math.abs(dy);
     drag.tracker.add(touch.clientY, Date.now());
-    if (!drag.dragging && drag.travelled >= DRAG_SLOP_PX) {
-      // A drag, not a tap: whatever the finger lifts over, a picture or a button, must not
-      // take the lift as a press. The browser's own pan would have cancelled the pointer; the
-      // rows take no pointer until the finger has lifted, which comes after the pointer has.
-      drag.dragging = true;
-      if (this.#content.current !== null) {
-        this.#content.current.style.pointerEvents = "none";
+    if (!drag.dragging) {
+      // Still until the finger has gone the slop from where it touched; then a drag, not a tap,
+      // and the list follows the finger from there, moving by what it went past the slop, so
+      // the content never jumps by the slop as the drag begins.
+      const gone = touch.clientY - drag.from;
+      if (Math.abs(gone) < DRAG_SLOP_PX) {
+        return;
       }
+      drag.dragging = true;
+      this.#cancelPresses(drag);
+      dismissKeyboard();
+      this.#follow(-(gone - Math.sign(gone) * DRAG_SLOP_PX));
+      return;
     }
-    if (dy !== 0) {
-      // A finger moving down the screen draws older messages into view.
-      this.heading = dy < 0 ? "older" : "newer";
-      this.#moveTo(this.current() + dy, true);
-    }
+    this.#follow(dy);
   };
 
   readonly onTouchEnd = (event: ReactTouchEvent<HTMLDivElement>) => {
     const drag = this.#drag;
     if (drag !== null && event.touches.length === 0) {
+      if (drag.cancelled) {
+        // Left to itself the browser follows the lift with a click on what the finger lifted
+        // from, which would open a link under a finger that stopped the list, or that dragged
+        // it and lifted over one.
+        event.preventDefault();
+      }
       // The finger's speed down the screen is the content's speed up it.
       this.#lift("touch end", -drag.tracker.velocity(Date.now()));
     }
@@ -770,7 +809,9 @@ export class ListScroller {
       });
       bar.style.height = `${String(height)}px`;
       bar.style.transform = `translate3d(0, ${String(top)}px, 0)`;
-      track.style.opacity = shown ? "1" : "0";
+      // Not there at all while everything fits; when it is, its opacity is its own (the
+      // component's styles show it while `moving`), which an inline opacity would override.
+      track.style.visibility = shown ? "" : "hidden";
     }
   }
 
@@ -893,9 +934,51 @@ export class ListScroller {
     }
   }
 
+  /** The list follows a dragging finger that moved `dy` up the screen. */
+  #follow(dy: number) {
+    if (dy !== 0) {
+      // A finger moving down the screen draws older messages into view.
+      this.heading = dy < 0 ? "older" : "newer";
+      this.#moveTo(this.current() + dy, true);
+    }
+  }
+
+  /**
+   * What the finger touched is told it is not being pressed, as the browser tells it when a
+   * pan of its own takes the touch: the rows take no pointer until the finger has lifted, and a
+   * `pointercancel` ends the press the browser's `pointerdown` began before the list's
+   * `touchstart` arrived (React Aria's, and so a message's long press; a self link's and a
+   * reaction's own), as the browser's pan would have ended it. The lift is then no click
+   * (`onTouchEnd`).
+   */
+  #cancelPresses(drag: Drag) {
+    if (drag.cancelled) {
+      return;
+    }
+    drag.cancelled = true;
+    if (this.#content.current !== null) {
+      this.#content.current.style.pointerEvents = "none";
+    }
+    drag.target.dispatchEvent(
+      new PointerEvent("pointercancel", { bubbles: true, pointerType: "touch", isPrimary: true }),
+    );
+  }
+
   #letRowsTakePointers() {
     if (this.#content.current !== null) {
       this.#content.current.style.pointerEvents = "";
+    }
+  }
+
+  /**
+   * The list has just appeared, placed for the first time since it was reset: its indicator
+   * shows for a moment, as iOS's own lists flash theirs, telling the reader there is more than
+   * fits (`#place` hides it when there is not).
+   */
+  #flashOnAppearing() {
+    if (this.#appearing) {
+      this.#appearing = false;
+      this.#showIndicator();
     }
   }
 }

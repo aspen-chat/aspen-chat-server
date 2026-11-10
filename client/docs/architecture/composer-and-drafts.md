@@ -109,7 +109,11 @@ being edited.
 - **It stays open** until it is put away, so several can be picked in a row: by the smiley again, by
   Escape in the box (ahead of a reply being cancelled, or an edit) or anywhere in the keyboard. Each
   of those puts the focus back in the box. The box is made afresh for each channel, so going
-  elsewhere puts it away too.
+  elsewhere puts it away too. On a touch screen it goes with the keyboard: a drag on the message
+  list where the list scrolls itself (iOS) puts the keyboard away (`dismissKeyboard`,
+  `src/features/layout`, which the box and the message editor listen to through
+  `useOnKeyboardDismissed`), as a drag on a phone's own messaging apps does, and the box is left
+  unfocused.
 - **Height:** on a touch-only device, the height of its own keyboard in the same orientation, so the
   box stays where it is as one takes the other's place. `theme/visibleArea.ts` learns that height
   whenever the device's keyboard rises, from how much it takes off the page's height or covers of
@@ -124,12 +128,14 @@ being edited.
   the web view. The phone's keyboard coming or going then changes no layout: it covers the emoji
   keyboard or uncovers it.
   - Opened over the phone's keyboard, it is uncovered as that keyboard leaves.
-  - Put away as the phone's keyboard rises (the smiley, Escape, or touching the box), its room
-    stays, empty and as tall as that keyboard, for as long as the keyboard is up. It goes once the
-    keyboard has gone, or after `HANDOVER_MS` when none rises, when the page's full height is its
-    height anyway. **Why not give the room up as soon as the keyboard covers it:** the page would
-    change height then, with the web view, and WebKit lays the page out a step out of order with
-    such a change and keeps the list's position from it.
+  - Put away as the phone's keyboard rises (the smiley, Escape, or touching the box, each of which
+    has the box take the focus before the keyboard is put away), its room stays, empty and as tall
+    as that keyboard, for as long as the keyboard is up. It goes once the keyboard has gone, or
+    after `HANDOVER_MS` when none rises, when the page's full height is its height anyway. Put away
+    with the keyboard itself (`dismissKeyboard`), nothing holds the focus, no keyboard is coming,
+    and the room goes at once. **Why not give the room up as soon as the keyboard covers it:** the
+    page would change height then, with the web view, and WebKit lays the page out a step out of
+    order with such a change and keeps the list's position from it.
   - **Why not follow the web view's size in styles instead:** WebKit lays the page out at the web
     view's new size before styles that follow the size are worked out. The list's position from that
     layout is kept, and it lands a keyboard's height off.

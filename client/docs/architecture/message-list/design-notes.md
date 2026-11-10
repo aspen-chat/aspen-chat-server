@@ -28,8 +28,21 @@ See [who scrolls the list](scrolling.md).
 
 ## Dragging and events
 
-- **Rows take no pointer once a finger has moved `DRAG_SLOP_PX`.** Lifting it over a picture or a
-  button is then not a press, as it would not be under a pan the browser made.
+- **A finger does what it does on iOS's own lists.** Where the list scrolls itself it stands in for
+  `UIScrollView`, and hands that have used a phone expect what that does: nothing moves under a tap,
+  a drag begins past a slop without the content jumping by it, a drag presses nothing, a drag puts
+  the keyboard away, and a touch that catches a moving list stops it and is nothing else. Each of
+  those was once missing here, and the last was how links opened under a finger that only meant to
+  stop a fling. A speed below which a stopping touch would count as a tap was weighed and not taken:
+  it would still open links while the list moved slowly, and iOS's lists have no such speed.
+- **What the finger touched is told it is not a press, not merely cut off from pointers.** The
+  browser's `pointerdown` reaches the row before the list's `touchstart` does, so React Aria's press
+  (and the long press built on it) has begun by the time the list decides the touch is a drag or a
+  stop, and it ends only on `pointerup`, which a touch delivers to the element it began on whatever
+  pointer rule has since been put over it, or on `pointercancel`. So the list sends the
+  `pointercancel` the browser's own pan would have sent, and prevents the click the browser would
+  follow the lift with. Taking the rows' pointers away on its own would keep new presses from
+  starting and nothing more.
 - **The list takes only events from the list itself.** React passes events up through what a row
   opens in a layer of its own over the page (the actions' sheet, the emoji picker's, a dialog) as
   though it were in the row. A finger scrolling a picker there would otherwise drag the list behind

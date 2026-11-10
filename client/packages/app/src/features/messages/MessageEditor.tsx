@@ -1,5 +1,6 @@
 import { ApiProblemError, type Attachment } from "@aspen/protocol";
 import { SmileyIcon } from "@phosphor-icons/react";
+import { useOnKeyboardDismissed } from "@/features/layout/dismissKeyboard";
 import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Button, TextArea, TextField } from "react-aria-components";
@@ -63,6 +64,12 @@ export function MessageEditor({
   const box = useRef<HTMLTextAreaElement>(null);
   const [keyboard, setKeyboard] = useState(false);
   const keyboardId = useId();
+  // As the message box's: on a touch screen the emoji keyboard goes with the keyboard.
+  useOnKeyboardDismissed(() => {
+    if (touchOnly && keyboard) {
+      setKeyboard(false);
+    }
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

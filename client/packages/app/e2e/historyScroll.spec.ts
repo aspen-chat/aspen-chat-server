@@ -1053,3 +1053,238 @@ for (const { name, ios } of SCROLLERS) {
     expect(misses).toEqual([]);
   });
 }
+
+/**
+ * Every message one long link, wrapping over several lines, so that a finger landing anywhere in
+ * the list is likely to land on one.
+ */
+const LINK = `https://example.test/${"reservoir/boathouse/pumping-station/beeches/".repeat(6)}`;
+const linkHistory: Entry[] = history.map((m) => ({
+  record: { ...m.record, content: LINK, attachments: [] },
+  pictures: [],
+}));
+
+/**
+ * Records every click that reaches the page, as the link it was on or the tag it was on, and
+ * keeps a clicked link from opening.
+ */
+async function watchClicks(page: Page) {
+  await page.addInitScript(() => {
+    const record = window as unknown as { clicks: string[] };
+    record.clicks = [];
+    document.addEventListener(
+      "click",
+      (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        const link = target?.closest("a") ?? null;
+        record.clicks.push(link?.href ?? target?.tagName ?? "?");
+        if (link !== null) {
+          event.preventDefault();
+        }
+      },
+      true,
+    );
+  });
+}
+
+function clicks(page: Page) {
+  return page.evaluate(() => {
+    const record = window as unknown as { clicks: string[] };
+    const seen = record.clicks;
+    record.clicks = [];
+    return seen;
+  });
+}
+
+/** The link under the point, judged by the links' own boxes, which no pointer rule hides. */
+function linkAt(page: Page, point: { x: number; y: number }) {
+  return page.evaluate(({ x, y }) => {
+    const list = document.querySelector<HTMLElement>("[data-message-list]");
+    if (list === null) {
+      return null;
+    }
+    for (const link of list.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+      for (const rect of link.getClientRects()) {
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+          return link.href;
+        }
+      }
+    }
+    return null;
+  }, point);
+}
+
+/** A flick back through the history, from `from` down the screen, leaving the list coasting. */
+async function flickBack(cdp: CDPSession, page: Page, x: number, from: number) {
+  await touch(cdp, "touchStart", x, from);
+  for (let step = 1; step <= 6; step++) {
+    await touch(cdp, "touchMove", x, from + step * 25);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  }
+  await touch(cdp, "touchEnd", x, from + 150);
+}
+
+test("a touch that stops a fling is not a tap on what comes to rest under it, with the list scrolling itself as on iOS", async ({
+  page,
+  browserName,
+  isMobile,
+}) => {
+  test.skip(
+    !isMobile || browserName !== "chromium",
+    "a finger is driven through Chromium's protocol",
+  );
+  test.setTimeout(120_000);
+  await asIos(page);
+  await watchClicks(page);
+  await signInToWorld(page, (p) => serveHistory(p, linkHistory));
+  await page
+    .getByRole("grid", { name: "Channels" })
+    .first()
+    .getByText("general", { exact: true })
+    .click();
+  await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
+  await page.waitForTimeout(500);
+
+  const cdp = await page.context().newCDPSession(page);
+  const box = await page.locator("[data-message-list]").first().boundingBox();
+  expect(box).not.toBeNull();
+  const x = (box?.x ?? 0) + (box?.width ?? 400) / 2;
+  const top = box?.y ?? 0;
+  const height = box?.height ?? 600;
+  const point = { x, y: top + height / 2 };
+
+  // The finger lands where it lands on a moving list; a landing between links tries again.
+  let landedOn: string | null = null;
+  for (let attempt = 0; attempt < 8 && landedOn === null; attempt++) {
+    await flickBack(cdp, page, x, top + height * 0.3);
+    // Slowed a little, as a reader's catch comes once they see what passes.
+    await page.waitForTimeout(250);
+    await clicks(page);
+    await touch(cdp, "touchStart", point.x, point.y);
+    landedOn = await linkAt(page, point);
+    await page.waitForTimeout(150);
+    await touch(cdp, "touchEnd", point.x, point.y);
+    await page.waitForTimeout(300);
+    expect(await clicks(page), "clicks from a touch that stopped the list").toEqual([]);
+  }
+  expect(landedOn, "a link under the finger that stopped the list").not.toBeNull();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // The same tap on the list at rest is a tap, and opens the link.
+  await touch(cdp, "touchStart", point.x, point.y);
+  await page.waitForTimeout(150);
+  await touch(cdp, "touchEnd", point.x, point.y);
+  await page.waitForTimeout(300);
+  expect(await clicks(page)).toEqual([landedOn]);
+});
+
+test("a drag begins past the slop without the list jumping by it, with the list scrolling itself as on iOS", async ({
+  page,
+  browserName,
+  isMobile,
+}) => {
+  test.skip(
+    !isMobile || browserName !== "chromium",
+    "a finger is driven through Chromium's protocol",
+  );
+  await asIos(page);
+  await signInToWorld(page, serveHistory);
+  await page
+    .getByRole("grid", { name: "Channels" })
+    .first()
+    .getByText("general", { exact: true })
+    .click();
+  await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
+  await page.waitForTimeout(1500);
+
+  const cdp = await page.context().newCDPSession(page);
+  const box = await page.locator("[data-message-list]").first().boundingBox();
+  expect(box).not.toBeNull();
+  const x = (box?.x ?? 0) + (box?.width ?? 400) / 2;
+  const y = (box?.y ?? 0) + (box?.height ?? 600) / 2;
+  // Up into the history first, where nothing but the finger moves the list: at the bottom, the
+  // pin would draw it back there.
+  await touch(cdp, "touchStart", x, y - 150);
+  for (let step = 1; step <= 10; step++) {
+    await touch(cdp, "touchMove", x, y - 150 + step * 30);
+    await frames(page);
+  }
+  await page.waitForTimeout(150);
+  await touch(cdp, "touchEnd", x, y + 150);
+  await page.waitForTimeout(500);
+  const before = await sample(page);
+  // Chromium withholds a touch's moves inside a slop of its own, so the first move the page
+  // sees is this one, well past the list's slop.
+  const gone = 20;
+  await touch(cdp, "touchStart", x, y);
+  await touch(cdp, "touchMove", x, y + gone);
+  await frames(page);
+  const after = await sample(page);
+  await page.waitForTimeout(150);
+  await touch(cdp, "touchEnd", x, y + gone);
+  // The indicator shows after the move, over the view, however far up the list is.
+  const track = await page.locator("[data-scroll-indicator]").boundingBox();
+  expect(track).not.toBeNull();
+  expect(track?.y ?? -1).toBeGreaterThanOrEqual(box?.y ?? 0);
+  expect((track?.y ?? 0) + (track?.height ?? 0)).toBeLessThanOrEqual(
+    (box?.y ?? 0) + (box?.height ?? 0),
+  );
+  expect(track?.height ?? 0).toBeGreaterThan((box?.height ?? 0) / 2);
+  const both = moves(before?.tops ?? {}, after?.tops ?? {});
+  expect(both.length, "messages in view before and after").toBeGreaterThan(0);
+  for (const moved of both) {
+    // The slop is not a move: the list moved by what the finger went past it, not by the lot.
+    expect(Math.abs(moved - (gone - 8)), `moved ${String(moved)}px`).toBeLessThan(1.5);
+  }
+});
+
+test("a drag puts the keyboard away, with the list scrolling itself as on iOS", async ({
+  page,
+  browserName,
+  isMobile,
+}) => {
+  test.skip(
+    !isMobile || browserName !== "chromium",
+    "a finger is driven through Chromium's protocol",
+  );
+  await asIos(page);
+  await signInToWorld(page, serveHistory);
+  await page
+    .getByRole("grid", { name: "Channels" })
+    .first()
+    .getByText("general", { exact: true })
+    .click();
+  await expect(page.locator(`article[data-message-id="${id(COUNT)}"]`)).toBeVisible();
+  await page.waitForTimeout(1500);
+
+  const cdp = await page.context().newCDPSession(page);
+  const dragList = async () => {
+    const box = await page.locator("[data-message-list]").first().boundingBox();
+    expect(box).not.toBeNull();
+    const x = (box?.x ?? 0) + (box?.width ?? 400) / 2;
+    let y = (box?.y ?? 0) + (box?.height ?? 600) / 2;
+    await touch(cdp, "touchStart", x, y);
+    for (let step = 0; step < 3; step++) {
+      y += 10;
+      await touch(cdp, "touchMove", x, y);
+      await frames(page);
+    }
+    await page.waitForTimeout(120);
+    await touch(cdp, "touchEnd", x, y);
+  };
+
+  const messageBox = page.getByRole("textbox", { name: "Message" });
+  await messageBox.tap();
+  await expect(messageBox).toBeFocused();
+  await dragList();
+  await expect(messageBox).not.toBeFocused();
+
+  await page.getByRole("button", { name: "Insert an emoji" }).tap();
+  const keyboard = page.getByRole("group", { name: "Emoji keyboard" });
+  await expect(keyboard).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-docked-emoji-keyboard");
+  await dragList();
+  await expect(keyboard).toBeHidden();
+  // Its room goes with it: no keyboard is coming to take its place.
+  await expect(page.locator("html")).not.toHaveAttribute("data-docked-emoji-keyboard");
+});

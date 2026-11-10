@@ -293,116 +293,136 @@ export function MessageList({
     ));
 
   return (
-    <div
-      ref={viewport}
-      data-message-list=""
-      data-owns-scrolling={OWNS_SCROLLING ? "" : undefined}
-      onScroll={scroller.onScroll}
-      {...(OWNS_SCROLLING
-        ? {
-            onTouchStart: scroller.onTouchStart,
-            onTouchMove: scroller.onTouchMove,
-            onTouchEnd: scroller.onTouchEnd,
-            onTouchCancel: scroller.onTouchCancel,
-            onWheel: scroller.onWheel,
-            onKeyDown: scroller.onKeyDown,
-          }
-        : {})}
-      // Where the list scrolls itself, hidden overflow: only scripts scroll the box, the
-      // list's own among them, and fingers pan it through the handlers. Everywhere else the
-      // browser scrolls it, with its anchoring off, since the list keeps its own view still.
-      className={
-        OWNS_SCROLLING
-          ? "relative min-h-0 flex-1 touch-none overflow-hidden [overflow-anchor:none]"
-          : "relative min-h-0 flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none]"
-      }
-    >
-      <JumpToMessageContext.Provider value={jumpTo}>
-        <KeepStillContext.Provider value={scroller.settle}>
-          <div
-            ref={content}
-            onKeyDown={(event) => {
-              const heading = moveBetweenRows(event.currentTarget, event);
-              if (heading !== null) {
-                scroller.focusMoved(heading);
-              }
-            }}
-            className={
-              "message-text flex min-h-full flex-col gap-1 px-4 py-3" +
-              (fromTop ? "" : " justify-end")
+    // What is drawn over the view, the indicator and the diagnostics, is positioned in this
+    // box, not in the viewport: an absolute child of a scroll container is laid out against
+    // its content at scroll position zero and scrolls away with it.
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={viewport}
+        data-message-list=""
+        data-owns-scrolling={OWNS_SCROLLING ? "" : undefined}
+        onScroll={scroller.onScroll}
+        {...(OWNS_SCROLLING
+          ? {
+              onTouchStart: scroller.onTouchStart,
+              onTouchMove: scroller.onTouchMove,
+              onTouchEnd: scroller.onTouchEnd,
+              onTouchCancel: scroller.onTouchCancel,
+              onWheel: scroller.onWheel,
+              onKeyDown: scroller.onKeyDown,
             }
-          >
-            <MessageRowsContext.Provider value={messageRows}>
-              {window.hasOlder ? (
-                <LoadingEdge loading={loadingOlder} />
-              ) : start !== undefined ? (
-                <div ref={startBox}>{start}</div>
-              ) : (
-                <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
-              )}
-              {empty !== undefined &&
-                !window.hasOlder &&
-                window.atLatest &&
-                window.ids.length === 0 &&
-                departing.length === 0 &&
-                empty}
-              <div ref={rows} className="flex flex-col gap-1">
-                {lineIndex === -1 && <NewMessagesLine />}
-                {leaving(null)}
-                {parts.map((part) => {
-                  const item = (id: string, next?: string) => (
-                    <MessageItem
-                      id={id}
-                      home={home}
-                      channelId={channelId}
-                      parentId={parentId}
-                      highlighted={id === highlight}
-                      grouped={continuing.has(id)}
-                      continued={next !== undefined && continuing.has(next)}
-                    />
-                  );
-                  if (part.kind === "message") {
-                    const next = ids?.[part.index + 1];
+          : {})}
+        // Where the list scrolls itself, hidden overflow: only scripts scroll the box, the
+        // list's own among them, and fingers pan it through the handlers. Everywhere else the
+        // browser scrolls it, with its anchoring off, since the list keeps its own view still.
+        className={
+          OWNS_SCROLLING
+            ? "relative min-h-0 flex-1 touch-none overflow-hidden [overflow-anchor:none]"
+            : "relative min-h-0 flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none]"
+        }
+      >
+        <JumpToMessageContext.Provider value={jumpTo}>
+          <KeepStillContext.Provider value={scroller.settle}>
+            <div
+              ref={content}
+              onKeyDown={(event) => {
+                const heading = moveBetweenRows(event.currentTarget, event);
+                if (heading !== null) {
+                  scroller.focusMoved(heading);
+                }
+              }}
+              className={
+                "message-text flex min-h-full flex-col gap-1 px-4 py-3" +
+                (fromTop ? "" : " justify-end")
+              }
+            >
+              <MessageRowsContext.Provider value={messageRows}>
+                {window.hasOlder ? (
+                  <LoadingEdge loading={loadingOlder} />
+                ) : start !== undefined ? (
+                  <div ref={startBox}>{start}</div>
+                ) : (
+                  <p className="py-2 text-center text-sm text-ink-faint">{m.channelStart}</p>
+                )}
+                {empty !== undefined &&
+                  !window.hasOlder &&
+                  window.atLatest &&
+                  window.ids.length === 0 &&
+                  departing.length === 0 &&
+                  empty}
+                <div ref={rows} className="flex flex-col gap-1">
+                  {lineIndex === -1 && <NewMessagesLine />}
+                  {leaving(null)}
+                  {parts.map((part) => {
+                    const item = (id: string, next?: string) => (
+                      <MessageItem
+                        id={id}
+                        home={home}
+                        channelId={channelId}
+                        parentId={parentId}
+                        highlighted={id === highlight}
+                        grouped={continuing.has(id)}
+                        continued={next !== undefined && continuing.has(next)}
+                      />
+                    );
+                    if (part.kind === "message") {
+                      const next = ids?.[part.index + 1];
+                      return (
+                        <Fragment key={part.id}>
+                          {item(part.id, next)}
+                          {leaving(part.id)}
+                          {part.index === lineIndex && <NewMessagesLine />}
+                        </Fragment>
+                      );
+                    }
+                    const lineOffset =
+                      lineIndex !== null &&
+                      lineIndex >= part.index &&
+                      lineIndex < part.index + part.ids.length
+                        ? lineIndex - part.index
+                        : null;
                     return (
-                      <Fragment key={part.id}>
-                        {item(part.id, next)}
-                        {leaving(part.id)}
-                        {part.index === lineIndex && <NewMessagesLine />}
+                      <Fragment key={part.ids[0]}>
+                        <BlockedRun
+                          ids={part.ids}
+                          lineOffset={lineOffset}
+                          highlightId={highlight}
+                          item={item}
+                        />
+                        {part.ids.flatMap((id) => leaving(id))}
                       </Fragment>
                     );
-                  }
-                  const lineOffset =
-                    lineIndex !== null &&
-                    lineIndex >= part.index &&
-                    lineIndex < part.index + part.ids.length
-                      ? lineIndex - part.index
-                      : null;
-                  return (
-                    <Fragment key={part.ids[0]}>
-                      <BlockedRun
-                        ids={part.ids}
-                        lineOffset={lineOffset}
-                        highlightId={highlight}
-                        item={item}
-                      />
-                      {part.ids.flatMap((id) => leaving(id))}
-                    </Fragment>
-                  );
-                })}
-              </div>
-              {window.atLatest ? (
-                // After the newest message, where each will be once it is posted.
-                <PendingMessages channelId={channelId} home={home} />
-              ) : (
-                <LoadingEdge loading={loadingNewer} />
-              )}
-            </MessageRowsContext.Provider>
+                  })}
+                </div>
+                {window.atLatest ? (
+                  // After the newest message, where each will be once it is posted.
+                  <PendingMessages channelId={channelId} home={home} />
+                ) : (
+                  <LoadingEdge loading={loadingNewer} />
+                )}
+              </MessageRowsContext.Provider>
+            </div>
+          </KeepStillContext.Provider>
+        </JumpToMessageContext.Provider>
+        {(!window.atLatest || farBack) && (
+          // Over the bottom of the view, taking no room in the list: the pill comes and goes as
+          // the reader nears the newest, and room of its own going at the bottom would move
+          // everything in view down by its height.
+          <div className="pointer-events-none sticky bottom-3 flex h-0 items-end justify-center">
+            <JumpToLatest
+              onJump={() => {
+                const jumped = jumpToLatest();
+                dropLink();
+                return jumped;
+              }}
+            />
           </div>
-        </KeepStillContext.Provider>
-      </JumpToMessageContext.Provider>
+        )}
+      </div>
       {OWNS_SCROLLING && (
         <div
           ref={indicator}
+          data-scroll-indicator=""
           aria-hidden="true"
           // Over the list's own padding, taking no pointer but its thumb's, and that only where
           // there is a pointer to drag it with.
@@ -412,20 +432,6 @@ export function MessageList({
             ref={thumb}
             onPointerDown={scroller.onThumbPointerDown}
             className="absolute inset-x-0 top-0 rounded-full bg-ink/35 pointer-fine:pointer-events-auto"
-          />
-        </div>
-      )}
-      {(!window.atLatest || farBack) && (
-        // Over the bottom of the view, taking no room in the list: the pill comes and goes as
-        // the reader nears the newest, and room of its own going at the bottom would move
-        // everything in view down by its height.
-        <div className="pointer-events-none sticky bottom-3 flex h-0 items-end justify-center">
-          <JumpToLatest
-            onJump={() => {
-              const jumped = jumpToLatest();
-              dropLink();
-              return jumped;
-            }}
           />
         </div>
       )}

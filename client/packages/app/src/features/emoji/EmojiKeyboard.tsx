@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { LazyEmojiPicker } from "@/features/emoji/LazyEmojiPicker";
+import { keyboardRaised } from "@/features/layout/dismissKeyboard";
 import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useMessages } from "@/i18n/context";
 import { useKeyboardHeight } from "@/theme/visibleArea";
@@ -33,12 +34,13 @@ const HANDOVER_MS = 1000;
  * the phone's keyboard take each other's place without anything above them moving. While it is
  * there the page keeps its full height (`KeepsPageHeight`) however much of it the phone's
  * keyboard takes, so the keyboard coming or going changes no layout: it covers the emoji
- * keyboard, or leaves it uncovered. Put away (`open` false) as the phone's keyboard rises, its
- * room stays, as tall as that keyboard, for as long as the keyboard is up, and goes once it has
- * gone (or after `HANDOVER_MS` when none comes), when the page's full height is its height
- * anyway. Changing the layout while the web view resizes would not do: WebKit lays the page out
- * at its new size before styles that follow the size are worked out, and keeps the list's
- * position from that layout.
+ * keyboard, or leaves it uncovered. Put away (`open` false) as the phone's keyboard rises, which
+ * the box's taking the focus tells of, its room stays, as tall as that keyboard, for as long as
+ * the keyboard is up, and goes once it has gone (or after `HANDOVER_MS` when none comes), when
+ * the page's full height is its height anyway; put away with the keyboard itself
+ * (`dismissKeyboard`), nothing holds the focus, and its room goes at once. Changing the layout
+ * while the web view resizes would not do: WebKit lays the page out at its new size before
+ * styles that follow the size are worked out, and keeps the list's position from that layout.
  */
 export function EmojiKeyboard({
   id,
@@ -69,7 +71,10 @@ export function EmojiKeyboard({
   const [holding, setHolding] = useState<{ risen: boolean } | null>(null);
   if (open !== wasOpen) {
     setWasOpen(open);
-    setHolding(!open && docked && touchOnly ? { risen: false } : null);
+    // Its room is kept only for a keyboard that is coming, which the box put away for has
+    // already taken the focus for; put away with nothing focused (`dismissKeyboard`), none is,
+    // and the room goes with it.
+    setHolding(!open && docked && touchOnly && keyboardRaised() ? { risen: false } : null);
   }
   if (holding !== null && !holding.risen && cover > 0) {
     setHolding({ risen: true });
