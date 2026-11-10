@@ -6,7 +6,7 @@
 | Inline pictures, videos, and sounds | `src/features/messages/Attachments.tsx` (`MessageMedia`, `InlineVideo`, `InlineAudio`, `keptRoom`) |
 | Text and code files                 | `TextAttachment.tsx`, `textPreview.ts`                                                             |
 | Spoilers                            | `SpoilerCover` in `SpoilerCard.tsx`, `SpoilerToggle` in `Composer.tsx`                             |
-| Gallery                             | `ImageGallery.tsx`                                                                                 |
+| Gallery                             | `ImageGallery.tsx`, `gallerySwipe.ts`, `useGalleryZoom.ts`, `galleryZoom.ts`                       |
 | Records on demand                   | `useAttachment`                                                                                    |
 | Describing                          | `AttachmentDescriptionButton`, `AspenSync.updateAttachment`                                        |
 
@@ -68,6 +68,30 @@ it, and letting go once the menu has opened is not a press on the picture. Andro
 finger's long press with `contextmenu`, which the picture keeps from the message's menu while a
 finger presses it; a pointer's right click goes on up to the message's context menu, which offers
 the same actions (see [context menus](../context-menus.md)).
+
+### Zooming
+
+On a touch screen fingers zoom the gallery's current picture (`useGalleryZoom`, whose arithmetic is
+`galleryZoom.ts`):
+
+- Two fingers pinch it about their middle, and pan it as they move together.
+- A double-tap zooms in on the point tapped, to `DOUBLE_TAP_ZOOM` times its fitted size. A
+  double-tap on a zoomed picture fits it again.
+- One finger pans a zoomed picture, and thrown, the picture coasts. On a fitted picture one finger
+  swipes between pictures, as above.
+- A pan that reaches the picture's side carries on into the next picture, as a swipe would. The
+  zoomed picture slides away as it is, and is fitted again once out of sight.
+- A picture zooms to `ZOOM_OVER_FIT` (four) times its fitted size, or further where its original has
+  more to show: to one of its pixels per CSS pixel (`maxScale`).
+- Zoomed past a limit, or panned past an edge, it gives a little and eases back when the fingers
+  lift. Where motion is reduced it follows the fingers, settles at once, and does not coast.
+- A zoomed picture spreads over the whole gallery, under the counter and the controls beside it. Its
+  description and the thumbnails are put away until it is fitted again.
+- It pans across the stage, the room a fitted picture has, and never out of it (`panRange`).
+- Moving to another picture fits it again. A covered spoiler does not zoom.
+- The pictures stand the gallery's whole width apart, so a neighbour waits outside the gallery
+  however far a zoomed picture spreads.
+- The browser's own pinch and double-tap zoom are off over the gallery (`touch-action`).
 
 ## Previews and posters
 

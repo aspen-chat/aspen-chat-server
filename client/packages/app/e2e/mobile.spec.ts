@@ -111,6 +111,89 @@ async function swipeAcross(
   await client.detach();
 }
 
+/**
+ * Puts fingers down at the first of `frames`, moves them through the rest, and lifts them
+ * (Chromium only): each frame is where every finger is, in the same order.
+ */
+async function touch(page: Page, frames: readonly (readonly { x: number; y: number }[])[]) {
+  const client = await page.context().newCDPSession(page);
+  for (const [i, points] of frames.entries()) {
+    await client.send("Input.dispatchTouchEvent", {
+      type: i === 0 ? "touchStart" : "touchMove",
+      touchPoints: points.map((point, id) => ({ ...point, id })),
+    });
+  }
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await client.detach();
+}
+
+/**
+ * Two fingers either side of (`x`, `y`), `from` pixels apart, moved until they are `to` apart
+ * (Chromium only).
+ */
+async function pinch(page: Page, x: number, y: number, from: number, to: number) {
+  const steps = 8;
+  await touch(
+    page,
+    Array.from({ length: steps + 1 }, (_, i) => {
+      const half = (from + ((to - from) * i) / steps) / 2;
+      return [
+        { x: x - half, y },
+        { x: x + half, y },
+      ];
+    }),
+  );
+}
+
+/**
+ * Opens the gallery on the first of three pictures of the newest message in #general, each
+ * served from `src` and recorded as 200 by 150.
+ */
+async function openGallery(page: Page, src: string): Promise<Locator> {
+  const pictures = ["one", "two", "three"].map((name, i) => ({
+    id: `0190f0a0-0000-7000-8002-00000000002${String(i)}`,
+    fileName: `${name}.png`,
+    mimeType: "image/png",
+    downloadUrl: src,
+    width: 200,
+    height: 150,
+  }));
+  await page.route(/\/api\/v1\/attachments\/[^/?]+$/, (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").at(-1);
+    const picture = pictures.find((p) => p.id === id);
+    return picture === undefined ? route.fallback() : route.fulfill({ json: picture });
+  });
+  await page.route(new RegExp(`/api/v1/channels/${general}/messages(\\?.*)?$`), (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.has("before") || url.searchParams.has("after")) {
+      return route.fallback();
+    }
+    return route.fulfill({
+      json: {
+        data: [
+          message(208, bob, "Pictures", 1, { attachments: pictures.map((p) => p.id) }),
+          ...generalMessages,
+        ],
+        included: { users },
+      },
+    });
+  });
+  await openChannel(page, "general");
+  await page.getByRole("button", { name: "Image: one.png" }).tap();
+  const gallery = page.getByRole("dialog", { name: "Images" });
+  await expect(gallery.getByText("1 of 3")).toBeVisible();
+  await settleAnimations(page);
+  return gallery;
+}
+
+/** How a picture in the gallery is drawn over its fitted place: its scale, and how far across. */
+async function zoomOf(picture: Locator): Promise<{ scale: number; x: number }> {
+  return picture.evaluate((element) => {
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+    return { scale: matrix.a, x: matrix.e };
+  });
+}
+
 const channelList = (page: Page) => page.getByRole("grid", { name: "Channels" }).first();
 const rail = (page: Page) => page.getByRole("navigation", { name: "Communities" });
 const messageWith = (page: Page, text: string) =>
@@ -515,58 +598,24 @@ test.describe("on a phone", () => {
     browserName,
   }) => {
     test.skip(browserName !== "chromium", "only Chromium takes synthetic touch input");
-    // Newest in #general, a message carrying three pictures, each the one-pixel PNG drawn as
-    // large as a photo.
-    const pictures = ["one", "two", "three"].map((name, i) => ({
-      id: `0190f0a0-0000-7000-8002-00000000002${String(i)}`,
-      fileName: `${name}.png`,
-      mimeType: "image/png",
-      downloadUrl: PIXEL_PNG,
-      width: 200,
-      height: 150,
-    }));
-    await page.route(/\/api\/v1\/attachments\/[^/?]+$/, (route) => {
-      const id = new URL(route.request().url()).pathname.split("/").at(-1);
-      const picture = pictures.find((p) => p.id === id);
-      return picture === undefined ? route.fallback() : route.fulfill({ json: picture });
-    });
-    await page.route(new RegExp(`/api/v1/channels/${general}/messages(\\?.*)?$`), (route) => {
-      const url = new URL(route.request().url());
-      if (url.searchParams.has("before") || url.searchParams.has("after")) {
-        return route.fallback();
-      }
-      return route.fulfill({
-        json: {
-          data: [
-            message(208, bob, "Pictures", 1, { attachments: pictures.map((p) => p.id) }),
-            ...generalMessages,
-          ],
-          included: { users },
-        },
-      });
-    });
-    await openChannel(page, "general");
-    await page.getByRole("button", { name: "Image: one.png" }).tap();
-    const gallery = page.getByRole("dialog", { name: "Images" });
-    await expect(gallery.getByText("1 of 3")).toBeVisible();
+    const gallery = await openGallery(page, PIXEL_PNG);
     await expect(gallery.getByRole("button", { name: "Next image" })).toHaveCount(0);
     await expect(gallery.getByRole("button", { name: "Previous image" })).toHaveCount(0);
-    await settleAnimations(page);
     const box = await gallery.boundingBox();
     const y = (box?.y ?? 0) + (box?.height ?? 0) / 2;
     const middle = (box?.x ?? 0) + (box?.width ?? 0) / 2;
     // Thrown toward the start, the next picture comes in.
-    await swipeAcross(page, y, middle + 100, middle - 100);
+    await swipeAcross(page, y, middle + 120, middle - 120);
     await expect(gallery.getByText("2 of 3")).toBeVisible();
     // A short drag that comes to rest springs back to the picture it was on.
     await swipeAcross(page, y, middle, middle + 60, { rest: true });
     await settleAnimations(page);
     await expect(gallery.getByText("2 of 3")).toBeVisible();
     // Thrown toward the end, the previous one comes back.
-    await swipeAcross(page, y, middle - 100, middle + 100);
+    await swipeAcross(page, y, middle - 120, middle + 120);
     await expect(gallery.getByText("1 of 3")).toBeVisible();
     // Pulled past the first picture, nothing changes and the gallery stays open.
-    await swipeAcross(page, y, middle - 100, middle + 100);
+    await swipeAcross(page, y, middle - 120, middle + 120);
     await settleAnimations(page);
     await expect(gallery.getByText("1 of 3")).toBeVisible();
   });
@@ -652,6 +701,70 @@ test.describe("on a phone", () => {
     await longPress(page, button);
     await menu.getByRole("menuitem", { name: "More options" }).tap();
     await expect(page.getByRole("dialog", { name: "Message actions" })).toBeVisible();
+  });
+
+  test("fingers zoom a picture in the gallery, pan it, and carry on to the next", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium", "only Chromium takes synthetic touch input");
+    // A photo's worth of pixels, which the one-pixel PNG has not: there is nothing of it to
+    // zoom into. The browser draws it by its own type, whatever its record says.
+    const photo = "https://media.test/world/photo.png";
+    await page.route(photo, (route) =>
+      route.fulfill({
+        contentType: "image/svg+xml",
+        headers: { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" },
+        body:
+          '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200">' +
+          '<rect width="1600" height="1200" fill="#246"/>' +
+          '<circle cx="800" cy="600" r="300" fill="#fc6"/></svg>',
+      }),
+    );
+    const gallery = await openGallery(page, photo);
+    const picture = gallery.getByRole("img", { name: "Image: one.png" });
+    const thumbnail = gallery.getByRole("button", { name: "Image: two.png" });
+    const stage = await picture.boundingBox();
+    const x = (stage?.x ?? 0) + (stage?.width ?? 0) / 2;
+    const y = (stage?.y ?? 0) + (stage?.height ?? 0) / 2;
+    await expect(thumbnail).toBeVisible();
+
+    // Fingers parting to half as far apart again zoom it by as much, and the thumbnails are
+    // put away for it; the counter and the way out stay.
+    await pinch(page, x, y, 120, 180);
+    await expect.poll(async () => (await zoomOf(picture)).scale).toBeCloseTo(1.5, 1);
+    await expect(thumbnail).toBeHidden();
+    await expect(gallery.getByText("1 of 3")).toBeVisible();
+    await expect(gallery.getByRole("button", { name: "Close gallery" })).toBeVisible();
+
+    // One finger pans it, less the little a finger moves before it is known not to be
+    // tapping, and the gallery stays on the picture.
+    await swipeAcross(page, y, x + 30, x - 30, { rest: true });
+    const panned = (await zoomOf(picture)).x;
+    expect(panned).toBeLessThan(-20);
+    expect(panned).toBeGreaterThanOrEqual(-60);
+    await expect(gallery.getByText("1 of 3")).toBeVisible();
+
+    // Dragged on past its side, the finger carries on into the next picture, which is fitted.
+    await swipeAcross(page, y, x + 170, x - 170);
+    await expect(gallery.getByText("2 of 3")).toBeVisible();
+    await settleAnimations(page);
+    const second = gallery.getByRole("img", { name: "Image: two.png" });
+    expect((await zoomOf(second)).scale).toBe(1);
+    await expect(gallery.getByRole("button", { name: "Image: one.png" })).toBeVisible();
+
+    // A double-tap zooms in on the point tapped, and another fits the picture again.
+    const tap = [[{ x: x + 40, y }]];
+    await touch(page, tap);
+    await touch(page, tap);
+    await expect.poll(async () => (await zoomOf(second)).scale).toBeCloseTo(2.5, 1);
+    await expect(gallery.getByRole("button", { name: "Image: one.png" })).toBeHidden();
+    await settleAnimations(page);
+    await touch(page, tap);
+    await touch(page, tap);
+    await expect.poll(async () => (await zoomOf(second)).scale).toBe(1);
+    await expect(gallery.getByRole("button", { name: "Image: one.png" })).toBeVisible();
+    await expect(gallery.getByText("2 of 3")).toBeVisible();
   });
 
   test("an invite shows its code, and copies its link without the Clipboard API", async ({

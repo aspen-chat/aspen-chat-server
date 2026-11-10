@@ -53,6 +53,14 @@ See [attachments](attachments.md).
   message as it was sent.
 - **The gallery's shown description is hidden from assistive technology.** It has it already as the
   picture's text alternative.
+- **A zoomed picture pans within the stage, though it is drawn over the whole gallery.** Every part
+  of it can then be brought clear of the controls drawn over it.
+- **A pan carries on only into the picture it had begun to draw in.** Thrown back the other way, the
+  zoomed picture stays: most of it lies that way, and would be skipped.
+- **The gallery's zoom reads touch events, as its swipe does.** The two then agree on whose a finger
+  is: one finger on a fitted picture swipes, and every other finger zooms or pans.
+- **The page does not zoom under the gallery.** Two fingers there mean the picture, and a page left
+  zoomed would stay so after the gallery closed.
 - **A text file's preview is read by streaming and cancelling, not by a `Range` request.** `Range`
   is a CORS-safelisted header only in some browsers; elsewhere it would need a preflight the storage
   read path need not answer, and the read would fail.
