@@ -2,9 +2,11 @@ import type { FileSink, OfferState, TransferMode } from "@aspen/protocol";
 import { nativeCanChooseDestination, nativeChooseDestination } from "@/api/filesBridge";
 import { formatClock } from "@/features/layout/clock";
 
-/** How long an offer may stand, in seconds, as the offer dialog lists them; the first is the default. */
+/** How long an offer may stand, in seconds, as the offer dialog lists them. */
 export const VALIDITY_CHOICES = ["60", "300", "900", "1800", "3600"] as const;
 export type Validity = (typeof VALIDITY_CHOICES)[number];
+/** The choice the offer dialog starts on: `DEFAULT_OFFER_SECONDS`, which `files.test.ts` checks. */
+export const DEFAULT_VALIDITY = "1800" satisfies Validity;
 
 const UNITS = ["byte", "kilobyte", "megabyte", "gigabyte", "terabyte"] as const;
 

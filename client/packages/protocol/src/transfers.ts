@@ -29,7 +29,7 @@ import { plainFileName } from "./fileNames";
 export type { TransferLink, TransferMode };
 
 /** The default time an offer stands, in seconds. */
-export const DEFAULT_OFFER_SECONDS = 60;
+export const DEFAULT_OFFER_SECONDS = 30 * 60;
 /** The shortest and longest an offer may stand, as the voice server holds them. */
 export const MIN_OFFER_SECONDS = 10;
 export const MAX_OFFER_SECONDS = 60 * 60;

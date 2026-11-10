@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { OfferState } from "@aspen/protocol";
-import { formatSize, formatTimeLeft, linkPath, receiveModes, safeFileName } from "./files";
+import { DEFAULT_OFFER_SECONDS, type OfferState } from "@aspen/protocol";
+import {
+  DEFAULT_VALIDITY,
+  formatSize,
+  formatTimeLeft,
+  linkPath,
+  receiveModes,
+  safeFileName,
+  VALIDITY_CHOICES,
+} from "./files";
 
 const offer = (allowDirect: boolean): OfferState => ({
   id: "o",
@@ -13,6 +21,11 @@ const offer = (allowDirect: boolean): OfferState => ({
 });
 
 describe("files", () => {
+  it("starts the offer dialog on the protocol's default lifetime", () => {
+    expect(Number(DEFAULT_VALIDITY)).toBe(DEFAULT_OFFER_SECONDS);
+    expect(VALIDITY_CHOICES).toContain(DEFAULT_VALIDITY);
+  });
+
   it("formats sizes in the largest unit that fits", () => {
     expect(formatSize(512, "en")).toBe("512B");
     expect(formatSize(1_500, "en")).toBe("1.5 kB");

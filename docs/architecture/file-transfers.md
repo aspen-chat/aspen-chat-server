@@ -30,7 +30,7 @@ notes: [file-transfers-design-notes.md](file-transfers-design-notes.md).
 
 ## Offers
 
-- An offer lasts as long as its sender chooses: sixty seconds by default, from `MIN_VALID_SECONDS`
+- An offer lasts as long as its sender chooses: thirty minutes by default, from `MIN_VALID_SECONDS`
   to `MAX_VALID_SECONDS` (an hour).
 - Any number of people may accept one.
 - The sender's client answers acceptances by itself, so an offer works while its sender is away.

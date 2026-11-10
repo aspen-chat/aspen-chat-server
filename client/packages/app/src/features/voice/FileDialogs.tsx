@@ -39,6 +39,7 @@ import { handleOf } from "@/features/users/profile";
 import {
   canChooseDestination,
   chooseDestination,
+  DEFAULT_VALIDITY,
   formatSize,
   receiveModes,
   VALIDITY_CHOICES,
@@ -98,7 +99,7 @@ export function OfferFileDialog({
   const { locale } = useLocale();
   const limit = useLimit(relayMbps);
   const [file, setFile] = useState<File | null>(null);
-  const [validity, setValidity] = useState<Validity>(VALIDITY_CHOICES[0]);
+  const [validity, setValidity] = useState<Validity>(DEFAULT_VALIDITY);
   const [how, setHow] = useState<"direct" | "relay" | null>(null);
   return (
     <ModalOverlay
