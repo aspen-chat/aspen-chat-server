@@ -96,5 +96,9 @@
 	<string>$(ASPEN_PUSH_RELAY)</string>
 	<key>AspenKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)com.aspen-chat.client.push</string>
+	<!-- What the app's application identifier begins with, the keychain access group that is
+	     the app's alone (UploadStore). -->
+	<key>AspenAppIdentifierPrefix</key>
+	<string>$(AppIdentifierPrefix)</string>
 </dict>
 </plist>

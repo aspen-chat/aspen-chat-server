@@ -149,6 +149,12 @@ Console account, which its signing keys come with.
   deployment without one shows "This deployment has not published a Privacy Policy." or "This
   deployment has not published Terms of Use." where it would be.
 
+- **Uploads in the background.** The mobile apps go on sending a message's files with the app in the
+  background (`client/docs/architecture/sending-while-uploading.md`). On Android that is a
+  foreground service of type `dataSync`, a use Google Play has each app declare and describe in the
+  Play Console before it is published. iOS asks for nothing: a background `URLSession` needs no
+  entitlement or background mode.
+
 Both stores also need what Aspen lacks: deleting one's account in the app, a contact link, a
 deployment and account for the stores' reviewers, and calls that keep running in the background.
 

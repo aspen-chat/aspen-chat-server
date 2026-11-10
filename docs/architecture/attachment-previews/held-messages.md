@@ -8,6 +8,10 @@ polls, and echoes (`held_message.waiting` is `mana`; see
 [Channel mana](../channel-mana/index.md#waiting-rows)). This page is about waiting for previews;
 both kinds are listed, cancelled, and announced alike.
 
+A message sent while its files are still uploading is a held message as well (`waiting` is
+`uploads`; see [Sent before its files arrive](sent-before-uploaded.md)). Once each file is confirmed
+it waits for its previews as described here, whether it is a message or a slash command.
+
 A message scheduled for later is a held message too (`waiting` is `scheduled`, `send_at` its time;
 see [Scheduled messages](../scheduled-messages.md)). It is posted by the same job, which comes due
 at its time, but it is listed apart (`GET /users/@me/held-messages` leaves it out), keeps an order
@@ -42,7 +46,7 @@ keyed by the held message (`held::release_step`; see [Jobs](../jobs/index.md)).
   five seconds (`held::LOOK_EVERY`).
 - A job whose author sent a message before it that is still held waits a second. So an author's held
   messages are posted in the order they were sent (through the index `held_message_by_author`).
-  Scheduled messages are not waited for.
+  Scheduled messages are not waited for, nor are those still waiting for their files.
 
 Once nothing holds it, the job:
 
@@ -86,8 +90,8 @@ posted, whatever it waits for (`held::cancel`).
 
 ## Listing
 
-`GET /users/@me/held-messages` lists the caller's held messages in the order of their ids, which are
-UUIDv7 made as each was held.
+`GET /users/@me/held-messages` lists the caller's held messages, whatever each waits for but a time
+it was scheduled for, in the order of their ids, which are UUIDv7 made as each was held.
 
 - It answers a page of at most `LIST_PAGE` (100) at a time (through the index `held_message_list`),
   as `{data, nextCursor}`: `nextCursor` is the `cursor` of the page after, and `null` on the last.

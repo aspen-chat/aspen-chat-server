@@ -2,7 +2,9 @@ import {
   ApiProblemError,
   type Attachment,
   type AttachmentChange,
+  type HeldMessage,
   type Reply,
+  type ScheduledMessage,
 } from "@aspen/protocol";
 import {
   ChartBarIcon,
@@ -19,6 +21,7 @@ import {
   useId,
   useRef,
   useState,
+  useSyncExternalStore,
   type ChangeEvent,
   type ClipboardEvent,
   type KeyboardEvent,
@@ -99,13 +102,23 @@ interface Pending {
   /** An object URL for the file's own bytes when it is an image, shown as a thumbnail. */
   thumbnail: string | null;
   state:
-    /** `sent` is how much of the file has reached storage, 0 to 1. */
-    | { kind: "uploading"; sent: number }
+    /**
+     * `upload` names it among the session's uploads (`AspenSync.uploads`), which say how far
+     * it has come, once it has begun there.
+     */
+    | { kind: "uploading"; upload: string | null }
     | { kind: "ready"; attachment: Attachment }
     | { kind: "failed"; reason: string };
 }
 
 let nextKey = 1;
+
+/** A file a message is sent before the arrival of: its key in the box, its upload, and the attachment reserved for it. */
+interface Awaited {
+  key: number;
+  upload: string;
+  id: string;
+}
 
 /** A file already on the server, as the box holds it for the next message. */
 function pendingOf(attachment: Attachment): Pending {
@@ -145,7 +158,11 @@ const openToolButtonClass = toolButtonShape + " border-accent text-accent";
 
 /**
  * The message box. Enter sends, Shift+Enter breaks a line. Files chosen with the attach button
- * upload at once and are sent with the next message; a message may be files alone. Text pasted
+ * upload at once and are sent with the next message; a message may be files alone. A message
+ * sent while some are still uploading is sent all the same: the server holds it until each has
+ * arrived, the uploads going on without the box (`AspenSync.uploads`), and it is shown not yet
+ * sent at the foot of the list (`PendingMessages`), from where it may be taken back into the
+ * box. Text pasted
  * that would take the message past its length limit is attached as a text file instead. The
  * schedule control chooses a time (`ScheduleMessageModal`), shown in a bar over the box
  * (`ScheduleBar`) until the next message is sent, which then is scheduled for that time rather
@@ -224,9 +241,17 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     }
   }
   const fileInput = useRef<HTMLInputElement>(null);
-  // Changes made while a file was still uploading (its description, its spoiler mark), by its
-  // key, for the upload to give the server once it is done.
+  // Changes made to a file before its upload had begun (its description, its spoiler mark), by
+  // its key, for the upload to give the server as soon as it has.
   const changedEarly = useRef(new Map<number, AttachmentChange>());
+  // Each file still on its way, by its key: its upload, and the attachment the server reserves
+  // for it, which a message sent meanwhile names.
+  const begun = useRef(new Map<number, Promise<{ upload: string; id: string }>>());
+  // The uploads this box holds, each with the key of the file it is for: one that fails is
+  // taken out of the session's, one sent with a message is the session's alone from then, and
+  // the rest stop when the box goes.
+  const boxUploads = useRef(new Map<string, number>());
+  const uploads = useSyncExternalStore(sync.uploads.subscribe, sync.uploads.all);
   const channel = useChannel(channelId);
   // A thread's people are named as in the community of the channel it is in.
   const parentChannel = useChannel(channel?.parentChannel ?? "");
@@ -278,6 +303,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
       setReply({ to: messageId, tag: true });
       setReplyAsked((asked) => asked + 1);
     },
+    takeBack,
   });
 
   // The draft is noted as it changes, kept a moment after, and kept at once when the box goes
@@ -355,9 +381,8 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   const length = messageLength(encode(trimPicked(written.held)));
   const canSend =
     !sending &&
-    !uploading &&
     length <= MESSAGE_MAX_CHARS &&
-    (draft.trim().length > 0 || readyIds.length > 0);
+    (draft.trim().length > 0 || readyIds.length > 0 || uploading);
 
   // Object URLs hold their file's bytes until revoked; release them once no chip shows them.
   const thumbnails = useRef(new Set<string>());
@@ -372,13 +397,88 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   }, [pending]);
   useEffect(() => {
     const held = thumbnails.current;
+    const sending = boxUploads.current;
+    const session = sync.uploads;
     return () => {
       for (const url of held) {
         URL.revokeObjectURL(url);
       }
       held.clear();
+      // A file still on its way for a box that is gone would arrive for no one.
+      for (const upload of sending.keys()) {
+        session.discard(upload);
+      }
+      sending.clear();
     };
-  }, []);
+  }, [sync]);
+
+  /** How much of the file of `p` has reached storage, 0 to 1. */
+  function sentOf(p: Pending): number {
+    const upload = p.state.kind === "uploading" ? p.state.upload : null;
+    const live = upload === null ? undefined : uploads.find((u) => u.key === upload);
+    return live?.state.kind === "uploading" ? live.state.sent : 0;
+  }
+
+  function setState(key: number, state: Pending["state"]) {
+    setPending((list) => list.map((p) => (p.key === key ? { ...p, state } : p)));
+  }
+
+  /**
+   * Watches the upload of the file `key` to its end for the box: ready once it arrives, failed
+   * (and taken out of the session's uploads, since the box sends none again) when it fails. A
+   * file sent with a message meanwhile is no longer the box's, and is left to the session. One
+   * `adopted` from a message taken back was described before the box held it, so its record
+   * says what it shows and whether it is a spoiler; the file it was before it was sent watches
+   * it no longer.
+   */
+  function follow(key: number, upload: string, adopted = false) {
+    boxUploads.current.set(upload, key);
+    const mine = () => boxUploads.current.get(upload) === key;
+    const look = () => {
+      if (!mine()) {
+        stop();
+        return;
+      }
+      const state = sync.uploads.get(upload)?.state;
+      if (state?.kind === "failed") {
+        stop();
+        boxUploads.current.delete(upload);
+        sync.uploads.discard(upload);
+        setState(key, { kind: "failed", reason: state.reason ?? m.uploadUnreachable });
+      }
+    };
+    const stop = sync.uploads.subscribe(look);
+    // It may have failed already, while a message held it.
+    look();
+    sync.uploads.settled(upload).then(
+      (attachment) => {
+        stop();
+        if (!mine()) {
+          return;
+        }
+        boxUploads.current.delete(upload);
+        setPending((list) =>
+          list.map((p) =>
+            p.key !== key
+              ? p
+              : {
+                  ...p,
+                  ...(adopted
+                    ? {
+                        description: attachment.description ?? "",
+                        spoiler: attachment.spoiler ?? false,
+                      }
+                    : {}),
+                  state: { kind: "ready", attachment },
+                },
+          ),
+        );
+      },
+      () => {
+        stop();
+      },
+    );
+  }
 
   function attach(event: ChangeEvent<HTMLInputElement>) {
     const chosen = Array.from(event.target.files ?? []);
@@ -419,9 +519,6 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
         thumbnail = URL.createObjectURL(file);
         thumbnails.current.add(thumbnail);
       }
-      const update = (state: Pending["state"]) => {
-        setPending((list) => list.map((p) => (p.key === key ? { ...p, state } : p)));
-      };
       setPending((list) => [
         ...list,
         {
@@ -431,40 +528,24 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
           description: "",
           spoiler: false,
           thumbnail,
-          state: { kind: "uploading", sent: 0 },
+          state: { kind: "uploading", upload: null },
         },
       ]);
-      measurePicture(file)
-        .then((size) =>
-          sync.uploadAttachment(file, size, (sent, total) => {
-            setPending((list) =>
-              list.map((p) =>
-                p.key === key && p.state.kind === "uploading"
-                  ? { ...p, state: { kind: "uploading", sent: total > 0 ? sent / total : 0 } }
-                  : p,
-              ),
-            );
-          }),
-        )
-        .then(async (uploaded) => {
-          const early = changedEarly.current.get(key);
-          changedEarly.current.delete(key);
+      const started = measurePicture(file).then((size) => {
+        const { key: upload } = sync.uploads.add(file, size);
+        setState(key, { kind: "uploading", upload });
+        follow(key, upload);
+        const early = changedEarly.current.get(key);
+        changedEarly.current.delete(key);
+        if (early !== undefined) {
           // A change that fails to reach the server now is given again on sending.
-          return early === undefined
-            ? uploaded
-            : await sync.updateAttachment(uploaded.id, early).catch(() => uploaded);
-        })
-        .then(
-          (attachment) => {
-            update({ kind: "ready", attachment });
-          },
-          (e: unknown) => {
-            update({
-              kind: "failed",
-              reason: e instanceof ApiProblemError ? e.message : String(e),
-            });
-          },
-        );
+          sync.uploads.change(upload, early).catch(() => undefined);
+        }
+        return sync.uploads.reserved(upload).then((id) => ({ upload, id }));
+      });
+      // Nobody may ask; a file that cannot be reserved shows as failed by its upload's state.
+      started.catch(() => undefined);
+      begun.current.set(key, started);
     }
   }
 
@@ -482,28 +563,81 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     setPending((list) => list.map((p) => (p.key === key ? { ...p, ...local } : p)));
     const change: AttachmentChange =
       "description" in local ? { description: local.description || null } : local;
+    const refused = (e: unknown) => {
+      setError(format(failed, { reason: e instanceof ApiProblemError ? e.message : String(e) }));
+    };
+    if (item?.state.kind === "uploading" && item.state.upload !== null) {
+      sync.uploads.change(item.state.upload, change).catch(refused);
+      return;
+    }
     if (item?.state.kind !== "ready") {
       changedEarly.current.set(key, { ...changedEarly.current.get(key), ...change });
       return;
     }
-    sync.updateAttachment(item.state.attachment.id, change).then(
-      (attachment) => {
-        setPending((list) =>
-          list.map((p) =>
-            p.key === key && p.state.kind === "ready"
-              ? { ...p, state: { kind: "ready", attachment } }
-              : p,
-          ),
-        );
-      },
-      (e: unknown) => {
-        setError(
-          format(failed, {
-            reason: e instanceof ApiProblemError ? e.message : String(e),
-          }),
-        );
-      },
+    sync.updateAttachment(item.state.attachment.id, change).then((attachment) => {
+      setPending((list) =>
+        list.map((p) =>
+          p.key === key && p.state.kind === "ready"
+            ? { ...p, state: { kind: "ready", attachment } }
+            : p,
+        ),
+      );
+    }, refused);
+  }
+
+  /**
+   * The attachments the box's message names, in the order chosen: those ready, and those of
+   * files still on their way (`awaiting`), which the server has reserved and the message waits
+   * for. Rejects when one could not be reserved.
+   */
+  async function attachmentsToSend(): Promise<{ ids: string[]; awaiting: Awaited[] }> {
+    const files = await Promise.all(
+      pending.map(async (p) => {
+        if (p.state.kind === "ready") {
+          return { id: p.state.attachment.id, awaited: null };
+        }
+        const sending = p.state.kind === "failed" ? undefined : await begun.current.get(p.key);
+        return sending === undefined
+          ? null
+          : { id: sending.id, awaited: { key: p.key, ...sending } };
+      }),
     );
+    return {
+      ids: files.flatMap((file) => (file === null ? [] : [file.id])),
+      awaiting: files.flatMap((file) => (file?.awaited == null ? [] : [file.awaited])),
+    };
+  }
+
+  /**
+   * Hands the uploads a message is sent before the end of over to the session, which sees
+   * them through with no box holding them.
+   */
+  function handOver(awaiting: readonly Awaited[]) {
+    for (const { upload } of awaiting) {
+      boxUploads.current.delete(upload);
+    }
+    sync.uploads.detach(awaiting.map(({ upload }) => upload));
+  }
+
+  /**
+   * Takes back the uploads handed over for a message the server then refused: each is the
+   * box's again, as far as it has come since, one that arrived meanwhile among them.
+   */
+  function takeOver(awaiting: readonly Awaited[]) {
+    sync.uploads.attach(awaiting.map(({ upload }) => upload));
+    for (const { key, upload, id } of awaiting) {
+      if (sync.uploads.get(upload) !== undefined) {
+        follow(key, upload);
+        continue;
+      }
+      const arrived = sync.store.attachment(id);
+      setState(
+        key,
+        arrived === undefined
+          ? { kind: "failed", reason: m.uploadUnreachable }
+          : { kind: "ready", attachment: arrived },
+      );
+    }
   }
 
   async function send() {
@@ -512,6 +646,8 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     }
     setSending(true);
     setError(null);
+    let handed: Awaited[] = [];
+    let sent = false;
     try {
       const trimmed = trimPicked(written.held);
       const { text } = trimmed;
@@ -520,18 +656,31 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
       if (text.startsWith("/") && sync.store.commands(channelId) === undefined) {
         await sync.loadCommands(channelId).catch(() => undefined);
       }
+      // Files still on their way go with the message all the same, named by the attachments
+      // the server reserved for them: it holds the message until each has arrived.
+      const { ids, awaiting } = uploading
+        ? await attachmentsToSend()
+        : { ids: readyIds, awaiting: [] };
+      const awaitUploads = awaiting.length > 0;
+      // Handed over before the message is sent, not once it has been: a box may be gone by
+      // the time the server answers, as one that starts a thread is, and would stop the
+      // uploads it still held.
+      handOver(awaiting);
+      handed = awaiting;
       if (scheduledFor !== null) {
-        await schedule(trimmed, scheduledFor);
+        await schedule(trimmed, scheduledFor, ids, awaitUploads);
+        sent = true;
         return;
       }
       await saveFileChanges();
-      const prepared = commands.prepare(trimmed, readyIds);
+      const prepared = commands.prepare(trimmed, ids);
       if (prepared.kind === "refused") {
         setError(prepared.reason);
         return;
       }
       const options = {
         echoToParent: echoTarget !== undefined && echo,
+        awaitUploads,
         ...(reply === null ? {} : { reply }),
       };
       if (prepared.kind === "command") {
@@ -539,28 +688,37 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
         // is made for it first.
         const target =
           startsThreadOf === undefined ? channelId : (await sync.openThread(startsThreadOf)).id;
-        await sync.invokeCommand(target, prepared.invocation);
+        await sync.invokeCommand(target, prepared.invocation, { awaitUploads });
       } else if (startsThreadOf !== undefined) {
-        await sync.replyInThread(startsThreadOf, encode(trimmed), readyIds, options);
+        await sync.replyInThread(startsThreadOf, encode(trimmed), ids, options);
       } else {
-        await sync.sendMessage(channelId, encode(trimmed), readyIds, options);
+        await sync.sendMessage(channelId, encode(trimmed), ids, options);
       }
+      sent = true;
       clearBox();
     } catch (e) {
       setError(e instanceof ApiProblemError ? e.message : String(e));
     } finally {
+      if (!sent) {
+        takeOver(handed);
+      }
       setSending(false);
     }
   }
 
   /**
-   * Schedules `trimmed`, the box's trimmed draft, with its files for `at`, and empties the box as
-   * sending it would. What cannot be scheduled is thrown for `send` to say, the bar staying so
-   * the reader may change the message or the time: a reply also shown in the thread's parent
-   * channel, a time no longer far enough ahead (the bar was set a while ago) or too far, and a
-   * command, which is run when it is sent.
+   * Schedules `trimmed`, the box's trimmed draft, with its files `ids` for `at`, and empties the
+   * box as sending it would. What cannot be scheduled is thrown for `send` to say, the bar
+   * staying so the reader may change the message or the time: a reply also shown in the
+   * thread's parent channel, a time no longer far enough ahead (the bar was set a while ago) or
+   * too far, and a command, which is run when it is sent.
    */
-  async function schedule(trimmed: PickedText, at: Date) {
+  async function schedule(
+    trimmed: PickedText,
+    at: Date,
+    ids: readonly string[],
+    awaitUploads: boolean,
+  ) {
     if (echoTarget !== undefined && echo) {
       throw new Error(format(m.scheduled.noEcho, { channel: echoTarget }));
     }
@@ -568,18 +726,15 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     if (problem !== null) {
       throw new Error(describeTimeProblem(m, problem));
     }
-    const prepared = commands.prepare(trimmed, readyIds);
+    const prepared = commands.prepare(trimmed, ids);
     if (prepared.kind !== "message") {
       throw new Error(prepared.kind === "refused" ? prepared.reason : m.scheduled.noCommands);
     }
     await saveFileChanges();
-    await sync.scheduleMessage(
-      channelId,
-      encode(trimmed),
-      readyIds,
-      at,
-      reply === null ? {} : { reply },
-    );
+    await sync.scheduleMessage(channelId, encode(trimmed), ids, at, {
+      awaitUploads,
+      ...(reply === null ? {} : { reply }),
+    });
     clearBox();
   }
 
@@ -594,24 +749,84 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     if (draft.trim() !== "" || pending.length > 0) {
       throw new Error(m.scheduled.boxInUse);
     }
+    const waiting = sync.store.scheduledMessage(scheduledId);
     const { scheduled, attachments } = await sync.unschedule(scheduledId);
+    fill(scheduled, attachments, waiting?.attachments ?? []);
+    const sendAt = new Date(scheduled.sendAt);
+    setScheduledFor(timeProblem(sendAt, new Date()) === null ? sendAt : null);
+  }
+
+  /**
+   * Takes a message sent before its files had arrived back into the box (`takeBackIn`): it is
+   * cancelled where the server held it, and its text, tags, files, and what it replied to
+   * become what the box holds, the files still on their way going on as the box's own. One
+   * scheduled keeps its time, as `edit` says. Refused while the box holds something else.
+   */
+  async function takeBack(waiting: HeldMessage | ScheduledMessage) {
+    if ("sendAt" in waiting) {
+      await edit(waiting.id);
+      return;
+    }
+    if (draft.trim() !== "" || pending.length > 0) {
+      throw new Error(m.scheduled.boxInUse);
+    }
+    await sync.cancelHeld(waiting.id);
+    const arrived = waiting.attachments.flatMap((id) => sync.store.attachment(id) ?? []);
+    fill(waiting, arrived, waiting.attachments);
+    setEcho(waiting.echoToParent);
+  }
+
+  /**
+   * Makes what the box holds the text, tags, files, and reply of `message`, which waited with
+   * the server: `arrived` are the records of its files that are there, and those of `named`
+   * still on their way here become the box's uploads again.
+   */
+  function fill(
+    message: Pick<HeldMessage, "content" | "replyTo" | "tagReplied">,
+    arrived: readonly Attachment[],
+    named: readonly string[],
+  ) {
     const roles = community === null ? [] : sync.store.roles(community);
     const custom = community === null ? [] : sync.store.customEmoji(community);
     written.set(
-      decodePicked(scheduled.content, {
+      decodePicked(message.content, {
         usernameOf: (id) => sync.store.user(id)?.name,
         roleNameOf: (id) => roles.find((role) => role.id === id)?.name,
         emojiNameOf: (id) => custom.find((e) => e.id.toLowerCase() === id.toLowerCase())?.name,
       }),
     );
     tagging.reset();
-    setPending(attachments.map(pendingOf));
+    const sending = named.flatMap((id) => {
+      const upload = sync.uploads.byAttachment(id);
+      return upload === undefined || arrived.some((a) => a.id === id) ? [] : [{ id, upload }];
+    });
+    sync.uploads.attach(sending.map(({ upload }) => upload.key));
+    setPending([
+      ...arrived.map(pendingOf),
+      ...sending.map(({ id, upload }): Pending => {
+        const key = nextKey++;
+        let thumbnail: string | null = null;
+        if (upload.file !== null && isImageType(upload.mimeType)) {
+          thumbnail = URL.createObjectURL(upload.file);
+          thumbnails.current.add(thumbnail);
+        }
+        begun.current.set(key, Promise.resolve({ upload: upload.key, id }));
+        follow(key, upload.key, true);
+        return {
+          key,
+          name: upload.name,
+          mimeType: upload.mimeType,
+          description: "",
+          spoiler: false,
+          thumbnail,
+          state: { kind: "uploading", upload: upload.key },
+        };
+      }),
+    ]);
     setEcho(false);
     setReply(
-      scheduled.replyTo == null ? null : { to: scheduled.replyTo, tag: scheduled.tagReplied },
+      message.replyTo == null ? null : { to: message.replyTo, tag: message.tagReplied ?? true },
     );
-    const sendAt = new Date(scheduled.sendAt);
-    setScheduledFor(timeProblem(sendAt, new Date()) === null ? sendAt : null);
     setReplyAsked((asked) => asked + 1);
   }
 
@@ -794,7 +1009,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
                 {p.state.kind === "uploading" && (
                   <ProgressBar
                     aria-label={format(m.uploadingFile, { name: p.name })}
-                    value={p.state.sent * 100}
+                    value={sentOf(p) * 100}
                     className="mt-1 w-full"
                   >
                     {({ percentage }) => (
@@ -817,6 +1032,11 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
                 <Button
                   aria-label={format(m.removeAttachment, { name: p.name })}
                   onPress={() => {
+                    if (p.state.kind === "uploading" && p.state.upload !== null) {
+                      boxUploads.current.delete(p.state.upload);
+                      sync.uploads.discard(p.state.upload);
+                    }
+                    begun.current.delete(p.key);
                     setPending((list) => list.filter((other) => other.key !== p.key));
                   }}
                   className={pendingControlClass}

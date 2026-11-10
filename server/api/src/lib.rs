@@ -567,6 +567,7 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         ))
         .routes(routes!(attachment::init_attachment_upload))
         .routes(routes!(attachment::confirm_attachment_upload))
+        .routes(routes!(attachment::renew_attachment_upload))
         .routes(routes!(
             attachment::get_attachment,
             attachment::update_attachment,

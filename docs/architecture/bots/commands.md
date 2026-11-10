@@ -130,6 +130,10 @@ pattern to the server.
 - `name`.
 - `arguments`, in order.
 - `attachments`: the files its `attachmentId` arguments name, uploaded first.
+- `awaitUploads`, when the invoking app shows the command not yet sent while its files upload: the
+  files may then still be on their way, and the command is held until each is confirmed and invoked
+  then, checked again as below
+  ([Sent before its files arrive](../attachment-previews/sent-before-uploaded.md)).
 
 It takes what posting a message there takes.
 

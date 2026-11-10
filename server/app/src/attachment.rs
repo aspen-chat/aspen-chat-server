@@ -12,7 +12,13 @@
 //!    including a stable `download_url`. Until that
 //!    flip happens the row is invisible to readers and to message-attach
 //!    validation, so a half-finished upload can't be referenced from a
-//!    message.
+//!    message that is posted. A message sent while its files upload names them
+//!    all the same, and is held until each is confirmed: the confirmation of the
+//!    last sets it going (`message::held::uploaded`).
+//!
+//! An upload whose URL has expired, or whose bytes did not arrive, is given
+//! another URL by [`renew_upload`], for the same reservation: what already
+//! names the attachment, a message waiting for it among them, needs no change.
 //!
 //! Each row records its uploader. Until it is in a message an attachment is
 //! theirs alone: only they may confirm it, read it, put it in a message, or
@@ -508,7 +514,7 @@ pub async fn confirm_upload(
     }
     let confirmed = Utc::now();
     let mime_type = &row.mime_type;
-    let (updated, queued): (usize, bool) = conn
+    let (updated, wake): (usize, bool) = conn
         .transaction::<_, crate::Error, _>(|conn| {
             async move {
                 let updated = diesel::update(attachment::table)
@@ -517,7 +523,11 @@ pub async fn confirm_upload(
                     .execute(conn)
                     .await?;
                 let queued = updated > 0 && preview::queue(conn, id, caller, mime_type).await?;
-                Ok((updated, queued))
+                // After the preview's job is saved, so a message this sets going finds the
+                // hold that job puts on it.
+                let released =
+                    updated > 0 && crate::message::held::uploaded(state, conn, id).await?;
+                Ok((updated, queued || released))
             }
             .scope_boxed()
         })
@@ -527,12 +537,54 @@ pub async fn confirm_upload(
         // a no-op error rather than re-confirming.
         return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
     }
-    if queued {
+    if wake {
         crate::jobs::wake(state).await;
     }
     Ok(Attachment {
         ready_at: Some(confirmed),
         ..row
+    })
+}
+
+/// Gives an upload of the caller's that has not been confirmed another URL to send its bytes
+/// to, for the same reservation, the type it was reserved with, and exactly `byte_size` bytes:
+/// for an upload whose URL expired before it began, or that failed part way. The bytes are
+/// counted against the caller's quota again, as starting an upload counts them, since nothing
+/// records how large the reservation was. Not found for a confirmed attachment, or another's.
+pub async fn renew_upload(
+    state: &GlobalServerContext,
+    caller: UserId,
+    id: AttachmentId,
+    byte_size: Option<u64>,
+) -> crate::Result<AttachmentUpload> {
+    let max_bytes = state.config.media.max_attachment_bytes;
+    let byte_size = declared_size(byte_size)?;
+    if byte_size > max_bytes {
+        return Err(too_large(max_bytes));
+    }
+    let mut conn = state.connection_pool.get().await?;
+    let row: Attachment = attachment::table
+        .select(Attachment::as_select())
+        .filter(
+            attachment::id
+                .eq(id)
+                .and(attachment::ready_at.is_null())
+                .and(attachment::uploader.eq(caller)),
+        )
+        .first(conn.as_mut())
+        .await?;
+    crate::upload_quota::reserve(state, conn.as_mut(), caller, byte_size).await?;
+    drop(conn);
+    let served = served(&row.mime_type, &row.file_name);
+    let PresignedUpload { url, expires_at } = state
+        .media_store
+        .presign_upload(&row.storage_key, &served.content_type, byte_size)
+        .await?;
+    Ok(AttachmentUpload {
+        id,
+        upload_url: url,
+        expires_at,
+        content_type: served.content_type,
     })
 }
 
@@ -802,7 +854,8 @@ pub async fn sweep_unsent(state: &GlobalServerContext) -> crate::Result<usize> {
 
 /// Hard-delete an attachment of the caller's that is in no message, and best-effort delete the
 /// S3 object. Works on both `ready` and pending rows. One in a message goes with the message;
-/// asking to delete it, or anyone else's, is answered as not found.
+/// asking to delete it, or anyone else's, is answered as not found. A message that names it and
+/// still waits for its uploads is failed at once (`message::held::wake_awaiting`).
 pub async fn delete_attachment(
     state: &GlobalServerContext,
     caller: UserId,
@@ -827,6 +880,17 @@ pub async fn delete_attachment(
     else {
         return Err(crate::Error::Diesel(diesel::result::Error::NotFound));
     };
+    // A message still waiting for its uploads, this file or another of its files, will never
+    // have them all now.
+    match crate::message::held::wake_awaiting(conn.as_mut(), &[id]).await {
+        Ok(true) => crate::jobs::wake(state).await,
+        Ok(false) => {}
+        // What waited for it fails when its wait gives out instead.
+        Err(e) => {
+            warn!(error = %e, id = %id.0, "could not fail what waited for a deleted upload")
+        }
+    }
+    drop(conn);
     if let Err(e) = state.media_store.delete_upload(&deleted.storage_key).await {
         warn!(
             error = e.to_string(),

@@ -137,6 +137,9 @@ same commit, as with comments.
   feed, its tabs and filters, marking read from it, and the rows and pages they share.
 - [`search.md`](docs/architecture/search.md): message search across channels, communities, and
   deployments.
+- [`sending-while-uploading.md`](docs/architecture/sending-while-uploading.md): the session's
+  uploads, sending a message before its files arrive, the unsent messages at the foot of the list,
+  taking one back, what the page's going loses, and a phone's native uploads in the background.
 - [`sign-in.md`](docs/architecture/sign-in.md): the signed-out screens, the server each shell signs
   in to, passkey ceremonies and their hand-off to the system browser, signing in from another device
   by a QR code or a typed code, and identity providers: their flows, the web client's return page,

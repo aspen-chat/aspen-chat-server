@@ -306,6 +306,10 @@ Posts one held message, keyed by it, once:
 
 A failure waits thirty seconds. The tenth failure drops the message and tells its author why.
 
+A message sent while its files were still uploading has the same job, due a day after it was sent,
+when it fails the message if they have not arrived; the confirmation of the last of them makes it
+due at once ([Sent before its files arrive](../attachment-previews/sent-before-uploaded.md)).
+
 A message scheduled for later has the same job, due at the message's time
 ([Scheduled messages](../scheduled-messages.md#when-it-is-due)). It waits for an earlier one of its
 author's in the same channel rather than for previews, a failure keeps it for its author rather than

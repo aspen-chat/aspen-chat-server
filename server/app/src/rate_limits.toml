@@ -233,10 +233,11 @@ endpoints = [
 limits = { user = { requests = 20, per_seconds = 600, burst = 10, bucket = "security" } }
 
 # Starting and finishing uploads to object storage: two requests a file, so a burst of 100 lets
-# one message carry its most attachments (`message::MAX_ATTACHMENTS`, 50) at once. The bytes
-# are bounded by the deployment's upload quota.
+# one message carry its most attachments (`message::MAX_ATTACHMENTS`, 50) at once; an upload
+# that failed takes a third, for another URL. The bytes are bounded by the deployment's upload
+# quota.
 [rate_limits.groups.uploads]
-endpoints = ["POST /attachments", "POST /attachments/{attachment}/confirm", "POST /icons", "POST /icons/{icon}/confirm"]
+endpoints = ["POST /attachments", "POST /attachments/{attachment}/confirm", "POST /attachments/{attachment}/renew", "POST /icons", "POST /icons/{icon}/confirm"]
 limits = { user = { requests = 300, per_seconds = 600, burst = 100, bucket = "uploads" } }
 
 # The Administration Dashboard, kept to a pace a person clicking through it never reaches.

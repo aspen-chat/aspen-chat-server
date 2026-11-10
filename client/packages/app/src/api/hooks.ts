@@ -283,7 +283,7 @@ export function useIdWizard(): boolean {
   return developer && wizard;
 }
 
-/** The caller's messages in a channel held for their attachments' previews. */
+/** What the caller sent in a place that the server holds, and what it dropped that they have not let go. */
 export function useHeldMessages(place: string): readonly HeldEntry[] {
   return useTopic(`held:${place}`, (s) => s.heldMessages(place));
 }
@@ -291,6 +291,14 @@ export function useHeldMessages(place: string): readonly HeldEntry[] {
 /** The messages the caller scheduled for later in a channel, the soonest due first. */
 export function useScheduledMessages(channelId: string): readonly ScheduledMessage[] {
   return useTopic(`scheduled:${channelId}`, (s) => s.scheduledMessages(channelId));
+}
+
+/**
+ * An attachment record by id, as the cache holds it, never fetched: an upload still on its way
+ * has none, and the server answers for it as for no attachment at all.
+ */
+export function useStoredAttachment(id: string): Attachment | undefined {
+  return useTopic(`attachment:${id}`, (s) => s.attachment(id));
 }
 
 /** An attachment record by id, fetched on demand when the cache lacks it. */

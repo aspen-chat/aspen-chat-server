@@ -25,6 +25,9 @@ import {
   useDeploymentsHub,
   useForeignDeployments,
 } from "./deploymentsContext";
+import { guardSending } from "./sendingGuard";
+import { tellUploadFailures } from "./uploadFailures";
+import { nativeSendsUploads, nativeUploadTransport } from "./uploadsBridge";
 import { AspenSyncContext, HomeSyncContext } from "./syncContext";
 import { primaryButtonClass } from "@/features/auth/styles";
 import { useMessages } from "@/i18n/context";
@@ -51,6 +54,9 @@ export function DeploymentsProvider({
   children: ReactNode;
 }) {
   const home = useHomeClient();
+  // Each deployment's uploads are watched while it is signed in to (`guardSending`,
+  // `tellUploadFailures`).
+  const [guards] = useState<(() => void)[]>(() => []);
   const hub = useMemo(
     () =>
       new Deployments({
@@ -66,24 +72,31 @@ export function DeploymentsProvider({
             clockStore: clockStore(deploymentUrl(domain)),
             solvePuzzle: solveInWorker,
           }),
-        sync: (client) =>
-          new AspenSync({
+        sync: (client) => {
+          const sync = new AspenSync({
             client,
+            ...(nativeSendsUploads() ? { uploadTransport: nativeUploadTransport(client) } : {}),
             preferences: homeSync.preferences,
             validateEvents: import.meta.env.DEV,
             onInvalidEvent: (raw, errors) => {
               console.warn("dropped a server event that does not match the schema", errors, raw);
             },
-          }),
+          });
+          guards.push(guardSending(sync), tellUploadFailures(sync));
+          return sync;
+        },
       }),
-    [home, homeSync],
+    [home, homeSync, guards],
   );
   useEffect(() => {
     void hub.start();
     return () => {
       hub.stop();
+      for (const stop of guards.splice(0)) {
+        stop();
+      }
     };
-  }, [hub]);
+  }, [hub, guards]);
   // The home says the user is in a DM on another deployment: sign in there if this device is
   // not, and read the DM, so it shows in the one DM list at once.
   useEffect(

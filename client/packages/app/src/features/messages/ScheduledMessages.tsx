@@ -33,7 +33,9 @@ const rowButtonClass = secondaryButtonClass + " aria-disabled:opacity-60";
  * when there are some. It is one button, which opens the list of them (`ScheduledList`); with
  * nothing scheduled there it is not drawn, though a list left open stays to say so. `onEdit` takes one back into the message box; a
  * place without a box to take it leaves that out. `standalone` draws it with the box's own
- * edge and padding, where no box follows to give them.
+ * edge and padding, where no box follows to give them. One still waiting for its files is not
+ * counted or listed: it is shown at the foot of the messages until they arrive
+ * (`PendingMessages`).
  */
 export function ScheduledStrip({
   channelId,
@@ -45,7 +47,9 @@ export function ScheduledStrip({
   standalone?: boolean;
 }) {
   const m = useMessages();
-  const scheduled = useScheduledMessages(channelId);
+  const scheduled = useScheduledMessages(channelId).filter(
+    (message) => message.status !== "uploading",
+  );
   const [open, setOpen] = useState(false);
   // The list stays open over nothing once its last message goes, to say so, until it is closed.
   if (scheduled.length === 0 && !open) {
@@ -120,7 +124,9 @@ function ScheduledList({
 }) {
   const m = useMessages();
   const sync = useSync();
-  const scheduled = useScheduledMessages(channelId);
+  const scheduled = useScheduledMessages(channelId).filter(
+    (message) => message.status !== "uploading",
+  );
   const [changing, setChanging] = useState<string | null>(null);
   if (changing !== null && scheduled.some((message) => message.id === changing)) {
     return (

@@ -14,4 +14,8 @@
     <string name="aspen_push_member_joined">Joined the community</string>
     <string name="aspen_push_community_grew">This community is now large. Channels you haven\'t chosen notifications for now notify you only of messages that tag you.</string>
     <string name="aspen_push_community_grew_mention_everyone">Members can no longer tag @everyone, unless the community\'s owner turns Mention everyone back on.</string>
+    <!-- The notification channels of attachments sent in the background (uploads/UploadNotices.java);
+         each also titles its notifications when the app gave no words of its own. -->
+    <string name="aspen_uploads_channel_name">Sending files</string>
+    <string name="aspen_upload_failures_channel_name">Files that could not be sent</string>
 </resources>

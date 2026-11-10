@@ -36,6 +36,7 @@ Its author's apps hold it as a `ScheduledMessage`, whose `status` is read from t
 
 | `status`         | The row                                                      |
 | ---------------- | ------------------------------------------------------------ |
+| `uploading`      | `waiting = 'uploads'`: scheduled while its files uploaded    |
 | `scheduled`      | `waiting = 'scheduled'`, no `failure`                        |
 | `waitingForMana` | `waiting = 'mana'`, or due (`send_at` passed) and not failed |
 | `failed`         | `failure` set                                                |
@@ -53,7 +54,10 @@ Its author's apps hold it as a `ScheduledMessage`, whose `status` is read from t
 
 Scheduling checks what posting now would (`message::check_posting`, `reply::check`): the right to
 send there, each file being the author's own and ready, and what it replies to being a live message
-of the channel. Nothing is spent of the channel's mana, and no plugin sees it, until it is posted.
+of the channel. With `awaitUploads` a file may still be uploading: the message is then `uploading`
+until each is confirmed, whatever its time, and scheduled from then
+([Sent before its files arrive](attachment-previews/sent-before-uploaded.md#scheduled)). Nothing is
+spent of the channel's mana, and no plugin sees it, until it is posted.
 
 `GET /users/@me/held-messages` leaves scheduled messages out: its rows are what an app shows waiting
 above the message box, moments from being posted.

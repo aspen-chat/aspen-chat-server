@@ -1,5 +1,7 @@
 /**
- * Uploads in the server's two phases: reserve, send the bytes straight to storage, confirm.
+ * Icons uploaded in the server's two phases (reserve, send the bytes straight to storage,
+ * confirm), and changes to attachments not yet sent. Attachments themselves are uploaded by
+ * `AttachmentUploads` (`uploads.ts`).
  */
 
 import type { components } from "./generated/openapi";
@@ -16,62 +18,6 @@ export interface UploadTarget {
   readonly client: AspenClient;
   readonly store: RecordStore;
   readonly uploadFetch: typeof globalThis.fetch;
-  /** Whether uploads go through a `fetch` of the caller's rather than the browser's own. */
-  readonly customUpload: boolean;
-}
-
-/**
- * Uploads a file in the server's two phases, reserving an attachment, sending the bytes
- * straight to storage, and confirming, and caches the resulting record. The attachment can
- * then be named in a message.
- */
-export async function uploadAttachment(
-  target: UploadTarget,
-  file: File,
-  /** A picture's size in pixels, which readers use to make room for it before it loads. */
-  size?: { readonly width: number; readonly height: number },
-  /** Told how many of the file's bytes have reached storage, as they go. */
-  onProgress?: (sent: number, total: number) => void,
-): Promise<Attachment> {
-  const mimeType = file.type || "application/octet-stream";
-  const init = await target.client.api.POST("/api/v1/attachments", {
-    body: {
-      fileName: file.name,
-      mimeType,
-      byteSize: file.size,
-      ...(size === undefined ? {} : { width: size.width, height: size.height }),
-    },
-  });
-  if (init.data === undefined) {
-    throw new ApiProblemError(problemOf(init.error, init.response));
-  }
-  // The type the upload URL is signed for: the file's own, or, for a kind a browser could run
-  // were it opened from storage, one that has it saved instead. A deployment that does not say
-  // signs for the file's own.
-  const contentType = init.data.contentType ?? mimeType;
-  const put =
-    onProgress !== undefined && !target.customUpload && typeof XMLHttpRequest !== "undefined"
-      ? await putWithProgress(requireSecure(init.data.uploadUrl), file, contentType, onProgress)
-      : await target
-          .uploadFetch(requireSecure(init.data.uploadUrl), {
-            method: "PUT",
-            headers: { "content-type": contentType },
-            body: file,
-          })
-          .then((response) => ({ status: response.status, statusText: response.statusText }));
-  if (put.status < 200 || put.status >= 300) {
-    throw new ApiProblemError(
-      transportProblem(`upload failed: ${String(put.status)} ${put.statusText}`, put.status),
-    );
-  }
-  const confirm = await target.client.api.POST("/api/v1/attachments/{attachment}/confirm", {
-    params: { path: { attachment: init.data.id } },
-  });
-  if (confirm.data === undefined) {
-    throw new ApiProblemError(problemOf(confirm.error, confirm.response));
-  }
-  target.store.ingest({ attachments: [confirm.data] });
-  return confirm.data;
 }
 
 /** The longest description an attachment may have, in characters, as the server bounds it. */
@@ -138,32 +84,4 @@ export async function uploadIcon(
   }
   target.store.putIcon(confirm.data);
   return confirm.data;
-}
-
-/**
- * `PUT`s `body` to storage with `XMLHttpRequest`, which, unlike `fetch`, says how much of a
- * request body has been sent. A failure to reach storage at all rejects, as `fetch`'s would.
- */
-function putWithProgress(
-  url: string,
-  body: Blob,
-  contentType: string,
-  onProgress: (sent: number, total: number) => void,
-): Promise<{ status: number; statusText: string }> {
-  return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest();
-    request.open("PUT", url);
-    request.setRequestHeader("content-type", contentType);
-    request.upload.onprogress = (event) => {
-      onProgress(event.loaded, event.lengthComputable ? event.total : body.size);
-    };
-    request.onload = () => {
-      resolve({ status: request.status, statusText: request.statusText });
-    };
-    request.onerror = () => {
-      reject(new TypeError("the upload could not reach storage"));
-    };
-    request.onabort = request.onerror;
-    request.send(body);
-  });
 }

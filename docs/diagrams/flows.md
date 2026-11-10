@@ -37,10 +37,10 @@ sequenceDiagram
   [Settling and resyncs](../architecture/event-routing/settling.md)).
 - Plugins decide before the transaction opens, so a slow one holds no database connection.
 - A message may instead be answered `202 Accepted` and held: in a busy channel, waiting its turn for
-  the channel's mana (see [Channel mana](../architecture/channel-mana/index.md)), or while a preview
-  of one of its attachments is made (see
-  [Attachment previews](../architecture/attachment-previews/index.md)). It is posted later through
-  the same transaction and event.
+  the channel's mana (see [Channel mana](../architecture/channel-mana/index.md)), while a preview of
+  one of its attachments is made, or, sent before its files had finished uploading, until each is
+  confirmed (see [Attachment previews](../architecture/attachment-previews/index.md)). It is posted
+  later through the same transaction and event.
 
 ## Joining a call
 

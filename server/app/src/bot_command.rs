@@ -10,6 +10,7 @@
 //! `botCommandsChanged` wherever the bot's profile would be, so clients read the list again.
 
 use crate::context::GlobalServerContext;
+use crate::message::Uploads;
 use crate::permissions::{ChannelAccess, Permissions, channel_access, require_member};
 use crate::t;
 use crate::{AttachmentId, ChannelId, CommunityId, EventScope, UserId, publish_event};
@@ -440,7 +441,8 @@ async fn bot_present(
 /// Checks an invocation by `caller` in `channel`: that the bot can see the channel and
 /// answers the command, that the arguments are as many as it takes, and that each is what its
 /// parameter says, as the caller may reach it. Returns the command and the arguments as the
-/// bot will receive them.
+/// bot will receive them. With `uploads` [`Uploads::MayBePending`] a file it takes may still be
+/// uploading, as for a command that is held until its files are there (`held::hold_command`).
 pub async fn check(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
@@ -448,8 +450,11 @@ pub async fn check(
     access: &ChannelAccess,
     channel: ChannelId,
     invocation: &Invocation,
+    uploads: Uploads,
 ) -> crate::Result<(Command, Vec<Argument>)> {
     use aspen_schema::{attachment, community_role, message, user};
+    use diesel::IntoSql;
+    use diesel::sql_types::Bool;
     let name = invocation.name.as_str();
     if !bot_present(state, conn, access, channel, invocation.bot).await? {
         return Err(refused("botCommandBotAbsent", name, ""));
@@ -580,9 +585,11 @@ pub async fn check(
                 }
                 let ready: i64 = attachment::table
                     .filter(
-                        attachment::id
-                            .eq(id)
-                            .and(attachment::ready_at.is_not_null()),
+                        attachment::id.eq(id).and(
+                            attachment::ready_at
+                                .is_not_null()
+                                .or((uploads == Uploads::MayBePending).into_sql::<Bool>()),
+                        ),
                     )
                     .count()
                     .get_result(conn)

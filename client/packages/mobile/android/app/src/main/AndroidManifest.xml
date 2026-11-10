@@ -48,6 +48,12 @@
             </intent-filter>
         </service>
 
+        <!-- Sends attachments once the app has left the screen (uploads/UploadService.java). -->
+        <service
+            android:name=".uploads.UploadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -67,4 +73,9 @@
     <!-- Cameras in calls, asked for the same way; a phone without one still installs the app. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <!-- Uploads that go on in the background: the service that keeps the process alive, of the
+         kind the system requires it to name from Android 14, and the processor kept awake. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 </manifest>

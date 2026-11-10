@@ -8,6 +8,7 @@ import com.aspen_chat.client.files.AspenFilesPlugin;
 import com.aspen_chat.client.navigation.AspenNavigationPlugin;
 import com.aspen_chat.client.passkeys.AspenPasskeysPlugin;
 import com.aspen_chat.client.push.AspenPushPlugin;
+import com.aspen_chat.client.uploads.AspenUploadsPlugin;
 
 public class MainActivity extends BridgeActivity {
 
@@ -20,6 +21,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(AspenPasskeysPlugin.class);
         registerPlugin(AspenAgePlugin.class);
         registerPlugin(AspenAudioRoutePlugin.class);
+        registerPlugin(AspenUploadsPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

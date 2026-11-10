@@ -99,6 +99,14 @@ interface AspenDesktopBridge {
     onStep(listener: (step: 1 | -1 | 0) => void): () => void;
   };
   /**
+   * Whether a message the reader sent is still uploading its files
+   * (`packages/desktop/src/main/sendingGuard.ts`): the question the window asks before it
+   * closes on them, or `null` once nothing is on its way.
+   */
+  readonly sending: {
+    set(question: { message: string; detail: string; stay: string; quit: string } | null): void;
+  };
+  /**
    * The title bar the page draws (`packages/desktop/src/main/titleBar.ts`): `paint` gives the
    * window buttons their colours, as `#rrggbb`. `choice` is `null` where the system's title bar
    * cannot be chosen instead; on Linux it says whether this launch's window draws its own

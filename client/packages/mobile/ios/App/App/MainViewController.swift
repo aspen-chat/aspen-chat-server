@@ -22,6 +22,7 @@ class MainViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(AspenNavigationPlugin())
         bridge?.registerPluginInstance(AspenAgePlugin())
         bridge?.registerPluginInstance(AspenAudioRoutePlugin())
+        bridge?.registerPluginInstance(AspenUploadsPlugin())
         if let webView {
             for name in [
                 UIResponder.keyboardWillShowNotification, UIResponder.keyboardWillHideNotification,

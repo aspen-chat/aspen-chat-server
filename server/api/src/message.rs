@@ -19,12 +19,10 @@ use crate::{API_PREFIX, TAG_MESSAGES};
 use aspen_app as app;
 use aspen_app::channel::{MAX_MESSAGES_QUERIED, MessageWindow};
 use aspen_app::context::GlobalServerContext;
-use aspen_app::message::held::{HeldKind, HeldWaiting};
 use aspen_app::{AttachmentId, ChannelId, CommunityId, HeldMessageId, MessageId, PollId, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use utoipa::{IntoParams, ToSchema};
@@ -555,51 +553,7 @@ pub async fn search_messages(
     }))
 }
 
-/// Something its author sent that is held, as their apps show it waiting
-/// (`app::message::held`): a message while a preview of one of its attachments is being made,
-/// or, its channel being busy, a message, command, edit, poll, or echo waiting its turn for the
-/// channel's mana (`app::mana`). `heldMessagePosted` names the message it becomes (an edit's,
-/// the message it changed); `heldMessageFailed` says why it was dropped instead; and
-/// `heldMessageCancelled` that its author cancelled it.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct HeldMessage {
-    pub id: HeldMessageId,
-    /// Where it is posted; for an echo, the thread's parent.
-    pub channel_id: ChannelId,
-    /// Its text: a message's, a command's as shown, an edit's new text, or a poll's question.
-    pub content: String,
-    pub attachments: Vec<AttachmentId>,
-    pub echo_to_parent: bool,
-    /// The message it replies to, which it is posted replying to.
-    pub reply_to: Option<MessageId>,
-    /// Whether it tags the author of `replyTo`; absent from a deployment that predates replies.
-    #[schema(required = false)]
-    pub tag_replied: bool,
-    pub held_at: DateTime<Utc>,
-    pub waiting: HeldWaiting,
-    pub kind: HeldKind,
-    /// The message an edit changes, or a thread reply an echo copies.
-    pub target: Option<MessageId>,
-}
-
-impl From<app::message::held::HeldMessage> for HeldMessage {
-    fn from(held: app::message::held::HeldMessage) -> Self {
-        HeldMessage {
-            id: held.id,
-            channel_id: held.channel,
-            content: held.content,
-            attachments: held.attachments,
-            echo_to_parent: held.echo_to_parent,
-            reply_to: held.reply_to,
-            tag_replied: held.tags_replied,
-            held_at: held.held_at,
-            waiting: held.waiting,
-            kind: held.kind,
-            target: held.target,
-        }
-    }
-}
+pub use aspen_app::message::held::HeldRecord as HeldMessage;
 
 #[utoipa::path(
     post,
@@ -609,8 +563,8 @@ impl From<app::message::held::HeldMessage> for HeldMessage {
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = Message, headers(("Location" = String, description = "URL of the new message"))),
-        (status = ACCEPTED, description = "Held: when `mayHold` was given, while a preview of one of its attachments is being made, or, the channel being busy, waiting its turn for the channel's mana (`waiting`); it is posted later", body = HeldMessage),
-        (status = BAD_REQUEST, description = "`badRequest` or `validation` (the text is over `app::message::MAX_CONTENT_CHARS` characters, an attachment is not ready, `echoToParent` outside a thread, or `replyTo` names a message deleted or not in this channel)", body = Problem),
+        (status = ACCEPTED, description = "Held: when `awaitUploads` was given, while any of its attachments is still being uploaded; when `mayHold` was given, while a preview of one of its attachments is being made; or, the channel being busy, waiting its turn for the channel's mana (`waiting`); it is posted later", body = HeldMessage),
+        (status = BAD_REQUEST, description = "`badRequest` or `validation` (the text is over `app::message::MAX_CONTENT_CHARS` characters, an attachment is not ready, the caller already has as many messages waiting for their uploads as one person may (`app::message::held::MAX_AWAITING_UPLOADS`), `echoToParent` outside a thread, or `replyTo` names a message deleted or not in this channel)", body = Problem),
         (status = TOO_MANY_REQUESTS, description = "`channelBusy`: the channel cannot take more waiting for its mana now (`detail` says why); try again after `Retry-After`", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: a permission this needs is missing; `blocked`: a block stands between the two people of this one-to-one DM", body = Problem),
@@ -640,7 +594,7 @@ pub async fn create_message(
     security(("bearerAuth" = [])),
     responses(
         (status = CREATED, body = Message, headers(("Location" = String, description = "URL of the new message"))),
-        (status = ACCEPTED, description = "Held: when `mayHold` was given, while a preview of one of its attachments is being made, the thread being made now; or, the thread being busy, waiting its turn for its mana (`waiting`); it is posted later", body = HeldMessage),
+        (status = ACCEPTED, description = "Held: when `awaitUploads` was given, while any of its attachments is still being uploaded, or when `mayHold` was given, while a preview of one of them is being made, the thread being made now; or, the thread being busy, waiting its turn for its mana (`waiting`); it is posted later", body = HeldMessage),
         (status = TOO_MANY_REQUESTS, description = "`channelBusy`: the thread cannot take more waiting for its mana now (`detail` says why); try again after `Retry-After`", body = Problem),
         (status = BAD_REQUEST, description = "`badRequest` or `validation` (the text is over `app::message::MAX_CONTENT_CHARS` characters, an attachment is not ready, the message is in a thread, is an echo, or is in a voice channel, or `replyTo` names a message deleted or not in the thread, which holds none before its first reply)", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
@@ -680,6 +634,7 @@ async fn post(
         request.echo_to_parent.unwrap_or(false),
         app::message::reply::Reply::requested(request.reply_to, request.tag_replied),
         request.may_hold.unwrap_or(false),
+        request.await_uploads.unwrap_or(false),
     )
     .await?;
     let msg = match posted {
@@ -709,7 +664,9 @@ pub struct HeldPageQuery {
 }
 
 /// The caller's held messages, in the order they were held, which their apps show waiting
-/// until each is posted, a page at a time. `nextCursor` is the `cursor` of the page after this
+/// until each is posted, a page at a time: each waits for its uploads, its attachments'
+/// previews, or its channel's mana. Messages scheduled for later are read apart
+/// (`GET /users/@me/scheduled-messages`). `nextCursor` is the `cursor` of the page after this
 /// one, and `null` on the last; a page may hold fewer than `limit` and not be the last.
 #[utoipa::path(
     get,

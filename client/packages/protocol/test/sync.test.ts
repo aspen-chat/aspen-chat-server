@@ -1815,23 +1815,22 @@ describe("AspenSync", () => {
       },
     );
     await goLive(sync);
+    const upload = (file: File, size?: { width: number; height: number }) =>
+      sync.uploads.settled(sync.uploads.add(file, size).key);
     const file = new File(["hello"], "note.txt", { type: "text/plain" });
-    expect(await sync.uploadAttachment(file)).toEqual(record);
+    expect(await upload(file)).toEqual(record);
     expect(uploads).toEqual([
       { url: "https://store.test/put/900?sig=1", method: "PUT", type: "text/plain", body: "hello" },
     ]);
     expect(sync.store.attachment(record.id)).toEqual(record);
     // A picture's size goes with its reservation; a file that is no picture has none.
-    await sync.uploadAttachment(new File(["png"], "pic.png", { type: "image/png" }), {
-      width: 640,
-      height: 480,
-    });
+    await upload(new File(["png"], "pic.png", { type: "image/png" }), { width: 640, height: 480 });
     expect(reservations).toEqual([
       { fileName: "note.txt", mimeType: "text/plain", byteSize: 5 },
       { fileName: "pic.png", mimeType: "image/png", byteSize: 3, width: 640, height: 480 },
     ]);
     // The upload is sent as the type the deployment signed its URL for.
-    await sync.uploadAttachment(new File(["<p>hi</p>"], "page.html", { type: "text/html" }));
+    await upload(new File(["<p>hi</p>"], "page.html", { type: "text/html" }));
     expect(uploads.at(-1)?.type).toBe("application/octet-stream");
   });
 

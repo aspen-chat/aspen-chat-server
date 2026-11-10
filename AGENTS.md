@@ -872,7 +872,8 @@ a NATS stream or subject, or a client package updates them in the same commit.
   lists, the directory, signing in abroad, protocol versions, DMs across deployments, and standing
 - `docs/architecture/push.md` — waking phones through Web Push
 - `docs/architecture/attachment-previews/index.md` — previews of pictures and videos' posters, how
-  they are made and queued, and messages held for them
+  they are made and queued, messages held for them, and messages sent while their files are still
+  uploading
 - `docs/architecture/channel-mana/index.md` — channel mana: the budget a busy channel spends as
   messages are posted, its pools, costs, and settings, the queue of what waits for it, by rank and
   tenure, and its drainer, Bypass channel mana, and the bar viewers see

@@ -8,6 +8,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         excludeWebDataFromBackup()
+        // Before any page: the system may have started the app only to tell it how the uploads
+        // it carried on with ended.
+        UploadCenter.shared.start(application: application)
         return true
     }
 
@@ -56,6 +59,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         NotificationCenter.default.post(name: .capacitorDidFailToRegisterForRemoteNotifications, object: error)
+    }
+
+    /// The system has news of the uploads it carried on with while the app was suspended or
+    /// stopped. `UploadCenter` hears it through its session, and calls `completionHandler`
+    /// when it has dealt with all of it, which is when the system may suspend the app again.
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
+        UploadCenter.shared.handleEvents(ofSession: identifier, completionHandler: completionHandler)
     }
 
     func application(_ application: UIApplication,

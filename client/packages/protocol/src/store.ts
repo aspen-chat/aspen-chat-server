@@ -98,6 +98,15 @@ type UserOnlineStatus = components["schemas"]["UserOnlineStatus"];
  * Where a held message is shown: its channel's id, or, for the first reply of a thread not made
  * yet, `thread-of:<message>`.
  */
+/**
+ * Whether a held message is shown where it will be posted, not yet sent, rather than waiting
+ * above the message box: one sent while its files were still uploading, until they are there
+ * and their previews made. Once it waits for its channel's mana it waits with the rest.
+ */
+export function heldInPlace(held: HeldMessage): boolean {
+  return held.waiting === "uploads" || (held.waiting === "preview" && held.awaitedUploads === true);
+}
+
 export function heldPlace(entry: HeldEntry): string {
   return entry.startsThreadOf === null
     ? entry.message.channelId
@@ -567,9 +576,13 @@ export class RecordStore {
     return this.#heldMessages.get(id);
   }
 
-  /** Keeps a message the server held, unless its posting or dropping was heard of first. */
+  /**
+   * Keeps a message the server held, as a request's answer tells it, unless the stream told of
+   * it first: its record there is the newer, and one already posted or dropped is not brought
+   * back.
+   */
   putHeldMessage(message: HeldMessage): void {
-    if (this.#settledHeld.has(message.id)) {
+    if (this.#settledHeld.has(message.id) || this.#heldMessages.has(message.id)) {
       return;
     }
     this.#batch(() => {
@@ -3450,6 +3463,20 @@ export class RecordStore {
           this.forgetHeldMessage(event.held);
           this.forgetScheduledMessage(event.held);
           break;
+        case "heldMessageChanged": {
+          if (this.#settledHeld.has(event.held.id)) {
+            break;
+          }
+          const entry = this.#heldMessages.get(event.held.id);
+          const changed = {
+            message: event.held,
+            failure: entry?.failure ?? null,
+            startsThreadOf: entry?.startsThreadOf ?? null,
+          };
+          this.#heldMessages.set(event.held.id, changed);
+          this.#touch(`held:${heldPlace(changed)}`);
+          break;
+        }
         case "scheduledMessageChanged":
           this.#putScheduledMessage(event.scheduled);
           break;
@@ -3518,6 +3545,7 @@ export class RecordStore {
       case "foreignDeploymentsChanged":
       case "foreignDmJoined":
       case "heldMessageCancelled":
+      case "heldMessageChanged":
       case "heldMessageFailed":
       case "heldMessagePosted":
       case "invite":

@@ -437,6 +437,22 @@ body,
   margin: 0;
 }
 
+/* A message the reader sent that the server holds until its files arrive (`PendingMessages`),
+   drawn as it will be, faded so it reads as not there yet. A reader who asked for more
+   contrast, or whose system draws in its own colours, has it at full strength: the words under
+   it say it is not sent. */
+.not-yet-sent {
+  opacity: 0.8;
+}
+:root[data-contrast="more"] .not-yet-sent {
+  opacity: 1;
+}
+@media (forced-colors: active) {
+  .not-yet-sent {
+    opacity: 1;
+  }
+}
+
 /* Where the desktop app draws its own title bar (`theme/titleBar.ts`, which marks the root),
    the strip's height: the window buttons' (`titlebar-area-height`), which the shell grows with
    the zoom from 32px (`STRIP_HEIGHT` in `packages/desktop/src/main/titleBar.ts`), and never

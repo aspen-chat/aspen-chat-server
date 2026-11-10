@@ -26,7 +26,8 @@ pub type ScheduledMessageList = Listed<ScheduledMessage>;
 pub struct ScheduledMessageCreateRequest {
     #[serde(default)]
     pub content: String,
-    /// Uploads of the caller's, confirmed, which stay theirs alone until it is posted.
+    /// Uploads of the caller's, which stay theirs alone until it is posted: confirmed, or with
+    /// `awaitUploads` still being uploaded.
     #[serde(default)]
     pub attachments: Vec<AttachmentId>,
     /// A message of the same channel to post it as a reply to.
@@ -35,6 +36,11 @@ pub struct ScheduledMessageCreateRequest {
     pub tag_replied: Option<bool>,
     /// When to post it: from one minute to two years from now.
     pub send_at: DateTime<Utc>,
+    /// The scheduling client shows the message not yet scheduled while its files upload, so
+    /// `attachments` may name uploads not yet confirmed: its `status` is then `uploading` until
+    /// each has been confirmed, whatever its time. Without it an attachment not yet confirmed
+    /// is refused.
+    pub await_uploads: Option<bool>,
 }
 
 /// A change to a scheduled message; a field that is absent is unchanged.
@@ -99,6 +105,7 @@ pub async fn schedule_message(
         request.attachments,
         app::message::reply::Reply::requested(request.reply_to, request.tag_replied),
         request.send_at,
+        request.await_uploads.unwrap_or(false),
     )
     .await?;
     let location = format!(

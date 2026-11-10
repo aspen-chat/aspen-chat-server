@@ -65,13 +65,8 @@ import type {
   NotificationLevel,
 } from "./storeTypes";
 import { lazyBrowserMedia, pageStorage } from "./platform";
-import {
-  type AttachmentChange,
-  type UploadTarget,
-  updateAttachment,
-  uploadAttachment,
-  uploadIcon,
-} from "./upload";
+import { type AttachmentChange, type UploadTarget, updateAttachment, uploadIcon } from "./upload";
+import { AttachmentUploads, browserUploadTransport, type UploadTransport } from "./uploads";
 import { eventStreamUrl } from "./urls";
 import { VoiceCall } from "./voice";
 import type { VoiceMedia } from "./voiceMedia";
@@ -406,6 +401,12 @@ export interface AspenSyncOptions {
    * `fetch`.
    */
   uploadFetch?: typeof globalThis.fetch;
+  /**
+   * What carries attachments' bytes to storage (`AttachmentUploads`). Defaults to the browser's
+   * own (`browserUploadTransport`); a phone's app gives one that keeps sending in the
+   * background.
+   */
+  uploadTransport?: UploadTransport;
   /** The browser's media for voice calls; `browserVoiceMedia()` in the app, a fake in tests. */
   voiceMedia?: VoiceMedia;
   /**
@@ -475,8 +476,15 @@ export class AspenSync {
   readonly #stream: EventStream;
   readonly #now: () => number;
   readonly #uploadFetch: typeof globalThis.fetch;
+  /** The session's attachment uploads, which a message sent before they finish waits for. */
+  readonly uploads: AttachmentUploads;
+  /**
+   * Held and scheduled messages this app is cancelling, from when it asks until it hears so:
+   * the event may arrive before the request is answered, and must not be read as another
+   * device's cancellation, which discards the files still on their way.
+   */
+  readonly #cancelling = new Set<string>();
   /** Whether uploads go through a `fetch` of the caller's rather than the browser's own. */
-  readonly #customUpload: boolean;
   readonly #listeners = new Set<SyncListener>();
   #status: SyncStatus = "stopped";
   #lastError: Problem | null = null;
@@ -573,7 +581,13 @@ export class AspenSync {
     this.store = options.store ?? new RecordStore({ now: options.now ?? (() => Date.now()) });
     this.#now = options.now ?? (() => Date.now());
     this.#uploadFetch = options.uploadFetch ?? ((input, init) => globalThis.fetch(input, init));
-    this.#customUpload = options.uploadFetch !== undefined;
+    this.uploads = new AttachmentUploads({
+      client: options.client,
+      store: this.store,
+      transport:
+        options.uploadTransport ?? browserUploadTransport(options.client, options.uploadFetch),
+      storage: options.preferenceStorage === undefined ? pageStorage() : options.preferenceStorage,
+    });
     this.#random = options.random ?? Math.random;
     const voiceOptions: ConstructorParameters<typeof VoiceCall>[0] = {
       client: options.client,
@@ -882,6 +896,7 @@ export class AspenSync {
     const generation = this.#generation;
     this.#lastError = null;
     this.#setStatus("bootstrapping");
+    void this.uploads.restore();
     void this.#bootstrap(generation).then((ok) => {
       if (ok && generation === this.#generation) {
         if (this.#stream.status === "open") {
@@ -905,6 +920,8 @@ export class AspenSync {
       this.#presenceTimer = null;
     }
     this.voice.leave();
+    this.uploads.stop();
+    this.#cancelling.clear();
     if (this.#ownsPreferences) {
       this.preferences.clearAccount();
     }
@@ -1047,21 +1064,6 @@ export class AspenSync {
   }
 
   /**
-   * Uploads a file in the server's two phases, reserving an attachment, sending the bytes
-   * straight to storage, and confirming, and caches the resulting record. The attachment can
-   * then be named in a message.
-   */
-  uploadAttachment(
-    file: File,
-    /** A picture's size in pixels, which readers use to make room for it before it loads. */
-    size?: { readonly width: number; readonly height: number },
-    /** Told how many of the file's bytes have reached storage, as they go. */
-    onProgress?: (sent: number, total: number) => void,
-  ): Promise<Attachment> {
-    return uploadAttachment(this.#uploadTarget(), file, size, onProgress);
-  }
-
-  /**
    * Changes an attachment not yet sent: what it shows, which readers' apps give as its text
    * alternative, and whether they cover it as a spoiler. Caches the record as it now is.
    */
@@ -1083,7 +1085,6 @@ export class AspenSync {
       client: this.#client,
       store: this.store,
       uploadFetch: this.#uploadFetch,
-      customUpload: this.#customUpload,
     };
   }
 
@@ -1344,12 +1345,15 @@ export class AspenSync {
    * The server may hold a message while a preview of one of its attachments is being made, up to
    * twenty seconds from the upload, and post it then: the held message is kept in the store
    * (`heldMessages`) and shown waiting until `heldMessagePosted` or `heldMessageFailed`.
+   *
+   * With `awaitUploads`, `attachments` may name uploads still on their way (`uploads`): the
+   * server holds the message until each is confirmed, and posts it then.
    */
   async sendMessage(
     channelId: string,
     content: string,
     attachments: readonly string[] = [],
-    options: { echoToParent?: boolean; reply?: Reply } = {},
+    options: { echoToParent?: boolean; reply?: Reply; awaitUploads?: boolean } = {},
   ): Promise<Sent> {
     const result = await this.#client.api.POST("/api/v1/channels/{channel}/messages", {
       params: { path: { channel: channelId } },
@@ -1361,6 +1365,7 @@ export class AspenSync {
           ? {}
           : { replyTo: options.reply.to, tagReplied: options.reply.tag }),
         mayHold: true,
+        ...(options.awaitUploads === true ? { awaitUploads: true } : {}),
       },
     });
     if (result.data === undefined) {
@@ -1380,14 +1385,15 @@ export class AspenSync {
    * Schedules a message to be posted in a channel at `sendAt`, as `sendMessage` would post it
    * now: the server checks it then and again when it posts it, and until then only the caller's
    * apps know of it (`scheduledMessages`). It is kept at once unless the stream told of it
-   * first.
+   * first. With `awaitUploads`, `attachments` may name uploads still on their way: it is
+   * `uploading` until each is confirmed, and scheduled then.
    */
   async scheduleMessage(
     channelId: string,
     content: string,
     attachments: readonly string[],
     sendAt: Date,
-    options: { reply?: Reply } = {},
+    options: { reply?: Reply; awaitUploads?: boolean } = {},
   ): Promise<ScheduledMessage> {
     const result = await this.#client.api.POST("/api/v1/channels/{channel}/scheduled-messages", {
       params: { path: { channel: channelId } },
@@ -1398,6 +1404,7 @@ export class AspenSync {
         ...(options.reply === undefined
           ? {}
           : { replyTo: options.reply.to, tagReplied: options.reply.tag }),
+        ...(options.awaitUploads === true ? { awaitUploads: true } : {}),
       },
     });
     if (result.data === undefined) {
@@ -1443,6 +1450,7 @@ export class AspenSync {
    * `heldMessageCancelled` tells the caller's other apps.
    */
   async deleteScheduled(scheduledId: string): Promise<void> {
+    this.#cancelling.add(scheduledId);
     const result = await this.#client.api.DELETE(
       "/api/v1/users/@me/scheduled-messages/{scheduled}",
       { params: { path: { scheduled: scheduledId } } },
@@ -1470,6 +1478,7 @@ export class AspenSync {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     const { data: scheduled, included } = result.data;
+    this.#cancelling.add(scheduledId);
     const deleted = await this.#client.api.DELETE(
       "/api/v1/users/@me/scheduled-messages/{scheduled}",
       { params: { path: { scheduled: scheduledId } } },
@@ -1509,13 +1518,19 @@ export class AspenSync {
     if (kind !== "message") {
       return undefined;
     }
+    // Files of it still on their way are waited for, as when it was first sent.
+    const awaitUploads = attachments.some((id) => this.uploads.byAttachment(id) !== undefined);
     const sent =
       entry.startsThreadOf === null
         ? await this.sendMessage(channelId, content, attachments, {
             echoToParent,
+            awaitUploads,
             ...(replyTo == null ? {} : { reply: { to: replyTo, tag: tagReplied ?? true } }),
           })
-        : await this.replyInThread(entry.startsThreadOf, content, attachments, { echoToParent });
+        : await this.replyInThread(entry.startsThreadOf, content, attachments, {
+            echoToParent,
+            awaitUploads,
+          });
     this.store.forgetHeldMessage(heldId);
     return sent;
   }
@@ -1529,7 +1544,7 @@ export class AspenSync {
     starterId: string,
     content: string,
     attachments: readonly string[] = [],
-    options: { echoToParent?: boolean } = {},
+    options: { echoToParent?: boolean; awaitUploads?: boolean } = {},
   ): Promise<Sent> {
     const result = await this.#client.api.POST("/api/v1/messages/{message}/thread/messages", {
       params: { path: { message: starterId } },
@@ -1538,6 +1553,7 @@ export class AspenSync {
         attachments: [...attachments],
         ...(options.echoToParent === true ? { echoToParent: true } : {}),
         mayHold: true,
+        ...(options.awaitUploads === true ? { awaitUploads: true } : {}),
       },
     });
     if (result.data === undefined) {
@@ -2082,6 +2098,7 @@ export class AspenSync {
    * for. It is let go at once; `heldMessageCancelled` tells the caller's other apps.
    */
   async cancelHeld(heldId: string): Promise<void> {
+    this.#cancelling.add(heldId);
     const result = await this.#client.api.DELETE("/api/v1/users/@me/held-messages/{held}", {
       params: { path: { held: heldId } },
     });
@@ -3945,12 +3962,17 @@ export class AspenSync {
   /**
    * Sends a bot a command in a channel. The server checks its arguments and posts it there as
    * a message of kind `command`, which arrives like any other; in a busy channel it is held,
-   * and shown waiting until it is posted.
+   * and shown waiting until it is posted. With `awaitUploads`, the files it names may still be
+   * on their way (`uploads`): it is held until each is confirmed, and invoked then.
    */
-  async invokeCommand(channelId: string, invocation: Invocation): Promise<void> {
+  async invokeCommand(
+    channelId: string,
+    invocation: Invocation,
+    options: { awaitUploads?: boolean } = {},
+  ): Promise<void> {
     const result = await this.#client.api.POST("/api/v1/channels/{channel}/commands", {
       params: { path: { channel: channelId } },
-      body: invocation,
+      body: { ...invocation, ...(options.awaitUploads === true ? { awaitUploads: true } : {}) },
     });
     if (result.error !== undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
@@ -4361,6 +4383,16 @@ export class AspenSync {
       this.store.replaceHeldMessages(heldMessages);
       // The same holds of those scheduled for later.
       this.store.replaceScheduledMessages(scheduled);
+      // An upload a message waited for when this app last listened, whose message has since
+      // been posted, cancelled, or dropped, is waited for by nothing.
+      this.uploads.retain(
+        new Set(
+          [
+            ...heldMessages.filter((held) => held.waiting === "uploads"),
+            ...scheduled.filter((one) => one.status === "uploading"),
+          ].flatMap((waiting) => waiting.attachments),
+        ),
+      );
       this.store.replaceSaves(saved);
       this.store.replaceFollows(followed.map((follow) => follow.thread));
       this.store.replaceCollapsed(
@@ -4832,6 +4864,15 @@ export class AspenSync {
     if (event.serverEvent === "userResync") {
       void this.#resync();
       return;
+    }
+    // Cancelled from another device while this one was still sending its files: nothing waits
+    // for them now. One this app cancelled has its files kept or discarded by whoever asked.
+    if (event.serverEvent === "heldMessageCancelled" && !this.#cancelling.delete(event.held)) {
+      const waiting =
+        this.store.heldMessage(event.held)?.message ?? this.store.scheduledMessage(event.held);
+      if (waiting !== undefined) {
+        this.uploads.discardAttachments(waiting.attachments);
+      }
     }
     if (event.serverEvent === "pluginEvent") {
       for (const listener of this.#pluginEventListeners) {

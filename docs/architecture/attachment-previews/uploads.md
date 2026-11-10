@@ -17,6 +17,15 @@ straight to storage on a signed URL, then confirms the upload.
    second upload to the same URL between the weighing and the copy is weighed afresh rather than
    copied unweighed.
 7. Confirming a picture or video queues its preview (see [Making previews](making-previews.md)).
+8. Confirming sets going any message that was sent before the upload ended and waited only for it
+   (see [Sent before its files arrive](sent-before-uploaded.md)).
+
+What an attachment shows and whether it is a spoiler can be set from the moment it is reserved
+(`PATCH /attachments/{attachment}`), so a message sent while it uploads carries them.
+
+An upload that failed, or whose URL expired before it began, is given another URL for the same
+attachment by `POST /attachments/{attachment}/renew`
+([Sending a file again](sent-before-uploaded.md#sending-a-file-again)).
 
 ## Stored type
 
@@ -54,7 +63,8 @@ in any 24 hours, attachments and icons together (`app::upload_quota`).
 - A bot's uploads count toward its owner's quota (`upload_quota::charged_account`), so an owner with
   many bots has one quota rather than one for each.
 - Starting an upload records the bytes its URL is signed for in `upload_usage`, under the account it
-  is charged to, under a lock on that account's row.
+  is charged to, under a lock on that account's row. Another URL for the same upload
+  (`renew_upload`) records them again.
 - The record stands whatever then becomes of the upload (confirmed, sent, deleted, or swept). So
   deleting files does not make room.
 - An upload that would pass the quota is refused with `429` `uploadQuotaExceeded`.

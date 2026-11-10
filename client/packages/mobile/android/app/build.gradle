@@ -52,6 +52,9 @@ dependencies {
     // Whether the user is old enough, where the law has Play say (`AspenAgePlugin`).
     implementation "com.google.android.play:age-signals:$playAgeSignalsVersion"
     testImplementation "junit:junit:$junitVersion"
+    // The uploads' logic reads and writes JSON with `org.json`, which the Android jar that JVM
+    // tests run against only stubs.
+    testImplementation "org.json:json:$orgJsonVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

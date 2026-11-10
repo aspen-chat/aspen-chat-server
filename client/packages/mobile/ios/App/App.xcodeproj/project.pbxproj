@@ -20,6 +20,9 @@
 		A5E000000000000000000002 /* AspenFilesPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000012 /* AspenFilesPlugin.swift */; };
 		A5E000000000000000000004 /* AspenAgePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000015 /* AspenAgePlugin.swift */; };
 		A5E000000000000000000080 /* AspenAudioRoutePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000081 /* AspenAudioRoutePlugin.swift */; };
+		A5E000000000000000000082 /* AspenUploadsPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000083 /* AspenUploadsPlugin.swift */; };
+		A5E000000000000000000084 /* UploadCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000085 /* UploadCenter.swift */; };
+		A5E000000000000000000086 /* UploadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000087 /* UploadStore.swift */; };
 		A5E000000000000000000003 /* AppUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000013 /* AppUITests.swift */; };
 		A5E000000000000000000121 /* WebPush.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000101 /* WebPush.swift */; };
 		A5E000000000000000000122 /* PushState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000102 /* PushState.swift */; };
@@ -66,6 +69,9 @@
 		A5E000000000000000000012 /* AspenFilesPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenFilesPlugin.swift; sourceTree = "<group>"; };
 		A5E000000000000000000015 /* AspenAgePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenAgePlugin.swift; sourceTree = "<group>"; };
 		A5E000000000000000000081 /* AspenAudioRoutePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenAudioRoutePlugin.swift; sourceTree = "<group>"; };
+		A5E000000000000000000083 /* AspenUploadsPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenUploadsPlugin.swift; sourceTree = "<group>"; };
+		A5E000000000000000000085 /* UploadCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadCenter.swift; sourceTree = "<group>"; };
+		A5E000000000000000000087 /* UploadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadStore.swift; sourceTree = "<group>"; };
 		A5E000000000000000000013 /* AppUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUITests.swift; sourceTree = "<group>"; };
 		A5E000000000000000000014 /* AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A5E000000000000000000101 /* WebPush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPush.swift; sourceTree = "<group>"; };
@@ -141,6 +147,9 @@
 				A5E000000000000000000012 /* AspenFilesPlugin.swift */,
 				A5E000000000000000000015 /* AspenAgePlugin.swift */,
 				A5E000000000000000000081 /* AspenAudioRoutePlugin.swift */,
+				A5E000000000000000000083 /* AspenUploadsPlugin.swift */,
+				A5E000000000000000000085 /* UploadCenter.swift */,
+				A5E000000000000000000087 /* UploadStore.swift */,
 				A5E000000000000000000103 /* AspenPushPlugin.swift */,
 				A5E000000000000000000107 /* App.entitlements */,
 				A5E000000000000000000108 /* Localizable.strings */,
@@ -345,6 +354,9 @@
 				A5E000000000000000000002 /* AspenFilesPlugin.swift in Sources */,
 				A5E000000000000000000004 /* AspenAgePlugin.swift in Sources */,
 				A5E000000000000000000080 /* AspenAudioRoutePlugin.swift in Sources */,
+				A5E000000000000000000082 /* AspenUploadsPlugin.swift in Sources */,
+				A5E000000000000000000084 /* UploadCenter.swift in Sources */,
+				A5E000000000000000000086 /* UploadStore.swift in Sources */,
 				A5E000000000000000000123 /* AspenPushPlugin.swift in Sources */,
 				A5E000000000000000000121 /* WebPush.swift in Sources */,
 				A5E000000000000000000122 /* PushState.swift in Sources */,

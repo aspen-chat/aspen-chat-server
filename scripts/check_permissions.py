@@ -3965,6 +3965,257 @@ def scheduled_messages(world: World, check: Checks) -> None:
     bystander.close()
 
 
+def speculative_sends(world: World, check: Checks) -> None:
+    say("a message sent while its files upload: its author's alone until each is confirmed, and checked again then")
+    stack, member, owner = world.stack, world.member, world.owner
+    place = world.channel("uploading")
+    other = stack.events(member["token"])
+    bystander = stack.events(owner["token"])
+    streams = (world.stream, other, bystander)
+
+    def settle() -> None:
+        for stream in streams:
+            stream.gather(0.5)
+
+    def reserve(data: bytes, token: str = member["token"], name: str = "notes.txt",
+                mime: str = "text/plain") -> dict:
+        return stack.api("POST", "/attachments", {"fileName": name, "mimeType": mime, "byteSize": len(data)}, token)
+
+    def put(handle: dict, data: bytes) -> None:
+        request = urllib.request.Request(handle["uploadUrl"], data=data, method="PUT",
+                                         headers={"content-type": handle["contentType"]})
+        urllib.request.urlopen(request, timeout=15).close()
+
+    def confirm(handle: dict, token: str = member["token"]) -> int:
+        return stack.status("POST", f"/attachments/{handle['id']}/confirm", token=token)
+
+    def send(content: str, handles: list[dict], token: str = member["token"], **more) -> tuple[int, dict]:
+        body = {"content": content, "attachments": [h["id"] for h in handles], "mayHold": True, **more}
+        status, text = stack.request("POST", f"/channels/{place}/messages", body, token)
+        return status, json.loads(text)
+
+    def waiting(token: str = member["token"]) -> list[dict]:
+        return stack.api("GET", "/users/@me/held-messages", token=token)
+
+    def said() -> list[str]:
+        read = stack.api("GET", f"/channels/{place}/messages?limit=50", token=owner["token"])
+        return [m["content"] for m in (read["data"] if isinstance(read, dict) else read)]
+
+    def changed(stream: EventStream, held: str, seconds: float = 1.0) -> list[dict]:
+        return [e["held"] for e in of(stream.gather(seconds), "heldMessageChanged") if e["held"]["id"] == held]
+
+    def jobs() -> int:
+        return int(psql("SELECT count(*) FROM job WHERE kind = 'releaseHeldMessage'", stack.database))
+
+    settle()
+    notes = reserve(b"first notes")
+    check("a file still uploading is refused in a message that does not wait for it",
+          send("too early", [notes])[0] == 400)
+    theirs = reserve(b"the owner's", owner["token"])
+    check("as is another's upload in one that does",
+          send("not mine", [theirs], awaitUploads=True)[0] == 400)
+    status, held = send("sent early", [notes], awaitUploads=True)
+    check("a message sent while its file uploads is held for it",
+          status == 202 and held.get("waiting") == "uploads" and held.get("awaitedUploads") is True, (status, held))
+    check("both of the author's devices are told of it, as a fresh read says",
+          changed(other, held["id"]) == [held] and changed(world.stream, held["id"]) == [held]
+          and waiting() == [held], waiting())
+    heard = bystander.gather(1.0)
+    check("nobody else hears of it, or finds it",
+          not of(heard, "heldMessageChanged") and not of(heard, "message") and waiting(owner["token"]) == []
+          and "sent early" not in said(), [e["serverEvent"] for e in heard])
+    check("another cannot cancel it, or confirm its file",
+          stack.status("DELETE", f"/users/@me/held-messages/{held['id']}", token=owner["token"]) == 404
+          and confirm(notes, owner["token"]) == 404)
+    check("its file confirmed before it arrived leaves it waiting", confirm(notes) == 400 and waiting() == [held])
+    put(notes, b"first notes")
+    check("its file confirmed, it is posted", confirm(notes) == 200 and eventually(lambda: "sent early" in said()),
+          said())
+    posted = [of(stream.gather(1.5), "heldMessagePosted", held=held["id"]) for stream in (other, world.stream)]
+    check("and leaves both devices, as a fresh read says", all(posted) and waiting() == [], posted)
+    check("everyone in the channel hears the message", bool(of(bystander.gather(1.0), "message", type="create")))
+
+    # Every file is waited for, and each of two confirmed at once sees the other's.
+    first, second = reserve(b"one"), reserve(b"two!")
+    _, pair = send("two files", [first, second], awaitUploads=True)
+    settle()
+    put(first, b"one")
+    check("one of two files confirmed leaves it waiting",
+          confirm(first) == 200 and waiting() == [pair] and "two files" not in said(), waiting())
+    put(second, b"two!")
+    check("the other confirmed, it is posted", confirm(second) == 200 and eventually(lambda: "two files" in said()))
+    many = [reserve(bytes([65 + n]) * 3) for n in range(6)]
+    _, crowd = send("six at once", many, awaitUploads=True)
+    for n, handle in enumerate(many):
+        put(handle, bytes([65 + n]) * 3)
+    done: list[int] = []
+    threads = [threading.Thread(target=lambda h=handle: done.append(confirm(h))) for handle in many]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    check("six files confirmed at once post it", done == [200] * 6 and eventually(lambda: "six at once" in said(), 5),
+          (done, waiting()))
+    settle()
+
+    # A picture's preview holds it once its upload no longer does.
+    png = picture()
+    photo = reserve(png, name="photo.png", mime="image/png")
+    _, framed = send("with a picture", [photo], awaitUploads=True)
+    settle()
+    put(photo, png)
+    confirm(photo)
+    told = changed(other, framed["id"], 1.5)
+    check("a picture confirmed, its message waits for the preview, as its author's devices are told",
+          [h["waiting"] for h in told] == ["preview"] and told[0]["awaitedUploads"] is True, told)
+    check("and is posted once that is made", eventually(lambda: "with a picture" in said(), 30))
+    settle()
+
+    # Cancelled, or its file deleted, it is never posted.
+    gone = reserve(b"never")
+    _, cancelled = send("never mind", [gone], awaitUploads=True)
+    settle()
+    deleted = stack.status("DELETE", f"/users/@me/held-messages/{cancelled['id']}", token=member["token"])
+    check("one cancelled leaves both devices, and its job goes with it",
+          deleted == 204 and bool(of(other.gather(1.0), "heldMessageCancelled", held=cancelled["id"]))
+          and bool(of(world.stream.gather(1.0), "heldMessageCancelled", held=cancelled["id"]))
+          and waiting() == [] and jobs() == 0, (deleted, waiting(), jobs()))
+    put(gone, b"never")
+    check("and its file confirmed afterwards posts nothing",
+          confirm(gone) == 200 and not eventually(lambda: "never mind" in said(), 2))
+    lost = reserve(b"lost")
+    _, orphan = send("its file goes", [lost], awaitUploads=True)
+    settle()
+    stack.api("DELETE", f"/attachments/{lost['id']}", token=member["token"])
+    failed = [of(stream.gather(3.0), "heldMessageFailed", held=orphan["id"]) for stream in (other, world.stream)]
+    check("one whose file is deleted is dropped, both devices told why",
+          all(failed) and bool(failed[0][0]["detail"]) and waiting() == [] and jobs() == 0, (failed, waiting()))
+
+    # An upload that failed is sent again to another link, for the same attachment.
+    retried = reserve(b"second try")
+    send("after a retry", [retried], awaitUploads=True)
+    again = stack.api("POST", f"/attachments/{retried['id']}/renew", {"byteSize": len(b"second try")},
+                      member["token"])
+    check("an upload is given another link for the same attachment",
+          again["id"] == retried["id"] and again["contentType"] == retried["contentType"], again)
+    check("which nobody else is given",
+          stack.status("POST", f"/attachments/{retried['id']}/renew", {"byteSize": 10}, owner["token"]) == 404)
+    put(again, b"second try")
+    check("and its message is posted once it is confirmed",
+          confirm(retried) == 200 and eventually(lambda: "after a retry" in said()) and waiting() == [])
+    check("a confirmed upload is given no other link",
+          stack.status("POST", f"/attachments/{retried['id']}/renew", {"byteSize": 10}, member["token"]) == 404)
+    settle()
+
+    # A message scheduled while its file uploads waits for the file first, then for its time.
+    def at(seconds: float) -> str:
+        when = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=seconds)
+        return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def scheduled(token: str = member["token"]) -> list[dict]:
+        return stack.api("GET", "/users/@me/scheduled-messages", token=token)
+
+    def told_scheduled(stream: EventStream) -> list[dict]:
+        return [e["scheduled"] for e in of(stream.gather(1.0), "scheduledMessageChanged")]
+
+    slow = reserve(b"for later")
+    body = {"content": "later, with a file", "attachments": [slow["id"]], "sendAt": at(3600)}
+    check("a file still uploading is refused in a scheduled message that does not wait for it",
+          stack.status("POST", f"/channels/{place}/scheduled-messages", body, member["token"]) == 400)
+    planned = stack.api("POST", f"/channels/{place}/scheduled-messages", {**body, "awaitUploads": True},
+                        member["token"])
+    check("one that does is uploading, as both devices are told and a fresh read says",
+          planned["status"] == "uploading" and told_scheduled(other) == [planned]
+          and told_scheduled(world.stream) == [planned] and scheduled() == [planned], planned)
+    check("and is not among what waits above the message box", waiting() == [])
+    put(slow, b"for later")
+    confirm(slow)
+    ready = scheduled()
+    check("its file confirmed, it is scheduled, as both devices are told",
+          [m["status"] for m in ready] == ["scheduled"] and told_scheduled(other) == ready
+          and told_scheduled(world.stream) == ready and "later, with a file" not in said(), ready)
+    stack.api("POST", f"/users/@me/scheduled-messages/{planned['id']}/send", token=member["token"])
+    check("and sent now, it is posted", eventually(lambda: "later, with a file" in said()))
+    settle()
+
+    # A slash command waits for the file it takes the same way.
+    made = stack.api("POST", "/users/@me/bots", {"name": f"ubot{world.run}"}, owner["token"])
+    bot = {"id": made["bot"]["id"], "token": made["token"]}
+    world.as_owner("PUT", f"/communities/{world.community}/members/{bot['id']}", {})
+    stack.api("PUT", f"/bots/{bot['id']}/commands",
+              {"commands": [{"name": "file", "description": "Takes a file",
+                             "parameters": [{"name": "what", "description": "The file", "type": "attachmentId"}]}]},
+              bot["token"])
+    taken = reserve(b"for the bot")
+    invocation = {"bot": bot["id"], "name": "file", "arguments": [taken["id"]], "attachments": [taken["id"]]}
+    check("a command whose file is still uploading is refused unless it waits for it",
+          stack.status("POST", f"/channels/{place}/commands", invocation, member["token"]) == 400)
+    status, text = stack.request("POST", f"/channels/{place}/commands", {**invocation, "awaitUploads": True},
+                                 member["token"])
+    command = json.loads(text)
+    check("one that waits is held as a command, shown as it will be",
+          status == 202 and command.get("kind") == "command" and command.get("waiting") == "uploads"
+          and command.get("content", "").startswith("/file"), (status, command))
+    check("as both devices are told", bool(changed(other, command["id"])) and bool(changed(world.stream, command["id"])))
+    put(taken, b"for the bot")
+    confirm(taken)
+    check("and is invoked once its file is confirmed",
+          eventually(lambda: any(text.startswith("/file") for text in said())) and waiting() == [], said())
+    settle()
+
+    # Waiting for a file gives out, a day after it was sent: brought forward here.
+    def give_out(held_id: str) -> None:
+        psql(f"UPDATE held_message SET uploads_due = now() WHERE id = '{held_id}'", stack.database)
+        psql(f"UPDATE job SET not_before = now() WHERE kind = 'releaseHeldMessage' AND key = '{held_id}'",
+             stack.database)
+
+    never = reserve(b"never arrives")
+    _, stranded = send("its file never arrives", [never], awaitUploads=True)
+    forgotten = stack.api("POST", f"/channels/{place}/scheduled-messages",
+                          {"content": "scheduled, its file never arrives", "attachments": [never["id"]],
+                           "sendAt": at(3600), "awaitUploads": True}, member["token"])
+    settle()
+    give_out(stranded["id"])
+    give_out(forgotten["id"])
+    gave_out = [of(stream.gather(8.0), "heldMessageFailed", held=stranded["id"]) for stream in (other, world.stream)]
+    check("one whose file never arrives is dropped when waiting for it gives out, both devices told why",
+          all(gave_out) and "24" in gave_out[0][0]["detail"] and waiting() == [], gave_out)
+    check("and a scheduled one is kept, failed, with why",
+          [(m["status"], bool(m["failure"])) for m in scheduled()] == [("failed", True)], scheduled())
+    stack.api("DELETE", f"/users/@me/scheduled-messages/{forgotten['id']}", token=member["token"])
+    check("neither leaves a job", jobs() == 0, jobs())
+    settle()
+
+    # The right to post is checked again when the files are there.
+    late = reserve(b"too late")
+    _, refused = send("after the lock", [late], awaitUploads=True)
+    settle()
+    world.as_owner("PUT", f"/channels/{place}/overrides/{world.everyone}", {"allow": [], "deny": ["sendMessages"]})
+    settle()
+    put(late, b"too late")
+    confirm(late)
+    dropped = [of(stream.gather(3.0), "heldMessageFailed", held=refused["id"]) for stream in (other, world.stream)]
+    check("confirmed once its author may no longer post there, it is dropped, both devices told",
+          all(dropped) and waiting() == [] and "after the lock" not in said(), dropped)
+    world.as_owner("DELETE", f"/channels/{place}/overrides/{world.everyone}")
+
+    # One person keeps a bounded number waiting, and none of it outlives their membership.
+    pending = reserve(b"shared")
+    statuses = [send(f"waiting {n}", [pending], awaitUploads=True)[0] for n in range(51)]
+    check("past fifty waiting for their files, another is refused",
+          statuses[:50] == [202] * 50 and statuses[50] == 400 and len(waiting()) == 50, statuses[-3:])
+    world.stream.gather(0.5)
+    world.as_owner("DELETE", f"/communities/{world.community}/members/{member['id']}")
+    check("what a removed member had waiting is dropped", eventually(lambda: waiting() == [], 30), len(waiting()))
+    check("each told to their devices", len(of(world.stream.gather(2.0), "heldMessageFailed")) == 50)
+    check("and no job is left to post any of it", jobs() == 0, jobs())
+    put(pending, b"shared")
+    check("nor is any of it posted when the file arrives",
+          confirm(pending) == 200 and not any(text.startswith("waiting ") for text in said()))
+    other.close()
+    bystander.close()
+
+
 SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_and_categories, hidden_categories, hidden_managers,
              role_grants,
              poll_votes, poll_write_ins, deleted_parents, first_replies, thread_echoes, replies, calls, attachments,
@@ -3975,7 +4226,7 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              deleted_communities, previews, icons, uploads, saved_messages, thread_follows, activity_feed, activity_views,
              marking_unread, join_messages, identity_providers, sent_files, invite_codes, usernames, large_communities,
              pins_of_deleted_messages, own_votes_elsewhere, new_channel_overrides, bot_deletion_reaches_everyone,
-             profiles_reach_dm_partners, scheduled_messages]
+             profiles_reach_dm_partners, scheduled_messages, speculative_sends]
 
 
 def main() -> None:

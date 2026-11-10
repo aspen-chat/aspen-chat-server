@@ -186,6 +186,16 @@ pub const MAX_ATTACHMENTS: usize = 50;
 /// The most messages one channel keeps pinned.
 pub const MAX_PINS: i64 = 250;
 
+/// Whether a message may name uploads not yet confirmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Uploads {
+    /// Every attachment must be confirmed.
+    Confirmed,
+    /// Attachments still being uploaded are taken too: the message waits for them
+    /// (`held`, `HeldWaiting::Uploads`).
+    MayBePending,
+}
+
 /// Verify every id in `attachments` corresponds to a confirmed (`ready_at IS
 /// NOT NULL`) row that `author` uploaded, or that is already in `message`,
 /// before linking it to a message. The `attachment` table admits
@@ -194,14 +204,21 @@ pub const MAX_PINS: i64 = 250;
 /// upload is its uploader's to send. Returns [`app::Error::Validation`] if
 /// any id is missing, pending, or someone else's, or if there are more than
 /// [`MAX_ATTACHMENTS`].
+///
+/// With `uploads` [`Uploads::MayBePending`], reservations of `author`'s not yet confirmed are
+/// taken too, for a message that waits for them rather than being posted, and the answer is
+/// whether any of `attachments` is one. Such a message holds each row against being confirmed
+/// until it is saved (`FOR SHARE`): the confirmation of one then either was seen here or finds
+/// the saved message waiting for it (`held::uploaded`), and never falls between the two.
 async fn ensure_attachments_ready(
     conn: &mut AsyncPgConnection,
     author: UserId,
     message: Option<MessageId>,
     attachments: &[AttachmentId],
-) -> Result<(), crate::Error> {
+    uploads: Uploads,
+) -> Result<bool, crate::Error> {
     if attachments.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     if attachments.len() > MAX_ATTACHMENTS {
         return Err(crate::Error::Validation(t!(
@@ -213,14 +230,11 @@ async fn ensure_attachments_ready(
     let kept = message_attachment::table
         .select(message_attachment::attachment_id)
         .filter(message_attachment::message_id.nullable().eq(message));
-    // Locked until the message is saved, so the sweep of unsent attachments
-    // (`attachment::sweep_unsent`) passes them by.
-    let ready: Vec<AttachmentId> = attachment::table
-        .select(attachment::id)
+    let found = attachment::table
+        .select(attachment::ready_at.is_not_null())
         .filter(
             attachment::id
                 .eq_any(attachments)
-                .and(attachment::ready_at.is_not_null())
                 // Evidence is no one's to post again (`attachment::evidence`).
                 .and(attachment::evidence_at.is_null())
                 .and(
@@ -228,14 +242,38 @@ async fn ensure_attachments_ready(
                         .eq(author)
                         .or(attachment::id.eq_any(kept)),
                 ),
-        )
-        .for_key_share()
-        .load(conn)
-        .await?;
-    if ready.len() != attachments.len() {
+        );
+    // Locked until the message is saved, so the sweep of unsent attachments
+    // (`attachment::sweep_unsent`) passes them by.
+    let ready: Vec<bool> = match uploads {
+        Uploads::Confirmed => found.for_key_share().load(conn).await?,
+        Uploads::MayBePending => found.for_share().load(conn).await?,
+    };
+    let pending = ready.iter().any(|ready| !ready);
+    if ready.len() != attachments.len() || (pending && uploads == Uploads::Confirmed) {
         return Err(crate::Error::Validation(t!("attachmentNotReady")));
     }
-    Ok(())
+    Ok(pending)
+}
+
+/// Whether any of `attachments` is a reservation not yet confirmed, as things stand, with
+/// nothing locked: a look that decides only which way a message is checked.
+pub(crate) async fn any_unconfirmed(
+    conn: &mut AsyncPgConnection,
+    attachments: &[AttachmentId],
+) -> Result<bool, crate::Error> {
+    if attachments.is_empty() || attachments.len() > MAX_ATTACHMENTS {
+        return Ok(false);
+    }
+    Ok(diesel::select(diesel::dsl::exists(
+        attachment::table.filter(
+            attachment::id
+                .eq_any(attachments)
+                .and(attachment::ready_at.is_null()),
+        ),
+    ))
+    .get_result(conn)
+    .await?)
 }
 
 /// Checks that `author` may post text in `channel_id`, answering the channel and the author's
@@ -321,6 +359,30 @@ async fn check_posting(
     attachments: &[AttachmentId],
     echo_to_parent: bool,
 ) -> Result<(Channel, ChannelAccess), crate::Error> {
+    let (target, access, _) = check_posting_awaiting(
+        state,
+        conn,
+        author,
+        channel_id,
+        attachments,
+        echo_to_parent,
+        Uploads::Confirmed,
+    )
+    .await?;
+    Ok((target, access))
+}
+
+/// [`check_posting`], for a message that with `uploads` [`Uploads::MayBePending`] may name
+/// files still being uploaded, answering also whether any is.
+async fn check_posting_awaiting(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    author: UserId,
+    channel_id: ChannelId,
+    attachments: &[AttachmentId],
+    echo_to_parent: bool,
+    uploads: Uploads,
+) -> Result<(Channel, ChannelAccess, bool), crate::Error> {
     let (target, access) = may_post(state, conn, author, channel_id).await?;
     if echo_to_parent {
         let Some(parent) = target.parent_channel else {
@@ -331,8 +393,8 @@ async fn check_posting(
             .await?
             .require(Permissions::SEND_MESSAGES)?;
     }
-    check_attachments(conn, author, &access, attachments).await?;
-    Ok((target, access))
+    let pending = check_attachments(conn, author, &access, attachments, uploads).await?;
+    Ok((target, access, pending))
 }
 
 /// Checks that `author` may post the reply that makes `unmade`, as `check_posting` checks a
@@ -347,6 +409,7 @@ async fn check_first_reply(
     unmade: &Unmade,
     attachments: &[AttachmentId],
     echo_to_parent: bool,
+    uploads: Uploads,
 ) -> Result<ChannelAccess, crate::Error> {
     let parent =
         thread::check_startable(state, conn, author, unmade.starter, unmade.parent).await?;
@@ -356,22 +419,24 @@ async fn check_first_reply(
     }
     let access = parent.into_unmade_thread(unmade.id);
     access.require(access.send_permission())?;
-    check_attachments(conn, author, &access, attachments).await?;
+    check_attachments(conn, author, &access, attachments, uploads).await?;
     Ok(access)
 }
 
 /// Checks that `author` may post `attachments` where `access` is, and that each is theirs and
-/// ready.
+/// ready, or with `uploads` [`Uploads::MayBePending`] still being uploaded, answering whether
+/// any is.
 async fn check_attachments(
     conn: &mut AsyncPgConnection,
     author: UserId,
     access: &ChannelAccess,
     attachments: &[AttachmentId],
-) -> Result<(), crate::Error> {
+    uploads: Uploads,
+) -> Result<bool, crate::Error> {
     if !attachments.is_empty() {
         access.require(Permissions::ATTACH_FILES)?;
     }
-    ensure_attachments_ready(conn, author, None, attachments).await
+    ensure_attachments_ready(conn, author, None, attachments, uploads).await
 }
 
 /// Where a message is posted.
@@ -567,6 +632,7 @@ async fn post(
                 unmade,
                 &attachments,
                 echo_to_parent,
+                Uploads::Confirmed,
             )
             .await?,
         ),
@@ -614,6 +680,7 @@ async fn post(
                         &access,
                         channel_id,
                         invocation,
+                        Uploads::Confirmed,
                     )
                     .await?;
                     Some(bot_command::invocation_text(&checked, &arguments))
@@ -709,6 +776,7 @@ async fn post(
                             &access,
                             channel_id,
                             invocation,
+                            Uploads::Confirmed,
                         )
                         .await?,
                     ),
@@ -1369,14 +1437,22 @@ pub async fn update_message(
 
 /// Posts a slash command where `channel` is, or has it wait for the channel's mana when the
 /// channel is busy (`app::mana`). It is checked as posting checks it before it spends anything,
-/// and again as it is posted.
+/// and again as it is posted. With `await_uploads`, a command naming files still being
+/// uploaded is held until each is confirmed (`held::hold_command`), and posted then.
 pub async fn invoke_command(
     state: &GlobalServerContext,
     author: UserId,
     channel: ChannelId,
     invocation: Invocation,
+    await_uploads: bool,
 ) -> crate::Result<held::Posted> {
     let mut conn = state.connection_pool.get().await?;
+    if await_uploads && any_unconfirmed(conn.as_mut(), &invocation.attachments).await? {
+        drop(conn);
+        return held::hold_command(state, author, channel, invocation)
+            .await
+            .map(|held| held::Posted::Held(Box::new(held)));
+    }
     check_posting(
         state,
         conn.as_mut(),
@@ -1387,8 +1463,16 @@ pub async fn invoke_command(
     )
     .await?;
     let access = channel_access(state, conn.as_mut(), author, channel).await?;
-    let (command, arguments) =
-        bot_command::check(state, conn.as_mut(), author, &access, channel, &invocation).await?;
+    let (command, arguments) = bot_command::check(
+        state,
+        conn.as_mut(),
+        author,
+        &access,
+        channel,
+        &invocation,
+        Uploads::Confirmed,
+    )
+    .await?;
     let text = bot_command::invocation_text(&command, &arguments);
     let cost = mana::message_cost(&state.settings(), &text, invocation.attachments.len());
     if mana::decide_for(state, conn.as_mut(), author, channel, cost).await? == mana::Decision::Wait

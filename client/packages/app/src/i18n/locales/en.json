@@ -1575,6 +1575,7 @@
   "pendingAttachmentsLabel": "Files to send",
   "uploadingFile": "Uploading {name}",
   "uploadFailed": "Upload failed",
+  "uploadUnreachable": "The file could not be uploaded. Check your connection, then attach it again.",
   "removeAttachment": "Remove {name}",
   "describeAttachment": "Describe {name}",
   "editAttachmentDescription": "Edit the description of {name}",
@@ -1626,6 +1627,29 @@
     "files": "{count, plural, one {# file} other {# files}}",
     "sendAgain": "Send again",
     "discard": "Discard"
+  },
+  "pending": {
+    "label": "Messages not sent yet",
+    "uploading": "Sending once its files have uploaded…",
+    "scheduling": "Scheduling for {time} once its files have uploaded…",
+    "uploaded": "Uploaded",
+    "elsewhere": "Uploading from another device",
+    "failed": {
+      "refused": "Not sent: {name} was not accepted. Try again, or delete this message and send it again.",
+      "unreachable": "Not sent: {name} could not be uploaded. Check your connection, then try again.",
+      "interrupted": "Not sent: the app closed before {name} finished uploading. Delete this message and send it again."
+    },
+    "failedElsewhere": "A message was not sent: {name} could not be uploaded. Open its channel to try again.",
+    "retry": "Try again",
+    "edit": "Edit",
+    "delete": "Delete",
+    "leaveQuestion": "A message is still uploading its files",
+    "leaveDetail": "If you quit now, the files stop uploading and the message is not sent.",
+    "leaveStay": "Keep uploading",
+    "leaveQuit": "Quit anyway",
+    "notifyFailedTitle": "Message not sent",
+    "notifyFailedBody": "{name} could not be uploaded. Open Aspen to try again.",
+    "notifySending": "Sending your files…"
   },
   "scheduled": {
     "open": "Schedule message",

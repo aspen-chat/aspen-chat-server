@@ -18,6 +18,31 @@ The reasons behind the [attachment previews](index.md) design.
 - **Declared types are printable ASCII with no commas or quotes.** Nothing written after the essence
   can reach the header a browser reads as several types.
 
+## Sent before its files arrive
+
+- **The server holds the message, not the app.** A phone's page stops when the app goes to the
+  background, and a page that is not running cannot post. With the message already at the server,
+  all a device must still do is send bytes and confirm them, which a phone's native code does with
+  no page awake, and the posting happens in the request that confirms the last file. The author's
+  other devices see it waiting, and it is checked where every message is checked.
+- **The confirmation sets it going, in its own transaction.** A job that looked for confirmed files
+  on a timer would post the message a look late. The job remains for the two things no request does:
+  giving up after a day, and a file deleted.
+- **Each attachment is held against being confirmed while the message is saved.** Without that, a
+  confirmation between the check and the insert would see no message to set going, and the message
+  would wait a day for a file already there. See
+  [A file confirmed as it is sent](sent-before-uploaded.md#a-file-confirmed-as-it-is-sent).
+- **A day's wait**, as long as a confirmed upload waits to be sent. A large file on a slow link may
+  take hours; nothing tells the server an upload has died short of its never arriving.
+- **Fifty at once.** One confirmation sets going every message waiting for that file, so their
+  number is bounded for the request's sake; fifty is more than anyone sends before the first
+  arrives.
+- **A failed upload keeps its attachment.** Another reservation would mean changing the message that
+  already names the first, on a phone possibly with no page to do it. Another URL for the same
+  attachment changes nothing else.
+- **It does not keep later messages waiting.** An upload may take as long as it takes; what its
+  author says meanwhile should not.
+
 ## The preview box
 
 - **960 pixels tall** is the 320 CSS pixels a picture may stand inline, on a screen of three device

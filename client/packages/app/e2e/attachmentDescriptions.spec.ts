@@ -136,7 +136,7 @@ test("a picture described before sending carries its description to readers", as
   await expect(gallery.getByText("A grey cat asleep on a keyboard.")).toBeVisible();
 });
 
-test("a description given while the picture uploads reaches the server once it is there", async ({
+test("a description given while the picture uploads reaches the server before the picture has", async ({
   page,
 }) => {
   const recorded: Recorded = { calls: [], descriptions: [] };
@@ -146,7 +146,9 @@ test("a description given while the picture uploads reaches the server once it i
   });
   await signInToWorld(page, async (p) => {
     await withUploads(p, recorded);
-    // Held until the description is saved, so the picture is still uploading then.
+    // Held until the description is saved, so the picture is still uploading then; the
+    // attachment the server reserved for it takes the description meanwhile, and a message sent
+    // before the picture arrives carries it.
     await p.route(/\/api\/v1\/uploads\/attachment$/, async (route) => {
       await uploaded;
       await route.fulfill({ status: 200, body: "" });
@@ -168,11 +170,12 @@ test("a description given while the picture uploads reaches the server once it i
   const dialog = page.getByRole("dialog", { name: "Describe cat.png" });
   await dialog.getByRole("textbox", { name: "Description" }).fill("A sleepy cat");
   await dialog.getByRole("button", { name: "Save" }).click();
-  expect(recorded.descriptions).toEqual([]);
+  await expect.poll(() => recorded.descriptions).toEqual(["A sleepy cat"]);
+  expect(recorded.calls).toEqual(["reserve", "describe"]);
 
   finishUpload();
-  await expect.poll(() => recorded.descriptions).toEqual(["A sleepy cat"]);
-  expect(recorded.calls).toEqual(["reserve", "confirm", "describe"]);
+  await expect.poll(() => recorded.calls).toEqual(["reserve", "describe", "confirm"]);
+  await expect(files.getByRole("progressbar")).toHaveCount(0);
 });
 
 test("a sent picture is described from its message's editor, which changes no file", async ({

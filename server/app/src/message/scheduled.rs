@@ -8,6 +8,10 @@
 //! waits for the channel's mana with everything else (`app::mana::queue`), and is never
 //! dropped for waiting.
 //!
+//! One scheduled while its files are still being uploaded waits for them first
+//! (`waiting = 'uploads'`, `held::uploaded`), whatever its time, and its apps show it as
+//! `uploading`; once each is confirmed it waits for its time, or is posted if that has come.
+//!
 //! One that cannot be posted is kept, failed, with why (`held::fail_held`), until its author
 //! gives it another time ([`reschedule`], [`send_now`]) or deletes it (`held::cancel`), or it
 //! has been kept [`FAILED_KEPT`] ([`sweep_failed`]). An author who can no longer see where it
@@ -53,6 +57,8 @@ fn record(row: HeldMessage) -> Option<ScheduledMessage> {
     // same (`queue::wait_held`).
     let status = if row.failure.is_some() {
         ScheduledStatus::Failed
+    } else if row.waiting == HeldWaiting::Uploads {
+        ScheduledStatus::Uploading
     } else if row.waiting == HeldWaiting::Mana || send_at <= Utc::now() {
         ScheduledStatus::WaitingForMana
     } else {
@@ -124,7 +130,10 @@ struct Account {
 /// Schedules a message of `author`'s for `send_at` in `channel`: a channel, a thread already
 /// made, or a DM. It is checked as posting it now would be (the right to post there, its
 /// attachments, what it replies to), and again when it is posted. Refused when the author
-/// already has [`MAX_PER_AUTHOR`] scheduled, and for a bot, which keeps time of its own.
+/// already has [`MAX_PER_AUTHOR`] scheduled, and for a bot, which keeps time of its own. With
+/// `await_uploads` it may name files still being uploaded, and then waits for each to be
+/// confirmed before it waits for its time (`held::uploaded`).
+#[allow(clippy::too_many_arguments)]
 pub async fn schedule(
     state: &GlobalServerContext,
     author: UserId,
@@ -133,6 +142,7 @@ pub async fn schedule(
     attachments: Vec<AttachmentId>,
     reply: Option<super::reply::Reply>,
     send_at: DateTime<Utc>,
+    await_uploads: bool,
 ) -> crate::Result<ScheduledMessage> {
     super::check_content(&content)?;
     check_time(send_at)?;
@@ -165,15 +175,33 @@ pub async fn schedule(
                         max = MAX_PER_AUTHOR
                     )));
                 }
-                super::check_posting(state, conn.as_mut(), author, channel, &attachments, false)
-                    .await?;
+                let (_, _, pending) = super::check_posting_awaiting(
+                    state,
+                    conn.as_mut(),
+                    author,
+                    channel,
+                    &attachments,
+                    false,
+                    if await_uploads {
+                        super::Uploads::MayBePending
+                    } else {
+                        super::Uploads::Confirmed
+                    },
+                )
+                .await?;
                 if let Some(reply) = reply {
                     super::reply::check(conn.as_mut(), channel, reply.to, false).await?;
                 }
+                // While it waits for its files its job is due when that wait gives out; the
+                // confirmation of the last of them makes it due at its time.
+                let uploads_due = pending.then(|| Utc::now() + held::UPLOADS_WAIT);
                 let row: HeldMessage = diesel::sql_query(format!(
                     "INSERT INTO held_message (id, author, channel, content, attachments, \
-                         echo_to_parent, reply_to, tags_replied, locale, waiting, send_at) \
-                     VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, 'scheduled', $9) \
+                         echo_to_parent, reply_to, tags_replied, locale, waiting, send_at, \
+                         uploads_due) \
+                     VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, \
+                         CASE WHEN $10::timestamptz IS NULL THEN 'scheduled' ELSE 'uploads' END, \
+                         $9, $10) \
                      RETURNING {COLUMNS}"
                 ))
                 .bind::<PgUuid, _>(id)
@@ -185,9 +213,14 @@ pub async fn schedule(
                 .bind::<Bool, _>(reply.is_some_and(|reply| reply.tag))
                 .bind::<Text, _>(locale)
                 .bind::<Timestamptz, _>(send_at)
+                .bind::<Nullable<Timestamptz>, _>(uploads_due)
                 .get_result(conn.as_mut())
                 .await?;
-                jobs::enqueue(conn.as_mut(), job(id, Some(send_at))?).await?;
+                jobs::enqueue(
+                    conn.as_mut(),
+                    job(id, Some(uploads_due.unwrap_or(send_at)))?,
+                )
+                .await?;
                 announce(state, conn.as_mut(), &row).await?;
                 Ok(row)
             }
@@ -197,7 +230,8 @@ pub async fn schedule(
     record(row).ok_or(crate::Error::Diesel(diesel::result::Error::NotFound))
 }
 
-/// The job that posts the scheduled message `id`, due at `send_at`, or now.
+/// The job that posts the scheduled message `id`, due at `send_at`, or now; for one still
+/// waiting for its files, `send_at` is when that wait gives out.
 fn job(id: HeldMessageId, send_at: Option<DateTime<Utc>>) -> crate::Result<NewJob> {
     let job = NewJob::new(JobKind::ReleaseHeldMessage, JobClass::Interactive, &())?
         .keyed(id.0.to_string());
@@ -281,7 +315,8 @@ pub async fn send_now(
 /// Makes the scheduled message `id` of `author`'s due at `send_at`, or now, with a job of its
 /// own for that time in place of whichever it had: a step of the old job running now, or the
 /// drainer about to post it from the queue it leaves, finds the message no longer as it read it,
-/// and leaves it.
+/// and leaves it. One still waiting for its files takes the time and goes on waiting for them,
+/// its job left as it is.
 async fn set_time(
     state: &GlobalServerContext,
     author: UserId,
@@ -302,6 +337,18 @@ async fn set_time(
                 .await?;
                 if held.waiting == HeldWaiting::Mana && send_at.is_none() {
                     return Ok(held);
+                }
+                if held.waiting == HeldWaiting::Uploads {
+                    let row: HeldMessage = diesel::sql_query(format!(
+                        "UPDATE held_message SET send_at = COALESCE($2, now()) \
+                         WHERE id = $1 RETURNING {COLUMNS}"
+                    ))
+                    .bind::<PgUuid, _>(id)
+                    .bind::<Nullable<Timestamptz>, _>(send_at)
+                    .get_result(conn.as_mut())
+                    .await?;
+                    announce(state, conn.as_mut(), &row).await?;
+                    return Ok(row);
                 }
                 let row: HeldMessage = diesel::sql_query(format!(
                     "UPDATE held_message SET send_at = COALESCE($2, now()), waiting = 'scheduled', \
@@ -437,6 +484,7 @@ mod tests {
             cost: 0,
             send_at: Some(Utc::now() + TimeDelta::hours(1)),
             failure: failure.map(str::to_owned),
+            uploads_due: None,
         }
     }
 
@@ -454,6 +502,13 @@ mod tests {
         assert_eq!(
             status(HeldWaiting::Scheduled, Some("no")),
             Some(ScheduledStatus::Failed)
+        );
+        // Waiting for its files, it is uploading whatever its time.
+        let mut uploading = row(HeldWaiting::Uploads, None);
+        uploading.send_at = Some(Utc::now() - TimeDelta::seconds(5));
+        assert_eq!(
+            record(uploading).map(|r| r.status),
+            Some(ScheduledStatus::Uploading)
         );
         // Due, it waits for mana whether or not it has found room in the queue yet.
         let mut due = row(HeldWaiting::Scheduled, None);

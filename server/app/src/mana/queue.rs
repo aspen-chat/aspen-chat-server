@@ -136,6 +136,7 @@ pub async fn wait(state: &GlobalServerContext, waiting: Waiting) -> crate::Resul
                     cost: i32::try_from(waiting.cost).unwrap_or(i32::MAX),
                     send_at: None,
                     failure: None,
+                    uploads_due: None,
                 };
                 diesel::insert_into(held_message::table)
                     .values((
@@ -284,6 +285,10 @@ pub async fn wait_held(
                     };
                     if waiting.send_at.is_some() {
                         crate::message::scheduled::announce(state, conn.as_mut(), &waiting).await?;
+                    } else if waiting.uploads_due.is_some() {
+                        // Sent before its files were uploaded, its author's apps hold it and
+                        // show what it waits for.
+                        held::announce_changed(state, conn.as_mut(), &waiting).await?;
                     }
                     ensure_drainer(conn.as_mut(), channel).await?;
                     Ok(Waited::Queued)

@@ -68,6 +68,13 @@ contextBridge.exposeInMainWorld("aspenDesktop", {
       };
     },
   },
+  // Whether a message the reader sent is still uploading its files, with the question to ask
+  // before the window closes on them.
+  sending: {
+    set: (question: unknown) => {
+      ipcRenderer.send("sending:set", question);
+    },
+  },
   // The title bar the page draws: the window buttons' colours, and on Linux whether to draw it.
   titleBar: {
     paint: (colors: unknown) => {

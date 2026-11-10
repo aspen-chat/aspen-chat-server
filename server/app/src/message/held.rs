@@ -25,6 +25,17 @@
 //! reply that made its thread as it was held takes the thread with it when it is dropped, if
 //! nothing else was posted or waits there.
 //!
+//! A message sent while its files are still being uploaded is held the same way, when its
+//! client says it may be (`awaitUploads`): it names reservations not yet confirmed, is checked
+//! as any message is but for that, and waits (`waiting = 'uploads'`) until each has been
+//! confirmed. The request that confirms the last of them sets it going ([`uploaded`]), and
+//! from there it is a message held for its previews, posted by its job as above. A slash
+//! command waits for its files the same way ([`hold_command`]), and so does a message scheduled
+//! for later, which then waits for its time. Its job is due when the wait gives out,
+//! [`UPLOADS_WAIT`] after it was sent, and then fails it; a file of it deleted meanwhile brings
+//! the job forward to fail it at once ([`wake_awaiting`]). One author has at most
+//! [`MAX_AWAITING_UPLOADS`] waiting so, which bounds what one confirmation sets going.
+//!
 //! A message scheduled for later (`super::scheduled`) is a held message too, `send_at` saying
 //! when: its job comes due then and posts it as above. One that cannot be posted is kept for
 //! its author with why ([`fail_held`]) rather than dropped, while they can still see where it
@@ -43,9 +54,9 @@ use crate::mana::{self, Decision};
 use crate::t;
 use crate::{AttachmentId, ChannelId, EventScope, HeldMessageId, MessageId, UserId};
 use aspen_schema::held_message;
-pub use aspen_wire::held::{HeldKind, HeldWaiting};
+pub use aspen_wire::held::{HeldKind, HeldMessage as HeldRecord, HeldWaiting};
 use aspen_wire::message_enum::server_event::ServerEvent;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, TimeDelta, Utc};
 use diesel::prelude::*;
 use diesel::sql_types::{Array, Bool, Nullable, Text, Timestamptz, Uuid as PgUuid};
 use diesel_async::scoped_futures::ScopedFutureExt;
@@ -60,9 +71,16 @@ pub const LOOK_EVERY: Duration = Duration::from_secs(5);
 const BEHIND_WAIT: Duration = Duration::from_secs(1);
 /// How many times posting one is tried before it is dropped.
 pub const MAX_ATTEMPTS: i32 = 10;
+/// How long a message sent before its files were uploaded waits for them, from when it was
+/// sent, before it is failed: as long as a confirmed upload waits to be sent
+/// (`attachment::UNSENT_LIFETIME`).
+pub const UPLOADS_WAIT: TimeDelta = TimeDelta::hours(24);
+/// The most messages and commands one author may have waiting for their files at once,
+/// scheduled messages apart, which have a limit of their own (`scheduled::MAX_PER_AUTHOR`).
+pub const MAX_AWAITING_UPLOADS: i64 = 50;
 
-/// A message waiting for its attachments' previews, or for its channel's mana, and the other
-/// things that wait for mana (`app::mana::queue`).
+/// A message waiting for its files to be uploaded, for its attachments' previews, or for its
+/// channel's mana, and the other things that wait for mana (`app::mana::queue`).
 #[derive(Debug, Clone, QueryableByName)]
 pub struct HeldMessage {
     #[diesel(sql_type = PgUuid)]
@@ -108,23 +126,334 @@ pub struct HeldMessage {
     /// is kept for its author, and nothing posts it until they schedule it again.
     #[diesel(sql_type = Nullable<Text>)]
     pub failure: Option<String>,
+    /// For what was sent while its files were still uploading, when waiting for them gives
+    /// out; it stays set once they are all there. `None` for everything else.
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    pub uploads_due: Option<DateTime<Utc>>,
 }
 
 /// The columns a [`HeldMessage`] is read from.
 pub(crate) const COLUMNS: &str = "id, author, channel, content, attachments, echo_to_parent, \
     reply_to, tags_replied, locale, held_at, waiting, kind, target, payload, cost, send_at, \
-    failure";
+    failure, uploads_due";
 
-/// What became of a message sent: posted, or held for its previews.
+impl From<HeldMessage> for HeldRecord {
+    fn from(held: HeldMessage) -> Self {
+        HeldRecord {
+            id: held.id,
+            channel_id: held.channel,
+            content: held.content,
+            attachments: held.attachments,
+            echo_to_parent: held.echo_to_parent,
+            reply_to: held.reply_to,
+            tag_replied: held.tags_replied,
+            held_at: held.held_at,
+            waiting: held.waiting,
+            kind: held.kind,
+            target: held.target,
+            awaited_uploads: held.uploads_due.is_some(),
+        }
+    }
+}
+
+/// Tells the author's apps how the held message `row` stands, in the transaction that made or
+/// changed it: one sent before its files were uploaded, which their other devices show too.
+pub(crate) async fn announce_changed(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    row: &HeldMessage,
+) -> crate::Result<()> {
+    crate::publish_event(
+        state,
+        conn,
+        EventScope::User(row.author),
+        &ServerEvent::HeldMessageChanged {
+            held: row.clone().into(),
+        },
+    )
+    .await
+}
+
+/// What became of a message sent: posted, or held.
 pub enum Posted {
     Sent(Box<Message>),
     Held(Box<HeldMessage>),
 }
 
-/// Posts a message where `to` says, or holds it while one of its attachments' previews is being
-/// made when `may_hold`, as its client said it may. A message held has been checked as it would
-/// have been posted, what it replies to included; its job posts it. A reply that makes its
-/// thread makes it whether it is posted or held, and one held waits in the thread.
+/// Why a message is held as it is sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hold {
+    /// A preview of one of its attachments is being made.
+    Preview,
+    /// Some of its files are still being uploaded.
+    Uploads,
+}
+
+#[derive(QueryableByName)]
+struct Count {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    count: i64,
+}
+
+/// Refuses another message or command waiting for its files when `author` already has
+/// [`MAX_AWAITING_UPLOADS`], holding their own row until the caller's transaction commits so
+/// two of their requests at once cannot both find room: through `held_message_by_author`.
+async fn ensure_room_awaiting(conn: &mut AsyncPgConnection, author: UserId) -> crate::Result<()> {
+    diesel::sql_query(r#"SELECT 1 FROM "user" WHERE id = $1 FOR NO KEY UPDATE"#)
+        .bind::<PgUuid, _>(author)
+        .execute(conn)
+        .await?;
+    let awaiting: Count = diesel::sql_query(
+        "SELECT count(*) AS count FROM held_message \
+         WHERE author = $1 AND waiting = 'uploads' AND send_at IS NULL",
+    )
+    .bind::<PgUuid, _>(author)
+    .get_result(conn)
+    .await?;
+    if awaiting.count >= MAX_AWAITING_UPLOADS {
+        return Err(crate::Error::Validation(t!(
+            "heldTooManyAwaitingUploads",
+            max = MAX_AWAITING_UPLOADS
+        )));
+    }
+    Ok(())
+}
+
+/// The job that posts the held message `id`: due now, or, while it waits for its files, when
+/// waiting for them gives out.
+fn release_job(id: HeldMessageId, awaiting_until: Option<DateTime<Utc>>) -> crate::Result<NewJob> {
+    let job = NewJob::new(JobKind::ReleaseHeldMessage, JobClass::Interactive, &())?
+        .keyed(id.0.to_string());
+    Ok(match awaiting_until {
+        Some(until) => job.not_before(until),
+        None => job,
+    })
+}
+
+/// Holds a message sent `to` a place for `hold`, checked as it would have been posted, what it
+/// replies to included, but that one held for its uploads may name files not yet confirmed.
+/// A reply that makes its thread makes it as it is held, and waits in the thread.
+#[allow(clippy::too_many_arguments)]
+async fn hold_message(
+    state: &GlobalServerContext,
+    author: UserId,
+    to: super::To,
+    content: String,
+    attachments: Vec<AttachmentId>,
+    echo_to_parent: bool,
+    reply: Option<super::reply::Reply>,
+    hold: Hold,
+) -> crate::Result<HeldMessage> {
+    let uploads = match hold {
+        Hold::Preview => super::Uploads::Confirmed,
+        Hold::Uploads => super::Uploads::MayBePending,
+    };
+    let mut conn = state.connection_pool.get().await?;
+    let (channel, unmade) = super::resolve(conn.as_mut(), to).await?;
+    if unmade.is_some() && reply.is_some() {
+        return Err(crate::Error::Validation(t!("replyElsewhere")));
+    }
+    if let Some(unmade) = &unmade {
+        super::check_first_reply(
+            state,
+            conn.as_mut(),
+            author,
+            unmade,
+            &attachments,
+            echo_to_parent,
+            uploads,
+        )
+        .await?;
+    }
+    let id = HeldMessageId::new();
+    let locale = crate::locale::current().to_string();
+    // To the microsecond, as the database keeps it, so the answer to this request, the event
+    // telling of it, and a later read of it name one time.
+    let held_at = Utc::now().trunc_subsecs(6);
+    let held = conn
+        .transaction::<_, crate::Error, _>(|conn| {
+            async move {
+                if hold == Hold::Uploads {
+                    ensure_room_awaiting(conn.as_mut(), author).await?;
+                }
+                let (channel, made_thread) = match unmade.as_ref() {
+                    Some(unmade) => {
+                        let (thread, made) = crate::thread::open_in(
+                            state,
+                            conn.as_mut(),
+                            author,
+                            unmade.starter,
+                            unmade.id,
+                        )
+                        .await?;
+                        (thread.id, made)
+                    }
+                    None => (channel, false),
+                };
+                let (_, _, pending) = super::check_posting_awaiting(
+                    state,
+                    conn.as_mut(),
+                    author,
+                    channel,
+                    &attachments,
+                    echo_to_parent,
+                    uploads,
+                )
+                .await?;
+                if let Some(reply) = reply {
+                    super::reply::check(conn.as_mut(), channel, reply.to, false).await?;
+                }
+                // One whose last file was confirmed as this was sent waits for nothing more
+                // than its previews, and its job is due at once.
+                let uploads_due = (hold == Hold::Uploads).then(|| held_at + UPLOADS_WAIT);
+                let held = HeldMessage {
+                    id,
+                    author,
+                    channel,
+                    content,
+                    attachments,
+                    echo_to_parent,
+                    reply_to: reply.map(|reply| reply.to),
+                    tags_replied: reply.is_some_and(|reply| reply.tag),
+                    locale,
+                    held_at,
+                    waiting: if pending {
+                        HeldWaiting::Uploads
+                    } else {
+                        HeldWaiting::Preview
+                    },
+                    kind: HeldKind::Message,
+                    target: None,
+                    payload: None,
+                    cost: 0,
+                    send_at: None,
+                    failure: None,
+                    uploads_due,
+                };
+                diesel::insert_into(held_message::table)
+                    .values((
+                        held_message::id.eq(held.id),
+                        held_message::author.eq(held.author),
+                        held_message::channel.eq(held.channel),
+                        held_message::content.eq(&held.content),
+                        held_message::attachments.eq(held
+                            .attachments
+                            .iter()
+                            .copied()
+                            .map(Some)
+                            .collect::<Vec<_>>()),
+                        held_message::echo_to_parent.eq(held.echo_to_parent),
+                        held_message::reply_to.eq(held.reply_to),
+                        held_message::tags_replied.eq(held.tags_replied),
+                        held_message::locale.eq(&held.locale),
+                        held_message::held_at.eq(held.held_at),
+                        held_message::made_thread.eq(made_thread),
+                        held_message::waiting.eq(held.waiting),
+                        held_message::uploads_due.eq(held.uploads_due),
+                    ))
+                    .execute(conn.as_mut())
+                    .await?;
+                jobs::enqueue(
+                    conn.as_mut(),
+                    release_job(id, uploads_due.filter(|_| pending))?,
+                )
+                .await?;
+                if hold == Hold::Uploads {
+                    announce_changed(state, conn.as_mut(), &held).await?;
+                }
+                Ok(held)
+            }
+            .scope_boxed()
+        })
+        .await?;
+    drop(conn);
+    jobs::wake(state).await;
+    Ok(held)
+}
+
+/// Holds a slash command of `author`'s in `channel` until the files it names, some still being
+/// uploaded, are each confirmed (`super::invoke_command`): checked as invoking it checks it but
+/// for that, kept as the text it shows with its invocation, and posted by its job as a command
+/// that waited for its channel's mana is, checked again then.
+pub(crate) async fn hold_command(
+    state: &GlobalServerContext,
+    author: UserId,
+    channel: ChannelId,
+    invocation: crate::bot_command::Invocation,
+) -> crate::Result<HeldMessage> {
+    let id = HeldMessageId::new();
+    let locale = crate::locale::current().to_string();
+    let held_at = Utc::now();
+    let payload = serde_json::to_value(&invocation)?;
+    let mut conn = state.connection_pool.get().await?;
+    let held = conn
+        .transaction::<_, crate::Error, _>(|conn| {
+            async move {
+                ensure_room_awaiting(conn.as_mut(), author).await?;
+                let (_, access, pending) = super::check_posting_awaiting(
+                    state,
+                    conn.as_mut(),
+                    author,
+                    channel,
+                    &invocation.attachments,
+                    false,
+                    super::Uploads::MayBePending,
+                )
+                .await?;
+                let (command, arguments) = crate::bot_command::check(
+                    state,
+                    conn.as_mut(),
+                    author,
+                    &access,
+                    channel,
+                    &invocation,
+                    super::Uploads::MayBePending,
+                )
+                .await?;
+                let uploads_due = held_at + UPLOADS_WAIT;
+                let held: HeldMessage = diesel::sql_query(format!(
+                    "INSERT INTO held_message (id, author, channel, content, attachments, \
+                         echo_to_parent, locale, held_at, waiting, kind, payload, uploads_due) \
+                     VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, 'command', $9, $10) \
+                     RETURNING {COLUMNS}"
+                ))
+                .bind::<PgUuid, _>(id)
+                .bind::<PgUuid, _>(author)
+                .bind::<PgUuid, _>(channel)
+                .bind::<Text, _>(crate::bot_command::invocation_text(&command, &arguments))
+                .bind::<Array<PgUuid>, _>(&invocation.attachments)
+                .bind::<Text, _>(locale)
+                .bind::<Timestamptz, _>(held_at)
+                .bind::<Text, _>(if pending {
+                    HeldWaiting::Uploads
+                } else {
+                    HeldWaiting::Preview
+                })
+                .bind::<diesel::sql_types::Jsonb, _>(payload)
+                .bind::<Timestamptz, _>(uploads_due)
+                .get_result(conn.as_mut())
+                .await?;
+                jobs::enqueue(
+                    conn.as_mut(),
+                    release_job(id, pending.then_some(uploads_due))?,
+                )
+                .await?;
+                announce_changed(state, conn.as_mut(), &held).await?;
+                Ok(held)
+            }
+            .scope_boxed()
+        })
+        .await?;
+    drop(conn);
+    jobs::wake(state).await;
+    Ok(held)
+}
+
+/// Posts a message where `to` says, or holds it: with `await_uploads`, as its client said it
+/// may, while any of its files is still being uploaded, and with `may_hold` while one of its
+/// attachments' previews is being made. A message held has been checked as it would have been
+/// posted, what it replies to included; its job posts it. A reply that makes its thread makes
+/// it whether it is posted or held, and one held waits in the thread.
 #[allow(clippy::too_many_arguments)]
 pub async fn post(
     state: &GlobalServerContext,
@@ -135,109 +464,33 @@ pub async fn post(
     echo_to_parent: bool,
     reply: Option<super::reply::Reply>,
     may_hold: bool,
+    await_uploads: bool,
 ) -> crate::Result<Posted> {
     super::check_content(&content)?;
-    if may_hold && !attachments.is_empty() {
-        let mut conn = state.connection_pool.get().await?;
-        if held_back(conn.as_mut(), &attachments).await? {
-            let (channel, unmade) = super::resolve(conn.as_mut(), to).await?;
-            if unmade.is_some() && reply.is_some() {
-                return Err(crate::Error::Validation(t!("replyElsewhere")));
+    if (may_hold || await_uploads) && !attachments.is_empty() {
+        let hold = {
+            let mut conn = state.connection_pool.get().await?;
+            if await_uploads && super::any_unconfirmed(conn.as_mut(), &attachments).await? {
+                Some(Hold::Uploads)
+            } else if may_hold && held_back(conn.as_mut(), &attachments).await? {
+                Some(Hold::Preview)
+            } else {
+                None
             }
-            if let Some(unmade) = &unmade {
-                super::check_first_reply(
-                    state,
-                    conn.as_mut(),
-                    author,
-                    unmade,
-                    &attachments,
-                    echo_to_parent,
-                )
-                .await?;
-            }
-            let id = HeldMessageId::new();
-            let locale = crate::locale::current().to_string();
-            let held_at = Utc::now();
-            let job = NewJob::new(JobKind::ReleaseHeldMessage, JobClass::Interactive, &())?
-                .keyed(id.0.to_string());
-            let held = conn
-                .transaction::<_, crate::Error, _>(|conn| {
-                    async move {
-                        let (channel, made_thread) = match unmade.as_ref() {
-                            Some(unmade) => {
-                                let (thread, made) = crate::thread::open_in(
-                                    state,
-                                    conn.as_mut(),
-                                    author,
-                                    unmade.starter,
-                                    unmade.id,
-                                )
-                                .await?;
-                                (thread.id, made)
-                            }
-                            None => (channel, false),
-                        };
-                        super::check_posting(
-                            state,
-                            conn.as_mut(),
-                            author,
-                            channel,
-                            &attachments,
-                            echo_to_parent,
-                        )
-                        .await?;
-                        if let Some(reply) = reply {
-                            super::reply::check(conn.as_mut(), channel, reply.to, false).await?;
-                        }
-                        let held = HeldMessage {
-                            id,
-                            author,
-                            channel,
-                            content,
-                            attachments,
-                            echo_to_parent,
-                            reply_to: reply.map(|reply| reply.to),
-                            tags_replied: reply.is_some_and(|reply| reply.tag),
-                            locale,
-                            held_at,
-                            waiting: HeldWaiting::Preview,
-                            kind: HeldKind::Message,
-                            target: None,
-                            payload: None,
-                            cost: 0,
-                            send_at: None,
-                            failure: None,
-                        };
-                        diesel::insert_into(held_message::table)
-                            .values((
-                                held_message::id.eq(held.id),
-                                held_message::author.eq(held.author),
-                                held_message::channel.eq(held.channel),
-                                held_message::content.eq(&held.content),
-                                held_message::attachments.eq(held
-                                    .attachments
-                                    .iter()
-                                    .copied()
-                                    .map(Some)
-                                    .collect::<Vec<_>>()),
-                                held_message::echo_to_parent.eq(held.echo_to_parent),
-                                held_message::reply_to.eq(held.reply_to),
-                                held_message::tags_replied.eq(held.tags_replied),
-                                held_message::locale.eq(&held.locale),
-                                held_message::held_at.eq(held.held_at),
-                                held_message::made_thread.eq(made_thread),
-                            ))
-                            .execute(conn.as_mut())
-                            .await?;
-                        jobs::enqueue(conn.as_mut(), job).await?;
-                        Ok(held)
-                    }
-                    .scope_boxed()
-                })
-                .await?;
-            drop(conn);
-            jobs::wake(state).await;
-            return Ok(Posted::Held(Box::new(held)));
+        };
+        if let Some(hold) = hold {
+            return hold_message(
+                state,
+                author,
+                to,
+                content,
+                attachments,
+                echo_to_parent,
+                reply,
+                hold,
+            )
+            .await
+            .map(|held| Posted::Held(Box::new(held)));
         }
     }
     // A busy channel's mana (`app::mana`): decided once the author is known to be allowed to
@@ -257,6 +510,7 @@ pub async fn post(
             unmade,
             &attachments,
             echo_to_parent,
+            super::Uploads::Confirmed,
         )
         .await?;
     } else {
@@ -474,12 +728,14 @@ async fn read_held_page(
 }
 
 /// Takes a held message off the table as it is posted, in the posting's transaction; not found
-/// when it is no longer there, posted by another server, or is a scheduled one no longer to be
-/// posted now: failed, or given a later time since the posting began.
+/// when it is no longer there, posted by another server, still waits for its files, or is a
+/// scheduled one no longer to be posted now: failed, or given a later time since the posting
+/// began.
 pub(super) async fn take(conn: &mut AsyncPgConnection, id: HeldMessageId) -> crate::Result<()> {
     let taken = diesel::delete(held_message::table)
         .filter(held_message::id.eq(id))
         .filter(held_message::failure.is_null())
+        .filter(held_message::waiting.ne(HeldWaiting::Uploads))
         .filter(
             held_message::send_at
                 .is_null()
@@ -497,7 +753,8 @@ pub(super) async fn take(conn: &mut AsyncPgConnection, id: HeldMessageId) -> cra
 /// tells their apps. A first reply that made its thread as it was held (`made_thread`) takes
 /// the thread with it, as a dropped one does. A scheduled one's job goes with it, and its files,
 /// which its author may send another way, are kept as long from now as a new upload is
-/// (`attachment::renew_unsent`). Not found when it is not theirs, or already posted.
+/// (`attachment::renew_unsent`); the job of one waiting for its files goes with it too. Not
+/// found when it is not theirs, or already posted.
 pub async fn cancel(
     state: &GlobalServerContext,
     author: UserId,
@@ -517,11 +774,12 @@ pub(super) async fn cancel_of(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction::<_, crate::Error, _>(|conn| {
         async move {
-            let (channel, made_thread, send_at, attachments): (
+            let (channel, made_thread, send_at, attachments, waiting): (
                 ChannelId,
                 bool,
                 Option<DateTime<Utc>>,
                 Vec<Option<AttachmentId>>,
+                HeldWaiting,
             ) = diesel::delete(
                 held_message::table
                     .filter(held_message::id.eq(id).and(held_message::author.eq(author)))
@@ -536,6 +794,7 @@ pub(super) async fn cancel_of(
                 held_message::made_thread,
                 held_message::send_at,
                 held_message::attachments,
+                held_message::waiting,
             ))
             .get_result(conn)
             .await?;
@@ -550,9 +809,11 @@ pub(super) async fn cancel_of(
                 crate::thread::remove_if_unreplied(state, conn, channel).await?;
             }
             if send_at.is_some() {
-                forget_job(conn, id).await?;
                 let attachments: Vec<AttachmentId> = attachments.into_iter().flatten().collect();
                 crate::attachment::renew_unsent(conn, &attachments).await?;
+            }
+            if send_at.is_some() || waiting == HeldWaiting::Uploads {
+                forget_job(conn, id).await?;
             }
             Ok(())
         }
@@ -563,7 +824,8 @@ pub(super) async fn cancel_of(
 
 /// Deletes the job of the held message `id`, running or not, in the transaction that removes
 /// the message or gives it another job: a scheduled message's job may be due years from now,
-/// and would otherwise be kept until then to find nothing. A step of it running now does
+/// and that of one waiting for its files a day from now, and would otherwise be kept until
+/// then to find nothing. A step of it running now does
 /// nothing more to the row, and what the runner then records of that step finds no job.
 pub(crate) async fn forget_job(
     conn: &mut AsyncPgConnection,
@@ -659,6 +921,203 @@ pub async fn wake_holding_any(
 }
 
 #[derive(QueryableByName)]
+struct Awaiting {
+    #[diesel(sql_type = PgUuid)]
+    id: HeldMessageId,
+}
+
+/// Sets going what waited only for `attachment`, in the transaction that confirms it
+/// (`attachment::confirm_upload`): each held message naming it whose files are now all
+/// confirmed ([`advance`]), through `held_message_attachments_idx`. Answers whether any was, for
+/// the caller to wake the job runners once it commits.
+///
+/// Each row is locked before its files are looked at, in a statement of its own, so of two
+/// requests confirming the last two files of one message at once, the second to take the row
+/// looks only after the first has committed, and sees its file confirmed.
+pub(crate) async fn uploaded(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    attachment: AttachmentId,
+) -> crate::Result<bool> {
+    let awaiting: Vec<Awaiting> = diesel::sql_query(
+        "SELECT id FROM held_message \
+         WHERE waiting = 'uploads' AND attachments && ARRAY[$1]::uuid[] \
+         ORDER BY id FOR UPDATE",
+    )
+    .bind::<PgUuid, _>(attachment)
+    .load(conn)
+    .await?;
+    if awaiting.is_empty() {
+        return Ok(false);
+    }
+    let ids: Vec<HeldMessageId> = awaiting.into_iter().map(|row| row.id).collect();
+    Ok(!advance(state, conn, &ids).await?.is_empty())
+}
+
+/// Of the held messages `ids`, which wait for their files and which the caller's transaction
+/// has locked, sets going each whose files are all confirmed, answering them: it then waits
+/// for its previews as a message sent with its files ready does, or, scheduled, for its time;
+/// its job comes due then (one whose step is running finds the row changed, and looks again),
+/// and its author's apps are told.
+async fn advance(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    ids: &[HeldMessageId],
+) -> crate::Result<Vec<HeldMessage>> {
+    let ready: Vec<HeldMessage> = diesel::sql_query(format!(
+        "UPDATE held_message h \
+         SET waiting = CASE WHEN h.send_at IS NULL THEN 'preview' ELSE 'scheduled' END \
+         WHERE h.id = ANY($1) AND h.waiting = 'uploads' AND NOT EXISTS ( \
+             SELECT 1 FROM unnest(h.attachments) AS named(id) \
+             LEFT JOIN attachment a ON a.id = named.id WHERE a.ready_at IS NULL) \
+         RETURNING {COLUMNS}"
+    ))
+    .bind::<Array<PgUuid>, _>(ids)
+    .load(conn)
+    .await?;
+    if ready.is_empty() {
+        return Ok(ready);
+    }
+    diesel::sql_query(
+        "UPDATE job SET due = COALESCE(h.send_at, now()), not_before = COALESCE(h.send_at, now()) \
+         FROM held_message h \
+         WHERE job.kind = $1 AND job.key = h.id::text AND h.id = ANY($2) \
+           AND job.running_since IS NULL AND job.failed_at IS NULL",
+    )
+    .bind::<Text, _>(JobKind::ReleaseHeldMessage)
+    .bind::<Array<PgUuid>, _>(ready.iter().map(|row| row.id).collect::<Vec<_>>())
+    .execute(conn)
+    .await?;
+    for row in &ready {
+        if row.send_at.is_some() {
+            super::scheduled::announce(state, conn, row).await?;
+        } else {
+            announce_changed(state, conn, row).await?;
+        }
+    }
+    Ok(ready)
+}
+
+/// Brings forward the jobs of the held messages that wait for their uploads and name any of
+/// `attachments`, which have been deleted, so each fails now rather than when its wait gives
+/// out ([`await_uploads`]). Answers whether there was one, for the caller to wake the runners.
+pub(crate) async fn wake_awaiting(
+    conn: &mut AsyncPgConnection,
+    attachments: &[AttachmentId],
+) -> crate::Result<bool> {
+    let woken = diesel::sql_query(
+        r#"
+        UPDATE job SET not_before = now()
+        WHERE kind = $1 AND running_since IS NULL AND failed_at IS NULL
+          AND key IN (SELECT id::text FROM held_message
+                      WHERE waiting = 'uploads' AND attachments && $2::uuid[])
+        "#,
+    )
+    .bind::<Text, _>(JobKind::ReleaseHeldMessage)
+    .bind::<Array<PgUuid>, _>(attachments)
+    .execute(conn)
+    .await?;
+    Ok(woken > 0)
+}
+
+/// One look of the job of `held`, which waits for its files. It comes due when waiting for
+/// them gives out, or sooner when one of them was deleted, and then fails the message, its
+/// author told why: dropped as any held message is, or, scheduled, kept failed for them
+/// (`super::scheduled`) while they can still see where it would go. A look that finds every
+/// file confirmed after all sets it going, as the confirmation would have ([`advance`]); one
+/// that finds it no longer waiting for them looks again at once, to post it.
+async fn await_uploads(state: &GlobalServerContext, held: HeldMessage) -> crate::Result<Outcome> {
+    let locale = crate::locale::negotiate(&held.locale);
+    let mut conn = state.connection_pool.get().await?;
+    conn.transaction::<_, crate::Error, _>(|conn| {
+        async move {
+            let waiting: Option<HeldMessage> = diesel::sql_query(format!(
+                "SELECT {COLUMNS} FROM held_message \
+                 WHERE id = $1 AND waiting = 'uploads' FOR UPDATE"
+            ))
+            .bind::<PgUuid, _>(held.id)
+            .get_result(conn.as_mut())
+            .await
+            .optional()?;
+            let Some(held) = waiting else {
+                return Ok(Outcome::Later(Duration::ZERO));
+            };
+            let advanced = advance(state, conn.as_mut(), &[held.id]).await?;
+            if let Some(ready) = advanced.as_slice().first() {
+                let left = ready
+                    .send_at
+                    .and_then(|send_at| (send_at - Utc::now()).to_std().ok())
+                    .unwrap_or_default();
+                return Ok(Outcome::Later(left));
+            }
+            let there: Count =
+                diesel::sql_query("SELECT count(*) AS count FROM attachment WHERE id = ANY($1)")
+                    .bind::<Array<PgUuid>, _>(&held.attachments)
+                    .get_result(conn.as_mut())
+                    .await?;
+            let removed = there.count < held.attachments.len() as i64;
+            let left = held
+                .uploads_due
+                .and_then(|due| (due - Utc::now()).to_std().ok())
+                .filter(|left| !left.is_zero());
+            if let Some(left) = left
+                && !removed
+            {
+                return Ok(Outcome::Later(left));
+            }
+            let reason = crate::locale::scope(locale, async {
+                if removed {
+                    t!("heldUploadRemoved")
+                } else {
+                    t!("heldUploadsNotFinished", hours = UPLOADS_WAIT.num_hours())
+                }
+            })
+            .await;
+            // A scheduled message is kept for its author while they can see where it would
+            // go, as `fail_held` keeps one.
+            let kept = held.send_at.is_some()
+                && match crate::permissions::channel_access(
+                    state,
+                    conn.as_mut(),
+                    held.author,
+                    held.channel,
+                )
+                .await
+                {
+                    Ok(_) => true,
+                    Err(error) if refusal(&error).is_some() => false,
+                    Err(error) => return Err(error),
+                };
+            if kept {
+                let failed: HeldMessage = diesel::sql_query(format!(
+                    "UPDATE held_message SET failure = $2, failed_at = now(), \
+                         waiting = 'scheduled' \
+                     WHERE id = $1 RETURNING {COLUMNS}"
+                ))
+                .bind::<PgUuid, _>(held.id)
+                .bind::<Text, _>(reason.as_ref())
+                .get_result(conn.as_mut())
+                .await?;
+                super::scheduled::announce(state, conn.as_mut(), &failed).await?;
+            } else {
+                drop_held_in(
+                    state,
+                    conn.as_mut(),
+                    held.id,
+                    held.author,
+                    held.channel,
+                    reason,
+                )
+                .await?;
+            }
+            Ok(Outcome::Done)
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+#[derive(QueryableByName)]
 struct Behind {
     #[diesel(sql_type = Bool)]
     behind: bool,
@@ -666,7 +1125,8 @@ struct Behind {
 
 /// Whether a message `held`'s author sent before it is still held, its own job not given up:
 /// through `held_message_by_author`. Those scheduled for later are not waited for; they keep an
-/// order of their own (`scheduled::behind_another`).
+/// order of their own (`scheduled::behind_another`). Nor are those still waiting for their
+/// files, which may take as long as they take while what was sent after them goes ahead.
 async fn behind_another(conn: &mut AsyncPgConnection, held: &HeldMessage) -> crate::Result<bool> {
     let found: Behind = diesel::sql_query(
         r#"
@@ -674,7 +1134,7 @@ async fn behind_another(conn: &mut AsyncPgConnection, held: &HeldMessage) -> cra
             SELECT 1 FROM held_message earlier
             JOIN job ON job.kind = $4 AND job.key = earlier.id::text AND job.failed_at IS NULL
             WHERE earlier.author = $1 AND (earlier.held_at, earlier.id) < ($2, $3)
-              AND earlier.send_at IS NULL
+              AND earlier.send_at IS NULL AND earlier.waiting <> 'uploads'
         ) AS behind
         "#,
     )
@@ -713,7 +1173,8 @@ async fn look(conn: &mut AsyncPgConnection, id: HeldMessageId) -> crate::Result<
     .optional()?)
 }
 
-/// One held message's job: posts it once nothing holds it, or waits.
+/// One held message's job: posts it once nothing holds it, or waits; while it waits for its
+/// files, [`await_uploads`].
 pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outcome> {
     let Some(id) = job
         .key
@@ -737,6 +1198,10 @@ pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::
         // drainer posts it.
         if held.failure.is_some() || held.waiting == HeldWaiting::Mana {
             return Ok(Outcome::Done);
+        }
+        if held.waiting == HeldWaiting::Uploads {
+            drop(conn);
+            return await_uploads(state, held).await;
         }
         let behind = match due_in_millis {
             Some(left) => {
@@ -1248,7 +1713,8 @@ pub(crate) async fn fail_held(
 /// Drops a held message that will not be posted and tells its author's apps why. When it was the
 /// first reply of a thread, which it made as it was held (`post`, `made_thread`), and nothing
 /// else was posted or waits there, the thread goes with it (`thread::remove_if_unreplied`), in
-/// the same transaction; a scheduled message's job goes with it too.
+/// the same transaction; so does the job of a scheduled message, or of one waiting for its
+/// files.
 pub(crate) async fn drop_held(
     state: &GlobalServerContext,
     id: HeldMessageId,
@@ -1258,39 +1724,52 @@ pub(crate) async fn drop_held(
 ) -> crate::Result<()> {
     let mut conn = state.connection_pool.get().await?;
     conn.transaction::<_, crate::Error, _>(|conn| {
-        async move {
-            let dropped: Option<(bool, Option<DateTime<Utc>>)> =
-                diesel::delete(held_message::table)
-                    .filter(held_message::id.eq(id))
-                    .returning((held_message::made_thread, held_message::send_at))
-                    .get_result(conn)
-                    .await
-                    .optional()?;
-            let Some((made_thread, send_at)) = dropped else {
-                return Ok(());
-            };
-            if send_at.is_some() {
-                forget_job(conn, id).await?;
-            }
-            crate::publish_event(
-                state,
-                conn,
-                EventScope::User(author),
-                &ServerEvent::HeldMessageFailed {
-                    held: id,
-                    channel,
-                    detail: detail.into_owned(),
-                },
-            )
-            .await?;
-            if made_thread {
-                crate::thread::remove_if_unreplied(state, conn, channel).await?;
-            }
-            Ok(())
-        }
-        .scope_boxed()
+        async move { drop_held_in(state, conn, id, author, channel, detail).await }.scope_boxed()
     })
     .await
+}
+
+/// [`drop_held`], in the caller's transaction.
+async fn drop_held_in(
+    state: &GlobalServerContext,
+    conn: &mut AsyncPgConnection,
+    id: HeldMessageId,
+    author: UserId,
+    channel: ChannelId,
+    detail: Cow<'static, str>,
+) -> crate::Result<()> {
+    let dropped: Option<(bool, Option<DateTime<Utc>>, HeldWaiting)> =
+        diesel::delete(held_message::table)
+            .filter(held_message::id.eq(id))
+            .returning((
+                held_message::made_thread,
+                held_message::send_at,
+                held_message::waiting,
+            ))
+            .get_result(conn)
+            .await
+            .optional()?;
+    let Some((made_thread, send_at, waiting)) = dropped else {
+        return Ok(());
+    };
+    if send_at.is_some() || waiting == HeldWaiting::Uploads {
+        forget_job(conn, id).await?;
+    }
+    crate::publish_event(
+        state,
+        conn,
+        EventScope::User(author),
+        &ServerEvent::HeldMessageFailed {
+            held: id,
+            channel,
+            detail: detail.into_owned(),
+        },
+    )
+    .await?;
+    if made_thread {
+        crate::thread::remove_if_unreplied(state, conn, channel).await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

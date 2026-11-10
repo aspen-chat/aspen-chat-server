@@ -1,7 +1,11 @@
 import { AspenSync, type AspenClient } from "@aspen/protocol";
 import { useEffect, useMemo, type ReactNode } from "react";
+import { useMessages } from "@/i18n/context";
 import { reportActivity } from "./activity";
 import { DeploymentsProvider } from "./deployments";
+import { guardSending, wordSendingGuard } from "./sendingGuard";
+import { tellUploadFailures, wordUploadFailures } from "./uploadFailures";
+import { nativeSendsUploads, nativeUploadTransport, wordNativeUploads } from "./uploadsBridge";
 import { AspenSyncContext, HomeSyncContext } from "./syncContext";
 
 /**
@@ -16,6 +20,7 @@ export function SyncProvider({ client, children }: { client: AspenClient; childr
     () =>
       new AspenSync({
         client,
+        ...(nativeSendsUploads() ? { uploadTransport: nativeUploadTransport(client) } : {}),
         validateEvents: import.meta.env.DEV,
         onInvalidEvent: (raw, errors) => {
           console.warn("dropped a server event that does not match the schema", errors, raw);
@@ -26,11 +31,21 @@ export function SyncProvider({ client, children }: { client: AspenClient; childr
   useEffect(() => {
     sync.start();
     const stopReporting = reportActivity(sync);
+    const stopGuarding = guardSending(sync);
+    const stopTelling = tellUploadFailures(sync);
     return () => {
+      stopTelling();
+      stopGuarding();
       stopReporting();
       sync.stop();
     };
   }, [sync]);
+  const m = useMessages();
+  useEffect(() => {
+    wordSendingGuard(m);
+    wordUploadFailures(m);
+    wordNativeUploads(m);
+  }, [m]);
   return (
     <HomeSyncContext.Provider value={sync}>
       <AspenSyncContext.Provider value={sync}>

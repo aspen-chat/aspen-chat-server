@@ -408,6 +408,7 @@ diesel::table! {
         failure -> Nullable<Text>,
         failed_at -> Nullable<Timestamptz>,
         stuck_since -> Nullable<Timestamptz>,
+        uploads_due -> Nullable<Timestamptz>,
     }
 }
 

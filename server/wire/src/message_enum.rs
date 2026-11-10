@@ -167,6 +167,12 @@ enum MessageEnumSource {
         held: HeldMessageId,
         channel: ChannelId,
     },
+    // What a held message waits for changed, or a message or command was held for its files,
+    // which are still uploading (`app::message::held`): the author's apps keep `held` in place
+    // of what they held of it. Told of what was sent before its uploads finished: as it is
+    // held, as the last of its files is confirmed, and if it then waits for its channel's mana.
+    #[message_gen(custom_event)]
+    HeldMessageChanged { held: crate::held::HeldMessage },
     // A message its author scheduled for later was scheduled, given another time, began waiting
     // for its channel's mana, or failed (`app::message::scheduled`): the author's apps keep
     // `scheduled` in place of what they held of it. It leaves by `heldMessagePosted`,
@@ -429,6 +435,13 @@ enum MessageEnumSource {
         // once.
         #[message_gen(secret)]
         may_hold: Option<bool>,
+        // The sending client shows a message not yet sent while its files upload, so
+        // `attachments` may name uploads of the caller's not yet confirmed: the server then
+        // holds the message, answering `202 Accepted` with it, and posts it once each has been
+        // confirmed (`app::message::held`). Without it an attachment not yet confirmed is
+        // refused.
+        #[message_gen(secret)]
+        await_uploads: Option<bool>,
     },
     Poll {
         #[message_gen(id)]

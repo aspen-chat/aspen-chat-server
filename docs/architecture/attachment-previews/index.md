@@ -26,6 +26,8 @@ everywhere else: the gallery, a video's player, and downloads.
 - [Making previews](making-previews.md): the queue, which servers make them, retries, storage,
   announcing, and deletion.
 - [Held messages](held-messages.md): holding a message until its previews are made.
+- [Sent before its files arrive](sent-before-uploaded.md): holding a message sent while its files
+  are still uploading until each is confirmed, and giving a failed upload another link.
 - [Unsent attachments](unsent-attachments.md): sweeping uploads nobody sends.
 - [Access](access.md): the revocation checklist.
 

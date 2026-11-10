@@ -1,5 +1,5 @@
 import type { HeldEntry } from "@aspen/protocol";
-import { ApiProblemError, canSendHeldAgain } from "@aspen/protocol";
+import { ApiProblemError, canSendHeldAgain, heldInPlace } from "@aspen/protocol";
 import { CircleNotchIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Button } from "react-aria-components";
@@ -15,11 +15,14 @@ import { format } from "@/i18n/messages";
  * the channel being busy, a message, edit, poll, command, or echo waiting its turn for the
  * channel's mana. Each waits, said so (one waiting for mana may be cancelled), until it is
  * posted (and appears in the list) or dropped, when it says why and offers to send it again
- * where it can be, or let it go.
+ * where it can be, or let it go. A message sent while its files were still uploading waits at
+ * the foot of the list instead (`PendingMessages`), and is shown here only once dropped.
  */
 export function HeldMessages({ place }: { place: string }) {
   const m = useMessages();
-  const held = useHeldMessages(place);
+  const held = useHeldMessages(place).filter(
+    (entry) => entry.failure !== null || !heldInPlace(entry.message),
+  );
   if (held.length === 0) {
     return null;
   }

@@ -135,6 +135,7 @@ pub mod m20261025_143903_large_communities;
 pub mod m20261026_071540_community_takedown_keys;
 pub mod m20261027_064938_search_text;
 pub mod m20261105_143743_scheduled_messages;
+pub mod m20261109_063918_held_message_uploads;
 pub mod m20261111_135637_message_attachment_position;
 pub mod m20261111_143412_moderation_log_operator;
 pub mod m20261111_145810_held_message_list_by_id;

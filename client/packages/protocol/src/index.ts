@@ -121,6 +121,7 @@ export {
   TOUCH_MEMORY_MS,
   TOUCHES_MAX,
   WINDOW_MAX_MESSAGES,
+  heldInPlace,
   heldPlace,
   type ReadOptions,
 } from "./store";
@@ -483,6 +484,16 @@ export {
 } from "./deployments";
 export { CLIENT_PROTOCOL, commonVersion, supports, type Protocol } from "./protocol";
 export { ATTACHMENT_DESCRIPTION_MAX_CHARS, type AttachmentChange } from "./upload";
+export {
+  AttachmentUploads,
+  browserUploadTransport,
+  UploadDiscardedError,
+  type KeptUpload,
+  type Upload,
+  type UploadJob,
+  type UploadState,
+  type UploadTransport,
+} from "./uploads";
 export {
   offeredProviders,
   parseProviderFragment,

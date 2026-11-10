@@ -30,6 +30,7 @@ import { channelLink, messageLink, type ChannelHome } from "@/features/messages/
 import { OWNS_SCROLLING, useListPosition, useListScroller } from "@/features/messages/listScroller";
 import { MessageItem } from "@/features/messages/MessageItem";
 import { HistorySkeleton } from "@/features/messages/MessageSkeleton";
+import { PendingMessages } from "@/features/messages/PendingMessages";
 import { useNewMessagesLine } from "@/features/messages/newMessagesLine";
 import { ScrollDiagnosticsPanel } from "@/features/messages/ScrollDiagnosticsPanel";
 import { useShownWindow } from "@/features/messages/shownWindow";
@@ -82,6 +83,10 @@ import { useMessages } from "@/i18n/context";
  * Consecutive messages by people the reader blocked are collapsed into one row, which they may
  * open; a linked message among them opens its row. The row stands for its last message, both
  * as an anchor for the view and as what the reader has seen.
+ *
+ * Under the newest message stand the reader's own that are not sent yet, sent while their files
+ * were still uploading (`PendingMessages`); they are no rows of the window, and go as each is
+ * posted and arrives as one.
  *
  * When to give scrolling back to the browser on iOS too. The list scrolls itself there for one
  * reason, the pan's override above, and the browser's scrolling is better otherwise: it runs
@@ -385,7 +390,12 @@ export function MessageList({
                   );
                 })}
               </div>
-              {!window.atLatest && <LoadingEdge loading={loadingNewer} />}
+              {window.atLatest ? (
+                // After the newest message, where each will be once it is posted.
+                <PendingMessages channelId={channelId} home={home} />
+              ) : (
+                <LoadingEdge loading={loadingNewer} />
+              )}
             </MessageRowsContext.Provider>
           </div>
         </KeepStillContext.Provider>

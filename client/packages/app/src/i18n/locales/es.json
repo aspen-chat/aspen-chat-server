@@ -1575,6 +1575,7 @@
   "pendingAttachmentsLabel": "Archivos por enviar",
   "uploadingFile": "Subiendo {name}",
   "uploadFailed": "La subida falló",
+  "uploadUnreachable": "El archivo no se pudo subir. Revisa tu conexión y luego adjúntalo de nuevo.",
   "removeAttachment": "Quitar {name}",
   "describeAttachment": "Describir {name}",
   "editAttachmentDescription": "Editar la descripción de {name}",
@@ -1626,6 +1627,29 @@
     "files": "{count, plural, one {# archivo} other {# archivos}}",
     "sendAgain": "Enviar de nuevo",
     "discard": "Descartar"
+  },
+  "pending": {
+    "label": "Mensajes que aún no se envían",
+    "uploading": "Se enviará cuando sus archivos terminen de subirse…",
+    "scheduling": "Se programará para {time} cuando sus archivos terminen de subirse…",
+    "uploaded": "Subido",
+    "elsewhere": "Subiendo desde otro dispositivo",
+    "failed": {
+      "refused": "No se envió: {name} no fue aceptado. Intenta de nuevo, o elimina este mensaje y envíalo otra vez.",
+      "unreachable": "No se envió: {name} no se pudo subir. Revisa tu conexión y luego intenta de nuevo.",
+      "interrupted": "No se envió: la app se cerró antes de que {name} terminara de subirse. Elimina este mensaje y envíalo otra vez."
+    },
+    "failedElsewhere": "Un mensaje no se envió: {name} no se pudo subir. Abre su canal para intentar de nuevo.",
+    "retry": "Intentar de nuevo",
+    "edit": "Editar",
+    "delete": "Eliminar",
+    "leaveQuestion": "Un mensaje todavía está subiendo sus archivos",
+    "leaveDetail": "Si sales ahora, los archivos dejan de subirse y el mensaje no se envía.",
+    "leaveStay": "Seguir subiendo",
+    "leaveQuit": "Salir de todos modos",
+    "notifyFailedTitle": "Mensaje no enviado",
+    "notifyFailedBody": "{name} no se pudo subir. Abre Aspen para intentar de nuevo.",
+    "notifySending": "Enviando tus archivos…"
   },
   "scheduled": {
     "open": "Programar mensaje",

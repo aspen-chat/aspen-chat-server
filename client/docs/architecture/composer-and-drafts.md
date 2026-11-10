@@ -12,6 +12,7 @@ or for a busy channel, messages scheduled for later, the mana bar, and drafts.
 | Typing line     | `TypingIndicator`, `TypingDots`, `typingSentence`                                           |
 | Length counting | `messageLength.ts`, `MessageLengthNote`                                                     |
 | Held messages   | `HeldMessages.tsx`                                                                          |
+| Unsent messages | `PendingMessages.tsx`; see [Sending while files upload](sending-while-uploading.md)         |
 | Scheduling      | `ScheduleMessageDialog.tsx`, `ScheduleBar.tsx`, `ScheduledMessages.tsx`, `scheduleTimes.ts` |
 | Mana bar        | `ManaBar.tsx`, `manaDrawnAt` (`@aspen/protocol`), `TopSendersDialog.tsx`                    |
 | Replying        | `ReplyBar`, `composerTargets.ts`; the line above a reply is `ReplyLine`                     |
@@ -275,6 +276,10 @@ preview made is held by the server for up to twenty seconds from the upload.
 - The box clears as soon as the server has the message, held or posted.
 - Held messages are read at bootstrap (`GET /users/@me/held-messages`).
 - A dropped held message stays, on this device, until it is sent again or let go.
+- A message sent while its files were still uploading is held too, but is shown at the foot of the
+  list rather than above the box, through its preview's hold as well
+  ([Sending while files upload](sending-while-uploading.md)). Dropped, it waits above the box with
+  the rest, and sending it again waits for its files again.
 
 ### Waiting for a busy channel
 
@@ -393,7 +398,7 @@ conversation never moves when it comes or goes.
 - text, as written
 - what was picked in it (tags, custom emoji, a command's arguments) and where
   ([Picks](tagging.md#picks))
-- files already uploaded
+- files already uploaded (one still uploading when the box goes is stopped, and is not kept)
 - a thread's echo choice
 - the message it replies to, kept only with text or files
 - the time it is to be scheduled for, kept only with text or files

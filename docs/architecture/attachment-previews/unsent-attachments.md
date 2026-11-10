@@ -9,8 +9,9 @@ uploads nobody sends.
 
 - it was confirmed a day ago (`app::attachment::UNSENT_LIFETIME`);
 - it has never been in a message; and
-- it is not held in one: waiting for its preview, for its channel's mana, or for the time it was
-  scheduled for ([Scheduled messages](../scheduled-messages.md)).
+- it is not held in one: waiting for another of its files to be uploaded, for its preview, for its
+  channel's mana, or for the time it was scheduled for
+  ([Scheduled messages](../scheduled-messages.md)).
 
 It runs as part of the recurring `sweepUploads` job (`media_store::sweep_step`, hourly; see
 [Jobs](../jobs/kinds.md#sweepuploads)), 500 at a time under `FOR UPDATE SKIP LOCKED`.

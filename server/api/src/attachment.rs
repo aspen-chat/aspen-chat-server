@@ -204,6 +204,53 @@ pub async fn init_attachment_upload(
     ))
 }
 
+/// The file whose upload is to be sent again.
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentUploadRenewRequest {
+    /// The file's size in bytes, as when the upload was started; the new URL accepts exactly
+    /// this many bytes. Required: a request without it is refused with `validation`.
+    #[serde(default)]
+    #[schema(required = true, nullable = false, value_type = u64)]
+    pub byte_size: Option<u64>,
+}
+
+/// Gives an upload of the caller's that has not been confirmed another URL to send its bytes
+/// to, when the first expired before the upload began or the upload failed part way. The
+/// attachment keeps its id, so a message already naming it (one waiting for its uploads, sent
+/// with `awaitUploads`) needs no change. The bytes count toward the caller's upload quota
+/// again.
+#[utoipa::path(
+    post,
+    path = "/attachments/{attachment}/renew",
+    tag = TAG_ATTACHMENTS,
+    params(("attachment" = AttachmentId, Path)),
+    security(("bearerAuth" = [])),
+    responses(
+        (status = OK, body = AttachmentUploadHandle),
+        (status = BAD_REQUEST, description = "`validation`: `byteSize` is missing or over the deployment's limit", body = Problem),
+        (status = UNAUTHORIZED, body = Problem),
+        (status = NOT_FOUND, description = "No such attachment of the caller's, or one already confirmed", body = Problem),
+        (status = TOO_MANY_REQUESTS, description = "`uploadQuotaExceeded`: the caller has uploaded as much as one person may in a day", body = Problem),
+        (status = INTERNAL_SERVER_ERROR, body = Problem),
+    )
+)]
+pub async fn renew_attachment_upload(
+    State(state): State<GlobalServerContext>,
+    SessionUser { user, .. }: SessionUser,
+    Path(attachment): Path<AttachmentId>,
+    Json(request): Json<AttachmentUploadRenewRequest>,
+) -> ApiResult<Json<AttachmentUploadHandle>> {
+    let upload =
+        app::attachment::renew_upload(&state, user.id, attachment, request.byte_size).await?;
+    Ok(Json(AttachmentUploadHandle {
+        id: upload.id,
+        upload_url: upload.upload_url,
+        expires_at: upload.expires_at,
+        content_type: upload.content_type,
+    }))
+}
+
 #[utoipa::path(
     post,
     path = "/attachments/{attachment}/confirm",

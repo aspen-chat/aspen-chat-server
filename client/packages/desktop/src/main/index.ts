@@ -16,6 +16,7 @@ import { externalUrl, isAppPage, permitted } from "./navigation";
 import { servePasskeyHandoff } from "./passkeyHandoff";
 import { serveTitleBar, titleBarOptions } from "./titleBar";
 import { serveZoom, storedZoom, zoomWindow } from "./zoom";
+import { guardSending } from "./sendingGuard";
 
 /** Where `pnpm dev` serves the app; override with `ASPEN_DEV_SERVER_URL`. */
 const devServerUrl = process.env.ASPEN_DEV_SERVER_URL ?? "http://localhost:5173";
@@ -122,6 +123,7 @@ function createWindow(): void {
     },
   });
   zoomWindow(window);
+  guardSending(window);
 
   window.once("ready-to-show", () => {
     if (!hidden) {
