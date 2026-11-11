@@ -648,8 +648,9 @@ async fn confirm_users(state: &GlobalServerContext, backoff: &mut Backoff) -> cr
 /// Confirms `home`'s users here: those this deployment's own gate no longer admits, or all of
 /// them when the home is suspended, have their sessions ended; the rest are asked about when
 /// `ask` says the home may be tried now, and are otherwise taken as unreached. Returns whether
-/// the home answered, or `None` when it was not asked. No connection is held while the home is
-/// asked, nor for longer than [`BUDGET`] in all.
+/// the home answered, or `None` when it was not asked: it may not be tried yet, or the pass ran
+/// out of time before its first request. No connection is held while the home is asked, nor for
+/// longer than [`BUDGET`] in all.
 async fn confirm_home(
     context: &PassContext<'_>,
     home: &Domain,
@@ -685,6 +686,7 @@ async fn confirm_home(
         return Ok(None);
     }
     let mut reached = ask_now;
+    let mut asked = false;
     let until = context.until.min(tokio::time::Instant::now() + HOME_BUDGET);
     for chunk in admitted.chunks(MAX_USERS) {
         // A pass, or a home, that has run long leaves the rest of the chunks due for the next
@@ -693,6 +695,7 @@ async fn confirm_home(
             break;
         }
         let answer = if reached {
+            asked = true;
             let now = Utc::now();
             let request = jws::sign(
                 REQUEST_TYPE,
@@ -734,7 +737,7 @@ async fn confirm_home(
             }
         }
     }
-    Ok(ask_now.then_some(reached))
+    Ok(asked.then_some(reached))
 }
 
 /// Ends the sessions of those of `home`'s users who have gone unconfirmed for longer than

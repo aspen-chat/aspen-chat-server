@@ -428,6 +428,19 @@ pub(super) fn from_app(plugin: &str, error: crate::Error) -> wit::Error {
     }
 }
 
+/// Whether `error` says that something is not there, or is not for whoever asked, rather than
+/// that the server failed to find out.
+pub(super) fn withheld(error: &crate::Error) -> bool {
+    matches!(
+        error,
+        crate::Error::Diesel(diesel::result::Error::NotFound)
+            | crate::Error::Unauthorized
+            | crate::Error::Forbidden(_)
+            | crate::Error::Blocked
+            | crate::Error::Banned { .. }
+    )
+}
+
 impl Call {
     fn require(&self, permission: PluginPermission) -> Result<(), wit::Error> {
         if self.plugin.holds(permission) {
@@ -441,6 +454,17 @@ impl Call {
 
     fn fail(&self, error: crate::Error) -> wit::Error {
         from_app(&self.plugin.id, error)
+    }
+
+    /// What a plugin is told when something is looked up or checked for whoever reads: not
+    /// found when it is not there or not theirs ([`withheld`]), so neither is told from the
+    /// other, and unavailable when the server could not find out.
+    fn hidden(&self, error: crate::Error) -> wit::Error {
+        if withheld(&error) {
+            wit::Error::NotFound
+        } else {
+            self.fail(error)
+        }
     }
 
     async fn conn(
@@ -496,7 +520,7 @@ impl Call {
         if let Phase::Route { caller } = self.phase {
             channel_access(&self.server, conn, caller, channel_id)
                 .await
-                .map_err(|_| wit::Error::NotFound)?;
+                .map_err(|e| self.hidden(e))?;
         }
         Ok(())
     }
@@ -520,7 +544,7 @@ impl Call {
         if let Phase::Route { caller } = self.phase {
             crate::permissions::require_member(conn, caller, community)
                 .await
-                .map_err(|_| wit::Error::NotFound)?;
+                .map_err(|e| self.hidden(e))?;
         }
         Ok(())
     }
@@ -607,7 +631,7 @@ impl Call {
                 if let Phase::Route { caller } = self.phase {
                     crate::permissions::require_member(conn.as_mut(), caller, community)
                         .await
-                        .map_err(|_| wit::Error::NotFound)?;
+                        .map_err(|e| self.hidden(e))?;
                 }
                 storage::Scope::Community(community)
             }
@@ -630,7 +654,7 @@ impl Call {
                 if let Phase::Route { caller } = self.phase {
                     channel_access(&self.server, conn.as_mut(), caller, channel_id)
                         .await
-                        .map_err(|_| wit::Error::NotFound)?;
+                        .map_err(|e| self.hidden(e))?;
                 }
                 storage::Scope::Channel(channel_id)
             }
@@ -659,11 +683,11 @@ impl Call {
             .filter(message::id.eq(id).and(message::deleted_at.is_null()))
             .first(conn.as_mut())
             .await
-            .map_err(|_| wit::Error::NotFound)?;
+            .map_err(|e| self.hidden(e.into()))?;
         self.running_at(conn.as_mut(), *row.channel.id()).await?;
         channel_access(&self.server, conn.as_mut(), reader, *row.channel.id())
             .await
-            .map_err(|_| wit::Error::NotFound)?;
+            .map_err(|e| self.hidden(e))?;
         Ok(row)
     }
 
@@ -736,12 +760,12 @@ impl Call {
             .filter(message::id.eq(id).and(message::deleted_at.is_null()))
             .first(conn.as_mut())
             .await
-            .map_err(|_| wit::Error::NotFound)?;
+            .map_err(|e| self.hidden(e.into()))?;
         self.running_at(conn.as_mut(), channel_id).await?;
         if let Phase::Route { caller } = self.phase {
             channel_access(&self.server, conn.as_mut(), caller, channel_id)
                 .await
-                .map_err(|_| wit::Error::NotFound)?;
+                .map_err(|e| self.hidden(e))?;
         }
         annotation::set_on_message(&self.server, conn.as_mut(), &self.plugin.id, id, annotation)
             .await
@@ -828,9 +852,13 @@ impl Call {
                 drop(conn);
                 let mut found = false;
                 for message_id in messages {
-                    if self.readable_message(message_id).await.is_ok() {
-                        found = true;
-                        break;
+                    match self.readable_message(message_id).await {
+                        Ok(_) => {
+                            found = true;
+                            break;
+                        }
+                        Err(wit::Error::NotFound | wit::Error::Denied(_)) => {}
+                        Err(failure) => return Err(failure),
                     }
                 }
                 conn = self.conn().await?;
@@ -851,7 +879,7 @@ impl Call {
             )
             .first(conn.as_mut())
             .await
-            .map_err(|_| wit::Error::NotFound)?;
+            .map_err(|e| self.hidden(e.into()))?;
         drop(conn);
         // Read no more than the plugin may take: an object storage says is larger is refused
         // before any of it is read, and one that runs past the limit as it is read is dropped.
@@ -1206,7 +1234,7 @@ impl Call {
         if let Phase::Route { caller } = self.phase {
             channel_access(&self.server, conn.as_mut(), caller, channel_id)
                 .await
-                .map_err(|_| wit::Error::NotFound)?;
+                .map_err(|e| self.hidden(e))?;
         }
         place(conn.as_mut(), channel_id)
             .await
@@ -1220,7 +1248,7 @@ impl Call {
         if let Phase::Route { caller } = self.phase {
             channel_access(&self.server, conn.as_mut(), caller, channel_id)
                 .await
-                .map_err(|_| wit::Error::NotFound)?;
+                .map_err(|e| self.hidden(e))?;
         }
         let (ty, plugin_type): (ChannelType, Option<String>) = channel::table
             .select((channel::ty, channel::plugin_type))
@@ -1240,7 +1268,7 @@ impl Call {
         if let Phase::Route { caller } = self.phase {
             crate::permissions::require_member(conn.as_mut(), caller, community)
                 .await
-                .map_err(|_| wit::Error::NotFound)?;
+                .map_err(|e| self.hidden(e))?;
         }
         let running = self
             .server
@@ -1270,12 +1298,11 @@ impl Call {
         let reader = self.reader()?;
         let mut conn = self.conn().await?;
         self.running_at(conn.as_mut(), channel_id).await?;
-        Ok(
-            match channel_access(&self.server, conn.as_mut(), reader, channel_id).await {
-                Ok(access) => access.has(permission.bits()),
-                Err(_) => false,
-            },
-        )
+        match channel_access(&self.server, conn.as_mut(), reader, channel_id).await {
+            Ok(access) => Ok(access.has(permission.bits())),
+            Err(error) if withheld(&error) => Ok(false),
+            Err(error) => Err(self.fail(error)),
+        }
     }
 
     async fn set_timer(

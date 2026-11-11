@@ -925,10 +925,20 @@ pub async fn read_messages(
         let may_see = match allowed.get(&channel) {
             Some(may_see) => *may_see,
             None => {
-                // A DM read by a deployment moderator is logged once, here.
-                let may_see = channel_access_reading(state, conn.as_mut(), caller, channel, None)
-                    .await
-                    .is_ok();
+                // A DM read by a deployment moderator is logged once, here. Only a refusal
+                // says the caller may not see it; a check that failed fails the read.
+                let may_see =
+                    match channel_access_reading(state, conn.as_mut(), caller, channel, None).await
+                    {
+                        Ok(_) => true,
+                        Err(
+                            crate::Error::Unauthorized
+                            | crate::Error::Forbidden(_)
+                            | crate::Error::Blocked
+                            | crate::Error::Diesel(diesel::result::Error::NotFound),
+                        ) => false,
+                        Err(error) => return Err(error),
+                    };
                 allowed.insert(channel, may_see);
                 may_see
             }

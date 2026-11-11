@@ -313,7 +313,8 @@ export interface PushSource {
  * device registered with the relay under its current token, one subscription per account whose
  * deployment wakes phones, made for that deployment's current key and registered with it, and
  * none for accounts signed out of. Answers the new state, which the caller keeps; an account
- * that could not be subscribed is left out and tried again next time.
+ * that could not be subscribed, or whose deployment could not be asked, keeps the subscription
+ * it had, if any, and is tried again next time.
  */
 export async function syncPush(
   relay: RelayClient,
@@ -341,7 +342,17 @@ export async function syncPush(
       continue;
     }
     const kept = accounts.find((a) => a.origin === origin && a.userId === session.userId);
-    const serverKey = (await client.authMethods().catch(() => null))?.push?.applicationServerKey;
+    let serverKey: string | null | undefined;
+    try {
+      serverKey = (await client.authMethods()).push?.applicationServerKey;
+    } catch {
+      // The deployment did not say whether it wakes phones, which is not it saying it does
+      // not: what was kept stands, and it is asked again next time.
+      if (kept !== undefined) {
+        next.push(kept);
+      }
+      continue;
+    }
     if (serverKey == null) {
       continue;
     }

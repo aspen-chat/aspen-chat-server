@@ -1297,6 +1297,10 @@ when reviewing.
    the server decides whether a row is due in the query that reads it (`send_at <= now()`), on the
    database's clock; and what a device stamps on receipt it judges with its own. Never one machine's
    `now` against another's timestamp.
+8. **A failure is reported as a failure.** `map_err(|_| NotFound)`, `.ok()`, `unwrap_or_default()`,
+   and "the request failed, so there is none" turn an outage into a wrong answer. Only the refusals
+   that mean it become "not there" (`plugin::host::withheld` lists them); everything else
+   propagates, and a path that fails closed stays closed on every way of failing.
 
 ## Comments document the current code, not its history
 

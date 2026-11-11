@@ -381,14 +381,15 @@ pub fn readable(
 }
 
 /// Checks that every role and channel `settings` names is `community`'s own: a role of it, and
-/// a live channel of it (a thread is not offered).
+/// a live channel of it (a thread is not offered). The inner result is what the check found;
+/// the outer is an error when it could not be made.
 pub async fn check_community(
     conn: &mut AsyncPgConnection,
     fields: &[SettingField],
     community: CommunityId,
     settings: &Map<String, Value>,
-) -> Result<(), FieldProblem> {
-    for field in fields.iter().filter(|f| f.kind.of_community()) {
+) -> crate::Result<Result<(), FieldProblem>> {
+    for field in fields {
         let Some(value) = settings.get(&field.name) else {
             continue;
         };
@@ -415,10 +416,9 @@ pub async fn check_community(
                     )
                     .count()
                     .get_result(conn)
-                    .await
-                    .map_err(|_| FieldProblem::new(&field.name, Problem::NotInCommunity))?
+                    .await?
             }
-            _ => {
+            FieldKind::Channel | FieldKind::ChannelList { .. } => {
                 let ids: Vec<ChannelId> = named.iter().copied().map(ChannelId).collect();
                 channel::table
                     .filter(
@@ -429,16 +429,22 @@ pub async fn check_community(
                     )
                     .count()
                     .get_result(conn)
-                    .await
-                    .map_err(|_| FieldProblem::new(&field.name, Problem::NotInCommunity))?
+                    .await?
             }
+            // Nothing of a community's (`FieldKind::of_community`).
+            FieldKind::Boolean
+            | FieldKind::Integer { .. }
+            | FieldKind::Text { .. }
+            | FieldKind::LongText { .. }
+            | FieldKind::TextList { .. }
+            | FieldKind::Choice { .. } => continue,
         };
         let distinct = named.iter().collect::<HashSet<_>>().len();
         if found != distinct as i64 {
-            return Err(FieldProblem::new(&field.name, Problem::NotInCommunity));
+            return Ok(Err(FieldProblem::new(&field.name, Problem::NotInCommunity)));
         }
     }
-    Ok(())
+    Ok(Ok(()))
 }
 
 /// The localized refusal for a value that is not what its field takes, naming the field by its

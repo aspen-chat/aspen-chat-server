@@ -706,6 +706,36 @@ describe("AspenSync", () => {
     await goLive(sync);
   });
 
+  it("fails the bootstrap when a read a deployment may lack fails, and takes only a 404 as none", async () => {
+    const save = { id: id(700), message: id(1001) };
+    let answer = (): Response => json([save]);
+    const timers = heldTimers();
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        "/api/v1/users/@me/saved-messages": () => answer(),
+      },
+      undefined,
+      { setTimeout: timers.setTimeout },
+    );
+    await goLive(sync);
+    expect(sync.store.saves()).toEqual([save]);
+    sync.stop();
+    // Too busy to answer one read: nothing is installed as empty, and it is tried again.
+    answer = () => busy(1);
+    timers.held.length = 0;
+    sync.start();
+    await settle();
+    expect(sync.status).toBe("failed");
+    expect(sync.lastError?.code).toBe("serverBusy");
+    expect(timers.held).toHaveLength(1);
+    // A deployment without the endpoint keeps no saves.
+    answer = () => json({ code: "notFound", title: "Not found", status: 404 }, 404);
+    FakeSocket.instances = [];
+    await goLive(sync);
+    expect(sync.store.saves()).toEqual([]);
+  });
+
   it("bootstraps again by itself after a failure that passes, no sooner than asked", async () => {
     let attempts = 0;
     const timers = heldTimers();

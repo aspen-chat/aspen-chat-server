@@ -1068,6 +1068,18 @@ impl Retained {
         }
     }
 
+    /// Whether the stream message at `sequence` does not follow the last one seen: messages
+    /// between them were missed.
+    fn gap_before(&self, sequence: u64) -> bool {
+        self.last_sequence != 0 && self.last_sequence.checked_add(1) != Some(sequence)
+    }
+
+    /// Takes the stream message at `sequence` as seen though it held no event (`Skipped::At`),
+    /// so the event after it is not taken for one that follows a gap.
+    fn skip(&mut self, sequence: u64) {
+        self.last_sequence = sequence;
+    }
+
     fn push(&mut self, event: Arc<FeedEvent>) {
         self.last_sequence = event.sequence;
         self.bytes += event.payload.get().len();
@@ -1921,18 +1933,32 @@ fn restricting<T: std::str::FromStr>(
     }
 }
 
-/// Reads a delivered message into an event; `None` for one that is not an event.
-fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
+/// A delivered message that is not an event this build reads.
+enum Skipped {
+    /// It came without the metadata that places it in the stream, so the sequence it took is
+    /// unknown and the event after it reads as following a gap.
+    Unplaced,
+    /// Its place is known, so the stream is still read whole: a subject shape or a payload
+    /// this build does not know, as a newer server on the same stream may publish.
+    At { sequence: u64, pending: u64 },
+}
+
+/// Reads a delivered message into an event and how many messages are still to be delivered.
+fn read(message: &jetstream::Message) -> Result<(FeedEvent, u64), Skipped> {
     let info = match message.info() {
         Ok(info) => info,
         Err(e) => {
             error!("event stream message without metadata: {e}");
-            return None;
+            return Err(Skipped::Unplaced);
         }
+    };
+    let skipped = Skipped::At {
+        sequence: info.stream_sequence,
+        pending: info.pending,
     };
     let Some(owner) = subject_owner(message.subject.as_str()) else {
         warn!(subject = %message.subject, "event on a subject with no owner");
-        return None;
+        return Err(skipped);
     };
     let payload = match std::str::from_utf8(&message.payload)
         .map_err(|e| e.to_string())
@@ -1941,7 +1967,7 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
         Ok(payload) => payload,
         Err(e) => {
             error!("event stream message was not JSON text: {e}");
-            return None;
+            return Err(skipped);
         }
     };
     let Glanced {
@@ -1994,7 +2020,7 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
         .as_ref()
         .and_then(|headers| headers.get(crate::events::EVENT_ID_HEADER))
         .map(|value| value.to_string());
-    Some((
+    Ok((
         FeedEvent {
             sequence: info.stream_sequence,
             event_id,
@@ -2375,14 +2401,18 @@ async fn dispatch(
                         continue;
                     }
                 };
-                let Some((mut event, pending)) = read(&message) else {
-                    continue;
+                let (event, sequence, pending) = match read(&message) {
+                    Ok((event, pending)) => {
+                        let sequence = event.sequence;
+                        (Some(event), sequence, pending)
+                    }
+                    Err(Skipped::At { sequence, pending }) => (None, sequence, pending),
+                    Err(Skipped::Unplaced) => continue,
                 };
-                let last = retained.last_sequence;
-                if last != 0 && last.checked_add(1) != Some(event.sequence) {
+                if retained.gap_before(sequence) {
                     warn!(
-                        last,
-                        next = event.sequence,
+                        last = retained.last_sequence,
+                        next = sequence,
                         "the event feed missed events; every connection must resume"
                     );
                     for to in &shards {
@@ -2392,15 +2422,20 @@ async fn dispatch(
                     // The models missed the changes too; every connection registers afresh.
                     models = Models::default();
                 }
-                let resync = models.follow(&mut event);
-                let event = Arc::new(event);
-                for to in &shards {
-                    tell(to, ShardCommand::Route(event.clone())).await;
+                match event {
+                    Some(mut event) => {
+                        let resync = models.follow(&mut event);
+                        let event = Arc::new(event);
+                        for to in &shards {
+                            tell(to, ShardCommand::Route(event.clone())).await;
+                        }
+                        for id in resync {
+                            tell(shard(id), ShardCommand::Resync(id)).await;
+                        }
+                        retained.push(event);
+                    }
+                    None => retained.skip(sequence),
                 }
-                for id in resync {
-                    tell(shard(id), ShardCommand::Resync(id)).await;
-                }
-                retained.push(event);
                 if !loaded && pending == 0 {
                     loaded = true;
                     if let Ok(mut stream) = context.get_stream(ASPEN_NATS_STREAM_NAME).await
@@ -2926,6 +2961,26 @@ mod tests {
         assert_eq!(retained.bytes, 0);
         assert_eq!(retained.start_after(Some(20)), (20, true));
         assert_eq!(retained.start_after(Some(19)), (20, false));
+    }
+
+    #[test]
+    fn a_skipped_message_is_no_gap_and_a_missing_sequence_is() {
+        let owner = SubjectOwner::User(UserId::new());
+        let mut retained = Retained::default();
+        // Nothing seen yet: wherever the stream begins is no gap.
+        assert!(!retained.gap_before(7));
+        retained.push(event(7, owner, None));
+        assert!(!retained.gap_before(8));
+        retained.skip(8);
+        assert!(!retained.gap_before(9));
+        retained.push(event(9, owner, None));
+        assert!(retained.gap_before(11));
+        // A stream made again restarts its sequence.
+        assert!(retained.gap_before(1));
+        // What was skipped is not retained, and a resume from it or after it stands.
+        let held: Vec<Arc<FeedEvent>> = retained.since(owner, 0).cloned().collect();
+        assert_eq!(sequences(&held), vec![7, 9]);
+        assert_eq!(retained.start_after(Some(8)), (8, true));
     }
 
     #[test]

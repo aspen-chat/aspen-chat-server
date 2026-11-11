@@ -130,11 +130,10 @@ pub async fn notify(
     message_id: Option<MessageId>,
 ) -> crate::Result<bool> {
     let mut conn = state.connection_pool.get().await?;
-    if channel_access(state, conn.as_mut(), user, channel_id)
-        .await
-        .is_err()
-    {
-        return Ok(false);
+    match channel_access(state, conn.as_mut(), user, channel_id).await {
+        Ok(_) => {}
+        Err(error) if super::host::withheld(&error) => return Ok(false),
+        Err(error) => return Err(error),
     }
     let decided = deciding(conn.as_mut(), channel_id).await?;
     if !would_tell(conn.as_mut(), user, decided).await? {

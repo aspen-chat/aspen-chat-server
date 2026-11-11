@@ -166,6 +166,29 @@ describe("syncPush", () => {
     expect(signedOut.accounts).toEqual([]);
   });
 
+  it("keeps an account's subscription when its deployment cannot be asked", async () => {
+    const { relay, calls } = fakeRelay();
+    const home = account("https://a.example", "u1", "KEY-A");
+    const first = await syncPush(relay, EMPTY_PUSH_STATE, phone, [home.source]);
+    calls.length = 0;
+    const unreachable = {
+      origin: home.source.origin,
+      client: {
+        session: home.source.client.session,
+        authMethods: () => Promise.reject(new TypeError("Failed to fetch")),
+      } as unknown as AspenClient,
+    } satisfies PushSource;
+    const kept = await syncPush(relay, first, phone, [unreachable]);
+    expect(calls).toEqual([]);
+    expect(kept.accounts).toEqual(first.accounts);
+    // A deployment that answers, and no longer wakes phones, is unsubscribed.
+    const off = await syncPush(relay, kept, phone, [
+      account("https://a.example", "u1", null).source,
+    ]);
+    expect(calls).toEqual(["DELETE /v1/devices/d1/subscriptions/sub1"]);
+    expect(off.accounts).toEqual([]);
+  });
+
   it("follows a new platform token, and starts again when the relay forgot the device", async () => {
     const { relay, calls, known } = fakeRelay();
     const home = account("https://a.example", "u1", "KEY-A").source;

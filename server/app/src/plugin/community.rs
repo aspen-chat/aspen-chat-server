@@ -145,7 +145,7 @@ async fn checked(
     let next = settings::apply(fields, current, patch)
         .map_err(|p| settings::refusal(&p, &label(&p.field)))?;
     settings::check_community(conn, fields, community, &next)
-        .await
+        .await?
         .map_err(|p| settings::refusal(&p, &label(&p.field)))?;
     Ok(next)
 }

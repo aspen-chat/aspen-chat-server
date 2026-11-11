@@ -31,6 +31,12 @@ Each API server reads the stream once (`app::event_feed`):
 4. Each connection belongs to one shard. The shard delivers to it the events whose subject's owner
    (`events::subject_owner`) is its user, one of their communities, or a profile it follows.
 
+The dispatcher follows the stream's sequence. A message it cannot make an event of (a subject shape
+or a payload this build does not know, as a newer server beside it may publish) is logged and passed
+over at its place in the sequence. Only a sequence that does not follow the last one seen means
+events were missed: every connection is then dropped to resume, and the retained window and the
+models are forgotten.
+
 [Why one consumer per server](design-notes.md#one-consumer-per-server)
 
 ## What a connection receives

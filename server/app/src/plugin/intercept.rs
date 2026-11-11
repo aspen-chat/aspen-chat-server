@@ -137,6 +137,15 @@ pub async fn decide(
             .intercept
             .get(&hook)
             .map_or(Failure::Open, |p| p.failure);
+        // What becomes of the message when this plugin fails to decide it, by erring or by a
+        // verdict it holds no permission for: it goes on as if allowed, or is refused.
+        let undecided = || match failure {
+            Failure::Open => Ok(()),
+            Failure::Closed => Err(crate::Error::PluginUnavailable(t!(
+                "pluginUnavailableDetail",
+                plugin = plugin.name(locale)
+            ))),
+        };
         let input = wit::Draft {
             author: author.clone(),
             place: place.clone(),
@@ -186,15 +195,8 @@ pub async fn decide(
                     plugin = plugin.id,
                     "intercepting a message failed: {failed}"
                 );
-                match failure {
-                    Failure::Open => continue,
-                    Failure::Closed => {
-                        return Err(crate::Error::PluginUnavailable(t!(
-                            "pluginUnavailableDetail",
-                            plugin = plugin.name(locale)
-                        )));
-                    }
-                }
+                undecided()?;
+                continue;
             }
         };
         match verdict {
@@ -211,12 +213,7 @@ pub async fn decide(
                         "a rewrite was refused: it lacks messages.rewrite, is too long, or tags \
                          what the text did not"
                     );
-                    if failure == Failure::Closed {
-                        return Err(crate::Error::PluginUnavailable(t!(
-                            "pluginUnavailableDetail",
-                            plugin = plugin.name(locale)
-                        )));
-                    }
+                    undecided()?;
                     continue;
                 }
                 if rewritten != content {
@@ -227,6 +224,7 @@ pub async fn decide(
             wit::Verdict::Refuse(reason) => {
                 if !plugin.holds(PluginPermission::MessagesRefuse) {
                     tracing::warn!(plugin = plugin.id, "a refusal without messages.refuse");
+                    undecided()?;
                     continue;
                 }
                 let reason = PluginText::from(reason);

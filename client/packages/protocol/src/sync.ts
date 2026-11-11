@@ -312,6 +312,14 @@ export const TYPING_EXPIRY_MS = 8_000;
 /** The most users one presence request names; mirrors the server's limit. */
 export const PRESENCE_BATCH = 100;
 
+/**
+ * What a bootstrap read of something a deployment may not have answered: its data, or
+ * `undefined` from a deployment without the endpoint (a `404`), which has none of it. It throws
+ * for any other failure, which says nothing of what the deployment holds, so the bootstrap
+ * fails and is tried again rather than installing an empty answer.
+ */
+type OptionalRead = <T>(result: { data?: T; error?: unknown; response: Response }) => T | undefined;
+
 export type SyncStatus =
   /** `start()` has not been called, or `stop()` has. */
   | "stopped"
@@ -3025,20 +3033,25 @@ export class AspenSync {
 
   /**
    * Every message of the caller's held for its previews, a page at a time; they are few, since
-   * each is posted within seconds. A page that cannot be read ends the reading with what came.
+   * each is posted within seconds. A deployment that does not hold messages has none; a page
+   * that fails any other way is `read`'s to throw for.
    */
-  async #readHeldMessages(): Promise<HeldMessage[]> {
+  async #readHeldMessages(read: OptionalRead): Promise<HeldMessage[]> {
     const held: HeldMessage[] = [];
     for (;;) {
       const after = held.at(-1)?.id;
-      const page = await this.#client.api.GET("/api/v1/users/@me/held-messages", {
-        params: { query: after === undefined ? { limit: LIST_PAGE } : { after, limit: LIST_PAGE } },
-      });
-      if (page.data === undefined) {
+      const page = read(
+        await this.#client.api.GET("/api/v1/users/@me/held-messages", {
+          params: {
+            query: after === undefined ? { limit: LIST_PAGE } : { after, limit: LIST_PAGE },
+          },
+        }),
+      );
+      if (page === undefined) {
         return held;
       }
-      held.push(...page.data);
-      if (page.data.length < LIST_PAGE) {
+      held.push(...page);
+      if (page.length < LIST_PAGE) {
         return held;
       }
     }
@@ -4109,6 +4122,15 @@ export class AspenSync {
       retryAfterMs = retryAfterOf(result.response);
       return new ApiProblemError(problemOf(result.error, result.response));
     };
+    const optional: OptionalRead = (result) => {
+      if (result.data !== undefined) {
+        return result.data;
+      }
+      if (result.response.status === 404) {
+        return undefined;
+      }
+      throw failed(result);
+    };
     try {
       const [
         me,
@@ -4156,7 +4178,7 @@ export class AspenSync {
           params: { query: { include: ["users"] } },
         }),
         this.#client.api.GET("/api/v1/plugins"),
-        this.#readHeldMessages(),
+        this.#readHeldMessages(optional),
         this.#client.api.GET("/api/v1/users/@me/scheduled-messages"),
         this.#client.api.GET("/api/v1/users/@me/saved-messages"),
         this.#client.api.GET("/api/v1/users/@me/thread-follows"),
@@ -4177,6 +4199,14 @@ export class AspenSync {
       if (blocks.data === undefined) {
         throw failed(blocks);
       }
+      // Every read is judged before any is installed. A deployment without one of these has
+      // none of what it lists (`optional`).
+      const override = optional(chosenPresence);
+      const access = optional(admin);
+      const running = optional(plugins) ?? [];
+      const scheduled = optional(scheduledMessages) ?? [];
+      const saved = optional(saves) ?? [];
+      const followed = optional(follows) ?? [];
       this.store.setBootstrap(me.data, communities.data.data, communities.data.included);
       this.store.ingest(dms.data.included);
       this.store.setDms(dms.data.data, dms.data.data.length < DM_PAGE);
@@ -4188,12 +4218,9 @@ export class AspenSync {
         communities.data.included.categoryMutes ?? [],
       );
       this.#scheduleMuteEnd();
-      // A deployment that keeps no presence overrides has none.
-      const chosen = chosenPresence.data?.presenceOverride;
+      const chosen = override?.presenceOverride;
       this.store.setChosenPresence(
-        chosen == null
-          ? null
-          : { presenceOverride: chosen, until: chosenPresence.data?.until ?? null },
+        chosen == null ? null : { presenceOverride: chosen, until: override?.until ?? null },
       );
       this.#scheduleChosenPresenceEnd();
       this.store.replaceNotificationSettings([
@@ -4202,17 +4229,15 @@ export class AspenSync {
       ]);
       this.store.ingest(blocks.data.included);
       this.store.replaceBlocks(blocks.data.data.map((block) => block.user));
-      this.store.setDeploymentPermissions(admin.data?.permissions ?? []);
-      // A deployment without plugins, or one that does not say, runs none.
-      this.store.setPlugins(plugins.data ?? []);
+      this.store.setDeploymentPermissions(access?.permissions ?? []);
+      this.store.setPlugins(running);
       // Read before the events held back meanwhile, applied below, which settle any posted
-      // since; a deployment that does not hold messages has none.
+      // since.
       this.store.replaceHeldMessages(heldMessages);
       // The same holds of those scheduled for later.
-      this.store.replaceScheduledMessages(scheduledMessages.data ?? []);
-      // A deployment that keeps no saves or follows has none.
-      this.store.replaceSaves(saves.data ?? []);
-      this.store.replaceFollows((follows.data ?? []).map((follow) => follow.thread));
+      this.store.replaceScheduledMessages(scheduled);
+      this.store.replaceSaves(saved);
+      this.store.replaceFollows(followed.map((follow) => follow.thread));
       this.store.replaceCollapsed(
         (communities.data.included.categoryCollapses ?? []).map((c) => c.category),
       );
