@@ -71,7 +71,7 @@ browser.
   voice server.
 - The game's audio, where the platform can capture it, is a second such producer: source
   `screenAudio`, Opus, declared `sprop-stereo`.
-- One plain transport per producer. Only the video is previewed back to its sender.
+- One plain transport per producer, closed with it. Only the video is previewed back to its sender.
 - On Linux the picture is an ordinary browser screen producer, and only the game's sound arrives
   this way, beside it.
 
@@ -94,6 +94,8 @@ parameters, and a browser decodes Opus as mono without it.
 - Deafen pauses every audio consumer. A shared screen stays visible to a deafened participant.
 - Mute never touches `screen` or `screenAudio`.
 - Both are reported to the API server.
+- Someone muted while speaking stops speaking at once (`speaking` to the call, and the report),
+  rather than at the observer's next event. Nobody else's speaking changes.
 
 ### A moderator's mute
 
@@ -109,7 +111,8 @@ beside the participant's own mute.
 ## State reports
 
 - The `participantState` report carries `sharing_screen`. It is sent when a screen producer starts
-  or closes, as well as with mute and deafen changes.
+  or closes, as well as with mute and deafen changes, and after the join of a participant who
+  replaced another socket's or joined muted by a moderator.
 - `VoiceParticipant.sharingScreen` follows it, so a client can mark who is sharing without being in
   the call.
 - Speaking comes from mediasoup's audio level observer (300 ms interval, -50 dBvo).
@@ -137,6 +140,12 @@ A worker that dies stops the whole server (`Stopped::WorkerDied`), as stopping i
 ## Sockets and participants
 
 - A user who joins again from another socket replaces their participant.
+- What the replaced participant had in the call goes as it does when one leaves: its producers close
+  and everyone consuming them is sent `consumerClosed`, its offers are withdrawn and its transfers
+  end (both as `left`), and it stops speaking. No `participantLeft` is sent or reported, since the
+  user is still in the call.
+- The replacement's join is reported, and then its state (`participantState`): the API server keeps
+  the record of someone already in the call as it is, and that record describes the socket replaced.
 - A socket leaving takes out only the participant it made. The replaced socket closing never takes
   out its successor.
 - Every frame from a socket acts through the participant it made (`Seat`: the channel, the user, and

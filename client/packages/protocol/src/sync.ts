@@ -898,27 +898,21 @@ export class AspenSync {
       return latest;
     }
     // A page already on its way may be one that does not reach the latest; this follows it.
-    const pending = this.#windowLoads.get(channelId);
-    const load = (pending ?? Promise.resolve())
-      .catch(() => undefined)
-      .then(() =>
-        this.#loadWindow(channelId, async () => {
-          const { messages, since } = await this.#readMessages(channelId, {
-            limit: MESSAGE_PAGE_SIZE,
-          });
-          this.store.replaceWindow(
-            channelId,
-            messages,
-            { hasOlder: messages.length === MESSAGE_PAGE_SIZE, atLatest: true },
-            { since },
-          );
-        }),
-      )
-      .finally(() => {
-        if (this.#latestLoads.get(channelId) === load) {
-          this.#latestLoads.delete(channelId);
-        }
+    const load = this.#loadWindowAfter(channelId, async () => {
+      const { messages, since } = await this.#readMessages(channelId, {
+        limit: MESSAGE_PAGE_SIZE,
       });
+      this.store.replaceWindow(
+        channelId,
+        messages,
+        { hasOlder: messages.length === MESSAGE_PAGE_SIZE, atLatest: true },
+        { since },
+      );
+    }).finally(() => {
+      if (this.#latestLoads.get(channelId) === load) {
+        this.#latestLoads.delete(channelId);
+      }
+    });
     this.#latestLoads.set(channelId, load);
     return load;
   }
@@ -967,18 +961,11 @@ export class AspenSync {
    * unless the read shows nothing newer, so new messages are not appended to it; `loadLatest`
    * brings the channel back to the present.
    *
-   * A page already on its way is waited for first: `#loadWindow` would hand that page back in
-   * place of this read, and a link opened while history was loading would go nowhere.
+   * A page already on its way is waited for first (`#loadWindowAfter`), or a link opened while
+   * history was loading would go nowhere.
    */
-  async loadAround(channelId: string, messageId: string): Promise<void> {
-    for (
-      let pending = this.#windowLoads.get(channelId);
-      pending !== undefined;
-      pending = this.#windowLoads.get(channelId)
-    ) {
-      await pending.catch(() => undefined);
-    }
-    return this.#loadWindow(channelId, async () => {
+  loadAround(channelId: string, messageId: string): Promise<void> {
+    return this.#loadWindowAfter(channelId, async () => {
       const { messages, since } = await this.#readMessages(channelId, {
         around: messageId,
         limit: MESSAGE_AROUND_RADIUS,
@@ -1072,25 +1059,29 @@ export class AspenSync {
   /**
    * Arranges the caller's communities in the given order. Every community whose position
    * changed is renumbered to its position and patched; the cache is arranged at once, so the
-   * membership update events that follow are no-ops.
+   * membership update events that follow are no-ops. One whose patch fails is put back where it
+   * was (`#patchEach`).
    */
   async reorderCommunities(orderedIds: readonly string[]): Promise<void> {
-    const changed = orderedIds.flatMap((id, index) =>
-      this.store.communityOrder(id) === index ? [] : [{ id, index }],
-    );
+    const changed = orderedIds.flatMap((id, index) => {
+      const was = this.store.communityOrder(id);
+      return was === index ? [] : [{ id, index, was }];
+    });
     for (const { id, index } of changed) {
       this.store.setCommunityOrder(id, index);
     }
-    await Promise.all(
-      changed.map(async ({ id, index }) => {
-        const result = await this.#client.api.PATCH("/api/v1/communities/{community}/members/@me", {
+    await this.#patchEach(
+      changed,
+      ({ id, index }) =>
+        this.#client.api.PATCH("/api/v1/communities/{community}/members/@me", {
           params: { path: { community: id } },
           body: { sortIndex: index },
-        });
-        if (result.error !== undefined) {
-          throw new ApiProblemError(problemOf(result.error, result.response));
+        }),
+      ({ id, index, was }) => {
+        if (this.store.communityOrder(id) === index) {
+          this.store.setCommunityOrder(id, was);
         }
-      }),
+      },
     );
   }
 
@@ -1100,7 +1091,8 @@ export class AspenSync {
    * belongs elsewhere is moved into the group. Positions are the sort indexes, so groups
    * number independently and only the order within a group means anything. Every channel
    * whose index or category changed is patched; the cache is arranged at once, so the channel
-   * update events that follow are no-ops.
+   * update events that follow are no-ops. One whose patch fails is put back where it was
+   * (`#patchEach`).
    */
   async arrangeChannels(
     orderedIds: readonly string[],
@@ -1111,8 +1103,9 @@ export class AspenSync {
       if (channel === undefined) {
         return [];
       }
-      const moved = (channel.parentCategory ?? null) !== parentCategory;
-      return channel.sortIndex === index && !moved ? [] : [{ id, index, moved }];
+      const was = { sortIndex: channel.sortIndex, parentCategory: channel.parentCategory ?? null };
+      const moved = was.parentCategory !== parentCategory;
+      return was.sortIndex === index && !moved ? [] : [{ id, index, moved, was }];
     });
     for (const { id, index, moved } of changed) {
       this.store.applyEvent({
@@ -1123,16 +1116,28 @@ export class AspenSync {
         ...(moved ? { parentCategory } : {}),
       });
     }
-    await Promise.all(
-      changed.map(async ({ id, index, moved }) => {
-        const result = await this.#client.api.PATCH("/api/v1/channels/{channel}", {
+    await this.#patchEach(
+      changed,
+      ({ id, index, moved }) =>
+        this.#client.api.PATCH("/api/v1/channels/{channel}", {
           params: { path: { channel: id } },
           body: { sortIndex: index, ...(moved ? { parentCategory } : {}) },
-        });
-        if (result.error !== undefined) {
-          throw new ApiProblemError(problemOf(result.error, result.response));
+        }),
+      ({ id, index, moved, was }) => {
+        const channel = this.store.channel(id);
+        if (
+          channel?.sortIndex === index &&
+          (channel.parentCategory ?? null) === (moved ? parentCategory : was.parentCategory)
+        ) {
+          this.store.applyEvent({
+            serverEvent: "channel",
+            type: "update",
+            id,
+            sortIndex: was.sortIndex,
+            ...(moved ? { parentCategory: was.parentCategory } : {}),
+          });
         }
-      }),
+      },
     );
   }
 
@@ -1143,23 +1148,58 @@ export class AspenSync {
    */
   async arrangeCategories(orderedIds: readonly string[]): Promise<void> {
     const changed = orderedIds.flatMap((id, index) => {
-      const category = this.store.category(id);
-      return category === undefined || category.sortIndex === index ? [] : [{ id, index }];
+      const was = this.store.category(id)?.sortIndex;
+      return was === undefined || was === index ? [] : [{ id, index, was }];
     });
     for (const { id, index } of changed) {
       this.store.applyEvent({ serverEvent: "category", type: "update", id, sortIndex: index });
     }
-    await Promise.all(
-      changed.map(async ({ id, index }) => {
-        const result = await this.#client.api.PATCH("/api/v1/categories/{category}", {
+    await this.#patchEach(
+      changed,
+      ({ id, index }) =>
+        this.#client.api.PATCH("/api/v1/categories/{category}", {
           params: { path: { category: id } },
           body: { sortIndex: index },
-        });
+        }),
+      ({ id, index, was }) => {
+        if (this.store.category(id)?.sortIndex === index) {
+          this.store.applyEvent({ serverEvent: "category", type: "update", id, sortIndex: was });
+        }
+      },
+    );
+  }
+
+  /**
+   * Sends one patch for each of `changed`, records the cache was already arranged for, and
+   * waits for them all. The server changed nothing for a patch that failed and sends no event
+   * about it, so `restore` puts each such record back as it was, where the cache still holds
+   * what the arrangement wrote: the cache then shows the server's order, and arranging again
+   * finds the difference to send. Throws the first failure once every patch has settled.
+   */
+  async #patchEach<T>(
+    changed: readonly T[],
+    patch: (item: T) => Promise<{ error?: unknown; response: Response }>,
+    restore: (item: T) => void,
+  ): Promise<void> {
+    const results = await Promise.allSettled(
+      changed.map(async (item) => {
+        const result = await patch(item);
         if (result.error !== undefined) {
           throw new ApiProblemError(problemOf(result.error, result.response));
         }
       }),
     );
+    const failures = changed.flatMap((item, at) => {
+      const result = results[at];
+      return result?.status === "rejected" ? [{ item, reason: result.reason as unknown }] : [];
+    });
+    for (const { item } of failures) {
+      restore(item);
+    }
+    const first = failures[0];
+    if (first !== undefined) {
+      throw first.reason;
+    }
   }
 
   /** Renames a category. The cache is left to the update event. */
@@ -4207,7 +4247,12 @@ export class AspenSync {
       const scheduled = optional(scheduledMessages) ?? [];
       const saved = optional(saves) ?? [];
       const followed = optional(follows) ?? [];
-      this.store.setBootstrap(me.data, communities.data.data, communities.data.included);
+      this.store.setBootstrap(
+        me.data,
+        communities.data.data,
+        communities.data.included,
+        access?.permissions ?? [],
+      );
       this.store.ingest(dms.data.included);
       this.store.setDms(dms.data.data, dms.data.data.length < DM_PAGE);
       this.store.replaceMutes(
@@ -4229,7 +4274,6 @@ export class AspenSync {
       ]);
       this.store.ingest(blocks.data.included);
       this.store.replaceBlocks(blocks.data.data.map((block) => block.user));
-      this.store.setDeploymentPermissions(access?.permissions ?? []);
       this.store.setPlugins(running);
       // Read before the events held back meanwhile, applied below, which settle any posted
       // since.
@@ -4475,7 +4519,13 @@ export class AspenSync {
     this.#setStatus("resyncing");
     const generation = this.#generation;
     if (await this.#bootstrap(generation)) {
-      this.#goLive();
+      // The stream may have dropped while the cache was read, which changed no status then
+      // (`onConnectionLost`): it is reconnecting by itself, and its `ready` goes live.
+      if (this.#stream.status === "open") {
+        this.#goLive();
+      } else {
+        this.#setStatus("reconnecting");
+      }
     }
   }
 
@@ -5143,6 +5193,27 @@ export class AspenSync {
     }, delay);
   }
 
+  /**
+   * `#loadWindow` for a read that replaces the window (the latest, around a message), once no
+   * other load of the channel is on its way: `#loadWindow` would hand such a load back in place
+   * of this read. Several may wait on one load, and the first to go on registers its own, so
+   * each looks again after every wait.
+   */
+  async #loadWindowAfter(channelId: string, load: () => Promise<void>): Promise<void> {
+    for (
+      let pending = this.#windowLoads.get(channelId);
+      pending !== undefined;
+      pending = this.#windowLoads.get(channelId)
+    ) {
+      await pending.catch(() => undefined);
+    }
+    return this.#loadWindow(channelId, load);
+  }
+
+  /**
+   * Runs `load`, a read of the channel's window, unless one is on its way, which is handed
+   * back in its place: pages asked for twice are read once.
+   */
   #loadWindow(channelId: string, load: () => Promise<void>): Promise<void> {
     const pending = this.#windowLoads.get(channelId);
     if (pending !== undefined) {

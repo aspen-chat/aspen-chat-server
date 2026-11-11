@@ -142,6 +142,31 @@ describe("RecordStore bootstrap", () => {
   });
 });
 
+describe("RecordStore telling its listeners", () => {
+  it("tells of a record marked missing, a channel's mana, and the open reports as each is written", () => {
+    const store = bootstrapped();
+    const missing = vi.fn();
+    const mana = vi.fn();
+    const reports = vi.fn();
+    store.subscribe(`icon:${id(900)}`, missing);
+    store.subscribe(`mana:${general.id}`, mana);
+    store.subscribe("reports", reports);
+    store.markMissing("icon", id(900));
+    expect(missing).toHaveBeenCalledTimes(1);
+    store.noteMana(general.id, {
+      level: 0,
+      max: 100,
+      recharge: 10,
+      at: 0,
+      serverAt: 0,
+      queued: false,
+    });
+    expect(mana).toHaveBeenCalledTimes(1);
+    store.setOpenReports(3);
+    expect(reports).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("RecordStore events", () => {
   it("applies updates as merge patches and notifies exactly the touched topics", () => {
     const store = bootstrapped();
@@ -418,6 +443,31 @@ describe("RecordStore message windows", () => {
     store.applyEvent({ serverEvent: "message", type: "create", ...message(1, dev.id) });
     expect(store.messages(dev.id)).toBeUndefined();
     expect(store.message(message(1, dev.id).id)).toBeDefined();
+  });
+});
+
+describe("RecordStore pins", () => {
+  const pin = (messageId: string, sortIndex = 0) => ({
+    messageId,
+    sortIndex,
+    timestamp: "2026-09-25T12:00:00Z",
+  });
+
+  it("places a pin of a held message, and reads every list again for one it does not hold", () => {
+    const store = bootstrapped();
+    store.replaceWindow(general.id, [message(1)], { hasOlder: true, atLatest: true });
+    store.setPins(general.id, []);
+    store.setPins(dev.id, []);
+    const told = vi.fn();
+    store.subscribe(`pins:${dev.id}`, told);
+    store.applyEvent({ serverEvent: "pin", type: "create", ...pin(message(1).id) });
+    expect(store.pins(general.id)).toEqual([pin(message(1).id)]);
+    expect(told).not.toHaveBeenCalled();
+    // An old message outside every window: it may be in either channel.
+    store.applyEvent({ serverEvent: "pin", type: "create", ...pin(id(500), 1) });
+    expect(store.pins(general.id)).toBeUndefined();
+    expect(store.pins(dev.id)).toBeUndefined();
+    expect(told).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1804,6 +1854,96 @@ describe("RecordStore roles and access", () => {
   });
 });
 
+describe("RecordStore access across a second bootstrap", () => {
+  const everyone = {
+    id: id(40),
+    community: aspen.id,
+    name: "everyone",
+    position: 0,
+    permissions: [...TEMPLATES.member],
+    everyone: true,
+  };
+  const insider = { ...everyone, id: id(42), name: "Insider", position: 1, everyone: false };
+  /** A bootstrap in which only `insider` may view dev, and the caller holds `mine`. */
+  const listing = (mine: string[]) => ({
+    channels: [general, dev],
+    categories: [work],
+    users: [me],
+    userCommunities: [{ community: aspen.id, user: me.id, sortIndex: 0, roles: mine }],
+    roles: [everyone, insider],
+    channelOverrides: [
+      { channel: dev.id, role: everyone.id, allow: [], deny: ["viewChannel" as const] },
+      { channel: dev.id, role: insider.id, allow: ["viewChannel" as const], deny: [] },
+    ],
+    categoryOverrides: [],
+  });
+
+  it("keeps a channel only a role given while away may view", () => {
+    const store = new RecordStore();
+    store.setBootstrap(me, [aspen], listing([]));
+    expect(store.channel(dev.id)).toBeUndefined();
+    // The caller was given the role while disconnected: the next bootstrap lists the channel.
+    store.setBootstrap(me, [aspen], listing([insider.id]));
+    expect(store.channel(dev.id)).toEqual(dev);
+    expect(store.channelRemoved(dev.id)).toBe(false);
+    // And lets it go again once a bootstrap says the role was taken.
+    store.setBootstrap(me, [aspen], listing([]));
+    expect(store.channel(dev.id)).toBeUndefined();
+  });
+
+  it("keeps a hidden channel for someone made a moderator of the deployment while away", () => {
+    const store = new RecordStore();
+    store.setBootstrap(me, [aspen], listing([]), []);
+    expect(store.channel(dev.id)).toBeUndefined();
+    store.setBootstrap(me, [aspen], listing([]), ["viewDashboard", "moderateCommunities"]);
+    expect(store.channel(dev.id)).toEqual(dev);
+  });
+
+  it("judges a single community's read by its own roles and memberships together", () => {
+    const store = new RecordStore();
+    store.setBootstrap(me, [aspen], listing([]));
+    store.ingest(listing([insider.id]));
+    expect(store.channel(dev.id)).toEqual(dev);
+  });
+});
+
+describe("RecordStore custom emoji a read no longer lists", () => {
+  const wave = { id: id(60), community: aspen.id, name: "wave", icon: id(61) };
+  const leaf = { id: id(62), community: birch.id, name: "leaf", icon: id(63) };
+  const listing = (customEmoji: (typeof wave)[]) => ({
+    channels: [general],
+    users: [me],
+    userCommunities: [
+      { community: aspen.id, user: me.id, sortIndex: 0, roles: [] },
+      { community: birch.id, user: me.id, sortIndex: 1, roles: [] },
+    ],
+    customEmoji,
+  });
+
+  it("drops a community's emoji when a bootstrap lists none for it", () => {
+    const store = new RecordStore();
+    store.setBootstrap(me, [aspen, birch], listing([wave, leaf]));
+    const told = vi.fn();
+    store.subscribe(`emoji:${aspen.id}`, told);
+    // Aspen's last emoji was deleted while disconnected.
+    store.setBootstrap(me, [aspen, birch], listing([leaf]));
+    expect(store.customEmoji(aspen.id)).toEqual([]);
+    expect(store.customEmojiById(wave.id)).toBeUndefined();
+    expect(store.customEmoji(birch.id)).toEqual([leaf]);
+    expect(told).toHaveBeenCalled();
+  });
+
+  it("drops them when one community's read lists none, and with a community that goes", () => {
+    const store = new RecordStore();
+    store.setBootstrap(me, [aspen, birch], listing([wave, leaf]));
+    store.ingest({ communities: [aspen], customEmoji: [] });
+    expect(store.customEmoji(aspen.id)).toEqual([]);
+    expect(store.customEmoji(birch.id)).toEqual([leaf]);
+    store.applyEvent({ serverEvent: "community", type: "delete", id: birch.id });
+    expect(store.customEmojiById(leaf.id)).toBeUndefined();
+  });
+});
+
 describe("RecordStore deployment moderation", () => {
   const everyone = {
     id: id(40),
@@ -2666,6 +2806,38 @@ describe("RecordStore reads that land after events", () => {
     // A read sent after the edit is as new as the stream.
     store.prependWindow(general.id, [message(1)], false, { since: 40 });
     expect(store.message(message(1).id)?.content).toBe("message 1");
+  });
+
+  it("keeps the caller's votes the stream gave while a read listing older ones was in flight", () => {
+    const { store, clock } = clocked();
+    const lunch = poll(8, true);
+    store.ingest({ polls: [lunch], pollVotes: [{ poll: lunch.id, option: 0 }], ownWriteIns: [] });
+    const since = 20;
+    clock.now = 30;
+    // The caller took their vote back, here or on another device.
+    store.applyEvent({
+      serverEvent: "pollVotesChanged",
+      poll: lunch.id,
+      options: [],
+      writeIns: [],
+    });
+    // The response, sent before that, still lists the vote and a write-in.
+    store.ingest(
+      {
+        polls: [lunch],
+        pollVotes: [{ poll: lunch.id, option: 0 }],
+        ownWriteIns: [{ poll: lunch.id, option: 2 }],
+      },
+      { since },
+    );
+    expect(Array.from(store.myVotes(lunch.id))).toEqual([]);
+    expect(Array.from(store.myWriteIns(lunch.id))).toEqual([]);
+    // A read sent after it is as new as the stream.
+    store.ingest(
+      { polls: [lunch], pollVotes: [{ poll: lunch.id, option: 1 }], ownWriteIns: [] },
+      { since: 40 },
+    );
+    expect(Array.from(store.myVotes(lunch.id))).toEqual([1]);
   });
 
   it("does not bring back a message deleted while a read was in flight", () => {

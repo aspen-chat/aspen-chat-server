@@ -127,11 +127,14 @@ class AppSide(Handler):
     def do_DELETE(self) -> None:
         parts = self.path.strip("/").split("/")
         if len(parts) == 3 and parts[:2] == ["v1", "devices"] and self.holds_secret(parts[2]):
+            # A device's subscriptions end with it (spec/push.md), so a push to one answers 404.
             with lock:
                 devices.pop(parts[2], None)
+                for subscription in [id for id, device in subscriptions.items() if device == parts[2]]:
+                    del subscriptions[subscription]
             self.answer(204)
         elif (len(parts) == 5 and parts[:2] == ["v1", "devices"] and parts[3] == "subscriptions"
-              and self.holds_secret(parts[2])):
+              and self.holds_secret(parts[2]) and subscriptions.get(parts[4]) == parts[2]):
             with lock:
                 subscriptions.pop(parts[4], None)
             self.answer(204)

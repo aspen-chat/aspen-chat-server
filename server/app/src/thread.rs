@@ -737,6 +737,8 @@ pub async fn delete_echo_of(
         .returning((message::id, message::channel))
         .load(conn)
         .await?;
+    let gone: Vec<MessageId> = echoes.iter().map(|(id, _)| *id).collect();
+    crate::saved_message::forget(state, conn, &gone).await?;
     for (id, parent) in echoes {
         publish_event(
             state,

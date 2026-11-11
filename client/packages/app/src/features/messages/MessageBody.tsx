@@ -2,12 +2,12 @@ import type { LinkPreview, Message } from "@aspen/protocol";
 import { useLayoutEffect, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { MessageMedia } from "@/features/messages/Attachments";
-import { imageUrls, keptRoom, onlyImageLinks } from "@/features/messages/images";
+import { keptRoom } from "@/features/messages/images";
 import { useKeepStill } from "@/features/messages/keepStill";
+import { linkPictures } from "@/features/messages/linkPictures";
 import type { ChannelHome } from "@/features/messages/links";
 import { Markdown } from "@/features/messages/Markdown";
 import { PollCard } from "@/features/messages/PollCard";
-import { normalizedUrl, spoileredLinks } from "@/features/messages/spoileredLinks";
 import { SpoilerCard } from "@/features/messages/SpoilerCard";
 import { AlteredBy } from "@/features/plugins/Annotations";
 import { useCardPlugin } from "@/features/plugins/cardPlugin";
@@ -87,49 +87,18 @@ function MessageBodyContent({
   // The system account's notices quote names others chose (a community's, a person's), so
   // nothing in them is a link the deployment would seem to vouch for.
   const fromSystem = useUser(message.author)?.system === true;
-  const imageLinks = imageUrls(message.content);
   // Every picture is the server's copy, kept in its storage, of what it found behind a link,
   // never the link itself: loading a picture from wherever a message points would tell whoever
   // serves it the address of everyone who reads the message. A preview whose picture is not a
   // file a deployment may serve (`mediaUrl`) is taken as having none.
-  const linkPreviews = message.linkPreviews.map((p) => ({
-    ...p,
-    imageUrl: mediaUrl(p.imageUrl) ?? null,
-  }));
-  // A preview of a link inside a spoiler would give the spoiler away, so it is always a card,
-  // never a picture among the message's, and drawn covered (`SpoilerCard`).
-  const spoilered = linkPreviews.length === 0 ? null : spoileredLinks(message.content);
-  const isSpoilered = (p: LinkPreview) => spoilered?.has(normalizedUrl(p.url) ?? p.url) === true;
-  // A link that looks like a picture by its extension is drawn from the preview's picture: a
-  // share page named like a gif (tenor.com/….gif) is a page, and only the preview's picture,
-  // its og:image, is the gif. Until the preview comes, or when it has no picture, the link
-  // stays a link in the text.
-  const found = new Map(
-    linkPreviews.flatMap((p) =>
-      p.imageUrl == null || isSpoilered(p) ? [] : [[p.url, p] as const],
-    ),
-  );
-  const foundImages = imageLinks.flatMap((url) => {
-    const p = found.get(url);
-    return p?.imageUrl == null
-      ? []
-      : [{ src: p.imageUrl, name: url, width: p.imageWidth, height: p.imageHeight }];
-  });
-  // A link already shown as a picture needs no card for the same URL.
-  const previews = linkPreviews.filter((p) => !(imageLinks.includes(p.url) && found.has(p.url)));
-  // Links the server found to be images themselves join the message's pictures; the rest
-  // are cards.
-  const previewImages = [
-    ...foundImages,
-    ...previews.flatMap((p) =>
-      isPictureOnly(p) && p.imageUrl != null && !isSpoilered(p)
-        ? [{ src: p.imageUrl, name: p.url, width: p.imageWidth, height: p.imageHeight }]
-        : [],
-    ),
-  ];
-  const cards = previews.filter((p) => !isPictureOnly(p) || isSpoilered(p));
-  const pictureOnly = onlyImageLinks(message.content, (url) =>
-    previewImages.some((picture) => picture.name === url),
+  const {
+    pictures: previewImages,
+    cards,
+    isSpoilered,
+    pictureOnly,
+  } = linkPictures(
+    message.content,
+    message.linkPreviews.map((p) => ({ ...p, imageUrl: mediaUrl(p.imageUrl) ?? null })),
   );
   const pollId = still || message.kind !== "poll" ? null : (message.poll ?? null);
   const pluginCard = useCardPlugin(message) !== undefined;
@@ -267,11 +236,6 @@ function Trailed({
       </span>
     </div>
   );
-}
-
-/** A preview the server made from a link that is itself an image: a picture, no text. */
-function isPictureOnly(preview: LinkPreview): boolean {
-  return preview.imageUrl != null && preview.title == null && preview.description == null;
 }
 
 function LinkPreviewCard({ preview }: { preview: LinkPreview }) {

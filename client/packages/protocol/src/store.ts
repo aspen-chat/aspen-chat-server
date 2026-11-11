@@ -424,6 +424,11 @@ export class RecordStore {
   readonly #memo = new Map<Topic, unknown>();
   readonly #dirty = new Set<Topic>();
   #batchDepth = 0;
+  /**
+   * While a read is being installed (`#settlingAccess`), the communities whose access changed
+   * and has yet to be acted on; `null` otherwise.
+   */
+  #accessUnsettled: Set<string> | null = null;
 
   /** `now` stamps when participants speak; tests pass a fake clock. */
   constructor(options: { now?: () => number } = {}) {
@@ -494,8 +499,10 @@ export class RecordStore {
   markMissing(kind: MissingKind, id: string): void {
     const key = `${kind}:${id}` as const;
     if (!this.#missing.has(key)) {
-      this.#missing.add(key);
-      this.#touch(key);
+      this.#batch(() => {
+        this.#missing.add(key);
+        this.#touch(key);
+      });
     }
   }
 
@@ -1679,16 +1686,18 @@ export class RecordStore {
     if (held !== undefined && mana.serverAt < held.serverAt) {
       return;
     }
-    this.#mana.delete(channelId);
-    this.#mana.set(channelId, mana);
-    for (const oldest of this.#mana.keys()) {
-      if (this.#mana.size <= MANA_KEPT) {
-        break;
+    this.#batch(() => {
+      this.#mana.delete(channelId);
+      this.#mana.set(channelId, mana);
+      for (const oldest of this.#mana.keys()) {
+        if (this.#mana.size <= MANA_KEPT) {
+          break;
+        }
+        this.#mana.delete(oldest);
+        this.#touch(`mana:${oldest}`);
       }
-      this.#mana.delete(oldest);
-      this.#touch(`mana:${oldest}`);
-    }
-    this.#touch(`mana:${channelId}`);
+      this.#touch(`mana:${channelId}`);
+    });
   }
 
   /** Forgets every channel's mana, once the connection that told of it is gone. */
@@ -1741,9 +1750,11 @@ export class RecordStore {
 
   /** Records how many report cases are open, from a read or a `reportsChanged` event. */
   setOpenReports(open: number): void {
-    this.#openReports = open;
-    this.#reportsChanges += 1;
-    this.#touch("reports");
+    this.#batch(() => {
+      this.#openReports = open;
+      this.#reportsChanges += 1;
+      this.#touch("reports");
+    });
   }
 
   /**
@@ -1752,18 +1763,22 @@ export class RecordStore {
    */
   setDeploymentPermissions(permissions: readonly DeploymentPermission[]): void {
     this.#batch(() => {
-      const wasModerator = this.moderator;
-      this.#deployment = new Set(permissions);
-      this.#touch("admin");
-      if (wasModerator !== this.moderator) {
-        for (const id of this.#communities.keys()) {
-          this.#accessChanged(id);
-        }
-        for (const channel of this.#channels.values()) {
-          this.#touch(`channelAccess:${channel.id}`);
-        }
-      }
+      this.#setDeploymentPermissions(permissions);
     });
+  }
+
+  #setDeploymentPermissions(permissions: readonly DeploymentPermission[]): void {
+    const wasModerator = this.moderator;
+    this.#deployment = new Set(permissions);
+    this.#touch("admin");
+    if (wasModerator !== this.moderator) {
+      for (const id of this.#communities.keys()) {
+        this.#accessChanged(id);
+      }
+      for (const channel of this.#channels.values()) {
+        this.#touch(`channelAccess:${channel.id}`);
+      }
+    }
   }
 
   /** Topic `collapse:<categoryId>`: whether the caller has the category collapsed. */
@@ -2022,8 +2037,29 @@ export class RecordStore {
    * are dropped, because the bootstrap is complete for those types. Message windows are
    * discarded, since a resync means history may have gaps; users and attachments are kept,
    * since a stale one is harmless and will be patched by later reads and events.
+   *
+   * `deployment` is what the caller may do across the deployment, as the same bootstrap read
+   * it. It is installed with the rest, so that what they may no longer see is decided once, by
+   * the bootstrap's roles, memberships, and deployment permissions together.
    */
-  setBootstrap(me: User, communities: readonly Community[], included: Included): void {
+  setBootstrap(
+    me: User,
+    communities: readonly Community[],
+    included: Included,
+    deployment?: readonly DeploymentPermission[],
+  ): void {
+    this.#batch(() => {
+      this.#settlingAccess(() => {
+        if (deployment !== undefined) {
+          this.#setDeploymentPermissions(deployment);
+        }
+        this.#installBootstrap(me, communities, included);
+      });
+    });
+  }
+
+  /** `setBootstrap`'s records; its caller runs it inside `#settlingAccess`. */
+  #installBootstrap(me: User, communities: readonly Community[], included: Included): void {
     this.#batch(() => {
       this.#myUserId = me.id;
       this.#putUser(me);
@@ -2086,7 +2122,7 @@ export class RecordStore {
           this.#replaceMembers(id, []);
         }
       }
-      this.#ingest(included, {}, true);
+      this.#ingest(included, {}, true, listed);
 
       for (const channelId of this.#windows.keys()) {
         this.#touch(`messages:${channelId}`);
@@ -2151,14 +2187,25 @@ export class RecordStore {
    * position only forward, as `putReadState` does.
    */
   ingest(included: Included, options: ReadOptions = {}): void {
-    this.#ingest(included, options, false);
+    this.#batch(() => {
+      this.#settlingAccess(() => {
+        this.#ingest(included, options, false);
+      });
+    });
   }
 
   /**
    * `ingest`, with `replaceReadStates` for a bootstrap, whose read states stand whole: it is
    * what the store is rebuilt from, and the events held back meanwhile are applied after it.
+   * Its callers run it inside `#settlingAccess`. `communities` are the ones the read was of,
+   * whose lists it brings whole: the communities it carries, unless the caller names them.
    */
-  #ingest(included: Included, options: ReadOptions, replaceReadStates: boolean): void {
+  #ingest(
+    included: Included,
+    options: ReadOptions,
+    replaceReadStates: boolean,
+    communities: Iterable<string> = (included.communities ?? []).map((c) => c.id),
+  ): void {
     const { since } = options;
     this.#batch(() => {
       for (const community of included.communities ?? []) {
@@ -2230,7 +2277,7 @@ export class RecordStore {
         );
       }
       if (included.customEmoji !== undefined) {
-        this.#replaceCustomEmoji(included.customEmoji);
+        this.#replaceCustomEmoji(included.customEmoji, communities);
       }
       for (const session of included.voiceSessions ?? []) {
         this.#putVoiceSession(session);
@@ -2269,6 +2316,10 @@ export class RecordStore {
         for (const vote of included.pollVotes) {
           let options = byPoll.get(vote.poll);
           if (options === undefined) {
+            // A poll the stream changed since the read began keeps the votes the stream gave.
+            if (!this.#fresh(`poll:${vote.poll}`, since)) {
+              continue;
+            }
             options = new Set();
             byPoll.set(vote.poll, options);
           }
@@ -2287,6 +2338,9 @@ export class RecordStore {
         for (const own of included.ownWriteIns ?? []) {
           let options = written.get(own.poll);
           if (options === undefined) {
+            if (!this.#fresh(`poll:${own.poll}`, since)) {
+              continue;
+            }
             options = new Set();
             written.set(own.poll, options);
           }
@@ -3255,10 +3309,19 @@ export class RecordStore {
         case "pin":
           if (event.type === "create") {
             // A pin names only its message; it is placed in that message's channel, when the
-            // message and the channel's pins are both held.
+            // message and the channel's pins are both held. A message not held (an old one,
+            // outside every window) may be in any channel, so every list held may now lack
+            // a pin: all are dropped, to be read again where shown.
             const channelId = this.#messages.get(event.messageId)?.channelId;
-            const pins = channelId === undefined ? undefined : this.#pins.get(channelId);
-            if (channelId !== undefined && pins !== undefined) {
+            if (channelId === undefined) {
+              for (const listed of this.#pins.keys()) {
+                this.#touch(`pins:${listed}`);
+              }
+              this.#pins.clear();
+              break;
+            }
+            const pins = this.#pins.get(channelId);
+            if (pins !== undefined) {
               pins.set(event.messageId, created(event));
               this.#touch(`pins:${channelId}`);
             }
@@ -3489,6 +3552,11 @@ export class RecordStore {
     return value;
   }
 
+  /**
+   * Marks `topic` changed. Its listeners are told when the batch around the write ends
+   * (`#batch`), so every write that touches runs inside one, or nobody hears of it until some
+   * later write flushes.
+   */
   #touch(topic: Topic): void {
     this.#memo.delete(topic);
     this.#dirty.add(topic);
@@ -3729,6 +3797,12 @@ export class RecordStore {
     this.#touch(`roles:${id}`);
     this.#touch(`nicknames:${id}`);
     this.#touch(`access:${id}`);
+    for (const emoji of Array.from(this.#customEmoji.values())) {
+      if (emoji.community === id) {
+        this.#customEmoji.delete(emoji.id);
+      }
+    }
+    this.#touch(`emoji:${id}`);
     for (const invite of Array.from(this.#invites.values())) {
       if (invite.community === id) {
         this.#removeInvite(invite.code);
@@ -3769,9 +3843,16 @@ export class RecordStore {
     }
   }
 
-  /** A read's whole list of its communities' emoji replaces what was held for them. */
-  #replaceCustomEmoji(emoji: readonly CustomEmoji[]): void {
-    const communities = new Set(emoji.map((e) => e.community));
+  /**
+   * A read's whole list of its communities' emoji replaces what was held for them. `covered`
+   * names the communities the read was of, which the emoji themselves cannot: one whose last
+   * emoji was deleted has none in the list.
+   */
+  #replaceCustomEmoji(emoji: readonly CustomEmoji[], covered: Iterable<string>): void {
+    const communities = new Set(covered);
+    for (const e of emoji) {
+      communities.add(e.community);
+    }
     for (const held of Array.from(this.#customEmoji.values())) {
       if (communities.has(held.community)) {
         this.#customEmoji.delete(held.id);
@@ -3923,7 +4004,7 @@ export class RecordStore {
    * Something that decides what the caller may do in a community changed: every answer that
    * depends on it is recomputed, and the channels they may no longer view, and the invites of
    * others they may no longer manage, are let go of, as the server stops sending anything about
-   * them.
+   * them; while a read is being installed, only once it all is (`#settlingAccess`).
    */
   #accessChanged(communityId: string): void {
     this.#touch(`roles:${communityId}`);
@@ -3932,7 +4013,43 @@ export class RecordStore {
     for (const channel of channels) {
       this.#touch(`channelAccess:${channel.id}`);
     }
+    if (this.#accessUnsettled !== null) {
+      this.#accessUnsettled.add(communityId);
+    } else {
+      this.#letGoOfUnseen(communityId);
+    }
+  }
+
+  /**
+   * Runs `install`, a read being installed, letting go of nothing the caller may not see until
+   * all of it is in. A read brings roles, overrides, and the caller's own roles one after
+   * another, and what they may view judged by one read's roles and an earlier read's
+   * memberships is neither's answer: a channel only a role given since may view would be
+   * removed before the membership naming that role is installed.
+   */
+  #settlingAccess(install: () => void): void {
+    if (this.#accessUnsettled !== null) {
+      install();
+      return;
+    }
+    const unsettled = new Set<string>();
+    this.#accessUnsettled = unsettled;
+    try {
+      install();
+    } finally {
+      this.#accessUnsettled = null;
+      for (const communityId of unsettled) {
+        this.#letGoOfUnseen(communityId);
+      }
+    }
+  }
+
+  /** Lets go of what the caller may no longer see in a community, once that can be decided. */
+  #letGoOfUnseen(communityId: string): void {
     if (this.#decided(communityId)) {
+      const channels = Array.from(this.#channels.values()).filter(
+        (c) => c.community === communityId,
+      );
       for (const channel of channels) {
         if (!this.channelAccess(channel.id).has("viewChannel")) {
           this.#removeChannel(channel.id);

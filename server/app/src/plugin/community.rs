@@ -230,7 +230,9 @@ pub async fn enable(
                     Some(_) => CommunityPluginEvent::Update {
                         community,
                         plugin: plugin.id.clone(),
-                        enabled: Some(record.enabled),
+                        // Only a change: the plugin is told it was turned on by an update
+                        // that carries this (`observe::toggled`).
+                        enabled: (!was_on).then_some(record.enabled),
                         settings: Some(record.settings.clone()),
                         secrets_set: Some(record.secrets_set.clone()),
                     },

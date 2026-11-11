@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
         config.id,
         workers,
         media_addresses,
-        reporter.clone(),
+        reporter.reports(),
         Arc::clone(&relay),
         &config.rate_limits,
     );

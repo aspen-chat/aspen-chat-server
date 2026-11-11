@@ -76,8 +76,10 @@ follow. It carries the message, and the save's id while it is saved (`null` once
    opens it, the save ids having stayed in the store.
 5. **Does every path that changes it announce it?**
    - Saving and unsaving announce it.
-   - Deleting the message does: `app::message::soft_delete` deletes its saves and tells each saver,
-     even one who may no longer read the channel and so hears nothing else of the deletion.
+   - Deleting the message does: `app::message::soft_delete`, and `soft_delete_many` for the messages
+     a ban's deletion window or a takedown deletes, delete its saves and its echo's through
+     `saved_message::forget` and tell each saver, even one who may no longer read the channel and so
+     hears nothing else of the deletion.
    - A message removed outright (a purge, a channel or account deleted) goes with its saves by
      cascade, and readers infer it from the message's going.
 6. **Is it published inside the transaction that makes the change?** Yes. A rollback is answered by

@@ -47,7 +47,8 @@ So the reports about one channel are applied once, in the order they were sent, 
 server takes each. A channel's calls are applied one after another (a channel's call always ends
 before its next one starts). The 128 lanes are applied side by side.
 
-On the voice server, reports go out through one queue (`Reporter`) in the order they are made.
+On the voice server, reports go out through one queue (`Reports`, which `Reporter` publishes) in the
+order they are made.
 
 ## Where a report came from
 

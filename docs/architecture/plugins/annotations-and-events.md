@@ -28,4 +28,6 @@
 ## `communityPlugin`
 
 A `communityPlugin` event announces a community turning a plugin on or off, or configuring it. It
-carries `Aspen-Requires: managePlugins`, so only the community's managers receive its settings.
+carries `Aspen-Requires: managePlugins`, so only the community's managers receive its settings. Its
+`update` carries `enabled` only when the plugin was turned on or off, as every update carries only
+what changed.

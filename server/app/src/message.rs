@@ -1562,7 +1562,7 @@ pub async fn soft_delete(
     // Its files leave the public read path, kept for reviewing reports, and its link previews'
     // pictures are kept as long.
     crate::attachment::evidence::keep_deleted(conn, id).await?;
-    crate::saved_message::forget(state, conn, id).await?;
+    crate::saved_message::forget(state, conn, &[id]).await?;
     crate::link_preview::note_deleted(conn, &[id]).await?;
     unpin_deleted(state, conn, &[id]).await?;
     publish_event(
@@ -1597,8 +1597,9 @@ pub async fn soft_delete(
 }
 
 /// Deletes `ids` as [`soft_delete`] deletes each, as one set: one statement marks them deleted,
-/// one their echoes, one keeps their files as evidence, one takes their pins down, their
-/// threads' summaries are taken down once per thread, and every deletion is announced together.
+/// one their echoes, one keeps their files as evidence, one takes their pins down, one their
+/// saves, their threads' summaries are taken down once per thread, and every deletion is
+/// announced together.
 /// Messages already deleted are passed over. Answers how many it deleted.
 pub async fn soft_delete_many(
     state: &GlobalServerContext,
@@ -1641,6 +1642,7 @@ pub async fn soft_delete_many(
         .chain(echoes.iter().map(|(id, _)| *id))
         .collect();
     unpin_deleted(state, conn, &all_gone).await?;
+    crate::saved_message::forget(state, conn, &all_gone).await?;
     let events: Vec<(EventScope, ServerEvent)> = deleted
         .iter()
         .map(|m| (*m.channel.id(), m.id))

@@ -16,6 +16,11 @@ message text and in reactions.
 | Picker data                    | `emojiData.ts`                                                                           |
 | Settings tab                   | `EmojiPanel`                                                                             |
 
+A read that sideloads `emoji` lists them whole for the communities it was of (the bootstrap's listed
+communities, a community read's own), so the store drops what it held for those and the read lacks,
+a community whose last emoji was deleted among them, and drops a community's emoji with the
+community.
+
 ## In message text
 
 A message's text names a custom emoji as `<:id>`.

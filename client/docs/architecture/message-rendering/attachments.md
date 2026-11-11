@@ -40,6 +40,11 @@ Loading the linked address would tell whoever serves it the address of everyone 
 to a picture shows as a link until its preview arrives with the server's copy, and stays one when
 the preview has no picture.
 
+Which previews are pictures and which are cards is sorted by `linkPictures` (`linkPictures.ts`). It
+matches a link in the text to its preview by address, each as a WHATWG URL serializes it
+(`normalizedUrl`), since the server writes a preview's `url` that way and the text holds the link as
+it was typed.
+
 `MessageMedia` gathers the pictures into one strip and shows at most `INLINE_IMAGE_LIMIT` (three)
 inline. Beyond that a `+N` tile, like any inline picture, opens `ImageGallery.tsx`, a modal that
 pages through the whole set with arrows, the arrow keys, and a strip of thumbnails. On a touch

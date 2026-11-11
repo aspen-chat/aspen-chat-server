@@ -140,31 +140,32 @@ pub async fn unsave(
     .await
 }
 
-/// Deletes every save of `message_id`, which the caller's transaction is deleting, and tells each
-/// saver: one who may no longer read its channel hears nothing else of the deletion.
+/// Deletes every save of `messages`, which the caller's transaction is deleting, and tells each
+/// saver: one who may no longer read its channel hears nothing else of the deletion. Every way
+/// of deleting messages comes through here (`message::soft_delete`, `soft_delete_many`).
 pub async fn forget(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
-    message_id: MessageId,
+    messages: &[MessageId],
 ) -> crate::Result<()> {
-    let savers: Vec<UserId> =
-        diesel::delete(saved_message::table.filter(saved_message::message.eq(message_id)))
-            .returning(saved_message::user)
+    let saves: Vec<(UserId, MessageId)> =
+        diesel::delete(saved_message::table.filter(saved_message::message.eq_any(messages)))
+            .returning((saved_message::user, saved_message::message))
             .get_results(conn)
             .await?;
-    for saver in savers {
-        publish_event(
-            state,
-            conn,
-            EventScope::User(saver),
-            &ServerEvent::SavedMessageChanged {
-                message: message_id,
-                saved: None,
-            },
-        )
-        .await?;
-    }
-    Ok(())
+    let events = saves
+        .into_iter()
+        .map(|(saver, message)| {
+            (
+                EventScope::User(saver),
+                ServerEvent::SavedMessageChanged {
+                    message,
+                    saved: None,
+                },
+            )
+        })
+        .collect();
+    crate::events::publish_events(state, conn, events).await
 }
 
 /// The channel whose reading decides who reads a saved message's: its own, or a thread's

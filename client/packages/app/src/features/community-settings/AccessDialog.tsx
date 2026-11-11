@@ -34,6 +34,7 @@ import { alertClass, fieldClass, hintClass, labelClass } from "@/features/auth/s
 import { MemberPicker } from "@/features/community-settings/MemberPicker";
 import {
   currentPreset,
+  selects,
   withheldBy,
   type Preset,
   type PresetOption,
@@ -147,11 +148,17 @@ function Presets({
   const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set(current.roles));
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useUnsavedChanges(
-    preset !== current.preset ||
-      chosen.size !== current.roles.length ||
-      current.roles.some((role) => !chosen.has(role)),
-  );
+  // The selection follows the overrides (changed under Advanced, or by someone else) for as
+  // long as the reader has not moved it from what they last were.
+  const [followed, setFollowed] = useState(current);
+  if (!selects(current.preset, new Set(current.roles), followed)) {
+    if (selects(preset, chosen, followed)) {
+      setPreset(current.preset);
+      setChosen(new Set(current.roles));
+    }
+    setFollowed(current);
+  }
+  useUnsavedChanges(!selects(preset, chosen, current));
   const others = roles.filter((r) => !r.everyone).reverse();
 
   async function apply() {

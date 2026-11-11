@@ -62,6 +62,10 @@ Controls the caller may not use are not shown:
 | The caller loses Manage invites                                    | The store lets go of every invite but the caller's own. Without it the server sends only the caller's own                                                             |
 
 - Categories follow the same rule as channels, by their own overrides alone.
+- While a read is being installed (a bootstrap, a community's read), nothing is let go until all of
+  it is in (`RecordStore.#settlingAccess`): a read brings roles, overrides, the caller's own roles,
+  and at a bootstrap their deployment permissions one after another, and what the caller may view is
+  judged once by all of them together, never by one read's roles and an earlier read's memberships.
 - A category the store does not hold counts in `channelAccess` as denying View channel. A channel's
   own overrides may grant it again.
 
@@ -111,6 +115,13 @@ shows.
 Opened from a channel's menu or a category's lock.
 
 - It leads with three presets: everyone, only some roles, read-only.
+- A preset shows as the current one only when the overrides are exactly that preset's
+  (`currentPreset`, comparing each override's allows and denies as sets and leaving out empty ones).
+  Anything else shows as Custom, and Apply stays disabled until a preset is chosen on purpose, since
+  applying one clears every override it does not hold.
+- The selection follows the overrides when they change under it (an edit under Advanced, or someone
+  else's) for as long as the reader has not moved it (`selects`); once they have, it is theirs to
+  apply or abandon.
 - Advanced holds per-role allow, default, and deny.
 - Check access holds a per-member explanation (`explain`).
 - A preset lets its roles in before shutting everyone else out, so their members never lose the
@@ -136,7 +147,9 @@ Wherever a member is chosen (the Members tab, handing over ownership, Check acce
 ## Pins
 
 Pins are store state per channel: topic `pins:<channelId>`, `usePins`. They are read once on first
-use and kept by `pin` events.
+use and kept by `pin` events. A `pin` event names only its message, so a pin of a message the store
+does not hold (an old one, outside every window) cannot be placed in a channel: every list held is
+dropped then, and `usePins` reads again the ones being shown.
 
 `PinsButton` shows them in the channel and DM headers:
 

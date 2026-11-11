@@ -17,12 +17,43 @@ use voice_protocol::control::{
 #[derive(Clone)]
 pub struct Reporter {
     client: async_nats::Client,
-    /// Reports waiting to be published, which one task publishes in the order they were sent.
-    /// Sending under the lock is what gives a report its place, so the reports `report_with`
-    /// makes under it go out together, with none between them.
-    queue: Arc<Mutex<mpsc::UnboundedSender<VoiceReport>>>,
+    reports: Reports,
     /// Told each time the connection to NATS comes back after being lost.
     reconnected: Arc<Notify>,
+}
+
+/// Reports waiting to be published, which one task publishes in the order they were sent.
+/// Sending under the lock is what gives a report its place, so the reports `report_with` makes
+/// under it go out together, with none between them.
+#[derive(Clone)]
+pub struct Reports(Arc<Mutex<mpsc::UnboundedSender<VoiceReport>>>);
+
+impl Reports {
+    /// The queue and its other end, read by whoever publishes the reports: `Reporter`, or a
+    /// test of the rooms that reads them itself.
+    pub(crate) fn new() -> (Self, mpsc::UnboundedReceiver<VoiceReport>) {
+        let (queue, waiting) = mpsc::unbounded_channel();
+        (Self(Arc::new(Mutex::new(queue))), waiting)
+    }
+
+    /// Sends one report, after every report sent before it. A report the stream does not take
+    /// is logged rather than returned: the next snapshot repairs what it would have changed,
+    /// and the call itself must go on.
+    pub fn report(&self, report: VoiceReport) {
+        self.report_with(|| vec![report]);
+    }
+
+    /// Sends the reports `make` returns, made while no other report can be sent, so they go out
+    /// together and each describes things as of its place in the order. A snapshot is made this
+    /// way. `make` may lock the rooms and their participants, so nothing reports while holding
+    /// either lock.
+    pub fn report_with(&self, make: impl FnOnce() -> Vec<VoiceReport>) {
+        let queue = self.0.lock().expect("report queue lock");
+        for report in make() {
+            // The receiver lives as long as the process.
+            let _ = queue.send(report);
+        }
+    }
 }
 
 impl Reporter {
@@ -57,7 +88,7 @@ impl Reporter {
             });
         let client = async_nats::connect_with_options(&config.nats_url, options).await?;
         aspen_tls::warn_if_nats_unencrypted(&config.nats_url, config.nats.tls.as_ref(), &client);
-        let (queue, mut waiting) = mpsc::unbounded_channel::<VoiceReport>();
+        let (reports, mut waiting) = Reports::new();
         let stream = async_nats::jetstream::new(client.clone());
         tokio::spawn(async move {
             while let Some(report) = waiting.recv().await {
@@ -66,7 +97,7 @@ impl Reporter {
         });
         Ok(Self {
             client,
-            queue: Arc::new(Mutex::new(queue)),
+            reports,
             reconnected,
         })
     }
@@ -76,23 +107,9 @@ impl Reporter {
         self.client.clone()
     }
 
-    /// Sends one report, after every report sent before it. A report the stream does not take
-    /// is logged rather than returned: the next snapshot repairs what it would have changed,
-    /// and the call itself must go on.
-    pub fn report(&self, report: VoiceReport) {
-        self.report_with(|| vec![report]);
-    }
-
-    /// Sends the reports `make` returns, made while no other report can be sent, so they go out
-    /// together and each describes things as of its place in the order. A snapshot is made this
-    /// way. `make` may lock the rooms and their participants, so nothing reports while holding
-    /// either lock.
-    pub fn report_with(&self, make: impl FnOnce() -> Vec<VoiceReport>) {
-        let queue = self.queue.lock().expect("report queue lock");
-        for report in make() {
-            // The receiver lives as long as the process.
-            let _ = queue.send(report);
-        }
+    /// Where this server's reports are sent from, for the rooms.
+    pub fn reports(&self) -> Reports {
+        self.reports.clone()
     }
 
     /// Publishes the load every `LOAD_REPORT_INTERVAL_SECONDS`, forever.
@@ -102,7 +119,7 @@ impl Reporter {
                 tokio::time::interval(Duration::from_secs(LOAD_REPORT_INTERVAL_SECONDS));
             loop {
                 interval.tick().await;
-                self.report(VoiceReport::Load {
+                self.reports.report(VoiceReport::Load {
                     server,
                     participants: participants(),
                 });
@@ -124,7 +141,7 @@ impl Reporter {
                     _ = interval.tick() => {}
                     () = self.reconnected.notified() => {}
                 }
-                self.report_with(&snapshot);
+                self.reports.report_with(&snapshot);
             }
         });
     }

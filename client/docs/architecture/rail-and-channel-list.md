@@ -26,7 +26,10 @@ Reordering is drag and drop from React Aria: `useDragAndDrop` on a `GridList`.
 
 1. renumber positions;
 2. patch only the records whose index changed;
-3. arrange the cache at once, so the events that follow are no-ops.
+3. arrange the cache at once, so the events that follow are no-ops;
+4. put back each record whose `PATCH` failed, once all have settled, where the cache still holds
+   what the arrangement wrote. The server changed nothing for those and sends no event, so the cache
+   then shows the server's order and arranging again finds the difference to send.
 
 | What        | Order kept in                                                                                          |
 | ----------- | ------------------------------------------------------------------------------------------------------ |

@@ -889,6 +889,55 @@ describe("AspenSync", () => {
     expect(sync.store.community(aspen.id)?.name).toBe("Renamed");
   });
 
+  it("is not live after a resync whose stream dropped while it read", async () => {
+    let reads = 0;
+    let release: () => void = () => undefined;
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me": () => {
+        reads += 1;
+        if (reads === 1) {
+          return json(me);
+        }
+        // The resync's read: stall until the test releases it.
+        return new Promise<Response>((resolve) => {
+          release = () => {
+            resolve(json(me));
+          };
+        });
+      },
+    });
+    const socket = await goLive(sync);
+    socket.frame({
+      type: "event",
+      sequence: 1,
+      event: { serverEvent: "userResync", user: me.id },
+    });
+    await settle();
+    expect(sync.status).toBe("resyncing");
+    // The connection goes while the cache is being read again.
+    socket.close();
+    await settle();
+    expect(sync.status).toBe("resyncing");
+    release();
+    await settle();
+    // The cache is read, but no events arrive until the stream is back.
+    expect(sync.status).toBe("reconnecting");
+    const again = FakeSocket.instances[1];
+    if (again === undefined) {
+      throw new Error("no reconnect attempt");
+    }
+    again.onopen?.();
+    again.frame(ready());
+    // The new connection could not resume, so the cache is read once more, now on an open
+    // stream.
+    await settle();
+    expect(sync.status).toBe("resyncing");
+    release();
+    await settle();
+    expect(sync.status).toBe("live");
+  });
+
   it("redoes a bootstrap that took longer than the replay window", async () => {
     let clock = 0;
     let listings = 0;
@@ -1122,6 +1171,43 @@ describe("AspenSync", () => {
       ...page.slice(0, MESSAGE_AROUND_RADIUS).map((m) => m.id),
     ]);
     expect(sync.store.messages(general.id)?.atLatest).toBe(false);
+  });
+
+  it("loads the latest asked for after a link, both while a page of history is on its way", async () => {
+    const page = Array.from({ length: MESSAGE_PAGE_SIZE }, (_, i) => message(600 + i));
+    const anchor = message(100);
+    let giveOlder: (response: Response) => void = () => undefined;
+    const reads: string[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/channels/${general.id}/messages`]: (url) => {
+        if (url.searchParams.has("before")) {
+          return new Promise<Response>((resolve) => {
+            giveOlder = resolve;
+          });
+        }
+        reads.push(url.searchParams.has("around") ? "around" : "latest");
+        const around = [anchor, ...page.slice(0, MESSAGE_AROUND_RADIUS)];
+        return json({
+          data: url.searchParams.has("around") ? around : page,
+          included: { users: [], attachments: [] },
+        });
+      },
+    });
+    await goLive(sync);
+    await sync.loadLatest(general.id);
+    const older = sync.loadOlder(general.id);
+    await settle();
+    // A link is opened, then Jump to latest pressed, before the page lands.
+    const around = sync.loadAround(general.id, anchor.id);
+    const latest = sync.loadLatest(general.id);
+    await settle();
+    giveOlder(json({ data: [message(599)], included: { users: [], attachments: [] } }));
+    await Promise.all([older, around, latest]);
+    // Each read ran, in the order asked, and the window is the one asked for last.
+    expect(reads).toEqual(["latest", "around", "latest"]);
+    expect(sync.store.messages(general.id)?.atLatest).toBe(true);
+    expect(sync.store.messages(general.id)?.ids).toEqual(page.map((m) => m.id));
   });
 
   it("fetches an unknown author once when a message event names one", async () => {
@@ -2171,6 +2257,47 @@ describe("AspenSync", () => {
     await sync.arrangeChannels([dev.id, general.id], null);
     expect(sync.store.channels(aspen.id).map((c) => c.name)).toEqual(["dev", "general"]);
     expect(patched.slice(3).sort()).toEqual(["dev", "general"]);
+  });
+
+  it("puts back what a failed arrangement wrote, so arranging again sends it again", async () => {
+    const dev: Channel = { ...general, id: id(21), name: "dev", sortIndex: 1 };
+    const patched: string[] = [];
+    let refuse = true;
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/communities": () =>
+        json({
+          data: [aspen],
+          included: {
+            channels: [general, dev],
+            categories: [],
+            users: [me],
+            userCommunities: [{ community: aspen.id, user: me.id, sortIndex: 0 }],
+          },
+        }),
+      [`/api/v1/channels/${general.id}`]: () => {
+        patched.push("general");
+        return json({ ...general, sortIndex: 1 });
+      },
+      [`/api/v1/channels/${dev.id}`]: () => {
+        patched.push("dev");
+        return refuse
+          ? json({ code: "rateLimited", title: "Slow down", status: 429 }, 429)
+          : json({ ...dev, sortIndex: 0 });
+      },
+    });
+    await goLive(sync);
+    await expect(sync.arrangeChannels([dev.id, general.id], null)).rejects.toMatchObject({
+      code: "rateLimited",
+    });
+    // The server moved general and not dev, and the cache says the same.
+    expect(sync.store.channel(general.id)?.sortIndex).toBe(1);
+    expect(sync.store.channel(dev.id)?.sortIndex).toBe(1);
+    refuse = false;
+    patched.length = 0;
+    await sync.arrangeChannels([dev.id, general.id], null);
+    expect(patched).toEqual(["dev"]);
+    expect(sync.store.channel(dev.id)?.sortIndex).toBe(0);
   });
 
   it("moves a channel into another group when the arrangement names it there", async () => {

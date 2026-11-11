@@ -10,7 +10,7 @@ mod transfers;
 
 use crate::config::MediaAddress;
 use crate::media::{media_codecs, media_kind, webrtc_transport_options, wire_kind};
-use crate::reporter::Reporter;
+use crate::reporter::Reports;
 use crate::transfer::Relay;
 use mediasoup::prelude::*;
 use mediasoup::types::data_structures::{DtlsState, TransportTuple};
@@ -260,6 +260,14 @@ impl Participant {
         self.ensure_source_free(source)
     }
 
+    /// Takes one of the participant's producers out, with what exists only for it: the plain
+    /// transport an external sender feeds it over, and its place among their previews.
+    fn remove_producer(&mut self, id: ProducerId) -> Option<(Producer, MediaSource)> {
+        self.rtp_transports.remove(&id);
+        self.own_preview.remove(&id);
+        self.producers.remove(&id)
+    }
+
     fn sharing_screen(&self) -> bool {
         self.producers
             .values()
@@ -328,6 +336,21 @@ impl Room {
     }
 }
 
+/// How a join found a room (`Rooms::enter`).
+enum Entry {
+    /// It has closed, and takes no one in.
+    Closed,
+    Entered {
+        replaced: Option<Replaced>,
+    },
+}
+
+/// What a participant replaced from another socket leaves to be closed as a leaving one's is.
+struct Replaced {
+    producers: Vec<Producer>,
+    speaking: bool,
+}
+
 /// Where a participant's consumers are: a WebRTC transport for a browser, or a plain SRTP one
 /// for a client that asked with `consumeRtp`.
 #[derive(Clone)]
@@ -378,7 +401,7 @@ pub struct Rooms {
     next_worker: AtomicUsize,
     /// Where media is received (`RtcConfig::media_addresses`); never empty.
     media_addresses: Vec<MediaAddress>,
-    reporter: Reporter,
+    reporter: Reports,
     relay: Arc<Relay>,
     rooms: Mutex<HashMap<Uuid, Arc<Room>>>,
     next_connection: AtomicU64,
@@ -392,7 +415,7 @@ impl Rooms {
         server: Uuid,
         workers: Vec<Worker>,
         media_addresses: Vec<MediaAddress>,
-        reporter: Reporter,
+        reporter: Reports,
         relay: Arc<Relay>,
         limits: &crate::config::LimitSettings,
     ) -> Arc<Self> {
@@ -465,7 +488,7 @@ impl Rooms {
     }
 
     /// Every call this server holds and who is in it, ending with the list of them in each lane
-    /// (every lane's, even one with no calls). Made inside `Reporter::report_with`, so it
+    /// (every lane's, even one with no calls). Made inside `Reports::report_with`, so it
     /// describes the calls as of its place among the reports.
     pub fn snapshot(&self) -> Vec<VoiceReport> {
         let rooms: Vec<Arc<Room>> = self
@@ -544,8 +567,15 @@ impl Rooms {
                 Some(room) => room,
                 None => self.start_room(channel).await?,
             };
-            let entered = match self.enter(&room, user, connection, &outbox, admission.clone()) {
-                Ok(entered) => entered,
+            let replaced = match self.enter(&room, user, connection, &outbox, admission.clone()) {
+                Ok(Entry::Entered { replaced }) => replaced,
+                Ok(Entry::Closed) => {
+                    // The room's last participant left as this one arrived. Once its end is
+                    // reported and it has gone from the channel's place, this one starts the
+                    // channel's next call.
+                    let _ = room.ended.subscribe().wait_for(|ended| *ended).await;
+                    continue;
+                }
                 Err(e) => {
                     // A room this join started holds no one; it ends as though its last
                     // participant left.
@@ -553,47 +583,64 @@ impl Rooms {
                     return Err(e);
                 }
             };
-            if entered {
-                self.reporter.report(VoiceReport::ParticipantJoined {
-                    session: room.session,
-                    channel,
-                    user,
-                    sign_in: admission.sign_in,
-                });
-                // A participant joining muted by a moderator is recorded so: their joining is
-                // recorded unmuted, and the recheck that follows finds the mute already
-                // standing and changes nothing.
-                if admission.server_muted {
-                    let report = room
-                        .participants
-                        .lock()
-                        .expect("room lock")
-                        .get(&user)
-                        .filter(|participant| participant.connection == connection)
-                        .map(|participant| Self::state_report(&room, participant));
-                    if let Some(report) = report {
-                        self.reporter.report(report);
-                    }
+            // What the socket replaced had in the call goes as it does when a participant
+            // leaves. The new socket's frames are read only once this returns, so nothing of
+            // its own is caught up in it.
+            let was_replaced = replaced.is_some();
+            let mut stopped_speaking = false;
+            if let Some(Replaced {
+                producers,
+                speaking,
+            }) = replaced
+            {
+                for producer in producers {
+                    self.drop_producer(&room, producer).await;
                 }
-                info!(
-                    channel = channel.to_string(),
-                    user = user.to_string(),
-                    "joined a call"
-                );
-                return Ok(Seat {
-                    channel,
-                    user,
-                    connection,
-                });
+                self.end_everything_of(&room, user).await;
+                stopped_speaking = speaking;
             }
-            // The room's last participant left as this one arrived. Once its end is reported
-            // and it has gone from the channel's place, this one starts the channel's next call.
-            let _ = room.ended.subscribe().wait_for(|ended| *ended).await;
+            self.reporter.report(VoiceReport::ParticipantJoined {
+                session: room.session,
+                channel,
+                user,
+                sign_in: admission.sign_in,
+            });
+            if stopped_speaking {
+                self.tell_speaking(&room, user, false);
+            }
+            // The API server records a join unmuted, undeafened, and not sharing, and leaves
+            // the record of someone already in the call as it is. So the state is reported
+            // where either falls short: for a participant joining muted by a moderator (the
+            // recheck that follows finds the mute already standing and changes nothing), and
+            // for one who replaced another socket, whose record still describes that one.
+            if was_replaced || admission.server_muted {
+                let report = room
+                    .participants
+                    .lock()
+                    .expect("room lock")
+                    .get(&user)
+                    .filter(|participant| participant.connection == connection)
+                    .map(|participant| Self::state_report(&room, participant));
+                if let Some(report) = report {
+                    self.reporter.report(report);
+                }
+            }
+            info!(
+                channel = channel.to_string(),
+                user = user.to_string(),
+                "joined a call"
+            );
+            return Ok(Seat {
+                channel,
+                user,
+                connection,
+            });
         }
     }
 
     /// Adds the participant to `room`, replacing any of the same user from another socket, and
-    /// sends them `ready`, returning false when the room has closed.
+    /// sends them `ready`. The one replaced is told and hung up here; what it had in the call is
+    /// handed back for `join` to close.
     fn enter(
         &self,
         room: &Room,
@@ -601,7 +648,7 @@ impl Rooms {
         connection: Connection,
         outbox: &Outbox,
         admission: Admission,
-    ) -> Result<bool, RoomError> {
+    ) -> Result<Entry, RoomError> {
         let Admission {
             grants,
             sign_in,
@@ -609,7 +656,7 @@ impl Rooms {
         } = admission;
         let mut participants = room.participants.lock().expect("room lock");
         if room.closed.load(Ordering::Relaxed) {
-            return Ok(false);
+            return Ok(Entry::Closed);
         }
         let seat = match participants.get_mut(&user) {
             Some(old) => old.seat.take(),
@@ -624,12 +671,18 @@ impl Rooms {
                 )
             }
         };
-        let replaced = participants.remove(&user);
-        if let Some(old) = &replaced {
+        let replaced = participants.remove(&user).map(|mut old| {
             old.send(ServerMessage::Kicked {
                 reason: KickReason::Replaced,
             });
-        }
+            Replaced {
+                producers: std::mem::take(&mut old.producers)
+                    .into_values()
+                    .map(|(producer, _)| producer)
+                    .collect(),
+                speaking: old.speaking,
+            }
+        });
         let others: Vec<ParticipantInfo> = participants.values().map(Participant::info).collect();
         let joined = ServerMessage::ParticipantJoined {
             user,
@@ -669,7 +722,7 @@ impl Rooms {
             transfers: self.relay.policy(),
         });
         participants.insert(user, participant);
-        Ok(true)
+        Ok(Entry::Entered { replaced })
     }
 
     async fn start_room(self: &Arc<Self>, channel: Uuid) -> Result<Arc<Room>, RoomError> {
@@ -760,6 +813,8 @@ impl Rooms {
         Ok(room)
     }
 
+    /// Marks as speaking exactly those of `loud` whose microphone is not paused, telling of each
+    /// who started or stopped. `loud` is everyone the audio level observer hears.
     async fn apply_speaking(&self, room: &Room, loud: &HashSet<Uuid>) {
         let changes: Vec<(Uuid, bool)> = {
             let mut participants = room.participants.lock().expect("room lock");
@@ -774,14 +829,19 @@ impl Rooms {
             changes
         };
         for (user, speaking) in changes {
-            room.broadcast(&ServerMessage::Speaking { user, speaking }, None);
-            self.reporter.report(VoiceReport::Speaking {
-                session: room.session,
-                channel: room.channel,
-                user,
-                speaking,
-            });
+            self.tell_speaking(room, user, speaking);
         }
+    }
+
+    /// Tells everyone in the call, and the API server, that `user` started or stopped speaking.
+    fn tell_speaking(&self, room: &Room, user: Uuid, speaking: bool) {
+        room.broadcast(&ServerMessage::Speaking { user, speaking }, None);
+        self.reporter.report(VoiceReport::Speaking {
+            session: room.session,
+            channel: room.channel,
+            user,
+            speaking,
+        });
     }
 
     pub async fn set_capabilities(&self, seat: Seat, capabilities: Value) -> Result<(), RoomError> {
@@ -910,8 +970,6 @@ impl Rooms {
                         .get(&producer)
                         .is_some_and(|t| !heard_from(t))
                     {
-                        participant.rtp_transports.remove(&producer);
-                        participant.own_preview.remove(&producer);
                         closing.push(producer);
                     } else {
                         return;
@@ -921,7 +979,7 @@ impl Rooms {
             let mut screen = false;
             let closing: Vec<Producer> = closing
                 .into_iter()
-                .filter_map(|id| participant.producers.remove(&id))
+                .filter_map(|id| participant.remove_producer(id))
                 .map(|(producer, source)| {
                     screen |= source == MediaSource::Screen;
                     producer
@@ -1222,10 +1280,7 @@ impl Rooms {
                 .find(|id| id.to_string() == producer_id)
                 .copied()
                 .ok_or(RoomError::UnknownProducer)?;
-            let removed = participant.producers.remove(&id);
-            if participant.own_preview.remove(&id) {
-                participant.rtp_transports.remove(&id);
-            }
+            let removed = participant.remove_producer(id);
             let state = removed
                 .as_ref()
                 .is_some_and(|(_, source)| *source == MediaSource::Screen)
@@ -1290,10 +1345,7 @@ impl Rooms {
             let mut closing = Vec::new();
             let mut screen = false;
             for id in refused {
-                if let Some((producer, source)) = participant.producers.remove(&id) {
-                    if participant.own_preview.remove(&id) {
-                        participant.rtp_transports.remove(&id);
-                    }
+                if let Some((producer, source)) = participant.remove_producer(id) {
                     screen |= source == MediaSource::Screen;
                     closing.push(producer);
                 }
@@ -1377,7 +1429,7 @@ impl Rooms {
         connection: Option<Connection>,
         change: impl FnOnce(&mut Participant),
     ) -> Result<(), RoomError> {
-        let (muted, deafened, microphones, consumers, report) = {
+        let (muted, deafened, quieted, microphones, consumers, report) = {
             let mut participants = room.participants.lock().expect("room lock");
             let participant = participants
                 .get_mut(&user)
@@ -1385,6 +1437,8 @@ impl Rooms {
                 .ok_or(RoomError::NotInCall)?;
             change(participant);
             let (muted, deafened) = (participant.silenced(), participant.deafened);
+            // Someone silenced mid-word stops speaking now, not at the observer's next event.
+            let quieted = muted && std::mem::take(&mut participant.speaking);
             let microphones: Vec<Producer> = participant
                 .producers
                 .values()
@@ -1401,6 +1455,7 @@ impl Rooms {
             (
                 muted,
                 deafened,
+                quieted,
                 microphones,
                 consumers,
                 Self::state_report(room, participant),
@@ -1442,8 +1497,8 @@ impl Rooms {
             None,
         );
         self.reporter.report(report);
-        if muted {
-            self.apply_speaking(room, &HashSet::new()).await;
+        if quieted {
+            self.tell_speaking(room, user, false);
         }
         Ok(())
     }
@@ -1667,6 +1722,19 @@ impl Rooms {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{LimitSettings, TransferConfig};
+    use crate::outbox::{OUTBOX_BYTES, OutboxReader};
+    use futures_util::FutureExt;
+    use std::net::{IpAddr, Ipv4Addr};
+    use voice_protocol::signal::{OfferEnd, TransferEnd, TransferMode};
+
+    const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    const EVERYTHING: Grants = Grants {
+        speak: true,
+        share_screen: true,
+        camera: true,
+        transfer_files: true,
+    };
 
     #[test]
     fn a_user_holds_at_most_their_seats_and_gets_each_back_on_leaving() {
@@ -1680,5 +1748,311 @@ mod tests {
         let third = counts.claim(alice, 2).unwrap();
         drop((second, third));
         assert!(counts.0.lock().unwrap().get(&alice).is_none());
+    }
+
+    /// Rooms on a mediasoup worker of their own, media and STUN on loopback, and the reports
+    /// they make, which go nowhere else.
+    async fn rooms() -> (Arc<Rooms>, mpsc::UnboundedReceiver<VoiceReport>) {
+        let worker = WorkerManager::new()
+            .create_worker(WorkerSettings::default())
+            .await
+            .expect("worker starts");
+        let addresses = vec![MediaAddress {
+            ip: LOOPBACK,
+            announced: None,
+        }];
+        let transfer = TransferConfig {
+            relay_mbps: 0,
+            port: 0,
+            ..TransferConfig::default()
+        };
+        let relay = Relay::start(&transfer, &addresses).await.expect("relay");
+        let (reports, made) = Reports::new();
+        let rooms = Rooms::new(
+            Uuid::now_v7(),
+            vec![worker],
+            addresses,
+            reports,
+            Arc::new(relay),
+            &LimitSettings::built_in().expect("built-in limits"),
+        );
+        (rooms, made)
+    }
+
+    /// One socket's place in a call, and what the server has sent it.
+    struct Client {
+        seat: Seat,
+        outbox: Outbox,
+        frames: OutboxReader,
+    }
+
+    impl Client {
+        async fn join(rooms: &Arc<Rooms>, channel: Uuid, user: Uuid) -> Self {
+            let (outbox, frames) = Outbox::new(OUTBOX_BYTES);
+            let admission = Admission {
+                grants: EVERYTHING,
+                sign_in: None,
+                server_muted: false,
+            };
+            let seat = rooms
+                .join(channel, user, outbox.clone(), admission)
+                .await
+                .expect("joins");
+            Self {
+                seat,
+                outbox,
+                frames,
+            }
+        }
+
+        /// Every frame sent to the socket since the last call.
+        fn sent(&mut self) -> Vec<ServerMessage> {
+            std::iter::from_fn(|| self.frames.recv().now_or_never().flatten())
+                .map(|text| serde_json::from_str(&text).expect("a frame"))
+                .collect()
+        }
+
+        /// Starts a producer of `source` fed over a plain transport, and returns its id.
+        async fn produce(&mut self, rooms: &Arc<Rooms>, source: MediaSource) -> String {
+            rooms
+                .produce_rtp(self.seat, source, LOOPBACK)
+                .await
+                .expect("produces");
+            self.sent()
+                .into_iter()
+                .find_map(|frame| match frame {
+                    ServerMessage::RtpProduced { producer_id, .. } => Some(producer_id),
+                    _ => None,
+                })
+                .expect("rtpProduced")
+        }
+    }
+
+    fn made(reports: &mut mpsc::UnboundedReceiver<VoiceReport>) -> Vec<VoiceReport> {
+        std::iter::from_fn(|| reports.try_recv().ok()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_producer_fed_over_a_plain_transport_takes_it_along_when_it_closes() {
+        let (rooms, _reports) = rooms().await;
+        let (channel, user) = (Uuid::now_v7(), Uuid::now_v7());
+        let mut alice = Client::join(&rooms, channel, user).await;
+        // Sound is not previewed back to its sender, a picture is; either way the transport
+        // goes with the producer.
+        for source in [MediaSource::ScreenAudio, MediaSource::Screen] {
+            let producer = alice.produce(&rooms, source).await;
+            assert_eq!(
+                (rooms.census().producers, rooms.census().transports),
+                (1, 1)
+            );
+            rooms.close_producer(alice.seat, &producer).await.unwrap();
+            assert_eq!(
+                (rooms.census().producers, rooms.census().transports),
+                (0, 0)
+            );
+        }
+        // The same when the grant its source needs is taken away.
+        alice.produce(&rooms, MediaSource::ScreenAudio).await;
+        alice.produce(&rooms, MediaSource::Microphone).await;
+        let room = rooms.room(channel).unwrap();
+        let grants = Grants {
+            share_screen: false,
+            ..EVERYTHING
+        };
+        rooms.set_grants(&room, user, grants).await;
+        assert_eq!(
+            (rooms.census().producers, rooms.census().transports),
+            (1, 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn muting_one_participant_leaves_the_others_speaking() {
+        let (rooms, mut reports) = rooms().await;
+        let channel = Uuid::now_v7();
+        let (a, b, c) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        let mut alice = Client::join(&rooms, channel, a).await;
+        let bob = Client::join(&rooms, channel, b).await;
+        let carol = Client::join(&rooms, channel, c).await;
+        let room = rooms.room(channel).unwrap();
+        rooms.apply_speaking(&room, &HashSet::from([a, b])).await;
+        alice.sent();
+        made(&mut reports);
+
+        rooms.set_state(bob.seat, true, false).await.unwrap();
+        rooms.set_state(carol.seat, true, false).await.unwrap();
+        let speaking: Vec<(Uuid, bool)> = alice
+            .sent()
+            .into_iter()
+            .filter_map(|frame| match frame {
+                ServerMessage::Speaking { user, speaking } => Some((user, speaking)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(speaking, [(b, false)]);
+        let reported: Vec<(Uuid, bool)> = made(&mut reports)
+            .into_iter()
+            .filter_map(|report| match report {
+                VoiceReport::Speaking { user, speaking, .. } => Some((user, speaking)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reported, [(b, false)]);
+        let participants = room.participants.lock().unwrap();
+        assert!(participants[&a].speaking);
+        assert!(!participants[&b].speaking);
+    }
+
+    #[tokio::test]
+    async fn a_participant_replaced_from_another_socket_leaves_nothing_behind() {
+        let (rooms, mut reports) = rooms().await;
+        let channel = Uuid::now_v7();
+        let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+        let mut desktop = Client::join(&rooms, channel, a).await;
+        let mut bob = Client::join(&rooms, channel, b).await;
+        let room = rooms.room(channel).unwrap();
+
+        // The desktop is deafened, speaking, sharing its screen with sound, offering a file,
+        // and sending it to Bob, who consumes everything it produces.
+        rooms.set_state(desktop.seat, false, true).await.unwrap();
+        for source in [
+            MediaSource::Microphone,
+            MediaSource::Screen,
+            MediaSource::ScreenAudio,
+        ] {
+            desktop.produce(&rooms, source).await;
+        }
+        rooms.apply_speaking(&room, &HashSet::from([a])).await;
+        let capabilities = bob
+            .sent()
+            .into_iter()
+            .find_map(|frame| match frame {
+                ServerMessage::Ready {
+                    router_rtp_capabilities,
+                    ..
+                } => Some(router_rtp_capabilities),
+                _ => None,
+            })
+            .expect("ready");
+        rooms.consume_rtp(bob.seat, LOOPBACK).await.unwrap();
+        rooms
+            .set_capabilities(bob.seat, capabilities)
+            .await
+            .unwrap();
+        let mut consumers: Vec<String> = bob
+            .sent()
+            .into_iter()
+            .filter_map(|frame| match frame {
+                ServerMessage::NewConsumer { consumer_id, .. } => Some(consumer_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(consumers.len(), 3);
+        let offer = Uuid::now_v7();
+        rooms
+            .offer_file(desktop.seat, offer, "notes.txt".to_string(), 1, true, 60)
+            .await
+            .unwrap();
+        rooms
+            .accept_file(bob.seat, offer, TransferMode::DirectPreferred)
+            .await
+            .unwrap();
+        desktop.sent();
+        bob.sent();
+        made(&mut reports);
+
+        let mut phone = Client::join(&rooms, channel, a).await;
+
+        // The desktop is told and hung up, and its socket acts for no one.
+        assert_eq!(
+            desktop.sent().last(),
+            Some(&ServerMessage::Kicked {
+                reason: KickReason::Replaced
+            })
+        );
+        assert!(desktop.outbox.hung_up().now_or_never().is_some());
+        assert!(matches!(
+            rooms.set_state(desktop.seat, false, false).await,
+            Err(RoomError::NotInCall)
+        ));
+        rooms.leave_seat(desktop.seat).await;
+
+        // Bob is told of everything that went with it.
+        let told = bob.sent();
+        let mut closed: Vec<String> = told
+            .iter()
+            .filter_map(|frame| match frame {
+                ServerMessage::ConsumerClosed { consumer_id } => Some(consumer_id.clone()),
+                _ => None,
+            })
+            .collect();
+        closed.sort();
+        consumers.sort();
+        assert_eq!(closed, consumers);
+        for expected in [
+            ServerMessage::FileWithdrawn {
+                offer,
+                reason: OfferEnd::Left,
+            },
+            ServerMessage::TransferEnded {
+                offer,
+                peer: a,
+                reason: TransferEnd::Left,
+            },
+            ServerMessage::Speaking {
+                user: a,
+                speaking: false,
+            },
+        ] {
+            assert!(
+                told.contains(&expected),
+                "{expected:?} missing from {told:?}"
+            );
+        }
+
+        // Nothing of the desktop's is left in the room: the phone holds a bare place in it.
+        assert_eq!(
+            rooms.census(),
+            Census {
+                rooms: 1,
+                participants: 2,
+                producers: 0,
+                consumers: 0,
+                transports: 1,
+            }
+        );
+        assert!(room.producer_owner.lock().unwrap().is_empty());
+        assert!(room.offers.lock().unwrap().is_empty());
+        assert!(room.transfers.lock().unwrap().is_empty());
+        assert!(matches!(
+            phone.sent().first(),
+            Some(ServerMessage::Ready { user, .. }) if *user == a
+        ));
+
+        // The API server hears of the join, and then of the state the phone joined in, which
+        // its record of the desktop does not describe.
+        let reported = made(&mut reports);
+        let joined = reported
+            .iter()
+            .position(|report| {
+                matches!(report, VoiceReport::ParticipantJoined { user, .. } if *user == a)
+            })
+            .expect("the join is reported");
+        let state = VoiceReport::ParticipantState {
+            session: room.session,
+            channel,
+            user: a,
+            muted: false,
+            deafened: false,
+            sharing_screen: false,
+        };
+        let stopped = VoiceReport::Speaking {
+            session: room.session,
+            channel,
+            user: a,
+            speaking: false,
+        };
+        assert!(reported[joined..].contains(&state), "{reported:?}");
+        assert!(reported[joined..].contains(&stopped), "{reported:?}");
     }
 }
