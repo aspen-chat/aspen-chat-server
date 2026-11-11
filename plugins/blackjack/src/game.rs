@@ -782,8 +782,10 @@ mod tests {
 
     /// A table whose shoe deals `cards` first.
     fn stacked(cards: &[u8]) -> Table {
-        let mut table = Table::default();
-        table.shoe = shuffled(&mut Stacked);
+        let mut table = Table {
+            shoe: shuffled(&mut Stacked),
+            ..Table::default()
+        };
         table.shoe.extend(cards.iter().rev().map(|&r| card(r)));
         table
     }
