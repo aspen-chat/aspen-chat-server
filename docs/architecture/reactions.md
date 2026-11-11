@@ -51,8 +51,18 @@ A summary stays small however popular a message is.
 
 ### Reactor lists
 
-`GET /messages/{message}/reactions/{emoji}` lists user records, earliest first, paged with `after`
-(the last user of the previous page) and `limit` (at most 100).
+`GET /messages/{message}/reactions/{emoji}` lists user records, earliest first, a page at a time
+(`limit`, at most 100).
+
+- The answer is `{data, nextCursor}`: `nextCursor` is the `cursor` of the page after, and `null` on
+  the last. The read asks for one row more than the page holds to decide it, so a page's length says
+  nothing: one may be short, or full, and either may be the last.
+- A cursor (`app::cursor`) is the place of the page's last reaction, when it was made and by whom,
+  the columns `react_by_message` orders an emoji's reactions by. The next page is whatever the index
+  holds after that place, so it is found whether or not that reaction still stands: someone taking
+  their reaction back between two pages ends nothing early.
+- Text that is not such a cursor, or is a cursor of another list (each names its own), is refused
+  with `validation`.
 
 ### Rules for both
 

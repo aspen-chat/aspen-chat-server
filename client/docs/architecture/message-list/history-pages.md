@@ -21,6 +21,32 @@ included) render every row through its Markdown again, synchronously, for half a
 When a deleted message's space closes, `useShownWindow` holds the change to the window and shows it
 as a transition.
 
+## Where a window ends
+
+A channel's window (`MessageWindow`) says whether older messages remain (`hasOlder`) and whether its
+newest message is the channel's newest (`atLatest`). Both come from the server, which answers every
+window read with `moreBefore` and `moreAfter`: whether the channel holds messages older and newer
+than the page, decided by reading one message past it on each side read. A page's length says
+neither: a full page may reach the channel's first message, and the page before it is then not asked
+for.
+
+| Read                | Sets                                                         |
+| ------------------- | ------------------------------------------------------------ |
+| `loadLatest`        | `hasOlder` from `moreBefore`; `atLatest` is true             |
+| `loadOlder`         | `hasOlder` from `moreBefore`                                 |
+| `loadNewer`         | `atLatest` when `moreAfter` is false                         |
+| `loadAround`        | `hasOlder` from `moreBefore`, `atLatest` when no `moreAfter` |
+| `#refreshReactions` | Nothing: it reads reactions only                             |
+
+The side a `before` or `after` anchor is on is not read, and the server answers it `true`; no load
+goes by that side. A deployment that sends neither field leaves the one fallback, `moreByPageLength`
+(`sync.ts`): a side that came back with as many messages as were asked for is taken to have more,
+which costs a read of nothing where it held exactly that many. The store's own trimming still moves
+an end: a window cut at its newer end past `WINDOW_MAX_MESSAGES` is no longer at the latest, and one
+cut at its older end has older messages.
+
+Threads and DMs are channels and read the same way.
+
 ## What the store keeps
 
 `RecordStore` (`packages/protocol/src/store.ts`) holds a bounded number of messages however long the

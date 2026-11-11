@@ -99,7 +99,8 @@ with it.
    deployments.
 2. It shows `SAVED_PAGE` at a time, with Show more.
 3. It reads each deployment's messages a page at a time (`AspenSync.loadSavedMessages`), as far as
-   its saves among those shown.
+   its saves among those shown, each page by the `nextCursor` the one before gave. A deployment's
+   messages are all read once an answer gives `null`, however many a page held.
 
 Each row removes its save.
 
@@ -125,7 +126,9 @@ Muted channels are in none of them.
 1. It reads each deployment's page (`AspenSync.readActivity`, `ACTIVITY_PAGE` at a time), with read
    positions sideloaded.
 2. It merges them as search does (`mergeResults`).
-3. It reads older pages on request.
+3. It reads older pages on request, each deployment's by the cursor its page before gave
+   (`withFeedPage`, `feedPages.ts`). A deployment's feed is read to its end when a page gives no
+   cursor, never when a page is short: a full page may be the last, and a short one may not be.
 
 What arrives while a view is open (`AspenSync.onArrival`) joins the top of its deployment's feed if
 the view holds it (`RecordStore.inActivity`, the server's rule for each view) and the filter shows

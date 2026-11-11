@@ -5,7 +5,7 @@
 use crate::admin::AdminUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path, Query, double_option};
-use crate::include::Listed;
+use crate::include::{Listed, Page};
 use crate::{API_PREFIX, TAG_ADMIN};
 use aspen_app::context::GlobalServerContext;
 use aspen_app::deployment::{DeploymentPermission, from_names, to_names};
@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 pub type DeploymentRoleList = Listed<DeploymentRole>;
-pub type ModerationEntryList = Listed<ModerationEntry>;
-pub type FileOfferEntryList = Listed<FileOfferEntry>;
-pub type ChannelList = Listed<crate::message_enum::Channel>;
+pub type ModerationEntryPage = Page<ModerationEntry>;
+pub type FileOfferEntryPage = Page<FileOfferEntry>;
+pub type ChannelPage = Page<crate::message_enum::Channel>;
 
 /// A deployment role.
 #[derive(Debug, Serialize, ToSchema)]
@@ -331,14 +331,16 @@ impl From<app::moderation_log::ModerationEntry> for ModerationEntry {
 #[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct ModerationLogQuery {
-    /// Continue before this entry, the last of the previous page.
-    pub before: Option<uuid::Uuid>,
+    /// Continue after the page whose `nextCursor` this is.
+    pub cursor: Option<String>,
     /// How many to return, at most 100; 50 when absent.
     pub limit: Option<u32>,
 }
 
-/// The moderation log, newest first, a page at a time. Anyone who may view the dashboard may
-/// read it, so moderators answer to the deployment's other administrators.
+/// The moderation log, newest first, a page at a time. `nextCursor` is the `cursor` of the
+/// page after this one, and `null` on the last; a page may hold fewer than `limit` and not be
+/// the last. Anyone who may view the dashboard may read it, so moderators answer to the
+/// deployment's other administrators.
 #[utoipa::path(
     get,
     path = "/admin/moderation-log",
@@ -346,8 +348,8 @@ pub struct ModerationLogQuery {
     params(ModerationLogQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = ModerationEntryList),
-        (status = BAD_REQUEST, body = Problem),
+        (status = OK, body = ModerationEntryPage),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired` or `forbidden`", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -357,17 +359,18 @@ pub async fn read_moderation_log(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
     Query(query): Query<ModerationLogQuery>,
-) -> ApiResult<Json<ModerationEntryList>> {
+) -> ApiResult<Json<ModerationEntryPage>> {
     access.require(DeploymentPermission::ViewDashboard)?;
-    let entries = app::moderation_log::read_moderation_log(
+    let page = app::moderation_log::read_moderation_log(
         &state,
-        query.before,
-        i64::from(query.limit.unwrap_or(50).clamp(1, 100)),
+        query.cursor.as_deref(),
+        i64::from(query.limit.unwrap_or(50)),
     )
     .await?;
-    Ok(Json(
-        entries.into_iter().map(ModerationEntry::from).collect(),
-    ))
+    Ok(Json(Page::new(
+        page.items.into_iter().map(ModerationEntry::from).collect(),
+        page.next_cursor,
+    )))
 }
 
 /// A file offered in a call, as the deployment's record of transfers keeps it: never its
@@ -410,8 +413,8 @@ pub struct FileTransferEntry {
 #[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub struct FileTransferLogQuery {
-    /// Continue before this offer, the last of the previous page.
-    pub before: Option<uuid::Uuid>,
+    /// Continue after the page whose `nextCursor` this is, read with the same `filter[user]`.
+    pub cursor: Option<String>,
     /// Only offers this user made or received.
     #[serde(rename = "filter[user]")]
     #[param(rename = "filter[user]")]
@@ -421,7 +424,9 @@ pub struct FileTransferLogQuery {
 }
 
 /// The record of files offered in calls and who received them, newest offer first, a page at a
-/// time. It tells who sent what to whom in private calls, so it takes Moderate any community.
+/// time. `nextCursor` is the `cursor` of the page after this one, and `null` on the last; a
+/// page may hold fewer than `limit` and not be the last. It tells who sent what to whom in
+/// private calls, so it takes Moderate any community.
 #[utoipa::path(
     get,
     path = "/admin/file-transfers",
@@ -429,8 +434,8 @@ pub struct FileTransferLogQuery {
     params(FileTransferLogQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = FileOfferEntryList),
-        (status = BAD_REQUEST, body = Problem),
+        (status = OK, body = FileOfferEntryPage),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired` or `forbidden`", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -440,17 +445,17 @@ pub async fn read_file_transfer_log(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
     Query(query): Query<FileTransferLogQuery>,
-) -> ApiResult<Json<FileOfferEntryList>> {
+) -> ApiResult<Json<FileOfferEntryPage>> {
     access.require(DeploymentPermission::ModerateCommunities)?;
-    let entries = app::file_transfer::read_log(
+    let page = app::file_transfer::read_log(
         &state,
-        query.before,
+        query.cursor.as_deref(),
         query.user,
-        i64::from(query.limit.unwrap_or(50).clamp(1, 100)),
+        i64::from(query.limit.unwrap_or(50)),
     )
     .await?;
-    Ok(Json(
-        entries
+    Ok(Json(Page::new(
+        page.items
             .into_iter()
             .map(|(offer, transfers)| FileOfferEntry {
                 id: offer.id,
@@ -474,12 +479,14 @@ pub async fn read_file_transfer_log(
                     .collect(),
             })
             .collect(),
-    ))
+        page.next_cursor,
+    )))
 }
 
 /// Someone's DMs and group DMs, the most recently active first, a page at a time, for a
-/// deployment moderator to open. Takes Moderate any community; listing them, and reading any of
-/// them, is written to the moderation log.
+/// deployment moderator to open. `nextCursor` is the `cursor` of the page after this one, and
+/// `null` on the last; a page may hold fewer than `limit` and not be the last. Takes Moderate
+/// any community; listing them, and reading any of them, is written to the moderation log.
 #[utoipa::path(
     get,
     path = "/admin/users/{user}/dms",
@@ -487,7 +494,8 @@ pub async fn read_file_transfer_log(
     params(("user" = UserId, Path), crate::dm::DmPageQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = ChannelList),
+        (status = OK, body = ChannelPage),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired` or `forbidden`", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -498,12 +506,15 @@ pub async fn list_user_dms(
     AdminUser(_session, access): AdminUser,
     Path(user): Path<UserId>,
     crate::extract::Query(page): crate::extract::Query<crate::dm::DmPageQuery>,
-) -> ApiResult<Json<ChannelList>> {
-    Ok(Json(
-        app::dm::list_dms_moderating(&state, &access, user, page.before, page.limit())
-            .await?
+) -> ApiResult<Json<ChannelPage>> {
+    let page =
+        app::dm::list_dms_moderating(&state, &access, user, page.cursor.as_deref(), page.limit())
+            .await?;
+    Ok(Json(Page::new(
+        page.items
             .into_iter()
             .map(|(dm, recipients)| app::channel::record(&dm, recipients))
             .collect(),
-    ))
+        page.next_cursor,
+    )))
 }

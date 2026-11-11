@@ -669,3 +669,4 @@ identityProviderDiscoveryStatus: "%{issuer} no tiene un documento de descubrimie
 identityProviderDiscoveryUnreadable: "No se pudo leer el documento de descubrimiento de %{issuer} (%{detail}). Revisa que sea el emisor de un proveedor de OpenID Connect."
 identityProviderDiscoveryInvalid: "El documento de descubrimiento de %{issuer} no es válido (%{detail}). Revisa el emisor: el documento debe nombrar exactamente el emisor dado."
 reauthenticateNoPassword: "Esta cuenta no tiene contraseña. Confirma que eres tú a través de tu proveedor de identidad, o con una llave de acceso."
+cursorInvalid: "Ese cursor no es uno que esta lista haya dado. Vuelve a leer la lista desde su primera página."

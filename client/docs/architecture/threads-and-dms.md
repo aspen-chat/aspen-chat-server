@@ -127,6 +127,8 @@ The list comes a page at a time (`DM_PAGE`, 100):
 1. Bootstrap reads the first page (`setDms`), with every DM's mutes and notification settings whole.
 2. As the end of the DM list (`OlderDms`) comes into view, it reads the next page of each deployment
    with more (`AspenSync.loadMoreDms`, `appendDms`).
+3. The store keeps the `nextCursor` each answer gave (`dmsCursor`), which asks for the page after. A
+   deployment has more while that is not `null` (`dmsComplete`), however many DMs a page held.
 
 ### Leaving
 

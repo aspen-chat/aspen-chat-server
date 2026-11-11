@@ -1,7 +1,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::extract::{Created, Json, NoContent, Path, Query};
-use crate::include::{FilterSet, IncludeSet, Included, Listed, Sideloaded, SideloadedList};
+use crate::include::{FilterSet, IncludeSet, Included, Page, Sideloaded, SideloadedPage};
 use crate::link_preview::LinkPreview;
 use crate::message_enum::request::{MessageCreateRequest, MessageUpdateRequest};
 use crate::message_enum::{Message, UserCommunity};
@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use utoipa::{IntoParams, ToSchema};
 
-pub type HeldMessageList = Listed<HeldMessage>;
+pub type HeldMessagePage = Page<HeldMessage>;
 
 pub fn message_to_api(
     msg: app::message::Message,
@@ -92,8 +92,24 @@ pub enum MessageInclude {
 
 /// Body of a message read; a named alias for the same reason as `api::community::CommunityRead`.
 pub type MessageRead = Sideloaded<Message>;
-/// Body of a message list read; see [`MessageRead`].
-pub type MessageList = SideloadedList<Message>;
+/// Body of a read of a window of a channel's history: the messages, their related records,
+/// and whether the channel holds messages beyond each end of them. A reader decides whether to
+/// read further by these alone, never by how many messages `data` holds.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageWindowRead {
+    pub data: Vec<Message>,
+    pub included: Included,
+    /// Whether the channel holds messages older than these. Always true of an `after` read,
+    /// which reads nothing older than its anchor.
+    pub more_before: bool,
+    /// Whether the channel holds messages newer than these. Always true of a `before` read,
+    /// which reads nothing newer than its anchor, and always false of the default window, the
+    /// newest messages.
+    pub more_after: bool,
+}
+/// Body of a message list read a page at a time by a cursor.
+pub type MessagePage = SideloadedPage<Message>;
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -682,18 +698,19 @@ async fn post(
     .into_response())
 }
 
-/// A page of the caller's held messages, oldest first.
+/// A page of the caller's held messages, in the order they were held.
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct HeldPageQuery {
-    /// Continue after this held message, the last of the previous page.
-    pub after: Option<HeldMessageId>,
-    /// How many to return, at most 100; 100 when absent. A shorter page is the last.
+    /// Continue after the page whose `nextCursor` this is.
+    pub cursor: Option<String>,
+    /// How many to return, at most 100; 100 when absent.
     pub limit: Option<i64>,
 }
 
-/// A page of the caller's messages held for their attachments' previews, oldest first, which
-/// their apps show waiting until each is posted.
+/// The caller's held messages, in the order they were held, which their apps show waiting
+/// until each is posted, a page at a time. `nextCursor` is the `cursor` of the page after this
+/// one, and `null` on the last; a page may hold fewer than `limit` and not be the last.
 #[utoipa::path(
     get,
     path = "/users/@me/held-messages",
@@ -701,7 +718,8 @@ pub struct HeldPageQuery {
     params(HeldPageQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = HeldMessageList),
+        (status = OK, body = HeldMessagePage),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -710,15 +728,18 @@ pub async fn list_held_messages(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Query(page): Query<HeldPageQuery>,
-) -> ApiResult<Json<HeldMessageList>> {
-    let held = app::message::held::read_held(
+) -> ApiResult<Json<HeldMessagePage>> {
+    let page = app::message::held::read_held(
         &state,
         user.id,
-        page.after,
+        page.cursor.as_deref(),
         page.limit.unwrap_or(app::LIST_PAGE),
     )
     .await?;
-    Ok(Json(held.into_iter().map(HeldMessage::from).collect()))
+    Ok(Json(Page::new(
+        page.items.into_iter().map(HeldMessage::from).collect(),
+        page.next_cursor,
+    )))
 }
 
 const DEFAULT_MESSAGE_LIMIT: u32 = 50;
@@ -768,8 +789,10 @@ impl MessageListQuery {
 }
 
 /// Messages are returned newest first for `before` and the default window, oldest first for
-/// `after`, and in ascending id order for `around`. `include` sideloads the messages' authors,
-/// attachments, polls, the threads they started, and the replies their echoes show.
+/// `after`, and in ascending id order for `around`. `moreBefore` and `moreAfter` say whether
+/// the channel holds messages older and newer than those returned, which a page's length does
+/// not. `include` sideloads the messages' authors, attachments, polls, the threads they started,
+/// and the replies their echoes show.
 #[utoipa::path(
     get,
     path = "/channels/{channel}/messages",
@@ -777,7 +800,7 @@ impl MessageListQuery {
     params(("channel" = ChannelId, Path), MessageListQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = MessageList),
+        (status = OK, body = MessageWindowRead),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -789,17 +812,18 @@ pub async fn list_channel_messages(
     SessionUser { user, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
     Query(query): Query<MessageListQuery>,
-) -> ApiResult<Json<MessageList>> {
+) -> ApiResult<Json<MessageWindowRead>> {
     let include = query.include.clone();
     let window = query.into_window()?;
-    let messages: Vec<Message> =
-        app::channel::read_channel_messages(&state, user.id, channel, window)
-            .await?
-            .into_iter()
-            .map(Message::from)
-            .collect();
-    let included = sideload_messages(&state, user.id, &messages, &include).await?;
-    Ok(Json(MessageList::new(messages, included)))
+    let read = app::channel::read_channel_messages(&state, user.id, channel, window).await?;
+    let data: Vec<Message> = read.messages.into_iter().map(Message::from).collect();
+    let included = sideload_messages(&state, user.id, &data, &include).await?;
+    Ok(Json(MessageWindowRead {
+        data,
+        included,
+        more_before: read.more_before,
+        more_after: read.more_after,
+    }))
 }
 
 /// Reads a message. `include` sideloads its author, attachments, and poll.

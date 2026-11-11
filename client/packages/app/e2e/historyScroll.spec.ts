@@ -108,21 +108,33 @@ async function serveHistory(page: Page, messages: typeof history = history) {
     const before = url.searchParams.get("before");
     const after = url.searchParams.get("after");
     const around = url.searchParams.get("around");
+    // What lies beyond each end of the slice is said as the server says it: a side read is
+    // judged by what stands past it, and the side an anchor is on is taken to have more.
     let slice: typeof history;
+    let moreBefore: boolean;
+    let moreAfter: boolean;
     if (around !== null) {
       // The message and up to `limit` on each side of it, newest first like the rest.
       await new Promise((resolve) => setTimeout(resolve, PAGE_DELAY_MS));
       const at = messages.findIndex((m) => m.record.id === around);
       slice = at === -1 ? [] : messages.slice(Math.max(0, at - limit), at + limit + 1);
+      moreAfter = at - limit > 0;
+      moreBefore = at !== -1 && at + limit + 1 < messages.length;
     } else if (before !== null) {
       await new Promise((resolve) => setTimeout(resolve, PAGE_DELAY_MS));
       const start = messages.findIndex((m) => (m.record.id as string) < before);
       slice = start === -1 ? [] : messages.slice(start, start + limit);
+      moreBefore = start !== -1 && start + limit < messages.length;
+      moreAfter = true;
     } else if (after !== null) {
       const newer = messages.filter((m) => (m.record.id as string) > after).reverse();
       slice = newer.slice(0, limit).reverse();
+      moreBefore = true;
+      moreAfter = newer.length > limit;
     } else {
       slice = messages.slice(0, limit);
+      moreBefore = messages.length > limit;
+      moreAfter = false;
     }
     await route.fulfill({
       json: {
@@ -131,6 +143,8 @@ async function serveHistory(page: Page, messages: typeof history = history) {
           users: [],
           attachments: slice.flatMap((m) => m.pictures.map(attachmentOf)),
         },
+        moreBefore,
+        moreAfter,
       },
     });
   });

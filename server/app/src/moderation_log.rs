@@ -5,6 +5,7 @@
 //! what its ids name.
 
 use crate::context::GlobalServerContext;
+use crate::cursor::{List, Paged};
 use crate::message::MessageKind;
 use crate::{AttachmentId, ChannelId, CommunityId, MessageId, PollId, UserId};
 use aspen_schema::moderation_log;
@@ -276,25 +277,36 @@ fn subject_of(action: &str, subject: &str) -> Option<Subject> {
     }
 }
 
-/// The newest entries of the moderation log, before `before` when given, each with what its
-/// ids name, read one query per kind of record for the whole page.
-pub async fn read_moderation_log(
-    state: &GlobalServerContext,
-    before: Option<uuid::Uuid>,
+/// An entry as the table keeps it: its id, actor, whether an operator made it, action,
+/// community, channel, subject, and time.
+type LogRow = (
+    uuid::Uuid,
+    Option<UserId>,
+    bool,
+    String,
+    Option<CommunityId>,
+    Option<ChannelId>,
+    Option<String>,
+    chrono::DateTime<chrono::Utc>,
+);
+
+/// The most entries one page of the log holds.
+pub const MAX_PAGE: i64 = 100;
+
+/// The place a moderation log cursor holds: the id of the last entry of the page before, which
+/// is all the log is ordered by.
+fn log_position(cursor: &str) -> crate::Result<uuid::Uuid> {
+    crate::cursor::decode(List::ModerationLog, cursor)
+}
+
+/// One page of the log's rows, newest first by id through the primary key, after `after`, and
+/// the cursor of the next.
+async fn log_page(
+    conn: &mut AsyncPgConnection,
+    after: Option<uuid::Uuid>,
     limit: i64,
-) -> crate::Result<Vec<ModerationEntry>> {
-    use aspen_schema::{attachment, channel, community, dm_recipient, message, poll_option};
-    type Row = (
-        uuid::Uuid,
-        Option<UserId>,
-        bool,
-        String,
-        Option<CommunityId>,
-        Option<ChannelId>,
-        Option<String>,
-        chrono::DateTime<chrono::Utc>,
-    );
-    let mut conn = state.connection_pool.get().await?;
+) -> crate::Result<Paged<LogRow>> {
+    let limit = limit.clamp(1, MAX_PAGE);
     let mut query = moderation_log::table
         .select((
             moderation_log::id,
@@ -307,12 +319,35 @@ pub async fn read_moderation_log(
             moderation_log::at,
         ))
         .order(moderation_log::id.desc())
-        .limit(limit)
+        .limit(limit + 1)
         .into_boxed();
-    if let Some(before) = before {
-        query = query.filter(moderation_log::id.lt(before));
+    if let Some(after) = after {
+        query = query.filter(moderation_log::id.lt(after));
     }
-    let rows: Vec<Row> = query.load(conn.as_mut()).await?;
+    let rows: Vec<LogRow> = query.load(conn).await?;
+    Ok(crate::cursor::cut(
+        List::ModerationLog,
+        rows,
+        limit as usize,
+        |last| last.0,
+    ))
+}
+
+/// A page of the moderation log, newest first: at most `limit` entries (up to [`MAX_PAGE`]),
+/// after the place `cursor` holds when given, which is the `next_cursor` of the page before,
+/// each with what its ids name, read one query per kind of record for the whole page.
+pub async fn read_moderation_log(
+    state: &GlobalServerContext,
+    cursor: Option<&str>,
+    limit: i64,
+) -> crate::Result<Paged<ModerationEntry>> {
+    use aspen_schema::{attachment, channel, community, dm_recipient, message, poll_option};
+    let after = cursor.map(log_position).transpose()?;
+    let mut conn = state.connection_pool.get().await?;
+    let Paged {
+        items: rows,
+        next_cursor,
+    } = log_page(conn.as_mut(), after, limit).await?;
     let subjects: Vec<Option<Subject>> = rows
         .iter()
         .map(|(_, _, _, action, _, _, subject, _)| {
@@ -443,7 +478,7 @@ pub async fn read_moderation_log(
         })
         .collect();
 
-    Ok(rows
+    let items = rows
         .into_iter()
         .zip(subjects)
         .map(
@@ -490,7 +525,100 @@ pub async fn read_moderation_log(
                 }
             },
         )
-        .collect())
+        .collect();
+    Ok(Paged { items, next_cursor })
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+    use diesel_async::{AsyncConnection, SimpleAsyncConnection};
+
+    fn entry(n: u8) -> uuid::Uuid {
+        format!("ffffffff-ffff-7fff-bfff-ffffffffff{n:02x}")
+            .parse()
+            .unwrap()
+    }
+
+    /// Which entries one page holds, by their numbers, and the next page's cursor.
+    async fn page(
+        conn: &mut AsyncPgConnection,
+        cursor: Option<&str>,
+        limit: i64,
+    ) -> (Vec<u8>, Option<String>) {
+        let page = log_page(conn, cursor.map(|c| log_position(c).unwrap()), limit)
+            .await
+            .unwrap();
+        let entries = page
+            .items
+            .into_iter()
+            .map(|row| (1..=u8::MAX).find(|n| entry(*n) == row.0).unwrap())
+            .collect();
+        (entries, page.next_cursor)
+    }
+
+    /// The log pages by its entries' ids, newest first, and its last page says it is the last
+    /// however many it holds.
+    #[tokio::test]
+    async fn the_log_pages_to_a_last_page_that_is_full() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        // The log is the deployment's, so the test's entries are the only ones only once the
+        // rest are gone, for as long as its transaction lasts.
+        conn.batch_execute("DELETE FROM moderation_log")
+            .await
+            .unwrap();
+        for n in 1..=5 {
+            conn.batch_execute(&format!(
+                "INSERT INTO moderation_log (id, action, at) VALUES ('{}', 'banUser', now())",
+                entry(n)
+            ))
+            .await
+            .unwrap();
+        }
+        let (entries, cursor) = page(&mut conn, None, 2).await;
+        assert_eq!(entries, [5, 4]);
+        // The fourth, which the cursor was made from, is gone.
+        conn.batch_execute(&format!(
+            "DELETE FROM moderation_log WHERE id = '{}'",
+            entry(4)
+        ))
+        .await
+        .unwrap();
+        let (entries, cursor) = page(&mut conn, cursor.as_deref(), 2).await;
+        assert_eq!(entries, [3, 2]);
+        assert!(cursor.is_some());
+        let (entries, cursor) = page(&mut conn, cursor.as_deref(), 2).await;
+        assert_eq!(entries, [1]);
+        assert_eq!(cursor, None);
+        let (entries, cursor) = page(&mut conn, None, 4).await;
+        assert_eq!(entries, [5, 3, 2, 1]);
+        assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn a_cursor_of_no_log_is_refused() {
+        let refused =
+            |cursor: &str| matches!(log_position(cursor), Err(crate::Error::Validation(_)));
+        assert!(refused("garbage"));
+        // An entry's id as it is, which is not a cursor.
+        assert!(refused(&entry(1).to_string()));
+        // A place of another shape, and a cursor of the record of file offers, whose place
+        // is an id alone too.
+        assert!(refused(&crate::cursor::encode(
+            List::ModerationLog,
+            &(1_i64, entry(1))
+        )));
+        assert!(refused(&crate::cursor::encode(List::FileOffers, &entry(1))));
+        assert!(!refused(&crate::cursor::encode(
+            List::ModerationLog,
+            &entry(1)
+        )));
+    }
 }
 
 #[cfg(test)]

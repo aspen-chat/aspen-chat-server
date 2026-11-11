@@ -14,7 +14,7 @@ use crate::TAG_REACTIONS;
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem, unique, violates};
 use crate::extract::{Json, NoContent, Path, Query};
-use crate::include::Listed;
+use crate::include::{Listed, Page};
 use crate::message_enum::{React, User};
 use crate::user::{UserRef, not_your_account};
 use aspen_app as app;
@@ -26,7 +26,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-pub type UserList = Listed<User>;
+pub type ReactorPage = Page<User>;
 pub type FrequentEmojiList = Listed<FrequentEmoji>;
 
 /// One emoji's reactions to a message, in brief.
@@ -58,14 +58,18 @@ impl From<app::react::ReactionSummary> for ReactionSummary {
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ReactorsQuery {
-    /// Continue after this person, the last of the previous page.
-    pub after: Option<UserId>,
+    /// Continue after the page whose `nextCursor` this is.
+    pub cursor: Option<String>,
     /// How many to return, at most 100; 50 when absent.
     pub limit: Option<u32>,
 }
 
-/// Everyone who reacted to a message with an emoji, earliest first, a page at a time. A page
-/// shorter than `limit` is the last.
+/// How many reactors a page holds when no `limit` is given.
+const DEFAULT_REACTORS_PAGE: u32 = 50;
+
+/// Everyone who reacted to a message with an emoji, earliest first, a page at a time.
+/// `nextCursor` is the `cursor` of the page after this one, and `null` on the last; a page may
+/// hold fewer than `limit` and not be the last.
 #[utoipa::path(
     get,
     path = "/messages/{message}/reactions/{emoji}",
@@ -77,8 +81,8 @@ pub struct ReactorsQuery {
     ),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = UserList),
-        (status = BAD_REQUEST, body = Problem),
+        (status = OK, body = ReactorPage),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, description = "No such message, or one in a DM the caller is not in", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -89,19 +93,19 @@ pub async fn list_reactors(
     SessionUser { user, .. }: SessionUser,
     Path((message, emoji)): Path<(MessageId, String)>,
     Query(query): Query<ReactorsQuery>,
-) -> ApiResult<Json<UserList>> {
-    let ids = app::react::read_reactors(
+) -> ApiResult<Json<ReactorPage>> {
+    let page = app::react::read_reactors(
         &state,
         user.id,
         message,
         &emoji,
-        query.after,
-        query.limit.unwrap_or(50),
+        query.cursor.as_deref(),
+        query.limit.unwrap_or(DEFAULT_REACTORS_PAGE),
     )
     .await?;
     // Read in one batch, then put back in the list's order.
     let mut users: std::collections::HashMap<UserId, User> =
-        app::user::read_users(&state, user.id, &ids)
+        app::user::read_users(&state, user.id, &page.items)
             .await?
             .into_iter()
             .map(|u| {
@@ -109,7 +113,13 @@ pub async fn list_reactors(
                 (record.id, record)
             })
             .collect();
-    Ok(Json(ids.iter().filter_map(|id| users.remove(id)).collect()))
+    Ok(Json(ReactorPage::new(
+        page.items
+            .iter()
+            .filter_map(|id| users.remove(id))
+            .collect(),
+        page.next_cursor,
+    )))
 }
 
 #[utoipa::path(

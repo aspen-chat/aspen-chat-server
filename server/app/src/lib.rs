@@ -35,6 +35,7 @@ pub mod channel_presence;
 pub mod community;
 pub mod community_takedown;
 pub mod context;
+pub mod cursor;
 pub mod custom_emoji;
 pub mod database_latency;
 pub mod deep_search;

@@ -49,9 +49,14 @@ Community invites follow the same week:
 
 - A community's invite list (`GET /communities/{community}/invites`) shows invites that have expired
   for a week.
-- That list is newest first, a page of at most `LIST_PAGE` (100) at a time after the invite
-  `before`. It is read through the index `invite_listed`, or `invite_listed_by_creator` for a member
-  who sees only their own.
+- That list is newest first, a page of at most `LIST_PAGE` (100) at a time. It is read through the
+  index `invite_listed`, or `invite_listed_by_creator` for a member who sees only their own.
+- Its answer is `{data, nextCursor}`: `nextCursor` is the `cursor` of the page after, and `null` on
+  the last, which the read decides by asking for one invite more than the page holds. A cursor
+  (`app::cursor`) is the place of the page's last invite, when it was made and its code, the columns
+  the list is ordered by, so the page after it is read whether or not that invite is still listed.
+  Text that is not such a cursor, or is a cursor of another list (each names its own), is refused
+  with `validation`.
 - A revoked community invite is gone at once.
 
 ## The first account of an invite-only deployment

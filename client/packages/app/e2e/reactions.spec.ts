@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { longPress, reactedText, signInToWorld, singleReactions } from "./world";
+import { users } from "./world/fixtures";
 
 /**
  * Reactions under a message, against the stubbed world in `world.ts`, where Bob's "Sounds
@@ -66,6 +67,41 @@ test("the rest open in a list of every reaction, with who reacted", async ({ pag
   ]);
   await tabs.nth(1).click();
   await expect(dialog.getByRole("tabpanel").getByRole("listitem")).toHaveCount(1);
+});
+
+test("the list of who reacted reads on by the cursor a page gives, however short the page", async ({
+  page,
+}) => {
+  // One person a page where fifty were asked for, with a cursor until the last.
+  const pages: Record<string, { data: unknown[]; nextCursor: string | null }> = {
+    "": { data: [users[0]], nextCursor: "after-kate" },
+    "after-kate": { data: [users[1]], nextCursor: null },
+  };
+  const asked: (string | null)[] = [];
+  await page.route(/\/api\/v1\/messages\/[^/]+\/reactions\/[^/]+(\?.*)?$/, (route) => {
+    if (route.request().method() !== "GET") {
+      return route.fallback();
+    }
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    asked.push(cursor);
+    return route.fulfill({ json: pages[cursor ?? ""] });
+  });
+  await chips(page).getByRole("button", { name: "2 more reactions" }).click();
+  const people = page
+    .getByRole("dialog", { name: "Reactions" })
+    .getByRole("tabpanel")
+    .getByRole("listitem");
+  const more = page.getByRole("dialog", { name: "Reactions" }).getByRole("button", {
+    name: "Show more",
+  });
+  await expect(people).toHaveText(["KKate"]);
+  await more.click();
+  await expect(people).toHaveText(["KKate", "BNBob With A Rather Long Display Name"]);
+  await expect(more).toHaveCount(0);
+  // The first page may be read more than once (React's strict mode mounts twice); the second
+  // is asked for once, by the cursor.
+  expect(asked.filter((cursor) => cursor !== null)).toEqual(["after-kate"]);
+  expect(asked.at(-1)).toBe("after-kate");
 });
 
 test("adding a reaction from the chips takes one tap", async ({ page }) => {

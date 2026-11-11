@@ -4,15 +4,22 @@ Review takes the deployment permission Review reports.
 
 ## Endpoints
 
-| Endpoint                                                      | Does                                                                                                                                                                                                                                                                   |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /admin/reports?filter[status]=open\|resolved\|dismissed` | Pages the cases with `before` (the last case of the previous page) and `limit` (15 by default). Open and dismissed cases are ordered by their latest report, through `report_case_by_status`; resolved ones by when they were resolved, through `report_case_resolved` |
-| `GET /admin/reports/{case}`                                   | Reads one case                                                                                                                                                                                                                                                         |
-| `GET /admin/report-counts`                                    | Counts the open and dismissed cases, each up to `MAX_COUNTED_CASES` (1000, shown as "999+")                                                                                                                                                                            |
-| `GET /admin/reports/{case}/context`                           | Reads the reported message's surroundings (below)                                                                                                                                                                                                                      |
+| Endpoint                                                      | Does                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /admin/reports?filter[status]=open\|resolved\|dismissed` | Pages the cases with `cursor` (the `nextCursor` of the previous page) and `limit` (15 by default). Open and dismissed cases are ordered by their latest report, through `report_case_by_status`; resolved ones by when they were resolved, through `report_case_resolved` |
+| `GET /admin/reports/{case}`                                   | Reads one case                                                                                                                                                                                                                                                            |
+| `GET /admin/report-counts`                                    | Counts the open and dismissed cases, each up to `MAX_COUNTED_CASES` (1000, shown as "999+")                                                                                                                                                                               |
+| `GET /admin/reports/{case}/context`                           | Reads the reported message's surroundings (below)                                                                                                                                                                                                                         |
 
-The dashboard's Reports section shows a page at a time, each further page read with `before`, and
-reads every page it shows again when what awaits review changes.
+The list's answer carries `nextCursor`, the `cursor` of the page after, and `null` on the last page
+(and on a single case's read), which the list decides by asking for one case more than the page
+holds. A cursor (`app::cursor`) is the place of the page's last case: the status listed, the time
+that list is ordered by, and the case. The page after it is read whatever has become of that case
+since. Text that is not a cursor of the list of that status, or is a cursor of another list (each
+names its own), is refused with `validation`.
+
+The dashboard's Reports section shows a page at a time, each further page read by the cursor the one
+before gave (`readCasePages`), and reads every page it shows again when what awaits review changes.
 
 The list and the single read give each case with:
 

@@ -50,7 +50,15 @@ Drawing:
   nothing.
 
 It lists every emoji and, for the chosen one, everyone who reacted, a page at a time
-(`AspenSync.loadReactors`).
+(`AspenSync.loadReactors`, through `useCursorPages`):
+
+- Each answer is `{data, nextCursor}`. Show more asks for the next page by that cursor, and is
+  offered for as long as the last answer gave one.
+- How many a page holds decides nothing: a short page with a cursor has more after it, and a full
+  one without is the last.
+- The cursor is the server's and names no one, so taking a reaction off someone in the list (`drop`)
+  does not move where the next page begins.
+- Someone a later page lists again keeps the one place they have.
 
 ## Quick reactions
 

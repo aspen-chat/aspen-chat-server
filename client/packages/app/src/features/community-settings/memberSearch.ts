@@ -50,9 +50,9 @@ export function useMemberSearch(communityId: string, query: string): MemberSearc
     let current = true;
     const timer = setTimeout(() => {
       sync.searchMembers(communityId, text).then(
-        (members) => {
+        (page) => {
           if (current) {
-            setFound({ text, members });
+            setFound({ text, members: page.data });
             setError(null);
           }
         },

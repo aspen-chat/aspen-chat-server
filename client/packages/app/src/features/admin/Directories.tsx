@@ -1,6 +1,5 @@
 import {
   ApiProblemError,
-  type Channel,
   type AdminCommunityEntry,
   type AdminListQuery,
   type AdminUserEntry,
@@ -21,7 +20,7 @@ import {
 } from "react-aria-components";
 import { useDeploymentCan, useMe, useSync, useUser } from "@/api/hooks";
 import { rankOf, type DeploymentRoles } from "@/features/admin/deploymentRoleRecords";
-import { useDmTitle } from "@/features/dms/useDmTitle";
+import { UserDmList } from "@/features/admin/UserDmList";
 import { markClass } from "@/features/layout/choices";
 import { useFigures } from "@/features/admin/format";
 import { Avatar } from "@/features/communities/Avatar";
@@ -427,24 +426,17 @@ function UserRoles({
   );
 }
 
-/** For a moderator: someone's DMs, each a link to read it, which the server logs. */
+/**
+ * For a moderator: someone's DMs, each a link to read it, which the server logs. They are read
+ * when the list is opened, and again each time it is.
+ */
 function UserDms({ user }: { user: AdminUserEntry }) {
   const m = useMessages();
   const sync = useSync();
-  const [dms, setDms] = useState<readonly Channel[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const load = useCallback((cursor?: string) => sync.userDms(user.id, cursor), [sync, user.id]);
   const name = user.displayName ?? user.name;
   return (
-    <DialogTrigger
-      onOpenChange={(open) => {
-        if (open) {
-          setError(null);
-          sync.userDms(user.id).then(setDms, (e: unknown) => {
-            setError(e instanceof ApiProblemError ? e.message : String(e));
-          });
-        }
-      }}
-    >
+    <DialogTrigger>
       <Button className={secondaryButtonClass + " py-0.5 text-xs"}>{m.admin.userDms}</Button>
       <Popover
         placement="bottom end"
@@ -456,29 +448,10 @@ function UserDms({ user }: { user: AdminUserEntry }) {
         >
           <h3 className="px-1 text-sm font-semibold">{format(m.admin.userDmsHeading, { name })}</h3>
           <p className="px-1 text-xs text-ink-muted">{m.admin.userDmsHint}</p>
-          {error !== null && <p className="px-1 text-xs text-danger">{error}</p>}
-          {dms !== null && dms.length === 0 && (
-            <p className="px-1 text-sm text-ink-muted">{m.admin.noDms}</p>
-          )}
-          {dms?.map((dm) => (
-            <DmLink key={dm.id} dm={dm} />
-          ))}
+          <UserDmList load={load} />
         </Dialog>
       </Popover>
     </DialogTrigger>
-  );
-}
-
-function DmLink({ dm }: { dm: Channel }) {
-  const title = useDmTitle(dm);
-  return (
-    <Link
-      to="/dms/$channelId"
-      params={{ channelId: dm.id }}
-      className="truncate rounded px-2 py-1 text-sm outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-accent/50"
-    >
-      {title}
-    </Link>
   );
 }
 

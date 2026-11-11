@@ -14,6 +14,7 @@ import { Button, ToggleButton, ToggleButtonGroup } from "react-aria-components";
 import { useNickname, useReportsChanges, useSync } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { ResolveDialog } from "@/features/admin/ResolveDialog";
+import { readCasePages } from "@/features/admin/reportPages";
 import { useAdminRead } from "@/features/admin/useAdminRead";
 import { Avatar } from "@/features/communities/Avatar";
 import { secondaryButtonClass, toggleChipClass } from "@/features/invites/dialog";
@@ -43,19 +44,6 @@ interface Named {
   categories: ReadonlyMap<string, string>;
 }
 
-/** Two pages of cases as one, the later's after the earlier's. */
-function joined(a: ReportCaseList, b: ReportCaseList): ReportCaseList {
-  return {
-    cases: [...a.cases, ...b.cases],
-    users: [...a.users, ...b.users],
-    messages: [...a.messages, ...b.messages],
-    channels: [...a.channels, ...b.channels],
-    communities: [...a.communities, ...b.communities],
-    categories: [...a.categories, ...b.categories],
-    attachments: [...a.attachments, ...b.attachments],
-  };
-}
-
 function namedBy(list: ReportCaseList): Named {
   return {
     users: new Map(list.users.map((u) => [u.id, u])),
@@ -82,16 +70,17 @@ export function ReportsSection() {
   const [pages, setPages] = useState(1);
   const load = useCallback(async () => {
     const counts = sync.admin.reportCounts();
-    let list = await sync.admin.reportCases(status, { limit: PAGE });
-    let last = list;
-    for (let page = 1; page < pages && last.cases.length === PAGE; page++) {
-      const before = last.cases.at(-1)?.id;
-      last = await sync.admin.reportCases(status, { limit: PAGE, ...(before ? { before } : {}) });
-      list = joined(list, last);
-    }
+    const list = await readCasePages(
+      (cursor) =>
+        sync.admin.reportCases(status, {
+          limit: PAGE,
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+      pages,
+    );
     // The people and files they name are drawn from the cache, like everyone else's.
     sync.store.ingest({ users: list.users, attachments: list.attachments });
-    return { list, counts: await counts, more: last.cases.length === PAGE };
+    return { list, counts: await counts, more: list.nextCursor !== null };
   }, [sync, status, pages]);
   const read = useAdminRead(load);
   // A change to what awaits review reads the page again.

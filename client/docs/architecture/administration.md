@@ -125,7 +125,9 @@ The user and community lists:
 
 - Shows each person's deployment roles and, for those who may change them, a picker.
 - Shows a user of another deployment as `name@domain`.
-- For a moderator, lists anyone's DMs to open.
+- For a moderator, lists anyone's DMs to open (`UserDmList`), most recently active first, a page at
+  a time: Show more reads the next page by the cursor the page before gave (`useCursorLog`,
+  `AspenSync.userDms`), and is offered while the last page read gave one.
 - Holders of Ban users ban anyone but the system account and themselves from the deployment, and
   lift bans (`UserBanControl`, `UserBanDialog`; see [Reports](reports.md)). It filters to those
   banned.

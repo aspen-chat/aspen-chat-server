@@ -15,6 +15,7 @@
 //! index changes.
 
 use crate::context::GlobalServerContext;
+use crate::cursor::{List, Paged};
 use crate::message::Message;
 use crate::message::MessageKind;
 use crate::permissions::{
@@ -592,19 +593,29 @@ pub const MAX_VOTERS_PAGE: u32 = 100;
 struct VoterRow {
     #[diesel(sql_type = diesel::sql_types::Uuid)]
     user: UserId,
+    #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+    timestamp: DateTime<Utc>,
 }
 
-/// Who voted for `option` of poll `id`, earliest first: at most `limit` of them (up to
-/// [`MAX_VOTERS_PAGE`]), starting after `after` when given. Not found for a poll `caller` may
-/// not see; refused for an anonymous one, whose voters no one learns.
+/// Where a vote stands among an answer's, the columns they are ordered by: when it was cast,
+/// in microseconds since the epoch as PostgreSQL keeps it, and who cast it. The voter list's
+/// cursor.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct VotePosition(i64, UserId);
+
+/// Who voted for `option` of poll `id` and still has an account, earliest first: at most
+/// `limit` of them (up to [`MAX_VOTERS_PAGE`]), after the place `cursor` holds when given,
+/// which is the `next_cursor` of the page before. Not found for a poll `caller` may not see;
+/// refused for an anonymous one, whose voters no one learns.
 pub async fn read_voters(
     state: &GlobalServerContext,
     caller: UserId,
     id: PollId,
     option: u32,
-    after: Option<UserId>,
+    cursor: Option<&str>,
     limit: u32,
-) -> crate::Result<Vec<UserId>> {
+) -> crate::Result<Paged<UserId>> {
+    let after = cursor.map(vote_position).transpose()?;
     let mut conn = state.connection_pool.get().await?;
     let (channel, anonymous): (ChannelId, bool) = poll::table
         .select((poll::channel, poll::anonymous))
@@ -624,26 +635,65 @@ pub async fn read_voters(
     }
     let option =
         i32::try_from(option).map_err(|_| crate::Error::Validation(t!("pollOptionOutOfRange")))?;
-    // Keyset on (timestamp, user), the list's order, through `poll_vote_by_option`; the cursor
-    // is the last voter read.
-    let rows: Vec<VoterRow> = diesel::sql_query(
+    voters_page(conn.as_mut(), id, option, after, limit).await
+}
+
+/// The place a voter list's cursor holds.
+fn vote_position(cursor: &str) -> crate::Result<(DateTime<Utc>, UserId)> {
+    let VotePosition(micros, user) = crate::cursor::decode(List::Voters, cursor)?;
+    let cast = DateTime::from_timestamp_micros(micros)
+        .ok_or_else(|| crate::Error::Validation(t!("cursorInvalid")))?;
+    Ok((cast, user))
+}
+
+/// One page of an answer's voters and the cursor of the next, by `(timestamp, user)`, the
+/// order `poll_vote_by_option` keeps an answer's votes in, after `after`. The place is compared
+/// as a row value against the cursor's own, so the page starts where the index says whether or
+/// not that vote still stands. Votes of deleted accounts, which stay in the tally, are passed
+/// over before the limit.
+async fn voters_page(
+    conn: &mut AsyncPgConnection,
+    poll: PollId,
+    option: i32,
+    after: Option<(DateTime<Utc>, UserId)>,
+    limit: u32,
+) -> crate::Result<Paged<UserId>> {
+    use diesel::sql_types::{BigInt, Integer, Timestamptz, Uuid};
+    let limit = limit.clamp(1, MAX_VOTERS_PAGE);
+    // The comparison is in the statement only when there is a cursor: behind
+    // `$4 IS NULL OR …` a plan made for any parameters could not start the index scan at it.
+    let after_clause = if after.is_some() {
+        r#"AND (v."timestamp", v."user") > ($4, $5)"#
+    } else {
+        ""
+    };
+    let query = diesel::sql_query(format!(
         r#"
-        SELECT "user" FROM poll_vote
-        WHERE poll = $1 AND option_index = $2
-          AND ($3::uuid IS NULL OR ("timestamp", "user") > (
-              SELECT "timestamp", "user" FROM poll_vote
-              WHERE poll = $1 AND option_index = $2 AND "user" = $3))
-        ORDER BY "timestamp", "user"
-        LIMIT $4
-        "#,
-    )
-    .bind::<diesel::sql_types::Uuid, _>(id.0)
-    .bind::<diesel::sql_types::Integer, _>(option)
-    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(after.map(|a| a.0))
-    .bind::<diesel::sql_types::BigInt, _>(i64::from(limit.clamp(1, MAX_VOTERS_PAGE)))
-    .load(conn.as_mut())
-    .await?;
-    Ok(rows.into_iter().map(|row| row.user).collect())
+        SELECT v."user", v."timestamp" FROM poll_vote v
+        JOIN "user" u ON u.id = v."user" AND u.deleted_at IS NULL
+        WHERE v.poll = $1 AND v.option_index = $2
+          {after_clause}
+        ORDER BY v."timestamp", v."user"
+        LIMIT $3
+        "#
+    ))
+    .into_boxed::<diesel::pg::Pg>()
+    .bind::<Uuid, _>(poll.0)
+    .bind::<Integer, _>(option)
+    // One past the page, which says whether another follows.
+    .bind::<BigInt, _>(i64::from(limit) + 1);
+    let query = match after {
+        Some((cast, user)) => query.bind::<Timestamptz, _>(cast).bind::<Uuid, _>(user.0),
+        None => query,
+    };
+    let rows: Vec<VoterRow> = query.load(conn).await?;
+    let page = crate::cursor::cut(List::Voters, rows, limit as usize, |last| {
+        VotePosition(last.timestamp.timestamp_micros(), last.user)
+    });
+    Ok(Paged {
+        items: page.items.into_iter().map(|row| row.user).collect(),
+        next_cursor: page.next_cursor,
+    })
 }
 
 /// Batched read for sideloading; see [`load_polls`].
@@ -1438,5 +1488,150 @@ mod tests {
             Err(crate::Error::PollClosed)
         ));
         assert!(empty_results(&closed, 2).iter().all(|r| r.voters.is_none()));
+    }
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+    use diesel_async::SimpleAsyncConnection;
+
+    const POLL: &str = "707e0000-0000-4000-8000-000000000001";
+    const CHANNEL: &str = "707e0000-0000-4000-8000-000000000002";
+
+    fn voter(n: u8) -> UserId {
+        UserId(
+            format!("707e0000-0000-4000-8000-0000000001{n:02x}")
+                .parse()
+                .unwrap(),
+        )
+    }
+
+    /// A connection to the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed, with a poll whose first answer `voters` people chose, the n-th a second
+    /// after the one before, but for the third and fourth, who voted at the same instant;
+    /// `None` without one, when the test checks nothing.
+    async fn poll_with(voters: u8) -> Option<AsyncPgConnection> {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return None;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        let author = voter(0).0;
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                 VALUES ('{author}', '{author}', '', now(), now());
+             INSERT INTO channel (id, name, ty, sort_index) VALUES ('{CHANNEL}', '', 'dm', 0);
+             INSERT INTO poll (id, channel, created_by, question, multiple_choice, anonymous,
+                               created_at, closes_at)
+                 VALUES ('{POLL}', '{CHANNEL}', '{author}', 'q', false, false, now(),
+                         now() + interval '1 day');
+             INSERT INTO poll_option (poll, index, label) VALUES ('{POLL}', 0, 'a'), ('{POLL}', 1, 'b');"#,
+        ))
+        .await
+        .unwrap();
+        for n in 1..=voters {
+            let user = voter(n).0;
+            let second = if n == 4 { 3 } else { n };
+            conn.batch_execute(&format!(
+                r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                     VALUES ('{user}', '{user}', '', now(), now());
+                 INSERT INTO poll_vote (poll, option_index, "user", "timestamp")
+                     VALUES ('{POLL}', 0, '{user}',
+                             '2026-01-01T00:00:00.123456Z'::timestamptz + interval '{second} seconds');"#,
+            ))
+            .await
+            .unwrap();
+        }
+        Some(conn)
+    }
+
+    /// Which voters one page holds, by their numbers, and the next page's cursor.
+    async fn page(
+        conn: &mut AsyncPgConnection,
+        cursor: Option<&str>,
+        limit: u32,
+    ) -> (Vec<u8>, Option<String>) {
+        let page = voters_page(
+            conn,
+            PollId(POLL.parse().unwrap()),
+            0,
+            cursor.map(|c| vote_position(c).unwrap()),
+            limit,
+        )
+        .await
+        .unwrap();
+        let voters = page
+            .items
+            .into_iter()
+            .map(|user| (1..=u8::MAX).find(|n| voter(*n) == user).unwrap())
+            .collect();
+        (voters, page.next_cursor)
+    }
+
+    /// The voter list's cursor is a place, not a vote: the pages go on after a voter who
+    /// withdrew, through votes cast at one instant, past the votes of deleted accounts, and the
+    /// last page says it is the last however many it holds.
+    #[tokio::test]
+    async fn the_voters_page_past_a_vote_that_is_gone() {
+        let Some(mut conn) = poll_with(7).await else {
+            return;
+        };
+        let (voters, cursor) = page(&mut conn, None, 3).await;
+        assert_eq!(voters, [1, 2, 3]);
+        // The third, whom the cursor was made from, withdraws; the fourth voted at the same
+        // instant and is still next. The fifth's account is deleted.
+        conn.batch_execute(&format!(
+            r#"DELETE FROM poll_vote WHERE "user" = '{}';
+               UPDATE "user" SET deleted_at = now() WHERE id = '{}';"#,
+            voter(3).0,
+            voter(5).0
+        ))
+        .await
+        .unwrap();
+        let (voters, cursor) = page(&mut conn, cursor.as_deref(), 2).await;
+        assert_eq!(voters, [4, 6]);
+        assert!(cursor.is_some());
+        // The sixth changes their answer, which takes their vote from this one.
+        conn.batch_execute(&format!(
+            r#"UPDATE poll_vote SET option_index = 1 WHERE "user" = '{}'"#,
+            voter(6).0
+        ))
+        .await
+        .unwrap();
+        let (voters, cursor) = page(&mut conn, cursor.as_deref(), 1).await;
+        assert_eq!(voters, [7]);
+        assert_eq!(cursor, None);
+        // A page that ends on the last vote has none after it, though it is full.
+        let (voters, cursor) = page(&mut conn, None, 4).await;
+        assert_eq!(voters, [1, 2, 4, 7]);
+        assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn a_cursor_of_no_voter_list_is_refused() {
+        let refused =
+            |cursor: &str| matches!(vote_position(cursor), Err(crate::Error::Validation(_)));
+        assert!(refused("garbage"));
+        assert!(refused(&voter(1).0.to_string()));
+        // A place of another shape, a time no clock tells, and a reactor list's cursor, whose
+        // place has a voter's shape.
+        assert!(refused(&crate::cursor::encode(
+            List::Voters,
+            &("ada", voter(1))
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::Voters,
+            &(i64::MAX, voter(1))
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::Reactors,
+            &(1_i64, voter(1))
+        )));
+        assert!(!refused(&crate::cursor::encode(
+            List::Voters,
+            &(1_i64, voter(1))
+        )));
     }
 }

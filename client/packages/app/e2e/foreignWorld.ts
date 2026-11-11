@@ -154,6 +154,7 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
             { channel: foreignDm, lastRead: null, lastMessage: dmMessageId, mentions: 0 },
           ],
         },
+        nextCursor: null,
       });
     }
     if (path === `/invites/${foreignInviteCode}`) {

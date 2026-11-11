@@ -19,6 +19,7 @@
 
 use crate::channel::ChannelType;
 use crate::context::GlobalServerContext;
+use crate::cursor::{List, Paged};
 use crate::message::{Message, MessageKind, MessageWithRelations};
 use crate::notification_setting::{NotificationLevel, level_of};
 use crate::visibility::Visibility;
@@ -26,7 +27,7 @@ use crate::{CategoryId, ChannelId, CommunityId, MessageId, RoleId, UserId};
 use aspen_schema::{channel, community_member_role, dm_recipient, message, thread_follow};
 use diesel::prelude::*;
 use diesel::sql_types::{Array, Bool, Uuid as PgUuid};
-use diesel_async::RunQueryDsl;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use std::collections::{HashMap, HashSet};
 
 /// The most messages one page of the feed holds.
@@ -60,8 +61,8 @@ pub struct ActivityQuery {
     pub dms: bool,
     /// Only messages the reader has not read.
     pub unread: bool,
-    /// Only messages older than this one: the last of the previous page.
-    pub before: Option<MessageId>,
+    /// The `next_cursor` of the page before the one asked for; the first page when `None`.
+    pub cursor: Option<String>,
     pub limit: u32,
 }
 
@@ -195,10 +196,11 @@ fn walk(source: &str, from: &str, place: &str, key: &str, passing: &str, limit: 
     )
 }
 
-/// The ids of one page of the feed of `limit` messages, newest first. `$1` is the user, `$2`
-/// the id the page is older than, `$3` whether only what is unread is read, `$4` the roles the
-/// user holds, `$5` the places read whole with their threads, `$6` the threads read alone, `$7`
-/// the places read for what tags the user, and `$8` the kinds of message left out.
+/// The ids of the feed's newest `limit` messages older than `$2`, newest first: a page and the
+/// one message past it that says another follows, as [`read_activity`] asks. `$1` is the user,
+/// `$3` whether only what is unread is read, `$4` the roles the user holds, `$5` the places read
+/// whole with their threads, `$6` the threads read alone, `$7` the places read for what tags
+/// the user, and `$8` the kinds of message left out.
 ///
 /// The planner chooses a walk over collecting and sorting everything a place holds only when it
 /// can see how few rows are wanted and how wide the range is. So `limit` is written into the
@@ -317,12 +319,20 @@ fn page_sql(limit: u32) -> String {
     )
 }
 
-/// The messages of the user's feed that `query` asks for, newest first.
+/// The place an activity feed's cursor holds: the id of the last message of the page before,
+/// which is all the feed is ordered by.
+fn activity_position(cursor: &str) -> crate::Result<MessageId> {
+    crate::cursor::decode(List::Activity, cursor)
+}
+
+/// One page of the user's feed that `query` asks for, newest first, and the cursor of the page
+/// after it.
 pub async fn read_activity(
     state: &GlobalServerContext,
     user: UserId,
     query: ActivityQuery,
-) -> crate::Result<Vec<MessageWithRelations>> {
+) -> crate::Result<Paged<MessageWithRelations>> {
+    let before = query.cursor.as_deref().map(activity_position).transpose()?;
     let mut conn = state.connection_pool.get().await?;
     let mut communities = crate::events::memberships(conn.as_mut(), user).await?;
     if let Some(asked) = &query.communities {
@@ -418,7 +428,10 @@ pub async fn read_activity(
         .await?;
     let places = sort_places(&places, &followed);
     if places.unmuted.is_empty() {
-        return Ok(Vec::new());
+        return Ok(Paged {
+            items: Vec::new(),
+            next_cursor: None,
+        });
     }
     // Each view is some of three reads: places read whole with their threads, threads read
     // alone, and places read for what tags the user.
@@ -430,15 +443,62 @@ pub async fn read_activity(
         ActivityView::Dms => (places.dms, none(), none()),
         ActivityView::Threads => (none(), places.followed, none()),
     };
-    let uuids = |ids: Vec<ChannelId>| ids.into_iter().map(|id| id.0).collect::<Vec<_>>();
-    let page: Vec<Found> = diesel::sql_query(page_sql(query.limit.clamp(1, MAX_PAGE)))
+    let reads = Reads {
+        whole,
+        threads,
+        tagging,
+        roles,
+        unread: query.unread,
+    };
+    let page = feed_page(conn.as_mut(), user, &reads, before, query.limit).await?;
+    let messages: Vec<Message> = message::table
+        .select(Message::as_select())
+        .filter(message::id.eq_any(&page.items))
+        .order_by(message::id.desc())
+        .load(conn.as_mut())
+        .await?;
+    Ok(Paged {
+        items: crate::message::with_relations(state, conn.as_mut(), messages).await?,
+        next_cursor: page.next_cursor,
+    })
+}
+
+/// What a page of the feed is read of ([`page_sql`]).
+struct Reads {
+    /// The places read whole, with their threads.
+    whole: Vec<ChannelId>,
+    /// The threads read alone.
+    threads: Vec<ChannelId>,
+    /// The places read for what tags the user.
+    tagging: Vec<ChannelId>,
+    /// The roles the user holds, a tag of which tags them.
+    roles: Vec<RoleId>,
+    /// Only what the user has not read.
+    unread: bool,
+}
+
+/// The ids of one page of `user`'s feed, at most `limit` of them (up to [`MAX_PAGE`]), newest
+/// first, older than `before` when given, and the cursor of the page after it. The statement
+/// is asked for one message more than the page holds, and only when it finds that one does
+/// another page follow. The place is compared as an id alone, so the page is read whether or
+/// not the message the cursor was made from still stands.
+async fn feed_page(
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    reads: &Reads,
+    before: Option<MessageId>,
+    limit: u32,
+) -> crate::Result<Paged<MessageId>> {
+    let limit = limit.clamp(1, MAX_PAGE);
+    let uuids = |ids: &[ChannelId]| ids.iter().map(|id| id.0).collect::<Vec<_>>();
+    let found: Vec<Found> = diesel::sql_query(page_sql(limit + 1))
         .bind::<PgUuid, _>(user.0)
-        .bind::<PgUuid, _>(query.before.map_or(uuid::Uuid::max(), |before| before.0))
-        .bind::<Bool, _>(query.unread)
-        .bind::<Array<PgUuid>, _>(roles.into_iter().map(|role| role.0).collect::<Vec<_>>())
-        .bind::<Array<PgUuid>, _>(uuids(whole))
-        .bind::<Array<PgUuid>, _>(uuids(threads))
-        .bind::<Array<PgUuid>, _>(uuids(tagging))
+        .bind::<PgUuid, _>(before.map_or(uuid::Uuid::max(), |before| before.0))
+        .bind::<Bool, _>(reads.unread)
+        .bind::<Array<PgUuid>, _>(reads.roles.iter().map(|role| role.0).collect::<Vec<_>>())
+        .bind::<Array<PgUuid>, _>(uuids(&reads.whole))
+        .bind::<Array<PgUuid>, _>(uuids(&reads.threads))
+        .bind::<Array<PgUuid>, _>(uuids(&reads.tagging))
         // What only records something says nothing of its own, as it wakes no phone.
         .bind::<Array<aspen_schema::sql_types::MessageKind>, _>(
             <MessageKind as strum::VariantArray>::VARIANTS
@@ -447,15 +507,14 @@ pub async fn read_activity(
                 .filter(|kind| !kind.notifies())
                 .collect::<Vec<_>>(),
         )
-        .load(conn.as_mut())
+        .load(conn)
         .await?;
-    let messages: Vec<Message> = message::table
-        .select(Message::as_select())
-        .filter(message::id.eq_any(page.into_iter().map(|found| found.id)))
-        .order_by(message::id.desc())
-        .load(conn.as_mut())
-        .await?;
-    crate::message::with_relations(state, conn.as_mut(), messages).await
+    Ok(crate::cursor::cut(
+        List::Activity,
+        found.into_iter().map(|found| found.id).collect(),
+        limit as usize,
+        |last: &MessageId| *last,
+    ))
 }
 
 #[cfg(test)]
@@ -504,5 +563,145 @@ mod tests {
             sort_places(&[all, tags, nothing, muted, dm, muted_dm], &followed),
             expected
         );
+    }
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+    use diesel_async::{AsyncConnection, SimpleAsyncConnection};
+
+    const READER: &str = "ac717000-0000-4000-8000-000000000001";
+    const WRITER: &str = "ac717000-0000-4000-8000-000000000002";
+    const DM: &str = "ac717000-0000-4000-8000-000000000003";
+
+    fn message(n: u8) -> MessageId {
+        MessageId(
+            format!("ac717000-0000-4000-8000-0000000001{n:02x}")
+                .parse()
+                .unwrap(),
+        )
+    }
+
+    /// A connection to the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed, with a reader in a DM where someone else said `said` messages, the n-th
+    /// after the one before; `None` without one, when the test checks nothing.
+    async fn reader_of(said: u8) -> Option<AsyncPgConnection> {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return None;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                   VALUES ('{READER}', '{READER}', '', now(), now()),
+                          ('{WRITER}', '{WRITER}', '', now(), now());
+               INSERT INTO channel (id, name, ty, sort_index) VALUES ('{DM}', '', 'dm', 0);
+               INSERT INTO dm_recipient (channel, "user", joined_at)
+                   VALUES ('{DM}', '{READER}', '2000-01-01T00:00:00Z'),
+                          ('{DM}', '{WRITER}', '2000-01-01T00:00:00Z');"#
+        ))
+        .await
+        .unwrap();
+        for n in 1..=said {
+            conn.batch_execute(&format!(
+                r#"INSERT INTO message (id, channel, author, content, timestamp)
+                   VALUES ('{}', '{DM}', '{WRITER}', 'm', now());"#,
+                message(n).0
+            ))
+            .await
+            .unwrap();
+        }
+        Some(conn)
+    }
+
+    /// Which messages one page of the reader's DMs holds, by their numbers, and the next
+    /// page's cursor.
+    async fn page(
+        conn: &mut AsyncPgConnection,
+        cursor: Option<&str>,
+        limit: u32,
+    ) -> (Vec<u8>, Option<String>) {
+        let reads = Reads {
+            whole: vec![ChannelId(DM.parse().unwrap())],
+            threads: Vec::new(),
+            tagging: Vec::new(),
+            roles: Vec::new(),
+            unread: false,
+        };
+        let page = feed_page(
+            conn,
+            UserId(READER.parse().unwrap()),
+            &reads,
+            cursor.map(|c| activity_position(c).unwrap()),
+            limit,
+        )
+        .await
+        .unwrap();
+        let messages = page
+            .items
+            .into_iter()
+            .map(|id| (1..=u8::MAX).find(|n| message(*n) == id).unwrap())
+            .collect();
+        (messages, page.next_cursor)
+    }
+
+    /// The feed's cursor is a place, not a message: the pages go on after the message a
+    /// cursor was made from is deleted, and the last page says it is the last however many it
+    /// holds.
+    #[tokio::test]
+    async fn the_feed_pages_past_a_message_that_is_gone() {
+        let Some(mut conn) = reader_of(7).await else {
+            return;
+        };
+        let (messages, cursor) = page(&mut conn, None, 3).await;
+        assert_eq!(messages, [7, 6, 5]);
+        // The fifth, which the cursor was made from, is deleted.
+        conn.batch_execute(&format!(
+            "UPDATE message SET deleted_at = now() WHERE id = '{}'",
+            message(5).0
+        ))
+        .await
+        .unwrap();
+        let (messages, cursor) = page(&mut conn, cursor.as_deref(), 2).await;
+        assert_eq!(messages, [4, 3]);
+        assert!(cursor.is_some());
+        // A page that ends on the oldest message has none after it, though it is full.
+        let (messages, cursor) = page(&mut conn, cursor.as_deref(), 2).await;
+        assert_eq!(messages, [2, 1]);
+        assert_eq!(cursor, None);
+        let (messages, cursor) = page(&mut conn, None, 6).await;
+        assert_eq!(messages, [7, 6, 4, 3, 2, 1]);
+        assert_eq!(cursor, None);
+        // One message more than a page holds is another page, of that one.
+        let (messages, cursor) = page(&mut conn, None, 5).await;
+        assert_eq!(messages, [7, 6, 4, 3, 2]);
+        let (messages, cursor) = page(&mut conn, cursor.as_deref(), 5).await;
+        assert_eq!(messages, [1]);
+        assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn a_cursor_of_no_feed_is_refused() {
+        let refused =
+            |cursor: &str| matches!(activity_position(cursor), Err(crate::Error::Validation(_)));
+        assert!(refused("garbage"));
+        // A message's id as it is, which is not a cursor.
+        assert!(refused(&message(1).0.to_string()));
+        // A place of another shape, and a saved message list's cursor, whose place is an id
+        // alone too.
+        assert!(refused(&crate::cursor::encode(
+            List::Activity,
+            &(1_i64, message(1))
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::SavedMessages,
+            &message(1)
+        )));
+        assert!(!refused(&crate::cursor::encode(
+            List::Activity,
+            &message(1)
+        )));
     }
 }

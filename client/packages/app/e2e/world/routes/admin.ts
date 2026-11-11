@@ -1,5 +1,5 @@
 import { deploymentAdministrator } from "../fixtures";
-import { type Asked, type WorldRoute, listed } from "../reply";
+import { type Asked, type WorldRoute, listed, paged } from "../reply";
 
 /** The Administration Dashboard's routes, its federation directory among them. */
 export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] {
@@ -42,7 +42,7 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
           },
         ]),
     ],
-    ["GET", /^\/admin\/moderation-log$/, () => listed([])],
+    ["GET", /^\/admin\/moderation-log$/, () => paged([], url, 50)],
     // One identity provider, turned off, which people have signed in with.
     [
       "GET",
@@ -104,7 +104,7 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
     ["GET", /^\/admin\/overview$/, admin.overview],
     ["GET", /^\/admin\/users$/, () => listed(admin.users(url))],
     ["GET", /^\/admin\/communities$/, () => listed(admin.communities(url))],
-    ["GET", /^\/admin\/file-transfers$/, () => listed(admin.fileTransfers(url))],
+    ["GET", /^\/admin\/file-transfers$/, () => paged(admin.fileTransfers(url), url, 50)],
     ["GET", /^\/admin\/registration-invites$/, () => listed(admin.invites())],
     [
       "POST",

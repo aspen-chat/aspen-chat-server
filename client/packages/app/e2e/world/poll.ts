@@ -1,5 +1,14 @@
-import { bob, general, lunchPoll, me, messageId, minutesAgo, pollQuestion } from "./fixtures";
-import { type Publish, reply } from "./reply";
+import {
+  bob,
+  general,
+  lunchPoll,
+  me,
+  messageId,
+  minutesAgo,
+  pollQuestion,
+  users,
+} from "./fixtures";
+import { type Publish, paged, reply } from "./reply";
 
 /**
  * Bob's poll, one per page so that what a spec writes in stays in that spec. Bob has written in
@@ -41,6 +50,13 @@ export function lunch(publish: Publish) {
   };
   return {
     read: () => ({ data: poll, included: { pollVotes: [], ownWriteIns: [] } }),
+    /** Everyone who voted for `option`, a page at a time. */
+    voters: (option: number, url: URL) =>
+      paged(
+        users.filter((u) => poll.results[option]?.voters.includes(u.id)),
+        url,
+        50,
+      ),
     writeIn: (label: string) => {
       poll.writeIns.push({ label, writtenBy: me });
       poll.results.push({ count: 1, voters: [me] });

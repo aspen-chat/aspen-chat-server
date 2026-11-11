@@ -403,62 +403,114 @@ pub enum MessageWindow {
     Around { anchor: MessageId, radius: u32 },
 }
 
+/// A window of a channel's history, and whether the channel holds messages beyond each end of
+/// it.
+pub struct MessagesRead {
+    pub messages: Vec<MessageWithRelations>,
+    /// Whether the channel holds messages older than these.
+    pub more_before: bool,
+    /// Whether the channel holds messages newer than these.
+    pub more_after: bool,
+}
+
+/// Cuts `rows`, read with a limit of `limit + 1` in order of distance from where the read
+/// began, to `limit`, and says whether a row past them was read.
+fn cut_side<T>(rows: &mut Vec<T>, limit: usize) -> bool {
+    let more = rows.len() > limit;
+    rows.truncate(limit);
+    more
+}
+
+/// The ids of `window` and whether there are messages beyond each end of them, of the channel's
+/// messages as `in_channel` filters them. Each direction a window reads is read one row past
+/// what it returns, which is what says whether more lie that way; the direction a window does
+/// not read is its anchor's side, answered as having more, except that nothing is newer than
+/// the latest.
+async fn window_rows(
+    conn: &mut AsyncPgConnection,
+    id: ChannelId,
+    window: MessageWindow,
+) -> crate::error::Result<(Vec<Message>, bool, bool)> {
+    let query = message::table
+        .select(Message::as_select())
+        .filter(message::channel.eq(id).and(message::deleted_at.is_null()));
+    let page = |limit: u32| limit.min(MAX_MESSAGES_QUERIED) as usize;
+    Ok(match window {
+        MessageWindow::Latest { limit } => {
+            let mut rows: Vec<Message> = query
+                .limit(page(limit) as i64 + 1)
+                .order_by(message::id.desc())
+                .load(conn)
+                .await?;
+            let more_before = cut_side(&mut rows, page(limit));
+            (rows, more_before, false)
+        }
+        MessageWindow::Before { anchor, limit } => {
+            let mut rows: Vec<Message> = query
+                .limit(page(limit) as i64 + 1)
+                .filter(message::id.lt(anchor))
+                .order_by(message::id.desc())
+                .load(conn)
+                .await?;
+            let more_before = cut_side(&mut rows, page(limit));
+            (rows, more_before, true)
+        }
+        MessageWindow::After { anchor, limit } => {
+            let mut rows: Vec<Message> = query
+                .limit(page(limit) as i64 + 1)
+                .filter(message::id.gt(anchor))
+                .order_by(message::id.asc())
+                .load(conn)
+                .await?;
+            let more_after = cut_side(&mut rows, page(limit));
+            (rows, true, more_after)
+        }
+        MessageWindow::Around { anchor, radius } => {
+            let radius = radius.min(MAX_MESSAGES_QUERIED / 2) as usize;
+            let around: Vec<Message> = query
+                .limit(radius as i64 + 2)
+                .filter(message::id.le(anchor))
+                .order_by(message::id.desc())
+                .union(
+                    query
+                        .limit(radius as i64 + 1)
+                        .filter(message::id.gt(anchor))
+                        .order_by(message::id.asc()),
+                )
+                .load(conn)
+                .await?;
+            // A union's rows come in no order of their own: each side is put in the order it
+            // was read in, nearest the anchor first, and cut there.
+            let (mut older, mut newer): (Vec<Message>, Vec<Message>) =
+                around.into_iter().partition(|message| message.id <= anchor);
+            older.sort_unstable_by_key(|message| std::cmp::Reverse(message.id));
+            newer.sort_unstable_by_key(|message| message.id);
+            // The older side holds the anchor too.
+            let more_before = cut_side(&mut older, radius + 1);
+            let more_after = cut_side(&mut newer, radius);
+            older.reverse();
+            older.extend(newer);
+            (older, more_before, more_after)
+        }
+    })
+}
+
 pub async fn read_channel_messages(
     state: &GlobalServerContext,
     caller: UserId,
     id: ChannelId,
     window: MessageWindow,
-) -> crate::error::Result<Vec<MessageWithRelations>> {
+) -> crate::error::Result<MessagesRead> {
     let mut conn = state.connection_pool.get().await?;
     // Reading a DM one is not in is moderation, and every such reading is logged. The check
     // finds a deleted channel not found.
     crate::permissions::channel_access_reading(state, conn.as_mut(), caller, id, None).await?;
-    let query = message::table
-        .select(Message::as_select())
-        .filter(message::channel.eq(id).and(message::deleted_at.is_null()));
-    let messages: Vec<Message> = match window {
-        MessageWindow::Latest { limit } => {
-            query
-                .limit(limit.min(MAX_MESSAGES_QUERIED) as i64)
-                .order_by(message::id.desc())
-                .load(conn.as_mut())
-                .await?
-        }
-        MessageWindow::Before { anchor, limit } => {
-            query
-                .limit(limit.min(MAX_MESSAGES_QUERIED) as i64)
-                .filter(message::id.lt(anchor))
-                .order_by(message::id.desc())
-                .load(conn.as_mut())
-                .await?
-        }
-        MessageWindow::After { anchor, limit } => {
-            query
-                .limit(limit.min(MAX_MESSAGES_QUERIED) as i64)
-                .filter(message::id.gt(anchor))
-                .order_by(message::id.asc())
-                .load(conn.as_mut())
-                .await?
-        }
-        MessageWindow::Around { anchor, radius } => {
-            let mut around: Vec<Message> = query
-                .limit(radius.min(MAX_MESSAGES_QUERIED / 2) as i64 + 1)
-                .filter(message::id.le(anchor))
-                .order_by(message::id.desc())
-                .union(
-                    query
-                        .limit(radius.min(MAX_MESSAGES_QUERIED / 2) as i64)
-                        .filter(message::id.gt(anchor))
-                        .order_by(message::id.asc()),
-                )
-                .load(conn.as_mut())
-                .await?;
-            // A union's rows come in no order of their own.
-            around.sort_unstable_by_key(|message| message.id);
-            around
-        }
-    };
-    with_relations(state, conn.as_mut(), messages).await
+    let (messages, more_before, more_after) = window_rows(conn.as_mut(), id, window).await?;
+    Ok(MessagesRead {
+        messages: with_relations(state, conn.as_mut(), messages).await?,
+        more_before,
+        more_after,
+    })
 }
 
 /// `messages` with their attachments and link previews, in the order given.
@@ -713,4 +765,185 @@ pub async fn delete_channel(
         .scope_boxed()
     })
     .await
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+    use diesel_async::SimpleAsyncConnection;
+
+    const AUTHOR: &str = "c4a77000-0000-4000-8000-000000000001";
+    const CHANNEL: &str = "c4a77000-0000-4000-8000-000000000002";
+
+    fn message(n: u8) -> MessageId {
+        MessageId(
+            format!("c4a77000-0000-4000-8000-0000000001{n:02x}")
+                .parse()
+                .unwrap(),
+        )
+    }
+
+    /// A connection to the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed, with a channel of `said` messages, the n-th after the one before, the
+    /// `deleted` among them deleted; `None` without one, when the test checks nothing.
+    async fn channel_of(said: u8, deleted: &[u8]) -> Option<AsyncPgConnection> {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return None;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                   VALUES ('{AUTHOR}', '{AUTHOR}', '', now(), now());
+               INSERT INTO channel (id, name, ty, sort_index) VALUES ('{CHANNEL}', '', 'dm', 0);"#
+        ))
+        .await
+        .unwrap();
+        for n in 1..=said {
+            let gone = if deleted.contains(&n) {
+                "now()"
+            } else {
+                "NULL"
+            };
+            conn.batch_execute(&format!(
+                r#"INSERT INTO message (id, channel, author, content, timestamp, deleted_at)
+                   VALUES ('{}', '{CHANNEL}', '{AUTHOR}', 'm', now(), {gone});"#,
+                message(n).0
+            ))
+            .await
+            .unwrap();
+        }
+        Some(conn)
+    }
+
+    /// Which messages a window holds, by their numbers and in the order read, and whether
+    /// there are older and newer ones.
+    async fn read(conn: &mut AsyncPgConnection, window: MessageWindow) -> (Vec<u8>, bool, bool) {
+        let (messages, more_before, more_after) =
+            window_rows(conn, ChannelId(CHANNEL.parse().unwrap()), window)
+                .await
+                .unwrap();
+        let numbers = messages
+            .into_iter()
+            .map(|m| (1..=u8::MAX).find(|n| message(*n) == m.id).unwrap())
+            .collect();
+        (numbers, more_before, more_after)
+    }
+
+    /// The latest window and a `before` read say there is more only when a message older than
+    /// the page stands: a full page that reaches the channel's oldest does not, and a deleted
+    /// message beyond it is none.
+    #[tokio::test]
+    async fn a_window_read_backwards_says_whether_older_messages_remain() {
+        let Some(mut conn) = channel_of(6, &[1]).await else {
+            return;
+        };
+        let latest = |limit| MessageWindow::Latest { limit };
+        assert_eq!(
+            read(&mut conn, latest(3)).await,
+            (vec![6, 5, 4], true, false)
+        );
+        assert_eq!(
+            read(&mut conn, latest(4)).await,
+            (vec![6, 5, 4, 3], true, false)
+        );
+        // Exactly the limit, with only a deleted message beyond.
+        assert_eq!(
+            read(&mut conn, latest(5)).await,
+            (vec![6, 5, 4, 3, 2], false, false)
+        );
+        assert_eq!(
+            read(&mut conn, latest(9)).await,
+            (vec![6, 5, 4, 3, 2], false, false)
+        );
+        let before = |n, limit| MessageWindow::Before {
+            anchor: message(n),
+            limit,
+        };
+        // Nothing newer than the anchor is read, so that side is answered as having more.
+        assert_eq!(
+            read(&mut conn, before(5, 2)).await,
+            (vec![4, 3], true, true)
+        );
+        assert_eq!(
+            read(&mut conn, before(5, 3)).await,
+            (vec![4, 3, 2], false, true)
+        );
+        assert_eq!(
+            read(&mut conn, before(5, 4)).await,
+            (vec![4, 3, 2], false, true)
+        );
+        assert_eq!(read(&mut conn, before(2, 4)).await, (vec![], false, true));
+    }
+
+    #[tokio::test]
+    async fn a_window_read_forwards_says_whether_newer_messages_remain() {
+        let Some(mut conn) = channel_of(6, &[6]).await else {
+            return;
+        };
+        let after = |n, limit| MessageWindow::After {
+            anchor: message(n),
+            limit,
+        };
+        assert_eq!(read(&mut conn, after(2, 2)).await, (vec![3, 4], true, true));
+        // Exactly the limit, with only a deleted message beyond.
+        assert_eq!(
+            read(&mut conn, after(2, 3)).await,
+            (vec![3, 4, 5], true, false)
+        );
+        assert_eq!(
+            read(&mut conn, after(2, 4)).await,
+            (vec![3, 4, 5], true, false)
+        );
+        assert_eq!(read(&mut conn, after(5, 4)).await, (vec![], true, false));
+    }
+
+    /// A window around a message says of each side whether more lies beyond it, each side
+    /// read one message past its radius.
+    #[tokio::test]
+    async fn a_window_around_a_message_says_what_lies_beyond_each_side() {
+        let Some(mut conn) = channel_of(9, &[]).await else {
+            return;
+        };
+        let around = |n, radius| MessageWindow::Around {
+            anchor: message(n),
+            radius,
+        };
+        assert_eq!(
+            read(&mut conn, around(5, 2)).await,
+            (vec![3, 4, 5, 6, 7], true, true)
+        );
+        // Each side holds exactly its radius and nothing beyond.
+        assert_eq!(
+            read(&mut conn, around(5, 4)).await,
+            (vec![1, 2, 3, 4, 5, 6, 7, 8, 9], false, false)
+        );
+        // Near the oldest: nothing older remains, and more is newer.
+        assert_eq!(
+            read(&mut conn, around(2, 2)).await,
+            (vec![1, 2, 3, 4], false, true)
+        );
+        assert_eq!(
+            read(&mut conn, around(3, 2)).await,
+            (vec![1, 2, 3, 4, 5], false, true)
+        );
+        // Near the newest: more is older, and nothing newer remains.
+        assert_eq!(
+            read(&mut conn, around(8, 2)).await,
+            (vec![6, 7, 8, 9], true, false)
+        );
+        assert_eq!(
+            read(&mut conn, around(7, 2)).await,
+            (vec![5, 6, 7, 8, 9], true, false)
+        );
+        assert_eq!(
+            read(&mut conn, around(1, 1)).await,
+            (vec![1, 2], false, true)
+        );
+        assert_eq!(
+            read(&mut conn, around(9, 1)).await,
+            (vec![8, 9], true, false)
+        );
+    }
 }

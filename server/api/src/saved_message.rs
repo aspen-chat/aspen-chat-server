@@ -7,7 +7,7 @@ use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Json, NoContent, Path, Query};
 use crate::include::{IncludeSet, Listed};
-use crate::message::{MessageInclude, MessageList, sideload_messages};
+use crate::message::{MessageInclude, MessagePage, sideload_messages};
 use crate::message_enum::Message;
 use aspen_app::context::GlobalServerContext;
 use aspen_app::{self as app, MessageId, SavedMessageId};
@@ -61,8 +61,8 @@ pub async fn read_saves(
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct SavedMessagesQuery {
-    /// Only messages saved before this one: the last of the previous page.
-    pub before: Option<MessageId>,
+    /// Continue after the page whose `nextCursor` this is.
+    pub cursor: Option<String>,
     /// How many to return, at most `app::saved_message::MAX_PAGE` (100); 50 when absent.
     pub limit: Option<u32>,
     /// Related records to return alongside the messages, comma separated.
@@ -74,7 +74,9 @@ pub struct SavedMessagesQuery {
 /// How many saved messages a page holds when it does not say.
 const DEFAULT_SAVED_PAGE: u32 = 50;
 
-/// The messages the caller saved and may read now, newest save first.
+/// The messages the caller saved and may read now, newest save first, a page at a time.
+/// `nextCursor` is the `cursor` of the page after this one, and `null` on the last; a page may
+/// hold fewer than `limit` and not be the last.
 #[utoipa::path(
     get,
     path = "/users/@me/saved-messages/messages",
@@ -82,8 +84,8 @@ const DEFAULT_SAVED_PAGE: u32 = 50;
     params(SavedMessagesQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = MessageList),
-        (status = BAD_REQUEST, body = Problem),
+        (status = OK, body = MessagePage),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -92,19 +94,21 @@ pub async fn read_saved_messages(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Query(query): Query<SavedMessagesQuery>,
-) -> ApiResult<Json<MessageList>> {
-    let messages: Vec<Message> = app::saved_message::read_saved_messages(
+) -> ApiResult<Json<MessagePage>> {
+    let page = app::saved_message::read_saved_messages(
         &state,
         user.id,
-        query.before,
+        query.cursor.as_deref(),
         query.limit.unwrap_or(DEFAULT_SAVED_PAGE),
     )
-    .await?
-    .into_iter()
-    .map(Message::from)
-    .collect();
+    .await?;
+    let messages: Vec<Message> = page.items.into_iter().map(Message::from).collect();
     let included = sideload_messages(&state, user.id, &messages, &query.include).await?;
-    Ok(Json(MessageList::new(messages, included)))
+    Ok(Json(MessagePage {
+        data: messages,
+        included,
+        next_cursor: page.next_cursor,
+    }))
 }
 
 /// Saves a message for the caller, one of a channel or DM they may read.

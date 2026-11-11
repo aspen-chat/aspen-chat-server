@@ -2,7 +2,7 @@ use crate::auth::SessionUser;
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode, unique, violates};
 use crate::extract::double_option;
 use crate::extract::{Created, Json, NoContent, Path, Query};
-use crate::include::{IncludeSet, Included, Listed, Sideloaded};
+use crate::include::{IncludeSet, Included, Page, Sideloaded};
 use crate::message_enum;
 use crate::rate_limit::Failures;
 use crate::{API_PREFIX, TAG_INVITES};
@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-pub type InviteList = Listed<message_enum::Invite>;
+pub type InvitePage = Page<message_enum::Invite>;
 
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +69,10 @@ pub async fn create_invite(
     ))
 }
 
+/// A community's invites, newest first, a page at a time: every one for those with Manage
+/// invites, and only their own for other members. `nextCursor` is the `cursor` of the page
+/// after this one, and `null` on the last; a page may hold fewer than `limit` and not be the
+/// last.
 #[utoipa::path(
     get,
     path = "/communities/{community}/invites",
@@ -76,8 +80,8 @@ pub async fn create_invite(
     params(("community" = CommunityId, Path), InvitePageQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = InviteList),
-        (status = BAD_REQUEST, body = Problem),
+        (status = OK, body = InvitePage),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -88,27 +92,28 @@ pub async fn list_community_invites(
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
     Query(page): Query<InvitePageQuery>,
-) -> ApiResult<Json<InviteList>> {
-    let invites = app::invite::read_community_invites(
+) -> ApiResult<Json<InvitePage>> {
+    let page = app::invite::read_community_invites(
         &state,
         user.id,
         community,
-        page.before.as_deref(),
+        page.cursor.as_deref(),
         page.limit.unwrap_or(app::LIST_PAGE),
     )
     .await?;
-    Ok(Json(
-        invites.iter().map(message_enum::Invite::from).collect(),
-    ))
+    Ok(Json(Page::new(
+        page.items.iter().map(message_enum::Invite::from).collect(),
+        page.next_cursor,
+    )))
 }
 
 /// A page of a community's invites, newest first.
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct InvitePageQuery {
-    /// Continue after this invite, by its code, the last of the previous page.
-    pub before: Option<String>,
-    /// How many to return, at most 100; 100 when absent. A shorter page is the last.
+    /// Continue after the page whose `nextCursor` this is.
+    pub cursor: Option<String>,
+    /// How many to return, at most 100; 100 when absent.
     pub limit: Option<i64>,
 }
 

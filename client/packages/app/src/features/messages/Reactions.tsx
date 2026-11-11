@@ -1,13 +1,9 @@
 import { ACTION_ICON } from "@/features/messages/actionIcon";
-import {
-  ApiProblemError,
-  REACTORS_PAGE,
-  type EmojiReactions,
-  type Reactions,
-} from "@aspen/protocol";
+import { ApiProblemError, type EmojiReactions, type Reactions } from "@aspen/protocol";
+import { useCursorPages } from "@/api/useCursorPages";
 import { useGrowthKey } from "@/features/layout/motion";
 import { SmileyIcon, UsersIcon, XIcon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   Button,
   Dialog,
@@ -407,48 +403,11 @@ export function EmojiKey({ emoji, communityId }: { emoji: string; communityId: s
 function ReactorList({ messageId, emoji }: { messageId: string; emoji: string }) {
   const m = useMessages();
   const sync = useSync();
-  // The ids of a paged read, in the server's order; the records themselves are in the store.
-  const [ids, setIds] = useState<readonly string[]>([]);
-  const [complete, setComplete] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const read = useCallback(
-    (after: string | undefined, isCurrent: () => boolean) => {
-      sync.loadReactors(messageId, emoji, after).then(
-        (users) => {
-          if (!isCurrent()) {
-            return;
-          }
-          const page = users.map((u) => u.id);
-          setIds((held) => (after === undefined ? page : [...held, ...page]));
-          setComplete(users.length < REACTORS_PAGE);
-          setLoading(false);
-        },
-        (e: unknown) => {
-          if (isCurrent()) {
-            setError(e instanceof ApiProblemError ? e.message : String(e));
-            setLoading(false);
-          }
-        },
-      );
-    },
+  const load = useCallback(
+    (cursor?: string) => sync.loadReactors(messageId, emoji, cursor),
     [sync, messageId, emoji],
   );
-
-  useEffect(() => {
-    let current = true;
-    read(undefined, () => current);
-    return () => {
-      current = false;
-    };
-  }, [read]);
-
-  function showMore() {
-    setLoading(true);
-    setError(null);
-    read(ids[ids.length - 1], () => true);
-  }
+  const { ids, loading, error, more, showMore, drop } = useCursorPages(load);
 
   return (
     <div className="flex max-h-96 flex-col gap-1 overflow-y-auto">
@@ -460,7 +419,7 @@ function ReactorList({ messageId, emoji }: { messageId: string; emoji: string })
             messageId={messageId}
             emoji={emoji}
             onRemoved={() => {
-              setIds((held) => held.filter((other) => other !== id));
+              drop(id);
             }}
           />
         ))}
@@ -471,7 +430,7 @@ function ReactorList({ messageId, emoji }: { messageId: string; emoji: string })
           {error}
         </p>
       )}
-      {!loading && !complete && ids.length > 0 && (
+      {!loading && more && (
         <Button onPress={showMore} className={secondaryButtonClass + " self-start"}>
           {m.showMore}
         </Button>

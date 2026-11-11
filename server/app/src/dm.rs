@@ -11,6 +11,7 @@
 use crate::channel::ChannelType;
 use crate::channel::{Channel, record};
 use crate::context::GlobalServerContext;
+use crate::cursor::{List, Paged};
 use crate::events::dm_recipients;
 use crate::t;
 use crate::{ChannelId, EventScope, UserId, publish_event};
@@ -253,10 +254,11 @@ pub async fn list_dms_moderating(
     state: &GlobalServerContext,
     access: &crate::deployment::DeploymentAccess,
     user: UserId,
-    before: Option<ChannelId>,
+    cursor: Option<&str>,
     limit: i64,
-) -> crate::Result<Vec<(Channel, Vec<UserId>)>> {
+) -> crate::Result<Paged<(Channel, Vec<UserId>)>> {
     access.require(crate::deployment::DeploymentPermission::ModerateCommunities)?;
+    let after = cursor.map(dm_position).transpose()?;
     crate::moderation_log::log_moderation(
         state.connection_pool.get().await?.as_mut(),
         access.user,
@@ -266,49 +268,49 @@ pub async fn list_dms_moderating(
         Some(user.0.to_string()),
     )
     .await?;
-    list_dms(state, user, before, limit).await
+    dms_after(state, user, after, limit).await
 }
 
 /// The most DMs one page of [`list_dms`] lists.
 pub const MAX_DM_PAGE: i64 = 100;
 
+/// Where a DM stands among someone's, the columns they are ordered by: when it was last
+/// active for them, in microseconds since the epoch, and its channel. The DM list's cursor.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DmPosition(i64, ChannelId);
+
+/// The place a DM list's cursor holds.
+fn dm_position(cursor: &str) -> crate::Result<(chrono::DateTime<Utc>, ChannelId)> {
+    let DmPosition(micros, channel) = crate::cursor::decode(List::Dms, cursor)?;
+    Ok((crate::cursor::instant(micros)?, channel))
+}
+
 /// A page of `caller`'s DMs and group DMs, most recently active first (`dm_recipient.active_at`:
-/// when they joined, or its latest message since), after the DM `before` when given, each with
-/// its people. Read through `dm_recipient_by_activity`, so a page costs the same however many
-/// DMs the caller has; a DM that became active since the page before moves up, and is listed
-/// again rather than missed.
+/// when they joined, or its latest message since), each with its people: at most `limit` of
+/// them (up to [`MAX_DM_PAGE`]), after the place `cursor` holds when given, which is the
+/// `next_cursor` of the page before. A DM that became active since the page before has moved
+/// above the cursor and is on no later page; its reader hears of what made it active on the
+/// event stream.
 pub async fn list_dms(
     state: &GlobalServerContext,
     caller: UserId,
-    before: Option<ChannelId>,
+    cursor: Option<&str>,
     limit: i64,
-) -> crate::Result<Vec<(Channel, Vec<UserId>)>> {
-    #[derive(diesel::QueryableByName)]
-    struct Listed {
-        #[diesel(sql_type = diesel::sql_types::Uuid)]
-        channel: ChannelId,
-    }
+) -> crate::Result<Paged<(Channel, Vec<UserId>)>> {
+    let after = cursor.map(dm_position).transpose()?;
+    dms_after(state, caller, after, limit).await
+}
+
+/// A page of `user`'s DMs after `after`, as [`list_dms`] gives them.
+async fn dms_after(
+    state: &GlobalServerContext,
+    user: UserId,
+    after: Option<(chrono::DateTime<Utc>, ChannelId)>,
+    limit: i64,
+) -> crate::Result<Paged<(Channel, Vec<UserId>)>> {
     let mut conn = state.connection_pool.get().await?;
-    let order: Vec<ChannelId> = diesel::sql_query(
-        r#"
-        SELECT dr.channel FROM dm_recipient dr
-        JOIN channel c ON c.id = dr.channel
-        WHERE dr."user" = $1 AND c.deleted_at IS NULL
-          AND ($2::uuid IS NULL OR (dr.active_at, dr.channel) < (
-              SELECT p.active_at, p.channel FROM dm_recipient p
-              WHERE p."user" = $1 AND p.channel = $2))
-        ORDER BY dr.active_at DESC, dr.channel DESC
-        LIMIT $3
-        "#,
-    )
-    .bind::<diesel::sql_types::Uuid, _>(caller.0)
-    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(before.map(|b| b.0))
-    .bind::<diesel::sql_types::BigInt, _>(limit.clamp(1, MAX_DM_PAGE))
-    .load::<Listed>(conn.as_mut())
-    .await?
-    .into_iter()
-    .map(|l| l.channel)
-    .collect();
+    let page = dms_page(conn.as_mut(), user, after, limit).await?;
+    let order = page.items;
     let mut channels: HashMap<ChannelId, Channel> = channel::table
         .select(Channel::as_select())
         .filter(channel::id.eq_any(&order))
@@ -327,14 +329,71 @@ pub async fn list_dms(
     {
         recipients.entry(dm).or_default().push(user);
     }
-    Ok(order
-        .into_iter()
-        .filter_map(|id| {
-            let c = channels.remove(&id)?;
-            let people = recipients.remove(&id).unwrap_or_default();
-            Some((c, people))
-        })
-        .collect())
+    Ok(Paged {
+        items: order
+            .into_iter()
+            .filter_map(|id| {
+                let c = channels.remove(&id)?;
+                let people = recipients.remove(&id).unwrap_or_default();
+                Some((c, people))
+            })
+            .collect(),
+        next_cursor: page.next_cursor,
+    })
+}
+
+/// The channels of one page of `user`'s DMs and the cursor of the next, by
+/// `(active_at, channel)` descending, the order `dm_recipient_by_activity` keeps them in, so a
+/// page costs the same however many DMs they have, after `after`. The place is compared as a
+/// row value against the cursor's own, so the page starts where the index says whether or not
+/// the user is still in that DM. Deleted DMs are passed over before the limit.
+async fn dms_page(
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    after: Option<(chrono::DateTime<Utc>, ChannelId)>,
+    limit: i64,
+) -> crate::Result<Paged<ChannelId>> {
+    use diesel::sql_types::{BigInt, Timestamptz, Uuid};
+    #[derive(diesel::QueryableByName)]
+    struct Listed {
+        #[diesel(sql_type = Uuid)]
+        channel: ChannelId,
+        #[diesel(sql_type = Timestamptz)]
+        active_at: chrono::DateTime<Utc>,
+    }
+    let limit = limit.clamp(1, MAX_DM_PAGE);
+    // The comparison is in the statement only when there is a cursor: behind
+    // `$3 IS NULL OR …` a plan made for any parameters could not start the index scan at it.
+    let after_clause = if after.is_some() {
+        "AND (dr.active_at, dr.channel) < ($3, $4)"
+    } else {
+        ""
+    };
+    let query = diesel::sql_query(format!(
+        r#"
+        SELECT dr.channel, dr.active_at FROM dm_recipient dr
+        JOIN channel c ON c.id = dr.channel
+        WHERE dr."user" = $1 AND c.deleted_at IS NULL
+          {after_clause}
+        ORDER BY dr.active_at DESC, dr.channel DESC
+        LIMIT $2
+        "#,
+    ))
+    .bind::<Uuid, _>(user.0)
+    .bind::<BigInt, _>(limit + 1)
+    .into_boxed::<diesel::pg::Pg>();
+    let query = match after {
+        Some((at, channel)) => query.bind::<Timestamptz, _>(at).bind::<Uuid, _>(channel.0),
+        None => query,
+    };
+    let rows: Vec<Listed> = query.load(conn).await?;
+    let page = crate::cursor::cut(List::Dms, rows, limit as usize, |last| {
+        DmPosition(last.active_at.timestamp_micros(), last.channel)
+    });
+    Ok(Paged {
+        items: page.items.into_iter().map(|row| row.channel).collect(),
+        next_cursor: page.next_cursor,
+    })
 }
 
 /// Adds someone to a group DM the caller is in; whether they were added, rather than already
@@ -514,5 +573,134 @@ mod tests {
         let b = UserId::new();
         assert_eq!(pair_key(a, b), pair_key(b, a));
         assert_ne!(pair_key(a, b), pair_key(a, UserId::new()));
+    }
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+    use diesel_async::SimpleAsyncConnection;
+
+    const READER: &str = "d3a17000-0000-4000-8000-000000000001";
+
+    fn dm(n: u8) -> ChannelId {
+        ChannelId(
+            format!("d3a17000-0000-4000-8000-0000000001{n:02x}")
+                .parse()
+                .unwrap(),
+        )
+    }
+
+    /// A connection to the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed, with someone in `dms` DMs, the n-th last active a second before the one
+    /// before, but for the third and fourth, active at the same instant; `None` without one,
+    /// when the test checks nothing.
+    async fn reader_with(dms: u8) -> Option<AsyncPgConnection> {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return None;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                   VALUES ('{READER}', '{READER}', '', now(), now())"#
+        ))
+        .await
+        .unwrap();
+        for n in 1..=dms {
+            let channel = dm(n).0;
+            let second = if n == 4 { 3 } else { n };
+            conn.batch_execute(&format!(
+                r#"INSERT INTO channel (id, name, ty, sort_index) VALUES ('{channel}', '', 'dm', 0);
+                 INSERT INTO dm_recipient (channel, "user", joined_at, active_at)
+                     VALUES ('{channel}', '{READER}', now(),
+                             '2026-01-01T00:00:00.123456Z'::timestamptz - interval '{second} seconds');"#,
+            ))
+            .await
+            .unwrap();
+        }
+        Some(conn)
+    }
+
+    /// Which DMs one page holds, by their numbers, and the next page's cursor.
+    async fn page(
+        conn: &mut AsyncPgConnection,
+        cursor: Option<&str>,
+        limit: i64,
+    ) -> (Vec<u8>, Option<String>) {
+        let page = dms_page(
+            conn,
+            UserId(READER.parse().unwrap()),
+            cursor.map(|c| dm_position(c).unwrap()),
+            limit,
+        )
+        .await
+        .unwrap();
+        let dms = page
+            .items
+            .into_iter()
+            .map(|channel| (1..=u8::MAX).find(|n| dm(*n) == channel).unwrap())
+            .collect();
+        (dms, page.next_cursor)
+    }
+
+    /// The DM list's cursor is a place, not a DM: the pages go on after a DM its reader left
+    /// since, through DMs active at one instant, past one deleted, and the last page says it
+    /// is the last however many it holds.
+    #[tokio::test]
+    async fn the_dms_page_past_a_dm_that_is_gone() {
+        let Some(mut conn) = reader_with(7).await else {
+            return;
+        };
+        // Of two DMs active at one instant, the later id comes first.
+        let (dms, cursor) = page(&mut conn, None, 3).await;
+        assert_eq!(dms, [1, 2, 4]);
+        // The reader leaves the fourth, which the cursor was made from; the third was active
+        // at the same instant and is still next. The fifth is deleted.
+        conn.batch_execute(&format!(
+            r#"DELETE FROM dm_recipient WHERE channel = '{}';
+               UPDATE channel SET deleted_at = now() WHERE id = '{}';"#,
+            dm(4).0,
+            dm(5).0
+        ))
+        .await
+        .unwrap();
+        let (dms, cursor) = page(&mut conn, cursor.as_deref(), 2).await;
+        assert_eq!(dms, [3, 6]);
+        assert!(cursor.is_some());
+        // The reader leaves the sixth, the boundary again.
+        conn.batch_execute(&format!(
+            "DELETE FROM dm_recipient WHERE channel = '{}'",
+            dm(6).0
+        ))
+        .await
+        .unwrap();
+        let (dms, cursor) = page(&mut conn, cursor.as_deref(), 1).await;
+        assert_eq!(dms, [7]);
+        assert_eq!(cursor, None);
+        // A page that ends on the last DM has none after it, though it is full.
+        let (dms, cursor) = page(&mut conn, None, 4).await;
+        assert_eq!(dms, [1, 2, 3, 7]);
+        assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn a_cursor_of_no_dm_list_is_refused() {
+        let refused =
+            |cursor: &str| matches!(dm_position(cursor), Err(crate::Error::Validation(_)));
+        assert!(refused("garbage"));
+        // A DM's id, which is not a place in the list.
+        assert!(refused(&dm(1).0.to_string()));
+        // A place of another shape, a time no clock tells, and a ban list's cursor, whose
+        // place has a DM's shape.
+        assert!(refused(&crate::cursor::encode(List::Dms, &(1_i64, "code"))));
+        assert!(refused(&crate::cursor::encode(List::Dms, &dm(1))));
+        assert!(refused(&crate::cursor::encode(
+            List::Dms,
+            &(i64::MAX, dm(1))
+        )));
+        assert!(refused(&crate::cursor::encode(List::Bans, &(1_i64, dm(1)))));
+        assert!(!refused(&crate::cursor::encode(List::Dms, &(1_i64, dm(1)))));
     }
 }

@@ -1,16 +1,12 @@
-import {
-  ApiProblemError,
-  type LoggedChannel,
-  type LoggedMessage,
-  type ModerationEntry,
-} from "@aspen/protocol";
+import { type LoggedChannel, type LoggedMessage, type ModerationEntry } from "@aspen/protocol";
 import { Link } from "@tanstack/react-router";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, type ReactNode } from "react";
 import { Button } from "react-aria-components";
 import { useSync, useUser, useUserLoading, useIdWizard } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { actorKindOf } from "@/features/admin/moderationActor";
 import { Cell, Table } from "@/features/admin/FleetHealth";
+import { useCursorLog } from "@/features/admin/useCursorLog";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { UserMention } from "@/features/messages/Mention";
 import {
@@ -29,9 +25,6 @@ import { CopyIdButton } from "@/features/layout/CopyId";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
 
-/** A page of the log is what the server gives by default. */
-const PAGE = 50;
-
 /**
  * The moderation log, newest first, a page at a time: each use of Moderate any community that a
  * community's own permissions would not have allowed, and every reading of a DM by someone not
@@ -45,53 +38,12 @@ export function ModerationLog() {
   const m = useMessages();
   const sync = useSync();
   const wizard = useIdWizard();
-  const [entries, setEntries] = useState<readonly ModerationEntry[]>([]);
-  const [complete, setComplete] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const read = useCallback(
-    (before: string | undefined, isCurrent: () => boolean) => {
-      sync.admin.moderationLog(before).then(
-        (page) => {
-          if (!isCurrent()) {
-            return;
-          }
-          setEntries((held) => (before === undefined ? page : [...held, ...page]));
-          setComplete(page.length < PAGE);
-          setError(null);
-          setLoading(false);
-        },
-        (e: unknown) => {
-          if (isCurrent()) {
-            setError(e instanceof ApiProblemError ? e.message : String(e));
-            setLoading(false);
-          }
-        },
-      );
-    },
-    [sync],
-  );
-
-  useEffect(() => {
-    let current = true;
-    read(undefined, () => current);
-    return () => {
-      current = false;
-    };
-  }, [read]);
+  const load = useCallback((cursor?: string) => sync.admin.moderationLog(cursor), [sync]);
+  const { entries, loading, error, more, showMore, reload } = useCursorLog(load);
 
   return (
     <Section id="admin-moderation" title={m.admin.moderationLog} hint={m.admin.moderationLogHint}>
-      {error !== null && (
-        <ReadFailed
-          error={error}
-          onRetry={() => {
-            setLoading(true);
-            read(undefined, () => true);
-          }}
-        />
-      )}
+      {error !== null && <ReadFailed error={error} onRetry={reload} />}
       {!loading && entries.length === 0 && error === null ? (
         <p className="text-sm text-ink-muted">{m.admin.noModeration}</p>
       ) : (
@@ -130,13 +82,10 @@ export function ModerationLog() {
           ))}
         </Table>
       )}
-      {!complete && entries.length > 0 && (
+      {more && (
         <Button
           isDisabled={loading}
-          onPress={() => {
-            setLoading(true);
-            read(entries.at(-1)?.id, () => true);
-          }}
+          onPress={showMore}
           className={secondaryButtonClass + " self-start"}
         >
           {m.admin.showMore}

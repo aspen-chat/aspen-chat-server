@@ -4,10 +4,10 @@
 
 use crate::admin::AdminUser;
 use crate::auth::SessionUser;
-use crate::ban::UserPageQuery;
+use crate::ban::ModerationPageQuery;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path, Query};
-use crate::include::Listed;
+use crate::include::{Listed, Page};
 use crate::message_enum::{VoiceMute, VoiceParticipant, VoiceSession};
 use crate::{API_PREFIX, TAG_VOICE};
 use aspen_app as app;
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 pub type VoiceServerList = Listed<VoiceServer>;
-pub type VoiceMuteList = Listed<VoiceMute>;
+pub type VoiceMutePage = Page<VoiceMute>;
 
 /// A moderator's change to someone else's state in a call.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -464,15 +464,18 @@ pub async fn kick_voice_participant(
     Ok(StatusCode::ACCEPTED)
 }
 
-/// A page of the community's standing server mutes, newest first. Takes Manage calls.
+/// The community's standing server mutes, newest first, a page at a time. `nextCursor` is the
+/// `cursor` of the page after this one, and `null` on the last; a page may hold fewer than
+/// `limit` and not be the last. Takes Manage calls.
 #[utoipa::path(
     get,
     path = "/communities/{community}/voice-mutes",
     tag = TAG_VOICE,
-    params(("community" = CommunityId, Path), UserPageQuery),
+    params(("community" = CommunityId, Path), ModerationPageQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = VoiceMuteList),
+        (status = OK, body = VoiceMutePage),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: lacks Manage calls", body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -483,12 +486,18 @@ pub async fn read_voice_mutes(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
-    Query(page): Query<UserPageQuery>,
-) -> ApiResult<Json<VoiceMuteList>> {
+    Query(page): Query<ModerationPageQuery>,
+) -> ApiResult<Json<VoiceMutePage>> {
     Ok(Json(
-        app::voice::mutes::read_mutes(&state, user.id, community, page.before, page.limit())
-            .await?
-            .into(),
+        app::voice::mutes::read_mutes(
+            &state,
+            user.id,
+            community,
+            page.cursor.as_deref(),
+            page.limit(),
+        )
+        .await?
+        .into(),
     ))
 }
 

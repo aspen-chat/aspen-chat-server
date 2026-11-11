@@ -489,10 +489,10 @@ describe("RecordStore invites", () => {
     store.replaceInvites(
       aspen.id,
       [invite("old", aspen.id, "2026-09-24T12:00:00Z"), invite("new")],
-      true,
+      null,
     );
     expect(store.invites(aspen.id).map((i) => i.code)).toEqual(["new", "old"]);
-    store.replaceInvites(aspen.id, [invite("only")], true);
+    store.replaceInvites(aspen.id, [invite("only")], null);
     expect(store.invites(aspen.id).map((i) => i.code)).toEqual(["only"]);
     expect(store.invite("old")).toBeUndefined();
   });
@@ -506,16 +506,16 @@ describe("RecordStore invites", () => {
         invite("half", aspen.id, "2026-09-25T12:00:00.5Z"),
         invite("micro", aspen.id, "2026-09-25T12:00:00.250001Z"),
       ],
-      true,
+      null,
     );
     expect(store.invites(aspen.id).map((i) => i.code)).toEqual(["half", "micro", "whole"]);
   });
 
   it("adds later pages of a paged list and says when it is whole", () => {
     const store = bootstrapped();
-    store.replaceInvites(aspen.id, [invite("new")], false);
+    store.replaceInvites(aspen.id, [invite("new")], "after-new");
     expect(store.listComplete(`invites:${aspen.id}`)).toBe(false);
-    store.appendInvites(aspen.id, [invite("old", aspen.id, "2026-09-24T12:00:00Z")], true);
+    store.appendInvites(aspen.id, [invite("old", aspen.id, "2026-09-24T12:00:00Z")], null);
     expect(store.invites(aspen.id).map((i) => i.code)).toEqual(["new", "old"]);
     expect(store.listComplete(`invites:${aspen.id}`)).toBe(true);
   });
@@ -534,9 +534,9 @@ describe("RecordStore invites", () => {
       mutedAt: "2026-10-09T00:00:00Z",
     });
     expect(store.voiceMuted(aspen.id, "u1")).toBe(true);
-    store.replaceVoiceMutes(aspen.id, [], false);
+    store.replaceVoiceMutes(aspen.id, [], "more");
     expect(store.voiceMuted(aspen.id, "u2")).toBeUndefined();
-    store.replaceVoiceMutes(aspen.id, [], true);
+    store.replaceVoiceMutes(aspen.id, [], null);
     expect(store.voiceMuted(aspen.id, "u2")).toBe(false);
   });
 
@@ -1515,7 +1515,7 @@ describe("RecordStore threads and DMs", () => {
     const store = bootstrapped();
     const older = dm(50, [me.id, bob.id]);
     const newer = dm(51, [me.id, bob.id, id(3)], "groupDm");
-    store.setDms([newer, older], true);
+    store.setDms([newer, older], null);
     expect(store.dms().map((c) => c.id)).toEqual([newer.id, older.id]);
     expect(store.channels(aspen.id).some((c) => c.id === older.id)).toBe(false);
     store.applyEvent({ serverEvent: "message", type: "create", ...message(9, older.id, bob.id) });
@@ -1540,7 +1540,7 @@ describe("RecordStore threads and DMs", () => {
       const store = bootstrapped();
       const first = dm(50, [me.id, bob.id]);
       const second = dm(51, [me.id, id(3)]);
-      store.setDms([first, second], true);
+      store.setDms([first, second], null);
       store.applyEvent({
         serverEvent: "message",
         type: "create",
@@ -1562,7 +1562,7 @@ describe("RecordStore threads and DMs", () => {
   it("drops a DM the caller left, with its history", () => {
     const store = bootstrapped();
     const group = dm(52, [me.id, bob.id, id(3)], "groupDm");
-    store.setDms([group], true);
+    store.setDms([group], null);
     store.replaceWindow(group.id, [message(3, group.id)], { hasOlder: false, atLatest: true });
     store.applyEvent({
       serverEvent: "channel",
@@ -1590,8 +1590,8 @@ describe("RecordStore threads and DMs", () => {
     const store = bootstrapped();
     const kept = dm(53, [me.id, bob.id]);
     const gone = dm(54, [me.id, id(3)]);
-    store.setDms([kept, gone], true);
-    store.setDms([kept], true);
+    store.setDms([kept, gone], null);
+    store.setDms([kept], null);
     expect(store.dms().map((c) => c.id)).toEqual([kept.id]);
     expect(store.channel(gone.id)).toBeUndefined();
   });
@@ -1601,13 +1601,13 @@ describe("RecordStore threads and DMs", () => {
     const newest = dm(55, [me.id, bob.id]);
     const older = dm(56, [me.id, id(3)]);
     const oldest = dm(57, [me.id, id(4)]);
-    store.setDms([newest], false);
+    store.setDms([newest], "after-newest");
     expect(store.dmsComplete()).toBe(false);
-    expect(store.lastListedDm()).toBe(newest.id);
-    store.appendDms([older, newest, oldest], true);
+    expect(store.dmsCursor()).toBe("after-newest");
+    store.appendDms([older, newest, oldest], null);
     expect(store.dms().map((c) => c.id)).toEqual([newest.id, older.id, oldest.id]);
     expect(store.dmsComplete()).toBe(true);
-    expect(store.lastListedDm()).toBe(oldest.id);
+    expect(store.dmsCursor()).toBeNull();
   });
 });
 
@@ -1823,7 +1823,7 @@ describe("RecordStore roles and access", () => {
       id: moderator.id,
       permissions: ["banMembers"],
     });
-    store.replaceBans(aspen.id, [], true);
+    store.replaceBans(aspen.id, [], null);
     expect(store.bans(aspen.id)).toEqual([]);
     store.applyEvent({
       serverEvent: "role",

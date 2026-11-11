@@ -1,6 +1,7 @@
-import { ApiProblemError, VOTERS_PAGE, type Poll } from "@aspen/protocol";
+import { ApiProblemError, type Poll } from "@aspen/protocol";
+import { useCursorPages } from "@/api/useCursorPages";
 import { CheckIcon, UsersIcon, XIcon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   Button,
   Dialog,
@@ -377,42 +378,11 @@ function VoterList({ pollId, index, label }: { pollId: string; index: number; la
   const m = useMessages();
   const sync = useSync();
   const community = useChannel(usePoll(pollId)?.channelId ?? "")?.community;
-  // The ids of a paged read, in the server's order; the records themselves are in the store.
-  const [ids, setIds] = useState<readonly string[]>([]);
-  const [complete, setComplete] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const read = useCallback(
-    (after: string | undefined, isCurrent: () => boolean) => {
-      sync.loadVoters(pollId, index, after).then(
-        (users) => {
-          if (!isCurrent()) {
-            return;
-          }
-          const page = users.map((u) => u.id);
-          setIds((held) => (after === undefined ? page : [...held, ...page]));
-          setComplete(users.length < VOTERS_PAGE);
-          setLoading(false);
-        },
-        (e: unknown) => {
-          if (isCurrent()) {
-            setError(e instanceof ApiProblemError ? e.message : String(e));
-            setLoading(false);
-          }
-        },
-      );
-    },
+  const load = useCallback(
+    (cursor?: string) => sync.loadVoters(pollId, index, cursor),
     [sync, pollId, index],
   );
-
-  useEffect(() => {
-    let current = true;
-    read(undefined, () => current);
-    return () => {
-      current = false;
-    };
-  }, [read]);
+  const { ids, loading, error, more, showMore } = useCursorPages(load);
 
   return (
     <div className="flex max-h-96 flex-col gap-1 overflow-y-auto">
@@ -433,15 +403,8 @@ function VoterList({ pollId, index, label }: { pollId: string; index: number; la
           {error}
         </p>
       )}
-      {!loading && !complete && ids.length > 0 && (
-        <Button
-          onPress={() => {
-            setLoading(true);
-            setError(null);
-            read(ids[ids.length - 1], () => true);
-          }}
-          className={secondaryButtonClass + " self-start"}
-        >
+      {!loading && more && (
+        <Button onPress={showMore} className={secondaryButtonClass + " self-start"}>
           {m.showMore}
         </Button>
       )}

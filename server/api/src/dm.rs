@@ -1,7 +1,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Json, NoContent, Path, Query};
-use crate::include::{IncludeSet, Included, SideloadedList};
+use crate::include::{IncludeSet, Included, SideloadedPage};
 use crate::message_enum::Channel;
 use crate::{API_PREFIX, TAG_DMS};
 use aspen_app::context::GlobalServerContext;
@@ -40,7 +40,7 @@ pub enum DmInclude {
 }
 
 /// Body of a DM list read; a named alias for the same reason as `api::community::CommunityRead`.
-pub type DmList = SideloadedList<Channel>;
+pub type DmPage = SideloadedPage<Channel>;
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -49,8 +49,8 @@ pub struct DmListQuery {
     #[serde(default)]
     #[param(value_type = Option<Vec<DmInclude>>, style = Form, explode = false)]
     pub include: IncludeSet<DmInclude>,
-    /// Continue after this DM, the last of the previous page.
-    pub before: Option<ChannelId>,
+    /// Continue after the page whose `nextCursor` this is.
+    pub cursor: Option<String>,
     /// How many to return, at most 100; 50 when absent.
     pub limit: Option<i64>,
 }
@@ -59,8 +59,8 @@ pub struct DmListQuery {
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct DmPageQuery {
-    /// Continue after this DM, the last of the previous page.
-    pub before: Option<ChannelId>,
+    /// Continue after the page whose `nextCursor` this is.
+    pub cursor: Option<String>,
     /// How many to return, at most 100; 50 when absent.
     pub limit: Option<i64>,
 }
@@ -113,10 +113,11 @@ pub async fn open_dm(
     ))
 }
 
-/// The caller's DMs and group DMs, the most recently active first, a page at a time: a page
-/// shorter than `limit` is the last. `include=users` sideloads
-/// their recipients, `include=readStates` how far the caller has read each, and
-/// `include=mutes` which the caller has muted.
+/// The caller's DMs and group DMs, the most recently active first, a page at a time.
+/// `nextCursor` is the `cursor` of the page after this one, and `null` on the last; a page may
+/// hold fewer than `limit` and not be the last. `include=users` sideloads their recipients,
+/// `include=readStates` how far the caller has read each, and `include=mutes` which the caller
+/// has muted.
 #[utoipa::path(
     get,
     path = "/users/@me/dms",
@@ -124,8 +125,8 @@ pub async fn open_dm(
     params(DmListQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = DmList),
-        (status = BAD_REQUEST, body = Problem),
+        (status = OK, body = DmPage),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -134,11 +135,14 @@ pub async fn list_dms(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Query(query): Query<DmListQuery>,
-) -> ApiResult<Json<DmList>> {
-    let dms = app::dm::list_dms(
+) -> ApiResult<Json<DmPage>> {
+    let app::cursor::Paged {
+        items: dms,
+        next_cursor,
+    } = app::dm::list_dms(
         &state,
         user.id,
-        query.before,
+        query.cursor.as_deref(),
         query.limit.unwrap_or(DEFAULT_DM_PAGE),
     )
     .await?;
@@ -208,9 +212,9 @@ pub async fn list_dms(
         .into_iter()
         .map(|(dm, recipients)| app::channel::record(&dm, recipients))
         .collect();
-    Ok(Json(DmList::new(
-        records,
-        Included {
+    Ok(Json(DmPage {
+        data: records,
+        included: Included {
             users,
             read_states,
             channel_mutes,
@@ -220,7 +224,8 @@ pub async fn list_dms(
             voice_rings,
             ..Included::default()
         },
-    )))
+        next_cursor,
+    }))
 }
 
 /// Adds someone to a group DM the caller is in. They must share a community with the caller,

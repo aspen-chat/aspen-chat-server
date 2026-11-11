@@ -204,9 +204,14 @@ same commit, as with comments.
   `query: { include: ["channels", "members"] }`; the client serializes arrays comma separated
   because that is how the OpenAPI document declares them. Prefer one read with `include` over a
   fan-out of per-community or per-message requests. Every other list answers `{ data }`, never a
-  bare array, and the lists read by a cursor (an emoji's reactors, a poll answer's voters, member
-  search) answer `{ data, nextCursor }`: ask for the next page with `cursor`, and go by
-  `nextCursor !== null`, never by a page's length (`useCursorPages`, `src/api/useCursorPages.ts`).
+  bare array, and every list read past its first page, but for reads of messages placed by message
+  ids and the dashboard's directories, answers `{ data, nextCursor }`: ask for the next page with
+  `cursor`, and go by `nextCursor !== null`, never by a page's length (`useCursorPages` in
+  `src/api/useCursorPages.ts` for a dialog's list, `useCursorLog` for one of the dashboard's,
+  `RecordStore.listCursor` for a list the store holds). A channel's window of messages, read by
+  `before`, `after`, and `around`, says its own ends as `moreBefore` and `moreAfter`, which
+  `AspenSync` makes the window's `hasOlder` and `atLatest`; only for a deployment that sends neither
+  does it go by a page's length (`moreByPageLength` in `sync.ts`).
 - Server state lives in `RecordStore` (`packages/protocol/src/store.ts`), a normalized cache keyed
   by record type and id, kept current by `AspenSync` (`sync.ts`): REST bootstrap first, then the
   event stream, whose replay window covers the gap. Components read the store through the hooks in

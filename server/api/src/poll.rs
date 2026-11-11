@@ -9,7 +9,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path, Query};
-use crate::include::{IncludeSet, Included, Listed, Sideloaded};
+use crate::include::{IncludeSet, Included, Page, Sideloaded};
 use crate::message_enum::request::PollCreateRequest;
 use crate::message_enum::{Poll, User};
 use crate::{API_PREFIX, TAG_POLLS};
@@ -23,7 +23,7 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-pub type UserList = Listed<User>;
+pub type VoterPage = Page<User>;
 
 /// What adding a written-in answer did: the answer the caller's vote went to, a new one or the
 /// poll's matching answer, and the poll with its updated tally.
@@ -173,14 +173,18 @@ pub async fn close_poll(
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct VotersQuery {
-    /// Continue after this person, the last of the previous page.
-    pub after: Option<UserId>,
+    /// Continue after the page whose `nextCursor` this is.
+    pub cursor: Option<String>,
     /// How many to return, at most 100; 50 when absent.
     pub limit: Option<u32>,
 }
 
-/// Everyone who voted for an answer, earliest first, a page at a time. A page shorter than
-/// `limit` is the last.
+/// How many voters a page holds when no `limit` is given.
+const DEFAULT_VOTERS_PAGE: u32 = 50;
+
+/// Everyone who voted for an answer and still has an account, earliest first, a page at a
+/// time. `nextCursor` is the `cursor` of the page after this one, and `null` on the last; a
+/// page may hold fewer than `limit` and not be the last.
 #[utoipa::path(
     get,
     path = "/polls/{poll}/votes/{option}",
@@ -192,8 +196,8 @@ pub struct VotersQuery {
     ),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = UserList),
-        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for an anonymous poll or no such answer", body = Problem),
+        (status = OK, body = VoterPage),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for an anonymous poll, no such answer, or a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -204,19 +208,19 @@ pub async fn list_voters(
     SessionUser { user, .. }: SessionUser,
     Path((poll, option)): Path<(PollId, u32)>,
     Query(query): Query<VotersQuery>,
-) -> ApiResult<Json<UserList>> {
-    let ids = app::poll::read_voters(
+) -> ApiResult<Json<VoterPage>> {
+    let page = app::poll::read_voters(
         &state,
         user.id,
         poll,
         option,
-        query.after,
-        query.limit.unwrap_or(50),
+        query.cursor.as_deref(),
+        query.limit.unwrap_or(DEFAULT_VOTERS_PAGE),
     )
     .await?;
     // Read in one batch, then put back in the list's order.
     let mut users: std::collections::HashMap<UserId, User> =
-        app::user::read_users(&state, user.id, &ids)
+        app::user::read_users(&state, user.id, &page.items)
             .await?
             .into_iter()
             .map(|u| {
@@ -224,7 +228,13 @@ pub async fn list_voters(
                 (record.id, record)
             })
             .collect();
-    Ok(Json(ids.iter().filter_map(|id| users.remove(id)).collect()))
+    Ok(Json(VoterPage::new(
+        page.items
+            .iter()
+            .filter_map(|id| users.remove(id))
+            .collect(),
+        page.next_cursor,
+    )))
 }
 
 /// Casts a vote. On a single-choice poll this replaces any earlier vote by the caller.

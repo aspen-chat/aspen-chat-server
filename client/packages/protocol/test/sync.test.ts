@@ -10,6 +10,12 @@ import {
   INPUT_VOLUME,
   OUTPUT_VOLUME,
   MEMBER_SEARCH_PAGE,
+  LIST_PAGE,
+  REACTORS_PAGE,
+  SAVED_PAGE,
+  VOTERS_PAGE,
+  ACTIVITY_PAGE,
+  HISTORY_PAGE_SIZE,
   MESSAGE_AROUND_RADIUS,
   MESSAGE_AROUND_RADIUS_MAX,
   MESSAGE_PAGE_SIZE,
@@ -28,6 +34,7 @@ import {
   type ServerEvent,
   type ServerMessage,
   type Session,
+  type UserPage,
   type User,
 } from "../src";
 
@@ -97,6 +104,11 @@ function listed(records: readonly unknown[]): Response {
   return json({ data: records });
 }
 
+/** A page of a list read by cursor as the server answers one; the last, without a cursor. */
+function paged(records: readonly unknown[], nextCursor: string | null = null): Response {
+  return json({ data: records, nextCursor });
+}
+
 function bootstrapResponses(): Record<string, (url: URL) => Response> {
   return {
     "/api/v1/users/@me": () => json(me),
@@ -104,7 +116,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
     "/api/v1/users/@me/admin": () => json({ permissions: [], roles: [], inclusions: [] }),
     "/api/v1/users/@me/blocks": () => json({ data: [], included: { users: [] } }),
     "/api/v1/plugins": () => listed([]),
-    "/api/v1/users/@me/held-messages": () => listed([]),
+    "/api/v1/users/@me/held-messages": () => paged([]),
     "/api/v1/users/@me/scheduled-messages": () => listed([]),
     "/api/v1/users/@me/saved-messages": () => listed([]),
     "/api/v1/users/@me/thread-follows": () => listed([]),
@@ -135,7 +147,7 @@ function bootstrapResponses(): Record<string, (url: URL) => Response> {
     },
     "/api/v1/users/@me/dms": (url) => {
       expect(url.searchParams.get("include")).toBe("users,readStates,mutes,notifications,voice");
-      return json({ data: [], included: { users: [] } });
+      return json({ data: [], included: { users: [] }, nextCursor: null });
     },
   };
 }
@@ -1055,6 +1067,7 @@ describe("AspenSync", () => {
                 { community: aspen.id, user: bob.id, roles: [id(41)] },
               ],
             },
+            nextCursor: null,
           });
         },
       },
@@ -1092,6 +1105,92 @@ describe("AspenSync", () => {
       roles: [id(41), id(42)],
     });
     expect(sampleReads).toBe(3);
+    sync.stop();
+  });
+
+  it("takes a window's ends from what the server says lies beyond each page, not its length", async () => {
+    const anchor = message(500);
+    const older = Array.from({ length: HISTORY_PAGE_SIZE }, (_, i) => message(300 + i));
+    const newer = Array.from({ length: HISTORY_PAGE_SIZE }, (_, i) => message(502 + i));
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/channels/${general.id}/messages`]: (url) => {
+        const included = { users: [], attachments: [] };
+        if (url.searchParams.has("before")) {
+          // A full page that reaches the channel's oldest message.
+          return json({ data: older, included, moreBefore: false, moreAfter: true });
+        }
+        if (url.searchParams.has("after")) {
+          // A full page that reaches the channel's newest.
+          return json({ data: newer, included, moreBefore: true, moreAfter: false });
+        }
+        if (url.searchParams.has("around")) {
+          // Both sides short of the radius, with more beyond each.
+          return json({
+            data: [message(499), anchor, message(501)],
+            included,
+            moreBefore: true,
+            moreAfter: true,
+          });
+        }
+        // A latest page shorter than was asked for, with more before it.
+        return json({ data: [message(551)], included, moreBefore: true, moreAfter: false });
+      },
+    });
+    await goLive(sync);
+    await sync.loadLatest(general.id);
+    expect(sync.store.messages(general.id)).toMatchObject({ hasOlder: true, atLatest: true });
+
+    await sync.loadAround(general.id, anchor.id);
+    expect(sync.store.messages(general.id)).toMatchObject({ hasOlder: true, atLatest: false });
+
+    await sync.loadOlder(general.id);
+    expect(sync.store.messages(general.id)).toMatchObject({ hasOlder: false, atLatest: false });
+    expect(sync.store.messages(general.id)?.ids[0]).toBe(message(300).id);
+
+    await sync.loadNewer(general.id);
+    expect(sync.store.messages(general.id)).toMatchObject({ hasOlder: false, atLatest: true });
+    expect(sync.store.messages(general.id)?.ids.at(-1)).toBe(newer.at(-1)?.id);
+    sync.stop();
+  });
+
+  it("takes a window's ends from its pages' lengths when the deployment does not say", async () => {
+    const anchor = message(500);
+    const full = (from: number) =>
+      Array.from({ length: HISTORY_PAGE_SIZE }, (_, i) => message(from + i));
+    let short = false;
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/channels/${general.id}/messages`]: (url) => {
+        const included = { users: [], attachments: [] };
+        if (url.searchParams.has("before")) {
+          return json({ data: short ? [message(100)] : full(300), included });
+        }
+        if (url.searchParams.has("after")) {
+          return json({ data: short ? [message(700)] : full(502), included });
+        }
+        return json({
+          data: [
+            ...Array.from({ length: MESSAGE_AROUND_RADIUS }, (_, i) => message(400 + i)),
+            anchor,
+            ...Array.from({ length: MESSAGE_AROUND_RADIUS }, (_, i) => message(501 + i)),
+          ],
+          included,
+        });
+      },
+    });
+    await goLive(sync);
+    await sync.loadAround(general.id, anchor.id);
+    expect(sync.store.messages(general.id)).toMatchObject({ hasOlder: true, atLatest: false });
+    // Full pages are taken to have more beyond them.
+    await sync.loadOlder(general.id);
+    await sync.loadNewer(general.id);
+    expect(sync.store.messages(general.id)).toMatchObject({ hasOlder: true, atLatest: false });
+    // Short ones are the ends.
+    short = true;
+    await sync.loadOlder(general.id);
+    await sync.loadNewer(general.id);
+    expect(sync.store.messages(general.id)).toMatchObject({ hasOlder: false, atLatest: true });
     sync.stop();
   });
 
@@ -1252,7 +1351,7 @@ describe("AspenSync", () => {
     const { sync } = makeSync({
       ...bootstrapResponses(),
       [`/api/v1/communities/${aspen.id}/invites`]: (url) =>
-        url.searchParams.size === 0 && revoked ? listed([]) : listed([invite]),
+        url.searchParams.size === 0 && revoked ? paged([]) : paged([invite]),
       "/api/v1/invites/abc123": () => {
         revoked = true;
         return new Response(null, { status: 204 });
@@ -2017,18 +2116,454 @@ describe("AspenSync", () => {
           included: {
             userCommunities: [{ community: aspen.id, user: bob.id, sortIndex: 0, roles: [id(41)] }],
           },
+          nextCursor: null,
         });
       },
     });
     await goLive(sync);
     const found = await sync.searchMembers(aspen.id, "bo");
-    expect(found.map((u) => u.id)).toEqual([bob.id]);
+    expect(found.data.map((u) => u.id)).toEqual([bob.id]);
+    expect(found.nextCursor).toBeNull();
     expect(queries[0]?.get("filter[name]")).toBe("bo");
     expect(queries[0]?.get("limit")).toBe(String(MEMBER_SEARCH_PAGE));
+    expect(queries[0]?.has("cursor")).toBe(false);
     expect(sync.store.user(bob.id)).toEqual(bob);
     expect(sync.store.memberRoles(aspen.id, bob.id)).toEqual([id(41)]);
     // The sample is still the community read's.
     expect(sync.store.members(aspen.id).map((u) => u.id)).toEqual([me.id]);
+    sync.stop();
+  });
+
+  // Lists of people read by cursor. Each stub answers one person a page, far fewer than the
+  // page asked for, with a cursor until the last: whether another page follows is the
+  // cursor's to say.
+  const cursorReads: {
+    name: string;
+    path: string;
+    limit: number;
+    read: (sync: AspenSync, cursor?: string) => Promise<UserPage>;
+  }[] = [
+    {
+      name: "an emoji's reactors",
+      path: `/api/v1/messages/${id(1003)}/reactions/👍`,
+      limit: REACTORS_PAGE,
+      read: (sync, cursor) => sync.loadReactors(id(1003), "👍", cursor),
+    },
+    {
+      name: "an answer's voters",
+      path: `/api/v1/polls/${id(900)}/votes/1`,
+      limit: VOTERS_PAGE,
+      read: (sync, cursor) => sync.loadVoters(id(900), 1, cursor),
+    },
+    {
+      name: "a member search",
+      path: `/api/v1/communities/${aspen.id}/members`,
+      limit: MEMBER_SEARCH_PAGE,
+      read: (sync, cursor) => sync.searchMembers(aspen.id, "o", cursor),
+    },
+  ];
+  it.each(cursorReads)(
+    "pages $name by the cursor each answer gives, to the answer without one",
+    async ({ path, limit, read }) => {
+      const pages: Record<string, { data: User[]; nextCursor: string | null }> = {
+        "": { data: [me], nextCursor: "after-me" },
+        "after-me": { data: [bob], nextCursor: null },
+      };
+      const queries: URLSearchParams[] = [];
+      const { sync } = makeSync({
+        ...bootstrapResponses(),
+        [path]: (url) => {
+          queries.push(url.searchParams);
+          const page = pages[url.searchParams.get("cursor") ?? ""];
+          return page === undefined
+            ? json({ code: "validation", title: "Not a cursor", status: 400 }, 400)
+            : json({ ...page, included: { userCommunities: [] } });
+        },
+      });
+      await goLive(sync);
+
+      const first = await read(sync);
+      expect(first.data.map((u) => u.id)).toEqual([me.id]);
+      // One person where many were asked for, and another page follows all the same.
+      expect(first.data.length).toBeLessThan(limit);
+      expect(first.nextCursor).toBe("after-me");
+      expect(queries[0]?.get("limit")).toBe(String(limit));
+      expect(queries[0]?.has("cursor")).toBe(false);
+
+      const second = await read(sync, first.nextCursor ?? undefined);
+      expect(second.data.map((u) => u.id)).toEqual([bob.id]);
+      expect(second.nextCursor).toBeNull();
+      expect(queries[1]?.get("cursor")).toBe("after-me");
+      expect(queries[1]?.get("limit")).toBe(String(limit));
+      // The cursor is all that says where the page begins.
+      expect(queries.every((query) => !query.has("after"))).toBe(true);
+      expect(sync.store.user(bob.id)).toEqual(bob);
+
+      await expect(read(sync, "garbage")).rejects.toMatchObject({
+        problem: { code: "validation" },
+      });
+      sync.stop();
+    },
+  );
+
+  // A community's lists the store holds a page at a time. Each stub answers one record a page,
+  // far fewer than the page asked for, with a cursor until the last.
+  const ban = (user: string) => ({
+    community: aspen.id,
+    user,
+    reason: null,
+    bannedBy: me.id,
+    bannedAt: "2026-09-25T12:00:00Z",
+    until: null,
+  });
+  const voiceMute = (user: string) => ({
+    community: aspen.id,
+    user,
+    mutedBy: me.id,
+    mutedAt: "2026-09-25T12:00:00Z",
+  });
+  const invite = (code: string, createdAt: string) => ({
+    code,
+    community: aspen.id,
+    createdBy: me.id,
+    createdAt,
+    expiresAt: null,
+  });
+  const storedLists: {
+    name: string;
+    path: string;
+    topic: string;
+    records: [unknown, unknown];
+    load: (sync: AspenSync, more?: boolean) => Promise<void>;
+    held: (sync: AspenSync) => number;
+  }[] = [
+    {
+      name: "a community's bans",
+      path: `/api/v1/communities/${aspen.id}/bans`,
+      topic: `bans:${aspen.id}`,
+      records: [ban(bob.id), ban(id(3))],
+      load: (sync, more) => sync.loadBans(aspen.id, more),
+      held: (sync) => sync.store.bans(aspen.id)?.length ?? 0,
+    },
+    {
+      name: "a community's server mutes",
+      path: `/api/v1/communities/${aspen.id}/voice-mutes`,
+      topic: `voiceMutes:${aspen.id}`,
+      records: [voiceMute(bob.id), voiceMute(id(3))],
+      load: (sync, more) => sync.loadVoiceMutes(aspen.id, more),
+      held: (sync) => sync.store.voiceMutes(aspen.id)?.length ?? 0,
+    },
+    {
+      name: "a community's invites",
+      path: `/api/v1/communities/${aspen.id}/invites`,
+      topic: `invites:${aspen.id}`,
+      records: [invite("newer", "2026-09-25T12:00:00Z"), invite("older", "2026-09-24T12:00:00Z")],
+      load: (sync, more) => sync.loadInvites(aspen.id, more),
+      held: (sync) => sync.store.invites(aspen.id).length,
+    },
+  ];
+  it.each(storedLists)(
+    "pages $name by the cursor each answer gives, to the answer without one",
+    async ({ path, topic, records, load, held }) => {
+      const pages: Record<string, { data: unknown[]; nextCursor: string | null }> = {
+        "": { data: [records[0]], nextCursor: "after-first" },
+        "after-first": { data: [records[1]], nextCursor: null },
+      };
+      const queries: URLSearchParams[] = [];
+      const { sync } = makeSync({
+        ...bootstrapResponses(),
+        [path]: (url) => {
+          queries.push(url.searchParams);
+          const page = pages[url.searchParams.get("cursor") ?? ""];
+          return page === undefined
+            ? json({ code: "validation", title: "Not a cursor", status: 400 }, 400)
+            : json(page);
+        },
+      });
+      await goLive(sync);
+
+      // More is not asked for before there is a first page to follow.
+      await load(sync, true);
+      expect(queries).toHaveLength(0);
+
+      await load(sync);
+      // One record where a hundred were asked for, and another page follows all the same.
+      expect(held(sync)).toBe(1);
+      expect(sync.store.listComplete(topic)).toBe(false);
+      expect(queries[0]?.get("limit")).toBe(String(LIST_PAGE));
+      expect(queries[0]?.has("cursor")).toBe(false);
+
+      await load(sync, true);
+      expect(held(sync)).toBe(2);
+      expect(sync.store.listComplete(topic)).toBe(true);
+      expect(queries[1]?.get("cursor")).toBe("after-first");
+      // The cursor is all that says where the page begins.
+      expect(queries.every((query) => !query.has("before") && !query.has("after"))).toBe(true);
+
+      // The last answer gave no cursor, so there is nothing more to ask for.
+      await load(sync, true);
+      expect(queries).toHaveLength(2);
+      sync.stop();
+    },
+  );
+
+  it("takes a full page without a cursor as the last", async () => {
+    const full = Array.from({ length: LIST_PAGE }, (_, n) => ban(id(5000 + n)));
+    let reads = 0;
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/communities/${aspen.id}/bans`]: () => {
+        reads += 1;
+        return paged(full);
+      },
+    });
+    await goLive(sync);
+    await sync.loadBans(aspen.id);
+    expect(sync.store.bans(aspen.id)).toHaveLength(LIST_PAGE);
+    expect(sync.store.listComplete(`bans:${aspen.id}`)).toBe(true);
+    await sync.loadBans(aspen.id, true);
+    expect(reads).toBe(1);
+    sync.stop();
+  });
+
+  it("reads every held message at bootstrap, a page after each cursor", async () => {
+    const held = (n: number) => ({
+      id: id(80 + n),
+      channelId: general.id,
+      content: `held ${String(n)}`,
+      attachments: [],
+      echoToParent: false,
+      heldAt: "2026-10-18T12:00:00Z",
+      waiting: "mana",
+      kind: "message",
+      target: null,
+    });
+    const pages: Record<string, Response> = {
+      "": paged([held(1)], "after-1"),
+      // An empty page with a cursor is not the end either.
+      "after-1": paged([], "after-nothing"),
+      "after-nothing": paged([held(2)]),
+    };
+    const queries: URLSearchParams[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/held-messages": (url) => {
+        queries.push(url.searchParams);
+        return pages[url.searchParams.get("cursor") ?? ""] ?? json({ code: "validation" }, 400);
+      },
+    });
+    await goLive(sync);
+    expect(queries.map((query) => query.get("cursor"))).toEqual([null, "after-1", "after-nothing"]);
+    expect(queries.every((query) => !query.has("after"))).toBe(true);
+    expect(sync.store.heldMessage(id(81))).toBeDefined();
+    expect(sync.store.heldMessage(id(82))).toBeDefined();
+    sync.stop();
+  });
+
+  it("stops reading held messages at an answer that says nothing of a cursor", async () => {
+    let reads = 0;
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/held-messages": () => {
+        reads += 1;
+        return listed([]);
+      },
+    });
+    await goLive(sync);
+    expect(reads).toBe(1);
+    sync.stop();
+  });
+
+  it("pages the DM list by the cursor each answer gives, to the answer without one", async () => {
+    const dm = (n: number): Channel => ({
+      ...general,
+      id: id(50 + n),
+      community: null,
+      name: "",
+      ty: "dm",
+      recipients: [me.id, bob.id],
+    });
+    const pages: Record<string, { data: Channel[]; nextCursor: string | null }> = {
+      "": { data: [dm(1)], nextCursor: "after-1" },
+      "after-1": { data: [dm(2)], nextCursor: null },
+    };
+    const queries: URLSearchParams[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/dms": (url) => {
+        queries.push(url.searchParams);
+        const page = pages[url.searchParams.get("cursor") ?? ""];
+        return page === undefined
+          ? json({ code: "validation", title: "Not a cursor", status: 400 }, 400)
+          : json({ ...page, included: { users: [me, bob] } });
+      },
+    });
+    await goLive(sync);
+    // One DM where a hundred were asked for, and another page follows all the same.
+    expect(sync.store.dms().map((c) => c.id)).toEqual([dm(1).id]);
+    expect(sync.store.dmsComplete()).toBe(false);
+
+    await sync.loadMoreDms();
+    expect(sync.store.dms().map((c) => c.id)).toEqual([dm(1).id, dm(2).id]);
+    expect(sync.store.dmsComplete()).toBe(true);
+    expect(queries[1]?.get("cursor")).toBe("after-1");
+    expect(queries.every((query) => !query.has("before"))).toBe(true);
+
+    await sync.loadMoreDms();
+    expect(queries).toHaveLength(2);
+    sync.stop();
+  });
+
+  it("pages saved messages by the cursor each answer gives, to the answer without one", async () => {
+    const pages: Record<string, { data: Message[]; nextCursor: string | null }> = {
+      "": { data: [message(1)], nextCursor: "after-1" },
+      "after-1": { data: [message(2)], nextCursor: null },
+    };
+    const queries: URLSearchParams[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/saved-messages/messages": (url) => {
+        queries.push(url.searchParams);
+        const page = pages[url.searchParams.get("cursor") ?? ""];
+        return page === undefined
+          ? json({ code: "validation", title: "Not a cursor", status: 400 }, 400)
+          : json({ ...page, included: {} });
+      },
+    });
+    await goLive(sync);
+    const first = await sync.loadSavedMessages();
+    expect(first.data.map((m) => m.id)).toEqual([message(1).id]);
+    expect(first.data.length).toBeLessThan(SAVED_PAGE);
+    expect(first.nextCursor).toBe("after-1");
+    const second = await sync.loadSavedMessages(first.nextCursor ?? undefined);
+    expect(second.data.map((m) => m.id)).toEqual([message(2).id]);
+    expect(second.nextCursor).toBeNull();
+    expect(queries.map((query) => query.get("cursor"))).toEqual([null, "after-1"]);
+    expect(queries.every((query) => !query.has("before"))).toBe(true);
+    expect(sync.store.message(message(2).id)).toBeDefined();
+    sync.stop();
+  });
+
+  it("pages a moderator's reading of someone's DMs by the cursor each answer gives", async () => {
+    const dmOf = (n: number) => ({ ...general, id: id(900 + n), ty: "dm", recipients: [bob.id] });
+    const pages: Record<string, { data: object[]; nextCursor: string | null }> = {
+      "": { data: [dmOf(1)], nextCursor: "after-1" },
+      "after-1": { data: [dmOf(2)], nextCursor: null },
+    };
+    const queries: URLSearchParams[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/admin/users/${bob.id}/dms`]: (url) => {
+        queries.push(url.searchParams);
+        return json(pages[url.searchParams.get("cursor") ?? ""]);
+      },
+    });
+    await goLive(sync);
+    const first = await sync.userDms(bob.id);
+    expect(first.data.map((dm) => dm.id)).toEqual([id(901)]);
+    expect(first.nextCursor).toBe("after-1");
+    const second = await sync.userDms(bob.id, first.nextCursor ?? undefined);
+    expect(second.data.map((dm) => dm.id)).toEqual([id(902)]);
+    expect(second.nextCursor).toBeNull();
+    expect(queries.map((query) => query.get("cursor"))).toEqual([null, "after-1"]);
+    // Each is in the store, for the DM screen to show.
+    expect(sync.store.channel(id(902))).toBeDefined();
+    sync.stop();
+  });
+
+  it("pages the activity feed by the cursor each answer gives, to the answer without one", async () => {
+    const pages: Record<string, { data: Message[]; nextCursor: string | null }> = {
+      "": { data: [message(3)], nextCursor: "after-3" },
+      // A page as long as was asked for, and the last.
+      "after-3": {
+        data: Array.from({ length: ACTIVITY_PAGE }, (_, i) => message(100 + i)),
+        nextCursor: null,
+      },
+    };
+    const queries: URLSearchParams[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/activity": (url) => {
+        queries.push(url.searchParams);
+        const page = pages[url.searchParams.get("cursor") ?? ""];
+        return page === undefined
+          ? json({ code: "validation", title: "Not a cursor", status: 400 }, 400)
+          : json({ ...page, included: {} });
+      },
+    });
+    await goLive(sync);
+    const filter = { view: "mentions", dms: true, unread: false } as const;
+    const first = await sync.readActivity(filter);
+    expect(first.data.map((m) => m.id)).toEqual([message(3).id]);
+    expect(first.nextCursor).toBe("after-3");
+    const second = await sync.readActivity({ ...filter, cursor: "after-3" });
+    expect(second.data).toHaveLength(ACTIVITY_PAGE);
+    expect(second.nextCursor).toBeNull();
+    expect(queries.map((query) => query.get("cursor"))).toEqual([null, "after-3"]);
+    expect(queries.every((query) => !query.has("before"))).toBe(true);
+    expect(queries.every((query) => query.get("filter[view]") === "mentions")).toBe(true);
+    expect(sync.store.message(message(100).id)).toBeDefined();
+    sync.stop();
+  });
+
+  it("takes an activity feed that gives no cursor as read to its end", async () => {
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/activity": () =>
+        json({
+          data: Array.from({ length: ACTIVITY_PAGE }, (_, i) => message(100 + i)),
+          included: {},
+        }),
+    });
+    await goLive(sync);
+    const page = await sync.readActivity({ view: "all", dms: true, unread: false });
+    expect(page.data).toHaveLength(ACTIVITY_PAGE);
+    expect(page.nextCursor).toBeNull();
+    sync.stop();
+  });
+
+  it("asks the dashboard's lists for each page by the cursor the one before gave", async () => {
+    const queries = new Map<string, URLSearchParams[]>();
+    const answering = (body: object) => (url: URL) => {
+      queries.set(url.pathname, [...(queries.get(url.pathname) ?? []), url.searchParams]);
+      return json({ ...body, nextCursor: url.searchParams.has("cursor") ? null : "after-first" });
+    };
+    const cases = {
+      cases: [],
+      users: [],
+      messages: [],
+      channels: [],
+      communities: [],
+      categories: [],
+      attachments: [],
+    };
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/admin/moderation-log": answering({ data: [] }),
+      "/api/v1/admin/file-transfers": answering({ data: [] }),
+      "/api/v1/admin/reports": answering(cases),
+    });
+    await goLive(sync);
+    const reads: [string, (cursor?: string) => Promise<{ nextCursor: string | null }>][] = [
+      ["/api/v1/admin/moderation-log", (cursor) => sync.admin.moderationLog(cursor)],
+      ["/api/v1/admin/file-transfers", (cursor) => sync.admin.fileTransferLog(cursor, bob.id)],
+      [
+        "/api/v1/admin/reports",
+        (cursor) => sync.admin.reportCases("resolved", cursor === undefined ? {} : { cursor }),
+      ],
+    ];
+    for (const [path, read] of reads) {
+      // An empty page, and another follows all the same.
+      const first = await read();
+      expect(first.nextCursor).toBe("after-first");
+      const second = await read(first.nextCursor ?? undefined);
+      expect(second.nextCursor).toBeNull();
+      const asked = queries.get(path) ?? [];
+      expect(asked.map((query) => query.get("cursor"))).toEqual([null, "after-first"]);
+      expect(asked.every((query) => !query.has("before"))).toBe(true);
+    }
+    expect(queries.get("/api/v1/admin/file-transfers")?.[1]?.get("filter[user]")).toBe(bob.id);
+    expect(queries.get("/api/v1/admin/reports")?.[1]?.get("filter[status]")).toBe("resolved");
     sync.stop();
   });
 

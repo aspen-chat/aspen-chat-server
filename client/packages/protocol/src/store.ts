@@ -272,11 +272,11 @@ export class RecordStore {
   /** The standing bans of the communities whose bans a read has brought, by community then user. */
   readonly #bans = new Map<string, Map<string, CommunityBan>>();
   /**
-   * Whether each paged list read is whole, by its topic (`bans:<id>`, `voiceMutes:<id>`,
-   * `invites:<id>`): `false` while the server has a further page, which a list then offers to
-   * read. A list never read is taken as whole.
+   * The cursor of the page after those read of each paged list, by its topic (`bans:<id>`,
+   * `voiceMutes:<id>`, `invites:<id>`): the last answer's `nextCursor`, `null` once the server
+   * said there is no further page. A list never read has none and is taken as whole.
    */
-  readonly #listComplete = new Map<string, boolean>();
+  readonly #listCursor = new Map<string, string | null>();
   /**
    * Whether a moderator's mute of someone stands, by `<communityId>:<userId>`, as read for that
    * one person (`AspenSync.loadVoiceMute`) and kept by events.
@@ -396,8 +396,11 @@ export class RecordStore {
   readonly #myOrder = new Map<string, number>();
   /** The caller's DMs in the order the server listed them, most recently active first. */
   #dmOrder: string[] = [];
-  /** Whether the server has listed every DM, its last page having come short. */
-  #dmsComplete = true;
+  /**
+   * The cursor of the page of DMs after those listed, the last answer's `nextCursor`: `null`
+   * once the server has listed every DM.
+   */
+  #dmsCursor: string | null = null;
   /**
    * The newest activity seen in each DM since it was listed: the id of its latest message, or
    * the DM's own id when it was made. Both are UUIDv7, so they compare by time, and anything
@@ -745,30 +748,46 @@ export class RecordStore {
    * record the server has, so there is no further page to read.
    */
   listComplete(topic: string): boolean {
-    return this.#listComplete.get(topic) ?? true;
+    return this.listCursor(topic) === null;
+  }
+
+  /**
+   * The cursor that asks for the page after those read of the list of `topic`; `null` when the
+   * server said there is none, or the list was never read.
+   */
+  listCursor(topic: string): string | null {
+    return this.#listCursor.get(topic) ?? null;
   }
 
   /**
    * Keeps the first page of a community's standing server mutes in place of what was held;
-   * `complete` says whether it was the last.
+   * `nextCursor` is the answer's, `null` when the page was the last.
    */
-  replaceVoiceMutes(communityId: string, mutes: readonly VoiceMute[], complete: boolean): void {
+  replaceVoiceMutes(
+    communityId: string,
+    mutes: readonly VoiceMute[],
+    nextCursor: string | null,
+  ): void {
     this.#batch(() => {
       this.#voiceMutes.set(communityId, new Map(mutes.map((m) => [m.user, m])));
-      this.#listComplete.set(`voiceMutes:${communityId}`, complete);
+      this.#listCursor.set(`voiceMutes:${communityId}`, nextCursor);
       this.#touch(`voiceMutes:${communityId}`);
     });
   }
 
   /** Adds a later page of a community's standing server mutes to what is held. */
-  appendVoiceMutes(communityId: string, mutes: readonly VoiceMute[], complete: boolean): void {
+  appendVoiceMutes(
+    communityId: string,
+    mutes: readonly VoiceMute[],
+    nextCursor: string | null,
+  ): void {
     this.#batch(() => {
       const held = this.#voiceMutes.get(communityId) ?? new Map<string, VoiceMute>();
       for (const mute of mutes) {
         held.set(mute.user, mute);
       }
       this.#voiceMutes.set(communityId, held);
-      this.#listComplete.set(`voiceMutes:${communityId}`, complete);
+      this.#listCursor.set(`voiceMutes:${communityId}`, nextCursor);
       this.#touch(`voiceMutes:${communityId}`);
     });
   }
@@ -799,26 +818,26 @@ export class RecordStore {
   }
 
   /**
-   * Keeps the first page of a community's standing bans in place of what was held; `complete`
-   * says whether it was the last.
+   * Keeps the first page of a community's standing bans in place of what was held;
+   * `nextCursor` is the answer's, `null` when the page was the last.
    */
-  replaceBans(communityId: string, bans: readonly CommunityBan[], complete: boolean): void {
+  replaceBans(communityId: string, bans: readonly CommunityBan[], nextCursor: string | null): void {
     this.#batch(() => {
       this.#bans.set(communityId, new Map(bans.map((b) => [b.user, b])));
-      this.#listComplete.set(`bans:${communityId}`, complete);
+      this.#listCursor.set(`bans:${communityId}`, nextCursor);
       this.#touch(`bans:${communityId}`);
     });
   }
 
   /** Adds a later page of a community's standing bans to what is held. */
-  appendBans(communityId: string, bans: readonly CommunityBan[], complete: boolean): void {
+  appendBans(communityId: string, bans: readonly CommunityBan[], nextCursor: string | null): void {
     this.#batch(() => {
       const held = this.#bans.get(communityId) ?? new Map<string, CommunityBan>();
       for (const ban of bans) {
         held.set(ban.user, ban);
       }
       this.#bans.set(communityId, held);
-      this.#listComplete.set(`bans:${communityId}`, complete);
+      this.#listCursor.set(`bans:${communityId}`, nextCursor);
       this.#touch(`bans:${communityId}`);
     });
   }
@@ -2083,9 +2102,9 @@ export class RecordStore {
         this.#touch(`voiceMute:${one}`);
       }
       this.#voiceMuteOf.clear();
-      for (const topic of Array.from(this.#listComplete.keys())) {
+      for (const topic of Array.from(this.#listCursor.keys())) {
         if (!topic.startsWith("invites:")) {
-          this.#listComplete.delete(topic);
+          this.#listCursor.delete(topic);
         }
       }
       const listed = new Set(communities.map((c) => c.id));
@@ -2732,9 +2751,9 @@ export class RecordStore {
 
   /**
    * Installs the first page of a community's invites as read from the server, replacing what
-   * was held; `complete` says whether it was the last.
+   * was held; `nextCursor` is the answer's, `null` when the page was the last.
    */
-  replaceInvites(communityId: string, invites: readonly Invite[], complete: boolean): void {
+  replaceInvites(communityId: string, invites: readonly Invite[], nextCursor: string | null): void {
     this.#batch(() => {
       for (const invite of Array.from(this.#invites.values())) {
         if (invite.community === communityId) {
@@ -2744,18 +2763,18 @@ export class RecordStore {
       for (const invite of invites) {
         this.#putInvite(invite);
       }
-      this.#listComplete.set(`invites:${communityId}`, complete);
+      this.#listCursor.set(`invites:${communityId}`, nextCursor);
       this.#touch(`invites:${communityId}`);
     });
   }
 
   /** Adds a later page of a community's invites to what is held. */
-  appendInvites(communityId: string, invites: readonly Invite[], complete: boolean): void {
+  appendInvites(communityId: string, invites: readonly Invite[], nextCursor: string | null): void {
     this.#batch(() => {
       for (const invite of invites) {
         this.#putInvite(invite);
       }
-      this.#listComplete.set(`invites:${communityId}`, complete);
+      this.#listCursor.set(`invites:${communityId}`, nextCursor);
       this.#touch(`invites:${communityId}`);
     });
   }
@@ -2776,10 +2795,10 @@ export class RecordStore {
 
   /**
    * Installs the first page of the caller's DMs as the server listed them, most recently active
-   * first, dropping any the cache held that the page does not have; `complete` says whether it
-   * was the last page.
+   * first, dropping any the cache held that the page does not have; `nextCursor` is the
+   * answer's, `null` when the page was the last.
    */
-  setDms(dms: readonly Channel[], complete: boolean): void {
+  setDms(dms: readonly Channel[], nextCursor: string | null): void {
     this.#batch(() => {
       const listed = new Set(dms.map((dm) => dm.id));
       for (const channel of Array.from(this.#channels.values())) {
@@ -2789,7 +2808,7 @@ export class RecordStore {
       }
       this.#dmOrder = dms.map((dm) => dm.id);
       this.#dmActivity.clear();
-      this.#dmsComplete = complete;
+      this.#dmsCursor = nextCursor;
       for (const dm of dms) {
         this.#putChannel(dm);
       }
@@ -2799,9 +2818,10 @@ export class RecordStore {
 
   /**
    * Adds a later page of the caller's DMs after those listed, in the server's order;
-   * `complete` says whether it was the last page. A DM already listed keeps its place.
+   * `nextCursor` is the answer's, `null` when the page was the last. A DM already listed keeps
+   * its place.
    */
-  appendDms(dms: readonly Channel[], complete: boolean): void {
+  appendDms(dms: readonly Channel[], nextCursor: string | null): void {
     this.#batch(() => {
       for (const dm of dms) {
         if (!this.#dmOrder.includes(dm.id)) {
@@ -2809,19 +2829,19 @@ export class RecordStore {
         }
         this.#putChannel(dm);
       }
-      this.#dmsComplete = complete;
+      this.#dmsCursor = nextCursor;
       this.#touch("dms");
     });
   }
 
   /** Whether every DM is listed, so there is no further page to read. */
   dmsComplete(): boolean {
-    return this.#dmsComplete;
+    return this.#dmsCursor === null;
   }
 
-  /** The last DM listed, after which the next page starts. */
-  lastListedDm(): string | undefined {
-    return this.#dmOrder.at(-1);
+  /** The cursor that asks for the page of DMs after those listed; `null` when there is none. */
+  dmsCursor(): string | null {
+    return this.#dmsCursor;
   }
 
   /** Forgets everything, for sign-out. */
@@ -2868,7 +2888,7 @@ export class RecordStore {
       this.#bans.clear();
       this.#voiceMutes.clear();
       this.#voiceMuteOf.clear();
-      this.#listComplete.clear();
+      this.#listCursor.clear();
       this.#pins.clear();
       this.#saved.clear();
       this.#follows.clear();
@@ -2887,7 +2907,7 @@ export class RecordStore {
       this.#myCommunities.clear();
       this.#myOrder.clear();
       this.#dmOrder = [];
-      this.#dmsComplete = true;
+      this.#dmsCursor = null;
       this.#dmActivity.clear();
       this.#removedChannels.clear();
       this.#touchedAt.clear();

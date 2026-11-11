@@ -52,9 +52,13 @@ export type DeploymentRole = components["schemas"]["DeploymentRole"];
 export type DeploymentPermission = components["schemas"]["DeploymentPermission"];
 export type AdminAccess = components["schemas"]["AdminAccess"];
 export type ModerationEntry = components["schemas"]["ModerationEntry"];
+/** One page of the moderation log; `nextCursor` asks for the page after it, `null` on the last. */
+export type ModerationEntryPage = components["schemas"]["Page_ModerationEntry"];
 export type LoggedChannel = components["schemas"]["LoggedChannel"];
 export type LoggedMessage = components["schemas"]["LoggedMessage"];
 export type FileOfferEntry = components["schemas"]["FileOfferEntry"];
+/** One page of the record of offers; `nextCursor` asks for the page after it, `null` on the last. */
+export type FileOfferEntryPage = components["schemas"]["Page_FileOfferEntry"];
 export type JobsOverview = components["schemas"]["JobsOverview"];
 export type JobEntry = components["schemas"]["JobEntry"];
 export type JobClass = components["schemas"]["JobClass"];
@@ -189,19 +193,20 @@ export class AdminApi {
   }
 
   /**
-   * A page of the report cases in one state, in the order the server lists them, continuing
-   * after the case `before` names when given. Takes Review reports.
+   * A page of the report cases in one state, in the order the server lists them: the one
+   * `cursor` asks for (the `nextCursor` of the page before, of the same state), or the first.
+   * Whether another follows is the answer's `nextCursor` to say. Takes Review reports.
    */
   async reportCases(
     status: ReportStatus,
-    page: { before?: string; limit?: number } = {},
+    page: { cursor?: string; limit?: number } = {},
   ): Promise<ReportCaseList> {
     return adminRead(
       await this.#client.api.GET("/api/v1/admin/reports", {
         params: {
           query: {
             "filter[status]": status,
-            ...(page.before === undefined ? {} : { before: page.before }),
+            ...(page.cursor === undefined ? {} : { cursor: page.cursor }),
             ...(page.limit === undefined ? {} : { limit: page.limit }),
           },
         },
@@ -640,27 +645,34 @@ export class AdminApi {
     }
   }
 
-  /** A page of the moderation log, newest first. */
-  async moderationLog(before?: string): Promise<ModerationEntry[]> {
+  /**
+   * A page of the moderation log, newest first: the one `cursor` asks for (the `nextCursor` of
+   * the page before), or the first.
+   */
+  async moderationLog(cursor?: string): Promise<ModerationEntryPage> {
     return adminRead(
       await this.#client.api.GET("/api/v1/admin/moderation-log", {
-        params: { query: before === undefined ? {} : { before } },
+        params: { query: cursor === undefined ? {} : { cursor } },
       }),
-    ).data;
+    );
   }
 
-  /** A page of the record of files offered in calls, newest first, optionally one user's. */
-  async fileTransferLog(before?: string, user?: string): Promise<FileOfferEntry[]> {
+  /**
+   * A page of the record of files offered in calls, newest first, optionally one user's: the
+   * one `cursor` asks for (the `nextCursor` of the page before, read for the same user), or
+   * the first.
+   */
+  async fileTransferLog(cursor?: string, user?: string): Promise<FileOfferEntryPage> {
     return adminRead(
       await this.#client.api.GET("/api/v1/admin/file-transfers", {
         params: {
           query: {
-            ...(before === undefined ? {} : { before }),
+            ...(cursor === undefined ? {} : { cursor }),
             ...(user === undefined ? {} : { "filter[user]": user }),
           },
         },
       }),
-    ).data;
+    );
   }
 
   /** What the deployment's background jobs are doing now: a preview of at most 100. */

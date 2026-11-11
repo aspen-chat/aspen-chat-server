@@ -23,6 +23,7 @@
 //! reports as `reportsChanged`.
 
 use crate::context::GlobalServerContext;
+use crate::cursor::{List, Paged};
 use crate::deployment::{DeploymentAccess, DeploymentPermission, DeploymentPermissions};
 use crate::events::{ChannelHome, channel_home, dm_recipients};
 use crate::message::{Message, MessageKind, MessageWithRelations, Posting, with_relations};
@@ -440,6 +441,9 @@ pub struct CasePage {
     pub cases: Vec<ReportCase>,
     pub messages: Vec<ReviewedMessage>,
     pub categories: Vec<ReportCategory>,
+    /// The cursor of the page after this one of the list it was read from; `None` when it is
+    /// the last, and for cases read any other way.
+    pub next_cursor: Option<String>,
 }
 
 impl CasePage {
@@ -1271,6 +1275,7 @@ async fn page_of(
         cases,
         messages,
         categories,
+        next_cursor: None,
     })
 }
 
@@ -1306,53 +1311,108 @@ async fn reviewed(
         .collect())
 }
 
-/// A page of the cases in `status`, most recently reported first, after the case `before` when
-/// given. Takes Review reports.
+/// Where a case stands among those of one status, which a cursor of the case list holds: the
+/// status, the time the list is ordered by (when a resolved case was closed, when any other
+/// was last reported), in microseconds since the epoch, and the case.
+#[derive(Serialize, Deserialize)]
+struct CasePosition(ReportStatus, Option<i64>, ReportCaseId);
+
+/// The place a cursor of the list of cases in `status` holds; a validation error for one of
+/// another status's list, whose order is another.
+fn case_position(
+    status: ReportStatus,
+    cursor: &str,
+) -> crate::Result<(Option<DateTime<Utc>>, ReportCaseId)> {
+    let CasePosition(of, micros, case) = crate::cursor::decode(List::ReportCases, cursor)?;
+    if of != status {
+        return Err(crate::Error::Validation(t!("cursorInvalid")));
+    }
+    Ok((micros.map(crate::cursor::instant).transpose()?, case))
+}
+
+/// A page of the cases in `status`, most recently reported first, resolved ones most recently
+/// closed first: at most `limit` of them (up to [`MAX_PAGE`]), after the place `cursor` holds
+/// when given, which is the `next_cursor` of the page before. Takes Review reports.
 pub async fn list_cases(
     state: &GlobalServerContext,
     access: &DeploymentAccess,
     status: ReportStatus,
-    before: Option<ReportCaseId>,
+    cursor: Option<&str>,
     limit: i64,
 ) -> crate::Result<CasePage> {
-    use diesel::sql_types::{Nullable, Uuid as SqlUuid};
     access.require(DeploymentPermission::ReviewReports)?;
+    let after = cursor
+        .map(|cursor| case_position(status, cursor))
+        .transpose()?;
     let mut conn = state.connection_pool.get().await?;
-    // Resolved cases read in the order they were closed (`report_case_resolved`); the others in
-    // the order reports came (`report_case_by_status`). Pages follow on from the last case of
-    // the one before, by the same order, so a page costs the same however deep it is.
+    let page = cases_page(conn.as_mut(), access, status, after, limit).await?;
+    Ok(CasePage {
+        next_cursor: page.next_cursor,
+        ..page_of(state, conn.as_mut(), access, page.items).await?
+    })
+}
+
+/// One page of the cases in `status` that `access` may review and the cursor of the next,
+/// after `after`. Resolved cases read in the order they were closed (`report_case_resolved`);
+/// the others in the order reports came (`report_case_by_status`). The place is compared as a
+/// row value against the cursor's own, so a page costs the same however deep it is, and is
+/// read whatever has become of the case the cursor was made from. Cases the reviewer may not
+/// see are passed over before the limit.
+async fn cases_page(
+    conn: &mut AsyncPgConnection,
+    access: &DeploymentAccess,
+    status: ReportStatus,
+    after: Option<(Option<DateTime<Utc>>, ReportCaseId)>,
+    limit: i64,
+) -> crate::Result<Paged<CaseRow>> {
+    use diesel::sql_types::{Bool, Timestamptz, Uuid as SqlUuid};
+    let limit = limit.clamp(1, MAX_PAGE);
+    let resolved = status == ReportStatus::Resolved;
+    let ordered_by = if resolved {
+        "report_case.closed_at"
+    } else {
+        "report_case.last_reported_at"
+    };
     let mut query = report_case::table
         .select(CaseRow::as_select())
         .filter(report_case::status.eq(status))
         .filter(reviewable_cases(access.user, access.rank()))
         .into_boxed();
-    let before = before.map(|case| case.0);
-    query = if status == ReportStatus::Resolved {
-        query
-            .filter(
-                diesel::dsl::sql::<diesel::sql_types::Bool>("(")
-                    .bind::<Nullable<SqlUuid>, _>(before)
-                    .sql("::uuid IS NULL OR (report_case.closed_at, report_case.id) < (SELECT c.closed_at, c.id FROM report_case c WHERE c.id = ")
-                    .bind::<Nullable<SqlUuid>, _>(before)
-                    .sql("))"),
-            )
-            .order((report_case::closed_at.desc(), report_case::id.desc()))
-    } else {
-        query
-            .filter(
-                diesel::dsl::sql::<diesel::sql_types::Bool>("(")
-                    .bind::<Nullable<SqlUuid>, _>(before)
-                    .sql("::uuid IS NULL OR (report_case.last_reported_at, report_case.id) < (SELECT c.last_reported_at, c.id FROM report_case c WHERE c.id = ")
-                    .bind::<Nullable<SqlUuid>, _>(before)
-                    .sql("))"),
-            )
-            .order((report_case::last_reported_at.desc(), report_case::id.desc()))
+    query = match after {
+        Some((Some(at), case)) => query.filter(
+            diesel::dsl::sql::<Bool>(&format!("({ordered_by}, report_case.id) < ("))
+                .bind::<Timestamptz, _>(at)
+                .sql(", ")
+                .bind::<SqlUuid, _>(case.0)
+                .sql(")"),
+        ),
+        // A case with no time comes before every case with one, in the order of its id.
+        Some((None, case)) => query.filter(
+            diesel::dsl::sql::<Bool>(&format!("({ordered_by} IS NOT NULL OR report_case.id < "))
+                .bind::<SqlUuid, _>(case.0)
+                .sql(")"),
+        ),
+        None => query,
     };
-    let rows: Vec<CaseRow> = query
-        .limit(limit.clamp(1, MAX_PAGE))
-        .load(conn.as_mut())
-        .await?;
-    page_of(state, conn.as_mut(), access, rows).await
+    query = if resolved {
+        query.order((report_case::closed_at.desc(), report_case::id.desc()))
+    } else {
+        query.order((report_case::last_reported_at.desc(), report_case::id.desc()))
+    };
+    let rows: Vec<CaseRow> = query.limit(limit + 1).load(conn).await?;
+    Ok(crate::cursor::cut(
+        List::ReportCases,
+        rows,
+        limit as usize,
+        |last| {
+            let at = if resolved {
+                last.closed_at
+            } else {
+                Some(last.last_reported_at)
+            };
+            CasePosition(status, at.map(|at| at.timestamp_micros()), last.id)
+        },
+    ))
 }
 
 /// One case. Takes Review reports; a case the reviewer may not see (`may_act`) is not found.
@@ -2100,5 +2160,174 @@ mod tests {
             rank: 1,
         };
         assert!(may_act(&access, UserId::new(), others));
+    }
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+    use diesel_async::SimpleAsyncConnection;
+
+    const REVIEWER: &str = "ca5e7000-0000-4000-8000-000000000001";
+
+    fn case(n: u8) -> ReportCaseId {
+        ReportCaseId(
+            format!("ca5e7000-0000-4000-8000-0000000001{n:02x}")
+                .parse()
+                .unwrap(),
+        )
+    }
+
+    /// A connection to the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed, where the only cases are `cases` about as many people's profiles, the n-th
+    /// last reported, and closed, a second before the one before, but for the third and
+    /// fourth, at the same instant; the even ones are resolved and the rest open. `None`
+    /// without a database, when the test checks nothing.
+    async fn cases(cases: u8) -> Option<AsyncPgConnection> {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return None;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        // The cases are the deployment's, so the test's are the only ones only once the rest
+        // are gone, for as long as its transaction lasts.
+        conn.batch_execute("DELETE FROM report_case").await.unwrap();
+        for n in 1..=cases {
+            let id = case(n).0;
+            let subject = format!("ca5e7000-0000-4000-8000-0000000002{n:02x}");
+            let second = if n == 4 || n == 5 { n - 2 } else { n };
+            let (status, closed) = if n % 2 == 0 {
+                (
+                    "resolved",
+                    format!(
+                        "'2026-01-01T00:00:00.123456Z'::timestamptz - interval '{second} seconds'"
+                    ),
+                )
+            } else {
+                ("open", "NULL".to_string())
+            };
+            conn.batch_execute(&format!(
+                r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                     VALUES ('{subject}', '{subject}', '', now(), now());
+                 INSERT INTO report_case
+                     (id, kind, subject, opened_at, last_reported_at, status, closed_at)
+                     VALUES ('{id}', 'profile', '{subject}', now(),
+                             '2026-01-01T00:00:00.123456Z'::timestamptz - interval '{second} seconds',
+                             '{status}', {closed});"#,
+            ))
+            .await
+            .unwrap();
+        }
+        Some(conn)
+    }
+
+    /// Which cases one page of those in `status` holds, by their numbers, and the next page's
+    /// cursor.
+    async fn page(
+        conn: &mut AsyncPgConnection,
+        status: ReportStatus,
+        cursor: Option<&str>,
+        limit: i64,
+    ) -> (Vec<u8>, Option<String>) {
+        let access = DeploymentAccess {
+            user: UserId(REVIEWER.parse().unwrap()),
+            positions: vec![1],
+            permissions: DeploymentPermissions::empty(),
+        };
+        let page = cases_page(
+            conn,
+            &access,
+            status,
+            cursor.map(|c| case_position(status, c).unwrap()),
+            limit,
+        )
+        .await
+        .unwrap();
+        let cases = page
+            .items
+            .into_iter()
+            .map(|row| (1..=u8::MAX).find(|n| case(*n) == row.id).unwrap())
+            .collect();
+        (cases, page.next_cursor)
+    }
+
+    /// The case list's cursor is a place, not a case: the pages go on after a case that left
+    /// the list since, through cases reported or closed at one instant, and the last page
+    /// says it is the last however many it holds.
+    #[tokio::test]
+    async fn the_cases_page_past_a_case_that_is_gone() {
+        let Some(mut conn) = cases(12).await else {
+            return;
+        };
+        // Open: 1, 3, 5, 7, 9, 11, the fifth and third reported at one instant.
+        let (open, cursor) = page(&mut conn, ReportStatus::Open, None, 2).await;
+        assert_eq!(open, [1, 5]);
+        // The fifth, which the cursor was made from, is dismissed.
+        conn.batch_execute(&format!(
+            "UPDATE report_case SET status = 'dismissed' WHERE id = '{}'",
+            case(5).0
+        ))
+        .await
+        .unwrap();
+        let (open, cursor) = page(&mut conn, ReportStatus::Open, cursor.as_deref(), 2).await;
+        assert_eq!(open, [3, 7]);
+        assert!(cursor.is_some());
+        let (open, cursor) = page(&mut conn, ReportStatus::Open, cursor.as_deref(), 2).await;
+        assert_eq!(open, [9, 11]);
+        assert_eq!(cursor, None);
+
+        // Resolved: 2, 4, 6, 8, 10, 12, the fourth closed with the second.
+        let (resolved, cursor) = page(&mut conn, ReportStatus::Resolved, None, 1).await;
+        assert_eq!(resolved, [4]);
+        // The fourth is gone altogether.
+        conn.batch_execute(&format!(
+            "DELETE FROM report_case WHERE id = '{}'",
+            case(4).0
+        ))
+        .await
+        .unwrap();
+        let (resolved, cursor) =
+            page(&mut conn, ReportStatus::Resolved, cursor.as_deref(), 3).await;
+        assert_eq!(resolved, [2, 6, 8]);
+        let (resolved, cursor) =
+            page(&mut conn, ReportStatus::Resolved, cursor.as_deref(), 3).await;
+        assert_eq!(resolved, [10, 12]);
+        assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn a_cursor_of_no_case_list_is_refused() {
+        let refused = |cursor: &str| {
+            matches!(
+                case_position(ReportStatus::Open, cursor),
+                Err(crate::Error::Validation(_))
+            )
+        };
+        assert!(refused("garbage"));
+        // A case's id, which is not a place in the list.
+        assert!(refused(&case(1).0.to_string()));
+        // A place of another shape, the resolved list's cursor, a time no clock tells, and a
+        // cursor of another list holding a place of an open case's shape.
+        assert!(refused(&crate::cursor::encode(
+            List::ReportCases,
+            &(1_i64, case(1))
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::ReportCases,
+            &CasePosition(ReportStatus::Resolved, Some(1), case(1))
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::ReportCases,
+            &CasePosition(ReportStatus::Open, Some(i64::MAX), case(1))
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::Bans,
+            &CasePosition(ReportStatus::Open, Some(1), case(1))
+        )));
+        assert!(!refused(&crate::cursor::encode(
+            List::ReportCases,
+            &CasePosition(ReportStatus::Open, Some(1), case(1))
+        )));
     }
 }

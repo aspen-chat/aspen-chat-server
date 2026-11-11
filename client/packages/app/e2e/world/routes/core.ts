@@ -29,7 +29,7 @@ import {
   generalMessages,
   threadReplies,
 } from "../fixtures";
-import { type Asked, type WorldRoute, listed, reply } from "../reply";
+import { type Asked, type WorldRoute, listed, paged, reply } from "../reply";
 
 /** The routes of signing in, the community and its channels, messages, emoji, bots, bans, blocks, plugins, muting, notifications, and invites. */
 export function coreRoutes({
@@ -173,25 +173,30 @@ export function coreRoutes({
             { channel: dm, lastRead: messageId(1), lastMessage: messageId(220), mentions: 0 },
           ],
         },
+        nextCursor: null,
       }),
     ],
     ["PUT", /^\/channels\/[^/]+\/read-states\/@me$/, () => reply(null, 204)],
     ["PUT", /^\/users\/@me\/read-states$/, () => reply(null, 204)],
     ["GET", /^\/channels\/[^/]+\/pins$/, () => listed([])],
     // A member search: everyone in the world whose name holds what was typed, Dana included,
-    // though she is not in the member sample.
+    // though she is not in the member sample, a page at a time.
     [
       "GET",
       new RegExp(`^/communities/${community}/members$`),
       () => {
         const name = (url.searchParams.get("filter[name]") ?? "").toLowerCase();
-        const found = [...users, farMember].filter((u) =>
-          [u.name, u.displayName ?? ""].some((n) => n.toLowerCase().includes(name)),
+        const found = paged(
+          [...users, farMember].filter((u) =>
+            [u.name, u.displayName ?? ""].some((n) => n.toLowerCase().includes(name)),
+          ),
+          url,
+          100,
         );
         return {
-          data: found,
+          ...found,
           included: {
-            userCommunities: found.map((u) => ({
+            userCommunities: found.data.map((u) => ({
               community,
               user: u.id,
               sortIndex: 0,
@@ -201,11 +206,11 @@ export function coreRoutes({
         };
       },
     ],
-    // Everyone who reacted with an emoji, in one page.
+    // Everyone who reacted with an emoji, a page at a time.
     [
       "GET",
       new RegExp(`^/messages/${reactedId}/reactions/[^/]+$`),
-      () => listed(path.endsWith("👍") ? [users[0], users[1]] : [users[1]]),
+      () => paged(path.endsWith("👍") ? [users[0], users[1]] : [users[1]], url, 50),
     ],
     // Reacting answers with the reaction, which the app applies as its event.
     [
@@ -382,7 +387,7 @@ export function coreRoutes({
     [
       "GET",
       new RegExp(`^/communities/${community}/bans$`),
-      () => listed(Array.from(bans.values())),
+      () => paged(Array.from(bans.values()), url, 100),
     ],
     [
       "PUT",
@@ -431,7 +436,7 @@ export function coreRoutes({
     // answers these itself.
     ["GET", /^\/plugins$/, () => listed([])],
     // Nothing of the caller's is held for its previews.
-    ["GET", /^\/users\/@me\/held-messages$/, () => listed([])],
+    ["GET", /^\/users\/@me\/held-messages$/, () => paged([], url, 100)],
     // Nor is anything scheduled for later; `scheduledMessages.spec.ts` answers these itself.
     ["GET", /^\/users\/@me\/scheduled-messages$/, () => listed([])],
     ["GET", /^\/users\/[^/]+\/annotations$/, () => listed([])],
@@ -581,15 +586,19 @@ export function coreRoutes({
       "GET",
       new RegExp(`^/communities/${community}/invites$`),
       () =>
-        listed([
-          {
-            code: inviteCode,
-            community,
-            createdAt: minutesAgo(60),
-            createdBy: me,
-            expiresAt: null,
-          },
-        ]),
+        paged(
+          [
+            {
+              code: inviteCode,
+              community,
+              createdAt: minutesAgo(60),
+              createdBy: me,
+              expiresAt: null,
+            },
+          ],
+          url,
+          100,
+        ),
     ],
   ];
 }

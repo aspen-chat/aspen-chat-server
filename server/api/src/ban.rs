@@ -6,7 +6,7 @@ use crate::TAG_BANS;
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Json, NoContent, Path, Query};
-use crate::include::Listed;
+use crate::include::Page;
 use crate::message_enum::CommunityBan;
 use aspen_app as app;
 use aspen_app::ban::BanRequest;
@@ -18,7 +18,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-pub type CommunityBanList = Listed<CommunityBan>;
+pub type CommunityBanPage = Page<CommunityBan>;
 
 /// What a ban asks for.
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -47,31 +47,34 @@ pub struct CommunityBanOutcome {
     pub deleted_messages: u32,
 }
 
-/// A page of a list each of whose records names one person (bans, server mutes), newest first.
+/// A page of a moderator's list (bans, server mutes), newest first.
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
-pub struct UserPageQuery {
-    /// Continue after the record of this person, the last of the previous page.
-    pub before: Option<UserId>,
-    /// How many to return, at most 100; 100 when absent. A shorter page is the last.
+pub struct ModerationPageQuery {
+    /// Continue after the page whose `nextCursor` this is.
+    pub cursor: Option<String>,
+    /// How many to return, at most 100; 100 when absent.
     pub limit: Option<i64>,
 }
 
-impl UserPageQuery {
+impl ModerationPageQuery {
     pub fn limit(&self) -> i64 {
         self.limit.unwrap_or(app::LIST_PAGE)
     }
 }
 
-/// A page of the community's standing bans, newest first. Takes Ban members.
+/// The community's standing bans, newest first, a page at a time. `nextCursor` is the `cursor`
+/// of the page after this one, and `null` on the last; a page may hold fewer than `limit` and
+/// not be the last. Takes Ban members.
 #[utoipa::path(
     get,
     path = "/communities/{community}/bans",
     tag = TAG_BANS,
-    params(("community" = CommunityId, Path), UserPageQuery),
+    params(("community" = CommunityId, Path), ModerationPageQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = CommunityBanList),
+        (status = OK, body = CommunityBanPage),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: lacks Ban members", body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -82,12 +85,18 @@ pub async fn read_community_bans(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
-    Query(page): Query<UserPageQuery>,
-) -> ApiResult<Json<CommunityBanList>> {
+    Query(page): Query<ModerationPageQuery>,
+) -> ApiResult<Json<CommunityBanPage>> {
     Ok(Json(
-        app::ban::read_bans(&state, user.id, community, page.before, page.limit())
-            .await?
-            .into(),
+        app::ban::read_bans(
+            &state,
+            user.id,
+            community,
+            page.cursor.as_deref(),
+            page.limit(),
+        )
+        .await?
+        .into(),
     ))
 }
 

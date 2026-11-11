@@ -86,11 +86,19 @@ posted, whatever it waits for (`held::cancel`).
 
 ## Listing
 
-`GET /users/@me/held-messages` lists the caller's held messages, oldest first.
+`GET /users/@me/held-messages` lists the caller's held messages in the order of their ids, which are
+UUIDv7 made as each was held.
 
-- It answers a page of at most `LIST_PAGE` (100) at a time, after `after` (through
-  `held_message_by_author`).
-- Their apps read it whole as they start.
+- It answers a page of at most `LIST_PAGE` (100) at a time (through the index `held_message_list`),
+  as `{data, nextCursor}`: `nextCursor` is the `cursor` of the page after, and `null` on the last.
+  The read asks for one held message more than the page holds and gives a cursor only when it gets
+  it, so a reader goes by `nextCursor` and never by how many a page holds.
+- A cursor (`app::cursor`) is the id of the page's last held message, which is all the list is
+  ordered by. It is compared as an id alone, so the page after it is read whether or not that
+  message is still held: it may have been posted, dropped, or cancelled since the page before. Text
+  that is not such a cursor, or is a cursor of another list (each names its own), is refused with
+  `validation`.
+- Their apps read it whole as they start, a page after each cursor until an answer gives none.
 
 ## Order
 

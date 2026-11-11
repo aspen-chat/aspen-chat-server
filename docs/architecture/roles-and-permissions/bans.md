@@ -27,8 +27,17 @@ All take Ban members.
 ### Listing
 
 `GET /communities/{community}/bans` returns a page of at most `LIST_PAGE` (100) bans at a time,
-after the ban of `before` (index `community_ban_listed`). The client offers the next page under the
-list.
+newest first (index `community_ban_listed`), as `{data, nextCursor}`:
+
+- `nextCursor` is the `cursor` of the page after, and `null` on the last. The read asks for one ban
+  more than the page holds and gives a cursor only when it gets it, so a reader goes by `nextCursor`
+  and never by how many a page holds. The client offers the next page under the list while the last
+  answer gave a cursor.
+- A cursor (`app::cursor`) is the place of the page's last ban, when it was made and whom it bans,
+  the columns the list is ordered by. It is compared against the index as it stands, so the page
+  after it is read whether or not that ban has been lifted since.
+- Text that is not such a cursor, or is a cursor of another list (each names its own), is refused
+  with `validation`.
 
 ### Deleting recent messages
 

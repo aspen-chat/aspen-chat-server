@@ -1,9 +1,11 @@
 use crate::context::GlobalServerContext;
+use crate::cursor::{List, Paged};
 use crate::t;
 use crate::{CustomEmojiId, EventScope, MessageId, UserId, publish_event};
 use aspen_schema::react;
 use aspen_wire::message_enum;
 use aspen_wire::message_enum::server_event::{ReactEvent, ServerEvent};
+use chrono::{DateTime, Utc};
 use diesel::{
     BoolExpressionMethods, ExpressionMethods, Insertable, JoinOnDsl, QueryDsl, Queryable,
     QueryableByName, Selectable,
@@ -364,19 +366,29 @@ pub async fn read_summaries(
 struct ReactorRow {
     #[diesel(sql_type = diesel::sql_types::Uuid)]
     author: UserId,
+    #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+    timestamp: DateTime<Utc>,
 }
 
-/// Who reacted to `message_id` with `emoji`, earliest first: at most `limit` of them, starting
-/// after `after` when given, leaving out anyone `caller` has blocked. Not found for a message
-/// `caller` may not see, or one deleted.
+/// Where a reaction stands among an emoji's on one message, the columns they are ordered by:
+/// when it was made, in microseconds since the epoch as PostgreSQL keeps it, and who made it.
+/// The reactor list's cursor.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ReactPosition(i64, UserId);
+
+/// Who reacted to `message_id` with `emoji`, earliest first: at most `limit` of them (up to
+/// [`MAX_REACTORS_PAGE`]), after the place `cursor` holds when given, which is the
+/// `next_cursor` of the page before, leaving out anyone `caller` has blocked. Not found for a
+/// message `caller` may not see, or one deleted.
 pub async fn read_reactors(
     state: &GlobalServerContext,
     caller: UserId,
     message_id: MessageId,
     emoji: &str,
-    after: Option<UserId>,
+    cursor: Option<&str>,
     limit: u32,
-) -> crate::Result<Vec<UserId>> {
+) -> crate::Result<Paged<UserId>> {
+    let after = cursor.map(react_position).transpose()?;
     let mut conn = state.connection_pool.get().await?;
     let channel: crate::ChannelId = aspen_schema::message::table
         .select(aspen_schema::message::channel)
@@ -393,31 +405,74 @@ pub async fn read_reactors(
     )
     .await?;
     let Some(emoji) = canonical_emoji(emoji) else {
-        return Ok(Vec::new());
+        return Ok(Paged {
+            items: Vec::new(),
+            next_cursor: None,
+        });
     };
-    // Keyset on (timestamp, author), the list's order; the cursor is the last person read.
-    let rows: Vec<ReactorRow> = diesel::sql_query(
+    reactors_page(conn.as_mut(), caller, message_id, emoji, after, limit).await
+}
+
+/// The place a reactor list's cursor holds.
+fn react_position(cursor: &str) -> crate::Result<(DateTime<Utc>, UserId)> {
+    let ReactPosition(micros, author) = crate::cursor::decode(List::Reactors, cursor)?;
+    let made = DateTime::from_timestamp_micros(micros)
+        .ok_or_else(|| crate::Error::Validation(t!("cursorInvalid")))?;
+    Ok((made, author))
+}
+
+/// One page of who reacted to `message` with `emoji` (as stored) and the cursor of the next,
+/// by `(timestamp, author)`, the order `react_by_message` keeps an emoji's reactions in, after
+/// `after`. The place is compared as a row value against the cursor's own, so the page starts
+/// where the index says whether or not that reaction still stands. Those `caller` has blocked
+/// are passed over before the limit.
+async fn reactors_page(
+    conn: &mut AsyncPgConnection,
+    caller: UserId,
+    message: MessageId,
+    emoji: &str,
+    after: Option<(DateTime<Utc>, UserId)>,
+    limit: u32,
+) -> crate::Result<Paged<UserId>> {
+    use diesel::sql_types::{BigInt, Text, Timestamptz, Uuid};
+    let limit = limit.clamp(1, MAX_REACTORS_PAGE);
+    // The comparison is in the statement only when there is a cursor: behind
+    // `$5 IS NULL OR …` a plan made for any parameters could not start the index scan at it.
+    let after_clause = if after.is_some() {
+        r#"AND ("timestamp", author) > ($5, $6)"#
+    } else {
+        ""
+    };
+    let query = diesel::sql_query(format!(
         r#"
-        SELECT author FROM react
+        SELECT author, "timestamp" FROM react
         WHERE message = $1 AND emoji = $2
           AND NOT EXISTS (
-              SELECT 1 FROM user_block WHERE blocker = $5 AND blocked = react.author
+              SELECT 1 FROM user_block WHERE blocker = $3 AND blocked = react.author
           )
-          AND ($3::uuid IS NULL OR ("timestamp", author) > (
-              SELECT "timestamp", author FROM react
-              WHERE message = $1 AND emoji = $2 AND author = $3))
+          {after_clause}
         ORDER BY "timestamp", author
         LIMIT $4
-        "#,
-    )
-    .bind::<diesel::sql_types::Uuid, _>(message_id.0)
-    .bind::<diesel::sql_types::Text, _>(emoji)
-    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(after.map(|a| a.0))
-    .bind::<diesel::sql_types::BigInt, _>(i64::from(limit.min(MAX_REACTORS_PAGE)))
-    .bind::<diesel::sql_types::Uuid, _>(caller.0)
-    .load(conn.as_mut())
-    .await?;
-    Ok(rows.into_iter().map(|row| row.author).collect())
+        "#
+    ))
+    .into_boxed::<diesel::pg::Pg>()
+    .bind::<Uuid, _>(message.0)
+    .bind::<Text, _>(emoji)
+    .bind::<Uuid, _>(caller.0)
+    // One past the page, which says whether another follows.
+    .bind::<BigInt, _>(i64::from(limit) + 1);
+    let query = match after {
+        Some((made, author)) => query.bind::<Timestamptz, _>(made).bind::<Uuid, _>(author.0),
+        None => query,
+    };
+    let rows: Vec<ReactorRow> = query.load(conn).await?;
+    let page = crate::cursor::cut(List::Reactors, rows, limit as usize, |last| {
+        ReactPosition(last.timestamp.timestamp_micros(), last.author)
+    });
+    Ok(Paged {
+        items: page.items.into_iter().map(|row| row.author).collect(),
+        next_cursor: page.next_cursor,
+    })
 }
 
 /// How far back an emoji's use counts as recent, in days.
@@ -536,5 +591,152 @@ mod tests {
         for text in ["foo", "a", "1", "", "\u{1F44D}\u{1F44D}", "\u{1F44D} "] {
             assert_eq!(canonical_emoji(text), None, "{text:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+    use diesel_async::SimpleAsyncConnection;
+
+    const MESSAGE: &str = "4eac7000-0000-4000-8000-000000000001";
+    const CHANNEL: &str = "4eac7000-0000-4000-8000-000000000002";
+    const EMOJI: &str = "\u{1F44D}";
+
+    fn reactor(n: u8) -> UserId {
+        UserId(
+            format!("4eac7000-0000-4000-8000-0000000001{n:02x}")
+                .parse()
+                .unwrap(),
+        )
+    }
+
+    /// A connection to the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed, with a message `reactors` people reacted to with [`EMOJI`], the n-th a
+    /// second after the one before, but for the third and fourth, who reacted at the same
+    /// instant; `None` without one, when the test checks nothing. The message's author is
+    /// reactor 0, who did not react.
+    async fn message_with(reactors: u8) -> Option<AsyncPgConnection> {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return None;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        let author = reactor(0).0;
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                 VALUES ('{author}', '{author}', '', now(), now());
+             INSERT INTO channel (id, name, ty, sort_index) VALUES ('{CHANNEL}', '', 'dm', 0);
+             INSERT INTO message (id, channel, author, content, timestamp)
+                 VALUES ('{MESSAGE}', '{CHANNEL}', '{author}', 'm', now());"#,
+        ))
+        .await
+        .unwrap();
+        for n in 1..=reactors {
+            let user = reactor(n).0;
+            let second = if n == 4 { 3 } else { n };
+            conn.batch_execute(&format!(
+                r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                     VALUES ('{user}', '{user}', '', now(), now());
+                 INSERT INTO react (message, emoji, author, "timestamp")
+                     VALUES ('{MESSAGE}', '{EMOJI}', '{user}',
+                             '2026-01-01T00:00:00.123456Z'::timestamptz + interval '{second} seconds');"#,
+            ))
+            .await
+            .unwrap();
+        }
+        Some(conn)
+    }
+
+    /// Which reactors one page holds, by their numbers, and the next page's cursor, as
+    /// reactor 0 reads them.
+    async fn page(
+        conn: &mut AsyncPgConnection,
+        cursor: Option<&str>,
+        limit: u32,
+    ) -> (Vec<u8>, Option<String>) {
+        let page = reactors_page(
+            conn,
+            reactor(0),
+            MessageId(MESSAGE.parse().unwrap()),
+            EMOJI,
+            cursor.map(|c| react_position(c).unwrap()),
+            limit,
+        )
+        .await
+        .unwrap();
+        let reactors = page
+            .items
+            .into_iter()
+            .map(|user| (1..=u8::MAX).find(|n| reactor(*n) == user).unwrap())
+            .collect();
+        (reactors, page.next_cursor)
+    }
+
+    /// The reactor list's cursor is a place, not a reaction: the pages go on after someone who
+    /// took their reaction back, through reactions made at one instant, past those the reader
+    /// has blocked, and the last page says it is the last however many it holds.
+    #[tokio::test]
+    async fn the_reactors_page_past_a_reaction_that_is_gone() {
+        let Some(mut conn) = message_with(7).await else {
+            return;
+        };
+        let (reactors, cursor) = page(&mut conn, None, 3).await;
+        assert_eq!(reactors, [1, 2, 3]);
+        // The third, whom the cursor was made from, takes their reaction back; the fourth
+        // reacted at the same instant and is still next. The reader blocks the fifth.
+        conn.batch_execute(&format!(
+            r#"DELETE FROM react WHERE author = '{}';
+               INSERT INTO user_block (blocker, blocked, created_at) VALUES ('{}', '{}', now());"#,
+            reactor(3).0,
+            reactor(0).0,
+            reactor(5).0
+        ))
+        .await
+        .unwrap();
+        let (reactors, cursor) = page(&mut conn, cursor.as_deref(), 2).await;
+        assert_eq!(reactors, [4, 6]);
+        assert!(cursor.is_some());
+        // The sixth, the boundary again, takes theirs back too.
+        conn.batch_execute(&format!(
+            "DELETE FROM react WHERE author = '{}'",
+            reactor(6).0
+        ))
+        .await
+        .unwrap();
+        let (reactors, cursor) = page(&mut conn, cursor.as_deref(), 1).await;
+        assert_eq!(reactors, [7]);
+        assert_eq!(cursor, None);
+        // A page that ends on the last reaction has none after it, though it is full.
+        let (reactors, cursor) = page(&mut conn, None, 4).await;
+        assert_eq!(reactors, [1, 2, 4, 7]);
+        assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn a_cursor_of_no_reactor_list_is_refused() {
+        let refused =
+            |cursor: &str| matches!(react_position(cursor), Err(crate::Error::Validation(_)));
+        assert!(refused("garbage"));
+        assert!(refused(&reactor(1).0.to_string()));
+        // A place of another shape, a time no clock tells, and a voter list's cursor, whose
+        // place has a reactor's shape.
+        assert!(refused(&crate::cursor::encode(
+            List::Reactors,
+            &("ada", reactor(1))
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::Reactors,
+            &(i64::MAX, reactor(1))
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::Voters,
+            &(1_i64, reactor(1))
+        )));
+        assert!(!refused(&crate::cursor::encode(
+            List::Reactors,
+            &(1_i64, reactor(1))
+        )));
     }
 }

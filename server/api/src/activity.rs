@@ -7,11 +7,11 @@ use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Json, Query};
 use crate::include::IncludeSet;
-use crate::message::{MessageInclude, MessageList, sideload_messages};
+use crate::message::{MessageInclude, MessagePage, sideload_messages};
 use crate::message_enum::Message;
 use crate::t;
 use aspen_app::context::GlobalServerContext;
-use aspen_app::{self as app, CommunityId, MessageId};
+use aspen_app::{self as app, CommunityId};
 use axum::extract::State;
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
@@ -63,8 +63,8 @@ pub struct ActivityQuery {
     #[serde(rename = "filter[unread]")]
     #[param(rename = "filter[unread]")]
     pub unread: Option<bool>,
-    /// Only messages older than this one: the last of the previous page.
-    pub before: Option<MessageId>,
+    /// The `nextCursor` of the page before the one asked for; the first page when absent.
+    pub cursor: Option<String>,
     /// How many to return, at most `app::activity::MAX_PAGE` (50); 25 when absent.
     pub limit: Option<u32>,
     /// Related records to return alongside the messages, comma separated.
@@ -80,7 +80,9 @@ const DEFAULT_ACTIVITY_PAGE: u32 = 25;
 /// channel, every message or only those tagging them as their notification level there says,
 /// and every reply in a thread they follow; never in a channel they muted, by them or anyone
 /// they blocked, or from before they joined. `filter[view]` reads another view in their place.
-/// A community the caller does not belong to is passed over.
+/// A community the caller does not belong to is passed over. Read a page at a time:
+/// `nextCursor` is the `cursor` of the page after this one, read with the same filters, and
+/// `null` on the last; a page may hold fewer than `limit` and not be the last.
 #[utoipa::path(
     get,
     path = "/users/@me/activity",
@@ -88,8 +90,8 @@ const DEFAULT_ACTIVITY_PAGE: u32 = 25;
     params(ActivityQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = MessageList),
-        (status = BAD_REQUEST, description = "`validation`: a malformed community id, or a view this server does not have", body = Problem),
+        (status = OK, body = MessagePage),
+        (status = BAD_REQUEST, description = "`validation`: a malformed community id, a view this server does not have, or a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -98,7 +100,7 @@ pub async fn read_activity(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Query(query): Query<ActivityQuery>,
-) -> ApiResult<Json<MessageList>> {
+) -> ApiResult<Json<MessagePage>> {
     let communities = match &query.communities {
         None => None,
         Some(listed) => Some(
@@ -114,7 +116,7 @@ pub async fn read_activity(
                 .collect::<Result<Vec<_>, _>>()?,
         ),
     };
-    let messages: Vec<Message> = app::activity::read_activity(
+    let page = app::activity::read_activity(
         &state,
         user.id,
         app::activity::ActivityQuery {
@@ -122,14 +124,16 @@ pub async fn read_activity(
             communities,
             dms: query.dms.unwrap_or(true),
             unread: query.unread.unwrap_or(false),
-            before: query.before,
+            cursor: query.cursor,
             limit: query.limit.unwrap_or(DEFAULT_ACTIVITY_PAGE),
         },
     )
-    .await?
-    .into_iter()
-    .map(Message::from)
-    .collect();
-    let included = sideload_messages(&state, user.id, &messages, &query.include).await?;
-    Ok(Json(MessageList::new(messages, included)))
+    .await?;
+    let data: Vec<Message> = page.items.into_iter().map(Message::from).collect();
+    let included = sideload_messages(&state, user.id, &data, &query.include).await?;
+    Ok(Json(MessagePage {
+        data,
+        included,
+        next_cursor: page.next_cursor,
+    }))
 }

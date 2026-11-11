@@ -669,3 +669,4 @@ identityProviderDiscoveryStatus: "%{issuer} has no OpenID Connect discovery docu
 identityProviderDiscoveryUnreadable: "%{issuer}'s discovery document couldn't be read (%{detail}). Check that it is an OpenID Connect provider's issuer."
 identityProviderDiscoveryInvalid: "%{issuer}'s discovery document isn't valid (%{detail}). Check the issuer: the document must name exactly the issuer given."
 reauthenticateNoPassword: "This account has no password. Confirm it's you through your identity provider, or a passkey."
+cursorInvalid: "That cursor is not one this list gave. Read the list again from its first page."

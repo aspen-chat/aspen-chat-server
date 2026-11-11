@@ -1,5 +1,6 @@
 use crate::channel::ChannelType;
 use crate::context::GlobalServerContext;
+use crate::cursor::{List, Paged};
 use crate::icon::Icon;
 use crate::moderation_log::{ModerationAction, log_moderation};
 use crate::permissions::{Permissions, community_access, missing, require_member};
@@ -1007,11 +1008,24 @@ fn member_pattern(text: Option<&str>) -> crate::Result<Option<String>> {
     }))
 }
 
+/// Where a member stands in a search, the columns it is ordered by: the name the community
+/// shows them by, as `community_user.shown_name` holds it, and their id. A search's cursor.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MemberPosition(String, UserId);
+
+#[derive(QueryableByName)]
+struct SearchedMember {
+    #[diesel(embed)]
+    member: CommunityMember,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    shown_name: String,
+}
+
 /// One page of `community`'s members whose username, display name, or nickname there contains
-/// `search` (or, for one or two characters, starts with it), by the name the community shows,
-/// after the member `after` when given: `limit` of them. Read through
-/// `community_user_by_shown_name` and `community_user_search`, so a page costs the same however
-/// large the community.
+/// `search` (or, for one or two characters, starts with it), by the name the community shows:
+/// `limit` of them, after the place `cursor` holds when given, which is the `next_cursor` of the
+/// page before. Read through `community_user_by_shown_name` and `community_user_search`, so a
+/// page costs the same however large the community.
 ///
 /// In a community no bigger than the member sample (`MEMBERS_PER_COMMUNITY`), which every
 /// member already reads whole, anyone in it may search. In a larger one only those who act on
@@ -1024,10 +1038,11 @@ pub async fn search_community_members(
     caller: UserId,
     community: CommunityId,
     search: Option<&str>,
-    after: Option<UserId>,
+    cursor: Option<&str>,
     limit: i64,
-) -> crate::Result<Vec<Membership>> {
-    use diesel::sql_types::{BigInt, Nullable, Text, Uuid};
+) -> crate::Result<Paged<Membership>> {
+    let pattern = member_pattern(search)?;
+    let after = cursor.map(member_position).transpose()?;
     let mut conn = state.connection_pool.get().await?;
     let access = require_member(conn.as_mut(), caller, community).await?;
     let privileged = access.owner
@@ -1052,31 +1067,76 @@ pub async fn search_community_members(
             return Err(crate::Error::Forbidden(t!("memberSearchRefused")));
         }
     }
-    let rows: Vec<CommunityMember> = diesel::sql_query(
+    let page = search_page(conn.as_mut(), community, pattern, after, limit).await?;
+    Ok(Paged {
+        items: memberships_of(state, conn.as_mut(), caller, page.items).await?,
+        next_cursor: page.next_cursor,
+    })
+}
+
+/// The place a member search's cursor holds.
+fn member_position(cursor: &str) -> crate::Result<MemberPosition> {
+    let position: MemberPosition = crate::cursor::decode(List::Members, cursor)?;
+    // PostgreSQL takes no text holding U+0000, and no shown name holds one.
+    if position.0.contains('\0') {
+        return Err(crate::Error::Validation(t!("cursorInvalid")));
+    }
+    Ok(position)
+}
+
+/// The rows of one page of a member search and the cursor of the next, by `shown_name` and
+/// then id, after `after`. The place is compared as a row value against the cursor's own, the
+/// two columns `community_user_by_shown_name` orders a community by, so the page starts where
+/// the index says, whether or not that member is still there or still shown by that name.
+async fn search_page(
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+    pattern: Option<String>,
+    after: Option<MemberPosition>,
+    limit: i64,
+) -> crate::Result<Paged<CommunityMember>> {
+    use diesel::sql_types::{BigInt, Nullable, Text, Uuid};
+    let limit = limit.clamp(1, MAX_MEMBER_PAGE);
+    // The comparison is in the statement only when there is a cursor: behind
+    // `$4 IS NULL OR …` a plan made for any parameters could not start the index scan at it.
+    let after_clause = if after.is_some() {
+        r#"AND (cu.shown_name, cu."user") > ($4, $5)"#
+    } else {
+        ""
+    };
+    let query = diesel::sql_query(format!(
         r#"
-        SELECT cu.community, cu.sort_index, cu.nickname, u.id, u.name, u.password_hash, u.icon, u.created_at,
-               u.last_seen_at, u.deleted_at, u.display_name, u.pronouns, u.bio, u.status_text,
-               u.status_emoji, u.bot, u.system, u.bot_owner, u.bot_public, u.home_domain,
-               u.home_id, u.home_icon, u.name_hue, u.plugin,
-               u.public_email
+        SELECT cu.community, cu.sort_index, cu.nickname, cu.shown_name, u.id, u.name,
+               u.password_hash, u.icon, u.created_at, u.last_seen_at, u.deleted_at,
+               u.display_name, u.pronouns, u.bio, u.status_text, u.status_emoji, u.bot, u.system,
+               u.bot_owner, u.bot_public, u.home_domain, u.home_id, u.home_icon, u.name_hue,
+               u.plugin, u.public_email
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND u.deleted_at IS NULL
           AND ($2::text IS NULL OR cu.search_name LIKE lower($2))
-          AND ($3::uuid IS NULL OR (cu.shown_name, cu."user") > (
-              SELECT p.shown_name, p."user" FROM community_user p
-              WHERE p.community = $1 AND p."user" = $3))
+          {after_clause}
         ORDER BY cu.shown_name, cu."user"
-        LIMIT $4
-        "#,
-    )
+        LIMIT $3
+        "#
+    ))
+    .into_boxed::<diesel::pg::Pg>()
     .bind::<Uuid, _>(community.0)
-    .bind::<Nullable<Text>, _>(member_pattern(search)?)
-    .bind::<Nullable<Uuid>, _>(after.map(|a| a.0))
-    .bind::<BigInt, _>(limit.clamp(1, MAX_MEMBER_PAGE))
-    .load(conn.as_mut())
-    .await?;
-    memberships_of(state, conn.as_mut(), caller, rows).await
+    .bind::<Nullable<Text>, _>(pattern)
+    // One past the page, which says whether another follows.
+    .bind::<BigInt, _>(limit + 1);
+    let query = match after {
+        Some(MemberPosition(name, user)) => query.bind::<Text, _>(name).bind::<Uuid, _>(user.0),
+        None => query,
+    };
+    let rows: Vec<SearchedMember> = query.load(conn).await?;
+    let page = crate::cursor::cut(List::Members, rows, limit as usize, |last| {
+        MemberPosition(last.shown_name.clone(), last.member.user.id)
+    });
+    Ok(Paged {
+        items: page.items.into_iter().map(|row| row.member).collect(),
+        next_cursor: page.next_cursor,
+    })
 }
 
 /// The member sample of one community, for a member of it (or a deployment moderator).
@@ -1192,5 +1252,150 @@ impl From<&Membership> for aspen_wire::message_enum::UserCommunity {
             roles: membership.roles.clone(),
             nickname: membership.nickname.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+    use diesel_async::SimpleAsyncConnection;
+
+    const COMMUNITY: &str = "5ea7c400-0000-4000-8000-000000000001";
+
+    fn id(n: u8) -> String {
+        format!("5ea7c400-0000-4000-8000-0000000001{n:02x}")
+    }
+
+    /// A connection to the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed, with a community of members named as `names`, the n-th with the id `id(n)`;
+    /// `None` without one, when the test checks nothing.
+    async fn community_of(names: &[&str]) -> Option<AsyncPgConnection> {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return None;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(&format!(
+            "INSERT INTO community (id, name) VALUES ('{COMMUNITY}', 'c');"
+        ))
+        .await
+        .unwrap();
+        for (n, name) in names.iter().enumerate() {
+            let user = id(n as u8);
+            conn.batch_execute(&format!(
+                r#"INSERT INTO "user" (id, name, display_name, password_hash, created_at, last_seen_at)
+                     VALUES ('{user}', 'member{n}', '{name}', '', now(), now());
+                 INSERT INTO community_user ("user", community) VALUES ('{user}', '{COMMUNITY}');"#,
+            ))
+            .await
+            .unwrap();
+        }
+        Some(conn)
+    }
+
+    /// The display names of one page of a search for `pattern`, and the next page's cursor.
+    async fn page(
+        conn: &mut AsyncPgConnection,
+        pattern: Option<&str>,
+        cursor: Option<&str>,
+        limit: i64,
+    ) -> (Vec<String>, Option<String>) {
+        let page = search_page(
+            conn,
+            CommunityId(COMMUNITY.parse().unwrap()),
+            member_pattern(pattern).unwrap(),
+            cursor.map(|c| member_position(c).unwrap()),
+            limit,
+        )
+        .await
+        .unwrap();
+        let names = page
+            .items
+            .into_iter()
+            .map(|row| row.user.display_name.unwrap())
+            .collect();
+        (names, page.next_cursor)
+    }
+
+    /// A search's cursor is a place, not a member: the pages go on after someone who left, or
+    /// whom the community now shows by another name, and the last page says it is the last
+    /// however many it holds.
+    #[tokio::test]
+    async fn a_search_pages_past_a_member_who_is_gone() {
+        let Some(mut conn) = community_of(&["Ada", "Bea", "Cy", "Dee", "Eve", "Fay"]).await else {
+            return;
+        };
+        let (names, cursor) = page(&mut conn, None, None, 2).await;
+        assert_eq!(names, ["Ada", "Bea"]);
+        // Bea, whom the cursor was made from, leaves.
+        conn.batch_execute(&format!(
+            r#"DELETE FROM community_user WHERE "user" = '{}'"#,
+            id(1)
+        ))
+        .await
+        .unwrap();
+        let (names, cursor) = page(&mut conn, None, cursor.as_deref(), 2).await;
+        assert_eq!(names, ["Cy", "Dee"]);
+        // Dee takes a nickname that sorts before everyone already read.
+        conn.batch_execute(&format!(
+            r#"UPDATE community_user SET nickname = 'Abe' WHERE "user" = '{}'"#,
+            id(3)
+        ))
+        .await
+        .unwrap();
+        // A page as long as its limit with nothing after it is the last.
+        let (names, cursor) = page(&mut conn, None, cursor.as_deref(), 2).await;
+        assert_eq!(names, ["Eve", "Fay"]);
+        assert_eq!(cursor, None);
+        let (names, cursor) = page(&mut conn, None, None, 50).await;
+        assert_eq!(names, ["Dee", "Ada", "Cy", "Eve", "Fay"]);
+        assert_eq!(cursor, None);
+    }
+
+    /// Members shown by one name are ordered by id, and a page that ends among them goes on
+    /// with the rest; a filtered search pages the same way.
+    #[tokio::test]
+    async fn a_search_pages_through_members_of_one_name() {
+        let Some(mut conn) = community_of(&["Sam", "sam", "SAM", "Tess", "Samir"]).await else {
+            return;
+        };
+        let mut seen = Vec::new();
+        let mut cursor = None;
+        loop {
+            let (names, next) = page(&mut conn, Some("sam"), cursor.as_deref(), 1).await;
+            seen.extend(names);
+            match next {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        assert_eq!(seen, ["Sam", "sam", "SAM", "Samir"]);
+    }
+
+    #[test]
+    fn a_cursor_of_no_search_is_refused() {
+        let refused =
+            |cursor: &str| matches!(member_position(cursor), Err(crate::Error::Validation(_)));
+        assert!(refused("garbage"));
+        assert!(refused(&id(1)));
+        // A place of another shape, a name PostgreSQL could not take, and a cursor of another
+        // list holding a place of a member's shape.
+        assert!(refused(&crate::cursor::encode(
+            List::Members,
+            &(1_i64, id(1))
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::Members,
+            &("a\0b", id(1))
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::Voters,
+            &("ada", id(1))
+        )));
+        assert!(!refused(&crate::cursor::encode(
+            List::Members,
+            &("ada", id(1))
+        )));
     }
 }

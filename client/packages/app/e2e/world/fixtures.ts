@@ -323,12 +323,20 @@ export const inviteCode = "FamilyInvite42";
 /** How long a page of older history takes to arrive, long enough to see it loading. */
 export const HISTORY_DELAY_MS = 400;
 
-/** A page of #general, newest first, as `GET /channels/{general}/messages` answers it. */
+/**
+ * A page of #general, newest first, as `GET /channels/{general}/messages` answers it, and
+ * whether older messages stand past it.
+ */
 export function generalPage(url: URL) {
   const limit = Number(url.searchParams.get("limit") ?? "50");
   const before = url.searchParams.get("before");
   const start = before === null ? 0 : generalMessages.findIndex((m) => m.id === before) + 1;
-  return generalMessages.slice(start, start + limit);
+  return {
+    messages: generalMessages.slice(start, start + limit),
+    moreBefore: start + limit < generalMessages.length,
+    // Nothing is newer than the latest; a `before` read's anchor is.
+    moreAfter: before !== null,
+  };
 }
 
 export const dmRecord = {

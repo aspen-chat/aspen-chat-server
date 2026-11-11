@@ -37,8 +37,16 @@ The user and message each cascade, and the pair is unique.
 | `GET /users/@me/saved-messages`              | Lists every save as `{id, message}`                    |
 | `GET /users/@me/saved-messages/messages`     | Reads the messages themselves, newest save first       |
 
-The messages read takes `limit` (50, at most 100), pages after the save of `before` (a message), and
-takes the same `include` names as any message read.
+The messages read takes `limit` (50, at most 100) and the same `include` names as any message read,
+and answers a page at a time:
+
+- The answer is `{data, included, nextCursor}`: `nextCursor` is the `cursor` of the page after, and
+  `null` on the last. The read asks for one save more than the page holds and gives a cursor only
+  when it gets it, so a reader goes by `nextCursor` and never by how many a page holds.
+- A cursor (`app::cursor`) is the id of the page's last save, which is all the list is ordered by
+  (`saved_message_by_user`). It is compared as an id alone, so the page after it is read whether or
+  not that save still stands. Text that is not such a cursor, or is a cursor of another list (each
+  names its own), is refused with `validation`.
 
 ## The limit
 

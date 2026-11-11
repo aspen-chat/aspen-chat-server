@@ -147,7 +147,9 @@ tables `file_offer` and `file_transfer`).
 
 It tells who sent what to whom in private calls, so only holders of Moderate any community read it:
 
-- `GET /admin/file-transfers`: newest offer first, paged by `before` and `limit`, one person's by
-  `filter[user]` (as sender or receiver);
+- `GET /admin/file-transfers`: newest offer first, one person's by `filter[user]` (as sender or
+  receiver), a page of `limit` (50, at most 100) at a time. The answer is `{data, nextCursor}`:
+  `nextCursor` is the `cursor` of the page after, the id of the page's last offer (`app::cursor`),
+  and `null` on the last, which the read decides by asking for one offer more than the page holds;
 - the dashboard's File transfers section, narrowed to one person by `AdminUserPicker` and widened
   again by its Anyone option or by emptying it.

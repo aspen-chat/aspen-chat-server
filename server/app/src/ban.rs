@@ -5,6 +5,7 @@
 //! in the community, which takes Manage messages besides.
 
 use crate::context::GlobalServerContext;
+use crate::cursor::{List, Paged};
 use crate::events::{EventScope, publish_event};
 use crate::moderation_log::{ModerationAction, log_moderation};
 use crate::permissions::{Permissions, community_access, require_member};
@@ -98,19 +99,47 @@ pub async fn check_not_banned(
     }
 }
 
-/// A page of the community's standing bans, newest first, for a holder of Ban members: `limit`
-/// of them (at most [`crate::LIST_PAGE`]) after the ban of `before`, through
-/// `community_ban_listed`.
+/// Where a ban stands among a community's, the columns they are ordered by: when it was made,
+/// in microseconds since the epoch, and whom it bans. The ban list's cursor.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BanPosition(i64, UserId);
+
+/// The place a ban list's cursor holds.
+fn ban_position(cursor: &str) -> crate::Result<(DateTime<Utc>, UserId)> {
+    let BanPosition(micros, user) = crate::cursor::decode(List::Bans, cursor)?;
+    Ok((crate::cursor::instant(micros)?, user))
+}
+
+/// A page of the community's standing bans, newest first, for a holder of Ban members: at most
+/// `limit` of them (up to [`crate::LIST_PAGE`]), after the place `cursor` holds when given,
+/// which is the `next_cursor` of the page before.
 pub async fn read_bans(
     state: &GlobalServerContext,
     caller: UserId,
     community: CommunityId,
-    before: Option<UserId>,
+    cursor: Option<&str>,
     limit: i64,
-) -> crate::Result<Vec<message_enum::CommunityBan>> {
+) -> crate::Result<Paged<message_enum::CommunityBan>> {
+    let after = cursor.map(ban_position).transpose()?;
     let mut conn = state.connection_pool.get().await?;
     let access = require_member(conn.as_mut(), caller, community).await?;
     access.require(Permissions::BAN_MEMBERS)?;
+    bans_page(conn.as_mut(), community, after, limit).await
+}
+
+/// One page of `community`'s standing bans and the cursor of the next, by
+/// `(banned_at, "user")` descending, the order `community_ban_listed` keeps them in, after
+/// `after`. The place is compared as a row value against the cursor's own, so the index scan
+/// starts there whether or not that ban still stands. Bans that have ended are passed over
+/// before the limit.
+async fn bans_page(
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+    after: Option<(DateTime<Utc>, UserId)>,
+    limit: i64,
+) -> crate::Result<Paged<message_enum::CommunityBan>> {
+    use diesel::sql_types::{Bool, Timestamptz, Uuid};
+    let limit = limit.clamp(1, crate::LIST_PAGE);
     let mut query = community_ban::table
         .select(CommunityBanRow::as_select())
         .filter(community_ban::community.eq(community))
@@ -120,30 +149,31 @@ pub async fn read_bans(
                 .or(community_ban::until.gt(Utc::now())),
         )
         .into_boxed();
-    if let Some(before) = before {
-        let Some((at, user)) = community_ban::table
-            .select((community_ban::banned_at, community_ban::user))
-            .filter(community_ban::community.eq(community))
-            .filter(community_ban::user.eq(before))
-            .first::<(DateTime<Utc>, UserId)>(conn.as_mut())
-            .await
-            .optional()?
-        else {
-            // The ban the page continues after was lifted meanwhile; the caller reads again.
-            return Ok(Vec::new());
-        };
+    if let Some((at, user)) = after {
         query = query.filter(
-            community_ban::banned_at.lt(at).or(community_ban::banned_at
-                .eq(at)
-                .and(community_ban::user.lt(user))),
+            diesel::dsl::sql::<Bool>(r#"(community_ban.banned_at, community_ban."user") < ("#)
+                .bind::<Timestamptz, _>(at)
+                .sql(", ")
+                .bind::<Uuid, _>(user)
+                .sql(")"),
         );
     }
     let rows: Vec<CommunityBanRow> = query
         .order((community_ban::banned_at.desc(), community_ban::user.desc()))
-        .limit(limit.clamp(1, crate::LIST_PAGE))
-        .load(conn.as_mut())
+        .limit(limit + 1)
+        .load(conn)
         .await?;
-    Ok(rows.iter().map(message_enum::CommunityBan::from).collect())
+    let page = crate::cursor::cut(List::Bans, rows, limit as usize, |last| {
+        BanPosition(last.banned_at.timestamp_micros(), last.user)
+    });
+    Ok(Paged {
+        items: page
+            .items
+            .iter()
+            .map(message_enum::CommunityBan::from)
+            .collect(),
+        next_cursor: page.next_cursor,
+    })
 }
 
 pub fn validate(request: &BanRequest) -> crate::Result<(Option<String>, Option<DateTime<Utc>>)> {
@@ -422,5 +452,143 @@ mod tests {
             })
             .is_ok()
         );
+    }
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+    use diesel_async::SimpleAsyncConnection;
+
+    const COMMUNITY: &str = "ba4c7000-0000-4000-8000-000000000001";
+
+    fn banned(n: u8) -> UserId {
+        UserId(
+            format!("ba4c7000-0000-4000-8000-0000000001{n:02x}")
+                .parse()
+                .unwrap(),
+        )
+    }
+
+    /// A connection to the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed, with a community of `bans` people banned, the n-th a second before the one
+    /// before, but for the third and fourth, banned at the same instant; `None` without one,
+    /// when the test checks nothing.
+    async fn community_with(bans: u8) -> Option<AsyncPgConnection> {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return None;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(&format!(
+            "INSERT INTO community (id, name) VALUES ('{COMMUNITY}', 'c')"
+        ))
+        .await
+        .unwrap();
+        for n in 1..=bans {
+            let user = banned(n).0;
+            let second = if n == 4 { 3 } else { n };
+            conn.batch_execute(&format!(
+                r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                     VALUES ('{user}', '{user}', '', now(), now());
+                 INSERT INTO community_ban (community, "user", banned_at)
+                     VALUES ('{COMMUNITY}', '{user}',
+                             '2026-01-01T00:00:00.123456Z'::timestamptz - interval '{second} seconds');"#,
+            ))
+            .await
+            .unwrap();
+        }
+        Some(conn)
+    }
+
+    /// Whom one page's bans name, by their numbers, and the next page's cursor.
+    async fn page(
+        conn: &mut AsyncPgConnection,
+        cursor: Option<&str>,
+        limit: i64,
+    ) -> (Vec<u8>, Option<String>) {
+        let page = bans_page(
+            conn,
+            CommunityId(COMMUNITY.parse().unwrap()),
+            cursor.map(|c| ban_position(c).unwrap()),
+            limit,
+        )
+        .await
+        .unwrap();
+        let users = page
+            .items
+            .into_iter()
+            .map(|ban| (1..=u8::MAX).find(|n| banned(*n) == ban.user).unwrap())
+            .collect();
+        (users, page.next_cursor)
+    }
+
+    /// The ban list's cursor is a place, not a ban: the pages go on after a ban lifted since,
+    /// through bans made at one instant, past one that has ended, and the last page says it is
+    /// the last however many it holds.
+    #[tokio::test]
+    async fn the_bans_page_past_a_ban_that_is_gone() {
+        let Some(mut conn) = community_with(7).await else {
+            return;
+        };
+        // Of two bans made at one instant, the later id comes first.
+        let (users, cursor) = page(&mut conn, None, 3).await;
+        assert_eq!(users, [1, 2, 4]);
+        // The fourth, whom the cursor was made from, is let back in; the third was banned at
+        // the same instant and is still next. The fifth's ban ends.
+        conn.batch_execute(&format!(
+            r#"DELETE FROM community_ban WHERE "user" = '{}';
+               UPDATE community_ban SET until = now() - interval '1 second' WHERE "user" = '{}';"#,
+            banned(4).0,
+            banned(5).0
+        ))
+        .await
+        .unwrap();
+        let (users, cursor) = page(&mut conn, cursor.as_deref(), 2).await;
+        assert_eq!(users, [3, 6]);
+        assert!(cursor.is_some());
+        // The sixth, the boundary again, is let back in too.
+        conn.batch_execute(&format!(
+            r#"DELETE FROM community_ban WHERE "user" = '{}'"#,
+            banned(6).0
+        ))
+        .await
+        .unwrap();
+        let (users, cursor) = page(&mut conn, cursor.as_deref(), 1).await;
+        assert_eq!(users, [7]);
+        assert_eq!(cursor, None);
+        // A page that ends on the last ban has none after it, though it is full.
+        let (users, cursor) = page(&mut conn, None, 4).await;
+        assert_eq!(users, [1, 2, 3, 7]);
+        assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn a_cursor_of_no_ban_list_is_refused() {
+        let refused =
+            |cursor: &str| matches!(ban_position(cursor), Err(crate::Error::Validation(_)));
+        assert!(refused("garbage"));
+        // A banned person's id, which is not a place in the list.
+        assert!(refused(&banned(1).0.to_string()));
+        // A place of another shape, a time no clock tells, and a mute list's cursor, whose
+        // place has a ban's shape.
+        assert!(refused(&crate::cursor::encode(
+            List::Bans,
+            &(1_i64, "code")
+        )));
+        assert!(refused(&crate::cursor::encode(List::Bans, &banned(1))));
+        assert!(refused(&crate::cursor::encode(
+            List::Bans,
+            &(i64::MAX, banned(1))
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::VoiceMutes,
+            &(1_i64, banned(1))
+        )));
+        assert!(!refused(&crate::cursor::encode(
+            List::Bans,
+            &(1_i64, banned(1))
+        )));
     }
 }

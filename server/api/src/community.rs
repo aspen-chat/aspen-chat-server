@@ -1,7 +1,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem, unique, violates};
 use crate::extract::{Created, Json, NoContent, Path, Query, double_option};
-use crate::include::{IncludeSet, Included, Listed, Sideloaded, SideloadedList};
+use crate::include::{IncludeSet, Included, Listed, Sideloaded, SideloadedList, SideloadedPage};
 use crate::message_enum::request::{
     CommunityCreateRequest, CommunityUpdateRequest, UserCommunityCreateRequest,
 };
@@ -388,7 +388,7 @@ pub async fn delete_community(
 
 /// Body of a member read: the members, with their memberships (their roles among them) as
 /// `included.userCommunities`.
-pub type MemberList = SideloadedList<User>;
+pub type MemberPage = SideloadedPage<User>;
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -398,8 +398,9 @@ pub struct MemberListQuery {
     #[serde(rename = "filter[name]")]
     #[param(rename = "filter[name]")]
     pub name: Option<String>,
-    /// Continue a search after this member, the last of the previous page.
-    pub after: Option<UserId>,
+    /// Continue a search after the page whose `nextCursor` this is, with the same
+    /// `filter[name]`.
+    pub cursor: Option<String>,
     /// How many a search returns, at most 50; 20 when absent.
     pub limit: Option<i64>,
 }
@@ -408,11 +409,13 @@ pub struct MemberListQuery {
 const DEFAULT_MEMBER_PAGE: i64 = 20;
 
 /// The community's members. Without parameters, the sample every member reads: the 100 most
-/// recently seen, the caller always among them. With `filter[name]`, `offset`, or `limit`, a
-/// search of every member by name, sorted by name, a page at a time. In a community of more than
-/// 100 members only those who act on members may search it (its owner, a deployment moderator,
-/// and holders of Assign roles, Remove members, Manage channels, or Manage categories); anyone
-/// else is refused with `forbidden`, so no ordinary member can list a large community whole.
+/// recently seen, the caller always among them, with `nextCursor` `null`. With `filter[name]`,
+/// `cursor`, or `limit`, a search of every member by name, sorted by name, a page at a time:
+/// `nextCursor` is the `cursor` of the page after this one, and `null` on the last. In a
+/// community of more than 100 members only those who act on members may search it (its owner,
+/// a deployment moderator, and holders of Assign roles, Remove members, Manage channels, or
+/// Manage categories); anyone else is refused with `forbidden`, so no ordinary member can list
+/// a large community whole.
 #[utoipa::path(
     get,
     path = "/communities/{community}/members",
@@ -420,8 +423,8 @@ const DEFAULT_MEMBER_PAGE: i64 = 20;
     params(("community" = CommunityId, Path), MemberListQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = MemberList),
-        (status = BAD_REQUEST, body = Problem),
+        (status = OK, body = MemberPage),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for a `cursor` this search did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: searching a large community without acting on members", body = Problem),
         (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
@@ -433,20 +436,22 @@ pub async fn list_community_members(
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
     Query(query): Query<MemberListQuery>,
-) -> ApiResult<Json<MemberList>> {
-    let searching = query.name.is_some() || query.after.is_some() || query.limit.is_some();
-    let members = if searching {
-        app::community::search_community_members(
+) -> ApiResult<Json<MemberPage>> {
+    let searching = query.name.is_some() || query.cursor.is_some() || query.limit.is_some();
+    let (members, next_cursor) = if searching {
+        let page = app::community::search_community_members(
             &state,
             user.id,
             community,
             query.name.as_deref(),
-            query.after,
+            query.cursor.as_deref(),
             query.limit.unwrap_or(DEFAULT_MEMBER_PAGE),
         )
-        .await?
+        .await?;
+        (page.items, page.next_cursor)
     } else {
-        app::community::read_community_sample(&state, user.id, community).await?
+        let sample = app::community::read_community_sample(&state, user.id, community).await?;
+        (sample, None)
     };
     let mut users = Vec::with_capacity(members.len());
     let mut memberships = Vec::with_capacity(members.len());
@@ -454,13 +459,14 @@ pub async fn list_community_members(
         memberships.push(UserCommunity::from(&membership));
         users.push(User::from(membership.user));
     }
-    Ok(Json(MemberList::new(
-        users,
-        Included {
+    Ok(Json(MemberPage {
+        data: users,
+        included: Included {
             user_communities: Some(memberships),
             ..Included::default()
         },
-    )))
+        next_cursor,
+    }))
 }
 
 /// One member's membership of the community: the roles they hold there besides everyone's,

@@ -40,8 +40,20 @@ A tally is counted in SQL (`app::poll::load_results`):
 
 So a vote costs the same however many have voted, and its event carries five names, not everyone.
 
-`GET /polls/{poll}/votes/{option}` lists every voter of an answer, earliest first, a page at a time.
-It is refused on an anonymous poll.
+`GET /polls/{poll}/votes/{option}` lists every voter of an answer, earliest first, a page at a time
+(`app::poll::read_voters`). It is refused on an anonymous poll.
+
+- The answer is `{data, nextCursor}`: `nextCursor` is the `cursor` of the page after, and `null` on
+  the last. The server reads one vote more than the page holds to tell which, so a reader goes by
+  `nextCursor` and never by how many a page holds.
+- A cursor (`app::cursor`) is the place of the page's last vote, when it was cast and by whom, the
+  two columns the list is ordered by, as base64url text. The next page is every vote after that
+  place, compared as a row value through `poll_vote_by_option`, so it does not matter that the vote
+  itself has gone since (withdrawn, or moved to another answer of a single-choice poll).
+- Text that is not such a cursor, or is a cursor of another list (each names its own), is refused
+  with `validation`.
+- Votes of accounts since deleted stay in the tally and are left out of the list before a page is
+  cut.
 
 ### Closing early
 

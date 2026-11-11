@@ -51,6 +51,7 @@ export function messageRoutes({
           .sort((a, b) => b.id.localeCompare(a.id))
           .flatMap(({ message }) => everyMessage.filter((m) => m.id === message)),
         included: { users, channels: [threadRecord] },
+        nextCursor: null,
       }),
     ],
     [
@@ -127,6 +128,7 @@ export function messageRoutes({
             .filter((m) => m.author !== me)
             .sort((a, b) => String(b.id).localeCompare(String(a.id))),
           included: { users, channels: [threadRecord, dmRecord] },
+          nextCursor: null,
         };
       },
     ],
@@ -145,29 +147,49 @@ export function messageRoutes({
     [
       "GET",
       new RegExp(`^/channels/${general}/messages$`),
+      () => {
+        const { messages, moreBefore, moreAfter } = generalPage(url);
+        return {
+          data: messages,
+          included: {
+            users,
+            channels: [threadRecord],
+            messages: [threadReplies[1]],
+            reactions: messages.some((m) => m.id === reactedId) ? reactionSummaries : [],
+          },
+          moreBefore,
+          moreAfter,
+        };
+      },
+    ],
+    // The other channels' windows hold every message they have.
+    [
+      "GET",
+      new RegExp(`^/channels/${thread}/messages$`),
       () => ({
-        data: generalPage(url),
-        included: {
-          users,
-          channels: [threadRecord],
-          messages: [threadReplies[1]],
-          reactions: generalPage(url).some((m) => m.id === reactedId) ? reactionSummaries : [],
-        },
+        data: [...threadReplies].reverse(),
+        included: { users },
+        moreBefore: false,
+        moreAfter: false,
       }),
     ],
     [
       "GET",
-      new RegExp(`^/channels/${thread}/messages$`),
-      () => ({ data: [...threadReplies].reverse(), included: { users } }),
+      new RegExp(`^/channels/${dm}/messages$`),
+      () => ({ data: dmMessages, included: { users }, moreBefore: false, moreAfter: false }),
     ],
     [
       "GET",
-      new RegExp(`^/channels/${dm}/messages$`),
-      () => ({ data: dmMessages, included: { users } }),
+      /^\/channels\/[^/]+\/messages$/,
+      () => ({ data: [], included: { users }, moreBefore: false, moreAfter: false }),
     ],
-    ["GET", /^\/channels\/[^/]+\/messages$/, () => ({ data: [], included: { users } })],
     ["GET", new RegExp(`^/channels/${thread}$`), () => threadRecord],
     ["GET", new RegExp(`^/polls/${lunchPoll}$`), poll.read],
+    [
+      "GET",
+      new RegExp(`^/polls/${lunchPoll}/votes/\\d+$`),
+      () => poll.voters(Number(path.split("/").pop()), url),
+    ],
     [
       "POST",
       new RegExp(`^/polls/${lunchPoll}/write-ins$`),

@@ -65,6 +65,14 @@ the threads, whose positions no list carries.
 2. One statement finds the page's message ids (`app::activity::page_sql`), and a second reads those
    messages.
 
+The feed is ordered by message id alone, newest first, and read a page at a time by a cursor
+(`app::cursor`, `List::Activity`) that holds the id of the last message of the page before. The page
+is whatever is older than that id, so it is read whether or not that message still stands. The
+statement is asked for one message more than the page holds, and the answer carries `nextCursor`
+only when it finds it: a full page may be the last, and says so. A cursor names a place in the
+feed's order, not a view, so the reader gives it back with the filters it was read with. Text that
+is no cursor of the feed, a message's id among it, is refused with `validation`.
+
 Each view is some of three reads:
 
 | Read                            | Of                                                       | Views                                                 |
@@ -96,8 +104,9 @@ the places hold.
 so what is read of a place is walked past until the page fills. The apps read what is unread only of
 threads.
 
-The statement must be planned for the values it runs with, which Diesel's `sql_query` is. See the
-note on `page_sql` before changing how it is prepared.
+The statement must be planned for the values it runs with, which Diesel's `sql_query` is, and its
+limit is written into it rather than bound: the page's length and one, since the message past the
+page is read by the same walks. See the note on `page_sql` before changing how it is prepared.
 
 ## Parameters
 
@@ -108,8 +117,11 @@ note on `page_sql` before changing how it is prepared.
 | `filter[dms]=false`   | Leaves DMs out                                                                                                                   |
 | `filter[unread]=true` | Keeps only what is after the reader's position where it was said (a thread's own; see [Read positions](read-positions.md))       |
 | `limit`               | 25 by default, at most 50                                                                                                        |
-| `before`              | Pages backwards                                                                                                                  |
+| `cursor`              | The `nextCursor` of the page before; the first page when absent                                                                  |
 | `include`             | The same names as any message read. `readStates` brings the read positions of the channels and threads the messages were said in |
+
+The answer is `{ data, included, nextCursor }` (`SideloadedPage`), `nextCursor` being `null` on the
+last page.
 
 ## When access is given or taken away
 

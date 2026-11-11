@@ -29,7 +29,7 @@ DMs and group DMs are channels of type `dm` and `groupDm` that belong to no comm
 
 | Parameter                                | Does                                                                                          |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `before`                                 | The last DM of the page before                                                                |
+| `cursor`                                 | The `nextCursor` of the page before                                                           |
 | `limit`                                  | 50 by default, at most `MAX_DM_PAGE` (100)                                                    |
 | `include=users`                          | Sideloads their people                                                                        |
 | `include=voice`                          | Sideloads their calls, and the rings in force (see [Calls in DMs](dm-calls.md))               |
@@ -42,7 +42,18 @@ How recently a DM was active is `dm_recipient.active_at`, one for each of its pe
    a message runs, does this, and also fills `message.home_channel`.
 3. The list is read through the index `dm_recipient_by_activity`, however many DMs someone has.
 
-A DM that became active since an earlier page moves up and is listed again rather than missed.
+The answer is `{data, included, nextCursor}`:
+
+- `nextCursor` is the `cursor` of the page after, and `null` on the last. The read asks for one DM
+  more than the page holds and gives a cursor only when it gets it, so a reader goes by `nextCursor`
+  and never by how many a page holds.
+- A cursor (`app::cursor`) is the place of the page's last DM, when it was last active for the
+  caller and its channel, the columns the list is ordered by. It is compared against the index as it
+  stands, so the page after it is read whether or not the caller is still in that DM.
+- A DM that became active since the page before has moved above the cursor and is on no later page;
+  the event that made it active tells its reader of it.
+- Text that is not such a cursor, or is a cursor of another list (each names its own), is refused
+  with `validation`.
 
 `GET /admin/users/{user}/dms` pages the same way.
 

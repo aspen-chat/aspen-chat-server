@@ -1,10 +1,4 @@
-import {
-  ACTIVITY_PAGE,
-  ApiProblemError,
-  type ActivityView,
-  type Message,
-  type Topic,
-} from "@aspen/protocol";
+import { ApiProblemError, type ActivityView, type Message, type Topic } from "@aspen/protocol";
 import {
   ArrowBendDownRightIcon,
   BellRingingIcon,
@@ -27,6 +21,7 @@ import {
   useSync,
 } from "@/api/hooks";
 import { ActivityFilters } from "@/features/activity/ActivityFilters";
+import { type FeedPages, withFeedPage } from "@/features/activity/feedPages";
 import {
   ACTIVITY_HIDDEN,
   ACTIVITY_TAB,
@@ -131,9 +126,8 @@ export function ActivityScreen() {
 }
 
 /** One deployment's part of the feed so far, newest first. */
-interface Feed extends SourceResults<Message> {
+interface Feed extends SourceResults<Message>, FeedPages {
   readonly source: Source;
-  readonly problem: string | null;
 }
 
 /**
@@ -182,35 +176,24 @@ function useFeeds(view: ActivityView, unread: boolean) {
       view,
     );
 
-  const page = async (source: Source, before: string | undefined, earlier: readonly Message[]) => {
+  const page = async (
+    source: Source,
+    cursor: string | undefined,
+    earlier: readonly Message[],
+  ): Promise<Feed> => {
     const filter = filterOf(source);
     const key = source.domain ?? "";
     if (filter === null) {
-      return { key, source, messages: earlier, exhausted: true, problem: null };
+      return { key, source, messages: earlier, next: null, exhausted: true, problem: null };
     }
-    try {
-      const found = await source.sync.readActivity({
+    const read = (from: string | undefined) =>
+      source.sync.readActivity({
         ...filter,
         view,
         unread,
-        ...(before === undefined ? {} : { before }),
+        ...(from === undefined ? {} : { cursor: from }),
       });
-      return {
-        key,
-        source,
-        messages: [...earlier, ...found],
-        exhausted: found.length < ACTIVITY_PAGE,
-        problem: null,
-      };
-    } catch (error) {
-      return {
-        key,
-        source,
-        messages: earlier,
-        exhausted: true,
-        problem: error instanceof ApiProblemError ? error.message : String(error),
-      };
-    }
+    return { key, source, ...(await withFeedPage(read, earlier, cursor)) };
   };
 
   useEffect(() => {
@@ -261,9 +244,7 @@ function useFeeds(view: ActivityView, unread: boolean) {
     setLoadingMore(true);
     const paged = await Promise.all(
       feeds.map((feed) =>
-        feed.exhausted
-          ? Promise.resolve(feed)
-          : page(feed.source, feed.messages.at(-1)?.id, feed.messages),
+        feed.next === null ? Promise.resolve(feed) : page(feed.source, feed.next, feed.messages),
       ),
     );
     setLoadingMore(false);

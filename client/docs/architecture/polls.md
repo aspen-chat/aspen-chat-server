@@ -33,7 +33,9 @@ A poll is a record of its own, shown in a message and kept current by the event 
   vote moved there moves here; the device that voted recorded the same from its own write and
   applies the event over it.
 - Each answer's result names only its first five voters. `ChoiceRow` says how many more there are,
-  and `VotersDialog` lists everyone who voted for it a page at a time (`AspenSync.loadVoters`).
+  and `VotersDialog` lists everyone who voted for it a page at a time (`AspenSync.loadVoters`,
+  through `useCursorPages`): Show more asks for the next page by the `nextCursor` the last answer
+  gave, and is offered until an answer gives `null`, whatever number of voters a page holds.
 - Message reads sideload `polls` with the caller's `pollVotes`. This is the only way to learn one's
   own vote on an anonymous poll.
 - `usePoll` fetches a poll the window did not bring.

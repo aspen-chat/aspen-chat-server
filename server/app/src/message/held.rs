@@ -36,6 +36,7 @@
 use super::Message;
 use crate::attachment::preview;
 use crate::context::GlobalServerContext;
+use crate::cursor::{List, Paged};
 use crate::jobs::{self, Claimed, JobClass, JobKind, NewJob, Outcome};
 use crate::mana::queue::{self, Waiting};
 use crate::mana::{self, Decision};
@@ -411,31 +412,65 @@ async fn held_back(
     Ok(held_until(conn, attachments).await?.is_some())
 }
 
-/// A page of the held messages of `author`, oldest first, for their apps to show waiting: `limit`
-/// of them (at most [`crate::LIST_PAGE`]) after `after`, through `held_message_by_author`. Those
-/// they scheduled for later are read apart (`super::scheduled::read_scheduled`).
+/// The place a held message list's cursor holds: the id of the last held message of the page
+/// before, which is all the list is ordered by.
+fn held_position(cursor: &str) -> crate::Result<HeldMessageId> {
+    crate::cursor::decode(List::HeldMessages, cursor)
+}
+
+/// A page of the held messages of `author` in the order of their ids, which is the order they
+/// were held in, for their apps to show waiting: at most `limit` of them (up to
+/// [`crate::LIST_PAGE`]), after the place `cursor` holds when given, which is the `next_cursor`
+/// of the page before. Those they scheduled for later are read apart
+/// (`super::scheduled::read_scheduled`).
 pub async fn read_held(
     state: &GlobalServerContext,
     author: UserId,
+    cursor: Option<&str>,
+    limit: i64,
+) -> crate::Result<Paged<HeldMessage>> {
+    let after = cursor.map(held_position).transpose()?;
+    read_held_page(
+        state.connection_pool.get().await?.as_mut(),
+        author,
+        after,
+        limit,
+    )
+    .await
+}
+
+/// One page of `author`'s held messages and the cursor of the next, by id through the index
+/// `held_message_list`, after `after`. The place is compared as an id alone, so the page is
+/// read whether or not the message of that id is still held; held messages are posted within
+/// seconds, often between two pages.
+async fn read_held_page(
+    conn: &mut AsyncPgConnection,
+    author: UserId,
     after: Option<HeldMessageId>,
     limit: i64,
-) -> crate::Result<Vec<HeldMessage>> {
-    Ok(diesel::sql_query(format!(
+) -> crate::Result<Paged<HeldMessage>> {
+    let limit = limit.clamp(1, crate::LIST_PAGE);
+    let rows: Vec<HeldMessage> = diesel::sql_query(format!(
         r#"
         SELECT {COLUMNS}
         FROM held_message
-        WHERE author = $1 AND send_at IS NULL
-          AND ($2::uuid IS NULL OR (held_at, id) > (
-              SELECT held_at, id FROM held_message WHERE author = $1 AND id = $2))
-        ORDER BY held_at, id
+        WHERE author = $1 AND send_at IS NULL AND id > $2
+        ORDER BY id
         LIMIT $3
         "#
     ))
     .bind::<PgUuid, _>(author)
-    .bind::<diesel::sql_types::Nullable<PgUuid>, _>(after)
-    .bind::<diesel::sql_types::BigInt, _>(limit.clamp(1, crate::LIST_PAGE))
-    .load(state.connection_pool.get().await?.as_mut())
-    .await?)
+    // No id sorts before the nil one, so a first page starts from it.
+    .bind::<PgUuid, _>(after.map_or(uuid::Uuid::nil(), |after| after.0))
+    .bind::<diesel::sql_types::BigInt, _>(limit + 1)
+    .load(conn)
+    .await?;
+    Ok(crate::cursor::cut(
+        List::HeldMessages,
+        rows,
+        limit as usize,
+        |last| last.id,
+    ))
 }
 
 /// Takes a held message off the table as it is posted, in the posting's transaction; not found
@@ -1323,5 +1358,91 @@ mod database_tests {
         let unscheduled = look(&mut conn, held(UNSCHEDULED)).await.unwrap().unwrap();
         assert_eq!(unscheduled.due_in_millis, None);
         assert!(look(&mut conn, held(DUE)).await.unwrap().is_none());
+    }
+    /// The held list's cursor is a place, not a held message: when the message it was made
+    /// from has been posted since the page before, the rest are still listed, in the order of
+    /// their ids whatever `held_at` says, never those scheduled for later, and the last page
+    /// says it is the last however many it holds.
+    #[tokio::test]
+    async fn the_list_pages_past_a_cursor_that_is_gone() {
+        const FIRST: &str = "4e1d0000-0000-4000-8000-000000000030";
+        const SECOND: &str = "4e1d0000-0000-4000-8000-000000000031";
+        const THIRD: &str = "4e1d0000-0000-4000-8000-000000000032";
+        const LATER: &str = "4e1d0000-0000-4000-8000-000000000033";
+        const FOURTH: &str = "4e1d0000-0000-4000-8000-000000000034";
+        let Some(mut conn) = connection().await else {
+            return;
+        };
+        conn.batch_execute(&format!(
+            r#"INSERT INTO held_message
+                   (id, author, channel, content, attachments, echo_to_parent, locale, waiting,
+                    held_at, send_at)
+               VALUES
+                   ('{FIRST}', '{ANN}', '{CHANNEL}', '', '{{}}', false, 'en', 'mana',
+                    now(), NULL),
+                   ('{SECOND}', '{ANN}', '{CHANNEL}', '', '{{}}', false, 'en', 'mana',
+                    now() - interval '1 minute', NULL),
+                   ('{THIRD}', '{ANN}', '{CHANNEL}', '', '{{}}', false, 'en', 'mana',
+                    now() - interval '2 minutes', NULL),
+                   ('{LATER}', '{ANN}', '{CHANNEL}', '', '{{}}', false, 'en', 'scheduled',
+                    now(), now() + interval '1 hour'),
+                   ('{FOURTH}', '{ANN}', '{CHANNEL}', '', '{{}}', false, 'en', 'mana',
+                    now() - interval '3 minutes', NULL);"#,
+        ))
+        .await
+        .unwrap();
+        let author = UserId(ANN.parse().unwrap());
+        async fn page(
+            conn: &mut AsyncPgConnection,
+            author: UserId,
+            cursor: Option<&str>,
+            limit: i64,
+        ) -> (Vec<HeldMessageId>, Option<String>) {
+            let after = cursor.map(|c| held_position(c).unwrap());
+            let page = read_held_page(conn, author, after, limit).await.unwrap();
+            (
+                page.items.into_iter().map(|h| h.id).collect(),
+                page.next_cursor,
+            )
+        }
+        let (ids, cursor) = page(&mut conn, author, None, 2).await;
+        assert_eq!(ids, vec![held(FIRST), held(SECOND)]);
+        // The second, which the cursor was made from, is posted.
+        conn.batch_execute(&format!("DELETE FROM held_message WHERE id = '{SECOND}'"))
+            .await
+            .unwrap();
+        let (ids, cursor) = page(&mut conn, author, cursor.as_deref(), 1).await;
+        assert_eq!(ids, vec![held(THIRD)]);
+        assert!(cursor.is_some());
+        let (ids, cursor) = page(&mut conn, author, cursor.as_deref(), 1).await;
+        assert_eq!(ids, vec![held(FOURTH)]);
+        assert_eq!(cursor, None);
+        // A page that ends on the last held message has none after it, though it is full.
+        let (ids, cursor) = page(&mut conn, author, None, 3).await;
+        assert_eq!(ids, vec![held(FIRST), held(THIRD), held(FOURTH)]);
+        assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn a_cursor_of_no_held_list_is_refused() {
+        let refused =
+            |cursor: &str| matches!(held_position(cursor), Err(crate::Error::Validation(_)));
+        assert!(refused("garbage"));
+        // A held message's id as it is, which is what a cursor holds but not a cursor.
+        assert!(refused(ANN));
+        // A place of another shape, and a saved message list's cursor, whose place is an id
+        // alone too.
+        assert!(refused(&crate::cursor::encode(
+            List::HeldMessages,
+            &(1_i64, held(ANN))
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::SavedMessages,
+            &held(ANN)
+        )));
+        assert!(!refused(&crate::cursor::encode(
+            List::HeldMessages,
+            &held(ANN)
+        )));
     }
 }

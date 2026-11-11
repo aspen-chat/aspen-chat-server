@@ -1,5 +1,6 @@
 use crate::CHACHA_RNG;
 use crate::context::GlobalServerContext;
+use crate::cursor::{List, Paged};
 use crate::events::Publishing;
 use crate::permissions::{Permissions, require_member};
 use crate::t;
@@ -9,8 +10,8 @@ use aspen_wire::message_enum;
 use aspen_wire::message_enum::server_event::{InviteEvent, ServerEvent};
 use chrono::Utc;
 use diesel::{
-    AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, OptionalExtension, QueryDsl,
-    Queryable, Selectable, SelectableHelper,
+    AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
+    Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -312,43 +313,53 @@ pub async fn read_invite(state: &GlobalServerContext, code: &str) -> crate::Resu
         .map_err(Into::into)
 }
 
+/// Where an invite stands among a community's, the columns they are ordered by: when it was
+/// made, in microseconds since the epoch, and its code. The invite list's cursor.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct InvitePosition(i64, String);
+
+/// The place an invite list's cursor holds.
+fn invite_position(cursor: &str) -> crate::Result<(chrono::DateTime<Utc>, String)> {
+    let InvitePosition(micros, code) = crate::cursor::decode(List::Invites, cursor)?;
+    Ok((crate::cursor::instant(micros)?, code))
+}
+
 /// A page of a community's invites, newest first: every one for those with Manage invites, and
-/// only their own for other members, `limit` of them (at most [`crate::LIST_PAGE`]) after the
-/// invite `before`, through `invite_listed` and `invite_listed_by_creator`. Revoked ones are gone; expired ones are listed for
-/// `STALE_AFTER_DAYS` after they expire, so a link that just stopped working can still be seen
-/// for what it was.
+/// only their own for other members, at most `limit` of them (up to [`crate::LIST_PAGE`]),
+/// after the place `cursor` holds when given, which is the `next_cursor` of the page before.
+/// Revoked ones are gone; expired ones are listed for `STALE_AFTER_DAYS` after they expire, so
+/// a link that just stopped working can still be seen for what it was.
 pub async fn read_community_invites(
     state: &GlobalServerContext,
     caller: UserId,
     community: CommunityId,
-    before: Option<&str>,
+    cursor: Option<&str>,
     limit: i64,
-) -> crate::Result<Vec<Invite>> {
+) -> crate::Result<Paged<Invite>> {
+    let after = cursor.map(invite_position).transpose()?;
     let mut conn = state.connection_pool.get().await?;
     let access = require_member(conn.as_mut(), caller, community).await?;
+    let creator = (!access.has(Permissions::MANAGE_INVITES)).then_some(caller);
+    invites_page(conn.as_mut(), community, creator, after, limit).await
+}
+
+/// One page of `community`'s invites, those `creator` made when given, and the cursor of the
+/// next, by `(created_at, code)` descending, the order `invite_listed` and
+/// `invite_listed_by_creator` keep them in, after `after`. The place is compared as a row
+/// value against the cursor's own, so the index scan starts there whether or not that invite
+/// is still listed. Revoked and long expired ones are passed over before the limit.
+async fn invites_page(
+    conn: &mut AsyncPgConnection,
+    community: CommunityId,
+    creator: Option<UserId>,
+    after: Option<(chrono::DateTime<Utc>, String)>,
+    limit: i64,
+) -> crate::Result<Paged<Invite>> {
+    use diesel::sql_types::{Bool, Text, Timestamptz};
+    let limit = limit.clamp(1, crate::LIST_PAGE);
     let cutoff = Utc::now() - chrono::Duration::days(STALE_AFTER_DAYS);
-    let mut query = invite::table.select(Invite::as_select()).into_boxed();
-    if !access.has(Permissions::MANAGE_INVITES) {
-        query = query.filter(invite::created_by.eq(caller));
-    }
-    if let Some(before) = before {
-        let Some((at, code)) = invite::table
-            .select((invite::created_at, invite::code))
-            .filter(invite::community.eq(community))
-            .filter(invite::code.eq(before))
-            .first::<(chrono::DateTime<Utc>, String)>(conn.as_mut())
-            .await
-            .optional()?
-        else {
-            return Ok(Vec::new());
-        };
-        query = query.filter(
-            invite::created_at
-                .lt(at)
-                .or(invite::created_at.eq(at).and(invite::code.lt(code))),
-        );
-    }
-    let invites = query
+    let mut query = invite::table
+        .select(Invite::as_select())
         .filter(
             invite::community
                 .eq(community)
@@ -359,9 +370,166 @@ pub async fn read_community_invites(
                         .or(invite::expires_at.gt(cutoff)),
                 ),
         )
+        .into_boxed();
+    if let Some(creator) = creator {
+        query = query.filter(invite::created_by.eq(creator));
+    }
+    if let Some((at, code)) = after {
+        query = query.filter(
+            diesel::dsl::sql::<Bool>("(invite.created_at, invite.code) < (")
+                .bind::<Timestamptz, _>(at)
+                .sql(", ")
+                .bind::<Text, _>(code)
+                .sql(")"),
+        );
+    }
+    let rows: Vec<Invite> = query
         .order_by((invite::created_at.desc(), invite::code.desc()))
-        .limit(limit.clamp(1, crate::LIST_PAGE))
-        .load(conn.as_mut())
+        .limit(limit + 1)
+        .load(conn)
         .await?;
-    Ok(invites)
+    Ok(crate::cursor::cut(
+        List::Invites,
+        rows,
+        limit as usize,
+        |last| InvitePosition(last.created_at.timestamp_micros(), last.code.clone()),
+    ))
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+    use diesel_async::SimpleAsyncConnection;
+
+    const COMMUNITY: &str = "14b17000-0000-4000-8000-000000000001";
+    const ANN: &str = "14b17000-0000-4000-8000-000000000002";
+    const BEN: &str = "14b17000-0000-4000-8000-000000000003";
+
+    /// A connection to the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed, with a community of `invites` invites, `page-test-1` the newest and each
+    /// after it a second older, but for the third and fourth, made at the same instant; Ben
+    /// made the even ones and Ann the rest. `None` without a database, when the test checks
+    /// nothing.
+    async fn community_with(invites: u8) -> Option<AsyncPgConnection> {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return None;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(&format!(
+            r#"INSERT INTO community (id, name) VALUES ('{COMMUNITY}', 'c');
+               INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                   VALUES ('{ANN}', '{ANN}', '', now(), now()), ('{BEN}', '{BEN}', '', now(), now());"#
+        ))
+        .await
+        .unwrap();
+        for n in 1..=invites {
+            let creator = if n % 2 == 0 { BEN } else { ANN };
+            let second = if n == 4 { 3 } else { n };
+            conn.batch_execute(&format!(
+                r#"INSERT INTO invite (code, community, created_by, created_at)
+                     VALUES ('page-test-{n}', '{COMMUNITY}', '{creator}',
+                             '2026-01-01T00:00:00.123456Z'::timestamptz - interval '{second} seconds');"#,
+            ))
+            .await
+            .unwrap();
+        }
+        Some(conn)
+    }
+
+    /// Which invites one page holds, by their numbers, and the next page's cursor.
+    async fn page(
+        conn: &mut AsyncPgConnection,
+        creator: Option<&str>,
+        cursor: Option<&str>,
+        limit: i64,
+    ) -> (Vec<u8>, Option<String>) {
+        let page = invites_page(
+            conn,
+            CommunityId(COMMUNITY.parse().unwrap()),
+            creator.map(|c| UserId(c.parse().unwrap())),
+            cursor.map(|c| invite_position(c).unwrap()),
+            limit,
+        )
+        .await
+        .unwrap();
+        let invites = page
+            .items
+            .into_iter()
+            .map(|invite| invite.code["page-test-".len()..].parse().unwrap())
+            .collect();
+        (invites, page.next_cursor)
+    }
+
+    /// The invite list's cursor is a place, not an invite: the pages go on after an invite
+    /// revoked since, through invites made at one instant, past one long expired, and the last
+    /// page says it is the last however many it holds.
+    #[tokio::test]
+    async fn the_invites_page_past_an_invite_that_is_gone() {
+        let Some(mut conn) = community_with(7).await else {
+            return;
+        };
+        // Of two invites made at one instant, the later code comes first.
+        let (invites, cursor) = page(&mut conn, None, None, 3).await;
+        assert_eq!(invites, [1, 2, 4]);
+        // The fourth, which the cursor was made from, is revoked; the third was made at the
+        // same instant and is still next. The fifth expired long ago.
+        conn.batch_execute(&format!(
+            r#"UPDATE invite SET deleted_at = now() WHERE code = 'page-test-4';
+               UPDATE invite SET expires_at = now() - interval '{} days' WHERE code = 'page-test-5';"#,
+            STALE_AFTER_DAYS + 1
+        ))
+        .await
+        .unwrap();
+        let (invites, cursor) = page(&mut conn, None, cursor.as_deref(), 2).await;
+        assert_eq!(invites, [3, 6]);
+        assert!(cursor.is_some());
+        // The sixth, the boundary again, is revoked too.
+        conn.batch_execute("UPDATE invite SET deleted_at = now() WHERE code = 'page-test-6'")
+            .await
+            .unwrap();
+        let (invites, cursor) = page(&mut conn, None, cursor.as_deref(), 1).await;
+        assert_eq!(invites, [7]);
+        assert_eq!(cursor, None);
+        // A page that ends on the last invite has none after it, though it is full.
+        let (invites, cursor) = page(&mut conn, None, None, 4).await;
+        assert_eq!(invites, [1, 2, 3, 7]);
+        assert_eq!(cursor, None);
+        // Someone without Manage invites pages through their own alone.
+        let (invites, cursor) = page(&mut conn, Some(ANN), None, 2).await;
+        assert_eq!(invites, [1, 3]);
+        let (invites, cursor) = page(&mut conn, Some(ANN), cursor.as_deref(), 2).await;
+        assert_eq!(invites, [7]);
+        assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn a_cursor_of_no_invite_list_is_refused() {
+        let refused =
+            |cursor: &str| matches!(invite_position(cursor), Err(crate::Error::Validation(_)));
+        let user = UserId(ANN.parse().unwrap());
+        assert!(refused("garbage"));
+        // An invite's code, which is not a place in the list.
+        assert!(refused("page-test-1"));
+        // Places of other shapes, a time no clock tells, and a cursor of another list holding
+        // a place of an invite's shape.
+        assert!(refused(&crate::cursor::encode(List::Invites, &user)));
+        assert!(refused(&crate::cursor::encode(
+            List::Invites,
+            &("ada", user)
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::Invites,
+            &(i64::MAX, "code")
+        )));
+        assert!(refused(&crate::cursor::encode(
+            List::Bans,
+            &(1_i64, "code")
+        )));
+        assert!(!refused(&crate::cursor::encode(
+            List::Invites,
+            &(1_i64, "code")
+        )));
+    }
 }

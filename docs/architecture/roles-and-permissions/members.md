@@ -43,12 +43,19 @@ again, at a moment spread over ten seconds, when it hears that:
 
 ## Member search
 
-`GET /communities/{community}/members` with `filter[name]`, `after`, or `limit` searches every
+`GET /communities/{community}/members` with `filter[name]`, `cursor`, or `limit` searches every
 member by name instead (`app::community::search_community_members`).
 
 - A name matches on any part of the member's username, display name, or nickname there. For one or
   two characters, it matches the start of one.
-- A page holds at most 50, the members after the member `after`.
+- A page holds at most 50. The answer carries `nextCursor` beside `data` and `included`: the
+  `cursor` of the page after, and `null` on the last page, as on the sample, which has no pages. The
+  server reads one member more than the page holds to tell which.
+- A cursor (`app::cursor`) is the place of the page's last member, the name the community shows them
+  by and their id, as base64url text. The next page is every member after that place, compared as a
+  row value, so it does not matter that the member has since left or is shown by another name. Text
+  that is not such a cursor, or is a cursor of another list (each names its own), is refused with
+  `validation`.
 - Members are ordered by the name the community shows, through the index
   `community_user_by_shown_name`.
 - Matching uses the trigram index `community_user_search` on each membership's `shown_name` and

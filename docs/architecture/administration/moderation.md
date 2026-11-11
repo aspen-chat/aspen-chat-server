@@ -65,6 +65,11 @@ The dashboard shows the log (`GET /admin/moderation-log`) to holders of View das
 - `details` takes one query per kind of record for a page: the community, the channel or DM and its
   people, the message and its author, the person acted on, and the emoji, file name, write-in, or
   new name.
+- It is read newest first, a page of `limit` (50, at most 100) at a time, as `{data, nextCursor}`:
+  `nextCursor` is the `cursor` of the page after, the id of the page's last entry (`app::cursor`),
+  and `null` on the last, which the read decides by asking for one entry more than the page holds.
+  Text that is not such a cursor, or is a cursor of another list (each names its own), is refused
+  with `validation`.
 
 ## A moderator's client
 

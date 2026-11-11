@@ -3297,6 +3297,10 @@ def activity_views(world: World, check: Checks) -> None:
         return [m["id"] for m in stack.api(
             "GET", f"/users/@me/activity?filter[view]={view}{query}", token=member)["data"]]
 
+    def page(view: str, query: str = "") -> tuple[list[str], str | None]:
+        got = stack.api("GET", f"/users/@me/activity?filter[view]={view}{query}", token=member)
+        return [m["id"] for m in got["data"]], got["nextCursor"]
+
     def read_state(channel: str) -> dict:
         return stack.api("GET", f"/channels/{channel}/read-states/@me", token=member)
 
@@ -3329,11 +3333,18 @@ def activity_views(world: World, check: Checks) -> None:
     twice = world.post(room, f"<@{world.member['id']}> <@&{held}> @everyone all three")
     check("mentions holds tags by name, by a role held, and of everyone, a thread's among them, each once",
           feed("mentions") == [twice, by_everyone, by_role, tagged], feed("mentions"))
-    check("a page is as long as asked, and the next begins where it ended",
-          feed("mentions", "&limit=2") == [twice, by_everyone]
-          and feed("mentions", f"&limit=2&before={by_everyone}") == [by_role, tagged]
-          and feed("all", f"&limit=3&before={by_role}") == [reply, unfollowed, starter],
-          feed("all", f"&limit=3&before={by_role}"))
+    first, after_first = page("mentions", "&limit=2")
+    second, after_second = page("mentions", f"&limit=2&cursor={after_first}")
+    check("a page is as long as asked, the next is asked for by its cursor, and a full last page gives none",
+          first == [twice, by_everyone] and after_first is not None
+          and second == [by_role, tagged] and after_second is None, (first, after_first, second, after_second))
+    newest, after_newest = page("all", "&limit=3")
+    check("a view's next page begins where the one before ended",
+          newest == [twice, by_everyone, by_role]
+          and page("all", f"&limit=3&cursor={after_newest}")[0] == [reply, unfollowed, starter],
+          (newest, after_newest))
+    check("a message's id is no cursor of the feed",
+          stack.status("GET", f"/users/@me/activity?filter[view]=mentions&cursor={by_everyone}", token=member) == 400)
     stack.api("PUT", f"/communities/{world.community}/notification-settings/@me", {"level": "nothing"}, member)
     check("a level of nothing takes nothing out of a view", plain in feed("all") and tagged in feed("mentions"))
     stack.api("PUT", f"/channels/{room}/mutes/@me", {}, member)

@@ -26,6 +26,17 @@ export const reply = (body: unknown, status: number) => new Reply(body, status);
 /** A list as the server answers one: its records under `data`. */
 export const listed = (records: readonly unknown[]) => ({ data: records });
 
+/**
+ * One page of `records` as a list read by cursor answers it: `limit` of them (`pageSize`
+ * without one) from the place `cursor` asks for, and the cursor of the page after, `null` on
+ * the last. The world's cursors are how many records come before the page.
+ */
+export function paged<T>(records: readonly T[], url: URL, pageSize: number) {
+  const start = Number(url.searchParams.get("cursor") ?? 0);
+  const end = start + Number(url.searchParams.get("limit") ?? pageSize);
+  return { data: records.slice(start, end), nextCursor: end < records.length ? String(end) : null };
+}
+
 /** One route of the world: the method, the path it matches, and what it answers. */
 export type WorldRoute = [string, RegExp, () => unknown];
 

@@ -88,6 +88,26 @@ type Poll = components["schemas"]["Poll"];
 type PollCreateRequest = components["schemas"]["PollCreateRequest"];
 type User = components["schemas"]["User"];
 export type BotTransfer = components["schemas"]["BotTransfer"];
+/**
+ * One page of people from a list read by cursor. `nextCursor` asks for the page after it, and
+ * is `null` on the last; how many a page holds says nothing of whether another follows.
+ */
+export type UserPage = components["schemas"]["Page_User"];
+
+/**
+ * One page of channels from a list read by cursor. `nextCursor` asks for the page after it,
+ * and is `null` on the last.
+ */
+export type ChannelPage = components["schemas"]["Page_Channel"];
+
+/**
+ * One page of messages from a list read by cursor, whose related records are in the store.
+ * `nextCursor` asks for the page after it, and is `null` on the last.
+ */
+export type MessagePage = Pick<
+  components["schemas"]["SideloadedPage_Message"],
+  "data" | "nextCursor"
+>;
 export type MessageHolding = components["schemas"]["MessageHolding"];
 
 /** What became of a message sent: posted, or held by the server for its previews. */
@@ -152,8 +172,8 @@ export interface ActivityFilter {
   dms: boolean;
   /** Only messages the caller has not read. */
   unread: boolean;
-  /** The last message of the previous page. */
-  before?: string;
+  /** The `nextCursor` of the page before the one asked for; the first page when absent. */
+  cursor?: string;
 }
 
 /** How many messages one page of the activity feed holds. */
@@ -272,7 +292,7 @@ export function positionBefore(id: string): string {
  */
 const NOTIFY_CLOCK_SLACK_MS = 5_000;
 
-/** How many people a page of a reaction list holds. */
+/** How many people one read of an emoji's reactors asks for. */
 export const REACTORS_PAGE = 50;
 
 /** How many voters one read of an answer's voters asks for. */
@@ -282,10 +302,38 @@ export const VOTERS_PAGE = 50;
 export const DM_PAGE = 100;
 
 /**
- * How many records a page of a moderator's or owner's list holds (bans, server mutes, invites,
- * held messages); a shorter page is the last.
+ * How many records one read of a moderator's or owner's list asks for (bans, server mutes,
+ * invites, held messages). Whether another page follows is the answer's `nextCursor` to say,
+ * never how many records it holds.
  */
 export const LIST_PAGE = 100;
+
+/**
+ * The cursor an answer gave for the page after it, or `null`: when it says the page is the
+ * last, and when it says nothing, as a deployment that does not page the list by cursor does.
+ * A reader that went on without one would ask for the first page again, without end.
+ */
+function nextCursorOf(page: { nextCursor?: string | null }): string | null {
+  return typeof page.nextCursor === "string" ? page.nextCursor : null;
+}
+
+/**
+ * Whether a channel holds messages beyond one end of a window read: what the server said
+ * (`moreBefore` or `moreAfter`), or, from a deployment whose window reads do not say,
+ * `moreByPageLength`.
+ */
+function moreBeyond(said: unknown, read: number, asked: number): boolean {
+  return typeof said === "boolean" ? said : moreByPageLength(read, asked);
+}
+
+/**
+ * The fallback for a deployment whose window reads carry no `moreBefore` and `moreAfter`: a
+ * side that came back with as many messages as were asked for is taken to have more. It is
+ * wrong where that side holds exactly as many, which costs one more read, of nothing.
+ */
+function moreByPageLength(read: number, asked: number): boolean {
+  return read >= asked;
+}
 
 /** The most channels the server sends typing for on one connection (`viewing`). */
 const MAX_VIEWING = 8;
@@ -899,13 +947,13 @@ export class AspenSync {
     }
     // A page already on its way may be one that does not reach the latest; this follows it.
     const load = this.#loadWindowAfter(channelId, async () => {
-      const { messages, since } = await this.#readMessages(channelId, {
+      const { messages, since, moreBefore } = await this.#readMessages(channelId, {
         limit: MESSAGE_PAGE_SIZE,
       });
       this.store.replaceWindow(
         channelId,
         messages,
-        { hasOlder: messages.length === MESSAGE_PAGE_SIZE, atLatest: true },
+        { hasOlder: moreBeyond(moreBefore, messages.length, MESSAGE_PAGE_SIZE), atLatest: true },
         { since },
       );
     }).finally(() => {
@@ -925,19 +973,22 @@ export class AspenSync {
       if (window === undefined || oldest === undefined || !window.hasOlder) {
         return;
       }
-      const { messages, since } = await this.#readMessages(channelId, {
+      const { messages, since, moreBefore } = await this.#readMessages(channelId, {
         before: oldest,
         limit: HISTORY_PAGE_SIZE,
       });
-      this.store.prependWindow(channelId, messages, messages.length === HISTORY_PAGE_SIZE, {
-        since,
-      });
+      this.store.prependWindow(
+        channelId,
+        messages,
+        moreBeyond(moreBefore, messages.length, HISTORY_PAGE_SIZE),
+        { since },
+      );
     });
   }
 
   /**
    * Extends the loaded window forwards by one page, for a window that is not at the latest.
-   * The window is at the latest once a read comes back short.
+   * The window is at the latest once a read says nothing newer remains.
    */
   loadNewer(channelId: string): Promise<void> {
     return this.#loadWindow(channelId, async () => {
@@ -946,13 +997,16 @@ export class AspenSync {
       if (window === undefined || newest === undefined || window.atLatest) {
         return;
       }
-      const { messages, since } = await this.#readMessages(channelId, {
+      const { messages, since, moreAfter } = await this.#readMessages(channelId, {
         after: newest,
         limit: HISTORY_PAGE_SIZE,
       });
-      this.store.appendWindow(channelId, messages, messages.length < HISTORY_PAGE_SIZE, {
-        since,
-      });
+      this.store.appendWindow(
+        channelId,
+        messages,
+        !moreBeyond(moreAfter, messages.length, HISTORY_PAGE_SIZE),
+        { since },
+      );
     });
   }
 
@@ -966,10 +1020,11 @@ export class AspenSync {
    */
   loadAround(channelId: string, messageId: string): Promise<void> {
     return this.#loadWindowAfter(channelId, async () => {
-      const { messages, since } = await this.#readMessages(channelId, {
+      const { messages, since, moreBefore, moreAfter } = await this.#readMessages(channelId, {
         around: messageId,
         limit: MESSAGE_AROUND_RADIUS,
       });
+      // How many came back on each side, which only the fallback goes by.
       let older = 0;
       let newer = 0;
       for (const message of messages) {
@@ -982,7 +1037,10 @@ export class AspenSync {
       this.store.replaceWindow(
         channelId,
         messages,
-        { hasOlder: older >= MESSAGE_AROUND_RADIUS, atLatest: newer < MESSAGE_AROUND_RADIUS },
+        {
+          hasOlder: moreBeyond(moreBefore, older, MESSAGE_AROUND_RADIUS),
+          atLatest: !moreBeyond(moreAfter, newer, MESSAGE_AROUND_RADIUS),
+        },
         { since },
       );
     });
@@ -2034,42 +2092,42 @@ export class AspenSync {
 
   /**
    * Everyone who reacted to a message with an emoji, earliest first, a page at a time: the page
-   * after `after`, or the first. A page shorter than `REACTORS_PAGE` is the last. The users are
-   * stored as they come.
+   * `cursor` asks for (the `nextCursor` of the page before), or the first. The users are stored
+   * as they come.
    */
-  async loadReactors(messageId: string, emoji: string, after?: string): Promise<User[]> {
+  async loadReactors(messageId: string, emoji: string, cursor?: string): Promise<UserPage> {
     const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/messages/{message}/reactions/{emoji}", {
       params: {
         path: { message: messageId, emoji },
-        query: after === undefined ? { limit: REACTORS_PAGE } : { after, limit: REACTORS_PAGE },
+        query: { limit: REACTORS_PAGE, ...(cursor === undefined ? {} : { cursor }) },
       },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     this.store.ingest({ users: result.data.data }, { since });
-    return result.data.data;
+    return result.data;
   }
 
   /**
    * Everyone who voted for one answer of a poll, earliest first, a page at a time: the page
-   * after `after`, or the first. A page shorter than `VOTERS_PAGE` is the last. The users are
-   * stored as they come.
+   * `cursor` asks for (the `nextCursor` of the page before), or the first. The users are stored
+   * as they come.
    */
-  async loadVoters(pollId: string, option: number, after?: string): Promise<User[]> {
+  async loadVoters(pollId: string, option: number, cursor?: string): Promise<UserPage> {
     const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/polls/{poll}/votes/{option}", {
       params: {
         path: { poll: pollId, option },
-        query: after === undefined ? { limit: VOTERS_PAGE } : { after, limit: VOTERS_PAGE },
+        query: { limit: VOTERS_PAGE, ...(cursor === undefined ? {} : { cursor }) },
       },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     this.store.ingest({ users: result.data.data }, { since });
-    return result.data.data;
+    return result.data;
   }
 
   /** Removes the caller's reaction, dropping it from the cache at once. */
@@ -2446,23 +2504,24 @@ export class AspenSync {
   }
 
   /**
-   * Someone's DMs, for a deployment moderator to open; they are put in the store so the DM
-   * screen can show one, and reading any is logged by the server.
+   * Someone's DMs, most recently active first, for a deployment moderator to open: the page
+   * `cursor` asks for (the `nextCursor` of the page before), or the first. They are put in the
+   * store so the DM screen can show one, and reading any is logged by the server.
    */
-  async userDms(userId: string): Promise<Channel[]> {
+  async userDms(userId: string, cursor?: string): Promise<ChannelPage> {
     const since = this.#now();
-    const dms = adminRead(
+    const page = adminRead(
       await this.#client.api.GET("/api/v1/admin/users/{user}/dms", {
-        params: { path: { user: userId } },
+        params: { path: { user: userId }, query: cursor === undefined ? {} : { cursor } },
       }),
-    ).data;
-    this.store.ingest({ channels: dms }, { since });
-    for (const dm of dms) {
+    );
+    this.store.ingest({ channels: page.data }, { since });
+    for (const dm of page.data) {
       for (const recipient of dm.recipients) {
         this.ensureUser(recipient);
       }
     }
-    return dms;
+    return { data: page.data, nextCursor: nextCursorOf(page) };
   }
 
   /** Takes someone else's reaction off a message; see `#readsEventsOf` for the cache. */
@@ -3043,15 +3102,12 @@ export class AspenSync {
   }
 
   /**
-   * Reads the next page of the caller's DMs, after the last listed, when the server has more;
-   * its mutes and notification settings already came whole with the first.
+   * Reads the next page of the caller's DMs, by the cursor the page before gave, when the
+   * server has more; its mutes and notification settings already came whole with the first.
    */
   async loadMoreDms(): Promise<void> {
-    if (this.store.dmsComplete() || this.#loadingDms) {
-      return;
-    }
-    const before = this.store.lastListedDm();
-    if (before === undefined) {
+    const cursor = this.store.dmsCursor();
+    if (cursor === null || this.#loadingDms) {
       return;
     }
     const generation = this.#generation;
@@ -3059,31 +3115,32 @@ export class AspenSync {
     try {
       const since = this.#now();
       const page = await this.#client.api.GET("/api/v1/users/@me/dms", {
-        params: { query: { include: ["users", "readStates", "voice"], before, limit: DM_PAGE } },
+        params: { query: { include: ["users", "readStates", "voice"], cursor, limit: DM_PAGE } },
       });
       if (generation !== this.#generation || page.data === undefined) {
         return;
       }
       this.store.ingest(page.data.included, { since });
-      this.store.appendDms(page.data.data, page.data.data.length < DM_PAGE);
+      this.store.appendDms(page.data.data, nextCursorOf(page.data));
     } finally {
       this.#loadingDms = false;
     }
   }
 
   /**
-   * Every message of the caller's held for its previews, a page at a time; they are few, since
-   * each is posted within seconds. A deployment that does not hold messages has none; a page
-   * that fails any other way is `read`'s to throw for.
+   * Every message of the caller's held for its previews, a page at a time, each by the cursor
+   * the page before gave, until one gives none; they are few, since each is posted within
+   * seconds. A deployment that does not hold messages has none; a page that fails any other
+   * way is `read`'s to throw for.
    */
   async #readHeldMessages(read: OptionalRead): Promise<HeldMessage[]> {
     const held: HeldMessage[] = [];
+    let cursor: string | undefined;
     for (;;) {
-      const after = held.at(-1)?.id;
       const page = read(
         await this.#client.api.GET("/api/v1/users/@me/held-messages", {
           params: {
-            query: after === undefined ? { limit: LIST_PAGE } : { after, limit: LIST_PAGE },
+            query: cursor === undefined ? { limit: LIST_PAGE } : { cursor, limit: LIST_PAGE },
           },
         }),
       );
@@ -3091,9 +3148,11 @@ export class AspenSync {
         return held;
       }
       held.push(...page.data);
-      if (page.data.length < LIST_PAGE) {
+      const next = nextCursorOf(page);
+      if (next === null) {
         return held;
       }
+      cursor = next;
     }
   }
 
@@ -3244,53 +3303,53 @@ export class AspenSync {
 
   /**
    * Reads the first page of a community's standing bans into the store, for a holder of Ban
-   * members, or, with `more`, the page after those held.
+   * members, or, with `more`, the page after those held, by the cursor the last page gave;
+   * nothing when it gave none.
    */
   async loadBans(communityId: string, more = false): Promise<void> {
-    const before = more ? this.store.bans(communityId)?.at(-1)?.user : undefined;
-    if (more && (before === undefined || this.store.listComplete(`bans:${communityId}`))) {
+    const cursor = more ? this.store.listCursor(`bans:${communityId}`) : undefined;
+    if (cursor === null) {
       return;
     }
     const result = await this.#client.api.GET("/api/v1/communities/{community}/bans", {
       params: {
         path: { community: communityId },
-        query: before === undefined ? { limit: LIST_PAGE } : { before, limit: LIST_PAGE },
+        query: cursor === undefined ? { limit: LIST_PAGE } : { cursor, limit: LIST_PAGE },
       },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    const complete = result.data.data.length < LIST_PAGE;
     if (more) {
-      this.store.appendBans(communityId, result.data.data, complete);
+      this.store.appendBans(communityId, result.data.data, nextCursorOf(result.data));
     } else {
-      this.store.replaceBans(communityId, result.data.data, complete);
+      this.store.replaceBans(communityId, result.data.data, nextCursorOf(result.data));
     }
   }
 
   /**
    * Reads the first page of a community's standing server mutes into the store, for a holder
-   * of Manage calls, or, with `more`, the page after those held.
+   * of Manage calls, or, with `more`, the page after those held, by the cursor the last page
+   * gave; nothing when it gave none.
    */
   async loadVoiceMutes(communityId: string, more = false): Promise<void> {
-    const before = more ? this.store.voiceMutes(communityId)?.at(-1)?.user : undefined;
-    if (more && (before === undefined || this.store.listComplete(`voiceMutes:${communityId}`))) {
+    const cursor = more ? this.store.listCursor(`voiceMutes:${communityId}`) : undefined;
+    if (cursor === null) {
       return;
     }
     const result = await this.#client.api.GET("/api/v1/communities/{community}/voice-mutes", {
       params: {
         path: { community: communityId },
-        query: before === undefined ? { limit: LIST_PAGE } : { before, limit: LIST_PAGE },
+        query: cursor === undefined ? { limit: LIST_PAGE } : { cursor, limit: LIST_PAGE },
       },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    const complete = result.data.data.length < LIST_PAGE;
     if (more) {
-      this.store.appendVoiceMutes(communityId, result.data.data, complete);
+      this.store.appendVoiceMutes(communityId, result.data.data, nextCursorOf(result.data));
     } else {
-      this.store.replaceVoiceMutes(communityId, result.data.data, complete);
+      this.store.replaceVoiceMutes(communityId, result.data.data, nextCursorOf(result.data));
     }
   }
 
@@ -3477,20 +3536,22 @@ export class AspenSync {
   }
 
   /**
-   * A page of a community's members whose name contains `name`, sorted by name, after the
-   * member `after` when given. Only those who act on members may search a community larger
-   * than its member sample; the server refuses anyone else. The members are cached, their roles
-   * too, but not added to the sample.
+   * A page of a community's members whose name contains `name`, sorted by name: the page
+   * `cursor` asks for (the `nextCursor` of the page before, of a search for the same `name`),
+   * or the first. Only those who act on members may search a community larger than its member
+   * sample; the server refuses anyone else. The members are cached, their roles too, but not
+   * added to the sample.
    */
-  async searchMembers(communityId: string, name: string, after?: string): Promise<User[]> {
+  async searchMembers(communityId: string, name: string, cursor?: string): Promise<UserPage> {
     const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/communities/{community}/members", {
       params: {
         path: { community: communityId },
-        query:
-          after === undefined
-            ? { "filter[name]": name, limit: MEMBER_SEARCH_PAGE }
-            : { "filter[name]": name, after, limit: MEMBER_SEARCH_PAGE },
+        query: {
+          "filter[name]": name,
+          limit: MEMBER_SEARCH_PAGE,
+          ...(cursor === undefined ? {} : { cursor }),
+        },
       },
     });
     if (result.data === undefined) {
@@ -3498,7 +3559,7 @@ export class AspenSync {
     }
     this.store.ingest({ users: result.data.data }, { since });
     this.store.noteMemberships(result.data.included.userCommunities ?? [], { since });
-    return result.data.data;
+    return { data: result.data.data, nextCursor: result.data.nextCursor };
   }
 
   /** Reads a community's member sample again, replacing the one the store holds. */
@@ -3719,15 +3780,16 @@ export class AspenSync {
   }
 
   /**
-   * The messages the caller saved, newest save first, a page of `SAVED_PAGE` after the save of
-   * `before`. Their authors, channels, attachments, polls, and reactions are cached.
+   * The messages the caller saved, newest save first: the page of up to `SAVED_PAGE` that
+   * `cursor` asks for (the `nextCursor` of the page before), or the first. Their authors,
+   * channels, attachments, polls, and reactions are cached.
    */
-  async loadSavedMessages(before?: string): Promise<Message[]> {
+  async loadSavedMessages(cursor?: string): Promise<MessagePage> {
     const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/users/@me/saved-messages/messages", {
       params: {
         query: {
-          ...(before === undefined ? {} : { before }),
+          ...(cursor === undefined ? {} : { cursor }),
           limit: SAVED_PAGE,
           include: [...LISTED_INCLUDES],
         },
@@ -3737,7 +3799,7 @@ export class AspenSync {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     this.#ingestListed(result.data, { since });
-    return result.data.data;
+    return { data: result.data.data, nextCursor: nextCursorOf(result.data) };
   }
 
   /** Follows a thread for the caller, or stops following it. The store follows at once. */
@@ -3753,11 +3815,12 @@ export class AspenSync {
   }
 
   /**
-   * A page of `ACTIVITY_PAGE` of the caller's activity feed on this deployment, newest first:
-   * the messages of `filter.view`. Their authors, channels (threads among them),
-   * read positions, attachments, polls, and reactions are cached.
+   * A page of up to `ACTIVITY_PAGE` of the caller's activity feed on this deployment, newest
+   * first: the messages of `filter.view` that `filter.cursor` asks for (the `nextCursor` of the
+   * page before, read with the same filter), or the first. Their authors, channels (threads
+   * among them), read positions, attachments, polls, and reactions are cached.
    */
-  async readActivity(filter: ActivityFilter): Promise<Message[]> {
+  async readActivity(filter: ActivityFilter): Promise<MessagePage> {
     const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/users/@me/activity", {
       params: {
@@ -3768,7 +3831,7 @@ export class AspenSync {
           ...(filter.view === "notifying" ? {} : { "filter[view]": filter.view }),
           "filter[dms]": filter.dms,
           "filter[unread]": filter.unread,
-          ...(filter.before === undefined ? {} : { before: filter.before }),
+          ...(filter.cursor === undefined ? {} : { cursor: filter.cursor }),
           limit: ACTIVITY_PAGE,
           include: [...LISTED_INCLUDES],
         },
@@ -3778,7 +3841,7 @@ export class AspenSync {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
     this.#ingestListed(result.data, { since });
-    return result.data.data;
+    return { data: result.data.data, nextCursor: nextCursorOf(result.data) };
   }
 
   /**
@@ -3954,26 +4017,28 @@ export class AspenSync {
     return result.data;
   }
 
-  /** Loads the first page of a community's invites into the store, or, with `more`, the next. */
+  /**
+   * Loads the first page of a community's invites into the store, or, with `more`, the page
+   * after those held, by the cursor the last page gave; nothing when it gave none.
+   */
   async loadInvites(communityId: string, more = false): Promise<void> {
-    const before = more ? this.store.invites(communityId).at(-1)?.code : undefined;
-    if (more && (before === undefined || this.store.listComplete(`invites:${communityId}`))) {
+    const cursor = more ? this.store.listCursor(`invites:${communityId}`) : undefined;
+    if (cursor === null) {
       return;
     }
     const result = await this.#client.api.GET("/api/v1/communities/{community}/invites", {
       params: {
         path: { community: communityId },
-        query: before === undefined ? { limit: LIST_PAGE } : { before, limit: LIST_PAGE },
+        query: cursor === undefined ? { limit: LIST_PAGE } : { cursor, limit: LIST_PAGE },
       },
     });
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    const complete = result.data.data.length < LIST_PAGE;
     if (more) {
-      this.store.appendInvites(communityId, result.data.data, complete);
+      this.store.appendInvites(communityId, result.data.data, nextCursorOf(result.data));
     } else {
-      this.store.replaceInvites(communityId, result.data.data, complete);
+      this.store.replaceInvites(communityId, result.data.data, nextCursorOf(result.data));
     }
   }
 
@@ -4254,7 +4319,7 @@ export class AspenSync {
         access?.permissions ?? [],
       );
       this.store.ingest(dms.data.included);
-      this.store.setDms(dms.data.data, dms.data.data.length < DM_PAGE);
+      this.store.setDms(dms.data.data, nextCursorOf(dms.data));
       this.store.replaceMutes(
         [
           ...(communities.data.included.channelMutes ?? []),
@@ -5249,7 +5314,7 @@ export class AspenSync {
   async #readMessages(
     channelId: string,
     query: { before?: string; after?: string; around?: string; limit: number },
-  ): Promise<{ messages: Message[]; since: number }> {
+  ): Promise<{ messages: Message[]; since: number; moreBefore: unknown; moreAfter: unknown }> {
     const since = this.#now();
     const result = await this.#client.api.GET("/api/v1/channels/{channel}/messages", {
       params: {
@@ -5288,6 +5353,14 @@ export class AspenSync {
       ],
       result.data.included.messageAnnotations ?? [],
     );
-    return { messages: result.data.data, since };
+    // Whether the channel holds messages beyond each end of these, which a deployment that
+    // does not say leaves undefined, whatever the schema promises (`moreBeyond`).
+    const ends: { moreBefore?: unknown; moreAfter?: unknown } = result.data;
+    return {
+      messages: result.data.data,
+      since,
+      moreBefore: ends.moreBefore,
+      moreAfter: ends.moreAfter,
+    };
   }
 }

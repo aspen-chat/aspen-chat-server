@@ -17,13 +17,14 @@ import { useDocumentTitle } from "@/features/layout/documentTitle";
 interface Read {
   /** How many of its saves, newest first, have had their messages read. */
   readonly count: number;
-  /** The message of the last save read, which the next page starts after. */
-  readonly last: string | undefined;
+  /** The cursor the last page gave for the one after it; none before the first is read. */
+  readonly cursor: string | undefined;
+  /** Whether the last page said it was the last, or failed. */
   readonly exhausted: boolean;
   readonly problem: string | null;
 }
 
-const UNREAD: Read = { count: 0, last: undefined, exhausted: false, problem: null };
+const UNREAD: Read = { count: 0, cursor: undefined, exhausted: false, problem: null };
 
 /**
  * Saved messages, `/saved`: every message the reader saved on every deployment they use,
@@ -58,12 +59,12 @@ export function SavedScreen() {
       }
       reading.current.add(source);
       void source.sync
-        .loadSavedMessages(read.last)
+        .loadSavedMessages(read.cursor)
         .then(
           (found): Read => ({
-            count: read.count + found.length,
-            last: found.at(-1)?.id ?? read.last,
-            exhausted: found.length < SAVED_PAGE,
+            count: read.count + found.data.length,
+            cursor: found.nextCursor ?? undefined,
+            exhausted: found.nextCursor === null,
             problem: null,
           }),
           (error: unknown): Read => ({

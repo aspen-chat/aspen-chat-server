@@ -1,10 +1,11 @@
-import { ApiProblemError, plainFileName, type FileOfferEntry } from "@aspen/protocol";
-import { useCallback, useEffect, useState } from "react";
+import { plainFileName, type FileOfferEntry } from "@aspen/protocol";
+import { useCallback, useState } from "react";
 import { Button, useLocale } from "react-aria-components";
 import { useSync, useIdWizard } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { AdminUserPicker } from "@/features/admin/AdminUserPicker";
 import { Cell, Table } from "@/features/admin/FleetHealth";
+import { useCursorLog } from "@/features/admin/useCursorLog";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { formatSize } from "@/features/voice/files";
 import { useMessages } from "@/i18n/context";
@@ -14,9 +15,6 @@ import { formatNodes } from "@/i18n/formatNodes";
 import { CopyIdButton } from "@/features/layout/CopyId";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
-
-/** A page of the record is what the server gives by default. */
-const PAGE = 50;
 
 /**
  * The record of files offered in calls, newest first, a page at a time: who offered what, by
@@ -29,42 +27,12 @@ export function FileTransferLog() {
   const m = useMessages();
   const sync = useSync();
   const wizard = useIdWizard();
-  const [entries, setEntries] = useState<readonly FileOfferEntry[]>([]);
-  const [complete, setComplete] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [person, setPerson] = useState<string | undefined>(undefined);
-
-  const read = useCallback(
-    (before: string | undefined, isCurrent: () => boolean) => {
-      sync.admin.fileTransferLog(before, person).then(
-        (page) => {
-          if (!isCurrent()) {
-            return;
-          }
-          setEntries((held) => (before === undefined ? page : [...held, ...page]));
-          setComplete(page.length < PAGE);
-          setError(null);
-          setLoading(false);
-        },
-        (e: unknown) => {
-          if (isCurrent()) {
-            setError(e instanceof ApiProblemError ? e.message : String(e));
-            setLoading(false);
-          }
-        },
-      );
-    },
+  const load = useCallback(
+    (cursor?: string) => sync.admin.fileTransferLog(cursor, person),
     [sync, person],
   );
-
-  useEffect(() => {
-    let current = true;
-    read(undefined, () => current);
-    return () => {
-      current = false;
-    };
-  }, [read]);
+  const { entries, loading, error, more, showMore, reload } = useCursorLog(load);
 
   return (
     <Section
@@ -77,20 +45,11 @@ export function FileTransferLog() {
           label={m.admin.fileTransfersOf}
           anyoneLabel={m.admin.fileTransfersOfAnyone}
           onChange={(user) => {
-            setLoading(true);
             setPerson(user?.id);
           }}
         />
       </div>
-      {error !== null && (
-        <ReadFailed
-          error={error}
-          onRetry={() => {
-            setLoading(true);
-            read(undefined, () => true);
-          }}
-        />
-      )}
+      {error !== null && <ReadFailed error={error} onRetry={reload} />}
       {!loading && entries.length === 0 && error === null ? (
         <p className="text-sm text-ink-muted">{m.admin.noFileTransfers}</p>
       ) : (
@@ -139,13 +98,10 @@ export function FileTransferLog() {
           ))}
         </Table>
       )}
-      {!complete && entries.length > 0 && (
+      {more && (
         <Button
           isDisabled={loading}
-          onPress={() => {
-            setLoading(true);
-            read(entries.at(-1)?.id, () => true);
-          }}
+          onPress={showMore}
           className={secondaryButtonClass + " self-start"}
         >
           {m.admin.showMore}

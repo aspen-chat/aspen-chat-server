@@ -592,9 +592,15 @@ HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the s
   the `nextCursor` of the page before; `nextCursor` is always present and is `null` on the last
   page, which the server decides by reading one row more than the limit; and a cursor that does not
   decode is refused with `validation`. Cursors are made by `app::cursor` from every column the read
-  is ordered by, so no row is looked up again (an emoji's reactors, a poll answer's voters, member
-  search). The one bare array the server answers is `/.well-known/assetlinks.json`, whose shape
-  Android fixes.
+  is ordered by, so no row is looked up again. Every list a client reads past its first page is read
+  this way, never by a row's id as `before` or `after`, with two exceptions: reads of messages
+  placed by message ids (`before`, `after`, `around`: a channel's window, search, a report's
+  context), and the dashboard's directories, which page by `offset`. Those reads say where they end
+  too, never leaving it to a page's length: a channel's window and a report's context answer
+  `moreBefore` and `moreAfter`, whether messages older and newer than the page exist, each decided
+  by reading one row more than the limit on the side read (the side a `before` or `after` anchor is
+  on is not read, and is answered `true`), and search answers `more`. The one bare array the server
+  answers is `/.well-known/assetlinks.json`, whose shape Android fixes.
 - **List parameters use `sort=` and `filter[field]=`.** A filter that is a list of names is parsed
   with `api::include::FilterSet<E>` and refuses a name it does not know with `validation`, since
   ignoring it would answer more than was asked; `include`, which only adds, stays lenient. When a
@@ -1313,6 +1319,31 @@ when reviewing.
    and "the request failed, so there is none" turn an outage into a wrong answer. Only the refusals
    that mean it become "not there" (`plugin::host::withheld` lists them); everything else
    propagates, and a path that fails closed stays closed on every way of failing.
+9. **A page ends where the data ends.** What a page leaves out is left out before the `LIMIT`, so a
+   short page is the last. A cursor carries its own position, every column the order is by
+   (`app::cursor`), and is never a row to be looked up again, which may be gone by the next request.
+   Where a list is read by a cursor, its end is told by `nextCursor`, and the ends of a window of
+   messages by `moreBefore` and `moreAfter`, each decided by reading one row more than the limit,
+   never by a page's length.
+10. **What belongs to a transaction is inside it.** A check is made under the lock that serialises
+    what it checks, on the row as read after taking it; a log entry is written with the change it
+    records; state held elsewhere (Valkey) is given up only after the commit, so a retry finds it.
+    An event whose transaction rolled back is not applied again by whoever reads the stream
+    afterwards (the event feed's `resync_floor`). A job that must never stop is never given up, and
+    asking for it again revives one that was (`jobs::revive`).
+11. **Sibling paths do the same work.** When one way to an end cleans up, announces, or installs
+    (`leave`, `soft_delete`, a `RecordStore` batch), every other way to that end does too, by
+    calling the same function (`Participant::remove_producer`, `saved_message::forget`), never by a
+    copy of part of it.
+12. **Test past the threshold.** Whatever depends on age, size, count, or state is tested with
+    values on the far side of each limit, not with what a fresh fixture happens to have: a key older
+    than the handover window, a message that was held, a role at the cap, zero and negative
+    arguments. A test whose every case is new, small, and first passes on code that is wrong for
+    everything else.
+13. **A check fails when what it checks is absent.** Assert the effect (a count that rose, a row
+    that exists, a field present and null), never the absence of a log phrase or of an error.
+    Confirm the setup did what the scenario needs before judging the outcome, and refuse an input
+    the check does not know (a scenario name, a status) rather than pass on it.
 
 ## Comments document the current code, not its history
 

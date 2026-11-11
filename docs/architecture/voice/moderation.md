@@ -45,12 +45,19 @@ lifts it. It outlives the person leaving the community, so leaving and coming ba
 | `PATCH /channels/{channel}/voice/participants/{user}` | Makes or lifts one for someone in the call                                                                                             |
 | `PUT /communities/{community}/voice-mutes/{user}`     | Makes one, whether or not the person is in a call                                                                                      |
 | `DELETE /communities/{community}/voice-mutes/{user}`  | Lifts one, whether or not the person is in a call                                                                                      |
-| `GET /communities/{community}/voice-mutes`            | Lists those standing, newest first, a page of at most `LIST_PAGE` (100) at a time after the mute of `before` (`voice_mute_listed`)     |
+| `GET /communities/{community}/voice-mutes`            | Lists those standing, newest first, a page of at most `LIST_PAGE` (100) at a time (`voice_mute_listed`)                                |
 | `GET /communities/{community}/voice-mutes/{user}`     | Reads one person's, not found when none stands. A call's menu learns this way whether someone is muted without reading the whole list. |
 
 All take Manage calls in the community, over someone below the caller's highest role and never the
 owner. A deployment moderator acting by Moderate any community must outrank them in the deployment
 too.
+
+The list answers `{data, nextCursor}`: `nextCursor` is the `cursor` of the page after, and `null` on
+the last, which the read decides by asking for one mute more than the page holds. A cursor
+(`app::cursor`) is the place of the page's last mute, when it was made and whom it mutes, the
+columns the list is ordered by, so the page after it is read whether or not that mute has been
+lifted since. Text that is not such a cursor, or is a cursor of another list (each names its own),
+is refused with `validation`.
 
 ### How it reaches the call
 

@@ -14,7 +14,8 @@
 //! describes an array query parameter with `style: form, explode: false`.
 //!
 //! A list read that sideloads nothing answers a [`Listed`], and one read a page at a time by a
-//! cursor a [`Page`], so every list the API answers is an object with its records under `data`.
+//! cursor a [`Page`] (a [`SideloadedPage`] when it sideloads), so every list the API answers is
+//! an object with its records under `data`.
 
 use crate::attachment::Attachment;
 use crate::category_collapse::CategoryCollapse;
@@ -330,6 +331,22 @@ impl<T> Page<T> {
     }
 }
 
+impl<T> From<aspen_app::cursor::Paged<T>> for Page<T> {
+    fn from(page: aspen_app::cursor::Paged<T>) -> Self {
+        Self::new(page.items, page.next_cursor)
+    }
+}
+
+/// Response envelope of a list read a page at a time that supports `?include=`: a [`Page`]
+/// with the related records of its `data` under `included`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SideloadedPage<T> {
+    pub data: Vec<T>,
+    pub included: Included,
+    pub next_cursor: Option<String>,
+}
+
 // The OpenAPI schemas of the envelopes are written by hand so that `data` is a `$ref` to the
 // record's own component schema. Deriving `ToSchema` on a generic struct copies the record's
 // schema inline instead, which would give the generated client an anonymous type for `data`
@@ -419,6 +436,29 @@ impl<T: ToSchema> PartialSchema for Sideloaded<T> {
 impl<T: ToSchema> ToSchema for Sideloaded<T> {
     fn name() -> Cow<'static, str> {
         format!("Sideloaded_{}", T::name()).into()
+    }
+
+    fn schemas(schemas: &mut Vec<(String, RefOr<Schema>)>) {
+        envelope_schemas::<T>(schemas);
+    }
+}
+
+impl<T: ToSchema> PartialSchema for SideloadedPage<T> {
+    fn schema() -> RefOr<Schema> {
+        ObjectBuilder::new()
+            .property("data", array_of::<T>())
+            .required("data")
+            .property("included", Ref::from_schema_name(Included::name()))
+            .required("included")
+            .property("nextCursor", next_cursor_schema())
+            .required("nextCursor")
+            .into()
+    }
+}
+
+impl<T: ToSchema> ToSchema for SideloadedPage<T> {
+    fn name() -> Cow<'static, str> {
+        format!("SideloadedPage_{}", T::name()).into()
     }
 
     fn schemas(schemas: &mut Vec<(String, RefOr<Schema>)>) {

@@ -104,7 +104,9 @@ the wrench).
 
 - Bans are `RecordStore.bans`, topic `bans:<communityId>`.
 - `useBans` reads a page on first use. `ShowMore` reads the next while `RecordStore.listComplete`
-  says there is one.
+  says there is one: the store keeps the `nextCursor` each answer gave (`listCursor`), which asks
+  for the page after, and the list is whole once that is `null`, however many a page held. Server
+  mutes and invites are held and paged the same way.
 - `communityBan` events keep them, and reach holders of Ban members.
 
 Someone banned who tries an invite is answered `banned` with the reason, which the invite screen
@@ -140,6 +142,8 @@ Wherever a member is chosen (the Members tab, handing over ownership, Check acce
   refused.
 - `AspenSync.searchMembers` caches the people found and their roles without adding them to the
   sample.
+- A search answers `{data, nextCursor}`, a page of `MEMBER_SEARCH_PAGE`; `searchMembers` takes that
+  cursor for the page after. `useMemberSearch` shows the first page only: typing more narrows it.
 - `MemberPicker` is the combobox the dialogs and the search dialog's From share. Emptying it chooses
   no one; where it narrows something (From), it also offers an Anyone option that does
   (`useAnyoneOption`, which the dashboard's `AdminUserPicker` uses too).

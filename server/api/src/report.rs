@@ -267,6 +267,10 @@ pub struct ReportCaseList {
     /// The communities of those channels, and those the nickname cases are about.
     pub communities: Vec<Community>,
     pub attachments: Vec<Attachment>,
+    /// Give it back as `cursor` for the next page of the list these cases were read from;
+    /// `null` when this page is the last, and when they were read any other way.
+    #[schema(required = true)]
+    pub next_cursor: Option<String>,
 }
 
 /// The users, attachments, channels, and communities `messages`, `people`, and `communities`
@@ -337,6 +341,7 @@ impl ReportCaseList {
     ) -> ApiResult<Self> {
         let people = page.people();
         let case_communities = page.communities();
+        let next_cursor = page.next_cursor;
         let messages: Vec<ReviewedMessage> = page
             .messages
             .into_iter()
@@ -352,6 +357,7 @@ impl ReportCaseList {
             channels,
             communities,
             attachments,
+            next_cursor,
         })
     }
 }
@@ -365,14 +371,17 @@ pub struct ReportCaseQuery {
     #[serde(rename = "filter[status]")]
     #[param(rename = "filter[status]", value_type = Option<ReportStatus>)]
     pub status: Option<ReportStatus>,
-    /// Continue after this case, the last of the previous page.
-    pub before: Option<ReportCaseId>,
+    /// Continue after the page whose `nextCursor` this is, read with the same
+    /// `filter[status]`.
+    pub cursor: Option<String>,
     /// How many to return, at most 100; 15 when absent.
     pub limit: Option<i64>,
 }
 
-/// The cases in one state: open and dismissed ones most recently reported first, resolved ones
-/// most recently resolved first. Takes Review reports.
+/// The cases in one state, a page at a time: open and dismissed ones most recently reported
+/// first, resolved ones most recently resolved first. `nextCursor` is the `cursor` of the page
+/// after this one, and `null` on the last; a page may hold fewer than `limit` and not be the
+/// last. Takes Review reports.
 #[utoipa::path(
     get,
     path = "/admin/reports",
@@ -381,7 +390,7 @@ pub struct ReportCaseQuery {
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = ReportCaseList),
-        (status = BAD_REQUEST, body = Problem),
+        (status = BAD_REQUEST, description = "`badRequest`, or `validation` for a `cursor` this list did not give", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Review reports", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -396,7 +405,7 @@ pub async fn list_report_cases(
         &state,
         &access,
         query.status.unwrap_or(ReportStatus::Open),
-        query.before,
+        query.cursor.as_deref(),
         query.limit.unwrap_or(15),
     )
     .await?;
