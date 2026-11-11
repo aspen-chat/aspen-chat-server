@@ -2247,6 +2247,25 @@ describe("RecordStore bots", () => {
   });
 });
 
+describe("RecordStore commands", () => {
+  it("drops the held commands when a channel moves or a category goes, and not for a rename", () => {
+    const store = bootstrapped();
+    const told = vi.fn();
+    store.subscribe(`commands:${general.id}`, told);
+    store.setCommands(general.id, []);
+    store.applyEvent({ serverEvent: "channel", type: "update", id: dev.id, name: "development" });
+    expect(store.commands(general.id)).toEqual([]);
+    // Moved out of its category, the channel is under other overrides, so other bots see it.
+    store.applyEvent({ serverEvent: "channel", type: "update", id: dev.id, parentCategory: null });
+    expect(store.commands(general.id)).toBeUndefined();
+    store.setCommands(general.id, []);
+    told.mockClear();
+    store.applyEvent({ serverEvent: "category", type: "delete", id: work.id });
+    expect(store.commands(general.id)).toBeUndefined();
+    expect(told).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("RecordStore plugins", () => {
   const filter = {
     id: "org.example.filter",

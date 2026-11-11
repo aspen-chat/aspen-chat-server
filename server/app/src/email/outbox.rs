@@ -133,7 +133,15 @@ impl Mail {
         match self {
             Mail::Digest { .. } => Some(List::Digest),
             Mail::Newsletter { test: false, .. } => Some(List::Newsletter),
-            _ => None,
+            Mail::Verification { .. }
+            | Mail::AddressChanged { .. }
+            | Mail::PasswordReset { .. }
+            | Mail::PasswordWasReset { .. }
+            | Mail::PasswordChanged
+            | Mail::SecondFactorAdded { .. }
+            | Mail::SecondFactorRemoved { .. }
+            | Mail::SignInLocked
+            | Mail::Newsletter { test: true, .. } => None,
         }
     }
 

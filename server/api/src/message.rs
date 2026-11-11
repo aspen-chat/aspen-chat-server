@@ -1,7 +1,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::extract::{Created, Json, NoContent, Path, Query};
-use crate::include::{IncludeSet, Included, Sideloaded, SideloadedList};
+use crate::include::{FilterSet, IncludeSet, Included, Sideloaded, SideloadedList};
 use crate::link_preview::LinkPreview;
 use crate::message_enum::request::{MessageCreateRequest, MessageUpdateRequest};
 use crate::message_enum::{Message, UserCommunity};
@@ -425,10 +425,12 @@ pub struct MessageSearchQuery {
     #[serde(rename = "filter[mentions]")]
     #[param(rename = "filter[mentions]")]
     pub mentions: Option<UserId>,
-    /// Only messages holding each of these, comma separated.
+    /// Only messages holding each of these, comma separated. A value this server does not
+    /// know is refused with `validation`, since a search without it would answer more than was
+    /// asked for.
     #[serde(rename = "filter[has]", default)]
     #[param(rename = "filter[has]", value_type = Option<Vec<MessageHolding>>, style = Form, explode = false)]
-    pub has: IncludeSet<MessageHolding>,
+    pub has: FilterSet<MessageHolding>,
     /// Only messages older than this one: the last of the previous page.
     pub before: Option<MessageId>,
     /// How many to return, at most 50; 25 when absent.
@@ -461,7 +463,8 @@ pub struct MessageSearchPage {
 /// communities they belong to, the DMs they are in, and the threads of both, leaving out
 /// messages by anyone they blocked. `filter[community]` or `filter[channel]` narrows where;
 /// `filter[text]`, `filter[author]`, `filter[mentions]`, and `filter[has]` narrow what, and at
-/// least one of them must be given. A community the caller does not belong to, or a channel they
+/// least one of them must be given. A `filter[has]` value this server does not know is refused
+/// rather than left out, which would answer a broader search than the one asked for. A community the caller does not belong to, or a channel they
 /// may not read, is answered `404`.
 ///
 /// A search reads back through history only so far in one request. When it has found nothing
@@ -477,7 +480,7 @@ pub struct MessageSearchPage {
     security(("bearerAuth" = [])),
     responses(
         (status = OK, body = MessageSearchPage),
-        (status = BAD_REQUEST, description = "`validation`: nothing to search for, text too long, or both a community and a channel", body = Problem),
+        (status = BAD_REQUEST, description = "`validation`: nothing to search for, text too long, both a community and a channel, or a `filter[has]` value this server does not know, which `detail` names", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -499,7 +502,16 @@ pub async fn search_messages(
             );
         }
     };
-    let holding = query.has.iter().map(app::search::Holding::from).collect();
+    let holding = query
+        .has
+        .known()
+        .map_err(|unknown| {
+            ApiError::new(ProblemCode::Validation)
+                .with_detail(t!("searchHoldingUnknown", value = unknown))
+        })?
+        .into_iter()
+        .map(app::search::Holding::from)
+        .collect();
     let page = app::search::search_messages(
         &state,
         user.id,

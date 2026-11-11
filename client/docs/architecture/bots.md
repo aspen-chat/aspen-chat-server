@@ -87,7 +87,9 @@ The channel's commands are store state:
 - `RecordStore.commands`, topic `commands:<channelId>`
 - read by `AspenSync.loadCommands` through `useCommands`
 - dropped whenever something may change which bots see the channel or what they answer:
-  `botCommandsChanged`, roles, overrides, a bot's membership, a DM's recipients
+  `botCommandsChanged`, roles, overrides, a bot's membership, a DM's recipients, a channel moved to
+  another category, a category deleted, and a resync. Every event is named in
+  `RecordStore.#changesCommands`, so a new one does not compile until it is decided
 - read again where shown
 
 ### Typing a command

@@ -123,9 +123,16 @@ jobs:
             case "$status" in
               Accepted) ;;
               "In Progress") if [ "$verdict" = accepted ]; then verdict=waiting; fi ;;
-              *)
+              Invalid | Rejected)
                 verdict=refused
                 xcrun notarytool log "$id" "${auth[@]}" "../logs/$dmg.json" || true
+                ;;
+              # A refusal is recorded for good, so a status this step does not know is not taken
+              # for one: the step fails with nothing recorded, and the next run asks again.
+              *)
+                rm "$RUNNER_TEMP/notarization.p8"
+                echo "::error::The notary service gave $dmg ($id) the status \"$status\", which this workflow does not know."
+                exit 1
                 ;;
             esac
           done < <(jq -r '.[] | "\(.dmg) \(.id)"' submissions.json)

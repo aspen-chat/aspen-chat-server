@@ -81,6 +81,62 @@ where
     }
 }
 
+/// The parsed value of a filter that takes a comma-separated list of names from the enum `E`
+/// (`filter[has]`). Unlike [`IncludeSet`], a name this server does not know is kept for the
+/// handler to refuse: a sideload left out loses nothing, but a filter left out answers more than
+/// was asked for, as though it were what was asked for.
+#[derive(Debug, Clone)]
+pub struct FilterSet<E> {
+    known: Vec<E>,
+    unknown: Option<String>,
+}
+
+impl<E> Default for FilterSet<E> {
+    fn default() -> Self {
+        Self {
+            known: Vec::new(),
+            unknown: None,
+        }
+    }
+}
+
+impl<E> FilterSet<E> {
+    /// The longest unknown name kept for the refusal to quote, in characters.
+    const QUOTED_CHARS: usize = 64;
+
+    /// Every name the parameter gave, once each, in the order first given; or the first name
+    /// this server does not know, cut to what a refusal quotes.
+    pub fn known(self) -> Result<Vec<E>, String> {
+        match self.unknown {
+            Some(unknown) => Err(unknown),
+            None => Ok(self.known),
+        }
+    }
+}
+
+impl<'de, E> Deserialize<'de> for FilterSet<E>
+where
+    E: Deserialize<'de> + PartialEq,
+{
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        let mut set = Self::default();
+        for name in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let parsed: Result<E, serde::de::value::Error> =
+                E::deserialize(name.into_deserializer());
+            match parsed {
+                Ok(value) if !set.known.contains(&value) => set.known.push(value),
+                Ok(_) => {}
+                Err(_) if set.unknown.is_none() => {
+                    set.unknown = Some(name.chars().take(Self::QUOTED_CHARS).collect());
+                }
+                Err(_) => {}
+            }
+        }
+        Ok(set)
+    }
+}
+
 /// Related records sideloaded alongside a read, keyed by record type. A key is present exactly
 /// when the caller asked for the relationship that produces it.
 #[derive(Default, Serialize, ToSchema)]
@@ -338,6 +394,38 @@ mod tests {
     fn absent_and_empty_are_empty_sets() {
         assert!(parse("").unwrap().include.0.is_empty());
         assert!(parse("include=").unwrap().include.0.is_empty());
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct Filtered {
+        #[serde(default)]
+        has: FilterSet<Relation>,
+    }
+
+    fn filtered(query: &str) -> Result<Vec<Relation>, String> {
+        serde_urlencoded::from_str::<Filtered>(query)
+            .unwrap()
+            .has
+            .known()
+    }
+
+    /// A filter keeps the name it does not know, so its handler can refuse rather than answer
+    /// a broader search than was asked for; what it knows reads as an include's names do.
+    #[test]
+    fn a_filter_names_the_value_it_does_not_know() {
+        assert_eq!(
+            filtered("has=channels,%20channels,members"),
+            Ok(vec![Relation::Channels, Relation::Members])
+        );
+        assert_eq!(filtered(""), Ok(Vec::new()));
+        assert_eq!(filtered("has="), Ok(Vec::new()));
+        assert_eq!(
+            filtered("has=channels,video,audio"),
+            Err("video".to_string())
+        );
+        assert_eq!(filtered("has=Channels"), Err("Channels".to_string()));
+        let long = "ж".repeat(500);
+        assert_eq!(filtered(&format!("has={long}")), Err("ж".repeat(64)));
     }
 
     /// Only the requested relationship types appear, and requesting a relationship with no

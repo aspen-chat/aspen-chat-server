@@ -151,6 +151,12 @@ pub struct FeedEvent {
     /// invite's), and the member who receives it without that permission (the invite's creator).
     requires: Option<Permissions>,
     creator: Option<UserId>,
+    /// On a community's subject, that a header restricting who receives it (`CHANNEL_HEADER`,
+    /// `CATEGORY_HEADER`, `REQUIRES_HEADER`) was there and this build could not read it, as
+    /// when a newer server names a permission this one lacks: whom it was restricted to is
+    /// unknown, so it reaches deployment moderators alone. The headers restrict nothing on a
+    /// user's subject, where it is never set.
+    unreadable: bool,
     /// On a community's subject, the change the event makes to who may view what.
     change: Option<ModelChange>,
     /// The community's model as it stood after this event, when the dispatcher held one. Set
@@ -261,6 +267,7 @@ impl FeedEvent {
             category: None,
             requires: None,
             creator: None,
+            unreadable: false,
             change: None,
             ends_at: None,
             access: OnceLock::new(),
@@ -939,7 +946,8 @@ fn moderation_change(kind: Option<&str>, payload: &str) -> Option<bool> {
 /// may view the one it names, by `model` or, for an event that changes who may, by the model
 /// before it (`event.before`); and likewise for the category it names. A channel a model does
 /// not know (one not yet made, or deleted) nobody views by it. A deployment moderator reads
-/// everything. Anything restricted reaches no one without a model.
+/// everything, and alone reads one whose restriction this build could not read
+/// (`FeedEvent::unreadable`). Anything restricted reaches no one without a model.
 fn may_read(
     event: &FeedEvent,
     model: Option<&CommunityModel>,
@@ -947,9 +955,13 @@ fn may_read(
     roles: Option<&Vec<RoleId>>,
     moderator: bool,
 ) -> bool {
-    if moderator
-        || (event.requires.is_none() && event.channel.is_none() && event.category.is_none())
-    {
+    if moderator {
+        return true;
+    }
+    if event.unreadable {
+        return false;
+    }
+    if event.requires.is_none() && event.channel.is_none() && event.category.is_none() {
         return true;
     }
     let none = Vec::new();
@@ -1493,7 +1505,13 @@ impl Routes {
             {
                 continue;
             }
-            if let SubjectOwner::Community(community) = event.owner
+            if event.unreadable {
+                // Decided apart from the role sets below, whose key takes an owner for a
+                // moderator.
+                if !connection.moderator {
+                    continue;
+                }
+            } else if let SubjectOwner::Community(community) = event.owner
                 && (event.channel.is_some() || event.category.is_some() || event.requires.is_some())
             {
                 let model = event.access.get().map(Arc::as_ref);
@@ -1888,6 +1906,21 @@ impl Glanced {
     }
 }
 
+/// A restricting header that was there and could not be read.
+struct Unreadable;
+
+/// The value of the header `name`, which restricts who receives an event: `Ok(None)` without
+/// the header, and `Err` with one this build cannot read, which must not pass for none.
+fn restricting<T: std::str::FromStr>(
+    headers: Option<&async_nats::HeaderMap>,
+    name: &str,
+) -> Result<Option<T>, Unreadable> {
+    match headers.and_then(|headers| headers.get(name)) {
+        None => Ok(None),
+        Some(value) => value.as_str().parse().map(Some).map_err(|_| Unreadable),
+    }
+}
+
 /// Reads a delivered message into an event; `None` for one that is not an event.
 fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
     let info = match message.info() {
@@ -1923,30 +1956,31 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
         resync,
         email_unverified,
     } = Glanced::read(owner, payload.get());
-    let channel = message
-        .headers
-        .as_ref()
-        .and_then(|headers| headers.get(CHANNEL_HEADER))
-        .and_then(|value| value.as_str().parse().ok())
-        .map(ChannelId);
-    let category = message
-        .headers
-        .as_ref()
-        .and_then(|headers| headers.get(CATEGORY_HEADER))
-        .and_then(|value| value.as_str().parse().ok())
-        .map(CategoryId);
-    let header = |name: &str| {
-        message
-            .headers
-            .as_ref()
-            .and_then(|headers| headers.get(name))
-            .map(|value| value.as_str().to_string())
-    };
-    let requires = header(REQUIRES_HEADER)
-        .and_then(|name| name.parse::<Permission>().ok())
-        .map(Permission::bits);
+    let headers = message.headers.as_ref();
+    let channel = restricting::<uuid::Uuid>(headers, CHANNEL_HEADER);
+    let category = restricting::<uuid::Uuid>(headers, CATEGORY_HEADER);
+    let requires = restricting::<Permission>(headers, REQUIRES_HEADER);
+    let unreadable = matches!(owner, SubjectOwner::Community(_))
+        && (channel.is_err() || category.is_err() || requires.is_err());
+    if unreadable {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            warn!(
+                subject = %message.subject,
+                "an event's restricting header could not be read, so it reaches deployment \
+                 moderators alone; a newer server on the same stream may have published it \
+                 (logged once)"
+            );
+        });
+    }
+    let channel = channel.ok().flatten().map(ChannelId);
+    let category = category.ok().flatten().map(CategoryId);
+    let requires = requires.ok().flatten().map(Permission::bits);
+    let header = |name: &str| headers.and_then(|headers| headers.get(name));
+    // Its creator only adds a reader to those `requires` allows, so one that cannot be read
+    // narrows.
     let creator = header(CREATOR_HEADER)
-        .and_then(|id| id.parse().ok())
+        .and_then(|id| id.as_str().parse().ok())
         .map(UserId);
     let age = (time::OffsetDateTime::now_utc() - info.published).clamp(
         time::Duration::ZERO,
@@ -1974,6 +2008,7 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             category,
             requires,
             creator,
+            unreadable,
             change,
             access: OnceLock::new(),
             before: OnceLock::new(),
@@ -2535,6 +2570,7 @@ mod tests {
             category: None,
             requires: None,
             creator: None,
+            unreadable: false,
             change: None,
             access: OnceLock::new(),
             before: OnceLock::new(),
@@ -3633,6 +3669,83 @@ mod tests {
         assert_eq!(models.follow(&mut join), vec![7]);
         // The resynced connection no longer counts as a reader, so its model goes.
         assert!(models.models.is_empty());
+    }
+
+    #[test]
+    fn a_restricting_header_that_cannot_be_read_is_not_taken_for_none() {
+        let mut headers = async_nats::HeaderMap::new();
+        let channel = ChannelId::new();
+        headers.insert(CHANNEL_HEADER, channel.0.to_string().as_str());
+        headers.insert(CATEGORY_HEADER, "not an id");
+        headers.insert(REQUIRES_HEADER, "aPermissionOfALaterVersion");
+        let headers = Some(&headers);
+        assert!(matches!(
+            restricting::<uuid::Uuid>(headers, CHANNEL_HEADER),
+            Ok(Some(id)) if id == channel.0
+        ));
+        assert!(restricting::<uuid::Uuid>(headers, CATEGORY_HEADER).is_err());
+        assert!(restricting::<Permission>(headers, REQUIRES_HEADER).is_err());
+        assert!(matches!(
+            restricting::<Permission>(headers, CREATOR_HEADER),
+            Ok(None)
+        ));
+        assert!(matches!(
+            restricting::<Permission>(None, REQUIRES_HEADER),
+            Ok(None)
+        ));
+        let mut known = async_nats::HeaderMap::new();
+        known.insert(
+            REQUIRES_HEADER,
+            Permission::ManageInvites.to_string().as_str(),
+        );
+        assert!(matches!(
+            restricting::<Permission>(Some(&known), REQUIRES_HEADER),
+            Ok(Some(Permission::ManageInvites))
+        ));
+    }
+
+    #[test]
+    fn an_event_whose_restriction_cannot_be_read_reaches_moderators_alone() {
+        let community = CommunityId::new();
+        let (owner, member, moderator) = (UserId::new(), UserId::new(), UserId::new());
+        let mut model = CommunityModel::new(community);
+        model.apply(&ModelChange::Owner(Some(owner)));
+        let model = Arc::new(model);
+        let mut unreadable = plain(1, SubjectOwner::Community(community), None);
+        unreadable.unreadable = true;
+        let _ = unreadable.access.set(model.clone());
+        let unreadable = Arc::new(unreadable);
+        for user in [owner, member] {
+            assert!(!may_read(&unreadable, Some(&model), user, None, false));
+        }
+        assert!(may_read(&unreadable, Some(&model), moderator, None, true));
+
+        // The owner comes first, so a decision shared with the moderator's would show.
+        let mut routes = Routes::default();
+        let mut receivers = Vec::new();
+        for (id, user, moderates) in [(1, owner, false), (2, moderator, true), (3, member, false)] {
+            let (tx, rx) = mpsc::channel(8);
+            routes.add(
+                id,
+                Connection {
+                    user,
+                    sign_in: SignIn::default(),
+                    communities: HashSet::from([community]),
+                    roles: HashMap::new(),
+                    moderator: moderates,
+                    following: Following::default(),
+                    deliveries: tx,
+                    viewing: HashSet::new(),
+                },
+            );
+            receivers.push(rx);
+        }
+        routes.route(&unreadable);
+        let got: Vec<bool> = receivers
+            .iter_mut()
+            .map(|rx| rx.try_recv().is_ok())
+            .collect();
+        assert_eq!(got, vec![false, true, false]);
     }
 
     #[test]

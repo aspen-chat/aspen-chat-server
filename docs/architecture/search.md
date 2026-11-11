@@ -55,7 +55,7 @@ given.
 | `filter[text]`      | What    | Words (below)                                       |
 | `filter[author]`    | What    | By author                                           |
 | `filter[mentions]`  | What    | Tagged by name                                      |
-| `filter[has]`       | What    | `attachment`, `image`, or `poll`                    |
+| `filter[has]`       | What    | `attachment`, `image`, or `poll`, comma separated   |
 | `limit`             |         | 25 by default, at most 50                           |
 | `before`            |         | The `searchedTo` of the previous page               |
 | `include=channels`  |         | Sideloads where each was posted, threads among them |

@@ -52,7 +52,11 @@ pub fn message_enum_source(
                         events = false;
                     }
                     _ => {
-                        proc_macro_error::emit_warning!(ident.span(), "unrecognized parameter");
+                        abort!(
+                            ident.span(),
+                            "unrecognized message_gen parameter `{}`",
+                            ident
+                        );
                     }
                 }
                 Ok(())
@@ -464,7 +468,7 @@ fn populate_field_types(
                             is_secret = true;
                         }
                         _ => {
-                            proc_macro_error::emit_warning!(ident.span(), "unrecognized parameter");
+                            abort!(ident.span(), "unrecognized message_gen parameter `{}`", ident);
                         }
                     }
                     Ok(())

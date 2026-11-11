@@ -23,7 +23,7 @@ use aspen::plugin::types::{
     Text, Verdict,
 };
 use exports::aspen::plugin::hooks::Guest;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 struct WordFilter;
 
@@ -32,7 +32,20 @@ struct WordFilter;
 #[serde(rename_all = "camelCase", default)]
 struct Settings {
     words: Vec<String>,
-    action: String,
+    action: Action,
+}
+
+/// What becomes of a message holding a listed word: the manifest's choices for `action`, which a
+/// test holds this to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum Action {
+    Refuse,
+    /// The manifest's default, and what a choice this build does not know is read as, so the
+    /// words are still filtered.
+    #[default]
+    #[serde(other)]
+    Mask,
 }
 
 /// A community's settings.
@@ -172,20 +185,22 @@ impl Guest for WordFilter {
         let Some(word) = find_word(&draft.content, &words) else {
             return Verdict::Allow;
         };
-        if settings.action == "refuse" {
-            if let Some(alert) = community.alert_channel {
-                // Run once this hook has answered.
-                let _ = host::send_message(
-                    &alert,
-                    &format!(
-                        "Refused a message from @{} for \"{word}\".",
-                        draft.author.username
-                    ),
-                );
+        match settings.action {
+            Action::Mask => Verdict::Rewrite(mask(&draft.content, &words)),
+            Action::Refuse => {
+                if let Some(alert) = community.alert_channel {
+                    // Run once this hook has answered.
+                    let _ = host::send_message(
+                        &alert,
+                        &format!(
+                            "Refused a message from @{} for \"{word}\".",
+                            draft.author.username
+                        ),
+                    );
+                }
+                Verdict::Refuse(text("refused", &[("word", word)]))
             }
-            return Verdict::Refuse(text("refused", &[("word", word)]));
         }
-        Verdict::Rewrite(mask(&draft.content, &words))
     }
 
     fn observe(event: Observed, context: Context) -> Result<(), String> {
@@ -241,6 +256,39 @@ export!(WordFilter);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_action_the_manifest_offers_is_one_the_filter_knows() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../aspen-plugin.json")).unwrap();
+        let setting = manifest["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|setting| setting["name"] == "action")
+            .unwrap();
+        let options = setting["options"].as_array().unwrap();
+        assert!(!options.is_empty());
+        for option in options {
+            // A choice the filter lacks would be read as masking, and written back as `mask`.
+            let action: Action = serde_json::from_value(option["value"].clone()).unwrap();
+            assert_eq!(serde_json::to_value(action).unwrap(), option["value"]);
+        }
+        let default: Action = serde_json::from_value(setting["default"].clone()).unwrap();
+        assert_eq!(default, Action::default());
+    }
+
+    #[test]
+    fn an_action_is_read_by_name_and_its_absence_masks() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"words":["darn"],"action":"refuse"}"#).unwrap();
+        assert_eq!(settings.action, Action::Refuse);
+        let settings: Settings = serde_json::from_str(r#"{"words":["darn"]}"#).unwrap();
+        assert_eq!(settings.action, Action::Mask);
+        let settings: Settings =
+            serde_json::from_str(r#"{"words":["darn"],"action":"flag"}"#).unwrap();
+        assert_eq!((settings.words.len(), settings.action), (1, Action::Mask));
+    }
 
     #[test]
     fn masks_whole_words_ignoring_case() {

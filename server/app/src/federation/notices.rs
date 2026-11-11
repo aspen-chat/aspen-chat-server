@@ -32,6 +32,7 @@ use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use reqwest::StatusCode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -226,10 +227,39 @@ pub async fn queue_deleted(
     queue(conn, deliveries).await
 }
 
-/// One attempt of a `deliverNotice` job: signs the notice and POSTs it to its receiver. Taken
-/// (`2xx`), or refused (`4xx`, which will not change on its own), the job is done; otherwise
-/// it fails, to be tried again after the jobs' backoff, until on its last attempt it is given
-/// up with a warning. Without federation, or a signing key, there is nothing to deliver.
+/// What a receiver's answer to a notice means for its delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    Taken,
+    /// Refused for a reason another attempt would meet again.
+    Refused,
+    /// Not taken this time; a later attempt may be.
+    NotTaken,
+}
+
+impl Answer {
+    /// Of the refusals (`4xx`), four pass on their own, so their notice is tried again: `401`,
+    /// which a receiver gives a statement it could not verify when it came (its sender was
+    /// contacted moments before, or the two clocks disagree; each attempt signs afresh), `408`,
+    /// `425`, and `429`. Every other refusal is final, and anything that is neither success
+    /// nor refusal is a receiver that could not answer.
+    fn of(status: StatusCode) -> Self {
+        match status {
+            status if status.is_success() => Answer::Taken,
+            StatusCode::UNAUTHORIZED
+            | StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_EARLY
+            | StatusCode::TOO_MANY_REQUESTS => Answer::NotTaken,
+            status if status.is_client_error() => Answer::Refused,
+            _ => Answer::NotTaken,
+        }
+    }
+}
+
+/// One attempt of a `deliverNotice` job: signs the notice and POSTs it to its receiver. Taken,
+/// or refused for good, the job is done ([`Answer`]); otherwise it fails, to be tried again
+/// after the jobs' backoff, until on its last attempt it is given up with a warning. Without
+/// federation, or a signing key, there is nothing to deliver.
 pub async fn deliver_step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outcome> {
     let Delivery { to, sub, about } = job.payload()?;
     let Some(here) = own_domain(&state.config.federation) else {
@@ -256,12 +286,14 @@ pub async fn deliver_step(state: &GlobalServerContext, job: &Claimed) -> crate::
     let url = format!("https://{to}{}{NOTICES_PATH}", aspen_wire::API_PREFIX);
     let body = serde_json::json!({ "notice": notice });
     let failure = match state.federation_client.post(&url).json(&body).send().await {
-        Ok(response) if response.status().is_success() => return Ok(Outcome::Done),
-        Ok(response) if response.status().is_client_error() => {
-            tracing::info!(%to, status = %response.status(), "a deployment refused a notice");
-            return Ok(Outcome::Done);
-        }
-        Ok(response) => format!("answered {}", response.status()),
+        Ok(response) => match Answer::of(response.status()) {
+            Answer::Taken => return Ok(Outcome::Done),
+            Answer::Refused => {
+                tracing::info!(%to, status = %response.status(), "a deployment refused a notice");
+                return Ok(Outcome::Done);
+            }
+            Answer::NotTaken => format!("answered {}", response.status()),
+        },
         Err(error) => error.to_string(),
     };
     if last_attempt(job) {
@@ -397,6 +429,29 @@ async fn account_deleted(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_refusals_that_will_not_pass_end_a_delivery() {
+        for (status, answer) in [
+            (200, Answer::Taken),
+            (202, Answer::Taken),
+            (400, Answer::Refused),
+            (403, Answer::Refused),
+            (404, Answer::Refused),
+            (410, Answer::Refused),
+            (422, Answer::Refused),
+            (401, Answer::NotTaken),
+            (408, Answer::NotTaken),
+            (425, Answer::NotTaken),
+            (429, Answer::NotTaken),
+            (302, Answer::NotTaken),
+            (500, Answer::NotTaken),
+            (503, Answer::NotTaken),
+        ] {
+            let status = StatusCode::from_u16(status).unwrap();
+            assert_eq!(Answer::of(status), answer, "{status}");
+        }
+    }
 
     #[test]
     fn notices_of_every_known_kind_and_of_kinds_to_come_read() {

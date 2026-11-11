@@ -76,6 +76,7 @@ import { format } from "@/i18n/messages";
 import { UserMention } from "@/features/messages/Mention";
 import { formatNodes } from "@/i18n/formatNodes";
 import { useNameIn } from "@/features/users/nameIn";
+import { kindActions } from "@/features/messages/messageKinds";
 import { useRowEngagement, useRowProps } from "@/features/messages/messageRows";
 
 const TIME: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
@@ -287,16 +288,12 @@ export const MessageItem = memo(function MessageItem({
   }
   const sentAt = new Date(message.timestamp);
   const inThread = parentId !== null;
+  const ofKind = kindActions(message.kind);
   // Opening a thread that exists is reading it; starting one takes Start threads.
   const canThread =
     threadable &&
     !inThread &&
-    message.kind !== "threadEcho" &&
-    message.kind !== "pollClosed" &&
-    message.kind !== "call" &&
-    message.kind !== "missedCall" &&
-    message.kind !== "memberJoined" &&
-    message.kind !== "communityGrew" &&
+    ofKind.threadable &&
     (message.thread != null || permissions.has("startThreads"));
   // A thread not made yet opens empty, and its first reply makes it.
   const openThread = () => {
@@ -310,14 +307,8 @@ export const MessageItem = memo(function MessageItem({
   // manage messages here.
   const own = me !== null && me.id === message.author;
   const deletable = own || permissions.has("manageMessages");
-  // The system account's notices, a call's record, and a join are no one's to report.
-  const reportable =
-    me !== null &&
-    !own &&
-    author?.system !== true &&
-    message.kind !== "call" &&
-    message.kind !== "missedCall" &&
-    message.kind !== "memberJoined";
+  // The system account's notices are no one's to report, nor are the kinds that record an event.
+  const reportable = me !== null && !own && author?.system !== true && ofKind.reportable;
   // A poll message has no text of its own; its card is edited by voting, not by rewriting.
   // Rewriting puts new words in it, which takes what posting here takes; deleting it does not.
   const editable =

@@ -126,6 +126,10 @@ to this one server.
   `retryAfterSeconds`, and names the frame's type as `refused`. Every non-fatal `error` answering a
   frame names it this way.
 - A refused `identify` is a fatal `error`, named the same way.
+- A frame that is a JSON object but none this server knows (a type, or a value in a known type, that
+  a newer client sends) is answered the same way: a non-fatal `error` naming its `type` as
+  `refused`, and the socket stays open. It counts toward `any` alone. Before `identify`, and for
+  text that is not a JSON object or a binary message, the socket is closed.
 - The limits let someone moving from call to call join a dozen times back to back, and every two
   seconds or so after that, as the API server's limit on join offers does.
 

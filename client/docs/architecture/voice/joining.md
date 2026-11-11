@@ -22,6 +22,13 @@ Code: `VoiceCall` in `packages/protocol/src/voice.ts`. State is `VoiceCallState`
    tried. **Why:** the server accepting the producer says nothing about media
    ([design notes](design-notes.md#joining)).
 
+Only a failure known to be the server's own (`VoiceServerError`) is reported and followed by the
+next candidate: its socket not opening, a fatal `error` frame, a request never answered, media that
+does not connect. Anything else thrown while setting the call up (the browser without WebRTC or a
+codec the router needs, a transport or the microphone's producer it could not make) is this device's
+and would meet every server alike, so the join fails at once as a `CallSetupError`, with
+`errorKind: "device"`, and no server is reported.
+
 A transport that fails mid-call rejoins.
 
 ## Request timeouts and refusals

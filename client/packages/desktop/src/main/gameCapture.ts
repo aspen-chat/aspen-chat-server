@@ -10,7 +10,7 @@ import {
   startOffered,
   type Offered,
 } from "./captureKinds";
-import { parseReply, type Reply } from "./captureReplies";
+import { parseReply, type Answer, type Reply } from "./captureReplies";
 
 /**
  * Game capture through libobs, for the renderer. The helper `aspen-capture` (the Rust
@@ -143,7 +143,7 @@ class CaptureHost {
   #offered: Offered = NOTHING_OFFERED;
   readonly #pending = new Map<
     number,
-    { resolve: (value: unknown) => void; reject: (reason: Error) => void }
+    { resolve: (answer: Answer) => void; reject: (reason: Error) => void }
   >();
 
   #process(): ChildProcess | null {
@@ -199,15 +199,12 @@ class CaptureHost {
     if (reply.type === "failed") {
       pending?.reject(new Error(reply.reason));
     } else {
-      pending?.resolve(
-        reply.type === "kinds"
-          ? { kinds: reply.kinds, applicationAudio: reply.applicationAudio }
-          : undefined,
-      );
+      pending?.resolve(reply);
     }
   }
 
-  #request(request: Record<string, unknown>): Promise<unknown> {
+  /** Sends one request: the helper's reply to it, whole, or a rejection with its failure. */
+  #request(request: Record<string, unknown>): Promise<Answer> {
     const child = this.#process();
     if (child === null) {
       return Promise.reject(new Error("game capture is not available in this build"));
@@ -224,13 +221,10 @@ class CaptureHost {
     if (helperPath() === null) {
       return { kinds: [], applicationAudio: null, testMedia };
     }
-    const listed = (await this.#request({ type: "kinds", ...this.#dirs })) as Omit<
-      CaptureCatalogue,
-      "testMedia"
-    > & {
-      /** Whether the helper can capture a picture at all (a build with libobs). */
-      pictures: boolean;
-    };
+    const listed = await this.#request({ type: "kinds", ...this.#dirs });
+    if (listed.type !== "kinds") {
+      throw new Error(`the capture helper answered a listing with "${listed.type}"`);
+    }
     // The test pattern is a picture, through libobs's media source.
     const catalogue = {
       kinds: listed.kinds,

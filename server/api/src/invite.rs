@@ -194,9 +194,7 @@ pub async fn update_invite(
     Path(code): Path<String>,
     Json(request): Json<InviteUpdateRequest>,
 ) -> ApiResult<Json<message_enum::Invite>> {
-    let invite = app::invite::update_invite(&state, user.id, code, request.expires_at)
-        .await
-        .map_err(membership_required)?;
+    let invite = app::invite::update_invite(&state, user.id, code, request.expires_at).await?;
     Ok(Json(message_enum::Invite::from(&invite)))
 }
 
@@ -220,19 +218,8 @@ pub async fn revoke_invite(
     SessionUser { user, .. }: SessionUser,
     Path(code): Path<String>,
 ) -> ApiResult<NoContent> {
-    app::invite::revoke_invite(&state, user.id, code)
-        .await
-        .map_err(membership_required)?;
+    app::invite::revoke_invite(&state, user.id, code).await?;
     Ok(NoContent)
-}
-
-/// The app layer reports "not a member of this community" as a validation failure; on the wire
-/// that is an authorization problem, so it is served as `403`.
-fn membership_required(e: app::Error) -> ApiError {
-    match e {
-        app::Error::Validation(reason) => ApiError::new(ProblemCode::Forbidden).with_detail(reason),
-        other => other.into(),
-    }
 }
 
 /// A usable registration invite, as someone about to register with it sees it.

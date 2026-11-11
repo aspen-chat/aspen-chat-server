@@ -8,10 +8,23 @@
 import type { AudioKind, CaptureKind } from "./gameCapture";
 
 export type Reply =
-  | { type: "kinds"; id: number; kinds: CaptureKind[]; applicationAudio: AudioKind | null }
+  | {
+      type: "kinds";
+      id: number;
+      kinds: CaptureKind[];
+      applicationAudio: AudioKind | null;
+      /** Whether the helper can capture a picture at all (a build with libobs). */
+      pictures: boolean;
+    }
   /** `encoder` is the libobs encoder a started picture goes through; a start alone carries it. */
   | { type: "done"; id: number; encoder?: string }
   | { type: "failed"; id: number; reason: string };
+
+/**
+ * A reply that settles its request well. Whoever asked gets it whole, so a field the helper
+ * sends is never dropped between the pipe and its reader.
+ */
+export type Answer = Exclude<Reply, { type: "failed" }>;
 
 /**
  * The reply a line holds, or `null` for a line that is not one: text that is not JSON, or JSON

@@ -28,7 +28,9 @@ import {
   NO_FILES,
   type TransferMode,
 } from "./transfers";
-import { Signal } from "./signalSocket";
+import { Signal, VoiceServerError } from "./signalSocket";
+
+export { VoiceServerError };
 import { InsecureAddressError, securelyReached } from "./urls";
 import { type RankedCandidate, rankCandidates, signallingUrl } from "./voiceCandidates";
 import type {
@@ -155,10 +157,12 @@ export interface VoiceCallState {
   cameraError: CameraFailure | null;
   /**
    * What failed when `status` is `failed`: the microphone (permission refused, no device, or an
-   * insecure page origin, which browsers refuse media on), every voice server, or the voice
-   * server refusing one of the call's requests (`refused`), most often for coming too fast.
+   * insecure page origin, which browsers refuse media on), every voice server, the voice
+   * server refusing one of the call's requests (`refused`), most often for coming too fast, or
+   * this device failing to set the call up (`device`: a browser without WebRTC or a codec the
+   * call needs), which no voice server is blamed for.
    */
-  errorKind: "microphone" | "server" | "refused" | null;
+  errorKind: "microphone" | "server" | "refused" | "device" | null;
   /**
    * When the voice server refused a request for coming too fast, how many seconds until it
    * would take it; `null` otherwise.
@@ -281,9 +285,22 @@ export class VoiceRequestRefused extends Error {
 }
 
 /**
+ * This device could not set the call up: the browser lacks WebRTC or a codec the voice server's
+ * router needs, or could not make a transport or send the microphone. `cause` is what it threw.
+ * No voice server is at fault, so none is reported and no other is tried.
+ */
+export class CallSetupError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "CallSetupError";
+  }
+}
+
+/**
  * Whether `error` is the voice servers offered failing to take the call (none reached, or the
- * token refused), rather than the join offer itself refused, the microphone, a request turned
- * away, or a server not reached over HTTPS, none of which another offer would change.
+ * token refused), rather than the join offer itself refused, the microphone, this device
+ * failing to set the call up, a request turned away, or a server not reached over HTTPS, none
+ * of which another offer would change.
  */
 function isServerFailure(error: unknown): boolean {
   return (
@@ -302,7 +319,9 @@ function failure(
         ? "microphone"
         : error instanceof VoiceRequestRefused
           ? "refused"
-          : "server",
+          : error instanceof CallSetupError
+            ? "device"
+            : "server",
     retryAfterSeconds: error instanceof VoiceRequestRefused ? error.retryAfterSeconds : null,
     error: error instanceof Error ? error.message : String(error),
   };
@@ -1107,13 +1126,19 @@ export class VoiceCall {
         if (error instanceof VoiceRequestRefused) {
           throw error;
         }
+        // Whatever is not known to be the server's own (the browser without WebRTC or a codec
+        // the router needs, a transport or producer it could not make) is this device's, and
+        // would meet every server alike: none is reported and no other is tried.
+        if (!(error instanceof VoiceServerError)) {
+          throw new CallSetupError(error);
+        }
         // Whatever the attempt set up (socket, transports) is released before the next
         // candidate builds its own; the microphone is kept for it.
         this.#teardown({ keepMicrophone: true });
         await this.#reportFailure(candidate.id);
       }
     }
-    throw lastError ?? new Error("no voice server could be reached");
+    throw lastError ?? new VoiceServerError("no voice server could be reached");
   }
 
   async #offer(channelId: string): Promise<VoiceJoinOffer> {
@@ -1173,7 +1198,7 @@ export class VoiceCall {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = this.#setTimeout(() => {
-        reject(new Error("the voice server did not answer in time"));
+        reject(new VoiceServerError("the voice server did not answer in time"));
       }, READY_TIMEOUT_MS);
     });
     try {
@@ -1185,7 +1210,7 @@ export class VoiceCall {
         if (frame.type === "error" && frame.retryAfterSeconds != null) {
           throw new VoiceRequestRefused(frame.detail, frame.retryAfterSeconds);
         }
-        throw new Error(frame.type === "error" ? frame.detail : "unexpected reply");
+        throw new VoiceServerError(frame.type === "error" ? frame.detail : "unexpected reply");
       }
       if (generation !== this.#generation) {
         signal.close();
@@ -1263,11 +1288,11 @@ export class VoiceCall {
       return Promise.resolve();
     }
     if (transport.connectionState === "failed" || transport.connectionState === "closed") {
-      return Promise.reject(new Error("media could not reach the voice server"));
+      return Promise.reject(new VoiceServerError("media could not reach the voice server"));
     }
     return new Promise((resolve, reject) => {
       const timer = this.#setTimeout(() => {
-        reject(new Error("media could not reach the voice server in time"));
+        reject(new VoiceServerError("media could not reach the voice server in time"));
       }, CONNECT_TIMEOUT_MS);
       transport.on("connectionstatechange", (state) => {
         if (state === "connected") {
@@ -1275,7 +1300,7 @@ export class VoiceCall {
           resolve();
         } else if (state === "failed" || state === "closed") {
           clearTimeout(timer);
-          reject(new Error("media could not reach the voice server"));
+          reject(new VoiceServerError("media could not reach the voice server"));
         }
       });
     });
@@ -1327,7 +1352,7 @@ export class VoiceCall {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = this.#setTimeout(() => {
-        reject(new Error("the voice server did not answer in time"));
+        reject(new VoiceServerError("the voice server did not answer in time"));
       }, READY_TIMEOUT_MS);
     });
     const answer = signal
@@ -1337,7 +1362,7 @@ export class VoiceCall {
           throw new VoiceRequestRefused(frame.detail, frame.retryAfterSeconds ?? null);
         }
         if (!isAnswer(frame)) {
-          throw new Error("unexpected frame");
+          throw new VoiceServerError("unexpected frame");
         }
         return frame;
       });

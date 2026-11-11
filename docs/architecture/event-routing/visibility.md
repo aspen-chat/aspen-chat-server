@@ -13,6 +13,12 @@ community's permissions attached to the event.
 | `Aspen-Creator`  | With `Aspen-Requires`                                                                                   | One member who receives the event anyway.                                                  |
 | `Aspen-Event-Id` | Every copy of an event about a user                                                                     | See [Publishing](publishing.md#events-about-a-user).                                       |
 
+A header that restricts who receives an event (`Aspen-Channel`, `Aspen-Category`, `Aspen-Requires`)
+and that this server cannot read, such as a permission a newer server on the same stream names, is
+not taken for no header: the event reaches deployment moderators alone on this server
+(`FeedEvent::unreadable`), and the first one is logged. An `Aspen-Creator` that cannot be read names
+no one.
+
 ## The community model
 
 The dispatcher holds an `app::visibility::CommunityModel` of each community a local connection

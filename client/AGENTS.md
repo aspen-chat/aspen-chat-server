@@ -520,6 +520,9 @@ same commit, as with comments.
   text for a piece of a route. A bot command's pattern is compiled through `compilePattern`
   (`src/features/commands/pattern.ts`), which gives `\d`, `\w`, `\s`, `\b`, and `.` the server's
   meaning; it, the server's check, and `spec/bot_command_pattern_vectors.json` change together.
+- A switch or table over a generated union names every member (`Record<Union, …>`, or a `default`
+  that is `satisfies never`) and says what a value this build's types lack shows as, since a newer
+  deployment may send one (`kindActions`, `channelGlyphKind`).
 
 ## Verification before handing work back
 

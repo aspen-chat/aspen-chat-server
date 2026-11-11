@@ -387,6 +387,7 @@ statementProfile: "The profile %{domain} sent for this account does not fit this
 searchEmpty: "Say what to search for: some words, who wrote it, whom it tags, or what it holds."
 searchTooLong: "Search for at most %{max} characters at a time."
 searchCommunityAndChannel: "Search one community or one channel, not both: a channel already says which community."
+searchHoldingUnknown: "This server cannot search for messages that hold \"%{value}\" (filter[has]). The word may be misspelled, or from a newer version of Aspen than this server runs. Search without it."
 pushOff: "This server does not wake phones: its administrators have turned push off ([push] enabled in its aspen.toml)."
 pushBots: "Bots have no phones to wake; they read the event stream instead."
 pushEndpoint: "A push endpoint must be an https:// URL of at most %{max} characters, as the app's push service gave it."

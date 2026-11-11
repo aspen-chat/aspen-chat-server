@@ -5,17 +5,20 @@ import { parseReply } from "./captureReplies.ts";
 void describe("parseReply", () => {
   void it("reads each kind of reply", () => {
     assert.deepEqual(parseReply('{"type":"done","id":4}'), { type: "done", id: 4 });
+    assert.deepEqual(parseReply('{"type":"done","id":4,"encoder":"obs_x264"}'), {
+      type: "done",
+      id: 4,
+      encoder: "obs_x264",
+    });
     assert.deepEqual(parseReply('{"type":"failed","id":5,"reason":"no"}'), {
       type: "failed",
       id: 5,
       reason: "no",
     });
-    assert.deepEqual(parseReply('{"type":"kinds","id":6,"kinds":[],"applicationAudio":null}'), {
-      type: "kinds",
-      id: 6,
-      kinds: [],
-      applicationAudio: null,
-    });
+    assert.deepEqual(
+      parseReply('{"type":"kinds","id":6,"kinds":[],"applicationAudio":null,"pictures":true}'),
+      { type: "kinds", id: 6, kinds: [], applicationAudio: null, pictures: true },
+    );
   });
 
   void it("takes a line that is not a reply for none", () => {

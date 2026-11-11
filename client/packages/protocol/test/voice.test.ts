@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AspenClient,
+  CallSetupError,
   CameraError,
   DEAD_SERVER_RETRY_MS,
   InsecureAddressError,
@@ -272,8 +273,11 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
   const screens: { video: FakeTrack; audio: FakeTrack }[] = [];
   const microphones: (string | null)[] = [];
   const microphoneTracks: FakeTrack[] = [];
-  /** How many times a device was loaded with a router's capabilities. */
-  const loads = { count: 0 };
+  /**
+   * How many times a device was loaded with a router's capabilities, and what loading fails
+   * with, when the browser cannot do what the router needs.
+   */
+  const loads: { count: number; failure: Error | null } = { count: 0, failure: null };
   const outputs: (string | null)[] = [];
   const volumes: string[] = [];
   /** The gain each microphone opened at, then each change `setInputVolume` made. */
@@ -288,7 +292,7 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
   const device: VoiceDevice = {
     load: () => {
       loads.count += 1;
-      return Promise.resolve();
+      return loads.failure === null ? Promise.resolve() : Promise.reject(loads.failure);
     },
     rtpCapabilities: { codecs: [] },
     createSendTransport: () => {
@@ -599,6 +603,25 @@ describe("VoiceCall", () => {
       retryAfterSeconds: 5,
     });
     // Another server would refuse the user no differently, and this one did nothing wrong.
+    expect(FakeSocket.instances.map((s) => new URL(s.url).host)).toEqual(["near.example.org"]);
+    expect(calls.some((c) => c.includes("/failures"))).toBe(false);
+  });
+
+  it("fails a join this device cannot set up, blaming and trying no server for it", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, calls, loads } = makeCall({
+      candidates: ["near", "far"],
+      latency: { near: 1, far: 30 },
+    });
+    loads.failure = new Error("WebRTC is not supported");
+    await expect(call.join(channel)).rejects.toBeInstanceOf(CallSetupError);
+    expect(call.state).toMatchObject({
+      status: "failed",
+      channelId: channel,
+      errorKind: "device",
+      error: "WebRTC is not supported",
+    });
+    // The browser would load no better for another server.
     expect(FakeSocket.instances.map((s) => new URL(s.url).host)).toEqual(["near.example.org"]);
     expect(calls.some((c) => c.includes("/failures"))).toBe(false);
   });

@@ -342,9 +342,11 @@ export {
 } from "./sync";
 export {
   CONNECT_TIMEOUT_MS,
+  CallSetupError,
   CameraError,
   MicrophoneError,
   VoiceRequestRefused,
+  VoiceServerError,
   DEAD_SERVER_RETRY_MS,
   PING_TIMEOUT_MS,
   READY_TIMEOUT_MS,

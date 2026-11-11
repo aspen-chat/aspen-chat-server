@@ -220,10 +220,15 @@ pub async fn make_step(state: &GlobalServerContext, job: &Claimed) -> crate::Res
             "video",
             video::make(state, config, &row.storage_key, original_bytes).await,
         ),
-        _ => (
+        JobKind::MakePicturePreview => (
             "picture",
             picture::make(state, config, &row.storage_key, original_bytes).await,
         ),
+        other => {
+            return Err(crate::Error::PreviewUnmade(format!(
+                "{other:?} is not a kind of preview job"
+            )));
+        }
     };
     metrics::histogram!(aspen_metrics::api::ATTACHMENT_PREVIEW_DURATION, "kind" => kind)
         .record(started.elapsed().as_secs_f64());

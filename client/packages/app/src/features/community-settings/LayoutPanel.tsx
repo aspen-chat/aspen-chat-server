@@ -1,11 +1,9 @@
-import { groupChannels, type Channel } from "@aspen/protocol";
+import { groupChannels } from "@aspen/protocol";
 import {
   DotsSixVerticalIcon,
   FolderSimpleIcon,
-  HashIcon,
   PencilSimpleIcon,
   PlusIcon,
-  SpeakerHighIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
 import { useRef, useState, type ReactNode } from "react";
@@ -19,7 +17,7 @@ import {
   ModalOverlay,
   useDragAndDrop,
 } from "react-aria-components";
-import { useCan, useCategories, useChannels, usePluginKind, useSync } from "@/api/hooks";
+import { useCan, useCategories, useChannels, useSync } from "@/api/hooks";
 import { problemText } from "@/api/problemText";
 import { alertClass, hintClass } from "@/features/auth/styles";
 import { DeleteCategoryDialog, RenameCategoryDialog } from "@/features/channels/CategoryDialogs";
@@ -42,7 +40,7 @@ import { DialogHeading } from "@/features/layout/DialogHeading";
 import { useReorderGlide } from "@/features/layout/motion";
 import type { DropAt } from "@/features/layout/reorder";
 import { Tooltip } from "@/features/layout/Tooltip";
-import { PluginGlyph } from "@/features/plugins/PluginChannel";
+import { ChannelGlyph } from "@/features/channels/ChannelGlyph";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -375,16 +373,5 @@ function RowButton({
         {children}
       </Button>
     </Tooltip>
-  );
-}
-
-function ChannelGlyph({ channel }: { channel: Channel }) {
-  const kind = usePluginKind(channel);
-  return channel.ty === "text" ? (
-    <HashIcon size={16} aria-hidden="true" className="shrink-0 text-ink-faint" />
-  ) : channel.ty === "plugin" ? (
-    <PluginGlyph glyph={kind?.kind.glyph} size={16} className="shrink-0 text-ink-faint" />
-  ) : (
-    <SpeakerHighIcon size={16} aria-hidden="true" className="shrink-0" />
   );
 }

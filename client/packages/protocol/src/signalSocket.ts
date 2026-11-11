@@ -5,6 +5,18 @@
 
 import type { ClientMessage, ServerMessage } from "./generated/voiceSignal";
 
+/**
+ * A failure known to be a voice server's own: its socket not opening, a fatal `error` frame, a
+ * request it never answered, or media that could not reach it. Only these are reported to the
+ * API server as the voice server failing, and only after these is another server tried.
+ */
+export class VoiceServerError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "VoiceServerError";
+  }
+}
+
 /** One socket to a voice server with typed frames and waits for particular replies. */
 export class Signal {
   readonly #socket: WebSocket;
@@ -46,7 +58,7 @@ export class Signal {
         resolve();
       };
       this.#socket.onerror = () => {
-        reject(new Error("the voice server did not accept the connection"));
+        reject(new VoiceServerError("the voice server did not accept the connection"));
       };
     });
   }

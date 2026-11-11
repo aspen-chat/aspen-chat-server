@@ -180,7 +180,7 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
     });
 
     let first = match tokio::time::timeout(IDENTIFY_TIMEOUT, next_frame(&mut stream)).await {
-        Ok(Some(frame)) => {
+        Ok(Some(Received::Frame(frame))) => {
             let kind = frame.kind();
             match frame {
                 ClientMessage::Identify { token } => Some((kind, token)),
@@ -264,8 +264,42 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
             frame = next_frame(&mut stream) => frame,
             () = outbox.hung_up() => None,
         };
-        let Some(frame) = frame else {
-            break;
+        let frame = match frame {
+            Some(Received::Frame(frame)) => frame,
+            Some(Received::Unknown { kind, detail }) => {
+                // Counted against `any` alone, so a flood of them is refused like any other.
+                crate::metrics::frame(UNKNOWN_FRAME);
+                let error = match state.limits.check_frame(UNKNOWN_FRAME, &caller) {
+                    Ok(()) => {
+                        warn!(
+                            user = user.to_string(),
+                            error = detail,
+                            "a client frame this server does not know was refused"
+                        );
+                        ServerMessage::Error {
+                            detail: format!("not a frame this server knows: {detail}"),
+                            fatal: false,
+                            retry_after_seconds: None,
+                            refused: kind,
+                        }
+                    }
+                    Err(wait) => {
+                        crate::metrics::frame_refused(UNKNOWN_FRAME);
+                        ServerMessage::Error {
+                            detail: format!(
+                                "too many frames; try again in {}s",
+                                wait.as_secs().max(1)
+                            ),
+                            fatal: false,
+                            retry_after_seconds: Some(wait.as_secs().max(1)),
+                            refused: kind,
+                        }
+                    }
+                };
+                outbox.send(&error);
+                continue;
+            }
+            None => break,
         };
         let kind = frame.kind();
         crate::metrics::frame(kind);
@@ -401,24 +435,56 @@ async fn check_token(state: &AppState, token: &str, at: i64) -> Result<JoinClaim
     }
 }
 
-/// The next client frame, or `None` once the socket is closed, sends something unreadable, or
-/// goes `IDLE_TIMEOUT` without sending anything.
-async fn next_frame(
-    stream: &mut futures_util::stream::SplitStream<WebSocket>,
-) -> Option<ClientMessage> {
+/// What a socket sent.
+#[derive(Debug, PartialEq)]
+enum Received {
+    Frame(ClientMessage),
+    /// A JSON object that is no frame this build knows: a type, or a value in a known type,
+    /// that a newer client sends. `kind` is its `type`, when it has one.
+    Unknown {
+        kind: Option<String>,
+        detail: String,
+    },
+}
+
+/// The label unknown frames are counted under in the metrics; they have no limits of their
+/// own, only `any`'s.
+const UNKNOWN_FRAME: &str = "unknown";
+
+/// Reads a text frame; `None` when it is not a JSON object at all.
+fn read_frame(text: &str) -> Option<Received> {
+    match serde_json::from_str::<ClientMessage>(text) {
+        Ok(frame) => Some(Received::Frame(frame)),
+        Err(e) => {
+            let object: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(text).ok()?;
+            Some(Received::Unknown {
+                kind: object
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                detail: e.to_string(),
+            })
+        }
+    }
+}
+
+/// What the client sent next, or `None` once the socket is closed, sends something that is not
+/// a JSON object, or goes `IDLE_TIMEOUT` without sending anything.
+async fn next_frame(stream: &mut futures_util::stream::SplitStream<WebSocket>) -> Option<Received> {
     loop {
         let Ok(next) = tokio::time::timeout(IDLE_TIMEOUT, stream.next()).await else {
             info!("a signalling socket went silent");
             return None;
         };
         match next? {
-            Ok(Message::Text(text)) => match serde_json::from_str::<ClientMessage>(&text) {
-                Ok(frame) => return Some(frame),
-                Err(e) => {
-                    warn!(error = e.to_string(), "unreadable client frame");
-                    return None;
+            Ok(Message::Text(text)) => {
+                let received = read_frame(&text);
+                if received.is_none() {
+                    warn!("a client sent text that is not a JSON object");
                 }
-            },
+                return received;
+            }
             Ok(Message::Binary(_)) => return None,
             Ok(Message::Close(_)) | Err(_) => return None,
             Ok(Message::Ping(_) | Message::Pong(_)) => {}
@@ -435,6 +501,33 @@ mod tests {
         assert_eq!(limited_as(HEALTH_PATH), Some(HEALTH));
         assert_eq!(limited_as(SIGNALLING_PATH), Some(SIGNALLING));
         assert_eq!(limited_as("/ws/v2"), None);
+    }
+
+    #[test]
+    fn a_frame_this_build_does_not_know_is_told_from_one_that_is_no_frame() {
+        assert_eq!(
+            read_frame(r#"{"type":"leave"}"#),
+            Some(Received::Frame(ClientMessage::Leave))
+        );
+        // A type added later, and a value added later to a type known now.
+        for (text, kind) in [
+            (r#"{"type":"raiseHand","raised":true}"#, Some("raiseHand")),
+            (
+                r#"{"type":"produceRtp","source":"whiteboard"}"#,
+                Some("produceRtp"),
+            ),
+            (r#"{"kind":"leave"}"#, None),
+            (r#"{"type":7}"#, None),
+        ] {
+            match read_frame(text) {
+                Some(Received::Unknown { kind: found, .. }) => assert_eq!(found.as_deref(), kind),
+                other => panic!("{text} read as {other:?}"),
+            }
+        }
+        for text in ["", "leave", r#""leave""#, r#"[{"type":"leave"}]"#, "{"] {
+            assert_eq!(read_frame(text), None, "{text}");
+        }
+        assert!(!ClientMessage::KINDS.contains(&UNKNOWN_FRAME));
     }
 
     #[test]

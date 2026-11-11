@@ -11,6 +11,12 @@ See [joining and leaving](joining.md).
 - **A join waits for the send transport's ICE and DTLS to connect.** The server accepting the
   producer says nothing about whether media flows, so a transport that fails or times out is the
   server's failure and the next candidate is tried.
+- **A server is reported only for a failure known to be its own.** Loading the device, making the
+  transports, and producing the microphone run in the browser, and fail the same against every
+  server, so reporting them would count healthy servers toward the failure threshold and tell the
+  user a server failed. Media that does not connect may be the user's network as much as the server,
+  and is still reported: the client cannot tell which, and a server announcing an address nobody
+  reaches is found no other way.
 - **A refused request is not reported as the server's failure.** A refusal (such as going too fast)
   is the user's to wait out, unlike a timeout, so no other server is tried.
 - **The microphone producer uses `stopTracks: false`.** The call, not the transport, decides when

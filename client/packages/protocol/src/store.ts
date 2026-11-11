@@ -3402,8 +3402,66 @@ export class RecordStore {
           this.#users.get(event.user)?.bot === true
         );
       case "channel":
-        return event.type === "update" && event.recipients != null;
-      default:
+        // A group DM's recipients, or a move, which puts the channel under another category's
+        // overrides (`null` moves it out of one).
+        return (
+          event.type === "update" &&
+          (event.recipients != null || event.parentCategory !== undefined)
+        );
+      case "category":
+        // Its channels are no longer under its overrides.
+        return event.type === "delete";
+      case "communityResync":
+      case "userResync":
+        // Something announced did not happen, and what did is not known.
+        return true;
+      // Every other event is named, so that a new one is decided here before it compiles.
+      case "accountBanned":
+      case "attachmentChanged":
+      case "attachmentPreviewed":
+      case "botCommandInvoked":
+      case "categoryCollapseChanged":
+      case "categoryMuteChanged":
+      case "channelMarkedUnread":
+      case "channelMuteChanged":
+      case "channelRead":
+      case "community":
+      case "communityBan":
+      case "communityPlugin":
+      case "customEmoji":
+      case "deploymentAccessChanged":
+      case "emailAccountChanged":
+      case "foreignDeploymentsChanged":
+      case "foreignDmJoined":
+      case "heldMessageCancelled":
+      case "heldMessageFailed":
+      case "heldMessagePosted":
+      case "invite":
+      case "message":
+      case "messageAnnotation":
+      case "notificationSettingChanged":
+      case "pin":
+      case "pluginEvent":
+      case "pluginNotice":
+      case "poll":
+      case "pollVotesChanged":
+      case "presenceOverrideChanged":
+      case "react":
+      case "reportsChanged":
+      case "savedMessageChanged":
+      case "scheduledMessageChanged":
+      case "signInsEnded":
+      case "threadFollowChanged":
+      case "user":
+      case "userAnnotation":
+      case "userBlockChanged":
+      case "userPreferencesChanged":
+      case "voiceMute":
+      case "voiceParticipant":
+      case "voiceRing":
+      case "voiceSession":
+      case "voiceSessionEnded":
+      case "voiceSpeaking":
         return false;
     }
   }

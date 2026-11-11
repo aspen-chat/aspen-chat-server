@@ -249,8 +249,12 @@ job is saved per receiver, in the transaction of the change it tells of (`notice
 notice says; each attempt signs the notice afresh (`notices::deliver_step`), since a signature is
 good for minutes and a delivery may wait hours.
 
-- Taken (`2xx`) or refused (`4xx`), it is done.
-- Anything else fails the step, tried again with the usual backoff.
+- Taken (`2xx`) or refused for good (`4xx`), it is done.
+- Four refusals pass on their own and are not final (`notices::Answer`): `401`, which a receiver
+  gives a notice it could not verify when it came (it had contacted the sender moments before, as
+  when two notices reach a home that has not pinned the sender's key, or the clocks disagree), and
+  `408`, `425`, and `429`.
+- Those and anything else fail the step, tried again with the usual backoff.
 - On its last attempt (`notices::MAX_ATTEMPTS`, 32: about a day) it gives itself up with a warning
   rather than being kept as a job given up.
 

@@ -1,15 +1,9 @@
 import { groupChannels, type Category, type Channel, type Community } from "@aspen/protocol";
 import { useGrowthKey, useReorderGlide } from "@/features/layout/motion";
 import { PaneEdge } from "@/features/layout/ResizablePane";
-import {
-  CaretDownIcon,
-  DotsSixVerticalIcon,
-  HashIcon,
-  LockSimpleIcon,
-  SpeakerHighIcon,
-} from "@phosphor-icons/react";
+import { CaretDownIcon, DotsSixVerticalIcon, LockSimpleIcon } from "@phosphor-icons/react";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { PluginGlyph } from "@/features/plugins/PluginChannel";
+import { ChannelGlyph } from "@/features/channels/ChannelGlyph";
 import { useId, useRef, useState } from "react";
 import {
   Button,
@@ -28,7 +22,6 @@ import {
   useCategoryMute,
   useMe,
   useMemberRoles,
-  usePluginKind,
   useChannels,
   useCollapsed,
   useMute,
@@ -454,7 +447,6 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
   const manage = useCan(channel.community, "manageChannels");
   // A moderator of the server may rename and delete any channel, and nothing else here.
   const moderator = useDeploymentCan("moderateCommunities");
-  const kind = usePluginKind(channel);
   const menu = useContextMenu();
   const menuButton = useRef<HTMLButtonElement>(null);
   const [dialog, setDialog] = useState<"access" | "mana" | "rename" | "delete" | null>(null);
@@ -487,13 +479,7 @@ function ChannelLabel({ channel, current }: { channel: Channel; current: boolean
         (muted && !current ? " text-ink-faint" : "")
       }
     >
-      {channel.ty === "text" ? (
-        <HashIcon size={16} aria-hidden="true" className="shrink-0 text-ink-faint" />
-      ) : channel.ty === "plugin" ? (
-        <PluginGlyph glyph={kind?.kind.glyph} size={16} className="shrink-0 text-ink-faint" />
-      ) : (
-        <SpeakerHighIcon size={16} aria-hidden="true" className="shrink-0" />
-      )}
+      <ChannelGlyph channel={channel} />
       {accessibleName === null ? (
         <span className="truncate">{channel.name}</span>
       ) : (

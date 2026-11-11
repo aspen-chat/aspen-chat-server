@@ -583,11 +583,13 @@ HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the s
   client or another deployment's may ask for a relationship this version does not have. Sideloads
   are batched in the `app` layer, one query per relationship however many parent records there are;
   never load them per record. Reads that do not support `include` return the bare record or array.
-- **List parameters use `sort=` and `filter[field]=`.** When a list endpoint gains ordering or
-  filtering, name the parameters `sort` (a field name, `-` prefixed for descending) and
-  `filter[<field>]`, deserialized with `#[serde(rename = "filter[name]")]` on the query struct, so
-  every list reads the same way. The keyset window parameters (`before`, `after`, `around`, `limit`)
-  stay as they are.
+- **List parameters use `sort=` and `filter[field]=`.** A filter that is a list of names is parsed
+  with `api::include::FilterSet<E>` and refuses a name it does not know with `validation`, since
+  ignoring it would answer more than was asked; `include`, which only adds, stays lenient. When a
+  list endpoint gains ordering or filtering, name the parameters `sort` (a field name, `-` prefixed
+  for descending) and `filter[<field>]`, deserialized with `#[serde(rename = "filter[name]")]` on
+  the query struct, so every list reads the same way. The keyset window parameters (`before`,
+  `after`, `around`, `limit`) stay as they are.
 - **Writes:** `POST` on a collection creates and returns `201 Created` with a `Location` header (use
   `api::extract::Created`). `PATCH` partially updates and returns the updated record. `DELETE`
   returns `204 No Content` (`api::extract::NoContent`). `PUT` is used for idempotent set-membership
@@ -1275,6 +1277,13 @@ when reviewing.
    `tlds.txt`). What a client would otherwise work out from other fields, the server says in a field
    of its own (`notifies`, `actorKind`, `notificationTexts`). A struct whose every field must be
    decided on is destructured with no `..`.
+5. **Every variant is decided by name.** No `_ =>`, `default:`, or trailing `else` standing for "the
+   rest" where a variant added later could need another answer; in TypeScript a `Record<Union, …>`
+   or a `default` that is `satisfies never`, with an explicit answer for a value a newer deployment
+   sends that this build's types lack. What is not recognised gets the safe answer: an unreadable
+   restriction restricts, an unknown status fails the step, an unknown annotation does not compile,
+   an unknown frame is answered and is not fatal. A status class is not a decision either
+   (`notices::Answer::of` names which answers end a delivery).
 
 ## Comments document the current code, not its history
 

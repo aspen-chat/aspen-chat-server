@@ -387,6 +387,7 @@ statementProfile: "El perfil que %{domain} envió para esta cuenta no encaja en 
 searchEmpty: "Di qué buscar: algunas palabras, quién lo escribió, a quién menciona o qué contiene."
 searchTooLong: "Busca como máximo %{max} caracteres a la vez."
 searchCommunityAndChannel: "Busca en una comunidad o en un canal, no en ambos: un canal ya indica a qué comunidad pertenece."
+searchHoldingUnknown: "Este servidor no puede buscar mensajes que contengan \"%{value}\" (filter[has]). Puede que la palabra esté mal escrita, o que sea de una versión de Aspen más nueva que la de este servidor. Busca sin ella."
 pushOff: "Este servidor no despierta teléfonos: sus administradores desactivaron las notificaciones push ([push] enabled en su aspen.toml)."
 pushBots: "Los bots no tienen teléfonos que despertar; leen el flujo de eventos en su lugar."
 pushEndpoint: "Un endpoint push debe ser una URL https:// de como máximo %{max} caracteres, tal como la dio el servicio push de la app."
