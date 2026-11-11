@@ -10,6 +10,7 @@ import {
   startOffered,
   type Offered,
 } from "./captureKinds";
+import { parseReply, type Reply } from "./captureReplies";
 
 /**
  * Game capture through libobs, for the renderer. The helper `aspen-capture` (the Rust
@@ -19,10 +20,11 @@ import {
  * browser's own screen share. The helper is a
  * process of its own, spawned on first use and spoken to over its pipes: one JSON request per
  * line on its stdin, one JSON reply per line on its stdout (the requests are described at the
- * top of the crate's `main.rs`). One capture runs at a time, for one renderer, and only of a
- * kind the helper listed (`captureKinds.ts`). Without the
- * helper on disk (a build without libobs) the bridge reports no capture kinds and the app shows
- * no game option.
+ * top of the crate's `main.rs`). The helper answers every request, one it cannot read with a
+ * failure, and a line that is not a reply is logged (`captureReplies.ts`). One capture runs at
+ * a time, for one renderer, and only of a kind the helper listed (`captureKinds.ts`). Without
+ * the helper on disk (a build without libobs) the bridge reports no capture kinds and the app
+ * shows no game option.
  */
 
 export interface CaptureTarget {
@@ -98,12 +100,6 @@ export interface StartOptions {
   audio?: AudioOptions;
 }
 
-type Reply =
-  | { type: "kinds"; id: number; kinds: CaptureKind[]; applicationAudio: AudioKind | null }
-  /** `encoder` is the libobs encoder a started picture goes through; a start alone carries it. */
-  | { type: "done"; id: number; encoder?: string }
-  | { type: "failed"; id: number; reason: string };
-
 export const CAPTURE_KINDS_CHANNEL = "voice:capture-kinds";
 export const CAPTURE_START_CHANNEL = "voice:capture-start";
 export const CAPTURE_START_AUDIO_CHANNEL = "voice:capture-start-audio";
@@ -172,7 +168,12 @@ class CaptureHost {
     const child = spawn(helper, [], { stdio: ["pipe", "pipe", "inherit"], env });
     // stdout is a pipe, so it is present; readline turns it into whole lines.
     createInterface({ input: child.stdout }).on("line", (line) => {
-      this.#onReply(JSON.parse(line) as Reply);
+      const reply = parseReply(line);
+      if (reply === null) {
+        console.warn("the capture helper wrote a line that is not a reply:", line);
+        return;
+      }
+      this.#onReply(reply);
     });
     child.on("exit", (code) => {
       if (this.#child === child) {

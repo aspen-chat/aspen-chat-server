@@ -45,8 +45,16 @@ See [Commands](commands.md).
 
 - **One list per bot, the same everywhere.** A bot of another deployment publishes its list on each
   deployment it uses.
-- **Patterns are limited to a subset every client reads alike.** So a pattern matches the same
-  values in every client and on the server.
+- **Patterns are limited to a subset every client can read as the server does.** So a pattern
+  matches the same values in every client and on the server. The subset is what the server's parse
+  of the pattern holds, node by node, never a search of its text, which mistakes an escaped
+  character for the construct it resembles.
+- **`\d`, `\w`, `\s`, `\b`, and `.` mean what Unicode says, and the client is the one rewritten.**
+  JavaScript's are ASCII's. Making the server's ASCII too would make a command take only Latin
+  letters and digits by default, and refusing them would send bots to spell out `\p{…}` classes for
+  the commonest things a pattern says.
+- **A kept list is not checked against the subset again.** Narrowing the subset must not stop a
+  command people already use; its bot meets the check the next time it publishes.
 - **An invocation is checked in the transaction that makes its message.**
 - **A command message tags no one, fetches no link preview, wakes no phone, and cannot be edited.**
   Only the bot hears of it, as `botCommandInvoked`.

@@ -95,12 +95,10 @@ pub struct Hold {
 /// The kind of job that makes a preview of an attachment of `mime_type`, as its uploader named
 /// it, where a preview may be made of one.
 fn kind_of(mime_type: &str) -> Option<JobKind> {
-    if mime_type.starts_with("image/") {
-        Some(JobKind::MakePicturePreview)
-    } else if mime_type.starts_with("video/") {
-        Some(JobKind::MakeVideoPoster)
-    } else {
-        None
+    match super::essence(mime_type).split_once('/')?.0 {
+        "image" => Some(JobKind::MakePicturePreview),
+        "video" => Some(JobKind::MakeVideoPoster),
+        _ => None,
     }
 }
 
@@ -447,6 +445,29 @@ mod tests {
         assert!(worth_keeping(0, 1));
         assert!(!worth_keeping(1, 1));
         assert!(worth_keeping(u64::MAX / 2, u64::MAX));
+    }
+
+    #[test]
+    fn the_kind_of_preview_follows_the_type_as_it_is_served() {
+        for picture in ["image/png", "Image/PNG", " image/webp ", "IMAGE/jpeg; q=1"] {
+            assert_eq!(
+                kind_of(picture),
+                Some(JobKind::MakePicturePreview),
+                "{picture}"
+            );
+        }
+        for video in ["video/mp4", "Video/MP4;codecs=avc1"] {
+            assert_eq!(kind_of(video), Some(JobKind::MakeVideoPoster), "{video}");
+        }
+        for neither in [
+            "application/pdf",
+            "image",
+            "imagery/png",
+            "text/plain; x=image/png",
+            "",
+        ] {
+            assert_eq!(kind_of(neither), None, "{neither}");
+        }
     }
 
     /// Runs against the database `DATABASE_URL` names, inside a transaction that is never

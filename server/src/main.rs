@@ -20,7 +20,7 @@ use hyper_util::{
 };
 use rustls::{
     ServerConfig,
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+    pki_types::{CertificateDer, PrivateKeyDer},
 };
 use tokio::{runtime, sync::oneshot};
 use tokio_rustls::TlsAcceptor;
@@ -175,6 +175,38 @@ enum Command {
     },
 }
 
+/// Whether a key or certificate file is PEM, which is told by its contents: PEM marks what it
+/// holds with a line that begins so, and DER is the bare binary structure.
+fn is_pem(file: &[u8]) -> bool {
+    const BOUNDARY: &[u8] = b"-----BEGIN";
+    file.windows(BOUNDARY.len())
+        .any(|window| window == BOUNDARY)
+}
+
+/// The private key a `--key` file holds, PEM or DER, as PKCS #8, PKCS #1, or SEC1.
+fn private_key(file: Vec<u8>) -> Result<PrivateKeyDer<'static>> {
+    if is_pem(&file) {
+        rustls_pemfile::private_key(&mut &*file)
+            .context("malformed PEM-encoded private key")?
+            .context("the PEM file holds no private key")
+    } else {
+        PrivateKeyDer::try_from(file).map_err(|error| {
+            anyhow::anyhow!("the private key is neither PEM nor a DER-encoded key: {error}")
+        })
+    }
+}
+
+/// The certificates a `--cert` file holds: every one of a PEM file, or the one a DER file is.
+fn certificate_chain(file: Vec<u8>) -> Result<Vec<CertificateDer<'static>>> {
+    if is_pem(&file) {
+        rustls_pemfile::certs(&mut &*file)
+            .collect::<Result<_, _>>()
+            .context("invalid PEM-encoded certificate")
+    } else {
+        Ok(vec![CertificateDer::from(file)])
+    }
+}
+
 /// The TLS this server answers with: the `--cert` and `--key` given, or none under
 /// `--no-https`. Given neither, it refuses to start rather than present a certificate no client
 /// trusts; `scripts/dev_ca.py` issues one for development.
@@ -190,22 +222,9 @@ fn tls_acceptor(options: &Opt) -> Result<Option<TlsAcceptor>> {
     };
     // TODO: Hot reload these files when they change. certbot and things like it will update the data periodically. It'd be nice to not require
     // a server reboot to start using the new cert and key.
-    let key = fs::read(key_path).context("failed to read private key")?;
-    let key = if key_path.extension().is_some_and(|x| x == "der") {
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key))
-    } else {
-        rustls_pemfile::private_key(&mut &*key)
-            .context("malformed PKCS #1 private key")?
-            .ok_or_else(|| anyhow::Error::msg("no private keys found"))?
-    };
-    let cert_chain = fs::read(cert_path).context("failed to read certificate chain")?;
-    let cert_chain = if cert_path.extension().is_some_and(|x| x == "der") {
-        vec![CertificateDer::from(cert_chain)]
-    } else {
-        rustls_pemfile::certs(&mut &*cert_chain)
-            .collect::<Result<_, _>>()
-            .context("invalid PEM-encoded certificate")?
-    };
+    let key = private_key(fs::read(key_path).context("failed to read private key")?)?;
+    let cert_chain =
+        certificate_chain(fs::read(cert_path).context("failed to read certificate chain")?)?;
     let mut server_config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(cert_chain, key)?;
@@ -499,5 +518,65 @@ async fn run(options: Opt) -> Result<()> {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An Ed25519 key as PKCS #8: the algorithm, then the key's 32 bytes.
+    fn pkcs8() -> Vec<u8> {
+        let mut der = vec![
+            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20,
+        ];
+        der.extend(0..32);
+        der
+    }
+
+    /// A P-256 key as SEC1: the key's 32 bytes, then the curve.
+    fn sec1() -> Vec<u8> {
+        let mut der = vec![0x30, 0x31, 0x02, 0x01, 0x01, 0x04, 0x20];
+        der.extend(0..32);
+        der.extend([
+            0xa0, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07,
+        ]);
+        der
+    }
+
+    #[test]
+    fn a_key_file_is_read_by_what_it_holds() {
+        assert!(matches!(
+            private_key(pkcs8()).unwrap(),
+            PrivateKeyDer::Pkcs8(_)
+        ));
+        assert!(matches!(
+            private_key(sec1()).unwrap(),
+            PrivateKeyDer::Sec1(_)
+        ));
+        let pem = "comment\n-----BEGIN PRIVATE KEY-----\n\
+                   MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f\n\
+                   -----END PRIVATE KEY-----\n";
+        match private_key(pem.as_bytes().to_vec()).unwrap() {
+            PrivateKeyDer::Pkcs8(key) => assert_eq!(key.secret_pkcs8_der(), pkcs8()),
+            other => panic!("{other:?}"),
+        }
+        assert!(private_key(b"not a key".to_vec()).is_err());
+        assert!(
+            private_key(b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n".to_vec())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_certificate_file_is_read_by_what_it_holds() {
+        let der = vec![0x30, 0x03, 0x02, 0x01, 0x00];
+        assert_eq!(
+            certificate_chain(der.clone()).unwrap(),
+            [CertificateDer::from(der)]
+        );
+        let pem = "-----BEGIN CERTIFICATE-----\nMAMCAQA=\n-----END CERTIFICATE-----\n".repeat(2);
+        assert_eq!(certificate_chain(pem.into_bytes()).unwrap().len(), 2);
     }
 }

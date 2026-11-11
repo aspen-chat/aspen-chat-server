@@ -123,6 +123,19 @@ def addresses(box: dict) -> list:
     return found
 
 
+def docker_rootless() -> bool:
+    """Whether Docker runs rootless, which it says with a security option named `rootless` (each
+    option is `name=<name>`, some with further `key=value` pairs after commas)."""
+    done = subprocess.run(["docker", "info", "--format", "{{json .SecurityOptions}}"], capture_output=True, text=True)
+    if done.returncode != 0:
+        raise Failed("Docker does not answer: start Docker, and let this user run it")
+    try:
+        options = json.loads(done.stdout) or []
+    except ValueError:
+        raise Failed(f"`docker info` did not list Docker's security options: {done.stdout.strip()[:200]}") from None
+    return "name=rootless" in options
+
+
 def memory_bytes() -> int:
     return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
 

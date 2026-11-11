@@ -1,6 +1,7 @@
 import { QrCodeIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Button } from "react-aria-components";
+import { useHomeHosts } from "@/features/messages/knownHosts";
 import { useMessages } from "@/i18n/context";
 import { parseAspenLink, type AspenLink } from "./aspenLinks";
 import { QrScannerDialog } from "./QrScanner";
@@ -22,6 +23,7 @@ export function ScanCodeButton({
   className: string;
 }) {
   const m = useMessages();
+  const homeHosts = useHomeHosts();
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -41,7 +43,7 @@ export function ScanCodeButton({
           title={label}
           hint={hint}
           onScan={(text) => {
-            const link = parseAspenLink(text);
+            const link = parseAspenLink(text, homeHosts);
             return link === null ? m.qr.notAspen : accept(link);
           }}
         />

@@ -58,11 +58,13 @@ const OUTPUT_AV_ID: &CStr = c"aspen_packet_output_av";
 /// The output of a capture of sound alone.
 const OUTPUT_AUDIO_ID: &CStr = c"aspen_packet_output_audio";
 
-/// libobs logs everything to stderr by default. Only its warnings and errors are worth the
-/// terminal, prefixed so they can be told from the shell's own, unless `ASPEN_CAPTURE_VERBOSE`
-/// is set, which lets its information through too (how much audio buffering it added, which
-/// encoder settings it took). Formatting a C `va_list` is platform-specific; where it is not
-/// done here, libobs's own logging stands.
+/// libobs's own log handler prints debug, information, and warning lines to the C runtime's
+/// stdout and errors to its stderr. The helper's stdout is pointed at stderr before anything
+/// runs (`reply_pipe` in `main.rs`), so all of it lands there and none among the replies. Only
+/// its warnings and errors are worth the terminal, prefixed so they can be told from the
+/// shell's own, unless `ASPEN_CAPTURE_VERBOSE` is set, which lets its information through too
+/// (how much audio buffering it added, which encoder settings it took). Formatting a C
+/// `va_list` is platform-specific; where it is not done here, libobs's own handler stands.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod logging {
     use super::ffi;

@@ -14,9 +14,8 @@ image, and left this machine's user's.
 from __future__ import annotations
 
 import os
-import subprocess
 
-from .common import Box
+from .common import Box, docker_rootless
 
 # Ten years: a certificate the box makes for itself has nobody to renew it.
 DAYS = 3650
@@ -44,7 +43,7 @@ def ensure(store: Box, domain: str) -> str:
             "chmod 600 ca.key /served/server.key",
             # The container's root is this user under rootless Docker, and root itself
             # otherwise, whose files this user could not read.
-            "" if rootless() else f"chown -R {os.getuid()}:{os.getgid()} /authority /served",
+            "" if docker_rootless() else f"chown -R {os.getuid()}:{os.getgid()} /authority /served",
         ])  # fmt: skip
         store.compose(
             "run", "--rm", "--no-deps", "-T", "--user", "0",
@@ -52,11 +51,6 @@ def ensure(store: Box, domain: str) -> str:
             "tool", "-c", script,
         )  # fmt: skip
     return (authority / "ca.pem").read_text()
-
-
-def rootless() -> bool:
-    done = subprocess.run(["docker", "info", "--format", "{{json .SecurityOptions}}"], capture_output=True, text=True)
-    return "rootless" in done.stdout
 
 
 NATS_CONF_TLS = """tls {

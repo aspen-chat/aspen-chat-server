@@ -32,7 +32,9 @@ docker run --rm --entrypoint tar ghcr.io/aspen-chat/aspen-api:TAG -C /usr/share/
 
 The images are published at `ghcr.io/aspen-chat/aspen-api` and `ghcr.io/aspen-chat/aspen-voice`, for
 x86-64 and 64-bit ARM, and `--tag` names a release of both. To run images of your own, give
-`--api-image` and `--voice-image` instead.
+`--api-image` and `--voice-image` instead. `upgrade --tag` replaces the tag of the images the box
+runs, so a box whose images are named by digest, or without a tag, upgrades with `--api-image` and
+`--voice-image`.
 
 ## Setting up
 

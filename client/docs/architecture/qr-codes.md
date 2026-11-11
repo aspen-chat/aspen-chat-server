@@ -9,7 +9,7 @@
 | Invite codes   | `InviteQr`                                                                         |
 | Links in codes | `shareUrl`, `useShareUrl` (`src/features/qr/shareLinks.ts`)                        |
 | Scanning       | `QrScannerDialog` (`QrScanner.tsx`), `zxing.ts`, `ScanCodeButton`                  |
-| Reading a link | `parseAspenLink` (`aspenLinks.ts`)                                                 |
+| Reading a link | `parseAspenLink` (`aspenLinks.ts`), `routeAddress` (`routeAddress.ts`)             |
 | App links      | `useOpenAppLinks` (`src/api/appLinks.ts`), `packages/desktop/src/main/appLinks.ts` |
 
 ## Drawing
@@ -77,8 +77,7 @@ Phones scan with `QrScannerDialog`:
 - read five times a second by `zxing-wasm`'s reader;
 - its WebAssembly is served with the app (`zxing.ts`) and loaded when the scanner first opens.
 
-`ScanCodeButton` reads what a code leads to with `parseAspenLink`, under whatever address it was
-shared:
+`ScanCodeButton` reads what a code leads to with `parseAspenLink`:
 
 - a sign-in code;
 - a registration invite;
@@ -87,6 +86,33 @@ shared:
   `/dms/{id}`).
 
 It answers a code that is not Aspen's, or not the kind wanted there, without closing.
+
+### Reading a link
+
+`routeAddress` reads the text as one address, in each form a link to the app takes:
+
+| Form                         | Example                                                     | Its host                            |
+| ---------------------------- | ----------------------------------------------------------- | ----------------------------------- |
+| Under a web client           | `https://chat.example.org/invite/abc`                       | The address's                       |
+| An app link                  | `aspen://app/invite/abc`                                    | None                                |
+| An app's page, route in hash | `file:///…/index.html#/invite/abc`, `https://localhost/#/…` | None for a file, else the address's |
+
+- A route is the link's whole path. A route found in a query, in a longer path, in a fragment that
+  is not a page's route, or in text around a link is not read.
+- What a link leads to is the deployment's whose address it is on. The home's own addresses
+  (`useHomeHosts`: the page's, and the one the app reaches the home at) and links with no host mean
+  the deployment in use. Any other host is that deployment's domain (`deploymentRoute`).
+- `/at/{domain}/…` names the deployment, whatever address it is under.
+- A sign-in code names its server itself.
+- A registration invite on another deployment's address is what that deployment asks of a first
+  arrival, not a way to make an account there, for a reader who has one at home. The join form,
+  whether it was scanned or pasted, opens the add-a-server form with the deployment and the invite
+  filled in (`routeJoinLink`, `features/invites/joinRouting.ts`; see
+  [Adding, leaving, and signing out](deployments.md#adding-leaving-and-signing-out)). Where the home
+  takes no part in federation it is refused, naming that deployment.
+- Signed out, no screen reads another deployment's registration invite: the scanners there take
+  sign-in codes only, and a registration link opened in an app (`aspen://app/register?invite=…`) or
+  under the web client is the deployment in use's, and opens its create-account form with the code.
 
 | Where                | Scans         |
 | -------------------- | ------------- |

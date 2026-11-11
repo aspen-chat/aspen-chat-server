@@ -3,6 +3,11 @@
 
 use crate::fetch::{MAX_METADATA_BYTES, http_client, read_capped};
 use aspen_wire::link_preview::VideoEmbed;
+use html5ever::tendril::StrTendril;
+use html5ever::tokenizer::{
+    BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
+};
+use std::cell::RefCell;
 use tracing::debug;
 use url::Url;
 
@@ -459,6 +464,34 @@ fn video_embed_from(
     })
 }
 
+/// Finds the first `<iframe>` start tag of a snippet and keeps its `src`.
+#[derive(Default)]
+struct IframeSink {
+    /// `None` until an `<iframe>` is met, then its `src`, if it has one.
+    first: RefCell<Option<Option<String>>>,
+}
+
+impl TokenSink for IframeSink {
+    type Handle = ();
+
+    fn process_token(&self, token: Token, _line: u64) -> TokenSinkResult<Self::Handle> {
+        let mut first = self.first.borrow_mut();
+        if first.is_none()
+            && let Token::TagToken(tag) = token
+            && tag.kind == TagKind::StartTag
+            && tag.name.as_ref() == "iframe"
+        {
+            *first = Some(
+                tag.attrs
+                    .iter()
+                    .find(|attribute| attribute.name.local.as_ref() == "src")
+                    .map(|attribute| attribute.value.to_string()),
+            );
+        }
+        TokenSinkResult::Continue
+    }
+}
+
 /// The `src` of the first `<iframe>` in an oEmbed `html` snippet, kept only when it is an
 /// `https` URL on one of `hosts`. Nothing else from the snippet is used.
 fn player_src_from_html(
@@ -466,19 +499,13 @@ fn player_src_from_html(
     rewrite: Option<(&str, &str)>,
     html: &str,
 ) -> Option<String> {
-    let lower = html.to_ascii_lowercase();
-    let tag_start = lower.find("<iframe")?;
-    let tag_end = lower[tag_start..].find('>')? + tag_start;
-    let tag = &lower[tag_start..tag_end];
-    let attr = tag.find("src=")? + 4;
-    let quote = *tag.as_bytes().get(attr)?;
-    if quote != b'"' && quote != b'\'' {
-        return None;
-    }
-    let value_start = tag_start + attr + 1;
-    let value_len = html[value_start..].find(quote as char)?;
-    let raw = &html[value_start..value_start + value_len];
-    let mut src = Url::parse(raw).ok()?;
+    let tokenizer = Tokenizer::new(IframeSink::default(), TokenizerOpts::default());
+    let input = BufferQueue::default();
+    input.push_back(StrTendril::from(html));
+    let _ = tokenizer.feed(&input);
+    tokenizer.end();
+    let raw = tokenizer.sink.first.into_inner()??;
+    let mut src = Url::parse(&raw).ok()?;
     if src.scheme() != "https" {
         return None;
     }
@@ -536,9 +563,17 @@ mod tests {
             r#"<iframe src="https://evil.test/embed/x"></iframe>"#,
             r#"<blockquote class="tiktok-embed"></blockquote><script src="https://www.tiktok.com/embed.js"></script>"#,
             r#"<iframe src="javascript:alert(1)"></iframe>"#,
+            r#"<iframe data-src="https://www.youtube.com/embed/x"></iframe><iframe src="https://www.youtube.com/embed/x"></iframe>"#,
         ] {
             assert!(player_src_from_html(hosts, rewrite, bad).is_none(), "{bad}");
         }
+        // The attribute named `src` is the one read, with its character references decoded,
+        // whatever the attributes before it hold.
+        let html = r#"<IFRAME title="how to use img src= in html" data-src="https://evil.test/" SRC='https://www.youtube.com/embed/x?h=abc&amp;app_id=1'></IFRAME>"#;
+        assert_eq!(
+            player_src_from_html(hosts, rewrite, html).as_deref(),
+            Some("https://www.youtube-nocookie.com/embed/x?h=abc&app_id=1"),
+        );
     }
 
     /// A YouTube oEmbed answer as served on 2026-09-25, trimmed to the fields used.

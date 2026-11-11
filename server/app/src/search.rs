@@ -66,6 +66,28 @@ pub enum Holding {
     Poll,
 }
 
+/// Which things a search asks its messages to hold.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Held {
+    attachment: bool,
+    image: bool,
+    poll: bool,
+}
+
+impl Held {
+    fn of(holding: &[Holding]) -> Self {
+        let mut held = Self::default();
+        for holding in holding {
+            match holding {
+                Holding::Attachment => held.attachment = true,
+                Holding::Image => held.image = true,
+                Holding::Poll => held.poll = true,
+            }
+        }
+        held
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum SearchScope {
     /// Everything the user may read.
@@ -196,7 +218,8 @@ impl Sought<'_> {
 /// Whether the message's thread was deleted is asked last, of the few that pass the rest, and
 /// as a value looked up for each: written as `NOT EXISTS` it is answered by reading every
 /// deleted channel of the deployment once for the statement.
-const PASSES: &str = r#"
+const PASSES: &str = concat!(
+    r#"
     m.kind <> ALL($5)
     AND ($7 IS NULL OR m.author = $7)
     AND (NOT $11 OR m.kind = 'poll')
@@ -212,12 +235,15 @@ const PASSES: &str = r#"
     AND (NOT $10 OR EXISTS (
         SELECT 1 FROM message_attachment held
         JOIN attachment a ON a.id = held.attachment_id
-        WHERE held.message_id = m.id AND a.mime_type LIKE 'image/%'
+        WHERE held.message_id = m.id AND "#,
+    crate::attachment::essence_sql!("a.mime_type"),
+    r#" LIKE 'image/%'
     ))
     AND ($6 IS NULL OR to_tsvector('simple', COALESCE(m.search_text, m.content))
         @@ websearch_to_tsquery('simple', $6))
     AND (SELECT gone.deleted_at FROM channel gone WHERE gone.id = m.channel) IS NULL
-"#;
+"#,
+);
 
 /// How each statement of a walk is planned: one core, no compiling of a statement that is run
 /// once, and its window read through the index that bounds it. The planner takes a window for
@@ -549,6 +575,7 @@ pub async fn search_messages(
         return page(state, Vec::new(), None, &places, in_thread).await;
     }
     let limit = usize::try_from(search.limit.clamp(1, MAX_RESULTS)).unwrap_or(1);
+    let held = Held::of(&search.holding);
     let sought = Sought {
         caller: caller.0,
         places: &places,
@@ -556,9 +583,9 @@ pub async fn search_messages(
         text,
         author: search.author.map(|author| author.0),
         mentions: search.mentions.map(|tagged| tagged.0),
-        attachment: search.holding.contains(&Holding::Attachment),
-        image: search.holding.contains(&Holding::Image),
-        poll: search.holding.contains(&Holding::Poll),
+        attachment: held.attachment,
+        image: held.image,
+        poll: held.poll,
         limit,
     };
     let before = search.before.map(|before| before.0);
@@ -819,6 +846,20 @@ pub async fn readable_everywhere(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_search_holds_what_it_was_asked_to_and_nothing_else() {
+        assert_eq!(Held::of(&[]), Held::default());
+        assert_eq!(
+            Held::of(&[Holding::Image, Holding::Poll, Holding::Image]),
+            Held {
+                attachment: false,
+                image: true,
+                poll: true,
+            }
+        );
+        assert!(Held::of(&[Holding::Attachment]).attachment);
+    }
 
     fn window(examined: i64, found: &[Uuid]) -> Window {
         Window {

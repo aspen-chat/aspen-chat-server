@@ -1,4 +1,5 @@
 import type { BotCommands, Command, CommandParameter } from "@aspen/protocol";
+import { compilePattern } from "./pattern";
 
 /**
  * Reading a command as a person types it in the message box: `/name`, then optionally a tag
@@ -212,14 +213,10 @@ export function isId(value: string): boolean {
 
 /**
  * Whether `value` matches a `regex` parameter's pattern whole, as the server will check it; a
- * pattern this engine cannot read is left to the server.
+ * pattern this engine cannot read as the server does is left to the server.
  */
 export function matchesPattern(pattern: string, value: string): boolean {
-  try {
-    return new RegExp(`^(?:${pattern})$`, "u").test(value);
-  } catch {
-    return true;
-  }
+  return compilePattern(pattern)?.test(value) ?? true;
 }
 
 /**

@@ -191,6 +191,31 @@ pub fn declarable(mime_type: &str) -> bool {
             .all(|b| matches!(b, b' '..=b'~') && b != b',' && b != b'"')
 }
 
+/// A declared type's essence: the type and subtype without parameters, in lower case, which is
+/// what every decision about an attachment's type is made on.
+pub(crate) fn essence(mime_type: &str) -> String {
+    let essence = mime_type
+        .split_once(';')
+        .map_or(mime_type, |(essence, _)| essence);
+    essence.trim().to_ascii_lowercase()
+}
+
+/// [`essence`] of the declared type in the SQL expression `$declared`, for a statement that
+/// decides by an attachment's type: `attachment.mime_type` holds the type as it was declared
+/// ([`declarable`]: printable ASCII in any case, parameters and all), never its essence. The
+/// case is folded under the `C` collation, which lowers ASCII letters alone whatever the
+/// database's locale, as `essence` does.
+macro_rules! essence_sql {
+    ($declared:literal) => {
+        concat!(
+            "lower(btrim(split_part(",
+            $declared,
+            ", ';', 1), ' ') COLLATE \"C\")"
+        )
+    };
+}
+pub(crate) use essence_sql;
+
 /// The longest `charset` parameter served with plain text.
 const MAX_CHARSET_BYTES: usize = 40;
 
@@ -216,10 +241,10 @@ fn charset<'a>(parameters: impl Iterator<Item = &'a str>) -> Option<String> {
 /// saved; either way under its own name. Nothing else the uploader wrote reaches the header, so
 /// what a browser reads as the type is always the type checked here.
 pub fn served(mime_type: &str, file_name: &str) -> Served {
-    let mut parts = mime_type.split(';');
-    let essence = parts.next().unwrap_or_default().trim().to_ascii_lowercase();
+    let essence = essence(mime_type);
     let (content_type, disposition) = if INLINE_TYPES.contains(&essence.as_str()) {
-        let content_type = match charset(parts).filter(|_| essence == "text/plain") {
+        let parameters = mime_type.split(';').skip(1);
+        let content_type = match charset(parameters).filter(|_| essence == "text/plain") {
             Some(charset) => format!("{essence}; charset={charset}"),
             None => essence,
         };
@@ -851,6 +876,59 @@ mod picture_size_tests {
         assert!(picture_size(None, Some(480)).is_err());
         assert!(picture_size(Some(0), Some(480)).is_err());
         assert!(picture_size(Some(MAX_PICTURE_SIDE + 1), Some(480)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod essence_tests {
+    use super::*;
+    use diesel::sql_types::{Array, Text};
+    use diesel_async::RunQueryDsl;
+
+    const DECLARED: [&str; 8] = [
+        "image/png",
+        "IMAGE/PNG",
+        " Image/Jpeg ; q=1",
+        "text/plain;charset=UTF-8",
+        "image",
+        "",
+        " ; image/png",
+        "application/X-İMAGE",
+    ];
+
+    #[test]
+    fn an_essence_is_the_type_alone_in_lower_case() {
+        assert_eq!(essence(" Image/Jpeg ; q=1"), "image/jpeg");
+        assert_eq!(essence("text/plain;charset=UTF-8"), "text/plain");
+        assert_eq!(essence(" ; image/png"), "");
+    }
+
+    #[derive(diesel::QueryableByName)]
+    struct Essences {
+        #[diesel(sql_type = Array<Text>)]
+        essences: Vec<String>,
+    }
+
+    /// `essence_sql!` against the database `DATABASE_URL` names; without one it checks
+    /// nothing. The database reads each declared type as `essence` does.
+    #[tokio::test]
+    async fn the_database_reads_an_essence_as_the_server_does() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        let read: Essences = diesel::sql_query(concat!(
+            "SELECT array_agg(",
+            essence_sql!("declared"),
+            " ORDER BY at) AS essences FROM unnest($1) WITH ORDINALITY AS given(declared, at)"
+        ))
+        .bind::<Array<Text>, _>(DECLARED.to_vec())
+        .get_result(&mut conn)
+        .await
+        .unwrap();
+        let expected: Vec<String> = DECLARED.iter().map(|declared| essence(declared)).collect();
+        assert_eq!(read.essences, expected);
     }
 }
 

@@ -120,11 +120,23 @@ impl Lookup {
     }
 }
 
+/// The media types of an HTML page, the only bodies read for metadata.
+const PAGE_TYPES: [&str; 2] = ["text/html", "application/xhtml+xml"];
+
+/// A `Content-Type` header's media type: the type and subtype without parameters, in lower
+/// case.
+fn media_type(content_type: &str) -> String {
+    let media_type = content_type
+        .split_once(';')
+        .map_or(content_type, |(media_type, _)| media_type);
+    media_type.trim().to_ascii_lowercase()
+}
+
 /// Fetch + parse metadata for `url`, going through the process-local cache.
 ///
 /// Returns `None` if the fetch failed or the response wasn't preview-worthy.
 /// The intermediate byte buffer is capped at [`MAX_METADATA_BYTES`] and we
-/// only decode bodies whose `Content-Type` starts with `text/`.
+/// only decode bodies whose `Content-Type` is one of [`PAGE_TYPES`].
 pub async fn fetch_metadata(url: &Url) -> Option<ParsedMetadata> {
     if !may_fetch(url) {
         debug!(url = url.as_str(), "preview generation: URL refused");
@@ -189,13 +201,14 @@ async fn fetch_page_metadata(url: &Url) -> Option<ParsedMetadata> {
     if !response.status().is_success() {
         return None;
     }
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if content_type.starts_with("image/") {
+    let media_type = media_type(
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default(),
+    );
+    if media_type.starts_with("image/") {
         // A link straight to a picture: no page to read, the picture is the preview.
         return Some(ParsedMetadata {
             image_url: Some(response.url().to_string()),
@@ -203,7 +216,7 @@ async fn fetch_page_metadata(url: &Url) -> Option<ParsedMetadata> {
             ..ParsedMetadata::default()
         });
     }
-    if !content_type.starts_with("text/") && !content_type.contains("html") {
+    if !PAGE_TYPES.contains(&media_type.as_str()) {
         return None;
     }
     let final_url = response.url().clone();
@@ -273,6 +286,26 @@ mod tests {
             "ftp://example.com/",
         ] {
             assert!(!may_fetch(&Url::parse(refused).unwrap()), "{refused}");
+        }
+    }
+
+    #[test]
+    fn only_html_types_are_pages() {
+        for page in [
+            "text/html",
+            "Text/HTML; charset=utf-8",
+            " application/xhtml+xml ;charset=utf-8",
+        ] {
+            assert!(PAGE_TYPES.contains(&media_type(page).as_str()), "{page}");
+        }
+        for other in [
+            "text/plain",
+            "text/javascript",
+            "application/octet-stream; name=\"page.html\"",
+            "text/htmlx",
+            "",
+        ] {
+            assert!(!PAGE_TYPES.contains(&media_type(other).as_str()), "{other}");
         }
     }
 

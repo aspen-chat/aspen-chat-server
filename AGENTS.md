@@ -43,6 +43,8 @@ explicit direction.
 - **Search:** PostgreSQL full-text search, with `icu_segmenter` (ICU4X, its data compiled in)
   finding the words of text written without spaces between them, Chinese, Japanese, and Thai among
   them, as a message is written (`server/search_text/`); see Search
+- **Bot command patterns:** `regex`, with `regex-syntax` parsing each pattern so that only the
+  subset JavaScript reads alike is accepted (`app::bot_command::pattern`); see Bots
 - **Attachment previews:** `image` (decoders written in Rust), `fast_image_resize`, `moxcms` (colour
   profiles), and `webp` (libwebp, built from source) for pictures, and the operator's `ffmpeg` and
   `ffprobe`, run as processes of their own, for videos' posters; see Attachment previews
@@ -1250,6 +1252,13 @@ when reviewing.
    its text. A timer ends the record it was set for, not whatever holds that id when it fires. Where
    no id exists (a program's audio across its restart), match on everything stable that is known and
    act only when exactly one candidate fits.
+2. **Structured text is parsed whole, then matched whole.** No `starts_with`, `contains`, `split`,
+   or regular expression over a URL, a media type, a pattern, an image reference, HTML, or a
+   command's output where a parser for it exists (`url::Url` and `new URL`, `attachment::essence`,
+   `regex-syntax`'s AST in `bot_command::pattern`, html5ever, `json.loads`). A route is matched
+   against a URL's whole path and a type against the whole media type. Where two implementations
+   must read the same text alike (bare URLs, bot command patterns, pseudo-locales, permissions), a
+   vector file in `spec/` that both sides' tests run holds them together, and they change with it.
 
 ## Comments document the current code, not its history
 

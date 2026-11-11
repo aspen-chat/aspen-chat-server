@@ -10,10 +10,23 @@ const QUIET_ZONE = 4;
  */
 const PATCH_SHARE = 0.26;
 
+/**
+ * What is inside an SVG document's root element, without its `<title>`: markup that can be put
+ * inside another `<svg>`. Throws when `document` is not one root `<svg>` element, since anything
+ * else would leave the document it is put in malformed.
+ */
+export function svgContents(document: string): string {
+  const root = /^\s*(?:<\?xml[^>]*\?>\s*)?<svg\b[^>]*>([\s\S]*)<\/svg>\s*$/.exec(document);
+  if (root?.[1] === undefined) {
+    throw new Error("Not an SVG document with one root element");
+  }
+  return root[1].replace(/^\s*<title>[^<]*<\/title>/, "");
+}
+
 /** The line mark's drawing: its view box and what is inside its `<svg>`. */
 const MARK = (() => {
   const viewBox = /viewBox="([^"]+)"/.exec(lineMark)?.[1] ?? "0 0 176 202";
-  const body = lineMark.replace(/^[\s\S]*?<\/title>/, "").replace(/<\/svg>\s*$/, "");
+  const body = svgContents(lineMark);
   const [, , width = 176, height = 202] = viewBox.split(/\s+/).map(Number);
   return { viewBox, body, aspect: width / height };
 })();

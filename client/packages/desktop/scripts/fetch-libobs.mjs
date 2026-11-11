@@ -56,7 +56,7 @@ const TEST_PROGRAMS = ["obs-nvenc-test.exe", "obs-qsv-test.exe", "obs-amf-test.e
 const NOT_NEEDED =
   /^(obs64|obs-.*-test|obs-ffmpeg-mux)\.exe$|^Qt6|\/|^obs-frontend-api|^obs-scripting|^lua51|^libobs-opengl|\.pdb$/;
 
-const desktop = dirname(dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")));
+const desktop = dirname(import.meta.dirname);
 const out = join(desktop, "native", "libobs");
 const cache = join(desktop, "native", "libobs-cache");
 

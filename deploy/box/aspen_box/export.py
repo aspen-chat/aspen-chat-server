@@ -8,10 +8,9 @@ import json
 import os
 import tempfile
 
-from .common import BUCKET, SLOTS, Box, Failed
+from .common import BUCKET, SLOTS, Box, Failed, docker_rootless
 from .data import dump
 from .lifecycle import converge
-from .nats_tls import rootless
 
 
 def export(store: Box, opt: argparse.Namespace) -> None:
@@ -77,7 +76,7 @@ def copy_files(store: Box, box: dict, target) -> None:
             "-v", f"{settings}:/aws:ro", "-v", f"{target}:/files",
             # Written as this user, who may then move them; under rootless Docker the container's
             # root is this user already.
-            *([] if rootless() else ["--user", f"{os.getuid()}:{os.getgid()}"]),
+            *([] if docker_rootless() else ["--user", f"{os.getuid()}:{os.getgid()}"]),
             "files", "s3", "sync", f"s3://{bucket}", "/files", "--endpoint-url", endpoint, "--only-show-errors",
             env=env, check=False,
         )  # fmt: skip

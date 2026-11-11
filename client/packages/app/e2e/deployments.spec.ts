@@ -197,6 +197,40 @@ test("a pasted invite link opens on the server it names", async ({ page }) => {
   await expect(page.getByRole("heading", { name: /Beta club/ })).toBeVisible();
 });
 
+test("another server's registration invite, pasted, fills in the form that signs in there", async ({
+  page,
+}) => {
+  await signInToWorld(page, (p) => stubForeignDeployment(p, { listed: false }));
+  await expect(rail(page).getByRole("row", { name: /^Family/ })).toBeVisible();
+  await rail(page).getByRole("button", { name: "Create or join a community" }).click();
+  await page.getByRole("button", { name: /Join a community/ }).click();
+  await page
+    .getByRole("textbox", { name: "Invite link or code" })
+    .fill(`https://${foreignDomain}/register?invite=Welcome1`);
+  const signIns: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/auth/federated-sign-in")) {
+      signIns.push(request.postData() ?? "");
+    }
+  });
+  await page.getByRole("button", { name: "Continue" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Use another server" })).toBeVisible();
+  await expect(dialog.getByRole("textbox", { name: "Server" })).toHaveValue(foreignDomain);
+  await expect(dialog.getByRole("textbox", { name: "Registration invite" })).toHaveValue(
+    "Welcome1",
+  );
+  // Nothing is sent until the button is pressed.
+  expect(signIns).toEqual([]);
+  await dialog.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    rail(page).getByRole("row", { name: `Beta club on ${foreignDomain}` }),
+  ).toBeVisible();
+  expect(signIns.map((body) => (JSON.parse(body) as { inviteCode?: string }).inviteCode)).toEqual([
+    "Welcome1",
+  ]);
+});
+
 test("signed out, an invite link says the account can be on any server", async ({ page }) => {
   await page.goto(`/invite/${foreignInviteCode}?at=${foreignDomain}`);
   await expect(

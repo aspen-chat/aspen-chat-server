@@ -2,13 +2,12 @@ import type { Mentions } from "@aspen/protocol";
 import { type ReactNode, createContext, isValidElement, memo, useContext } from "react";
 import { Link } from "@tanstack/react-router";
 import ReactMarkdown, { type Components } from "react-markdown";
-import { parseInvite, type InviteRef } from "@/features/invites/inviteCode";
+import { namedInvite, type InviteRef } from "@/features/invites/inviteCode";
 import { CodeBlock } from "@/features/messages/CodeBlock";
 import { openInviteLink, useDomain } from "@/features/messages/links";
-import { parseSelfLink, type KnownHosts } from "@/features/messages/selfLinks";
+import { useKnownHosts } from "@/features/messages/knownHosts";
+import { parseSelfLink } from "@/features/messages/selfLinks";
 import { SelfLink } from "@/features/messages/SelfLink";
-import { HomeClientContext } from "@/api/context";
-import { useForeignDeployments } from "@/api/deploymentsContext";
 import { Mention } from "@/features/messages/Mention";
 import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
 import { ErrorBoundary } from "@/features/layout/ErrorBoundary";
@@ -28,9 +27,9 @@ const linkClass =
 
 /**
  * A link in a message. A link to a deployment the user uses opens what it names here, shown by
- * those names (`SelfLink`); an Aspen invite link that names another deployment opens its
- * invite screen here (`InviteMessageLink`), whichever client made it; every other link opens
- * elsewhere.
+ * those names (`SelfLink`); an Aspen invite link that names its deployment (`namedInvite`)
+ * opens that invite's screen here (`InviteMessageLink`), whichever client made it; every other
+ * link opens elsewhere.
  */
 function MessageLink({ href, children }: { href: string | undefined; children: ReactNode }) {
   const hosts = useKnownHosts();
@@ -38,24 +37,11 @@ function MessageLink({ href, children }: { href: string | undefined; children: R
   if (self !== null && href !== undefined) {
     return <SelfLink target={self} href={href} />;
   }
-  const invite = href === undefined ? null : parseInvite(href);
-  if (invite?.domain != null) {
+  const invite = href === undefined ? null : namedInvite(href);
+  if (invite !== null) {
     return <InviteMessageLink invite={invite}>{children}</InviteMessageLink>;
   }
   return <ExternalLink href={href}>{children}</ExternalLink>;
-}
-
-/**
- * The addresses of the deployments the user uses: the home's (the address the app reaches it
- * at, and the page's own) and every other one they sign in to from there.
- */
-function useKnownHosts(): KnownHosts {
-  const home = useContext(HomeClientContext);
-  const foreign = useForeignDeployments();
-  return {
-    home: [window.location.host, ...(home === null ? [] : [new URL(home.baseUrl).host])],
-    foreign: foreign.map((d) => d.domain),
-  };
 }
 
 /**

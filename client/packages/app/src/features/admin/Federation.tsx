@@ -26,6 +26,7 @@ import {
 import { useSync } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Directory, type Column } from "@/features/admin/Directory";
+import { listHint } from "@/features/admin/federationLists";
 import { Status } from "@/features/admin/FleetHealth";
 import { useFigures } from "@/features/admin/format";
 import { useAdminRead, type AdminRead } from "@/features/admin/useAdminRead";
@@ -668,18 +669,6 @@ function DeploymentDialog({
       </Modal>
     </ModalOverlay>
   );
-}
-
-/** Which subject and direction a list governs, as its hint. */
-function listHint(m: Messages, list: FederationList): string {
-  const who = list.startsWith("users") ? m.federation.users : m.federation.bots;
-  const way = list.includes("Emigration")
-    ? m.federation.going
-    : list.includes("Immigration")
-      ? m.federation.coming
-      : m.federation.sharedList;
-  const kind = list.endsWith("Allow") ? m.federation.gate.allowList : m.federation.gate.blockList;
-  return `${who} · ${way} · ${kind}`;
 }
 
 /** Puts a deployment on the lists in force, or takes it off, a checkbox each. */

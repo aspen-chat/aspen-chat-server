@@ -39,10 +39,16 @@ export function encodeCustomEmoji(text: string, emoji: readonly CustomEmoji[]): 
   if (emoji.length === 0) {
     return text;
   }
-  const byName = new Map(emoji.map((e) => [e.name.toLowerCase(), e.id]));
+  const byName = new Map(emoji.map((e) => [e.name, e.id]));
+  /** By folded name; `null` where several emoji fold to one. */
+  const byFoldedName = new Map<string, string | null>();
+  for (const { name, id } of emoji) {
+    const folded = name.toLowerCase();
+    byFoldedName.set(folded, byFoldedName.has(folded) ? null : id);
+  }
   return text.replace(SHOWN, (shown, name: string) => {
-    const id = byName.get(name.toLowerCase());
-    return id === undefined ? shown : referenceOf(id);
+    const id = byName.get(name) ?? byFoldedName.get(name.toLowerCase());
+    return id == null ? shown : referenceOf(id);
   });
 }
 

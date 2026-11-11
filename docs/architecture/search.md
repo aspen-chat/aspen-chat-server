@@ -60,6 +60,16 @@ given.
 | `before`            |         | The `searchedTo` of the previous page               |
 | `include=channels`  |         | Sideloads where each was posted, threads among them |
 
+`image` finds an attachment whose declared type is a picture's by its essence, the type without
+parameters in lower case, read in SQL as the server reads it (`attachment::essence_sql!`,
+`attachment::essence`): `attachment.mime_type` holds the type as its uploader declared it.
+
+A `filter[has]` value this server does not know (a newer client's, or a misspelling) is refused with
+`validation`, its `detail` naming the value (`api::include::FilterSet`), as an unknown
+`filter[view]` of the activity feed is refused. Leaving it out would search for less than was asked
+and present the broader results as the narrower ones. `include` stays lenient (`IncludeSet`): a
+sideload left out loses nothing.
+
 ## Answer
 
 The answer is the `{data, included}` envelope with two more fields:

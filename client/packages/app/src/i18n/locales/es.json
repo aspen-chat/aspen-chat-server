@@ -255,6 +255,7 @@
     "scanInviteHint": "Apunta la cámara al código QR de una invitación.",
     "notAnInvite": "Eso es un código de inicio de sesión, no una invitación. Escanéalo desde Inicio de sesión y seguridad.",
     "notAspen": "Ese código QR no es de Aspen. Apunta la cámara a una invitación o a un código de inicio de sesión de Aspen.",
+    "registrationElsewhere": "Esa invitación es para crear una cuenta en {domain}, no en el servidor que estás usando. Abre su enlace en un navegador para usarla.",
     "cameraStarting": "Iniciando la cámara…",
     "cameraLabel": "Vista de la cámara",
     "cameraDenied": "Aspen no tiene permiso para usar la cámara. Permítelo en la configuración de este dispositivo e intenta de nuevo.",

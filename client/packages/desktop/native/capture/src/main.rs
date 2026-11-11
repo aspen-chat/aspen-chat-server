@@ -18,8 +18,11 @@
 //! trip the allocator every Electron process runs on, and because a crash in native capture
 //! code should cost the capture, not the app.
 //!
-//! The protocol: stdin carries one JSON request per line (`Request`), stdout one JSON reply
-//! per line (`Reply`). One capture runs at a time.
+//! The protocol: stdin carries one JSON request per line (`Request`), the pipe the helper was
+//! started with as its stdout one JSON reply per line (`Reply`), and nothing else: `reply_pipe`
+//! takes it for the replies and points the process's stdout at stderr, where whatever a library
+//! prints goes. Every request with an `id` is answered, one that cannot be read with `failed`.
+//! One capture runs at a time.
 
 #![allow(clippy::missing_safety_doc)]
 
@@ -296,9 +299,71 @@ enum Reply {
     },
 }
 
+/// What is read of a request that is not a `Request`: the id its failure is answered to.
+#[derive(Deserialize)]
+struct Addressed {
+    id: u64,
+}
+
+/// The reply to a line that is not a `Request`: `failed`, to the id it carries; none when it
+/// carries none, since nothing waits for an answer to it.
+fn unreadable(line: &str, error: &serde_json::Error) -> Option<Reply> {
+    let Addressed { id } = serde_json::from_str(line).ok()?;
+    Some(Reply::Failed {
+        id,
+        reason: format!("the capture helper could not read the request: {error}"),
+    })
+}
+
+unsafe extern "C" {
+    #[cfg_attr(windows, link_name = "_dup2")]
+    fn dup2(from: std::ffi::c_int, to: std::ffi::c_int) -> std::ffi::c_int;
+}
+
+/// The pipe the replies are written to: a duplicate of the stdout the process was started
+/// with, after which stdout itself is pointed at stderr. libobs's default log handler, its
+/// modules, and any other library print to the C runtime's stdout, and a line of theirs among
+/// the replies is one the shell cannot read.
+fn reply_pipe() -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    let replies = {
+        use std::os::fd::AsFd;
+        std::io::stdout().as_fd().try_clone_to_owned()?
+    };
+    #[cfg(windows)]
+    let replies = {
+        use std::os::windows::io::AsHandle;
+        std::io::stdout().as_handle().try_clone_to_owned()?
+    };
+    // The C runtime on Windows ends the process when handed a descriptor that is not open, so
+    // stderr is only used there when the process has one.
+    #[cfg(windows)]
+    let has_stderr = {
+        use std::os::windows::io::AsRawHandle;
+        !std::io::stderr().as_raw_handle().is_null()
+    };
+    #[cfg(not(windows))]
+    let has_stderr = true;
+    if !has_stderr || unsafe { dup2(2, 1) } == -1 {
+        eprintln!("aspen-capture: stdout could not be pointed at stderr");
+    }
+    Ok(replies.into())
+}
+
+/// Writes one reply as a line; false when the shell no longer reads them.
+fn send(out: &mut impl Write, reply: &Reply) -> bool {
+    let json = serde_json::to_string(reply).expect("reply serialises");
+    writeln!(out, "{json}").and_then(|()| out.flush()).is_ok()
+}
+
 fn main() {
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::new(stdout.lock());
+    let mut out = match reply_pipe() {
+        Ok(replies) => std::io::BufWriter::new(replies),
+        Err(error) => {
+            eprintln!("aspen-capture: no pipe to reply on: {error}");
+            return;
+        }
+    };
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
@@ -309,7 +374,10 @@ fn main() {
             Ok(request) => request,
             Err(error) => {
                 eprintln!("aspen-capture: unreadable request: {error}");
-                continue;
+                match unreadable(&line, &error) {
+                    Some(reply) if !send(&mut out, &reply) => break,
+                    _ => continue,
+                }
             }
         };
         let reply = match request {
@@ -349,11 +417,51 @@ fn main() {
             }
             Request::Shutdown => break,
         };
-        let json = serde_json::to_string(&reply).expect("reply serialises");
-        if writeln!(out, "{json}").and_then(|()| out.flush()).is_err() {
+        if !send(&mut out, &reply) {
             break;
         }
     }
     // stdin closed or a shutdown asked for: end the capture and whatever it needed.
     shutdown();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_request_that_cannot_be_read_is_answered_to_its_id() {
+        let line = r#"{"type":"start","id":7,"options":{"kind":"game_capture","width":-1}}"#;
+        let error = serde_json::from_str::<Request>(line)
+            .err()
+            .expect("unreadable");
+        let reply = unreadable(line, &error).expect("answered");
+        let reply = serde_json::to_value(&reply).unwrap();
+        assert_eq!(reply["type"], "failed");
+        assert_eq!(reply["id"], 7);
+        assert!(
+            reply["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("the capture helper could not read the request: ")
+        );
+        let unknown = r#"{"type":"pause","id":8}"#;
+        let error = serde_json::from_str::<Request>(unknown)
+            .err()
+            .expect("unreadable");
+        assert_eq!(
+            serde_json::to_value(unreadable(unknown, &error).unwrap()).unwrap()["id"],
+            8
+        );
+    }
+
+    #[test]
+    fn a_line_without_an_id_is_answered_to_no_one() {
+        for line in ["not json", r#"{"type":"start"}"#, r#"{"id":"seven"}"#] {
+            let error = serde_json::from_str::<Request>(line)
+                .err()
+                .expect("unreadable");
+            assert!(unreadable(line, &error).is_none(), "{line}");
+        }
+    }
 }

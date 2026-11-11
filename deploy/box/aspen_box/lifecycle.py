@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 import time
 
 from .common import BUCKET, HERE_VOICE, IMAGES, SLOTS, Box, Failed
@@ -137,7 +136,17 @@ def up_voice_only(store: Box, box: dict) -> None:
 
 
 def retag(image: str, tag: str | None) -> str:
-    return re.sub(r":[^:/]+$", f":{tag}", image) if tag else image
+    """`image` at `tag` in place of its own. An image pinned by digest, or one with no tag (a
+    colon before the last `/` is a registry's port), has none to replace and is refused."""
+    if not tag:
+        return image
+    repository, colon, _ = image.rpartition(":")
+    if "@" in image or not colon or "/" in image[len(repository):]:
+        raise Failed(
+            f"{image} has no tag for --tag to replace (it is pinned by digest, or was given without one): "
+            "give the image to move to whole, with --api-image or --voice-image"
+        )
+    return f"{repository}:{tag}"
 
 
 def published(tag: str) -> dict:

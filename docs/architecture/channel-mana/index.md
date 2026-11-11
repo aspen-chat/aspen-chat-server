@@ -62,7 +62,9 @@ mana.
   marks, costs about what its characters would apart. The longest emoji sequence Unicode recommends
   is ten scalars, so every emoji, and every script's letters, still cost 1.
 - **Tokens:** a tag (`<@id>`, `<@&id>`), a custom emoji (`<:id>`), and `@everyone` cost 1 each,
-  however long their stored form.
+  however long their stored form, where they stand as one: in text, as `mention::tokens` reads a
+  tag, the one reading that also decides who is tagged. In code, or `@everyone` against a word
+  character, they are shown as written and cost every character.
 - **Markdown markers** cost what they are, a glyph each.
 - **Counted on the text as sent**, before the channel's plugins decide it.
 - **A slash command** costs its invocation's text, as its message shows it, and its attachments.

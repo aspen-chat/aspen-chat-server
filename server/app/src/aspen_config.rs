@@ -1072,7 +1072,7 @@ impl MediaS3Config {
                 "[media.s3.tls] takes only ca_file: the S3 client presents no client certificate",
             );
         }
-        if !self.endpoint.starts_with("https://") {
+        if !url::Url::parse(&self.endpoint).is_ok_and(|url| url.scheme() == "https") {
             return message("[media.s3.tls] is given but media.s3.endpoint is not https://");
         }
         Ok(())
@@ -1592,7 +1592,9 @@ mod tests {
                 .check_tls()
         };
         assert!(s3("endpoint = \"https://s3.internal\"\ntls = { ca_file = \"/ca.pem\" }").is_ok());
+        assert!(s3("endpoint = \"HTTPS://s3.internal\"\ntls = { ca_file = \"/ca.pem\" }").is_ok());
         assert!(s3("endpoint = \"http://s3.internal\"\ntls = { ca_file = \"/ca.pem\" }").is_err());
+        assert!(s3("endpoint = \"https-s3.internal\"\ntls = { ca_file = \"/ca.pem\" }").is_err());
         assert!(
             s3("endpoint = \"https://s3.internal\"\ntls = { cert_file = \"/c\", key_file = \"/k\" }")
                 .is_err()

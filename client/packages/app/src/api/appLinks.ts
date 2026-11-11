@@ -23,7 +23,8 @@ export function useOpenAppLinks(onServer: (link: AspenLink & { kind: "deviceLink
       if (!url.startsWith(APP_LINK_BASE + "/")) {
         return;
       }
-      const link = parseAspenLink(url);
+      // An `aspen:` link is on no deployment's address, so there are none to tell apart.
+      const link = parseAspenLink(url, []);
       if (link === null) {
         return;
       }

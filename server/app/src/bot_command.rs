@@ -25,6 +25,9 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use utoipa::ToSchema;
 
+pub mod pattern;
+pub use pattern::MAX_PATTERN_CHARS;
+
 /// The most commands one bot may advertise.
 pub const MAX_COMMANDS: usize = 100;
 /// The most parameters one command may take.
@@ -35,10 +38,6 @@ pub const MAX_NAME_CHARS: usize = 32;
 pub const MAX_DESCRIPTION_CHARS: usize = 100;
 /// The most languages a description may be given in besides its own.
 pub const MAX_TRANSLATIONS: usize = 50;
-/// The longest a `regex` parameter's pattern may be, in characters.
-pub const MAX_PATTERN_CHARS: usize = 256;
-/// What a pattern's compiled program may use, which keeps any pattern quick to check.
-const PATTERN_SIZE_LIMIT: usize = 1 << 16;
 /// The largest a whole published list may be, as JSON.
 pub const MAX_LIST_BYTES: usize = 64 * 1024;
 
@@ -83,7 +82,39 @@ pub struct Parameter {
     /// Whether it may be left out; only the last parameters may be.
     #[serde(default)]
     pub optional: bool,
-    /// For a `regex` parameter, and only for one: what a value must match whole.
+    /// For a `regex` parameter, and only for one: what a value must match whole. A regular
+    /// expression of at most 256 characters, of the subset that the server and Aspen's clients
+    /// read alike, which is this and nothing else:
+    ///
+    /// - A character: any but `\ ^ $ . | ? * + ( ) [ ] { }`, each of which is written after a
+    ///   backslash (as `/` may be); `\f`, `\n`, `\r`, `\t`, `\v`; and a Unicode scalar value
+    ///   by its code, as `\xHH`, `\uHHHH`, or `\u{H…}`.
+    /// - `.`: any character but U+000A. It matches U+000D, U+2028, and U+2029.
+    /// - `\d`: a decimal digit of any script, `\p{Nd}`. `\D`: any other character.
+    /// - `\w`: a character that is `Alphabetic`, a mark (`M`), a decimal digit (`Nd`),
+    ///   connector punctuation (`Pc`), or `Join_Control` (U+200C, U+200D). `\W`: any other.
+    /// - `\s`: a `White_Space` character: U+0009 to U+000D, U+0020, U+0085, U+00A0, U+1680,
+    ///   U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, and U+3000, and not U+FEFF. `\S`:
+    ///   any other.
+    /// - `\b`: where a `\w` character meets a character that is not one or an end of the
+    ///   value. `\B`: anywhere else.
+    /// - `\p{…}`, and `\P{…}` for all but it: a general category or a binary property by its
+    ///   exact name (`\p{L}`, `\p{Letter}`, `\p{Alphabetic}`), `\p{General_Category=…}` or
+    ///   `\p{gc=…}`, and a script as `\p{Script=Greek}`, `\p{sc=Grek}`,
+    ///   `\p{Script_Extensions=Greek}`, or `\p{scx=Grek}`.
+    ///   `spec/bot_command_pattern_vectors.json` lists the names.
+    /// - A class, `[…]` or `[^…]`, of characters, ranges of them (`a-z`), `\d`, `\w`, `\s`
+    ///   and their negations, and `\p{…}`. Inside one only `\`, `]`, `[`, and `-` need a
+    ///   backslash, and `-` may go without one first or last. A class holds no other class, no
+    ///   `[:alpha:]`, and no `&&`, `--`, or `~~`.
+    /// - Groups, `(…)` and `(?:…)`, without names or flags; alternatives, `|`; `^` and `$`, the
+    ///   start and the end of the value.
+    /// - Repetition of a character, a class, or a group: `?`, `*`, `+`, `{n}`, `{n,}`, `{n,m}`,
+    ///   each lazy with a `?` after it.
+    ///
+    /// A character is a Unicode scalar value. Which characters a property holds follows the
+    /// version of Unicode of whoever reads the pattern, so a newly assigned character may be
+    /// read differently by the server and an older client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
 }
@@ -125,28 +156,6 @@ fn valid_translations(translations: &BTreeMap<String, String>) -> bool {
                 && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
                 && valid_description(text)
         })
-}
-
-/// A pattern of the subset every client can check alike: no longer than
-/// `MAX_PATTERN_CHARS`, compiling within `PATTERN_SIZE_LIMIT`, and without the constructs
-/// JavaScript reads differently or not at all (group flags and named groups, `\A` and `\z`,
-/// POSIX classes). It must match a value whole.
-pub fn compile_pattern(pattern: &str) -> Option<regex::Regex> {
-    if pattern.chars().count() > MAX_PATTERN_CHARS
-        || pattern.contains("\\A")
-        || pattern.contains("\\z")
-        || pattern.contains("[[:")
-        || pattern
-            .match_indices("(?")
-            .any(|(at, _)| !pattern[at..].starts_with("(?:"))
-    {
-        return None;
-    }
-    regex::RegexBuilder::new(&format!("^(?:{pattern})$"))
-        .size_limit(PATTERN_SIZE_LIMIT)
-        .dfa_size_limit(PATTERN_SIZE_LIMIT)
-        .build()
-        .ok()
 }
 
 /// Checks a list as a whole, naming the first thing wrong with it.
@@ -199,8 +208,13 @@ pub fn validate(list: &CommandList) -> crate::Result<()> {
             optional_seen |= parameter.optional;
             match (parameter.ty, parameter.pattern.as_deref()) {
                 (ParameterType::Regex, Some(pattern)) => {
-                    if compile_pattern(pattern).is_none() {
-                        return Err(invalid("botCommandPattern", name, Some(label)));
+                    if let Err(error) = pattern::check(pattern) {
+                        return Err(crate::Error::Validation(t!(
+                            "botCommandPattern",
+                            command = name,
+                            detail = label,
+                            reason = error.detail()
+                        )));
                     }
                 }
                 (ParameterType::Regex, None) => {
@@ -595,7 +609,7 @@ pub async fn check(
                 let matches = parameter
                     .pattern
                     .as_deref()
-                    .and_then(compile_pattern)
+                    .and_then(pattern::published)
                     .is_some_and(|pattern| pattern.is_match(value));
                 if !matches || value.chars().count() > MAX_ARGUMENT_CHARS {
                     return Err(bad());
@@ -724,10 +738,15 @@ mod tests {
         sides.pattern = Some("[0-9]+d[0-9]+".into());
         c.parameters = vec![sides.clone()];
         assert!(validate(&list(vec![c.clone()])).is_ok());
-        for bad in ["(?i)x", "(?P<n>x)", "\\Ax", "[[:alpha:]]", "("] {
+        for (bad, why) in [
+            ("(?i)x", "“(?i)” sets flags"),
+            ("\\Ax", "Write “^” instead"),
+            ("(", "character 1"),
+        ] {
             sides.pattern = Some(bad.into());
             c.parameters = vec![sides.clone()];
-            assert!(validate(&list(vec![c.clone()])).is_err(), "{bad}");
+            let refusal = validate(&list(vec![c.clone()])).unwrap_err().to_string();
+            assert!(refusal.contains(why), "{bad}: {refusal}");
         }
         c.parameters = vec![parameter("sides", ParameterType::Regex)];
         assert!(validate(&list(vec![c.clone()])).is_err());
@@ -772,13 +791,6 @@ mod tests {
             ),
             "/say <@u> <@&r>"
         );
-    }
-
-    #[test]
-    fn a_pattern_matches_a_value_whole() {
-        let pattern = compile_pattern("[0-9]+d[0-9]+").unwrap();
-        assert!(pattern.is_match("2d6"));
-        assert!(!pattern.is_match("roll 2d6 now"));
     }
 
     /// `spec/bot_commands.schema.json` is what bots are told to publish; it is these types.

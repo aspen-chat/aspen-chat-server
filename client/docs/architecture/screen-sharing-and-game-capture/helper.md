@@ -26,6 +26,11 @@ encoded once.
 - starts a capture only of a kind the helper's last listing offered (`captureKinds.ts`). The test
   pattern plays only the very clip offered. So the renderer cannot have libobs open a source of any
   other kind;
+- reads the helper's replies a line at a time, each settling the request whose id it carries. The
+  helper keeps that pipe for replies alone: as it starts it takes the pipe for itself and points its
+  stdout at stderr, where libobs's log lines and anything else a library prints go. It answers a
+  request it cannot read with a failure, and the shell logs a line that is not a reply
+  (`captureReplies.ts`) rather than failing on it;
 - on Windows, starts the helper with the bundled libobs's libraries on the `PATH` and names its
   modules and data in every request (`bundledLibobs`; see
   [building](building-the-helper.md#windows)).

@@ -12,6 +12,8 @@ import {
   primaryButtonClass,
 } from "@/features/auth/styles";
 import { parseInvite } from "@/features/invites/inviteCode";
+import type { OtherServerPrefill } from "@/features/invites/joinRouting";
+import { useHomeHosts } from "@/features/messages/knownHosts";
 import { deploymentLink, inviteLink } from "@/features/messages/links";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -19,22 +21,34 @@ import { format } from "@/i18n/messages";
 /**
  * Signs in at another deployment with the user's home account: its domain, and optionally an
  * invite to one of its communities, which opens once they are in. A deployment that asks a
- * first arrival for a registration invite says so, and the form then asks for one.
+ * first arrival for a registration invite says so, and the form then asks for one. Opened for a
+ * registration invite of that deployment (`initial`), it starts with the domain and the invite
+ * filled in and the invite's field showing, and signs in when its button is pressed, as ever.
  */
-export function OtherServerForm({ onDone }: { onDone?: () => void }) {
+export function OtherServerForm({
+  onDone,
+  initial,
+}: {
+  onDone?: () => void;
+  initial?: OtherServerPrefill | undefined;
+}) {
   const m = useMessages();
   const hub = useDeploymentsHub();
   const navigate = useNavigate();
-  const [domain, setDomain] = useState("");
+  const homeHosts = useHomeHosts();
+  const [domain, setDomain] = useState(initial?.domain ?? "");
   const [communityInvite, setCommunityInvite] = useState("");
-  const [registrationInvite, setRegistrationInvite] = useState<string | null>(null);
+  /** `null` while the field is not shown: no invite was brought, and none has been asked for. */
+  const [registrationInvite, setRegistrationInvite] = useState<string | null>(
+    initial?.registrationInvite ?? null,
+  );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     const target = domain.trim().toLowerCase();
-    const invite = communityInvite.trim() === "" ? null : parseInvite(communityInvite);
+    const invite = communityInvite.trim() === "" ? null : parseInvite(communityInvite, homeHosts);
     if (communityInvite.trim() !== "" && invite === null) {
       setError(m.inviteInputInvalid);
       return;
@@ -80,8 +94,9 @@ export function OtherServerForm({ onDone }: { onDone?: () => void }) {
         value={communityInvite}
         onChange={(value) => {
           setCommunityInvite(value);
-          // A link names its deployment, which fills in the domain when none is given.
-          const named = parseInvite(value)?.domain;
+          // A link names its deployment, or is on its address, which fills in the domain when
+          // none is given.
+          const named = parseInvite(value, homeHosts)?.domain;
           if (named != null && domain.trim() === "") {
             setDomain(named);
           }

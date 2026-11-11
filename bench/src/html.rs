@@ -1,11 +1,22 @@
 //! The report as a page (one self-contained HTML file with inline SVG charts, readable
 //! offline and attachable anywhere) and as a few lines for the terminal.
 
-use crate::report::{Point, Report};
+use crate::report::{Point, Report, SIGN_IN_METRIC};
 use crate::scrape::Sample;
 use aspen_bench_protocol::coordination::Phase;
 use std::collections::BTreeMap;
 use std::fmt::Write;
+
+/// The route and outcome of a `status:<route>:<outcome>` counter (`stats`) whose request
+/// failed: its outcome, the counter's last field, is anything but a 2xx status.
+fn failed_request(counter: &str) -> Option<&str> {
+    let request = counter.strip_prefix("status:")?;
+    let (_, outcome) = request.rsplit_once(':')?;
+    let succeeded = outcome
+        .parse::<u16>()
+        .is_ok_and(|status| (200..=299).contains(&status));
+    (!succeeded).then_some(request)
+}
 
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
@@ -295,19 +306,15 @@ pub fn render(report: &Report) -> String {
             );
         }
         body.push_str("</tbody></table>");
-        let errors: Vec<(&String, &u64)> = steady
+        let errors: Vec<(&str, &u64)> = steady
             .counters
             .iter()
-            .filter(|(k, _)| k.starts_with("status:") && !k.contains(":2"))
+            .filter_map(|(k, n)| Some((failed_request(k)?, n)))
             .collect();
         if !errors.is_empty() {
             body.push_str("<h3>Failed requests</h3><table><tbody>");
             for (name, n) in errors {
-                let _ = write!(
-                    body,
-                    "<tr><td>{}</td><td>{n}</td></tr>",
-                    escape(name.trim_start_matches("status:"))
-                );
+                let _ = write!(body, "<tr><td>{}</td><td>{n}</td></tr>", escape(name));
             }
             body.push_str("</tbody></table>");
         }
@@ -350,9 +357,7 @@ pub fn render(report: &Report) -> String {
             from_timeline(&report.timeline, "requests", |p| {
                 p.metrics
                     .iter()
-                    .filter(|(k, _)| {
-                        k.starts_with("http:") && k.as_str() != "http:POST /auth/login"
-                    })
+                    .filter(|(k, _)| k.starts_with("http:") && k.as_str() != SIGN_IN_METRIC)
                     .map(|(_, m)| m.p99_ms)
                     .reduce(f64::max)
             }),
@@ -602,3 +607,32 @@ figure { margin: 0 0 20px; } figcaption { font-weight: 600; margin-bottom: 4px; 
 code { font-size: 0.9em; } footer { font-size: 13px; margin-top: 8px; }
 @media (max-width: 600px) { th, td { padding: 4px; font-size: 13px; } }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_request_failed_unless_its_status_is_a_2xx() {
+        assert_eq!(failed_request("status:GET /users/@me:200"), None);
+        assert_eq!(
+            failed_request("status:POST /channels/{channel}/messages:202"),
+            None
+        );
+        assert_eq!(
+            failed_request("status:PATCH /messages/{message}:404"),
+            Some("PATCH /messages/{message}:404")
+        );
+        assert_eq!(
+            failed_request("status:GET /v:2/things:500"),
+            Some("GET /v:2/things:500")
+        );
+        assert_eq!(
+            failed_request("status:GET /users/@me:transport"),
+            Some("GET /users/@me:transport")
+        );
+        assert_eq!(failed_request("status:GET /a:2"), Some("GET /a:2"));
+        assert_eq!(failed_request("requests"), None);
+        assert_eq!(failed_request("http:GET /users/@me"), None);
+    }
+}

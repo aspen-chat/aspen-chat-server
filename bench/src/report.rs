@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The sign-in request's latency, which `http:*` leaves out.
-const SIGN_IN_METRIC: &str = "http:POST /auth/login";
+pub(crate) const SIGN_IN_METRIC: &str = "http:POST /auth/login";
 
 /// Merges snapshots as they arrive.
 pub struct Aggregate {

@@ -68,8 +68,10 @@ where
 
     fn visit_str<E: de::Error>(self, text: &str) -> Result<Vec<T>, E> {
         let text = text.trim();
-        if text.starts_with('[') {
-            return serde_json::from_str(text)
+        // Only text that is a JSON array whole is read as one: a value may itself begin with
+        // a bracket, as an IPv6 socket address does (`[::]:9001`).
+        if let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(text) {
+            return serde_json::from_value(serde_json::Value::Array(values))
                 .map_err(|error| E::custom(format!("is not a JSON array of the values: {error}")));
         }
         text.split(',')
@@ -173,6 +175,39 @@ mod tests {
     fn empty_text_is_an_empty_list() {
         let settings = from("proxies = [\"10.0.0.0/8\"]\n", &[("ASPEN_PROXIES", "")]).unwrap();
         assert!(settings.proxies.is_empty());
+    }
+
+    #[test]
+    fn text_beginning_with_a_bracket_is_json_only_when_it_is_a_json_array() {
+        use std::net::SocketAddr;
+
+        #[derive(Debug, Deserialize)]
+        struct Listening {
+            #[serde(deserialize_with = "list")]
+            listen: Vec<SocketAddr>,
+        }
+        let read = |text: &str| {
+            config::Config::builder()
+                .set_override("listen", text)
+                .unwrap()
+                .build()
+                .unwrap()
+                .try_deserialize::<Listening>()
+        };
+        let expected: Vec<SocketAddr> = vec![
+            "[::]:9001".parse().unwrap(),
+            "0.0.0.0:9001".parse().unwrap(),
+        ];
+        assert_eq!(read("[::]:9001,0.0.0.0:9001").unwrap().listen, expected);
+        assert_eq!(read("[::]:9001").unwrap().listen, expected[..1]);
+        assert_eq!(
+            read("[\"[::]:9001\", \"0.0.0.0:9001\"]").unwrap().listen,
+            expected
+        );
+        let error = read("[1, 2]").unwrap_err();
+        assert!(error.to_string().contains("JSON array"), "{error}");
+        let error = read("[::]:9001,[nowhere").unwrap_err();
+        assert!(error.to_string().contains("[nowhere"), "{error}");
     }
 
     #[test]

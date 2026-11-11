@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, it, beforeAll } from "vitest";
 import { prepareZXingModule, readBarcodes } from "zxing-wasm/reader";
-import { qrDrawing, qrSvgDocument } from "./qrDrawing";
+import { qrDrawing, qrSvgDocument, svgContents } from "./qrDrawing";
 
 const PIXELS_PER_MODULE = 4;
 
@@ -68,5 +68,33 @@ describe("qrDrawing", () => {
     expect(svg).toContain("<path d=");
     expect(svg).toContain('stroke="#000000"');
     expect(svg).toContain("Invite &lt;&quot;x&quot;> &amp; co");
+  });
+
+  it("writes well-formed XML holding the mark's drawing in one inner svg", () => {
+    const svg = qrSvgDocument(qrDrawing("hello"), "Invite", 512);
+    const parsed = new DOMParser().parseFromString(svg, "image/svg+xml");
+    expect(parsed.querySelector("parsererror")).toBeNull();
+    expect(parsed.querySelectorAll("svg")).toHaveLength(2);
+    expect(parsed.querySelectorAll("svg svg path").length).toBeGreaterThan(0);
+    // The mark's own title would name the whole code a second time.
+    expect(parsed.querySelectorAll("title")).toHaveLength(1);
+  });
+});
+
+describe("svgContents", () => {
+  const root = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">';
+
+  it("takes what is inside the root, with or without a title", () => {
+    expect(svgContents(`${root}<title>Aspen</title><g><path d="M0 0"/></g></svg>\n`)).toBe(
+      '<g><path d="M0 0"/></g>',
+    );
+    expect(svgContents(`<?xml version="1.0"?>\n${root}<g><path d="M0 0"/></g></svg>`)).toBe(
+      '<g><path d="M0 0"/></g>',
+    );
+  });
+
+  it("refuses what is not one root svg", () => {
+    expect(() => svgContents("<g/>")).toThrow();
+    expect(() => svgContents(`${root}<g/>`)).toThrow();
   });
 });

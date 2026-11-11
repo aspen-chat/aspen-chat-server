@@ -142,16 +142,39 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-/// Milliseconds since the epoch of an RFC 3339 time (`2026-10-04T18:30:00Z`, or with an offset).
+/// The number written as exactly `width` ASCII digits.
+fn digits(text: &str, width: usize) -> Option<i64> {
+    if text.len() != width || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+/// Milliseconds since the epoch of an RFC 3339 time (`2026-10-04T18:30:00Z`, or with an offset),
+/// whole seconds: a fraction is read and left out. None for anything else, a field out of its
+/// range (a 31st of February, a 25th hour) included. Every field has a fixed width, so the sum
+/// stays far inside an `i64`.
 fn parse_time(text: &str) -> Option<i64> {
-    let number = |s: &str| s.parse::<i64>().ok();
     let (date, rest) = text.split_once(['T', 't', ' '])?;
     let mut date = date.split('-');
     let (y, m, d) = (
-        number(date.next()?)?,
-        number(date.next()?)?,
-        number(date.next()?)?,
+        digits(date.next()?, 4)?,
+        digits(date.next()?, 2)?,
+        digits(date.next()?, 2)?,
     );
+    if date.next().is_some() || !(1..=days_in_month(y, m)).contains(&d) {
+        return None;
+    }
     let (clock, offset_minutes) = if let Some(clock) = rest.strip_suffix(['Z', 'z']) {
         (clock, 0)
     } else {
@@ -159,14 +182,33 @@ fn parse_time(text: &str) -> Option<i64> {
         let (clock, offset) = rest.split_at(at);
         let sign = if offset.starts_with('-') { -1 } else { 1 };
         let (oh, om) = offset[1..].split_once(':')?;
-        (clock, sign * (number(oh)? * 60 + number(om)?))
+        let (oh, om) = (digits(oh, 2)?, digits(om, 2)?);
+        if oh > 23 || om > 59 {
+            return None;
+        }
+        (clock, sign * (oh * 60 + om))
     };
     let mut clock = clock.split(':');
-    let h = number(clock.next()?)?;
-    let min = number(clock.next()?)?;
-    let s: f64 = clock.next().unwrap_or("0").parse().ok()?;
-    let seconds =
-        days_from_civil(y, m, d) * 86_400 + h * 3600 + min * 60 + s as i64 - offset_minutes * 60;
+    let (h, min, s) = (
+        digits(clock.next()?, 2)?,
+        digits(clock.next()?, 2)?,
+        clock.next()?,
+    );
+    let s = match s.split_once('.') {
+        Some((whole, fraction)) => {
+            if fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            whole
+        }
+        None => s,
+    };
+    let s = digits(s, 2)?;
+    // A leap second is written as a 60th.
+    if clock.next().is_some() || h > 23 || min > 59 || s > 60 {
+        return None;
+    }
+    let seconds = days_from_civil(y, m, d) * 86_400 + h * 3600 + min * 60 + s - offset_minutes * 60;
     Some(seconds * 1000)
 }
 
@@ -596,6 +638,41 @@ mod tests {
             parse_time("2024-02-29T00:00:00Z").map(format_time).unwrap(),
             "2024-02-29T00:00:00Z"
         );
+    }
+
+    #[test]
+    fn a_time_out_of_range_or_out_of_shape_is_refused() {
+        assert!(parse_time("2026-10-04T18:30:00.250Z").is_some());
+        assert!(parse_time("2026-12-31T23:59:60Z").is_some());
+        assert!(parse_time("2026-10-04t18:30:00-23:59").is_some());
+        for bad in [
+            "2026-02-31T10:00:00Z",
+            "2026-02-29T10:00:00Z",
+            "2026-13-01T10:00:00Z",
+            "2026-00-10T10:00:00Z",
+            "2026-10-00T10:00:00Z",
+            "2026-10-04T24:00:00Z",
+            "2026-10-04T18:60:00Z",
+            "2026-10-04T18:30:61Z",
+            "2026-10-04T18:30:infZ",
+            "2026-10-04T18:30:nanZ",
+            "2026-10-04T18:30:1e1Z",
+            "2026-10-04T18:30:00.Z",
+            "2026-10-04T18:30Z",
+            "2026-10-04T18:30:00:00Z",
+            "2026-10-04-05T18:30:00Z",
+            "2026-10-4T18:30:00Z",
+            "999999999999999-10-04T18:30:00Z",
+            "-026-10-04T18:30:00Z",
+            "2026-10-04T18:30:00+24:00",
+            "2026-10-04T18:30:00+02:60",
+            "2026-10-04T18:30:00+0200",
+            "2026-10-04T18:30:00",
+            "2026-10-04",
+            "",
+        ] {
+            assert_eq!(parse_time(bad), None, "{bad}");
+        }
     }
 
     #[test]

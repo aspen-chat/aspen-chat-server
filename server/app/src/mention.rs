@@ -16,7 +16,6 @@ use aspen_schema::{community_role, community_user, mention};
 pub use aspen_wire::mention::Mentions;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
-use pulldown_cmark::{Event, Tag, TagEnd};
 use uuid::Uuid;
 
 /// The most distinct people and roles one message may tag; any beyond are plain text.
@@ -55,53 +54,52 @@ impl Requested {
 /// people and roles together.
 pub fn parse(content: &str) -> Requested {
     let mut found = Requested::default();
-    // A run of text may come as several events; it is read whole, up to the next markup.
-    let mut run = String::new();
-    let mut code_depth = 0u32;
-    for event in crate::markdown::parser(content) {
-        match event {
-            Event::Start(Tag::CodeBlock(_)) => {
-                scan_line(&std::mem::take(&mut run), &mut found);
-                code_depth += 1;
+    crate::markdown::text_runs(content, |run| {
+        tokens(run, |token, _| match token {
+            Token::Tag(tag) => {
+                if found.users.len() + found.roles.len() < MAX_TAGS {
+                    match tag {
+                        Found::User(id) if !found.users.contains(&id) => found.users.push(id),
+                        Found::Role(id) if !found.roles.contains(&id) => found.roles.push(id),
+                        _ => {}
+                    }
+                }
             }
-            Event::End(TagEnd::CodeBlock) => code_depth = code_depth.saturating_sub(1),
-            _ if code_depth > 0 => {}
-            Event::Text(text) => run.push_str(&text),
-            Event::SoftBreak | Event::HardBreak => run.push('\n'),
-            _ => scan_line(&std::mem::take(&mut run), &mut found),
-        }
-    }
-    scan_line(&run, &mut found);
+            Token::Everyone => found.everyone = true,
+        });
+    });
     found
 }
 
-fn scan_line(line: &str, found: &mut Requested) {
-    let mut rest = line;
+/// What stands for a tag in a run of a message's text.
+pub(crate) enum Token {
+    Tag(Found),
+    Everyone,
+}
+
+const EVERYONE: &str = "@everyone";
+
+/// Gives `each` every tag written in `run`, a run of text as `markdown::text_runs` gives
+/// them, with its length in bytes: `<@id>`, `<@&id>`, and `@everyone` where no word character
+/// stands before or after it. This is the one reading of what a tag is, whoever asks.
+pub(crate) fn tokens(run: &str, mut each: impl FnMut(Token, usize)) {
+    let mut rest = run;
     let mut previous: Option<char> = None;
     while let Some(c) = rest.chars().next() {
         if c == '<'
             && let Some((tag, len)) = tag_at(rest)
         {
-            if found.users.len() + found.roles.len() < MAX_TAGS {
-                match tag {
-                    Found::User(id) if !found.users.contains(&id) => found.users.push(id),
-                    Found::Role(id) if !found.roles.contains(&id) => found.roles.push(id),
-                    _ => {}
-                }
-            }
+            each(Token::Tag(tag), len);
             rest = &rest[len..];
             previous = Some('>');
             continue;
         }
         if c == '@'
-            && rest.starts_with("@everyone")
+            && rest.starts_with(EVERYONE)
             && !previous.is_some_and(is_word)
-            && !rest["@everyone".len()..]
-                .chars()
-                .next()
-                .is_some_and(is_word)
+            && !rest[EVERYONE.len()..].chars().next().is_some_and(is_word)
         {
-            found.everyone = true;
+            each(Token::Everyone, EVERYONE.len());
         }
         previous = Some(c);
         rest = &rest[c.len_utf8()..];
@@ -122,7 +120,7 @@ const TAG_ID_LEN: usize = 36;
 
 /// The tag `<@id>` or `<@&id>` at the start of `text`, and its length in bytes. Only the bytes
 /// a tag can hold are read, so text with many `<@` and no tag is read once.
-pub(crate) fn tag_at(text: &str) -> Option<(Found, usize)> {
+fn tag_at(text: &str) -> Option<(Found, usize)> {
     let (role, body) = if let Some(body) = text.strip_prefix("<@&") {
         (true, body)
     } else {

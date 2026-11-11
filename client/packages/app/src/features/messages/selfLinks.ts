@@ -1,4 +1,5 @@
 import { linkOptions } from "@tanstack/react-router";
+import { INVITE_CODE } from "@/features/invites/inviteCodePattern";
 import {
   channelLink,
   communityLink,
@@ -46,13 +47,13 @@ export interface KnownHosts {
 }
 
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
-const CODE = "[A-Za-z0-9]{1,16}";
 const COMMUNITY = new RegExp(`^/communities/(${UUID})$`);
 const CHANNEL = new RegExp(
   `^/communities/(${UUID})/channels/(${UUID})(?:/(messages|threads)/(${UUID}))?$`,
 );
 const DM = new RegExp(`^/dms/(${UUID})(?:/(messages|threads)/(${UUID}))?$`);
-const INVITE = new RegExp(`^/invite/(${CODE})$`);
+const INVITE = new RegExp(`^/invite/(${INVITE_CODE})$`);
+const REGISTRATION_CODE = new RegExp(`^${INVITE_CODE}$`);
 const ADMIN = /^\/admin(?:\/([A-Za-z]+))?$/;
 const BOT_ADD = new RegExp(`^/bots/(${UUID})/add$`);
 const ABROAD = /^\/at\/([^/]+)(\/.*)?$/;
@@ -140,7 +141,7 @@ function homeRoute(path: string, query: string): SelfRoute | null {
   const search = new URLSearchParams(query);
   if (path === "/register") {
     const code = search.get("invite") ?? "";
-    return new RegExp(`^${CODE}$`).test(code) ? { kind: "registration", code } : null;
+    return REGISTRATION_CODE.test(code) ? { kind: "registration", code } : null;
   }
   if (path === "/attributions") {
     return { kind: "attributions" };

@@ -527,6 +527,7 @@ dependencies = [
  "rand 0.10.3",
  "rand_chacha 0.10.0",
  "regex",
+ "regex-syntax 0.8.11",
  "reqwest",
  "rust-i18n",
  "rustls",

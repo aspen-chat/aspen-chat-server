@@ -90,15 +90,36 @@ fn rate(before: &Sample, after: &Sample, series: &str) -> Option<f64> {
     Some((value(after, series)? - value(before, series)?) / dt)
 }
 
-/// A histogram's quantile between two samples, from its cumulative buckets.
+/// The value of the label `name` of a series as Prometheus writes it
+/// (`metric_bucket{scope="a",le="0.5"}`), as written, escapes and all. The labels are read one
+/// by one, so text inside another label's value is never taken for a label.
+fn label<'a>(series: &'a str, name: &str) -> Option<&'a str> {
+    let mut rest = series.split_once('{')?.1;
+    loop {
+        let (key, after) = rest.split_once("=\"")?;
+        let mut escaped = false;
+        let end = after.char_indices().find_map(|(at, c)| {
+            let closes = c == '"' && !escaped;
+            escaped = c == '\\' && !escaped;
+            closes.then_some(at)
+        })?;
+        if key == name {
+            return Some(&after[..end]);
+        }
+        rest = after[end + 1..].strip_prefix(',')?;
+    }
+}
+
+/// A histogram's quantile between two samples, from its cumulative buckets. A histogram with
+/// labels besides `le` is read as one: each bound's counts are added across its label sets.
 fn quantile(before: &Sample, after: &Sample, metric: &str, q: f64) -> Option<f64> {
     let prefix = format!("{metric}_bucket{{");
-    let mut buckets: Vec<(f64, f64)> = after
+    let mut series: Vec<(f64, f64)> = after
         .values
         .iter()
         .filter(|(k, _)| k.starts_with(&prefix))
         .filter_map(|(k, v)| {
-            let le = k.split("le=\"").nth(1)?.split('"').next()?;
+            let le = label(k, "le")?;
             let le = if le == "+Inf" {
                 f64::INFINITY
             } else {
@@ -108,7 +129,14 @@ fn quantile(before: &Sample, after: &Sample, metric: &str, q: f64) -> Option<f64
             Some((le, v - earlier))
         })
         .collect();
-    buckets.sort_by(|a, b| a.0.total_cmp(&b.0));
+    series.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut buckets: Vec<(f64, f64)> = Vec::new();
+    for (le, count) in series {
+        match buckets.last_mut() {
+            Some(last) if last.0 == le => last.1 += count,
+            _ => buckets.push((le, count)),
+        }
+    }
     let total = buckets.last()?.1;
     if total <= 0.0 {
         return None;
@@ -277,6 +305,47 @@ mod tests {
             7.0
         );
         assert!(!parsed.contains_key("unrelated_series"));
+    }
+
+    #[test]
+    fn a_label_is_read_among_the_others() {
+        let series = r#"m_bucket{route="GET /a,le=\"9\" b",le="0.5",scope="c"}"#;
+        assert_eq!(label(series, "le"), Some("0.5"));
+        assert_eq!(label(series, "scope"), Some("c"));
+        assert_eq!(label(series, "route"), Some(r#"GET /a,le=\"9\" b"#));
+        assert_eq!(label(series, "absent"), None);
+        assert_eq!(label("m_bucket", "le"), None);
+    }
+
+    #[test]
+    fn a_quantile_adds_a_histograms_label_sets_together() {
+        let before = sample(0.0, &[(r#"m_bucket{scope="a",le="0.1"}"#, 100.0)]);
+        // Since `before`: scope a took 10, all within 0.1; scope b took 90, all above 0.1.
+        let after = sample(
+            10.0,
+            &[
+                (r#"m_bucket{scope="a",le="0.1"}"#, 110.0),
+                (r#"m_bucket{scope="a",le="1"}"#, 10.0),
+                (r#"m_bucket{scope="a",le="+Inf"}"#, 10.0),
+                (r#"m_bucket{scope="b",le="0.1"}"#, 0.0),
+                (r#"m_bucket{scope="b",le="1"}"#, 90.0),
+                (r#"m_bucket{scope="b",le="+Inf"}"#, 90.0),
+                (r#"m_bucket_other{le="0.1"}"#, 5.0),
+            ],
+        );
+        assert_eq!(quantile(&before, &after, "m", 0.1), Some(0.1));
+        assert_eq!(quantile(&before, &after, "m", 0.5), Some(1.0));
+        let unlabelled = sample(
+            10.0,
+            &[
+                (r#"m_bucket{le="0.1"}"#, 1.0),
+                (r#"m_bucket{le="+Inf"}"#, 4.0),
+            ],
+        );
+        assert_eq!(
+            quantile(&sample(0.0, &[]), &unlabelled, "m", 0.99),
+            Some(f64::INFINITY)
+        );
     }
 
     #[test]

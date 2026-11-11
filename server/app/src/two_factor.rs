@@ -393,9 +393,20 @@ fn match_totp(
     found
 }
 
+/// The Key URI an authenticator app reads. Its label is one path segment, `issuer:account`,
+/// which apps split at the first colon, encoded or not, so an issuer holding a colon is left
+/// out of the label and named by the `issuer` parameter alone.
 fn otpauth_uri(secret: &[u8], issuer: &str, account: &str) -> String {
     let mut uri = url::Url::parse("otpauth://totp/").expect("static URL parses");
-    uri.set_path(&format!("{issuer}:{account}"));
+    let label = if issuer.contains(':') {
+        account.to_owned()
+    } else {
+        format!("{issuer}:{account}")
+    };
+    uri.path_segments_mut()
+        .expect("the URL has a host, so a path of segments")
+        .pop_if_empty()
+        .push(&label);
     uri.query_pairs_mut()
         .append_pair("secret", &BASE32_NOPAD.encode(secret))
         .append_pair("issuer", issuer)
@@ -1154,5 +1165,27 @@ mod tests {
             "{uri}"
         );
         assert!(uri.contains("issuer=Aspen"), "{uri}");
+    }
+
+    #[test]
+    fn otpauth_label_is_one_segment_split_at_its_first_colon() {
+        let label = |issuer, account| {
+            let uri = url::Url::parse(&otpauth_uri(b"secret", issuer, account)).unwrap();
+            let issuer_parameter = uri
+                .query_pairs()
+                .find(|(name, _)| name == "issuer")
+                .map(|(_, value)| value.into_owned());
+            assert_eq!(issuer_parameter.as_deref(), Some(issuer));
+            let mut segments = uri.path_segments().unwrap();
+            let label = segments.next().unwrap().to_owned();
+            assert_eq!(segments.next(), None, "{uri}");
+            label
+        };
+        assert_eq!(
+            label("A/B Chat?#%", "ka/te"),
+            "A%2FB%20Chat%3F%23%25:ka%2Fte"
+        );
+        assert_eq!(label("Aspen", "a:b"), "Aspen:a:b");
+        assert_eq!(label("Aspen: Dev", "kate"), "kate");
     }
 }

@@ -33,13 +33,72 @@ where.
 | Optional parameters    | Last                                                                                                         |
 | `pattern`              | On `regex` parameters alone                                                                                  |
 
-A `pattern` is of the subset every client reads alike (`compile_pattern`):
+### Patterns
 
-- No group flags or named groups.
-- No `\A`, `\z`, or POSIX classes.
-- Small once compiled.
+A `pattern` is a regular expression a value must match whole. The server matches with Rust's `regex`
+crate; Aspen's clients check a typed value with a `u`-mode `RegExp` before sending it. A pattern is
+of the subset the two can be made to read alike, and is at most `MAX_PATTERN_CHARS` (256) characters
+and small once compiled (`PATTERN_SIZE_LIMIT`, 2 MiB, of which each `\w` or `\p{L}` written, or
+repeated by a count, takes about 50 KiB).
 
-A value must match it whole.
+| Part                  | Where                                                                      |
+| --------------------- | -------------------------------------------------------------------------- |
+| The server's check    | `app::bot_command::pattern::check`, when a list is published               |
+| The client's `RegExp` | `compilePattern` in `client/packages/app/src/features/commands/pattern.ts` |
+| Cases both pass       | `spec/bot_command_pattern_vectors.json`                                    |
+| The subset in words   | The `pattern` property of `spec/bot_commands.schema.json`                  |
+
+The server parses the pattern (`regex-syntax`) and walks what it parsed, so what a construct is
+never depends on the text around it: `\(?` is an optional parenthesis and `\\A` a backslash and an
+`A`. Each node is one of three kinds.
+
+**Read alike by both.** Characters and their escapes (`\n`, `\x41`, `\u00e9`, `\u{1F600}`), classes
+and ranges, `\p{…}` with the listed names, groups without names or flags, `|`, `^`, `$`, and
+repetition of a character, a class, or a group.
+
+**Unicode's on the server, rewritten by the client.** JavaScript's `\d`, `\w`, and `\b` know only
+ASCII, its `\s` takes U+FEFF and not U+0085, and its `.` stops at U+000D, U+2028, and U+2029 as well
+as U+000A. The server's meaning stands, and the client writes each as the class that says the same:
+
+| Written    | Means on the server                                         | The client compiles                                 |
+| ---------- | ----------------------------------------------------------- | --------------------------------------------------- |
+| `\d`, `\D` | `Nd` and all but it                                         | `\p{Nd}`, `\P{Nd}`                                  |
+| `\w`, `\W` | `Alphabetic`, `M`, `Nd`, `Pc`, and `Join_Control`; the rest | `[\p{Alphabetic}\p{M}\p{Nd}\p{Pc}\p{Join_Control}]` |
+| `\s`, `\S` | `White_Space` and all but it                                | `\p{White_Space}`, `\P{White_Space}`                |
+| `\b`, `\B` | A `\w` character on exactly one side; on both or neither    | Look-behind and look-ahead for the `\w` class       |
+| `.`        | Any character but U+000A                                    | `[^\n]`                                             |
+
+Inside a class `\d`, `\w`, `\s`, `\D`, and `\S` become members in place. A `u`-mode class cannot
+hold the complement that `\W` is, so a class holding `\W` becomes the class beside `[^…]` of the
+word characters. `\b` inside a class is refused: Rust refuses it, and JavaScript reads a backspace.
+The client reads the pattern token by token to do this, and a pattern it cannot read as the subset,
+or that its engine cannot compile, it leaves to the server.
+
+**Refused**, each by name with the spelling to use (`PatternError`):
+
+| Construct                                                            | Why                                                           |
+| -------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Group flags, `(?i)` and `(?i:…)`                                     | JavaScript has no `(?i)`, and only its newer engines `(?i:…)` |
+| Named groups                                                         | `(?P<n>…)` is Rust's alone, and nothing reads a group's name  |
+| `\A`, `\z`                                                           | Not JavaScript's; `^` and `$` say the same                    |
+| `[:alpha:]`, a class inside a class, `&&`, `--`, `~~` in a class     | JavaScript reads the characters                               |
+| `\pL`, `\p{Greek}`, `\p{sc:Greek}`, a name loosely spelled           | JavaScript takes exact names and `name=value`                 |
+| `\<`, `\>`, `\b{start}` and its kin                                  | Not JavaScript's                                              |
+| `\x{41}`, `\U0001F600`, `\a`, a backslash before any other character | Not escapes in `u` mode                                       |
+| An unescaped `]` or `}`; `-` between two members of a class          | JavaScript refuses it, or reads a range                       |
+| `{ 2 }`, `{,n}`                                                      | JavaScript refuses the spaces; Rust has no `{,n}`             |
+| A repetition of a repetition (`a**`) or of an assertion (`\b+`)      | JavaScript refuses it                                         |
+| Look-around, backreferences, anything else that does not parse       | Rust has none                                                 |
+
+The `\p{…}` names are the general categories and binary properties both engines know, and the
+scripts for `Script` and `Script_Extensions`, kept as lists in `app::bot_command::pattern` and in
+the vector file, which a test holds equal. Which characters a property holds follows each reader's
+version of Unicode, so the two can differ on a character one of them does not yet know.
+
+A list already kept is not checked again. An invocation compiles its parameter's pattern with
+`pattern::published`, which applies only the size limit, so a command whose pattern was kept under a
+wider subset takes the values it took until its bot publishes again; the client leaves such a
+pattern to the server.
 
 ### Parameter types
 

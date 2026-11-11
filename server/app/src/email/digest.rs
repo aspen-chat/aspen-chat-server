@@ -676,19 +676,27 @@ impl Names {
     }
 }
 
-/// The custom emoji `content` names.
+/// The custom emoji `content` names: every reference `name_tokens` would find there.
 fn custom_emoji_in(content: &str) -> Vec<CustomEmojiId> {
+    const OPEN: &str = "<:";
     let mut found = Vec::new();
     let mut rest = content;
-    while let Some(start) = rest.find("<:") {
+    while let Some(start) = rest.find(OPEN) {
         rest = &rest[start..];
-        let Some(end) = rest.find('>') else {
-            break;
-        };
-        if let Some(id) = crate::custom_emoji::referenced(&rest[..=end]) {
-            found.push(id);
+        // As `name_tokens` reads: a `<:` that no reference follows (an emoticon, say) is
+        // passed by alone, so one after it is still found.
+        let reference = rest
+            .bytes()
+            .take(TOKEN_MAX_BYTES)
+            .position(|b| b == b'>')
+            .and_then(|end| Some((end, crate::custom_emoji::referenced(&rest[..=end])?)));
+        match reference {
+            Some((end, id)) => {
+                found.push(id);
+                rest = &rest[end + 1..];
+            }
+            None => rest = &rest[OPEN.len()..],
         }
-        rest = &rest[end + 1..];
     }
     found
 }
@@ -782,6 +790,23 @@ mod tests {
             communities: HashMap::new(),
             recipients: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn an_emoji_after_text_that_only_opens_like_one_is_found() {
+        let first = CustomEmojiId(uuid::Uuid::from_u128(3));
+        let second = CustomEmojiId(uuid::Uuid::from_u128(4));
+        let reference = crate::custom_emoji::reference;
+        let text = format!(
+            "<:) a <: b {} <:3 > {}<:",
+            reference(first),
+            reference(second)
+        );
+        assert_eq!(custom_emoji_in(&text), vec![first, second]);
+        assert_eq!(
+            names().name_tokens(&format!("<:) {}", reference(first))),
+            "<:) :party:"
+        );
     }
 
     #[test]

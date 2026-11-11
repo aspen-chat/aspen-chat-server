@@ -90,7 +90,23 @@ is taken there, whatever their home:
 - The invite screen goes on to `/at/{domain}/invite/{code}` when the domain is not the home's.
 - One pasted into the join form (`parseInvite`, which also reads `/at/{domain}/invite/…`) opens the
   same way.
-- One posted in a message (`MessageLink`) opens the same way.
+- One posted in a message (`MessageLink`, `namedInvite`) opens the same way.
+
+`parseInvite` reads a pasted link whole (`routeAddress`; see
+[Reading a link](qr-codes.md#reading-a-link)), its invite route being the link's whole path:
+
+| Pasted                                                | Read as                             |
+| ----------------------------------------------------- | ----------------------------------- |
+| A bare code                                           | The deployment shown's              |
+| A link with `?at=`, or `/at/{domain}/invite/{code}`   | The named deployment's, on any host |
+| `/invite/{code}` on one of the home's own addresses   | The deployment shown's              |
+| `/invite/{code}` on any other host                    | The deployment's at that host       |
+| `/invite/{code}` as an `aspen:` link or an app's page | The deployment shown's              |
+
+In a message, only a link that names its deployment is an invite (`namedInvite`). **Why:** a link
+that merely has an invite's path on some other host is usually another site's own, and opens as any
+link does.
+
 - A signed-out visitor is told their account may be on any deployment.
 
 ## Adding, leaving, and signing out
@@ -100,6 +116,19 @@ is taken there, whatever their home:
 | Add a server | The add dialog's last option (`OtherServerForm`)        |
 | Leave one    | Settings (`OtherServersSection`)                        |
 | Sign out     | Signing out at home signs out everywhere (`useSignOut`) |
+
+The join form (`JoinForm`: the add dialog's join step, and the empty home screen's) hands a
+registration invite of another deployment, scanned or pasted, to the add-a-server form
+(`routeJoinLink`):
+
+- The form opens with the deployment's domain and the invite filled in, and the registration invite
+  field showing, which otherwise appears only once the deployment answers that it requires one.
+- Nothing is sent until the reader presses Sign in.
+- In the add dialog the join step gives way to the server step, whose back arrow leads to the choice
+  and forgets what was filled in. On the empty home screen the form opens in a dialog of its own
+  (`OtherServerDialog`).
+- Where the home takes no part in federation there is no such form, and the invite is refused,
+  naming its deployment.
 
 ## DMs
 

@@ -30,6 +30,27 @@ describe("custom emoji references", () => {
     expect(encodeCustomEmoji(":partyparrot:", [])).toBe(":partyparrot:");
   });
 
+  it("counts a name's length in code points", () => {
+    const long: CustomEmoji = { ...parrot, name: "𠀀".repeat(32) };
+    expect(encodeCustomEmoji(`:${long.name}:`, [long])).toBe(referenceOf(long.id));
+    expect(encodeCustomEmoji(`:${"𠀀".repeat(33)}:`, [long])).toBe(`:${"𠀀".repeat(33)}:`);
+    const short: CustomEmoji = { ...parrot, name: "𠀀" };
+    expect(encodeCustomEmoji(`:${short.name}:`, [short])).toBe(`:${short.name}:`);
+  });
+
+  it("takes the emoji named as written over one that differs in case", () => {
+    const upper: CustomEmoji = { ...parrot, name: "Éx" };
+    const lower: CustomEmoji = { ...blob, name: "éx" };
+    expect(encodeCustomEmoji(":Éx: :éx:", [upper, lower])).toBe(
+      `${referenceOf(upper.id)} ${referenceOf(lower.id)}`,
+    );
+    expect(encodeCustomEmoji(":Éx: :éx:", [lower, upper])).toBe(
+      `${referenceOf(upper.id)} ${referenceOf(lower.id)}`,
+    );
+    // Neither is written so, and ignoring case names both.
+    expect(encodeCustomEmoji(":ÉX:", [upper, lower])).toBe(":ÉX:");
+  });
+
   it("decodes references to :name:, leaving unknown ones as sent", () => {
     const sent = `${referenceOf(parrot.id)} ${referenceOf("0190f0a0-0000-7000-8000-0000000000e9")}`;
     expect(decodeCustomEmoji(sent, [parrot])).toBe(

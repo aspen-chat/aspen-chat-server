@@ -1,0 +1,1799 @@
+{
+  "description": "Patterns of bot commands' regex parameters, which the server (app::bot_command::pattern) and the client (features/commands/pattern.ts) both pass. accepted: a pattern of the subset, values it matches whole, and values it does not. refused: a pattern outside the subset and why, by the server's reason, with the construct it names and the spelling it offers where it has them (at is the character reading stops at, from one); the client leaves each of these to the server. properties: the names \\p{...} takes, which every engine a pattern is read by must know; scriptsOfUnicode16 are the scripts among them that an engine older than Unicode 16 lacks.",
+  "accepted": [
+    {
+      "pattern": "[0-9]+d[0-9]+",
+      "matches": [
+        "2d6",
+        "10d20"
+      ],
+      "rejects": [
+        "roll 2d6 now",
+        "2d",
+        "",
+        "\u0662d\u0666"
+      ]
+    },
+    {
+      "pattern": "\\d+",
+      "note": "Arabic-Indic, Devanagari, and fullwidth digits are digits; a Roman numeral and a superscript are not",
+      "matches": [
+        "42",
+        "\u0663\u0664",
+        "\u096a\u0968",
+        "\uff11\uff12"
+      ],
+      "rejects": [
+        "",
+        "4a",
+        "\u2163",
+        "\u00b2",
+        "\u0663 \u0664"
+      ]
+    },
+    {
+      "pattern": "\\D",
+      "matches": [
+        "a",
+        "\u00b2",
+        " "
+      ],
+      "rejects": [
+        "5",
+        "\u0663",
+        "\u096a"
+      ]
+    },
+    {
+      "pattern": "\\w+",
+      "note": "letters of any script, marks, digits, connector punctuation, and the two joiners",
+      "matches": [
+        "abc_1",
+        "\u00e9",
+        "e\u0301",
+        "\u65e5\u672c\u8a9e",
+        "\u0301",
+        "a\u200db",
+        "\u200c",
+        "\u203f",
+        "\u0663",
+        "\ufb01"
+      ],
+      "rejects": [
+        "",
+        "a b",
+        "a-b",
+        "\u200b",
+        "\u20ac",
+        "\u00b2",
+        "\ud83d\ude00"
+      ]
+    },
+    {
+      "pattern": "\\W",
+      "matches": [
+        "-",
+        " ",
+        "\u200b",
+        "\ud83d\ude00",
+        "\u00b2"
+      ],
+      "rejects": [
+        "\u00e9",
+        "\u0301",
+        "\u200d",
+        "_",
+        "\u65e5",
+        "\u0663"
+      ]
+    },
+    {
+      "pattern": "\\s",
+      "note": "U+0085 is a space and U+FEFF is not",
+      "matches": [
+        " ",
+        "\t",
+        "\n",
+        "\r",
+        "\u000b",
+        "\f",
+        "\u0085",
+        "\u00a0",
+        "\u1680",
+        "\u2003",
+        "\u2028",
+        "\u2029",
+        "\u202f",
+        "\u205f",
+        "\u3000"
+      ],
+      "rejects": [
+        "\ufeff",
+        "\u200b",
+        "\u180e",
+        "a",
+        ""
+      ]
+    },
+    {
+      "pattern": "\\S+",
+      "matches": [
+        "\ufeff",
+        "a\u200bb"
+      ],
+      "rejects": [
+        "a\u0085b",
+        "a b",
+        ""
+      ]
+    },
+    {
+      "pattern": ".",
+      "note": "every character but U+000A",
+      "matches": [
+        "a",
+        "\r",
+        "\u2028",
+        "\u2029",
+        "\u0085",
+        "\ud83d\ude00"
+      ],
+      "rejects": [
+        "\n",
+        "",
+        "ab"
+      ]
+    },
+    {
+      "pattern": "a.c",
+      "matches": [
+        "a\rc",
+        "a\u2028c",
+        "a.c"
+      ],
+      "rejects": [
+        "a\nc",
+        "ac"
+      ]
+    },
+    {
+      "pattern": ".*",
+      "matches": [
+        "",
+        "one\rtwo"
+      ],
+      "rejects": [
+        "one\ntwo"
+      ]
+    },
+    {
+      "pattern": "\u00e9\\b-\\b\u00e9",
+      "note": "a boundary lies between a letter of any script and punctuation",
+      "matches": [
+        "\u00e9-\u00e9"
+      ],
+      "rejects": [
+        "\u00e9\u00e9"
+      ]
+    },
+    {
+      "pattern": "a\\b\u00e9",
+      "note": "no boundary lies between two letters",
+      "matches": [],
+      "rejects": [
+        "a\u00e9"
+      ]
+    },
+    {
+      "pattern": "a\\B\u00e9",
+      "matches": [
+        "a\u00e9"
+      ],
+      "rejects": [
+        "a \u00e9"
+      ]
+    },
+    {
+      "pattern": "\\b\u65e5\u672c\\b",
+      "matches": [
+        "\u65e5\u672c"
+      ],
+      "rejects": [
+        "\u65e5"
+      ]
+    },
+    {
+      "pattern": "\\d+\\b \\b\\d+",
+      "matches": [
+        "12 34",
+        "\u0663 \u096a"
+      ],
+      "rejects": [
+        "12  34",
+        "12-34",
+        "12 a"
+      ]
+    },
+    {
+      "pattern": ".\\b.",
+      "matches": [
+        "a ",
+        " a",
+        "\u00e9 ",
+        " \u65e5",
+        "a\u200b",
+        "\u0663-"
+      ],
+      "rejects": [
+        "ab",
+        "\u00e9a",
+        "  ",
+        "a\u0301",
+        "a\u200d",
+        "-\u0085"
+      ]
+    },
+    {
+      "pattern": "\\b",
+      "note": "an empty value has no word to bound",
+      "matches": [],
+      "rejects": [
+        ""
+      ]
+    },
+    {
+      "pattern": "\\B",
+      "matches": [
+        ""
+      ],
+      "rejects": [
+        "a"
+      ]
+    },
+    {
+      "pattern": "x\\b",
+      "matches": [
+        "x"
+      ],
+      "rejects": []
+    },
+    {
+      "pattern": "-\\b",
+      "matches": [],
+      "rejects": [
+        "-"
+      ]
+    },
+    {
+      "pattern": "\\B-\\B",
+      "matches": [
+        "-"
+      ],
+      "rejects": []
+    },
+    {
+      "pattern": "[\\w-]+",
+      "matches": [
+        "a-\u00e9",
+        "\u65e5-\u672c",
+        "-"
+      ],
+      "rejects": [
+        "a b",
+        ""
+      ]
+    },
+    {
+      "pattern": "[^\\w]",
+      "matches": [
+        "-",
+        " "
+      ],
+      "rejects": [
+        "\u00e9",
+        "_"
+      ]
+    },
+    {
+      "pattern": "[\\W]",
+      "matches": [
+        "-",
+        "\ud83d\ude00"
+      ],
+      "rejects": [
+        "\u00e9",
+        "\u0301"
+      ]
+    },
+    {
+      "pattern": "[a\\W]+",
+      "note": "a class holding \\W",
+      "matches": [
+        "a-",
+        "a a",
+        "--"
+      ],
+      "rejects": [
+        "b",
+        "\u00e9",
+        "a-b"
+      ]
+    },
+    {
+      "pattern": "[^a\\W]+",
+      "note": "a negated class holding \\W",
+      "matches": [
+        "b\u00e9c",
+        "\u65e5_\u0663"
+      ],
+      "rejects": [
+        "bac",
+        "b-c",
+        ""
+      ]
+    },
+    {
+      "pattern": "[^\\W\\d]+",
+      "matches": [
+        "\u00e9t\u00e9",
+        "\u65e5\u672c"
+      ],
+      "rejects": [
+        "a1",
+        "a\u0663",
+        "a-"
+      ]
+    },
+    {
+      "pattern": "[\\d.]+",
+      "note": "a dot inside a class is a dot",
+      "matches": [
+        "\u0663.\u0664",
+        "1.5"
+      ],
+      "rejects": [
+        "1,5",
+        "1\r5"
+      ]
+    },
+    {
+      "pattern": "[\\s\\d]",
+      "matches": [
+        "\u0085",
+        "\u0663"
+      ],
+      "rejects": [
+        "\ufeff",
+        "a"
+      ]
+    },
+    {
+      "pattern": "[^\\s]",
+      "matches": [
+        "\ufeff",
+        "a"
+      ],
+      "rejects": [
+        "\u0085",
+        " "
+      ]
+    },
+    {
+      "pattern": "[\\D]",
+      "matches": [
+        "a"
+      ],
+      "rejects": [
+        "\u0663"
+      ]
+    },
+    {
+      "pattern": "[\\S\\s]",
+      "matches": [
+        "\n",
+        "\ufeff",
+        "a"
+      ],
+      "rejects": [
+        ""
+      ]
+    },
+    {
+      "pattern": "\\(?[0-9]{3}\\)?[0-9]{7}",
+      "note": "an escaped parenthesis before ? is not a group with flags",
+      "matches": [
+        "(555)1234567",
+        "5551234567"
+      ],
+      "rejects": [
+        "(555)123456",
+        "[555]1234567"
+      ]
+    },
+    {
+      "pattern": "[(?]",
+      "note": "( and ? inside a class are themselves",
+      "matches": [
+        "(",
+        "?"
+      ],
+      "rejects": [
+        "a",
+        "(?"
+      ]
+    },
+    {
+      "pattern": "\\\\A",
+      "note": "an escaped backslash before A is not \\A",
+      "matches": [
+        "\\A"
+      ],
+      "rejects": [
+        "A",
+        "",
+        "\\"
+      ]
+    },
+    {
+      "pattern": "[\\\\z]",
+      "matches": [
+        "z",
+        "\\"
+      ],
+      "rejects": [
+        "\\z"
+      ]
+    },
+    {
+      "pattern": "\\\\d",
+      "note": "an escaped backslash before d is not \\d",
+      "matches": [
+        "\\d"
+      ],
+      "rejects": [
+        "5",
+        "d"
+      ]
+    },
+    {
+      "pattern": "\\\\\\d",
+      "matches": [
+        "\\5",
+        "\\\u0663"
+      ],
+      "rejects": [
+        "\\d",
+        "5"
+      ]
+    },
+    {
+      "pattern": "\\p{L}+",
+      "matches": [
+        "a\u00e9\u65e5"
+      ],
+      "rejects": [
+        "a1",
+        ""
+      ]
+    },
+    {
+      "pattern": "\\P{L}",
+      "matches": [
+        "1",
+        " "
+      ],
+      "rejects": [
+        "a",
+        "\u65e5"
+      ]
+    },
+    {
+      "pattern": "\\p{Lu}\\p{Ll}+",
+      "matches": [
+        "\u00c9lan",
+        "\u03a9\u03bc\u03ad\u03b3\u03b1"
+      ],
+      "rejects": [
+        "\u00e9lan",
+        "\u00c9LAN"
+      ]
+    },
+    {
+      "pattern": "\\p{Letter}\\p{gc=Nd}\\p{General_Category=Decimal_Number}",
+      "matches": [
+        "a1\u0663"
+      ],
+      "rejects": [
+        "a1b"
+      ]
+    },
+    {
+      "pattern": "\\p{Script=Greek}+",
+      "matches": [
+        "\u03b1\u03b2\u03b3"
+      ],
+      "rejects": [
+        "abc",
+        "\u03b1b\u03b3"
+      ]
+    },
+    {
+      "pattern": "\\p{sc=Grek}\\p{Script_Extensions=Greek}\\p{scx=Grek}",
+      "matches": [
+        "\u03b1\u03b2\u03b3"
+      ],
+      "rejects": [
+        "\u03b1\u03b2c"
+      ]
+    },
+    {
+      "pattern": "\\P{Script=Latin}+",
+      "matches": [
+        "\u65e5\u672c",
+        "\u03b1\u03b2"
+      ],
+      "rejects": [
+        "\u65e5a"
+      ]
+    },
+    {
+      "pattern": "[\\p{L}\\p{Nd}_]+",
+      "matches": [
+        "a_\u0663\u00e9"
+      ],
+      "rejects": [
+        "a-b"
+      ]
+    },
+    {
+      "pattern": "[^\\p{L}]+",
+      "matches": [
+        "12-"
+      ],
+      "rejects": [
+        "1a"
+      ]
+    },
+    {
+      "pattern": "\\p{Alphabetic}\\p{White_Space}\\p{Emoji_Presentation}",
+      "matches": [
+        "a \ud83d\ude00",
+        "\u00e9\u0085\ud83d\ude00"
+      ],
+      "rejects": [
+        "a a"
+      ]
+    },
+    {
+      "pattern": "\\x41\\u00e9\\u{1F600}\\u{e9}",
+      "matches": [
+        "A\u00e9\ud83d\ude00\u00e9"
+      ],
+      "rejects": [
+        "a\u00e9\ud83d\ude00\u00e9"
+      ]
+    },
+    {
+      "pattern": "\\t\\n\\r\\f\\v",
+      "matches": [
+        "\t\n\r\f\u000b"
+      ],
+      "rejects": [
+        "tnrfv"
+      ]
+    },
+    {
+      "pattern": "\\^\\$\\\\\\.\\*\\+\\?\\(\\)\\[\\]\\{\\}\\|\\/",
+      "matches": [
+        "^$\\.*+?()[]{}|/"
+      ],
+      "rejects": [
+        ""
+      ]
+    },
+    {
+      "pattern": "[\\^\\-\\]\\\\\\[]+",
+      "matches": [
+        "^-]\\["
+      ],
+      "rejects": [
+        "a"
+      ]
+    },
+    {
+      "pattern": "[-a]+",
+      "matches": [
+        "-a-"
+      ],
+      "rejects": [
+        "b"
+      ]
+    },
+    {
+      "pattern": "[a-]+",
+      "matches": [
+        "-a-"
+      ],
+      "rejects": [
+        "b"
+      ]
+    },
+    {
+      "pattern": "[^-]",
+      "matches": [
+        "a"
+      ],
+      "rejects": [
+        "-"
+      ]
+    },
+    {
+      "pattern": "[a^]",
+      "matches": [
+        "^",
+        "a"
+      ],
+      "rejects": [
+        "b"
+      ]
+    },
+    {
+      "pattern": "[^^]",
+      "matches": [
+        "a"
+      ],
+      "rejects": [
+        "^"
+      ]
+    },
+    {
+      "pattern": "[.*+?(){}|$/&~#,:=!<>@%_ ]+",
+      "matches": [
+        ".*+?(){}|$/&~#,:=!<>@%_ "
+      ],
+      "rejects": [
+        "a",
+        "\\"
+      ]
+    },
+    {
+      "pattern": "[+-/]",
+      "matches": [
+        "+",
+        ",",
+        "-",
+        ".",
+        "/"
+      ],
+      "rejects": [
+        "0",
+        "*"
+      ]
+    },
+    {
+      "pattern": "[\\x41-\\u005a\\u{61}-z]+",
+      "matches": [
+        "AZaz"
+      ],
+      "rejects": [
+        "[",
+        "\u00e9"
+      ]
+    },
+    {
+      "pattern": "[\ud83d\ude00-\ud83d\ude4f]+",
+      "matches": [
+        "\ud83d\ude03\ud83d\ude4f"
+      ],
+      "rejects": [
+        "a",
+        "\ud83d\ude80"
+      ]
+    },
+    {
+      "pattern": "\ud83d\ude00{2}",
+      "note": "a repetition takes a whole character, whatever its code",
+      "matches": [
+        "\ud83d\ude00\ud83d\ude00"
+      ],
+      "rejects": [
+        "\ud83d\ude00"
+      ]
+    },
+    {
+      "pattern": "a&&b--c~~d#e-f",
+      "note": "outside a class these are themselves",
+      "matches": [
+        "a&&b--c~~d#e-f"
+      ],
+      "rejects": [
+        "a&b"
+      ]
+    },
+    {
+      "pattern": "a{2}",
+      "matches": [
+        "aa"
+      ],
+      "rejects": [
+        "a",
+        "aaa"
+      ]
+    },
+    {
+      "pattern": "a{2,}",
+      "matches": [
+        "aa",
+        "aaaa"
+      ],
+      "rejects": [
+        "a"
+      ]
+    },
+    {
+      "pattern": "a{2,3}?",
+      "matches": [
+        "aa",
+        "aaa"
+      ],
+      "rejects": [
+        "a",
+        "aaaa"
+      ]
+    },
+    {
+      "pattern": "a{0}b",
+      "matches": [
+        "b"
+      ],
+      "rejects": [
+        "ab"
+      ]
+    },
+    {
+      "pattern": "a+?b*?c??",
+      "matches": [
+        "a",
+        "aabc",
+        "ac"
+      ],
+      "rejects": [
+        "",
+        "bc"
+      ]
+    },
+    {
+      "pattern": "(?:ab)*",
+      "matches": [
+        "",
+        "abab"
+      ],
+      "rejects": [
+        "aba"
+      ]
+    },
+    {
+      "pattern": "(a|b){2}",
+      "matches": [
+        "ab",
+        "bb"
+      ],
+      "rejects": [
+        "a",
+        "abc"
+      ]
+    },
+    {
+      "pattern": "(a(b(?:c)?)?)+",
+      "matches": [
+        "a",
+        "ababc"
+      ],
+      "rejects": [
+        "b",
+        "ac"
+      ]
+    },
+    {
+      "pattern": "cat|dog|",
+      "matches": [
+        "cat",
+        "dog",
+        ""
+      ],
+      "rejects": [
+        "catdog"
+      ]
+    },
+    {
+      "pattern": "(|a)b",
+      "matches": [
+        "b",
+        "ab"
+      ],
+      "rejects": [
+        "aab"
+      ]
+    },
+    {
+      "pattern": "^a$",
+      "note": "^ and $ are the ends of the value, not of a line",
+      "matches": [
+        "a"
+      ],
+      "rejects": [
+        "aa",
+        "a\n",
+        "\na"
+      ]
+    },
+    {
+      "pattern": "(?:^a)|(?:b$)",
+      "matches": [
+        "a",
+        "b"
+      ],
+      "rejects": [
+        "ab"
+      ]
+    },
+    {
+      "pattern": "a$b",
+      "matches": [],
+      "rejects": [
+        "ab",
+        "a\nb",
+        "a"
+      ]
+    },
+    {
+      "pattern": "a\\nb",
+      "matches": [
+        "a\nb"
+      ],
+      "rejects": [
+        "a\rb"
+      ]
+    },
+    {
+      "pattern": "(?:^)*a",
+      "note": "a group holding an assertion can be repeated",
+      "matches": [
+        "a"
+      ],
+      "rejects": [
+        "aa"
+      ]
+    },
+    {
+      "pattern": "",
+      "matches": [
+        ""
+      ],
+      "rejects": [
+        "a"
+      ]
+    },
+    {
+      "pattern": "\u0391\u0392\u0393|\u65e5\u672c|\ud83d\ude42",
+      "matches": [
+        "\u0391\u0392\u0393",
+        "\u65e5\u672c",
+        "\ud83d\ude42"
+      ],
+      "rejects": [
+        "\u03b1\u03b2\u03b3"
+      ]
+    }
+  ],
+  "refused": [
+    {
+      "pattern": "(?i)x",
+      "reason": "flags",
+      "construct": "(?i)"
+    },
+    {
+      "pattern": "(?i:x)",
+      "reason": "flags",
+      "construct": "(?i:"
+    },
+    {
+      "pattern": "(?s).",
+      "reason": "flags",
+      "construct": "(?s)"
+    },
+    {
+      "pattern": "(?P<n>x)",
+      "reason": "namedGroup",
+      "construct": "(?P<n>"
+    },
+    {
+      "pattern": "(?<n>x)",
+      "reason": "namedGroup",
+      "construct": "(?<n>"
+    },
+    {
+      "pattern": "\\Ax",
+      "reason": "spelling",
+      "construct": "\\A",
+      "instead": "^"
+    },
+    {
+      "pattern": "x\\z",
+      "reason": "spelling",
+      "construct": "\\z",
+      "instead": "$"
+    },
+    {
+      "pattern": "[[:alpha:]]",
+      "reason": "posixClass",
+      "construct": "[:alpha:]"
+    },
+    {
+      "pattern": "[a-z&&[^x]]",
+      "reason": "classSetOperation",
+      "construct": "&&"
+    },
+    {
+      "pattern": "[a-z--b]",
+      "reason": "classSetOperation",
+      "construct": "--"
+    },
+    {
+      "pattern": "[a~~b]",
+      "reason": "classSetOperation",
+      "construct": "~~"
+    },
+    {
+      "pattern": "[+--]",
+      "reason": "classSetOperation",
+      "construct": "--"
+    },
+    {
+      "pattern": "[a[b]]",
+      "reason": "nestedClass"
+    },
+    {
+      "pattern": "\\pL",
+      "reason": "spelling",
+      "construct": "\\pL",
+      "instead": "\\p{L}"
+    },
+    {
+      "pattern": "[\\PL]",
+      "reason": "spelling",
+      "construct": "\\PL",
+      "instead": "\\P{L}"
+    },
+    {
+      "pattern": "\\p{Greek}",
+      "reason": "property",
+      "construct": "\\p{Greek}"
+    },
+    {
+      "pattern": "\\p{letter}",
+      "reason": "property",
+      "construct": "\\p{letter}"
+    },
+    {
+      "pattern": "\\p{ L }",
+      "reason": "property",
+      "construct": "\\p{ L }"
+    },
+    {
+      "pattern": "\\p{^L}",
+      "reason": "property",
+      "construct": "\\p{^L}"
+    },
+    {
+      "pattern": "\\p{sc:Greek}",
+      "reason": "property",
+      "construct": "\\p{sc:Greek}"
+    },
+    {
+      "pattern": "\\p{sc!=Greek}",
+      "reason": "property",
+      "construct": "\\p{sc!=Greek}"
+    },
+    {
+      "pattern": "\\p{Script=greek}",
+      "reason": "property",
+      "construct": "\\p{Script=greek}"
+    },
+    {
+      "pattern": "[\\p{Age=6.0}]",
+      "reason": "property",
+      "construct": "\\p{Age=6.0}"
+    },
+    {
+      "pattern": "\\<x",
+      "reason": "wordBoundary",
+      "construct": "\\<"
+    },
+    {
+      "pattern": "x\\>",
+      "reason": "wordBoundary",
+      "construct": "\\>"
+    },
+    {
+      "pattern": "\\b{start}x",
+      "reason": "wordBoundary",
+      "construct": "\\b{start}"
+    },
+    {
+      "pattern": "x\\b{end-half}",
+      "reason": "wordBoundary",
+      "construct": "\\b{end-half}"
+    },
+    {
+      "pattern": "\\x{41}",
+      "reason": "spelling",
+      "construct": "\\x{41}",
+      "instead": "\\u{41}"
+    },
+    {
+      "pattern": "\\U0001F600",
+      "reason": "spelling",
+      "construct": "\\U0001F600",
+      "instead": "\\u{1F600}"
+    },
+    {
+      "pattern": "\\U{1F600}",
+      "reason": "spelling",
+      "construct": "\\U{1F600}",
+      "instead": "\\u{1F600}"
+    },
+    {
+      "pattern": "\\a",
+      "reason": "spelling",
+      "construct": "\\a",
+      "instead": "\\x07"
+    },
+    {
+      "pattern": "\\#",
+      "reason": "spelling",
+      "construct": "\\#",
+      "instead": "#"
+    },
+    {
+      "pattern": "a\\-b",
+      "reason": "spelling",
+      "construct": "\\-",
+      "instead": "-"
+    },
+    {
+      "pattern": "a\\ b",
+      "reason": "spelling",
+      "construct": "\\ ",
+      "instead": " "
+    },
+    {
+      "pattern": "[\\&]",
+      "reason": "spelling",
+      "construct": "\\&",
+      "instead": "&"
+    },
+    {
+      "pattern": "\\_",
+      "reason": "spelling",
+      "construct": "\\_",
+      "instead": "_"
+    },
+    {
+      "pattern": "a]",
+      "reason": "spelling",
+      "construct": "]",
+      "instead": "\\]"
+    },
+    {
+      "pattern": "a}",
+      "reason": "spelling",
+      "construct": "}",
+      "instead": "\\}"
+    },
+    {
+      "pattern": "[]a]",
+      "reason": "spelling",
+      "construct": "]",
+      "instead": "\\]"
+    },
+    {
+      "pattern": "[a-c-e]",
+      "reason": "spelling",
+      "construct": "-",
+      "instead": "\\-"
+    },
+    {
+      "pattern": "[--a]",
+      "reason": "spelling",
+      "construct": "-",
+      "instead": "\\-"
+    },
+    {
+      "pattern": "a{ 2 }",
+      "reason": "spelling",
+      "construct": "{ 2 }",
+      "instead": "{2}"
+    },
+    {
+      "pattern": "a{,3}",
+      "reason": "repetitionCount"
+    },
+    {
+      "pattern": "a{}",
+      "reason": "repetitionCount"
+    },
+    {
+      "pattern": "a**",
+      "reason": "nestedRepetition",
+      "construct": "a**"
+    },
+    {
+      "pattern": "a+??",
+      "reason": "nestedRepetition",
+      "construct": "a+??"
+    },
+    {
+      "pattern": "a{2}{3}",
+      "reason": "nestedRepetition",
+      "construct": "a{2}{3}"
+    },
+    {
+      "pattern": "a?+",
+      "reason": "nestedRepetition",
+      "construct": "a?+"
+    },
+    {
+      "pattern": "\\b+",
+      "reason": "repeatedAssertion",
+      "construct": "\\b+"
+    },
+    {
+      "pattern": "^*a",
+      "reason": "repeatedAssertion",
+      "construct": "^*"
+    },
+    {
+      "pattern": "a$?",
+      "reason": "repeatedAssertion",
+      "construct": "$?"
+    },
+    {
+      "pattern": "\\b{2}",
+      "reason": "repeatedAssertion",
+      "construct": "\\b{2}"
+    },
+    {
+      "pattern": "[\\b]",
+      "reason": "classAssertion",
+      "construct": "\\b"
+    },
+    {
+      "pattern": "[a\\B]",
+      "reason": "classAssertion",
+      "construct": "\\B"
+    },
+    {
+      "pattern": "(?=a)a",
+      "reason": "lookAround"
+    },
+    {
+      "pattern": "a(?!b)",
+      "reason": "lookAround"
+    },
+    {
+      "pattern": "(?<=a)b",
+      "reason": "lookAround"
+    },
+    {
+      "pattern": "(?<!a)b",
+      "reason": "lookAround"
+    },
+    {
+      "pattern": "(a)\\1",
+      "reason": "backreference"
+    },
+    {
+      "pattern": "\\0",
+      "reason": "backreference"
+    },
+    {
+      "pattern": "(",
+      "reason": "syntax",
+      "at": 1
+    },
+    {
+      "pattern": "a)|(b",
+      "reason": "syntax",
+      "at": 2
+    },
+    {
+      "pattern": "[a",
+      "reason": "syntax",
+      "at": 1
+    },
+    {
+      "pattern": "*a",
+      "reason": "syntax",
+      "at": 1
+    },
+    {
+      "pattern": "a|*",
+      "reason": "syntax",
+      "at": 3
+    },
+    {
+      "pattern": "a{2",
+      "reason": "syntax",
+      "at": 2
+    },
+    {
+      "pattern": "[z-a]",
+      "reason": "syntax",
+      "at": 2
+    },
+    {
+      "pattern": "[\\d-a]",
+      "reason": "syntax",
+      "at": 2
+    },
+    {
+      "pattern": "\\uD83D\\uDE00",
+      "reason": "syntax",
+      "at": 3
+    },
+    {
+      "pattern": "\\u{110000}",
+      "reason": "syntax",
+      "at": 4
+    },
+    {
+      "pattern": "\\cA",
+      "reason": "syntax",
+      "at": 1
+    },
+    {
+      "pattern": "\\e",
+      "reason": "syntax",
+      "at": 1
+    },
+    {
+      "pattern": "\\k<n>",
+      "reason": "syntax",
+      "at": 1
+    },
+    {
+      "pattern": "a\\",
+      "reason": "syntax",
+      "at": 2
+    }
+  ],
+  "properties": {
+    "generalCategories": [
+      "C",
+      "Cased_Letter",
+      "Cc",
+      "Cf",
+      "Close_Punctuation",
+      "Cn",
+      "Co",
+      "Connector_Punctuation",
+      "Control",
+      "Currency_Symbol",
+      "Dash_Punctuation",
+      "Decimal_Number",
+      "Enclosing_Mark",
+      "Final_Punctuation",
+      "Format",
+      "Initial_Punctuation",
+      "L",
+      "LC",
+      "Letter",
+      "Letter_Number",
+      "Line_Separator",
+      "Ll",
+      "Lm",
+      "Lo",
+      "Lowercase_Letter",
+      "Lt",
+      "Lu",
+      "M",
+      "Mark",
+      "Math_Symbol",
+      "Mc",
+      "Me",
+      "Mn",
+      "Modifier_Letter",
+      "Modifier_Symbol",
+      "N",
+      "Nd",
+      "Nl",
+      "No",
+      "Nonspacing_Mark",
+      "Number",
+      "Open_Punctuation",
+      "Other",
+      "Other_Letter",
+      "Other_Number",
+      "Other_Punctuation",
+      "Other_Symbol",
+      "P",
+      "Paragraph_Separator",
+      "Pc",
+      "Pd",
+      "Pe",
+      "Pf",
+      "Pi",
+      "Po",
+      "Private_Use",
+      "Ps",
+      "Punctuation",
+      "S",
+      "Sc",
+      "Separator",
+      "Sk",
+      "Sm",
+      "So",
+      "Space_Separator",
+      "Spacing_Mark",
+      "Symbol",
+      "Titlecase_Letter",
+      "Unassigned",
+      "Uppercase_Letter",
+      "Z",
+      "Zl",
+      "Zp",
+      "Zs"
+    ],
+    "binaryProperties": [
+      "AHex",
+      "ASCII",
+      "ASCII_Hex_Digit",
+      "Alpha",
+      "Alphabetic",
+      "Any",
+      "Assigned",
+      "Bidi_C",
+      "Bidi_Control",
+      "Bidi_M",
+      "Bidi_Mirrored",
+      "CI",
+      "CWCF",
+      "CWCM",
+      "CWL",
+      "CWT",
+      "CWU",
+      "Case_Ignorable",
+      "Cased",
+      "Changes_When_Casefolded",
+      "Changes_When_Casemapped",
+      "Changes_When_Lowercased",
+      "Changes_When_Titlecased",
+      "Changes_When_Uppercased",
+      "DI",
+      "Dash",
+      "Default_Ignorable_Code_Point",
+      "Dep",
+      "Deprecated",
+      "Dia",
+      "Diacritic",
+      "EBase",
+      "EComp",
+      "EMod",
+      "EPres",
+      "Emoji",
+      "Emoji_Component",
+      "Emoji_Modifier",
+      "Emoji_Modifier_Base",
+      "Emoji_Presentation",
+      "Ext",
+      "ExtPict",
+      "Extended_Pictographic",
+      "Extender",
+      "Gr_Base",
+      "Gr_Ext",
+      "Grapheme_Base",
+      "Grapheme_Extend",
+      "Hex",
+      "Hex_Digit",
+      "IDC",
+      "IDS",
+      "IDSB",
+      "IDST",
+      "IDS_Binary_Operator",
+      "IDS_Trinary_Operator",
+      "ID_Continue",
+      "ID_Start",
+      "Ideo",
+      "Ideographic",
+      "Join_C",
+      "Join_Control",
+      "LOE",
+      "Logical_Order_Exception",
+      "Lower",
+      "Lowercase",
+      "Math",
+      "NChar",
+      "Noncharacter_Code_Point",
+      "Pat_Syn",
+      "Pat_WS",
+      "Pattern_Syntax",
+      "Pattern_White_Space",
+      "QMark",
+      "Quotation_Mark",
+      "RI",
+      "Radical",
+      "Regional_Indicator",
+      "SD",
+      "STerm",
+      "Sentence_Terminal",
+      "Soft_Dotted",
+      "Term",
+      "Terminal_Punctuation",
+      "UIdeo",
+      "Unified_Ideograph",
+      "Upper",
+      "Uppercase",
+      "VS",
+      "Variation_Selector",
+      "White_Space",
+      "XIDC",
+      "XIDS",
+      "XID_Continue",
+      "XID_Start",
+      "space"
+    ],
+    "scripts": [
+      "Adlam",
+      "Adlm",
+      "Aghb",
+      "Ahom",
+      "Anatolian_Hieroglyphs",
+      "Arab",
+      "Arabic",
+      "Armenian",
+      "Armi",
+      "Armn",
+      "Avestan",
+      "Avst",
+      "Bali",
+      "Balinese",
+      "Bamu",
+      "Bamum",
+      "Bass",
+      "Bassa_Vah",
+      "Batak",
+      "Batk",
+      "Beng",
+      "Bengali",
+      "Bhaiksuki",
+      "Bhks",
+      "Bopo",
+      "Bopomofo",
+      "Brah",
+      "Brahmi",
+      "Brai",
+      "Braille",
+      "Bugi",
+      "Buginese",
+      "Buhd",
+      "Buhid",
+      "Cakm",
+      "Canadian_Aboriginal",
+      "Cans",
+      "Cari",
+      "Carian",
+      "Caucasian_Albanian",
+      "Chakma",
+      "Cham",
+      "Cher",
+      "Cherokee",
+      "Chorasmian",
+      "Chrs",
+      "Common",
+      "Copt",
+      "Coptic",
+      "Cpmn",
+      "Cprt",
+      "Cuneiform",
+      "Cypriot",
+      "Cypro_Minoan",
+      "Cyrillic",
+      "Cyrl",
+      "Deseret",
+      "Deva",
+      "Devanagari",
+      "Diak",
+      "Dives_Akuru",
+      "Dogr",
+      "Dogra",
+      "Dsrt",
+      "Dupl",
+      "Duployan",
+      "Egyp",
+      "Egyptian_Hieroglyphs",
+      "Elba",
+      "Elbasan",
+      "Elym",
+      "Elymaic",
+      "Ethi",
+      "Ethiopic",
+      "Gara",
+      "Garay",
+      "Geor",
+      "Georgian",
+      "Glag",
+      "Glagolitic",
+      "Gong",
+      "Gonm",
+      "Goth",
+      "Gothic",
+      "Gran",
+      "Grantha",
+      "Greek",
+      "Grek",
+      "Gujarati",
+      "Gujr",
+      "Gukh",
+      "Gunjala_Gondi",
+      "Gurmukhi",
+      "Guru",
+      "Gurung_Khema",
+      "Han",
+      "Hang",
+      "Hangul",
+      "Hani",
+      "Hanifi_Rohingya",
+      "Hano",
+      "Hanunoo",
+      "Hatr",
+      "Hatran",
+      "Hebr",
+      "Hebrew",
+      "Hira",
+      "Hiragana",
+      "Hluw",
+      "Hmng",
+      "Hmnp",
+      "Hung",
+      "Imperial_Aramaic",
+      "Inherited",
+      "Inscriptional_Pahlavi",
+      "Inscriptional_Parthian",
+      "Ital",
+      "Java",
+      "Javanese",
+      "Kaithi",
+      "Kali",
+      "Kana",
+      "Kannada",
+      "Katakana",
+      "Kawi",
+      "Kayah_Li",
+      "Khar",
+      "Kharoshthi",
+      "Khitan_Small_Script",
+      "Khmer",
+      "Khmr",
+      "Khoj",
+      "Khojki",
+      "Khudawadi",
+      "Kirat_Rai",
+      "Kits",
+      "Knda",
+      "Krai",
+      "Kthi",
+      "Lana",
+      "Lao",
+      "Laoo",
+      "Latin",
+      "Latn",
+      "Lepc",
+      "Lepcha",
+      "Limb",
+      "Limbu",
+      "Lina",
+      "Linb",
+      "Linear_A",
+      "Linear_B",
+      "Lisu",
+      "Lyci",
+      "Lycian",
+      "Lydi",
+      "Lydian",
+      "Mahajani",
+      "Mahj",
+      "Maka",
+      "Makasar",
+      "Malayalam",
+      "Mand",
+      "Mandaic",
+      "Mani",
+      "Manichaean",
+      "Marc",
+      "Marchen",
+      "Masaram_Gondi",
+      "Medefaidrin",
+      "Medf",
+      "Meetei_Mayek",
+      "Mend",
+      "Mende_Kikakui",
+      "Merc",
+      "Mero",
+      "Meroitic_Cursive",
+      "Meroitic_Hieroglyphs",
+      "Miao",
+      "Mlym",
+      "Modi",
+      "Mong",
+      "Mongolian",
+      "Mro",
+      "Mroo",
+      "Mtei",
+      "Mult",
+      "Multani",
+      "Myanmar",
+      "Mymr",
+      "Nabataean",
+      "Nag_Mundari",
+      "Nagm",
+      "Nand",
+      "Nandinagari",
+      "Narb",
+      "Nbat",
+      "New_Tai_Lue",
+      "Newa",
+      "Nko",
+      "Nkoo",
+      "Nshu",
+      "Nushu",
+      "Nyiakeng_Puachue_Hmong",
+      "Ogam",
+      "Ogham",
+      "Ol_Chiki",
+      "Ol_Onal",
+      "Olck",
+      "Old_Hungarian",
+      "Old_Italic",
+      "Old_North_Arabian",
+      "Old_Permic",
+      "Old_Persian",
+      "Old_Sogdian",
+      "Old_South_Arabian",
+      "Old_Turkic",
+      "Old_Uyghur",
+      "Onao",
+      "Oriya",
+      "Orkh",
+      "Orya",
+      "Osage",
+      "Osge",
+      "Osma",
+      "Osmanya",
+      "Ougr",
+      "Pahawh_Hmong",
+      "Palm",
+      "Palmyrene",
+      "Pau_Cin_Hau",
+      "Pauc",
+      "Perm",
+      "Phag",
+      "Phags_Pa",
+      "Phli",
+      "Phlp",
+      "Phnx",
+      "Phoenician",
+      "Plrd",
+      "Prti",
+      "Psalter_Pahlavi",
+      "Qaac",
+      "Qaai",
+      "Rejang",
+      "Rjng",
+      "Rohg",
+      "Runic",
+      "Runr",
+      "Samaritan",
+      "Samr",
+      "Sarb",
+      "Saur",
+      "Saurashtra",
+      "Sgnw",
+      "Sharada",
+      "Shavian",
+      "Shaw",
+      "Shrd",
+      "Sidd",
+      "Siddham",
+      "SignWriting",
+      "Sind",
+      "Sinh",
+      "Sinhala",
+      "Sogd",
+      "Sogdian",
+      "Sogo",
+      "Sora",
+      "Sora_Sompeng",
+      "Soyo",
+      "Soyombo",
+      "Sund",
+      "Sundanese",
+      "Sunu",
+      "Sunuwar",
+      "Sylo",
+      "Syloti_Nagri",
+      "Syrc",
+      "Syriac",
+      "Tagalog",
+      "Tagb",
+      "Tagbanwa",
+      "Tai_Le",
+      "Tai_Tham",
+      "Tai_Viet",
+      "Takr",
+      "Takri",
+      "Tale",
+      "Talu",
+      "Tamil",
+      "Taml",
+      "Tang",
+      "Tangsa",
+      "Tangut",
+      "Tavt",
+      "Telu",
+      "Telugu",
+      "Tfng",
+      "Tglg",
+      "Thaa",
+      "Thaana",
+      "Thai",
+      "Tibetan",
+      "Tibt",
+      "Tifinagh",
+      "Tirh",
+      "Tirhuta",
+      "Tnsa",
+      "Todhri",
+      "Todr",
+      "Toto",
+      "Tulu_Tigalari",
+      "Tutg",
+      "Ugar",
+      "Ugaritic",
+      "Vai",
+      "Vaii",
+      "Vith",
+      "Vithkuqi",
+      "Wancho",
+      "Wara",
+      "Warang_Citi",
+      "Wcho",
+      "Xpeo",
+      "Xsux",
+      "Yezi",
+      "Yezidi",
+      "Yi",
+      "Yiii",
+      "Zanabazar_Square",
+      "Zanb",
+      "Zinh",
+      "Zyyy"
+    ],
+    "scriptsOfUnicode16": [
+      "Gara",
+      "Garay",
+      "Gukh",
+      "Gurung_Khema",
+      "Kirat_Rai",
+      "Krai",
+      "Ol_Onal",
+      "Onao",
+      "Sunu",
+      "Sunuwar",
+      "Todhri",
+      "Todr",
+      "Tulu_Tigalari",
+      "Tutg"
+    ]
+  }
+}

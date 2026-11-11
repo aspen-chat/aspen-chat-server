@@ -73,6 +73,20 @@ def say(message: str) -> None:
     print(f"permissions: {message}", flush=True)
 
 
+def field_of(body: str, name: str) -> object:
+    """`name` in a response body that is a JSON object, or None when the body is not one."""
+    try:
+        answer = json.loads(body)
+    except ValueError:
+        return None
+    return answer.get(name) if isinstance(answer, dict) else None
+
+
+def code_of(body: str) -> object:
+    """The `code` of a refusal's Problem."""
+    return field_of(body, "code")
+
+
 class Checks:
     def __init__(self) -> None:
         self.failed: list[str] = []
@@ -1591,11 +1605,11 @@ def device_links(world: World, check: Checks) -> None:
          stack.database)
     refused = stack.request("POST", "/auth/device-links", {}, stale["token"])
     check("a sign-in not verified lately cannot offer itself to another device",
-          refused[0] == 403 and "reauthenticationRequired" in refused[1], refused)
+          refused[0] == 403 and code_of(refused[1]) == "reauthenticationRequired", refused)
     asked = stack.api("POST", "/auth/device-links", {"deviceName": "Computer", "codeChallenge": challenge})["id"]
     scanned = stack.request("POST", f"/auth/device-links/{asked}/scan", {}, stale["token"])
     check("nor give itself to a computer that asks",
-          scanned[0] == 403 and "reauthenticationRequired" in scanned[1], scanned)
+          scanned[0] == 403 and code_of(scanned[1]) == "reauthenticationRequired", scanned)
     stack.api("POST", "/auth/reauthenticate", {"method": "password", "secret": PASSWORD}, world.member["token"])
     link = offered(world.member)
     got = stack.api("POST", f"/auth/device-links/{link}/claim", {"codeVerifier": verifier})
@@ -1642,7 +1656,7 @@ def typed_device_links(world: World, check: Checks) -> None:
     waiting = asked()
     typed = stack.request("POST", "/auth/device-link-entries", {"code": waiting["code"]}, stale["token"])
     check("a sign-in not verified lately cannot give itself by typing a code",
-          typed[0] == 403 and "reauthenticationRequired" in typed[1], typed)
+          typed[0] == 403 and code_of(typed[1]) == "reauthenticationRequired", typed)
     for sign_in in (stale, world.member):
         stack.api("POST", "/auth/reauthenticate", {"method": "password", "secret": PASSWORD}, sign_in["token"])
     taken = stack.api("POST", "/auth/device-link-entries", {"code": waiting["code"]}, stale["token"])
@@ -1675,14 +1689,14 @@ def typed_device_links(world: World, check: Checks) -> None:
     owner = world.sign_in(world.owner["name"])
     as_giver = stack.request("POST", "/auth/device-link-entries", {"code": offer["code"]}, owner["token"])
     check("a wrong code and an offer's code typed by someone signed in are refused alike",
-          mistyped[0] == as_giver[0] == 404 and "deviceLinkCodeUnknown" in mistyped[1]
-          and "deviceLinkCodeUnknown" in as_giver[1], (mistyped, as_giver))
+          mistyped[0] == as_giver[0] == 404
+          and code_of(mistyped[1]) == code_of(as_giver[1]) == "deviceLinkCodeUnknown", (mistyped, as_giver))
     entered = stack.request("POST", "/auth/device-link-entries", {**receiver, "code": offer["code"]})
     check("without using the offer up", entered[0] == 200, entered)
     stack.api("DELETE", f"/auth/device-links/{offer['id']}")
     cancelled = stack.request("POST", "/auth/device-link-entries", {**receiver, "code": offer["code"]})
-    check("a cancelled link's code matches nothing", cancelled[0] == 404 and "deviceLinkCodeUnknown" in cancelled[1],
-          cancelled)
+    check("a cancelled link's code matches nothing",
+          cancelled[0] == 404 and code_of(cancelled[1]) == "deviceLinkCodeUnknown", cancelled)
 
 
 def passkeys(world: World, check: Checks) -> None:
@@ -1728,7 +1742,7 @@ def passkeys(world: World, check: Checks) -> None:
     status, body = sign_in(f"android:apk-key-hash:{b64url(ANDROID_APP[1])}")
     check("a ceremony that app ran signs in", status == 200, (status, body))
     status, body = sign_in(f"android:apk-key-hash:{b64url(bytes(32))}")
-    check("one another app ran does not", status == 400 and "passkeyRejected" in body, (status, body))
+    check("one another app ran does not", status == 400 and code_of(body) == "passkeyRejected", (status, body))
 
     # The passkey turned two-factor sign-in on, so another sign-in is the passkey's own.
     status, body = sign_in()
@@ -1739,7 +1753,7 @@ def passkeys(world: World, check: Checks) -> None:
     check("after removal the accepted list, read from any sign-in, is empty", settings["passkeys"] == [], settings)
     status, body = sign_in()
     check("and signing in with the removed passkey says it is unknown, so the browser forgets it",
-          status == 400 and "passkeyUnknown" in body, (status, body))
+          status == 400 and code_of(body) == "passkeyUnknown", (status, body))
     stack.api("POST", "/auth/logout", {"refreshToken": second["refresh"]}, second["token"])
     check("a sign-in that ended reads no list",
           stack.status("GET", "/users/@me/security", token=second["token"]) == 401)
@@ -1851,7 +1865,8 @@ def identity_providers(world: World, check: Checks) -> None:
         check("the account has no password", security.get("hasPassword") is False, security)
         identity = security["identities"][0]["id"]
         status, text = stack.request("DELETE", f"/users/@me/identities/{identity}", token=second["token"])
-        check("its only way in cannot be unlinked", status == 409 and "lastSignInMethod" in text, (status, text))
+        check("its only way in cannot be unlinked", status == 409 and code_of(text) == "lastSignInMethod",
+              (status, text))
         stack.api("PUT", "/users/@me/password", {"newPassword": PASSWORD}, second["token"])
         idp.sign_in_next(sub=sub, amr=["pwd"], sid="silent", auth_age=86400)
         status, claimed, _, _ = provider_flow(stack, provider, "signIn")
@@ -1930,7 +1945,7 @@ def identity_providers(world: World, check: Checks) -> None:
               all(p["id"] != provider for p in stack.api("GET", "/auth/methods")["identityProviders"]))
         refused = stack.request("POST", "/auth/identity-provider-flows",
                                 {"provider": provider, "purpose": "signIn", "codeChallenge": challenge})
-        check("and starts no flow", refused[0] == 404 and "identityProviderUnavailable" in refused[1], refused)
+        check("and starts no flow", refused[0] == 404 and code_of(refused[1]) == "identityProviderUnavailable", refused)
         stack.command("identity-providers", "remove", name)
         check("removing it lets its links go",
               eventually(lambda: psql(f"SELECT count(*) FROM user_identity WHERE provider = '{provider}'",
@@ -2325,9 +2340,9 @@ def bot_transfers(world: World, check: Checks) -> None:
     stale()
     rotated = stack.request("POST", f"/bots/{bot}/token", token=giver["token"])
     check("issuing a bot a new token asks for a fresh verification",
-          rotated[0] == 403 and "reauthenticationRequired" in rotated[1], rotated)
+          rotated[0] == 403 and code_of(rotated[1]) == "reauthenticationRequired", rotated)
     offered = stack.request("PUT", f"/bots/{bot}/transfer", {"owner": heir["id"]}, giver["token"])
-    check("and so does offering it", offered[0] == 403 and "reauthenticationRequired" in offered[1], offered)
+    check("and so does offering it", offered[0] == 403 and code_of(offered[1]) == "reauthenticationRequired", offered)
     stack.api("POST", "/auth/reauthenticate", {"method": "password", "secret": PASSWORD}, giver["token"])
     stack.api("PUT", f"/bots/{bot}/transfer", {"owner": heir["id"]}, giver["token"])
     check("an offer leaves the bot with its owner",
@@ -3061,8 +3076,9 @@ def blackjack_tables(world: World, check: Checks) -> None:
     if decided_twice is not None:
         # The second is refused as made at a version the table has left, or, when the first ended
         # the players' turns, as coming when no one is to decide: the phase is looked at first.
+        # The plugin's refusals are its own, `{"error": <why>}`, not the server's Problems.
         check("a decision sent twice counts once",
-              decided_twice[0] == 409 and any(why in decided_twice[1] for why in ("stale", "notNow")),
+              decided_twice[0] == 409 and field_of(decided_twice[1], "error") in ("stale", "notNow"),
               decided_twice)
     hand = next(s for s in now["seats"] if s["user"] == member["id"])["hands"][0]
     won = {"blackjack": 250, "win": 200, "push": 100}.get(hand.get("outcome"), 0)
@@ -3074,7 +3090,7 @@ def blackjack_tables(world: World, check: Checks) -> None:
     check("without Send messages, a member may watch",
           stack.status("GET", base, token=member["token"]) == 200)
     refused = stack.request("POST", f"{base}/bet", {"amount": 10}, member["token"])
-    check("but not play", refused[0] == 403 and "cannotPlay" in refused[1], refused)
+    check("but not play", refused[0] == 403 and field_of(refused[1], "error") == "cannotPlay", refused)
     world.as_owner("PUT", f"/channels/{table}/overrides/{world.everyone}", {"allow": [], "deny": ["viewChannel"]})
     world.stream.gather(0.5)
     stack.api("POST", f"{base}/bet", {"amount": 10}, world.owner["token"])

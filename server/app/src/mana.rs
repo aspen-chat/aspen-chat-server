@@ -91,32 +91,42 @@ pub fn check_channel_settings(
 /// every script alike. A cluster longer than [`GLYPH_SCALARS`] scalars costs one more for each
 /// scalar past them, so text stacked into a few clusters (a chain of emoji joined by ZWJ,
 /// combining marks heaped on one letter) costs what its characters would apart. A tag
-/// (`<@id>`, `<@&id>`), a custom emoji (`<:id>`), and `@everyone` are one glyph each however
-/// long their stored form; each is ASCII, one cluster a byte, so counting it whole and taking
-/// back the rest is exact.
+/// (`<@id>`, `<@&id>`, `@everyone`, each as `mention::tokens` reads it) and a custom emoji
+/// (`<:id>`) are one glyph each however long their stored form, where the message shows text
+/// (`markdown::text_runs`); in code they are shown as written and cost every character. Each
+/// is ASCII, one cluster a byte, so counting it whole and taking back the rest is exact.
 pub fn glyphs(content: &str) -> u32 {
     let mut count: usize = content
         .graphemes(true)
         .map(|cluster| 1 + cluster.chars().count().saturating_sub(GLYPH_SCALARS))
         .sum();
-    let mut rest = content;
+    let mut spared = 0usize;
+    crate::markdown::text_runs(content, |run| {
+        crate::mention::tokens(run, |_, len| spared += len - 1);
+        spared += custom_emoji_in(run) * (EMOJI_TOKEN_LEN - 1);
+    });
+    count = count.saturating_sub(spared);
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+/// How many custom emoji `run` names.
+fn custom_emoji_in(run: &str) -> usize {
+    let mut found = 0;
+    let mut rest = run;
     while let Some(at) = rest.find('<') {
         rest = &rest[at..];
-        let token = if let Some((_, len)) = crate::mention::tag_at(rest) {
-            len
-        } else if rest.len() >= EMOJI_TOKEN_LEN
+        let token = if rest.len() >= EMOJI_TOKEN_LEN
             && rest.is_char_boundary(EMOJI_TOKEN_LEN)
             && crate::custom_emoji::referenced(&rest[..EMOJI_TOKEN_LEN]).is_some()
         {
+            found += 1;
             EMOJI_TOKEN_LEN
         } else {
             1
         };
-        count = count.saturating_sub(token - 1);
         rest = &rest[token..];
     }
-    count = count.saturating_sub(content.matches(EVERYONE).count() * (EVERYONE.len() - 1));
-    u32::try_from(count).unwrap_or(u32::MAX)
+    found
 }
 
 /// The most scalars one glyph holds at the cost of one: the longest emoji sequence Unicode
@@ -126,7 +136,6 @@ pub const GLYPH_SCALARS: usize = 10;
 
 /// `<:` and a hyphenated UUID and `>`.
 const EMOJI_TOKEN_LEN: usize = 2 + 36 + 1;
-const EVERYONE: &str = "@everyone";
 
 /// What a message costs: its glyphs, and each attachment the deployment's
 /// `mana_attachment_cost`.
@@ -808,11 +817,25 @@ mod tests {
     }
 
     #[test]
+    fn what_tags_no_one_or_stands_in_code_costs_every_character() {
+        // A word character on either side: `mention::tokens` reads no tag.
+        assert_eq!(glyphs("a@everyone"), 10);
+        assert_eq!(glyphs("@everyone1"), 10);
+        assert_eq!(glyphs("`@everyone`"), 11);
+        assert_eq!(glyphs("```\n@everyone\n```"), 17);
+        assert_eq!(glyphs(&format!("`<@{ID}>`")), 41);
+        assert_eq!(glyphs(&format!("`<:{ID}>`")), 41);
+    }
+
+    #[test]
     fn a_tag_an_emoji_and_everyone_are_one_glyph_each() {
         assert_eq!(glyphs(&format!("hi <@{ID}>")), 4);
         assert_eq!(glyphs(&format!("<@&{ID}>")), 1);
         assert_eq!(glyphs(&format!("<:{ID}><:{ID}>")), 2);
         assert_eq!(glyphs("@everyone look"), 6);
+        // The second follows a word character, so only the first is a tag.
+        assert_eq!(glyphs("@everyone@everyone"), 10);
+        assert_eq!(glyphs("@everyone @everyone"), 3);
         // Text shaped like a token but not one counts as it is.
         assert_eq!(glyphs("<@nobody>"), 9);
         assert_eq!(glyphs("<:short>"), 8);

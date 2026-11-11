@@ -2,7 +2,7 @@
 //! and bare domains whose TLD IANA delegates (`tlds.txt`).
 
 use super::MAX_LINK_PREVIEWS_PER_MESSAGE;
-use pulldown_cmark::{Event, Tag, TagEnd};
+use pulldown_cmark::{Event, Tag, TagEnd, TextMergeStream};
 use std::collections::HashSet;
 use std::sync::LazyLock;
 use url::Url;
@@ -56,7 +56,10 @@ pub fn extract_urls(content: &str, limit: usize, mut keep: impl FnMut(&Url) -> b
             || attempts >= MAX_PARSE_ATTEMPTS
     };
 
-    for event in crate::markdown::parser(content) {
+    // The parser gives one run of text as several events wherever a character might have been
+    // markup and was not (the `_` and `[` of an address), so runs are merged to read each
+    // address whole.
+    for event in TextMergeStream::new(crate::markdown::parser(content)) {
         match event {
             Event::Start(Tag::CodeBlock(_)) => code_block_depth += 1,
             Event::End(TagEnd::CodeBlock) => {
@@ -107,13 +110,30 @@ fn push_url(
     true
 }
 
-/// Trailing characters we trim off a naked URL match: the punctuation GFM autolink usually
-/// ignores at the end of the match, and `|`, which no address ends with unencoded, so a
+/// Trailing characters we trim off a naked URL match: the punctuation that usually belongs to
+/// the sentence when it ends an address, and `|`, which no address ends with unencoded, so a
 /// spoiler's closing `||` is not taken into the one it hides. The client's `linkify` trims the
 /// same.
-const BARE_URL_TRAILING: &[char] = &[
-    '.', ',', ';', ':', '!', '?', ')', ']', '"', '\'', '>', '`', '|',
-];
+const BARE_URL_TRAILING: &[char] = &['.', ',', ';', ':', '!', '?', '"', '\'', '|'];
+
+/// `token` without the sentence punctuation that ends it ([`BARE_URL_TRAILING`]), nor a closing
+/// parenthesis it did not open (with the punctuation before that), as the client's `linkify`
+/// trims a link. The parentheses are counted once and kept as the end is trimmed, so a token
+/// ending in many of them is read in one pass.
+fn trim_trailing(token: &str) -> &str {
+    let opening = token.matches('(').count();
+    let mut closing = token.matches(')').count();
+    let mut end = token.len();
+    while let Some(last) = token[..end].chars().next_back() {
+        if last == ')' && opening < closing {
+            closing -= 1;
+        } else if !BARE_URL_TRAILING.contains(&last) {
+            break;
+        }
+        end -= last.len_utf8();
+    }
+    &token[..end]
+}
 
 /// Every TLD IANA delegates, lower case. The client links bare domains against the same list.
 static KNOWN_TLDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
@@ -147,24 +167,13 @@ fn scan_bare_domains(text: &str) -> Vec<String> {
 /// `None` when the token is anything else.
 fn bare_domain_url(token: &str) -> Option<String> {
     let token = token.trim_start_matches(BARE_DOMAIN_LEADING);
-    let mut end = token.len();
-    // The parentheses left in the token, counted once and kept as its end is trimmed, so a
-    // token ending in many of them is read in one pass.
-    let opening = token.matches('(').count();
-    let mut closing = token.matches(')').count();
-    loop {
-        let last = token[..end].chars().next_back()?;
-        let unbalanced_paren = last == ')' && opening < closing;
-        if BARE_URL_TRAILING.contains(&last) && (last != ')' || unbalanced_paren) {
-            end -= last.len_utf8();
-            if last == ')' {
-                closing -= 1;
-            }
-        } else {
-            break;
-        }
-    }
-    let token = &token[..end];
+    let token = trim_trailing(token);
+    // A closing bracket belongs to a path, as the client reads one, and never to a host.
+    let token = if token.contains('/') {
+        token
+    } else {
+        trim_trailing(token.trim_end_matches(']'))
+    };
     let (host_port, path) = match token.find('/') {
         Some(i) => (&token[..i], &token[i..]),
         None => (token, ""),
@@ -249,17 +258,7 @@ fn scan_bare_urls(text: &str) -> Vec<&str> {
             }
             end = start + off + c.len_utf8();
         }
-        while end > start {
-            let slice = &text[start..end];
-            let Some(last) = slice.chars().next_back() else {
-                break;
-            };
-            if BARE_URL_TRAILING.contains(&last) {
-                end -= last.len_utf8();
-            } else {
-                break;
-            }
-        }
+        end = start + trim_trailing(&text[start..end]).len();
         if end - start > prefix_len {
             out.push(&text[start..end]);
         }
@@ -283,6 +282,33 @@ mod tests {
             bare_domain_url(&many).as_deref(),
             Some("https://example.com/")
         );
+    }
+
+    /// Mirrors the client's `linkify` cases so the two rule sets stay aligned.
+    #[test]
+    fn a_bare_url_keeps_the_brackets_it_opened() {
+        for (content, url) in [
+            ("https://example.com/a(b)", "https://example.com/a(b)"),
+            (
+                "(see https://example.org/a_(b)).",
+                "https://example.org/a_(b)",
+            ),
+            (
+                "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+                "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+            ),
+            ("(https://example.com/a)", "https://example.com/a"),
+            (
+                "https://example.com/list?ids[]",
+                "https://example.com/list?ids[]",
+            ),
+            (
+                "https://example.com/a_b_c*d, then",
+                "https://example.com/a_b_c*d",
+            ),
+        ] {
+            assert_eq!(urls_from(content), vec![url.to_string()], "{content}");
+        }
     }
 
     #[test]
@@ -354,6 +380,13 @@ mod tests {
             vec![
                 "https://example.org/a(b)".to_string(),
                 "https://www.onet.pl/".to_string(),
+            ],
+        );
+        assert_eq!(
+            urls_from("[see example.net.] and [example.org/a]"),
+            vec![
+                "https://example.net/".to_string(),
+                "https://example.org/a]".to_string(),
             ],
         );
     }

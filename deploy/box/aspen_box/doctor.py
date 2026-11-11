@@ -18,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .common import GIB, HERE_VOICE, SLOTS, Box, Failed, detect_address, memory_bytes
+from .common import GIB, HERE_VOICE, SLOTS, Box, Failed, detect_address, docker_rootless, memory_bytes
 from .database import MINIMUM_POSTGRES, database_url, database_version, external_database
 from .lifecycle import ready, voice_answers
 from .render import nats_open
@@ -116,14 +116,38 @@ def nats_says(host: str, port: int = 4222) -> dict | None:
     return json.loads(line[len("INFO "):]) if line.startswith("INFO ") else None
 
 
-def data_device(directory: pathlib.Path) -> str:
-    """The device the box's data is on, as /proc/mounts names it."""
-    best = ("", "")
-    for line in pathlib.Path("/proc/mounts").read_text().splitlines():
-        device, mount = line.split()[:2]
-        if str(directory.resolve()).startswith(mount) and len(mount) > len(best[1]):
-            best = (device, mount)
-    return best[0]
+def mounted_from(device_number: str) -> str:
+    """What the file system whose device number is `device_number` (`major:minor`) was mounted
+    from, as /proc/self/mountinfo names it, or nothing when no mount has that number."""
+    for line in pathlib.Path("/proc/self/mountinfo").read_text().splitlines():
+        # `<id> <parent> <major:minor> <root> <mount point> <options> <optional fields> - <type> <source> <options>`
+        mount, _, source = line.partition(" - ")
+        if mount.split()[2] == device_number:
+            return source.split()[1]
+    return ""
+
+
+def data_disk(directory: pathlib.Path) -> tuple[str, str]:
+    """The disk the box's data is on, and what kind the kernel says it is: its name (`mmcblk0`)
+    and its `device/type` (`SD` for an SD card, `MMC` for eMMC). Both are empty when that cannot
+    be told: storage on the network, a volume made of several disks, a disk that states no type."""
+    number = os.stat(directory).st_dev
+    number = f"{os.major(number)}:{os.minor(number)}"
+    block = pathlib.Path("/sys/dev/block") / number
+    if not block.exists():
+        # A file system with a device number of its own (btrfs), found by what it was mounted from.
+        source = mounted_from(number)
+        if not source.startswith("/"):
+            return "", ""
+        block = pathlib.Path("/sys/class/block") / pathlib.Path(os.path.realpath(source)).name
+    try:
+        block = block.resolve(strict=True)
+        if (block / "partition").exists():
+            block = block.parent
+        kind = (block / "device" / "type").read_text().strip()
+    except OSError:
+        return "", ""
+    return block.name, kind
 
 
 def unready_reason(port: int) -> str | None:
@@ -142,16 +166,18 @@ def unready_reason(port: int) -> str | None:
 
 def check_machine(store: Box, report: Report) -> None:
     print("The machine")
-    info = subprocess.run(["docker", "info", "--format", "{{json .SecurityOptions}}"], capture_output=True, text=True)
-    if info.returncode != 0:
+    try:
+        rootless = docker_rootless()
+    except Failed:
         report.fail("Docker does not answer", "Start Docker, and let this user run it.")
-    elif "rootless" in info.stdout:
-        report.fail(
-            "Docker is running rootless",
-            "Its containers are on a network of their own, so nothing would be reachable. Use the system's Docker.",
-        )
     else:
-        report.ok("Docker")
+        if rootless:
+            report.fail(
+                "Docker is running rootless",
+                "Its containers are on a network of their own, so nothing would be reachable. Use the system's Docker.",
+            )
+        else:
+            report.ok("Docker")
     compose = subprocess.run(["docker", "compose", "version", "--short"], capture_output=True, text=True)
     version = tuple(int(part) for part in re.findall(r"\d+", compose.stdout)[:2])
     if compose.returncode != 0 or version < (2, 20):
@@ -166,10 +192,10 @@ def check_machine(store: Box, report: Report) -> None:
         report.ok(f"{memory:.1f} GiB of memory")
     free = shutil.disk_usage(store.dir).free / GIB
     (report.ok if free >= 5 else report.note)(f"{free:.0f} GiB free where the data is kept")
-    device = data_device(store.dir)
-    if "mmcblk" in device:
+    disk, kind = data_disk(store.dir)
+    if kind == "SD":
         report.note(
-            f"The data is on an SD card ({device})",
+            f"The data is on an SD card ({disk})",
             "SD cards wear out under a database and lose writes when power is cut. Keep the box's directory on an SSD, and run `aspen-box backup` daily.",
         )
     page = os.sysconf("SC_PAGE_SIZE")

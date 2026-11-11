@@ -255,6 +255,7 @@
     "scanInviteHint": "Point the camera at an invite's QR code.",
     "notAnInvite": "That's a sign-in code, not an invite. Scan it from Sign-in and security instead.",
     "notAspen": "That QR code isn't one of Aspen's. Point the camera at an Aspen invite or sign-in code.",
+    "registrationElsewhere": "That invite is for creating an account on {domain}, not on the server you are using. Open its link in a browser to use it.",
     "cameraStarting": "Starting the camera…",
     "cameraLabel": "Camera view",
     "cameraDenied": "Aspen isn't allowed to use the camera. Allow it in this device's settings, then try again.",

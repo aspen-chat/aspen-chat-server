@@ -515,6 +515,11 @@ same commit, as with comments.
   the draft (`usePickedText`, `src/features/messages/picks.ts`) and encoded from that range. Never
   find a pick again by searching the text for its name, which other text and other picks can share.
   A new kind of pick is a `Picked` kind, not a map keyed by what is shown.
+- A link pasted, scanned, or opened is read as an address and its whole path matched against a route
+  (`routeAddress`, `src/features/qr/routeAddress.ts`), and its host says whose it is; never search
+  text for a piece of a route. A bot command's pattern is compiled through `compilePattern`
+  (`src/features/commands/pattern.ts`), which gives `\d`, `\w`, `\s`, `\b`, and `.` the server's
+  meaning; it, the server's check, and `spec/bot_command_pattern_vectors.json` change together.
 
 ## Verification before handing work back
 
