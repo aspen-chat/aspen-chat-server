@@ -18,7 +18,8 @@ development stack on the usual ports. Everything else it makes is in `target/dev
 each deployment's `aspen.toml`, and the servers' logs. The
 servers are the debug builds in `target/debug` (`cargo build` first), or, with `--alpha-bin` and
 `--beta-bin`, builds of other versions, which is how two versions are checked against each other;
-`up` leaves them running and `down` stops them. Databases are kept between runs; `down --drop` drops them too.
+`up` leaves them running and `down` stops them, and `up` does not move a running server to another
+build: it says to run `down` first. Databases are kept between runs; `down --drop` drops them too.
 
 Needs Python 3.10, `openssl`, and `docker compose` with the database and SeaweedFS services up
 (`up --start-services` starts them).
@@ -316,13 +317,23 @@ def start_shared_services() -> None:
 def up(args: argparse.Namespace) -> None:
     if args.start_services:
         start_shared_services()
-    for deployment, chosen in [(ALPHA, args.alpha_bin), (BETA, args.beta_bin)]:
+    chosen = {}
+    for deployment, given in [(ALPHA, args.alpha_bin), (BETA, args.beta_bin)]:
         deployment.dir.mkdir(parents=True, exist_ok=True)
-        bins = Path(chosen).resolve() if chosen is not None else BIN
+        bins = Path(given).resolve() if given is not None else BIN
         for name in ["aspen-chat-server", "aspen-migrate"]:
             if not (bins / name).exists():
                 raise Failed(f"{bins / name} does not exist; run `cargo build` first")
-        (deployment.dir / "bin").write_text(str(bins))
+        # A running server stays the build it was started from, so recording another for it
+        # would migrate its database with that one's migrator and have `check` take it for it.
+        if running_pid(deployment) is not None and bin_of(deployment).resolve() != bins.resolve():
+            raise Failed(
+                f"{deployment.name} is running the build in {bin_of(deployment)}, not {bins}: "
+                f"run `{sys.argv[0]} down` first, then `up` with the builds to run"
+            )
+        chosen[deployment.name] = bins
+    for deployment in DEPLOYMENTS:
+        (deployment.dir / "bin").write_text(str(chosen[deployment.name]))
     make_certificates()
     for deployment in DEPLOYMENTS:
         start_services(deployment)

@@ -16,6 +16,7 @@ import {
   Text,
   TextArea,
   TextField,
+  ToggleButton,
 } from "react-aria-components";
 import { useChannels, useRoles } from "@/api/hooks";
 import { problemText } from "@/api/problemText";
@@ -27,60 +28,32 @@ import {
   labelClass,
   primaryButtonClass,
 } from "@/features/auth/styles";
-import { optionClass, selectButtonClass, selectPopoverClass } from "@/features/invites/dialog";
+import {
+  optionClass,
+  secondaryButtonClass,
+  selectButtonClass,
+  selectPopoverClass,
+} from "@/features/invites/dialog";
 import { ChoiceCheckbox } from "@/features/layout/choices";
 import { useUnsavedChanges } from "@/features/layout/unsavedChanges";
 import { useMessages } from "@/i18n/context";
-
-/** A value as a form holds it, before it becomes what the server takes. */
-type Draft = string | boolean | number | readonly string[] | null;
-
-const NONE = "";
-
-/** What the form starts from for `field`: the value set, its default, or nothing. */
-function initial(field: SettingField, values: Record<string, unknown>): Draft {
-  const value = values[field.name] ?? field.default ?? null;
-  switch (field.type) {
-    case "boolean":
-      return value === true;
-    case "integer":
-      return typeof value === "number" ? value : null;
-    case "textList":
-    case "roleList":
-    case "channelList":
-      return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
-    default:
-      return typeof value === "string" ? value : null;
-  }
-}
-
-/** Whether two drafts hold the same. */
-function same(a: Draft, b: Draft): boolean {
-  if (isList(a) && isList(b)) {
-    return a.length === b.length && a.every((v, i) => v === b[i]);
-  }
-  return a === b;
-}
-
-function isList(draft: Draft): draft is readonly string[] {
-  return Array.isArray(draft);
-}
-
-/** What the server takes for a draft: `null` restores the setting's default. */
-function wire(field: SettingField, draft: Draft): unknown {
-  if (field.type === "textList" && isList(draft)) {
-    return draft.map((line) => line.trim()).filter((line) => line !== "");
-  }
-  if (typeof draft === "string" && draft === "" && field.type !== "longText") {
-    return null;
-  }
-  return draft;
-}
+import { format } from "@/i18n/messages";
+import {
+  changedFields,
+  clearable,
+  initial,
+  isList,
+  NONE,
+  patchOf,
+  textDraft,
+  type Draft,
+} from "./settingsDrafts";
 
 /**
  * A plugin's settings as a form drawn from the fields it declares, with no code of the plugin's:
  * each labelled from its catalogue, of the kind its type says. A role or channel field offers
- * `communityId`'s own. A secret is never shown; it is replaced by typing a new one. Saving sends
+ * `communityId`'s own. A secret is never shown: typing a new one replaces it, a field left empty
+ * leaves it as it is, and one that may be left unset has a control to clear it. Saving sends
  * only what changed, which `onSave` lays over the settings.
  */
 export function SettingsForm({
@@ -101,11 +74,12 @@ export function SettingsForm({
   const m = useMessages();
   const start = () => Object.fromEntries(fields.map((f) => [f.name, initial(f, values)]));
   const [drafts, setDrafts] = useState<Record<string, Draft>>(start);
+  // The secrets to clear, by field: an empty secret field says nothing of the value kept.
+  const [clearing, setClearing] = useState<ReadonlySet<string>>(new Set());
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const original = start();
-  const changed = fields.filter((f) => !same(drafts[f.name] ?? null, original[f.name] ?? null));
+  const changed = changedFields(fields, drafts, values, clearing);
   useUnsavedChanges(changed.length > 0);
   if (fields.length === 0) {
     return <p className={hintClass}>{m.plugins.noSettings}</p>;
@@ -114,6 +88,18 @@ export function SettingsForm({
   function set(name: string, draft: Draft) {
     setSaved(false);
     setDrafts((current) => ({ ...current, [name]: draft }));
+    // A value typed replaces the one kept, so there is nothing left to clear.
+    if (draft !== null) {
+      setClearing((current) => without(current, name));
+    }
+  }
+
+  function setClear(name: string, clear: boolean) {
+    setSaved(false);
+    setClearing((current) => (clear ? new Set(current).add(name) : without(current, name)));
+    if (clear) {
+      setDrafts((current) => ({ ...current, [name]: null }));
+    }
   }
 
   function save() {
@@ -122,11 +108,16 @@ export function SettingsForm({
     }
     setPending(true);
     setError(null);
-    const patch = Object.fromEntries(changed.map((f) => [f.name, wire(f, drafts[f.name] ?? null)]));
-    onSave(patch).then(
+    onSave(patchOf(changed, drafts, clearing)).then(
       () => {
         setPending(false);
         setSaved(true);
+        // A secret saved is not read back, so its field starts over, empty.
+        setClearing(new Set());
+        setDrafts((current) => ({
+          ...current,
+          ...Object.fromEntries(fields.flatMap((f) => (f.secret === true ? [[f.name, null]] : []))),
+        }));
       },
       (e: unknown) => {
         setPending(false);
@@ -150,9 +141,13 @@ export function SettingsForm({
           field={field}
           draft={drafts[field.name] ?? null}
           secretSet={secretsSet.includes(field.name)}
+          clearing={clearing.has(field.name)}
           communityId={communityId}
           onChange={(draft) => {
             set(field.name, draft);
+          }}
+          onClear={(clear) => {
+            setClear(field.name, clear);
           }}
         />
       ))}
@@ -179,20 +174,36 @@ export function SettingsForm({
   );
 }
 
+/** The control that clears a secret: outlined, and filled while the secret is to be cleared. */
+const clearButtonClass =
+  secondaryButtonClass +
+  " w-fit selected:border-danger selected:bg-danger-soft selected:text-danger";
+
+function without(names: ReadonlySet<string>, name: string): ReadonlySet<string> {
+  const rest = new Set(names);
+  rest.delete(name);
+  return rest;
+}
+
 function Field({
   plugin,
   field,
   draft,
   secretSet,
+  clearing,
   communityId,
   onChange,
+  onClear,
 }: {
   plugin: PluginInfo;
   field: SettingField;
   draft: Draft;
   secretSet: boolean;
+  /** Whether the secret kept for the field is to be cleared on saving. */
+  clearing: boolean;
   communityId: string | undefined;
   onChange: (draft: Draft) => void;
+  onClear: (clear: boolean) => void;
 }) {
   const m = useMessages();
   const label = pluginKey(plugin, field.label);
@@ -232,21 +243,37 @@ function Field({
       );
     case "text":
       return (
-        <TextField
-          value={typeof draft === "string" ? draft : ""}
-          onChange={onChange}
-          type={field.secret === true ? "password" : "text"}
-          {...(field.maxLength == null ? {} : { maxLength: field.maxLength })}
-          className={fieldClass}
-        >
-          <Label className={labelClass}>{label}</Label>
-          <Input
-            className={inputClass}
-            autoComplete="off"
-            {...(field.secret === true && secretSet ? { placeholder: m.plugins.secretSet } : {})}
-          />
-          {help}
-        </TextField>
+        <div className={fieldClass}>
+          <TextField
+            value={typeof draft === "string" ? draft : ""}
+            onChange={(text) => {
+              onChange(textDraft(text));
+            }}
+            type={field.secret === true ? "password" : "text"}
+            {...(field.maxLength == null ? {} : { maxLength: field.maxLength })}
+            className={fieldClass}
+          >
+            <Label className={labelClass}>{label}</Label>
+            <Input
+              className={inputClass}
+              autoComplete="off"
+              {...(field.secret === true && secretSet
+                ? { placeholder: clearing ? m.plugins.secretClearing : m.plugins.secretSet }
+                : {})}
+            />
+            {help}
+          </TextField>
+          {clearable(field, secretSet) && (
+            <ToggleButton
+              isSelected={clearing}
+              onChange={onClear}
+              aria-label={format(m.plugins.clearSecretOf, { setting: label })}
+              className={clearButtonClass}
+            >
+              {m.plugins.clearSecret}
+            </ToggleButton>
+          )}
+        </div>
       );
     case "longText":
     case "textList":

@@ -155,15 +155,9 @@ pub async fn voice_servers(config: &AspenConfig, command: VoiceServersCommand) -
                 enabled,
             };
             let server = named(&name)?;
-            let server =
-                if changes.url.is_none() && changes.capacity.is_none() && changes.enabled.is_none()
-                {
-                    server.clone()
-                } else {
-                    voice::update_server_in(config, &mut conn, server.id, changes)
-                        .await
-                        .map_err(fail)?
-                };
+            let server = voice::update_server_in(config, &mut conn, server.id, changes)
+                .await
+                .map_err(fail)?;
             tracing::info!(
                 name = server.name,
                 operator = operator(),

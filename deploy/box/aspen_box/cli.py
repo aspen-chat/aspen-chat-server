@@ -36,6 +36,13 @@ from .database import DATABASE_URL_VARIABLE, MINIMUM_POSTGRES, check_database_ur
 from .render import render
 
 
+def one_or_more(text: str) -> int:
+    count = int(text)
+    if count < 1:
+        raise argparse.ArgumentTypeError(f"{count} is less than 1")
+    return count
+
+
 def init(store: Box, opt: argparse.Namespace) -> None:
     if store.file.exists() and not opt.force:
         raise Failed(
@@ -166,7 +173,9 @@ def arguments() -> argparse.ArgumentParser:
     move.add_argument("--voice-image")
     commands.add_parser("doctor")
     commands.add_parser("run").add_argument("command", nargs="*")
-    commands.add_parser("backup").add_argument("--keep", type=int, default=data.BACKUPS_KEPT, help="how many dumps to keep")
+    commands.add_parser("backup").add_argument(
+        "--keep", type=one_or_more, default=data.BACKUPS_KEPT, help="how many dumps to keep, the one it makes among them"
+    )
     back = commands.add_parser("restore")
     back.add_argument("file", type=pathlib.Path)
     back.add_argument("--yes", action="store_true")

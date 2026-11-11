@@ -541,7 +541,13 @@ pub async fn join_community(
     Json(request): Json<UserCommunityCreateRequest>,
 ) -> ApiResult<(StatusCode, Json<UserCommunity>)> {
     match app::community::join_community(&state, user.id, community, request.invite_code).await {
-        Ok(membership) => Ok((StatusCode::CREATED, Json(membership))),
+        Ok(app::community::Joining::Joined(membership)) => {
+            Ok((StatusCode::CREATED, Json(membership)))
+        }
+        Ok(app::community::Joining::AlreadyMember(membership)) => {
+            Ok((StatusCode::OK, Json(membership)))
+        }
+        // Two requests to join at once: the other's membership is the one that stands.
         Err(e) if violates(&e, unique::MEMBERSHIP) => {
             let membership = app::community::read_membership(&state, user.id, community).await?;
             Ok((StatusCode::OK, Json(membership)))

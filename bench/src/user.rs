@@ -989,7 +989,7 @@ impl User {
         }
         let message = answer.ok()?;
         self.world.recorder.count("messages_sent", 1);
-        if let Some(id) = message["id"].as_str().and_then(|s| s.parse().ok()) {
+        if let Some(id) = posted_id(&message) {
             remember(&self.state.own, id);
         }
         Some(message)
@@ -1817,6 +1817,16 @@ impl User {
     }
 }
 
+/// The id of the message a posting was answered with, when it was posted (`201`). A posting the
+/// deployment holds for later (`202`) is answered with a held message, which says what it is
+/// `waiting` for; its id is not a message's, and the message it becomes has another.
+fn posted_id(answer: &Value) -> Option<Uuid> {
+    if answer.get("waiting").is_some() {
+        return None;
+    }
+    answer["id"].as_str().and_then(|s| s.parse().ok())
+}
+
 /// Adds `item` to a list of recent things, forgetting the oldest past `RECENT`.
 fn remember<T>(list: &Mutex<VecDeque<T>>, item: T) {
     let mut list = list.lock().expect("recent lock");
@@ -1864,6 +1874,16 @@ mod tests {
         );
         assert_eq!(read_marker("no marker here"), None);
         assert_eq!(read_marker("⟦bench:c:x:1⟧"), None);
+    }
+
+    #[test]
+    fn only_a_posted_message_gives_an_id_to_edit_or_delete() {
+        let id = Uuid::now_v7();
+        assert_eq!(posted_id(&json!({ "id": id, "content": "hi" })), Some(id));
+        for waiting in ["mana", "preview"] {
+            assert_eq!(posted_id(&json!({ "id": id, "waiting": waiting })), None);
+        }
+        assert_eq!(posted_id(&json!({})), None);
     }
 
     #[test]

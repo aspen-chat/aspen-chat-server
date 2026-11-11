@@ -36,7 +36,15 @@ Field kinds:
 Rules:
 
 - A secret is never shown. Typing replaces it.
+- An empty secret field leaves the secret as it is: the form cannot tell a field never touched from
+  one typed in and emptied, so a line of text emptied is nothing again (`textDraft`).
+- A secret that is set and not required has a Clear saved value toggle (`clearable`). Pressed, the
+  save sends `null` for it. Typing a new value releases it.
 - Saving sends only the fields that changed, as a JSON Merge Patch. `null` restores a default.
+- After a save, secret fields start over, empty.
+
+`settingsDrafts.ts` holds what the form's values are and what a save sends (`changedFields`,
+`patchOf`).
 
 ## In the dashboard
 

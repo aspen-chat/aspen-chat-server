@@ -15,8 +15,8 @@ use aspen_wire::message_enum;
 use aspen_wire::message_enum::request::{CommunityCreateRequest, CommunityUpdateRequest};
 use aspen_wire::message_enum::server_event::{CommunityEvent, ServerEvent, UserCommunityEvent};
 use diesel::{
-    AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, QueryDsl, Queryable,
-    QueryableByName, Selectable, SelectableHelper,
+    AsChangeset, BoolExpressionMethods, ExpressionMethods, Insertable, OptionalExtension, QueryDsl,
+    Queryable, QueryableByName, Selectable, SelectableHelper,
 };
 use diesel_async::scoped_futures::ScopedFutureExt;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -418,32 +418,46 @@ pub async fn mark_deleted(
     .await
 }
 
-/// Adds `user` to the community with an invite to it, and returns the membership as the event
-/// carried it.
+/// What became of a request to join a community.
+pub enum Joining {
+    /// The membership made, as the event carried it.
+    Joined(message_enum::UserCommunity),
+    /// The membership the user already had, which nothing was done to.
+    AlreadyMember(message_enum::UserCommunity),
+}
+
+/// Adds `user` to the community with an invite to it. Someone already in it is answered with
+/// the membership they have, before the limit on communities is looked at, which joining
+/// again adds nothing toward.
 pub async fn join_community(
     state: &GlobalServerContext,
     user: UserId,
     community: CommunityId,
     invite_code: String,
-) -> crate::error::Result<message_enum::UserCommunity> {
+) -> crate::error::Result<Joining> {
     let mut conn = state.connection_pool.get().await?;
-    let membership = conn
+    let joining = conn
         .transaction(|conn| {
             async move {
                 let invite_community = crate::invite::validate_invite(conn, &invite_code).await?;
                 if invite_community != community {
                     return Err(crate::Error::Validation(t!("inviteCodeCommunityMismatch")));
                 }
+                if let Some(membership) = membership_of(conn, user, community).await? {
+                    return Ok(Joining::AlreadyMember(membership));
+                }
                 ensure_room_for_another(state, conn, user).await?;
                 let membership = add_member(state, conn, user, community, &[]).await?;
                 crate::default_channel::announce_join(state, conn, user, community).await?;
-                Ok(membership)
+                Ok(Joining::Joined(membership))
             }
             .scope_boxed()
         })
         .await?;
-    crate::large_community::after_join(state, community).await;
-    Ok(membership)
+    if matches!(joining, Joining::Joined(_)) {
+        crate::large_community::after_join(state, community).await;
+    }
+    Ok(joining)
 }
 
 /// Refuses `user` another community once they belong to as many as a user may. A deleted
@@ -546,26 +560,41 @@ pub async fn read_membership(
     community: CommunityId,
 ) -> crate::error::Result<message_enum::UserCommunity> {
     let mut conn = state.connection_pool.get().await?;
-    let row: CommunityUser = community_user::table
+    membership_of(conn.as_mut(), user, community)
+        .await?
+        .ok_or(crate::Error::Diesel(diesel::result::Error::NotFound))
+}
+
+/// `user`'s membership of `community` as they see it themselves, if they have one.
+async fn membership_of(
+    conn: &mut AsyncPgConnection,
+    user: UserId,
+    community: CommunityId,
+) -> crate::Result<Option<message_enum::UserCommunity>> {
+    let row: Option<CommunityUser> = community_user::table
         .select(CommunityUser::as_select())
         .filter(
             community_user::community
                 .eq(community)
                 .and(community_user::user.eq(user)),
         )
-        .first(conn.as_mut())
-        .await?;
-    let roles = crate::role::roles_of_members(conn.as_mut(), &[(community, user)])
+        .first(conn)
+        .await
+        .optional()?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let roles = crate::role::roles_of_members(conn, &[(community, user)])
         .await?
         .remove(&(community, user))
         .unwrap_or_default();
-    Ok(message_enum::UserCommunity {
+    Ok(Some(message_enum::UserCommunity {
         community: row.community,
         user: row.user,
         sort_index: Some(row.sort_index),
         roles,
         nickname: row.nickname,
-    })
+    }))
 }
 
 /// Checks a nickname, which must be non-blank and no longer than a display name when set, and

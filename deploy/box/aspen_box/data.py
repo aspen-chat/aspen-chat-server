@@ -13,6 +13,9 @@ from .lifecycle import converge, up, wait_for, voice_answers
 from .render import render
 
 BACKUPS_KEPT = 7
+# The dumps `backup` names, by their moment (`aspen-20260131-235959.dump`), and so the only ones
+# it counts and removes: a dump given a name by hand is its owner's to keep.
+DUMPS = f"aspen-{'[0-9]' * 8}-{'[0-9]' * 6}.dump"
 
 
 def run_command(store: Box, opt: argparse.Namespace) -> None:
@@ -42,7 +45,7 @@ def backup(store: Box, opt: argparse.Namespace) -> None:
         raise Failed("a voice server keeps nothing to back up")
     target = store.dir / "backups" / f"aspen-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}.dump"
     dump(store, box, target)
-    dumps = sorted((store.dir / "backups").glob("aspen-*.dump"))
+    dumps = sorted((store.dir / "backups").glob(DUMPS))
     for stale in dumps[: -opt.keep]:
         stale.unlink()
     print(

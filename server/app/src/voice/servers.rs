@@ -156,9 +156,9 @@ pub async fn update_server(
     .await
 }
 
-/// Changes a server. Enabling or disabling it is an operator's decision, which lifts any
-/// suspension for failures, and enabling it also forgets the failures that led to one. A new
-/// address must be one [`check_url`] allows.
+/// Changes a server, or with no change given answers it as it stands. Enabling or disabling
+/// it is an operator's decision, which lifts any suspension for failures, and enabling it also
+/// forgets the failures that led to one. A new address must be one [`check_url`] allows.
 pub async fn update_server_in(
     config: &crate::aspen_config::AspenConfig,
     conn: &mut AsyncPgConnection,
@@ -168,9 +168,24 @@ pub async fn update_server_in(
     if let Some(url) = &changes.url {
         check_url(config, url)?;
     }
-    let enabled = changes.enabled;
+    let VoiceServerChangeset {
+        name,
+        url,
+        capacity,
+        enabled,
+    } = &changes;
+    // A change of nothing is a statement diesel will not build; it leaves the server as it is.
+    let unchanged = name.is_none() && url.is_none() && capacity.is_none() && enabled.is_none();
+    let enabled = *enabled;
     conn.transaction(|conn| {
         async move {
+            if unchanged {
+                return Ok(voice_server::table
+                    .select(VoiceServer::as_select())
+                    .filter(voice_server::id.eq(id))
+                    .first(conn)
+                    .await?);
+            }
             let mut updated: VoiceServer = diesel::update(voice_server::table)
                 .filter(voice_server::id.eq(id))
                 .set(changes)
@@ -917,6 +932,60 @@ mod tests {
         assert!(check_url_at(false, "http://voice-1.example.org").is_err());
         assert!(check_url_at(false, "wss://voice-1.example.org").is_err());
         assert!(check_url_at(false, "voice-1.example.org").is_err());
+    }
+
+    /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing.
+    #[tokio::test]
+    async fn a_change_of_nothing_answers_the_server_as_it_stands() {
+        use diesel_async::SimpleAsyncConnection;
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let config: crate::aspen_config::AspenConfig = config::Config::builder()
+            .add_source(config::File::from_str(
+                "public_url = \"https://chat.example.org\"\ndatabase_url = \"postgres://x\"\n\
+                 nats_url = \"nats://x\"\nnats_auth_token = \"t\"\nvalkey_url = \"redis://x\"",
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        let id = VoiceServerId::new();
+        conn.batch_execute(&format!(
+            "INSERT INTO voice_server (id, name, url, capacity, created_at) \
+             VALUES ('{}', 'unchanged', 'https://voice.example.org', 7, now())",
+            id.0
+        ))
+        .await
+        .unwrap();
+        let nothing = || VoiceServerChangeset {
+            name: None,
+            url: None,
+            capacity: None,
+            enabled: None,
+        };
+        let server = update_server_in(&config, &mut conn, id, nothing())
+            .await
+            .unwrap();
+        assert_eq!((server.name.as_str(), server.capacity), ("unchanged", 7));
+        let unknown = update_server_in(&config, &mut conn, VoiceServerId::new(), nothing()).await;
+        assert!(matches!(
+            unknown,
+            Err(crate::Error::Diesel(diesel::result::Error::NotFound))
+        ));
+        let renamed = VoiceServerChangeset {
+            name: Some("renamed".to_string()),
+            ..nothing()
+        };
+        let server = update_server_in(&config, &mut conn, id, renamed)
+            .await
+            .unwrap();
+        assert_eq!(server.name, "renamed");
     }
 
     fn server(

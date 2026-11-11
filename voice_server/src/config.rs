@@ -443,10 +443,12 @@ impl RtcConfig {
                     Err(e) => {
                         anyhow::ensure!(
                             !required,
-                            "rtc.ip is {ip} and this machine has no {family} address to                              announce ({e}); add one to rtc.announced_address"
+                            "rtc.ip is {ip} and this machine has no {family} address to announce ({e}); \
+                             add one to rtc.announced_address"
                         );
                         tracing::info!(
-                            "no media over {family}: this machine has no {family} address to                              announce ({e}); add one to rtc.announced_address if it has"
+                            "no media over {family}: this machine has no {family} address to announce \
+                             ({e}); add one to rtc.announced_address if it has"
                         );
                         continue;
                     }
@@ -454,7 +456,8 @@ impl RtcConfig {
                 None => {
                     anyhow::ensure!(
                         !ip.is_loopback(),
-                        "rtc.ip {ip} is a loopback address, which browsers cannot send media                          to; bind an interface or leave it unspecified"
+                        "rtc.ip {ip} is a loopback address, which browsers cannot send media to; \
+                         bind an interface or leave it unspecified"
                     );
                     None
                 }
@@ -463,7 +466,8 @@ impl RtcConfig {
         }
         anyhow::ensure!(
             !addresses.is_empty(),
-            "this machine has no address to receive media on over IPv4 or IPv6; set rtc.ip and              rtc.announced_address"
+            "this machine has no address to receive media on over IPv4 or IPv6; set rtc.ip and \
+             rtc.announced_address"
         );
         Ok(addresses)
     }

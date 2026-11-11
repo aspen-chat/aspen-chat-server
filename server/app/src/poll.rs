@@ -1294,23 +1294,31 @@ pub async fn close_poll(
                 .await?;
             let access =
                 channel_access_moderating(state, conn.as_mut(), caller, row.channel).await?;
+            let closing = row.closed_at.is_none();
             if row.created_by != caller {
                 if !access.community_has(Permissions::MANAGE_MESSAGES) {
                     return Err(missing(Permissions::MANAGE_MESSAGES));
                 }
                 if access.moderating(Permissions::MANAGE_MESSAGES) {
-                    crate::message::note_moderation(
-                        conn.as_mut(),
-                        caller,
-                        &access,
-                        crate::moderation_log::ModerationAction::ClosePoll,
-                        Some(poll_id.0.to_string()),
-                        Some(row.created_by),
-                    )
-                    .await?;
+                    // A deployment moderator must outrank the creator either way, and the
+                    // log is written only when this call is what closes the poll.
+                    if closing {
+                        crate::message::note_moderation(
+                            conn.as_mut(),
+                            caller,
+                            &access,
+                            crate::moderation_log::ModerationAction::ClosePoll,
+                            Some(poll_id.0.to_string()),
+                            Some(row.created_by),
+                        )
+                        .await?;
+                    } else {
+                        crate::deployment::require_outranks(conn.as_mut(), caller, row.created_by)
+                            .await?;
+                    }
                 }
             }
-            if row.closed_at.is_none() {
+            if closing {
                 close_one(state, conn.as_mut(), row, Utc::now()).await?;
             }
             load_polls(conn.as_mut(), &[poll_id])

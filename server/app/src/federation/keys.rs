@@ -278,21 +278,18 @@ impl From<PublicKey> for DocumentKey {
     }
 }
 
-/// This deployment's document; `None` when it has no domain, and so takes no part in
-/// federation.
-pub async fn document(state: &GlobalServerContext) -> crate::Result<Option<DeploymentDocument>> {
-    let Some(domain) = own_domain(&state.config.federation) else {
-        return Ok(None);
-    };
-    let policy = state.settings().federation;
-    let mut conn = state.connection_pool.get().await?;
+/// The keys this deployment's document lists: its current key first, then those replaced within
+/// the handover window, newest first. A key is kept by when it was replaced, however long it
+/// signed before that, since a deployment that pinned it follows the handover it signed only
+/// while the document still lists it ([`follow_handovers`]).
+async fn published_keys(conn: &mut AsyncPgConnection) -> crate::Result<Vec<PublicKey>> {
     let since = Utc::now() - Duration::days(HANDOVER_WINDOW_DAYS);
-    let keys: Vec<PublicKey> = federation_key::table
+    Ok(federation_key::table
         .select(PublicKey::as_select())
         .filter(
             federation_key::retired_at
                 .is_null()
-                .or(federation_key::created_at.ge(since)),
+                .or(federation_key::retired_at.ge(since)),
         )
         // The current key, which has no retirement, sorts first.
         .order((
@@ -300,8 +297,18 @@ pub async fn document(state: &GlobalServerContext) -> crate::Result<Option<Deplo
             federation_key::created_at.desc(),
         ))
         .limit(MAX_DOCUMENT_KEYS as i64)
-        .load(&mut conn)
-        .await?;
+        .load(conn)
+        .await?)
+}
+
+/// This deployment's document; `None` when it has no domain, and so takes no part in
+/// federation.
+pub async fn document(state: &GlobalServerContext) -> crate::Result<Option<DeploymentDocument>> {
+    let Some(domain) = own_domain(&state.config.federation) else {
+        return Ok(None);
+    };
+    let policy = state.settings().federation;
+    let keys = published_keys(state.connection_pool.get().await?.as_mut()).await?;
     Ok(Some(DeploymentDocument {
         domain,
         keys: keys.into_iter().map(DocumentKey::from).collect(),
@@ -435,6 +442,67 @@ mod tests {
             software: None,
         };
         (document, publics)
+    }
+
+    /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing.
+    #[tokio::test]
+    async fn a_key_long_in_use_stays_in_the_document_for_the_window_after_it_is_replaced() {
+        use diesel_async::SimpleAsyncConnection;
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        let domain = Domain::parse("b.example").unwrap();
+        let open = Gates {
+            emigration: Gate::Open,
+            immigration: Gate::Open,
+        };
+        let document = |keys: Vec<PublicKey>| DeploymentDocument {
+            domain: domain.clone(),
+            keys: keys.into_iter().map(DocumentKey::from).collect(),
+            users: open,
+            bots: open,
+            protocol: Protocol::default(),
+            software: None,
+        };
+
+        // The key others pinned has signed for far longer than the handover window.
+        ensure_key(&mut conn).await.unwrap();
+        conn.batch_execute(&format!(
+            "UPDATE federation_key SET created_at = now() - interval '{} days'
+             WHERE retired_at IS NULL",
+            HANDOVER_WINDOW_DAYS * 2
+        ))
+        .await
+        .unwrap();
+        let pinned = current_key(&mut conn).await.unwrap().unwrap();
+        let next = rotate_key(&mut conn, Some(&domain), Rotation::Planned)
+            .await
+            .unwrap();
+        let published = document(published_keys(&mut conn).await.unwrap());
+        assert_eq!(published.keys[0].id, next.id);
+        assert!(published.keys.iter().any(|key| key.id == pinned.id));
+        assert_eq!(
+            follow_handovers(&published, &pinned.public_key),
+            Some(next.public_key.clone())
+        );
+
+        // Once the window has passed since it was replaced, it is listed no longer.
+        conn.batch_execute(&format!(
+            "UPDATE federation_key SET retired_at = now() - interval '{} days'
+             WHERE id = '{}'",
+            HANDOVER_WINDOW_DAYS + 1,
+            pinned.id.0
+        ))
+        .await
+        .unwrap();
+        let published = document(published_keys(&mut conn).await.unwrap());
+        assert_eq!(published.keys[0].id, next.id);
+        assert!(published.keys.iter().all(|key| key.id != pinned.id));
+        assert_eq!(follow_handovers(&published, &pinned.public_key), None);
     }
 
     #[test]
