@@ -4,6 +4,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, Path};
+use crate::include::Listed;
 use crate::message_enum::Message;
 use crate::{API_PREFIX, TAG_USERS};
 use aspen_app::bot_command::{BotCommands, CommandList, Invocation};
@@ -12,6 +13,8 @@ use aspen_app::{self as app, ChannelId, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+
+pub type BotCommandsList = Listed<BotCommands>;
 
 /// Publishes the commands a bot answers, replacing any it published before. The bot itself
 /// may, or its owner. The whole list is checked first, and a refusal says what is wrong
@@ -73,7 +76,7 @@ pub async fn read_bot_commands(
     params(("channel" = ChannelId, Path)),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<BotCommands>),
+        (status = OK, body = BotCommandsList),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, description = "No such channel, or one the caller may not view", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -83,9 +86,11 @@ pub async fn channel_commands(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
-) -> ApiResult<Json<Vec<BotCommands>>> {
+) -> ApiResult<Json<BotCommandsList>> {
     Ok(Json(
-        app::bot_command::for_channel(&state, user.id, channel).await?,
+        app::bot_command::for_channel(&state, user.id, channel)
+            .await?
+            .into(),
     ))
 }
 

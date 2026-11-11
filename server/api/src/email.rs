@@ -7,6 +7,7 @@ use crate::admin::AdminUser;
 use crate::auth::EnrollingSessionUser;
 use crate::error::{ApiError, ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path};
+use crate::include::Listed;
 use crate::rate_limit::Failures;
 use crate::t;
 use crate::user::{UserRef, not_your_account};
@@ -25,6 +26,8 @@ use axum::response::IntoResponse;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+pub type NewsletterPostRecordList = Listed<NewsletterPostRecord>;
 
 /// An account's email address and what it receives there.
 #[derive(Debug, Serialize, ToSchema)]
@@ -474,7 +477,7 @@ pub struct NewsletterPostUpdateRequest {
     tag = TAG_ADMIN,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<NewsletterPostRecord>),
+        (status = OK, body = NewsletterPostRecordList),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Send newsletters", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -483,7 +486,7 @@ pub struct NewsletterPostUpdateRequest {
 pub async fn list_newsletter_posts(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
-) -> ApiResult<Json<Vec<NewsletterPostRecord>>> {
+) -> ApiResult<Json<NewsletterPostRecordList>> {
     let posts = newsletter::list_posts(&state, &access).await?;
     Ok(Json(posts.into_iter().map(Into::into).collect()))
 }

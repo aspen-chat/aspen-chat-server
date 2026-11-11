@@ -203,7 +203,10 @@ same commit, as with comments.
   types the event stream carries, keyed by type (`channels`, `users`, ...). Pass
   `query: { include: ["channels", "members"] }`; the client serializes arrays comma separated
   because that is how the OpenAPI document declares them. Prefer one read with `include` over a
-  fan-out of per-community or per-message requests.
+  fan-out of per-community or per-message requests. Every other list answers `{ data }`, never a
+  bare array, and the lists read by a cursor (an emoji's reactors, a poll answer's voters, member
+  search) answer `{ data, nextCursor }`: ask for the next page with `cursor`, and go by
+  `nextCursor !== null`, never by a page's length (`useCursorPages`, `src/api/useCursorPages.ts`).
 - Server state lives in `RecordStore` (`packages/protocol/src/store.ts`), a normalized cache keyed
   by record type and id, kept current by `AspenSync` (`sync.ts`): REST bootstrap first, then the
   event stream, whose replay window covers the gap. Components read the store through the hooks in

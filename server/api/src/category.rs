@@ -1,6 +1,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path};
+use crate::include::Listed;
 use crate::message_enum::Channel;
 use crate::message_enum::request::{CategoryCreateRequest, CategoryUpdateRequest};
 use crate::{API_PREFIX, TAG_CATEGORIES, message_enum};
@@ -8,6 +9,9 @@ use aspen_app as app;
 use aspen_app::context::GlobalServerContext;
 use aspen_app::{CategoryId, CommunityId};
 use axum::extract::State;
+
+pub type CategoryList = Listed<message_enum::Category>;
+pub type ChannelList = Listed<Channel>;
 
 #[utoipa::path(
     post,
@@ -51,7 +55,7 @@ pub async fn create_category(
     params(("community" = CommunityId, Path)),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<message_enum::Category>),
+        (status = OK, body = CategoryList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
@@ -62,7 +66,7 @@ pub async fn list_community_categories(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
-) -> ApiResult<Json<Vec<message_enum::Category>>> {
+) -> ApiResult<Json<CategoryList>> {
     let categories = app::category::read_community_categories(&state, user.id, community).await?;
     Ok(Json(
         categories
@@ -103,7 +107,7 @@ pub async fn get_category(
     params(("category" = CategoryId, Path)),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<Channel>),
+        (status = OK, body = ChannelList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -114,7 +118,7 @@ pub async fn list_category_channels(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(category): Path<CategoryId>,
-) -> ApiResult<Json<Vec<Channel>>> {
+) -> ApiResult<Json<ChannelList>> {
     let channels = app::category::read_category_channels(&state, user.id, category).await?;
     Ok(Json(
         channels

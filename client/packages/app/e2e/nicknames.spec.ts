@@ -122,7 +122,9 @@ test("Manage nicknames clears the nickname of a member below the caller, never t
       publish(nicknamed(user, null));
       return route.fulfill({ status: 204 });
     });
-    await p.route(/\/api\/v1\/report-categories$/, (route) => route.fulfill({ json: categories }));
+    await p.route(/\/api\/v1\/report-categories$/, (route) =>
+      route.fulfill({ json: { data: categories } }),
+    );
     await p.route(
       new RegExp(`/communities/${community}/members/[^/]+/nickname/reports$`),
       (route) => {

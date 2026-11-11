@@ -5,6 +5,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path};
+use crate::include::Listed;
 use crate::message_enum::request::{
     CategoryOverrideCreateRequest, ChannelOverrideCreateRequest, RoleCreateRequest,
     RoleUpdateRequest,
@@ -21,6 +22,8 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
+pub type RoleList = Listed<Role>;
+
 /// A community's roles, lowest first; everyone's is first, at position 0.
 #[utoipa::path(
     get,
@@ -29,7 +32,7 @@ use utoipa::ToSchema;
     params(("community" = CommunityId, Path)),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<Role>),
+        (status = OK, body = RoleList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
@@ -40,9 +43,11 @@ pub async fn list_roles(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
-) -> ApiResult<Json<Vec<Role>>> {
+) -> ApiResult<Json<RoleList>> {
     Ok(Json(
-        app::role::read_roles(&state, user.id, community).await?,
+        app::role::read_roles(&state, user.id, community)
+            .await?
+            .into(),
     ))
 }
 
@@ -146,7 +151,7 @@ pub struct RoleOrderRequest {
     params(("community" = CommunityId, Path)),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<Role>),
+        (status = OK, body = RoleList),
         (status = BAD_REQUEST, description = "`validation`: the list is not exactly the roles below the caller", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, body = Problem),
@@ -159,9 +164,11 @@ pub async fn reorder_roles(
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
     Json(request): Json<RoleOrderRequest>,
-) -> ApiResult<Json<Vec<Role>>> {
+) -> ApiResult<Json<RoleList>> {
     Ok(Json(
-        app::role::reorder_roles(&state, user.id, community, &request.roles).await?,
+        app::role::reorder_roles(&state, user.id, community, &request.roles)
+            .await?
+            .into(),
     ))
 }
 

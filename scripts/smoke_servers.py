@@ -70,7 +70,7 @@ def smoke(stack: Stack) -> None:
     community_id = community.get("id") or community.get("data", {}).get("id")
 
     say("finding a message by its words")
-    general = next(c for c in api("GET", f"/communities/{community_id}/channels", token=token) if c["ty"] == "text")
+    general = next(c for c in api("GET", f"/communities/{community_id}/channels", token=token)["data"] if c["ty"] == "text")
     posted = api("POST", f"/channels/{general['id']}/messages", {"content": "Smoke signals from the Tuesday picnic", "attachments": []}, token)
     api("POST", f"/channels/{general['id']}/messages", {"content": "Nothing about lunch here", "attachments": []}, token)
     found = api("GET", "/messages?filter[text]=PICNIC%20tuesday&include=channels", token=token)

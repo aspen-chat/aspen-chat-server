@@ -1,5 +1,5 @@
 import { deploymentAdministrator } from "../fixtures";
-import type { Asked, WorldRoute } from "../reply";
+import { type Asked, type WorldRoute, listed } from "../reply";
 
 /** The Administration Dashboard's routes, its federation directory among them. */
 export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] {
@@ -24,24 +24,25 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
     [
       "GET",
       /^\/admin\/roles$/,
-      () => [
-        {
-          id: deploymentAdministrator,
-          name: "Administrator",
-          position: 1,
-          permissions: [
-            "viewDashboard",
-            "manageRegistrationInvites",
-            "manageVoiceServers",
-            "manageDeploymentRoles",
-            "manageFederation",
-            "manageDeploymentSettings",
-            "manageIdentityProviders",
-          ],
-        },
-      ],
+      () =>
+        listed([
+          {
+            id: deploymentAdministrator,
+            name: "Administrator",
+            position: 1,
+            permissions: [
+              "viewDashboard",
+              "manageRegistrationInvites",
+              "manageVoiceServers",
+              "manageDeploymentRoles",
+              "manageFederation",
+              "manageDeploymentSettings",
+              "manageIdentityProviders",
+            ],
+          },
+        ]),
     ],
-    ["GET", /^\/admin\/moderation-log$/, () => []],
+    ["GET", /^\/admin\/moderation-log$/, () => listed([])],
     // One identity provider, turned off, which people have signed in with.
     [
       "GET",
@@ -70,40 +71,41 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
     [
       "GET",
       /^\/admin\/plugins$/,
-      () => [
-        {
-          plugin: {
-            id: "org.example.filter",
-            version: "1.2.0",
-            name: "Word filter",
-            description: "Masks the words you list.",
-            author: "Example authors",
-            homepage: null,
-            mode: "optIn",
-            dms: false,
-            principal: null,
-            principalPermissions: [],
-            communitySettings: [],
-            messages: { words: "Words to filter" },
+      () =>
+        listed([
+          {
+            plugin: {
+              id: "org.example.filter",
+              version: "1.2.0",
+              name: "Word filter",
+              description: "Masks the words you list.",
+              author: "Example authors",
+              homepage: null,
+              mode: "optIn",
+              dms: false,
+              principal: null,
+              principalPermissions: [],
+              communitySettings: [],
+              messages: { words: "Words to filter" },
+            },
+            enabled: true,
+            position: 0,
+            granted: ["messages.read", "messages.rewrite", "storage"],
+            settingsFields: [{ name: "words", type: "textList", label: "words" }],
+            settings: { words: ["darn"] },
+            secretsSet: [],
+            hosts: [],
+            retention: "Keeps a count of each channel's messages.",
+            storageBytes: 2048,
+            storageQuota: 1048576,
           },
-          enabled: true,
-          position: 0,
-          granted: ["messages.read", "messages.rewrite", "storage"],
-          settingsFields: [{ name: "words", type: "textList", label: "words" }],
-          settings: { words: ["darn"] },
-          secretsSet: [],
-          hosts: [],
-          retention: "Keeps a count of each channel's messages.",
-          storageBytes: 2048,
-          storageQuota: 1048576,
-        },
-      ],
+        ]),
     ],
     ["GET", /^\/admin\/overview$/, admin.overview],
-    ["GET", /^\/admin\/users$/, () => admin.users(url)],
-    ["GET", /^\/admin\/communities$/, () => admin.communities(url)],
-    ["GET", /^\/admin\/file-transfers$/, () => admin.fileTransfers(url)],
-    ["GET", /^\/admin\/registration-invites$/, admin.invites],
+    ["GET", /^\/admin\/users$/, () => listed(admin.users(url))],
+    ["GET", /^\/admin\/communities$/, () => listed(admin.communities(url))],
+    ["GET", /^\/admin\/file-transfers$/, () => listed(admin.fileTransfers(url))],
+    ["GET", /^\/admin\/registration-invites$/, () => listed(admin.invites())],
     [
       "POST",
       /^\/admin\/registration-invites$/,
@@ -115,7 +117,7 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
       () => admin.revoke(path.split("/").pop() ?? ""),
     ],
     ["GET", /^\/admin\/fleet$/, admin.fleet],
-    ["GET", /^\/voice-servers$/, admin.voiceServers],
+    ["GET", /^\/voice-servers$/, () => listed(admin.voiceServers())],
     [
       "POST",
       /^\/voice-servers$/,
@@ -162,7 +164,7 @@ export function adminRoutes({ request, url, path, admin }: Asked): WorldRoute[] 
       /^\/admin\/settings$/,
       () => admin.updateSettings(request.postDataJSON() as Record<string, number | boolean | null>),
     ],
-    ["GET", /^\/admin\/federation\/deployments$/, () => admin.federation.list(url)],
+    ["GET", /^\/admin\/federation\/deployments$/, () => listed(admin.federation.list(url))],
     [
       "POST",
       /^\/admin\/federation\/deployments$/,

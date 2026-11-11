@@ -14,6 +14,7 @@ use crate::TAG_REACTIONS;
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem, unique, violates};
 use crate::extract::{Json, NoContent, Path, Query};
+use crate::include::Listed;
 use crate::message_enum::{React, User};
 use crate::user::{UserRef, not_your_account};
 use aspen_app as app;
@@ -24,6 +25,9 @@ use axum::http::StatusCode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+
+pub type UserList = Listed<User>;
+pub type FrequentEmojiList = Listed<FrequentEmoji>;
 
 /// One emoji's reactions to a message, in brief.
 #[derive(Debug, Clone, Serialize, ToSchema, JsonSchema)]
@@ -73,7 +77,7 @@ pub struct ReactorsQuery {
     ),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<User>),
+        (status = OK, body = UserList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, description = "No such message, or one in a DM the caller is not in", body = Problem),
@@ -85,7 +89,7 @@ pub async fn list_reactors(
     SessionUser { user, .. }: SessionUser,
     Path((message, emoji)): Path<(MessageId, String)>,
     Query(query): Query<ReactorsQuery>,
-) -> ApiResult<Json<Vec<User>>> {
+) -> ApiResult<Json<UserList>> {
     let ids = app::react::read_reactors(
         &state,
         user.id,
@@ -242,7 +246,7 @@ pub struct FrequentEmojiQuery {
     params(("user" = inline(UserRef), Path), FrequentEmojiQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<FrequentEmoji>),
+        (status = OK, body = FrequentEmojiList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "Only the user themself may read their most used emoji", body = Problem),
@@ -254,7 +258,7 @@ pub async fn list_frequent_emoji(
     session: SessionUser,
     Path(user): Path<UserRef>,
     Query(query): Query<FrequentEmojiQuery>,
-) -> ApiResult<Json<Vec<FrequentEmoji>>> {
+) -> ApiResult<Json<FrequentEmojiList>> {
     let user_id = user.resolve(&session);
     let frequent = app::react::read_frequent(
         &state,

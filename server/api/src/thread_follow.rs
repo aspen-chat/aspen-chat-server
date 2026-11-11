@@ -6,6 +6,7 @@ use crate::TAG_CHANNELS;
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Json, NoContent, Path};
+use crate::include::Listed;
 use aspen_app::context::GlobalServerContext;
 use aspen_app::{self as app, ChannelId};
 use axum::extract::State;
@@ -14,6 +15,8 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::Serialize;
 use utoipa::ToSchema;
+
+pub type ThreadFollowList = Listed<ThreadFollow>;
 
 /// A thread the caller follows.
 #[derive(Debug, Clone, Serialize, ToSchema, JsonSchema)]
@@ -42,7 +45,7 @@ impl From<app::thread_follow::ThreadFollow> for ThreadFollow {
     tag = TAG_CHANNELS,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<ThreadFollow>),
+        (status = OK, body = ThreadFollowList),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -50,7 +53,7 @@ impl From<app::thread_follow::ThreadFollow> for ThreadFollow {
 pub async fn read_follows(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
-) -> ApiResult<Json<Vec<ThreadFollow>>> {
+) -> ApiResult<Json<ThreadFollowList>> {
     let follows = app::thread_follow::read_follows(&state, user.id).await?;
     Ok(Json(follows.into_iter().map(ThreadFollow::from).collect()))
 }

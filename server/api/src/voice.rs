@@ -7,6 +7,7 @@ use crate::auth::SessionUser;
 use crate::ban::UserPageQuery;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path, Query};
+use crate::include::Listed;
 use crate::message_enum::{VoiceMute, VoiceParticipant, VoiceSession};
 use crate::{API_PREFIX, TAG_VOICE};
 use aspen_app as app;
@@ -18,6 +19,9 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+pub type VoiceServerList = Listed<VoiceServer>;
+pub type VoiceMuteList = Listed<VoiceMute>;
 
 /// A moderator's change to someone else's state in a call.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -270,7 +274,7 @@ pub async fn get_channel_voice(
     tag = TAG_VOICE,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<VoiceServer>),
+        (status = OK, body = VoiceServerList),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "Without Manage voice servers", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -279,7 +283,7 @@ pub async fn get_channel_voice(
 pub async fn list_voice_servers(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
-) -> ApiResult<Json<Vec<VoiceServer>>> {
+) -> ApiResult<Json<VoiceServerList>> {
     access.require(DeploymentPermission::ManageVoiceServers)?;
     let servers = app::voice::list_servers(&state).await?;
     Ok(Json(servers.into_iter().map(VoiceServer::from).collect()))
@@ -468,7 +472,7 @@ pub async fn kick_voice_participant(
     params(("community" = CommunityId, Path), UserPageQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<VoiceMute>),
+        (status = OK, body = VoiceMuteList),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: lacks Manage calls", body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -480,10 +484,11 @@ pub async fn read_voice_mutes(
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
     Query(page): Query<UserPageQuery>,
-) -> ApiResult<Json<Vec<VoiceMute>>> {
+) -> ApiResult<Json<VoiceMuteList>> {
     Ok(Json(
         app::voice::mutes::read_mutes(&state, user.id, community, page.before, page.limit())
-            .await?,
+            .await?
+            .into(),
     ))
 }
 

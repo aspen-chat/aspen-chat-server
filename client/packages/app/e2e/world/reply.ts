@@ -23,6 +23,9 @@ export class Reply {
 
 export const reply = (body: unknown, status: number) => new Reply(body, status);
 
+/** A list as the server answers one: its records under `data`. */
+export const listed = (records: readonly unknown[]) => ({ data: records });
+
 /** One route of the world: the method, the path it matches, and what it answers. */
 export type WorldRoute = [string, RegExp, () => unknown];
 

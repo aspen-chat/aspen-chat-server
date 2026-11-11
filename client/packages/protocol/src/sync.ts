@@ -1664,7 +1664,7 @@ export class AspenSync {
         if (result.data === undefined) {
           throw new ApiProblemError(problemOf(result.error, result.response));
         }
-        this.store.setPlugins(result.data);
+        this.store.setPlugins(result.data.data);
       })
       .finally(() => {
         this.#pluginLoad = null;
@@ -1752,7 +1752,7 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.setUserAnnotations(userId, result.data);
+    this.store.setUserAnnotations(userId, result.data.data);
   }
 
   /** Reads a community's use of each plugin, which takes Manage plugins. */
@@ -1763,7 +1763,7 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.setCommunityPlugins(communityId, result.data);
+    this.store.setCommunityPlugins(communityId, result.data.data);
   }
 
   /**
@@ -2048,8 +2048,8 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ users: result.data }, { since });
-    return result.data;
+    this.store.ingest({ users: result.data.data }, { since });
+    return result.data.data;
   }
 
   /**
@@ -2068,8 +2068,8 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ users: result.data }, { since });
-    return result.data;
+    this.store.ingest({ users: result.data.data }, { since });
+    return result.data.data;
   }
 
   /** Removes the caller's reaction, dropping it from the cache at once. */
@@ -2455,7 +2455,7 @@ export class AspenSync {
       await this.#client.api.GET("/api/v1/admin/users/{user}/dms", {
         params: { path: { user: userId } },
       }),
-    );
+    ).data;
     this.store.ingest({ channels: dms }, { since });
     for (const dm of dms) {
       for (const recipient of dm.recipients) {
@@ -2816,9 +2816,9 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    const owned = new Set(result.data.map((bot) => bot.id));
+    const owned = new Set(result.data.data.map((bot) => bot.id));
     const stale = this.store.ownedBots().filter((bot) => !owned.has(bot.id));
-    this.store.ingest({ users: result.data }, { since });
+    this.store.ingest({ users: result.data.data }, { since });
     const rereadSince = this.#now();
     const reread = await Promise.all(
       stale.map((bot) =>
@@ -2894,8 +2894,8 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    this.store.ingest({ users: result.data.map((transfer) => transfer.bot) });
-    return result.data;
+    this.store.ingest({ users: result.data.data.map((transfer) => transfer.bot) });
+    return result.data.data;
   }
 
   /**
@@ -2944,7 +2944,7 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    return result.data;
+    return result.data.data;
   }
 
   /** Reports a message to the deployment's moderators. */
@@ -3090,8 +3090,8 @@ export class AspenSync {
       if (page === undefined) {
         return held;
       }
-      held.push(...page);
-      if (page.length < LIST_PAGE) {
+      held.push(...page.data);
+      if (page.data.length < LIST_PAGE) {
         return held;
       }
     }
@@ -3260,11 +3260,11 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    const complete = result.data.length < LIST_PAGE;
+    const complete = result.data.data.length < LIST_PAGE;
     if (more) {
-      this.store.appendBans(communityId, result.data, complete);
+      this.store.appendBans(communityId, result.data.data, complete);
     } else {
-      this.store.replaceBans(communityId, result.data, complete);
+      this.store.replaceBans(communityId, result.data.data, complete);
     }
   }
 
@@ -3286,11 +3286,11 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    const complete = result.data.length < LIST_PAGE;
+    const complete = result.data.data.length < LIST_PAGE;
     if (more) {
-      this.store.appendVoiceMutes(communityId, result.data, complete);
+      this.store.appendVoiceMutes(communityId, result.data.data, complete);
     } else {
-      this.store.replaceVoiceMutes(communityId, result.data, complete);
+      this.store.replaceVoiceMutes(communityId, result.data.data, complete);
     }
   }
 
@@ -3797,7 +3797,7 @@ export class AspenSync {
       if (result.data === undefined) {
         throw new ApiProblemError(problemOf(result.error, result.response));
       }
-      this.store.setPins(channelId, result.data);
+      this.store.setPins(channelId, result.data.data);
     })().finally(() => {
       this.#pinLoads.delete(channelId);
     });
@@ -3821,7 +3821,7 @@ export class AspenSync {
       if (result.data === undefined) {
         throw new ApiProblemError(problemOf(result.error, result.response));
       }
-      this.store.setCommands(channelId, result.data);
+      this.store.setCommands(channelId, result.data.data);
     })().finally(() => {
       this.#commandLoads.delete(channelId);
     });
@@ -3853,7 +3853,7 @@ export class AspenSync {
       }
       this.store.setFrequentEmoji(
         communityId,
-        result.data.map((f) => f.emoji),
+        result.data.data.map((f) => f.emoji),
         asOf,
       );
     })().finally(() => {
@@ -3969,11 +3969,11 @@ export class AspenSync {
     if (result.data === undefined) {
       throw new ApiProblemError(problemOf(result.error, result.response));
     }
-    const complete = result.data.length < LIST_PAGE;
+    const complete = result.data.data.length < LIST_PAGE;
     if (more) {
-      this.store.appendInvites(communityId, result.data, complete);
+      this.store.appendInvites(communityId, result.data.data, complete);
     } else {
-      this.store.replaceInvites(communityId, result.data, complete);
+      this.store.replaceInvites(communityId, result.data.data, complete);
     }
   }
 
@@ -4243,10 +4243,10 @@ export class AspenSync {
       // none of what it lists (`optional`).
       const override = optional(chosenPresence);
       const access = optional(admin);
-      const running = optional(plugins) ?? [];
-      const scheduled = optional(scheduledMessages) ?? [];
-      const saved = optional(saves) ?? [];
-      const followed = optional(follows) ?? [];
+      const running = optional(plugins)?.data ?? [];
+      const scheduled = optional(scheduledMessages)?.data ?? [];
+      const saved = optional(saves)?.data ?? [];
+      const followed = optional(follows)?.data ?? [];
       this.store.setBootstrap(
         me.data,
         communities.data.data,
@@ -5137,7 +5137,7 @@ export class AspenSync {
       params: { query: { ids: ids.join(",") } },
     });
     if (result.data !== undefined) {
-      this.store.applyStatuses(result.data, { since });
+      this.store.applyStatuses(result.data.data, { since });
     }
   }
 

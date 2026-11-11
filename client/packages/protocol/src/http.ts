@@ -652,7 +652,7 @@ export class AspenClient {
 
   /** The other deployments the signed-in user has signed in to from here, most recent first. */
   async foreignDeployments(): Promise<Schemas["ForeignDeployment"][]> {
-    return unwrap(await this.api.GET(`${API_PREFIX}/users/@me/foreign-deployments`));
+    return unwrap(await this.api.GET(`${API_PREFIX}/users/@me/foreign-deployments`)).data;
   }
 
   /** Stops the signed-in user's devices signing in at `domain`. */

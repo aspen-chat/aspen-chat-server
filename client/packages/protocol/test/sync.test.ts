@@ -92,20 +92,25 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+/** A list as the server answers one: its records under `data`. */
+function listed(records: readonly unknown[]): Response {
+  return json({ data: records });
+}
+
 function bootstrapResponses(): Record<string, (url: URL) => Response> {
   return {
     "/api/v1/users/@me": () => json(me),
     "/api/v1/users/@me/preferences": () => json({ values: {}, updatedAt: null }),
     "/api/v1/users/@me/admin": () => json({ permissions: [], roles: [], inclusions: [] }),
     "/api/v1/users/@me/blocks": () => json({ data: [], included: { users: [] } }),
-    "/api/v1/plugins": () => json([]),
-    "/api/v1/users/@me/held-messages": () => json([]),
-    "/api/v1/users/@me/scheduled-messages": () => json([]),
-    "/api/v1/users/@me/saved-messages": () => json([]),
-    "/api/v1/users/@me/thread-follows": () => json([]),
+    "/api/v1/plugins": () => listed([]),
+    "/api/v1/users/@me/held-messages": () => listed([]),
+    "/api/v1/users/@me/scheduled-messages": () => listed([]),
+    "/api/v1/users/@me/saved-messages": () => listed([]),
+    "/api/v1/users/@me/thread-follows": () => listed([]),
     "/api/v1/users/@me/presence-override": () => json({ presenceOverride: null, until: null }),
     "/api/v1/users/statuses": (url) =>
-      json(
+      listed(
         (url.searchParams.get("ids") ?? "")
           .split(",")
           .filter((id) => id !== "")
@@ -708,7 +713,7 @@ describe("AspenSync", () => {
 
   it("fails the bootstrap when a read a deployment may lack fails, and takes only a 404 as none", async () => {
     const save = { id: id(700), message: id(1001) };
-    let answer = (): Response => json([save]);
+    let answer = (): Response => listed([save]);
     const timers = heldTimers();
     const { sync } = makeSync(
       {
@@ -1247,7 +1252,7 @@ describe("AspenSync", () => {
     const { sync } = makeSync({
       ...bootstrapResponses(),
       [`/api/v1/communities/${aspen.id}/invites`]: (url) =>
-        url.searchParams.size === 0 && revoked ? json([]) : json([invite]),
+        url.searchParams.size === 0 && revoked ? listed([]) : listed([invite]),
       "/api/v1/invites/abc123": () => {
         revoked = true;
         return new Response(null, { status: 204 });
@@ -1464,7 +1469,7 @@ describe("AspenSync", () => {
     };
     const { sync } = makeSync({
       ...bootstrapResponses(),
-      "/api/v1/users/@me/scheduled-messages": () => json([earlier]),
+      "/api/v1/users/@me/scheduled-messages": () => listed([earlier]),
       [`/api/v1/channels/${general.id}/scheduled-messages`]: async (url, request) => {
         await note(url, request);
         return json(scheduled, 201);
@@ -1583,7 +1588,7 @@ describe("AspenSync", () => {
     const dropped = { ...scheduled, id: id(85) };
     const { sync } = makeSync({
       ...bootstrapResponses(),
-      "/api/v1/users/@me/scheduled-messages": () => json([scheduled, dropped]),
+      "/api/v1/users/@me/scheduled-messages": () => listed([scheduled, dropped]),
     });
     const socket = await goLive(sync);
     socket.frame({
@@ -1628,7 +1633,7 @@ describe("AspenSync", () => {
     const methods: string[] = [];
     const { sync } = makeSync({
       ...bootstrapResponses(),
-      "/api/v1/users/@me/scheduled-messages": () => json([scheduled]),
+      "/api/v1/users/@me/scheduled-messages": () => listed([scheduled]),
       [`/api/v1/users/@me/scheduled-messages/${scheduled.id}`]: (url, request) => {
         methods.push(request.method);
         if (request.method === "DELETE") {
@@ -2035,7 +2040,7 @@ describe("AspenSync", () => {
         json({ permissions: ["viewDashboard"], roles: [], inclusions: [] }),
       "/api/v1/admin/users": (url) => {
         searches.push(url.search);
-        return json([]);
+        return listed([]);
       },
     });
     await goLive(sync);
@@ -2605,7 +2610,7 @@ describe("AspenSync and the plugin catalogue", () => {
       ...bootstrapResponses(),
       "/api/v1/plugins": () => {
         reads += 1;
-        return json(catalogue);
+        return listed(catalogue);
       },
     });
     const socket = await goLive(sync);
@@ -2642,7 +2647,7 @@ describe("AspenSync and the plugin catalogue", () => {
       ...bootstrapResponses(),
       "/api/v1/plugins": () => {
         reads += 1;
-        return json([]);
+        return listed([]);
       },
     });
     const socket = await goLive(sync);
@@ -2765,7 +2770,7 @@ describe("AspenSync following the caller's other devices", () => {
         "/api/v1/users/statuses": (url) => {
           const ids = url.searchParams.get("ids") ?? "";
           statusReads.push(ids);
-          return json(ids.split(",").map((id) => ({ id, onlineStatus: "online" })));
+          return listed(ids.split(",").map((id) => ({ id, onlineStatus: "online" })));
         },
       },
       () => Date.now(),
@@ -2789,7 +2794,7 @@ describe("AspenSync following the caller's other devices", () => {
         "/api/v1/users/@me/presence-override": () =>
           json({ presenceOverride: "away", until: new Date(Date.now() + 60).toISOString() }),
         "/api/v1/users/statuses": (url) =>
-          json(
+          listed(
             (url.searchParams.get("ids") ?? "")
               .split(",")
               .map((id) => ({ id, onlineStatus: "online" })),

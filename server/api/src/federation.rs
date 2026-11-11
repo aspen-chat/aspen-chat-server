@@ -9,6 +9,7 @@ use crate::auth::{LoginResponse, SessionUser};
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::extract::double_option;
 use crate::extract::{Created, Json, NoContent, Path, Query};
+use crate::include::Listed;
 use crate::{API_PREFIX, TAG_ADMIN, TAG_AUTH, TAG_ICONS, TAG_USERS};
 use aspen_app::context::GlobalServerContext;
 use aspen_app::deployment_settings::SettingsChange;
@@ -27,6 +28,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+
+pub type FederatedDeploymentList = Listed<FederatedDeployment>;
+pub type ForeignDeploymentList = Listed<ForeignDeployment>;
 
 /// How long other deployments may keep this deployment's document before reading it again.
 const DOCUMENT_MAX_AGE_SECONDS: u32 = 300;
@@ -306,7 +310,7 @@ const DEFAULT_PAGE: i64 = 15;
     params(DeploymentListQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<FederatedDeployment>),
+        (status = OK, body = FederatedDeploymentList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without Manage federation", body = Problem),
@@ -317,7 +321,7 @@ pub async fn list_deployments(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
     Query(query): Query<DeploymentListQuery>,
-) -> ApiResult<Json<Vec<FederatedDeployment>>> {
+) -> ApiResult<Json<FederatedDeploymentList>> {
     access.require(DeploymentPermission::ManageFederation)?;
     let mut conn = state
         .connection_pool
@@ -769,7 +773,7 @@ pub async fn federated_sign_in(
     tag = TAG_USERS,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<ForeignDeployment>),
+        (status = OK, body = ForeignDeploymentList),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -777,8 +781,10 @@ pub async fn federated_sign_in(
 pub async fn list_foreign_deployments(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
-) -> ApiResult<Json<Vec<ForeignDeployment>>> {
-    Ok(Json(abroad::foreign_deployments(&state, user.id).await?))
+) -> ApiResult<Json<ForeignDeploymentList>> {
+    Ok(Json(
+        abroad::foreign_deployments(&state, user.id).await?.into(),
+    ))
 }
 
 /// Stops using another deployment: it leaves the caller's list, so their devices stop signing

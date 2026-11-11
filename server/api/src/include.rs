@@ -12,6 +12,9 @@
 //! supports `include` declares its own enum of accepted relationship names; the parameter is a
 //! comma-separated list of those names (`?include=channels,categories`), which is how OpenAPI
 //! describes an array query parameter with `style: form, explode: false`.
+//!
+//! A list read that sideloads nothing answers a [`Listed`], and one read a page at a time by a
+//! cursor a [`Page`], so every list the API answers is an object with its records under `data`.
 
 use crate::attachment::Attachment;
 use crate::category_collapse::CategoryCollapse;
@@ -28,7 +31,7 @@ use crate::read_state::ReadState;
 use serde::Serialize;
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
 use std::borrow::Cow;
-use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Ref};
+use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Ref, SchemaType, Type};
 use utoipa::openapi::{RefOr, Schema};
 use utoipa::{PartialSchema, ToSchema};
 
@@ -287,10 +290,110 @@ impl<T> SideloadedList<T> {
     }
 }
 
-// The OpenAPI schemas of the two envelopes are written by hand so that `data` is a `$ref` to the
+/// Response envelope of a list read that sideloads nothing: the whole list, or the window its
+/// parameters ask for, under `data`. Every list answers in an object, never a bare array, so a
+/// field can be added beside `data` without breaking those who read it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Listed<T> {
+    pub data: Vec<T>,
+}
+
+impl<T> From<Vec<T>> for Listed<T> {
+    fn from(data: Vec<T>) -> Self {
+        Self { data }
+    }
+}
+
+impl<T> FromIterator<T> for Listed<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self {
+            data: iter.into_iter().collect(),
+        }
+    }
+}
+
+/// Response envelope of a list read a page at a time. `nextCursor` is always present: text to
+/// give back as `?cursor=` for the page after this one, or `null` when this page is the last. A
+/// reader decides whether there is more by `nextCursor` alone, never by how many records `data`
+/// holds, and takes the cursor as opaque.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Page<T> {
+    pub data: Vec<T>,
+    pub next_cursor: Option<String>,
+}
+
+impl<T> Page<T> {
+    pub fn new(data: Vec<T>, next_cursor: Option<String>) -> Self {
+        Self { data, next_cursor }
+    }
+}
+
+// The OpenAPI schemas of the envelopes are written by hand so that `data` is a `$ref` to the
 // record's own component schema. Deriving `ToSchema` on a generic struct copies the record's
 // schema inline instead, which would give the generated client an anonymous type for `data`
 // rather than the named record type it uses everywhere else.
+
+fn array_of<T: ToSchema>() -> RefOr<Schema> {
+    ArrayBuilder::new()
+        .items(Ref::from_schema_name(T::name()))
+        .into()
+}
+
+fn next_cursor_schema() -> RefOr<Schema> {
+    ObjectBuilder::new()
+        .schema_type(SchemaType::from_iter([Type::String, Type::Null]))
+        .description(Some(
+            "Give it back as `cursor` for the next page; `null` when this page is the last",
+        ))
+        .into()
+}
+
+fn record_schemas<T: ToSchema>(schemas: &mut Vec<(String, RefOr<Schema>)>) {
+    schemas.push((T::name().into_owned(), T::schema()));
+    T::schemas(schemas);
+}
+
+impl<T: ToSchema> PartialSchema for Listed<T> {
+    fn schema() -> RefOr<Schema> {
+        ObjectBuilder::new()
+            .property("data", array_of::<T>())
+            .required("data")
+            .into()
+    }
+}
+
+impl<T: ToSchema> ToSchema for Listed<T> {
+    fn name() -> Cow<'static, str> {
+        format!("Listed_{}", T::name()).into()
+    }
+
+    fn schemas(schemas: &mut Vec<(String, RefOr<Schema>)>) {
+        record_schemas::<T>(schemas);
+    }
+}
+
+impl<T: ToSchema> PartialSchema for Page<T> {
+    fn schema() -> RefOr<Schema> {
+        ObjectBuilder::new()
+            .property("data", array_of::<T>())
+            .required("data")
+            .property("nextCursor", next_cursor_schema())
+            .required("nextCursor")
+            .into()
+    }
+}
+
+impl<T: ToSchema> ToSchema for Page<T> {
+    fn name() -> Cow<'static, str> {
+        format!("Page_{}", T::name()).into()
+    }
+
+    fn schemas(schemas: &mut Vec<(String, RefOr<Schema>)>) {
+        record_schemas::<T>(schemas);
+    }
+}
 
 fn envelope_schema(data: impl Into<RefOr<Schema>>) -> RefOr<Schema> {
     ObjectBuilder::new()
@@ -302,8 +405,7 @@ fn envelope_schema(data: impl Into<RefOr<Schema>>) -> RefOr<Schema> {
 }
 
 fn envelope_schemas<T: ToSchema>(schemas: &mut Vec<(String, RefOr<Schema>)>) {
-    schemas.push((T::name().into_owned(), T::schema()));
-    T::schemas(schemas);
+    record_schemas::<T>(schemas);
     schemas.push((Included::name().into_owned(), Included::schema()));
     Included::schemas(schemas);
 }
@@ -326,11 +428,7 @@ impl<T: ToSchema> ToSchema for Sideloaded<T> {
 
 impl<T: ToSchema> PartialSchema for SideloadedList<T> {
     fn schema() -> RefOr<Schema> {
-        envelope_schema(
-            ArrayBuilder::new()
-                .items(Ref::from_schema_name(T::name()))
-                .build(),
-        )
+        envelope_schema(array_of::<T>())
     }
 }
 
@@ -426,6 +524,27 @@ mod tests {
         assert_eq!(filtered("has=Channels"), Err("Channels".to_string()));
         let long = "ж".repeat(500);
         assert_eq!(filtered(&format!("has={long}")), Err("ж".repeat(64)));
+    }
+
+    /// A list is an object whatever it holds, and a page always says whether another follows.
+    #[test]
+    fn lists_and_pages_answer_in_objects() {
+        assert_eq!(
+            serde_json::to_value(Listed::from(vec![1, 2])).unwrap(),
+            json!({"data": [1, 2]})
+        );
+        assert_eq!(
+            serde_json::to_value(Vec::<u8>::new().into_iter().collect::<Listed<u8>>()).unwrap(),
+            json!({"data": []})
+        );
+        assert_eq!(
+            serde_json::to_value(Page::new(vec![1], Some("next".to_string()))).unwrap(),
+            json!({"data": [1], "nextCursor": "next"})
+        );
+        assert_eq!(
+            serde_json::to_value(Page::<u8>::new(Vec::new(), None)).unwrap(),
+            json!({"data": [], "nextCursor": null})
+        );
     }
 
     /// Only the requested relationship types appear, and requesting a relationship with no

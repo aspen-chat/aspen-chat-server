@@ -6,6 +6,7 @@ use crate::TAG_BANS;
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Json, NoContent, Path, Query};
+use crate::include::Listed;
 use crate::message_enum::CommunityBan;
 use aspen_app as app;
 use aspen_app::ban::BanRequest;
@@ -16,6 +17,8 @@ use axum::http::StatusCode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+
+pub type CommunityBanList = Listed<CommunityBan>;
 
 /// What a ban asks for.
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -68,7 +71,7 @@ impl UserPageQuery {
     params(("community" = CommunityId, Path), UserPageQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<CommunityBan>),
+        (status = OK, body = CommunityBanList),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: lacks Ban members", body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -80,9 +83,11 @@ pub async fn read_community_bans(
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
     Query(page): Query<UserPageQuery>,
-) -> ApiResult<Json<Vec<CommunityBan>>> {
+) -> ApiResult<Json<CommunityBanList>> {
     Ok(Json(
-        app::ban::read_bans(&state, user.id, community, page.before, page.limit()).await?,
+        app::ban::read_bans(&state, user.id, community, page.before, page.limit())
+            .await?
+            .into(),
     ))
 }
 

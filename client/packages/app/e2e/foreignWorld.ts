@@ -66,10 +66,11 @@ function json(route: Route, body: unknown, status = 200) {
 export async function stubForeignDeployment(page: Page, { listed }: { listed: boolean }) {
   let visited = listed;
   await page.route(/\/api\/v1\/users\/@me\/foreign-deployments$/, (route) =>
-    json(
-      route,
-      visited ? [{ domain: foreignDomain, firstUsedAt: later(-60), lastUsedAt: later(-1) }] : [],
-    ),
+    json(route, {
+      data: visited
+        ? [{ domain: foreignDomain, firstUsedAt: later(-60), lastUsedAt: later(-1) }]
+        : [],
+    }),
   );
   await page.route(/\/api\/v1\/auth\/assertions$/, (route) => {
     visited = true;
@@ -204,7 +205,7 @@ export async function stubForeignDeployment(page: Page, { listed }: { listed: bo
       return json(route, { data: [], included: { users } });
     }
     if (path === "/users/statuses") {
-      return json(route, []);
+      return json(route, { data: [] });
     }
     // The user's chosen presence, set on every deployment alike, starts unset here too.
     if (path === "/users/@me/presence-override") {

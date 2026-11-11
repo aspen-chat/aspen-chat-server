@@ -7,7 +7,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path, Query};
-use crate::include::{IncludeSet, Included, Sideloaded};
+use crate::include::{IncludeSet, Included, Listed, Sideloaded};
 use crate::{API_PREFIX, TAG_MESSAGES};
 use aspen_app as app;
 use aspen_app::context::GlobalServerContext;
@@ -17,6 +17,8 @@ use axum::extract::State;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
+
+pub type ScheduledMessageList = Listed<ScheduledMessage>;
 
 /// A message to post later, as `POST /channels/{channel}/messages` would post it now.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -115,7 +117,7 @@ pub async fn schedule_message(
     tag = TAG_MESSAGES,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<ScheduledMessage>),
+        (status = OK, body = ScheduledMessageList),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -123,9 +125,11 @@ pub async fn schedule_message(
 pub async fn list_scheduled_messages(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
-) -> ApiResult<Json<Vec<ScheduledMessage>>> {
+) -> ApiResult<Json<ScheduledMessageList>> {
     Ok(Json(
-        app::message::scheduled::read_scheduled(&state, user.id).await?,
+        app::message::scheduled::read_scheduled(&state, user.id)
+            .await?
+            .into(),
     ))
 }
 

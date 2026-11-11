@@ -1,7 +1,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::extract::{Created, Json, NoContent, Path, Query};
-use crate::include::{FilterSet, IncludeSet, Included, Sideloaded, SideloadedList};
+use crate::include::{FilterSet, IncludeSet, Included, Listed, Sideloaded, SideloadedList};
 use crate::link_preview::LinkPreview;
 use crate::message_enum::request::{MessageCreateRequest, MessageUpdateRequest};
 use crate::message_enum::{Message, UserCommunity};
@@ -28,6 +28,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use utoipa::{IntoParams, ToSchema};
+
+pub type HeldMessageList = Listed<HeldMessage>;
 
 pub fn message_to_api(
     msg: app::message::Message,
@@ -699,7 +701,7 @@ pub struct HeldPageQuery {
     params(HeldPageQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<HeldMessage>),
+        (status = OK, body = HeldMessageList),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -708,7 +710,7 @@ pub async fn list_held_messages(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Query(page): Query<HeldPageQuery>,
-) -> ApiResult<Json<Vec<HeldMessage>>> {
+) -> ApiResult<Json<HeldMessageList>> {
     let held = app::message::held::read_held(
         &state,
         user.id,

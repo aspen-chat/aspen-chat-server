@@ -30,7 +30,7 @@ const commands = [
 async function withCommands(page: Page) {
   await page.route(`**/api/v1/channels/${general}/commands`, async (route) => {
     if (route.request().method() === "GET") {
-      await route.fulfill({ json: commands });
+      await route.fulfill({ json: { data: commands } });
     } else {
       await route.fulfill({ status: 201, json: {} });
     }

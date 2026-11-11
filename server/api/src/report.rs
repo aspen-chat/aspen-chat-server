@@ -9,6 +9,7 @@ use crate::attachment::Attachment;
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path, Query};
+use crate::include::Listed;
 use crate::message_enum::{Channel, Community, Message, User};
 use aspen_app as app;
 use aspen_app::context::GlobalServerContext;
@@ -26,6 +27,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use utoipa::{IntoParams, ToSchema};
+
+pub type ReportCategoryList = Listed<ReportCategory>;
 
 /// A message as a review reads it: deleted ones too, which no one else reads.
 #[derive(Debug, Clone, Serialize, ToSchema, JsonSchema)]
@@ -107,7 +110,7 @@ impl From<app::report::Filed> for ReportReceipt {
     tag = TAG_REPORTS,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<ReportCategory>),
+        (status = OK, body = ReportCategoryList),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -115,8 +118,8 @@ impl From<app::report::Filed> for ReportReceipt {
 pub async fn list_report_categories(
     State(state): State<GlobalServerContext>,
     _: SessionUser,
-) -> ApiResult<Json<Vec<ReportCategory>>> {
-    Ok(Json(app::report::categories(&state, false).await?))
+) -> ApiResult<Json<ReportCategoryList>> {
+    Ok(Json(app::report::categories(&state, false).await?.into()))
 }
 
 /// Reports a message the caller can read to the deployment's moderators. An echo is reported
@@ -659,7 +662,7 @@ pub async fn restore_report_case(
     tag = TAG_REPORTS,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<ReportCategory>),
+        (status = OK, body = ReportCategoryList),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without either permission", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -668,12 +671,12 @@ pub async fn restore_report_case(
 pub async fn list_all_report_categories(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
-) -> ApiResult<Json<Vec<ReportCategory>>> {
+) -> ApiResult<Json<ReportCategoryList>> {
     use app::deployment::DeploymentPermission;
     if !access.has(DeploymentPermission::ReviewReports) {
         access.require(DeploymentPermission::ManageReportCategories)?;
     }
-    Ok(Json(app::report::categories(&state, true).await?))
+    Ok(Json(app::report::categories(&state, true).await?.into()))
 }
 
 /// A category of the deployment's own.

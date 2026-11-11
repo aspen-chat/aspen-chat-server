@@ -2,7 +2,7 @@ use crate::auth::SessionUser;
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode, unique, violates};
 use crate::extract::double_option;
 use crate::extract::{Created, Json, NoContent, Path, Query};
-use crate::include::{IncludeSet, Included, Sideloaded};
+use crate::include::{IncludeSet, Included, Listed, Sideloaded};
 use crate::message_enum;
 use crate::rate_limit::Failures;
 use crate::{API_PREFIX, TAG_INVITES};
@@ -13,6 +13,8 @@ use axum::extract::State;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+
+pub type InviteList = Listed<message_enum::Invite>;
 
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -74,7 +76,7 @@ pub async fn create_invite(
     params(("community" = CommunityId, Path), InvitePageQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<message_enum::Invite>),
+        (status = OK, body = InviteList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
@@ -86,7 +88,7 @@ pub async fn list_community_invites(
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
     Query(page): Query<InvitePageQuery>,
-) -> ApiResult<Json<Vec<message_enum::Invite>>> {
+) -> ApiResult<Json<InviteList>> {
     let invites = app::invite::read_community_invites(
         &state,
         user.id,

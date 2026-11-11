@@ -18,7 +18,7 @@ import {
   threadReplies,
   users,
 } from "../fixtures";
-import { type Asked, type WorldRoute, reply } from "../reply";
+import { type Asked, type WorldRoute, listed, reply } from "../reply";
 
 /** The routes of message search and history, the thread, Bob's poll, and the caller's preferences and presence. */
 export function messageRoutes({
@@ -37,8 +37,10 @@ export function messageRoutes({
       "GET",
       /^\/users\/@me\/saved-messages$/,
       () =>
-        Array.from(saves, ([message, id]) => ({ id, message })).sort((a, b) =>
-          b.id.localeCompare(a.id),
+        listed(
+          Array.from(saves, ([message, id]) => ({ id, message })).sort((a, b) =>
+            b.id.localeCompare(a.id),
+          ),
         ),
     ],
     [
@@ -77,7 +79,10 @@ export function messageRoutes({
     [
       "GET",
       /^\/users\/@me\/thread-follows$/,
-      () => Array.from(follows, (followed) => ({ thread: followed, followedAt: minutesAgo(1) })),
+      () =>
+        listed(
+          Array.from(follows, (followed) => ({ thread: followed, followedAt: minutesAgo(1) })),
+        ),
     ],
     [
       "PUT",
@@ -132,7 +137,11 @@ export function messageRoutes({
       /^\/users\/@me\/preferences$/,
       () => ({ values: request.postDataJSON() as unknown, updatedAt: minutesAgo(0) }),
     ],
-    ["GET", /^\/users\/statuses$/, () => users.map((u) => ({ id: u.id, onlineStatus: "online" }))],
+    [
+      "GET",
+      /^\/users\/statuses$/,
+      () => listed(users.map((u) => ({ id: u.id, onlineStatus: "online" }))),
+    ],
     [
       "GET",
       new RegExp(`^/channels/${general}/messages$`),

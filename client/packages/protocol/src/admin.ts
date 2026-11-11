@@ -139,7 +139,7 @@ export class AdminApi {
   async adminUsers(query: AdminListQuery<UserSort> = {}): Promise<AdminUserEntry[]> {
     return adminRead(
       await this.#client.api.GET("/api/v1/admin/users", { params: { query: listQuery(query) } }),
-    );
+    ).data;
   }
 
   /** A page of the deployment's communities, searched and sorted. */
@@ -150,7 +150,7 @@ export class AdminApi {
       await this.#client.api.GET("/api/v1/admin/communities", {
         params: { query: listQuery(query) },
       }),
-    );
+    ).data;
   }
 
   /**
@@ -261,7 +261,7 @@ export class AdminApi {
 
   /** Every report category, hidden ones included, in the order they are offered. */
   async allReportCategories(): Promise<ReportCategory[]> {
-    return adminRead(await this.#client.api.GET("/api/v1/admin/report-categories"));
+    return adminRead(await this.#client.api.GET("/api/v1/admin/report-categories")).data;
   }
 
   /** Adds a category of the deployment's own. */
@@ -298,7 +298,7 @@ export class AdminApi {
 
   /** The newest registration invites, usable or not. */
   async registrationInvites(): Promise<RegistrationInvite[]> {
-    return adminRead(await this.#client.api.GET("/api/v1/admin/registration-invites"));
+    return adminRead(await this.#client.api.GET("/api/v1/admin/registration-invites")).data;
   }
 
   async createRegistrationInvite(request: RegistrationInviteRequest): Promise<RegistrationInvite> {
@@ -367,7 +367,7 @@ export class AdminApi {
 
   /** Every newsletter post, the newest first. */
   async newsletterPosts(): Promise<NewsletterPost[]> {
-    return adminRead(await this.#client.api.GET("/api/v1/admin/newsletter/posts"));
+    return adminRead(await this.#client.api.GET("/api/v1/admin/newsletter/posts")).data;
   }
 
   /** Writes a newsletter draft. */
@@ -438,7 +438,7 @@ export class AdminApi {
       await this.#client.api.GET("/api/v1/admin/federation/deployments", {
         params: { query: listQuery(query) },
       }),
-    );
+    ).data;
   }
 
   /** Adds a deployment to the directory, not yet contacted. */
@@ -529,7 +529,7 @@ export class AdminApi {
 
   /** The registered voice servers. Takes Manage voice servers. */
   async voiceServers(): Promise<VoiceServer[]> {
-    return adminRead(await this.#client.api.GET("/api/v1/voice-servers"));
+    return adminRead(await this.#client.api.GET("/api/v1/voice-servers")).data;
   }
 
   /**
@@ -578,7 +578,7 @@ export class AdminApi {
 
   /** The deployment's roles, lowest first, as a query of the moment. */
   async deploymentRoles(): Promise<DeploymentRole[]> {
-    return adminRead(await this.#client.api.GET("/api/v1/admin/roles"));
+    return adminRead(await this.#client.api.GET("/api/v1/admin/roles")).data;
   }
 
   async createDeploymentRole(
@@ -626,7 +626,7 @@ export class AdminApi {
   async reorderDeploymentRoles(roleIds: readonly string[]): Promise<DeploymentRole[]> {
     return adminRead(
       await this.#client.api.PUT("/api/v1/admin/role-order", { body: { roles: [...roleIds] } }),
-    );
+    ).data;
   }
 
   /** Gives someone a deployment role, or takes it away. */
@@ -646,7 +646,7 @@ export class AdminApi {
       await this.#client.api.GET("/api/v1/admin/moderation-log", {
         params: { query: before === undefined ? {} : { before } },
       }),
-    );
+    ).data;
   }
 
   /** A page of the record of files offered in calls, newest first, optionally one user's. */
@@ -660,7 +660,7 @@ export class AdminApi {
           },
         },
       }),
-    );
+    ).data;
   }
 
   /** What the deployment's background jobs are doing now: a preview of at most 100. */
@@ -670,7 +670,7 @@ export class AdminApi {
 
   /** Every installed plugin, on or off, in the order they decide messages in. */
   async plugins(): Promise<AdminPlugin[]> {
-    return adminRead(await this.#client.api.GET("/api/v1/admin/plugins"));
+    return adminRead(await this.#client.api.GET("/api/v1/admin/plugins")).data;
   }
 
   /** Turns an installed plugin on or off, changes its mode, or configures it. */

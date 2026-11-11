@@ -4,6 +4,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path};
+use crate::include::Listed;
 use crate::message_enum::{User, UserCommunity};
 use crate::{API_PREFIX, TAG_USERS};
 use aspen_app::context::GlobalServerContext;
@@ -14,6 +15,9 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+pub type UserList = Listed<User>;
+pub type BotTransferList = Listed<BotTransfer>;
 
 /// A new bot.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -58,7 +62,7 @@ pub struct BotOwnerRequest {
     tag = TAG_USERS,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<User>),
+        (status = OK, body = UserList),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -66,7 +70,7 @@ pub struct BotOwnerRequest {
 pub async fn list_bots(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
-) -> ApiResult<Json<Vec<User>>> {
+) -> ApiResult<Json<UserList>> {
     let bots = app::bot::list_owned(&state, user.id).await?;
     Ok(Json(bots.into_iter().map(User::from).collect()))
 }
@@ -247,7 +251,7 @@ pub async fn accept_bot_transfer(
     tag = TAG_USERS,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<BotTransfer>),
+        (status = OK, body = BotTransferList),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -255,7 +259,7 @@ pub async fn accept_bot_transfer(
 pub async fn list_bot_transfers(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
-) -> ApiResult<Json<Vec<BotTransfer>>> {
+) -> ApiResult<Json<BotTransferList>> {
     let transfers = app::bot::list_transfers(&state, user.id).await?;
     Ok(Json(transfers.into_iter().map(BotTransfer::from).collect()))
 }

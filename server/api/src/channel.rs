@@ -1,7 +1,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path, Query};
-use crate::include::{IncludeSet, Included, SideloadedList};
+use crate::include::{IncludeSet, Included, Listed, SideloadedList};
 use crate::message_enum::Pin;
 use crate::message_enum::request::{ChannelCreateRequest, ChannelUpdateRequest};
 use crate::{API_PREFIX, TAG_CHANNELS, message_enum};
@@ -11,6 +11,8 @@ use aspen_app::context::GlobalServerContext;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+
+pub type PinList = Listed<Pin>;
 
 /// A community channel's wire record; a DM's carries its recipients too (`app::channel::record`).
 pub fn channel_to_api(c: app::channel::Channel) -> message_enum::Channel {
@@ -116,7 +118,7 @@ pub async fn get_channel_presence(
     params(("channel" = ChannelId, Path)),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<Pin>),
+        (status = OK, body = PinList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -127,7 +129,7 @@ pub async fn list_channel_pins(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(channel): Path<ChannelId>,
-) -> ApiResult<Json<Vec<Pin>>> {
+) -> ApiResult<Json<PinList>> {
     let pins = app::channel::read_channel_pins(&state, user.id, channel).await?;
     Ok(Json(
         pins.into_iter()

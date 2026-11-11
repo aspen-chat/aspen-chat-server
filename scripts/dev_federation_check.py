@@ -85,7 +85,7 @@ def check(_args: argparse.Namespace) -> None:
     blocked = api(ALPHA, "PUT", f"{beta_path}/lists/botsImmigrationBlock", token=admin, expect=(201,))
     expect(not blocked["admission"]["botsImmigration"], "on alpha's block list, beta's bots may not come")
     api(ALPHA, "DELETE", f"{beta_path}/lists/botsImmigrationBlock", token=admin, expect=(204,))
-    found = api(ALPHA, "GET", f"/admin/federation/deployments?filter[name]={urllib.parse.quote(BETA.domain)}", token=admin)
+    found = api(ALPHA, "GET", f"/admin/federation/deployments?filter[name]={urllib.parse.quote(BETA.domain)}", token=admin)["data"]
     expect([d["domain"] for d in found] == [BETA.domain] and found[0]["lists"] == ["usersEmigrationAllow"],
            "the directory finds beta by name with its lists")
 
@@ -228,9 +228,8 @@ def check_standing() -> None:
     expect(problem(*sign_in_abroad(assertion_for(rogue))) == "403 federationRefused",
            "a banned user cannot sign in at beta again")
     api(BETA, "PUT", f"/admin/users/{deleter_at_beta}/ban", {}, token=moderator, expect=(404,))
-    log = api(BETA, "GET", "/admin/moderation-log", token=moderator)
-    entries = log if isinstance(log, list) else log.get("entries", log.get("data", []))
-    expect(any(e.get("action") == "banUser" for e in entries), "the ban is in beta's moderation log")
+    log = api(BETA, "GET", "/admin/moderation-log", token=moderator)["data"]
+    expect(any(e.get("action") == "banUser" for e in log), "the ban is in beta's moderation log")
     api(BETA, "DELETE", f"/admin/users/{roguish['userId']}/ban", token=moderator, expect=(204,))
     status, _ = sign_in_abroad(assertion_for(rogue))
     expect(status == 200, "once the ban is lifted they may sign in again")
@@ -307,7 +306,7 @@ def check_abroad(admin: str) -> None:
     expect(problem(*sign_in_abroad(assertion)) == "401 assertionInvalid", "an assertion is used once")
     expect(problem(*sign_in_abroad(assertion_for(traveller), at=ALPHA)) == "401 assertionInvalid",
            "an assertion is accepted only where it is for")
-    visited = api(ALPHA, "GET", "/users/@me/foreign-deployments", token=traveller)
+    visited = api(ALPHA, "GET", "/users/@me/foreign-deployments", token=traveller)["data"]
     expect([d["domain"] for d in visited] == [BETA.domain], "alpha remembers where its user signed in")
 
     api(BETA, "PATCH", "/users/@me", {"displayName": "Elsewhere"}, token=abroad, expect=(403,))

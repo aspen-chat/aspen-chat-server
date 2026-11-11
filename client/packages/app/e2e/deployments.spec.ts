@@ -90,22 +90,24 @@ test("a moderator bans a user of another server, and lifts the ban", async ({ pa
     );
     await p.route(/\/api\/v1\/admin\/users(\?.*)?$/, (route) =>
       route.fulfill(
-        json([
-          {
-            id: stranger,
-            name: "stranger",
-            displayName: "Stranger",
-            icon: null,
-            createdAt: new Date().toISOString(),
-            roles: [],
-            registeredWith: null,
-            bot: false,
-            botOwner: null,
-            homeDomain: foreignDomain,
-            banned: banned !== null,
-            ban: banned,
-          },
-        ]),
+        json({
+          data: [
+            {
+              id: stranger,
+              name: "stranger",
+              displayName: "Stranger",
+              icon: null,
+              createdAt: new Date().toISOString(),
+              roles: [],
+              registeredWith: null,
+              bot: false,
+              botOwner: null,
+              homeDomain: foreignDomain,
+              banned: banned !== null,
+              ban: banned,
+            },
+          ],
+        }),
       ),
     );
     await p.route(/\/api\/v1\/admin\/users\/[^/]+\/ban$/, (route) => {

@@ -131,7 +131,7 @@ class World:
         invite = stack.api("POST", f"/communities/{self.community}/invites", {}, self.owner["token"])
         stack.api("PUT", f"/communities/{self.community}/members/@me",
                   {"inviteCode": invite.get("code") or invite.get("id")}, self.member["token"])
-        roles = stack.api("GET", f"/communities/{self.community}/roles", token=self.owner["token"])
+        roles = stack.api("GET", f"/communities/{self.community}/roles", token=self.owner["token"])["data"]
         self.everyone = next(r["id"] for r in roles if r["everyone"])
         self.stream = stack.events(self.member["token"])
         self.stream.gather(0.5)
@@ -388,7 +388,7 @@ def role_grants(world: World, check: Checks) -> None:
     invite = world.as_owner("POST", f"/communities/{world.community}/invites", {})
     stack.api("PUT", f"/communities/{world.community}/members/@me",
               {"inviteCode": invite.get("code") or invite.get("id")}, third["token"])
-    roles = world.as_owner("GET", f"/communities/{world.community}/roles")
+    roles = world.as_owner("GET", f"/communities/{world.community}/roles")["data"]
     moderator = next(r["id"] for r in roles if r["name"] == "Moderator")
     world.as_owner("PUT", f"/communities/{world.community}/members/{third['id']}/roles/{moderator}")
     check("nor ranks its holder above roles for taking them away",
@@ -704,7 +704,7 @@ def calls(world: World, check: Checks) -> None:
     mutes = f"/communities/{world.community}/voice-mutes"
     check("the community's mutes are not the member's to list",
           stack.status("GET", mutes, token=world.member["token"]) == 403)
-    listed = stack.api("GET", mutes, token=world.owner["token"])
+    listed = stack.api("GET", mutes, token=world.owner["token"])["data"]
     check("its call moderators see the member among them",
           any(mute["user"] == world.member["id"] for mute in listed), listed)
     check("a member cannot lift their own mute",
@@ -1159,7 +1159,7 @@ def presence(world: World, check: Checks) -> None:
     stranger = world.account("stranger")
 
     def status_of(token: str, user: str) -> str:
-        return world.stack.api("GET", f"/users/statuses?ids={user}", token=token)[0]["onlineStatus"]
+        return world.stack.api("GET", f"/users/statuses?ids={user}", token=token)["data"][0]["onlineStatus"]
 
     def profile_status(token: str, user: str) -> str:
         return world.stack.api("GET", f"/users/{user}", token=token)["onlineStatus"]
@@ -1212,7 +1212,7 @@ def lost_presence_keys(world: World, check: Checks) -> None:
     say("an invisible user whose presence keys Valkey lost, coming back, is never shown online")
 
     def status_of(token: str) -> str:
-        return world.stack.api("GET", f"/users/statuses?ids={world.owner['id']}", token=token)[0]["onlineStatus"]
+        return world.stack.api("GET", f"/users/statuses?ids={world.owner['id']}", token=token)["data"][0]["onlineStatus"]
 
     def valkey(command: str, *kinds: str) -> int:
         """What Valkey answers `command` over the owner's presence keys of `kinds` with, a count.
@@ -1256,7 +1256,7 @@ def chosen_presence(world: World, check: Checks) -> None:
     say("a chosen status: what it was reaches only its chooser, and invisible is offline to the rest")
 
     def status_of(token: str, user: str) -> str:
-        return world.stack.api("GET", f"/users/statuses?ids={user}", token=token)[0]["onlineStatus"]
+        return world.stack.api("GET", f"/users/statuses?ids={user}", token=token)["data"][0]["onlineStatus"]
 
     def chosen(body: dict | None) -> None:
         if body is None:
@@ -2019,7 +2019,7 @@ def nicknames(world: World, check: Checks) -> None:
     stack.api("PATCH", mine, {"sortIndex": 7}, member["token"])
     check("a reorder alone tells the community nothing",
           not of(owner_stream.gather(1.0), "userCommunity", user=member["id"]))
-    everyone = next(r for r in world.as_owner("GET", f"/communities/{community}/roles") if r["everyone"])
+    everyone = next(r for r in world.as_owner("GET", f"/communities/{community}/roles")["data"] if r["everyone"])
     kept = [p for p in everyone["permissions"] if p != "changeNickname"]
     world.as_owner("PATCH", f"/roles/{world.everyone}", {"permissions": kept})
     check("without Change nickname, a member cannot choose another",
@@ -2058,7 +2058,7 @@ def nicknames(world: World, check: Checks) -> None:
 
     say("nicknames: reports and their review")
     stack.api("PATCH", mine, {"nickname": "Aster"}, member["token"])
-    category = stack.api("GET", "/report-categories", token=world.owner["token"])[0]["id"]
+    category = stack.api("GET", "/report-categories", token=world.owner["token"])["data"][0]["id"]
     reports = f"/communities/{community}/members/{member['id']}/nickname/reports"
     outsider = world.account("nickout")
     check("someone outside the community cannot report a nickname in it",
@@ -2130,7 +2130,7 @@ def evidence(world: World, check: Checks) -> None:
     say("the files of deleted messages and removed attachments are kept for reviewers alone")
     stack, member = world.stack, world.member
     channel = world.channel("evidence")
-    category = stack.api("GET", "/report-categories", token=world.owner["token"])[0]["id"]
+    category = stack.api("GET", "/report-categories", token=world.owner["token"])["data"][0]["id"]
 
     def upload(body: bytes) -> dict:
         handle = stack.api("POST", "/attachments", {"fileName": "kept.txt", "mimeType": "text/plain",
@@ -2186,7 +2186,7 @@ def evidence(world: World, check: Checks) -> None:
         check("purging from the terminal deletes it outright",
               deleted_file["id"] not in {a["id"] for a in page["attachments"]}
               and (not signed or read_url(signed)[0] in (403, 404)))
-        log = stack.api("GET", "/admin/moderation-log", token=reviewer["token"])
+        log = stack.api("GET", "/admin/moderation-log", token=reviewer["token"])["data"]
         check("and the moderation log records it, with no account as its actor",
               any(e["action"] == "purgeAttachment" and e.get("actor") is None for e in log), log[:3])
         try:
@@ -2203,7 +2203,7 @@ def review_powers(world: World, check: Checks) -> None:
     say("reviewing reports: what each deployment permission allows on its own")
     stack = world.stack
     reported = world.channel("reported")
-    category = stack.api("GET", "/report-categories", token=world.owner["token"])[0]["id"]
+    category = stack.api("GET", "/report-categories", token=world.owner["token"])["data"][0]["id"]
 
     def report(content: str) -> str:
         posted = stack.api("POST", f"/channels/{reported}/messages", {"content": content, "attachments": []},
@@ -2365,7 +2365,7 @@ def bot_transfers(world: World, check: Checks) -> None:
     stack.api("PUT", f"/bots/{bot}/transfer", {"owner": heir["id"]}, giver["token"])
     check("an offer leaves the bot with its owner",
           stack.api("GET", f"/users/{bot}", token=giver["token"])["botOwner"] == giver["id"])
-    offers = stack.api("GET", "/users/@me/bot-transfers", token=heir["token"])
+    offers = stack.api("GET", "/users/@me/bot-transfers", token=heir["token"])["data"]
     check("the recipient finds the offer", any(o["bot"]["id"] == bot for o in offers), offers)
     stack.api("DELETE", f"/bots/{bot}/transfer", token=giver["token"])
     check("a withdrawn offer cannot be accepted",
@@ -2468,7 +2468,7 @@ def community_takedowns(world: World, check: Checks) -> None:
     world.role("Doomed role")
     kept = stack.api("POST", f"/channels/{general}/messages", {"content": "reported", "attachments": []},
                      member["token"])["id"]
-    report_category = stack.api("GET", "/report-categories", token=world.owner["token"])[0]["id"]
+    report_category = stack.api("GET", "/report-categories", token=world.owner["token"])["data"][0]["id"]
     stack.api("POST", f"/messages/{kept}/reports", {"category": report_category}, world.owner["token"])
     erased = world.post(general, "erased with the community")
     stack.api("PUT", f"/messages/{erased}/reactions/%F0%9F%91%8D/@me", token=member["token"])
@@ -2537,7 +2537,7 @@ def community_takedowns(world: World, check: Checks) -> None:
         f"SELECT count(*) FROM invite WHERE community = {community}",
         f"SELECT count(*) FROM react WHERE message = '{erased}'",
     )))
-    logged = {e["action"] for e in world.as_owner("GET", "/admin/moderation-log")
+    logged = {e["action"] for e in world.as_owner("GET", "/admin/moderation-log")["data"]
               if e.get("community") == world.community}
     check("the deletion and the erasure are in the moderation log",
           {"deleteCommunity", "eraseCommunity"} <= logged, logged)
@@ -2595,7 +2595,7 @@ def dm_reads(world: World, check: Checks) -> None:
     stack.command("admin", "allow", "moderateCommunities")
 
     def logged() -> int:
-        entries = stack.api("GET", "/admin/moderation-log?limit=100", token=watcher["token"])
+        entries = stack.api("GET", "/admin/moderation-log?limit=100", token=watcher["token"])["data"]
         return sum(1 for e in entries if e.get("action") == "readDm" and e.get("channel") == dm)
 
     before = logged()
@@ -2606,7 +2606,7 @@ def dm_reads(world: World, check: Checks) -> None:
     status = stack.status("GET", f"/messages/{secret}/reactions/{thumbs}", token=watcher["token"])
     check("reading who reacted in it is logged too", status == 200 and logged() == before + 2, status)
     listed = stack.status("GET", f"/admin/users/{member['id']}/dms", token=watcher["token"])
-    entries = stack.api("GET", "/admin/moderation-log?limit=100", token=watcher["token"])
+    entries = stack.api("GET", "/admin/moderation-log?limit=100", token=watcher["token"])["data"]
     check("listing someone's DMs is logged, naming them", listed == 200 and any(
         e.get("action") == "listDms" and e.get("subject") == member["id"] for e in entries), listed)
     check("while what reads no content finds no DM",
@@ -2680,7 +2680,7 @@ def running(world: World, plugin: str) -> None:
     """Waits for the chat server to run `plugin`, which it does once it has compiled its
     component: a while on a debug build, and longer for a larger plugin."""
     wait_for(f"{plugin} running", lambda: any(
-        p["id"] == plugin for p in world.stack.api("GET", "/plugins", token=world.owner["token"])), 60)
+        p["id"] == plugin for p in world.stack.api("GET", "/plugins", token=world.owner["token"])["data"]), 60)
 
 
 def plugins(world: World, check: Checks) -> None:
@@ -2700,7 +2700,7 @@ def plugins(world: World, check: Checks) -> None:
           [e["serverEvent"] for e in got])
     check("nor may the member read them",
           stack.status("GET", f"/communities/{world.community}/plugins", token=world.member["token"]) == 403)
-    principal = next(p["principal"] for p in stack.api("GET", "/plugins", token=world.member["token"])
+    principal = next(p["principal"] for p in stack.api("GET", "/plugins", token=world.member["token"])["data"]
                      if p["id"] == WORD_FILTER_ID)
     check("its account joined the community",
           stack.status("GET", f"/communities/{world.community}/members/{principal}", token=world.owner["token"]) == 200)
@@ -2773,21 +2773,21 @@ def profile_annotations(world: World, check: Checks) -> None:
     path = f"/users/{member['id']}/annotations"
     plugin_here = f"/communities/{world.community}/plugins/{WORD_FILTER_ID}"
     check("while no community they share runs the plugin, nobody reads it",
-          stack.api("GET", path, token=world.owner["token"]) == []
-          and stack.api("GET", path, token=member["token"]) == [])
+          stack.api("GET", path, token=world.owner["token"])["data"] == []
+          and stack.api("GET", path, token=member["token"])["data"] == [])
     world.as_owner("PUT", plugin_here, {"settings": {"watchWords": [], "words": []}, "grant": []})
-    check("once the community runs it, the person reads their own", len(stack.api("GET", path, token=member["token"])) == 1)
+    check("once the community runs it, the person reads their own", len(stack.api("GET", path, token=member["token"])["data"]) == 1)
     check("and so does someone who shares that community with them",
-          len(stack.api("GET", path, token=world.owner["token"])) == 1)
-    check("but nobody else", stack.api("GET", path, token=outsider["token"]) == [])
+          len(stack.api("GET", path, token=world.owner["token"])["data"]) == 1)
+    check("but nobody else", stack.api("GET", path, token=outsider["token"])["data"] == [])
     world.as_owner("DELETE", plugin_here)
     check("once the community turns the plugin off, it is shown there no more",
-          stack.api("GET", path, token=world.owner["token"]) == []
-          and stack.api("GET", path, token=member["token"]) == [])
+          stack.api("GET", path, token=world.owner["token"])["data"] == []
+          and stack.api("GET", path, token=member["token"])["data"] == [])
     world.as_owner("PUT", plugin_here, {"settings": {"watchWords": [], "words": []}, "grant": []})
     world.as_owner("DELETE", f"/communities/{world.community}/members/{member['id']}")
     check("nor to anyone they no longer share a community with",
-          stack.api("GET", path, token=world.owner["token"]) == [])
+          stack.api("GET", path, token=world.owner["token"])["data"] == [])
     world.as_owner("DELETE", plugin_here)
     stack.command("plugins", "disable", WORD_FILTER_ID)
     psql(f"DELETE FROM user_annotation WHERE \"user\" = '{member['id']}'", stack.database)
@@ -3023,7 +3023,7 @@ def deleted_communities(world: World, check: Checks) -> None:
         return any(m["id"] == posted for m in rows)
 
     def status_of(user: str) -> str:
-        return stack.api("GET", f"/users/statuses?ids={user}", token=member["token"])[0]["onlineStatus"]
+        return stack.api("GET", f"/users/statuses?ids={user}", token=member["token"])["data"][0]["onlineStatus"]
 
     check("a member finds its messages while it stands", soon(lambda: found("")))
     world.as_owner("GET", "/users/@me")
@@ -3135,7 +3135,7 @@ def frequent_emoji(world: World, check: Checks) -> None:
     mine = f"/users/@me/frequent-emoji?community={world.community}"
 
     def used() -> list[str]:
-        return [f["emoji"] for f in stack.api("GET", mine, token=member["token"])]
+        return [f["emoji"] for f in stack.api("GET", mine, token=member["token"])["data"]]
 
     stack.api("PUT", f"/messages/{post}/reactions/{party}/@me", token=member["token"])
     check("a reaction counts toward its author's most used", used()[:1] == ["\U0001F389"], used())
@@ -3156,7 +3156,7 @@ def saved_messages(world: World, check: Checks) -> None:
     world.stream.gather(0.8)
 
     def saves(token: str = member) -> list[str]:
-        return [s["message"] for s in stack.api("GET", "/users/@me/saved-messages", token=token)]
+        return [s["message"] for s in stack.api("GET", "/users/@me/saved-messages", token=token)["data"]]
 
     def saved_messages() -> list[str]:
         return [m["id"] for m in stack.api("GET", "/users/@me/saved-messages/messages", token=member)["data"]]
@@ -3207,7 +3207,7 @@ def thread_follows(world: World, check: Checks) -> None:
     thread = stack.api("PUT", f"/messages/{starter}/thread", token=member)["id"]
 
     def follows(token: str = member) -> list[str]:
-        return [f["thread"] for f in stack.api("GET", "/users/@me/thread-follows", token=token)]
+        return [f["thread"] for f in stack.api("GET", "/users/@me/thread-follows", token=token)["data"]]
 
     def feed(query: str = "") -> list[str]:
         return [m["id"] for m in stack.api("GET", f"/users/@me/activity{query}", token=member)["data"]]
@@ -3451,7 +3451,7 @@ def emoji_deletions(world: World, check: Checks) -> None:
           [e["serverEvent"] for e in got])
     check("and it is listed no more",
           all(e["id"] != emoji for e in stack.api("GET", f"/communities/{world.community}/emoji",
-                                                    token=member["token"])))
+                                                    token=member["token"])["data"]))
     check("nobody may react with it after",
           stack.status("PUT", f"/messages/{post}/reactions/{key}/@me", token=world.owner["token"]) in (400, 404))
     # The reactions go by a job (`purgeCustomEmoji`), and then the emoji and its picture.
@@ -3469,7 +3469,7 @@ def plugin_removal(world: World, check: Checks) -> None:
     running(world, CALENDAR_ID)
     world.as_owner("PUT", f"/communities/{world.community}/plugins/{CALENDAR_ID}",
                    {"settings": {}, "grant": ["viewChannel", "sendMessages"]})
-    principal = next(p["principal"] for p in stack.api("GET", "/plugins", token=member["token"])
+    principal = next(p["principal"] for p in stack.api("GET", "/plugins", token=member["token"])["data"]
                      if p["id"] == CALENDAR_ID)
     calendar = world.as_owner("POST", "/channels", {
         "name": "removed", "ty": "plugin", "pluginType": f"{CALENDAR_ID}:calendar",
@@ -3482,7 +3482,7 @@ def plugin_removal(world: World, check: Checks) -> None:
     world.stream.gather(0.5)
     stack.command("plugins", "remove", CALENDAR_ID, "--yes")
     check("removed, it is listed nowhere", eventually(
-        lambda: all(p["id"] != CALENDAR_ID for p in stack.api("GET", "/plugins", token=member["token"]))))
+        lambda: all(p["id"] != CALENDAR_ID for p in stack.api("GET", "/plugins", token=member["token"])["data"])))
     check("and its routes answer nobody", eventually(
         lambda: stack.status("GET", events, token=world.owner["token"]) == 404))
     # Its account leaves each community by a job (`retirePlugin`), announced as any leaving is.
@@ -3673,7 +3673,7 @@ def pins_of_deleted_messages(world: World, check: Checks) -> None:
     world.as_owner("PUT", f"/messages/{pinned}/pin")
     world.stream.gather(0.8)
     check("the member reads the pin",
-          any(p["messageId"] == pinned for p in stack.api("GET", f"/channels/{board}/pins", token=member)))
+          any(p["messageId"] == pinned for p in stack.api("GET", f"/channels/{board}/pins", token=member)["data"]))
     world.as_owner("DELETE", f"/messages/{pinned}")
     got = world.stream.gather(1.0)
     kinds = [(e["serverEvent"], e.get("type")) for e in got]
@@ -3684,7 +3684,7 @@ def pins_of_deleted_messages(world: World, check: Checks) -> None:
     check("deleting the message tells the open stream its pin is gone, once, before the message",
           len(pin_gone) == 1 and len(message_gone) == 1 and pin_gone[0] < message_gone[0], kinds)
     check("a fresh read of the channel's pins lacks it",
-          all(p["messageId"] != pinned for p in stack.api("GET", f"/channels/{board}/pins", token=member)))
+          all(p["messageId"] != pinned for p in stack.api("GET", f"/channels/{board}/pins", token=member)["data"]))
     check("and its row is gone, so the place it held among the channel's pins is free",
           psql(f"SELECT count(*) FROM pin WHERE message_id = '{pinned}'", stack.database) == "0")
     check("another message is pinned after it",
@@ -3799,7 +3799,7 @@ def bot_deletion_reaches_everyone(world: World, check: Checks) -> None:
     check("and the owner's other device too", bool(of(heard, "user", type="delete", id=bot)),
           [(e["serverEvent"], e.get("type")) for e in heard])
     check("whose fresh read of their bots lacks it",
-          all(b["id"] != bot for b in stack.api("GET", "/users/@me/bots", token=owner["token"])))
+          all(b["id"] != bot for b in stack.api("GET", "/users/@me/bots", token=owner["token"])["data"]))
     other.close()
 
 
@@ -3865,7 +3865,7 @@ def scheduled_messages(world: World, check: Checks) -> None:
         return [e["scheduled"] for e in of(stream.gather(1.0), "scheduledMessageChanged")]
 
     def fresh(token: str = member["token"]) -> list[dict]:
-        return stack.api("GET", "/users/@me/scheduled-messages", token=token)
+        return stack.api("GET", "/users/@me/scheduled-messages", token=token)["data"]
 
     def said() -> list[str]:
         read = stack.api("GET", f"/channels/{later}/messages?limit=50", token=owner["token"])
@@ -3885,7 +3885,7 @@ def scheduled_messages(world: World, check: Checks) -> None:
     check("nor finds it among what they scheduled, or in the channel",
           fresh(owner["token"]) == [] and "see you tomorrow" not in said())
     check("and it is not among the messages its author's apps show waiting",
-          stack.api("GET", "/users/@me/held-messages", token=member["token"]) == [])
+          stack.api("GET", "/users/@me/held-messages", token=member["token"])["data"] == [])
     path = f"/users/@me/scheduled-messages/{mine}"
     check("another cannot read it, give it another time, send it, or delete it",
           [stack.status("GET", path, token=owner["token"]),

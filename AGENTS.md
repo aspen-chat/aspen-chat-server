@@ -582,7 +582,19 @@ HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the s
   `style = Form, explode = false`; a name the enum lacks is ignored, never refused, since a newer
   client or another deployment's may ask for a relationship this version does not have. Sideloads
   are batched in the `app` layer, one query per relationship however many parent records there are;
-  never load them per record. Reads that do not support `include` return the bare record or array.
+  never load them per record. A read of one record that does not support `include` returns the bare
+  record.
+- **Every list is an object, never a bare array**, whether or not it has anything to say beside its
+  rows today, so that a field can be added to a list's answer later without breaking its readers. A
+  list that sideloads nothing answers `api::include::Listed<T>` (`{data}`), named for utoipa through
+  an alias (`pub type RoleList = Listed<Role>`). A list read a page at a time by a cursor answers
+  `Page<T>` (`{data, nextCursor}`), or `SideloadedPage<T>` when it sideloads: it takes `?cursor=`,
+  the `nextCursor` of the page before; `nextCursor` is always present and is `null` on the last
+  page, which the server decides by reading one row more than the limit; and a cursor that does not
+  decode is refused with `validation`. Cursors are made by `app::cursor` from every column the read
+  is ordered by, so no row is looked up again (an emoji's reactors, a poll answer's voters, member
+  search). The one bare array the server answers is `/.well-known/assetlinks.json`, whose shape
+  Android fixes.
 - **List parameters use `sort=` and `filter[field]=`.** A filter that is a list of names is parsed
   with `api::include::FilterSet<E>` and refuses a name it does not know with `validation`, since
   ignoring it would answer more than was asked; `include`, which only adds, stays lenient. When a

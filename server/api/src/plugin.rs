@@ -7,6 +7,7 @@ use crate::admin::AdminUser;
 use crate::auth::SessionUser;
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::extract::{Json, NoContent, Path};
+use crate::include::Listed;
 use crate::message_enum::{CommunityPlugin, UserAnnotation};
 use aspen_app::context::GlobalServerContext;
 use aspen_app::deployment::DeploymentPermission;
@@ -24,6 +25,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use utoipa::ToSchema;
+
+pub type PluginInfoList = Listed<PluginInfo>;
+pub type CommunityPluginList = Listed<CommunityPlugin>;
+pub type UserAnnotationList = Listed<UserAnnotation>;
+pub type AdminPluginList = Listed<AdminPlugin>;
 
 /// A plugin as every client knows it: what it is, and its text in the reader's language, from
 /// which clients draw its annotations, `alteredBy`, and settings forms.
@@ -132,7 +138,7 @@ impl PluginInfo {
     tag = TAG_PLUGINS,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<PluginInfo>),
+        (status = OK, body = PluginInfoList),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -140,7 +146,7 @@ impl PluginInfo {
 pub async fn list_plugins(
     State(state): State<GlobalServerContext>,
     _session: SessionUser,
-) -> ApiResult<Json<Vec<PluginInfo>>> {
+) -> ApiResult<Json<PluginInfoList>> {
     let locale = app::locale::current();
     Ok(Json(
         state
@@ -168,7 +174,7 @@ pub async fn list_plugins(
     params(("community" = CommunityId, Path)),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<CommunityPlugin>),
+        (status = OK, body = CommunityPluginList),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`forbidden`: Manage plugins is missing", body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -179,9 +185,11 @@ pub async fn list_community_plugins(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
-) -> ApiResult<Json<Vec<CommunityPlugin>>> {
+) -> ApiResult<Json<CommunityPluginList>> {
     Ok(Json(
-        plugin::community::list(&state, user.id, community).await?,
+        plugin::community::list(&state, user.id, community)
+            .await?
+            .into(),
     ))
 }
 
@@ -306,7 +314,7 @@ pub async fn disable_community_plugin(
     params(("user" = UserId, Path)),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<UserAnnotation>),
+        (status = OK, body = UserAnnotationList),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -315,9 +323,11 @@ pub async fn list_user_annotations(
     State(state): State<GlobalServerContext>,
     SessionUser { user: viewer, .. }: SessionUser,
     Path(user): Path<UserId>,
-) -> ApiResult<Json<Vec<UserAnnotation>>> {
+) -> ApiResult<Json<UserAnnotationList>> {
     Ok(Json(
-        plugin::annotation::of_user(&state, viewer.id, user).await?,
+        plugin::annotation::of_user(&state, viewer.id, user)
+            .await?
+            .into(),
     ))
 }
 
@@ -390,7 +400,7 @@ impl AdminPlugin {
     tag = TAG_PLUGINS,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<AdminPlugin>),
+        (status = OK, body = AdminPluginList),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without View dashboard or Manage plugins", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -399,7 +409,7 @@ impl AdminPlugin {
 pub async fn list_admin_plugins(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
-) -> ApiResult<Json<Vec<AdminPlugin>>> {
+) -> ApiResult<Json<AdminPluginList>> {
     if !access.has(DeploymentPermission::ManagePlugins) {
         access.require(DeploymentPermission::ViewDashboard)?;
     }

@@ -189,7 +189,7 @@ def check(origin: str) -> None:
     invite = api(ALPHA, "POST", f"/communities/{club['id']}/invites", {}, token=sender)
     api(ALPHA, "PUT", f"/communities/{club['id']}/members/@me", {"inviteCode": invite["code"]},
         token=reader, expect=(200, 201))
-    general = next(c for c in api(ALPHA, "GET", f"/communities/{club['id']}/channels", token=sender)
+    general = next(c for c in api(ALPHA, "GET", f"/communities/{club['id']}/channels", token=sender)["data"]
                    if c["ty"] == "text")
 
     phone = Phone()

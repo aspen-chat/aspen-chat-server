@@ -5,6 +5,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode, unique, violates};
 use crate::extract::{Created, Json, NoContent, Path};
+use crate::include::Listed;
 use crate::message_enum::CustomEmoji;
 use crate::message_enum::request::{CustomEmojiCreateRequest, CustomEmojiUpdateRequest};
 use crate::{API_PREFIX, TAG_CUSTOM_EMOJI};
@@ -12,6 +13,8 @@ use aspen_app as app;
 use aspen_app::context::GlobalServerContext;
 use aspen_app::{CommunityId, CustomEmojiId};
 use axum::extract::State;
+
+pub type CustomEmojiList = Listed<CustomEmoji>;
 
 /// A community's emoji, by name.
 #[utoipa::path(
@@ -21,7 +24,7 @@ use axum::extract::State;
     params(("community" = CommunityId, Path)),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<CustomEmoji>),
+        (status = OK, body = CustomEmojiList),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -31,9 +34,11 @@ pub async fn read_emoji(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
-) -> ApiResult<Json<Vec<CustomEmoji>>> {
+) -> ApiResult<Json<CustomEmojiList>> {
     Ok(Json(
-        app::custom_emoji::read_emoji(&state, user.id, community).await?,
+        app::custom_emoji::read_emoji(&state, user.id, community)
+            .await?
+            .into(),
     ))
 }
 

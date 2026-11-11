@@ -43,7 +43,7 @@ async function withScheduled(page: Page, held: Scheduled[], asked: Asked[]) {
     const body = (request.postDataJSON() ?? null) as Asked["body"];
     asked.push({ method, path, body });
     if (method === "GET" && path === "/users/@me/scheduled-messages") {
-      return route.fulfill({ json: held });
+      return route.fulfill({ json: { data: held } });
     }
     const posted = /^\/channels\/([^/]+)\/scheduled-messages$/.exec(path);
     if (method === "POST" && posted?.[1] !== undefined) {

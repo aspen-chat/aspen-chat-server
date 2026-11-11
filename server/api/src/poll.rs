@@ -9,7 +9,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path, Query};
-use crate::include::{IncludeSet, Included, Sideloaded};
+use crate::include::{IncludeSet, Included, Listed, Sideloaded};
 use crate::message_enum::request::PollCreateRequest;
 use crate::message_enum::{Poll, User};
 use crate::{API_PREFIX, TAG_POLLS};
@@ -22,6 +22,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+
+pub type UserList = Listed<User>;
 
 /// What adding a written-in answer did: the answer the caller's vote went to, a new one or the
 /// poll's matching answer, and the poll with its updated tally.
@@ -190,7 +192,7 @@ pub struct VotersQuery {
     ),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<User>),
+        (status = OK, body = UserList),
         (status = BAD_REQUEST, description = "`badRequest`, or `validation` for an anonymous poll or no such answer", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, body = Problem),
@@ -202,7 +204,7 @@ pub async fn list_voters(
     SessionUser { user, .. }: SessionUser,
     Path((poll, option)): Path<(PollId, u32)>,
     Query(query): Query<VotersQuery>,
-) -> ApiResult<Json<Vec<User>>> {
+) -> ApiResult<Json<UserList>> {
     let ids = app::poll::read_voters(
         &state,
         user.id,

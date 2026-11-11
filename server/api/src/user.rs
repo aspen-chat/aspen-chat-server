@@ -2,6 +2,7 @@ use crate::auth::SessionUser;
 use crate::community::{CommunityList, CommunityReadQuery};
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode, unique, violates};
 use crate::extract::{Created, Json, NoContent, Path, Query};
+use crate::include::Listed;
 use crate::message_enum::User;
 use crate::message_enum::request::{UserCreateRequest, UserUpdateRequest};
 use crate::rate_limit::Failures;
@@ -18,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::openapi::schema::{ObjectBuilder, SchemaType, Type};
 use utoipa::openapi::{RefOr, Schema};
 use utoipa::{PartialSchema, ToSchema};
+
+pub type UserStatusRecordList = Listed<UserStatusRecord>;
 
 /// A user addressed in a URL: either a user id or the literal `@me` for the calling user.
 #[derive(Debug, Clone, Copy)]
@@ -408,7 +411,7 @@ pub struct StatusesQuery {
     params(StatusesQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, description = "The presence of each asked-for user, in the order asked; an event stream that watches them (`watchPresence`) is told of changes as they happen. A user the caller shares no community or DM with, or who blocked the caller, reads as `offline`", body = Vec<UserStatusRecord>),
+        (status = OK, description = "The presence of each asked-for user, in the order asked; an event stream that watches them (`watchPresence`) is told of changes as they happen. A user the caller shares no community or DM with, or who blocked the caller, reads as `offline`", body = UserStatusRecordList),
         (status = BAD_REQUEST, description = "A malformed id, or too many", body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -418,7 +421,7 @@ pub async fn get_statuses(
     State(state): State<GlobalServerContext>,
     session: SessionUser,
     Query(query): Query<StatusesQuery>,
-) -> ApiResult<Json<Vec<UserStatusRecord>>> {
+) -> ApiResult<Json<UserStatusRecordList>> {
     let mut ids = Vec::new();
     for raw in query
         .ids

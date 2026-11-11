@@ -75,7 +75,8 @@ A deployment says which protocol it speaks in its document and in `GET /api/v1/a
 
 1. **Within a version, only by addition.** A field, value, event, statement, endpoint, or capability
    may be added. Nothing is removed, renamed, or given a new meaning, and nothing that was optional
-   becomes required.
+   becomes required. So that a list's answer can gain a field too, every list the REST API answers
+   is an object holding the list as `data` (`{"data": […]}`), never a bare array.
 2. **Readers ignore what they do not know.** An unknown field is skipped; an unknown enum value
    reads as an explicit unknown and is treated as the most cautious known value (an unknown gate
    admits no one; a key of an unknown algorithm is never used); an unknown event, statement, or

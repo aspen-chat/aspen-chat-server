@@ -1,7 +1,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem, unique, violates};
 use crate::extract::{Created, Json, NoContent, Path, Query, double_option};
-use crate::include::{IncludeSet, Included, Sideloaded, SideloadedList};
+use crate::include::{IncludeSet, Included, Listed, Sideloaded, SideloadedList};
 use crate::message_enum::request::{
     CommunityCreateRequest, CommunityUpdateRequest, UserCommunityCreateRequest,
 };
@@ -16,6 +16,8 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 use std::collections::HashSet;
 use utoipa::{IntoParams, ToSchema};
+
+pub type ChannelList = Listed<Channel>;
 
 /// Relationships a community read can sideload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
@@ -497,7 +499,7 @@ pub async fn get_community_member(
     params(("community" = CommunityId, Path)),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<Channel>),
+        (status = OK, body = ChannelList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = NOT_FOUND, description = "No such community, or the caller is not a member", body = Problem),
@@ -508,7 +510,7 @@ pub async fn list_community_channels(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
     Path(community): Path<CommunityId>,
-) -> ApiResult<Json<Vec<Channel>>> {
+) -> ApiResult<Json<ChannelList>> {
     let channels = app::channel::read_community_channels(&state, user.id, community).await?;
     Ok(Json(
         channels

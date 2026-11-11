@@ -6,6 +6,7 @@
 use crate::auth::SessionUser;
 use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
 use crate::extract::{Created, Json, NoContent, Path, Query};
+use crate::include::Listed;
 use crate::{API_PREFIX, TAG_ADMIN};
 use aspen_app::context::GlobalServerContext;
 use aspen_app::deployment::{DeploymentAccess, DeploymentPermission, DeploymentPermissions};
@@ -15,6 +16,10 @@ use axum::http::request::Parts;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+
+pub type AdminUserEntryList = Listed<AdminUserEntry>;
+pub type AdminCommunityEntryList = Listed<AdminCommunityEntry>;
+pub type RegistrationInviteList = Listed<RegistrationInvite>;
 
 /// A caller who holds some deployment permission, with what they may do; anyone else is
 /// refused with `adminRequired`. Each handler requires the permission it needs, refusing with
@@ -272,7 +277,7 @@ pub struct AdminUserBan {
     params(UserListQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<AdminUserEntry>),
+        (status = OK, body = AdminUserEntryList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
@@ -283,7 +288,7 @@ pub async fn list_users(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
     Query(query): Query<UserListQuery>,
-) -> ApiResult<Json<Vec<AdminUserEntry>>> {
+) -> ApiResult<Json<AdminUserEntryList>> {
     require_directories(&access)?;
     use app::admin::{Sort, UserColumn};
     let sort = match query.sort {
@@ -359,7 +364,7 @@ pub struct AdminCommunityEntry {
     params(CommunityListQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<AdminCommunityEntry>),
+        (status = OK, body = AdminCommunityEntryList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
@@ -370,7 +375,7 @@ pub async fn list_communities(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
     Query(query): Query<CommunityListQuery>,
-) -> ApiResult<Json<Vec<AdminCommunityEntry>>> {
+) -> ApiResult<Json<AdminCommunityEntryList>> {
     require_directories(&access)?;
     use app::admin::{CommunityColumn, Sort};
     let sort = |column, descending| Sort { column, descending };
@@ -606,7 +611,7 @@ impl From<&RegistrationInviteRequest> for app::registration_invite::Terms {
     tag = TAG_ADMIN,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<RegistrationInvite>),
+        (status = OK, body = RegistrationInviteList),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`, or `forbidden` without the permission this needs", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -615,7 +620,7 @@ impl From<&RegistrationInviteRequest> for app::registration_invite::Terms {
 pub async fn list_registration_invites(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
-) -> ApiResult<Json<Vec<RegistrationInvite>>> {
+) -> ApiResult<Json<RegistrationInviteList>> {
     access.require(DeploymentPermission::ManageRegistrationInvites)?;
     let mut conn = state
         .connection_pool

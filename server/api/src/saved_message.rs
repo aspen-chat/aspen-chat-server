@@ -6,7 +6,7 @@ use crate::TAG_MESSAGES;
 use crate::auth::SessionUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Json, NoContent, Path, Query};
-use crate::include::IncludeSet;
+use crate::include::{IncludeSet, Listed};
 use crate::message::{MessageInclude, MessageList, sideload_messages};
 use crate::message_enum::Message;
 use aspen_app::context::GlobalServerContext;
@@ -16,6 +16,8 @@ use axum::http::StatusCode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+
+pub type SavedMessageList = Listed<SavedMessage>;
 
 /// A message the caller saved. Saves are listed newest first, by `id`, a UUIDv7 of the saving.
 #[derive(Debug, Clone, Serialize, ToSchema, JsonSchema)]
@@ -43,7 +45,7 @@ impl From<app::saved_message::SavedMessage> for SavedMessage {
     tag = TAG_MESSAGES,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<SavedMessage>),
+        (status = OK, body = SavedMessageList),
         (status = UNAUTHORIZED, body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
     )
@@ -51,7 +53,7 @@ impl From<app::saved_message::SavedMessage> for SavedMessage {
 pub async fn read_saves(
     State(state): State<GlobalServerContext>,
     SessionUser { user, .. }: SessionUser,
-) -> ApiResult<Json<Vec<SavedMessage>>> {
+) -> ApiResult<Json<SavedMessageList>> {
     let saves = app::saved_message::read_saves(&state, user.id).await?;
     Ok(Json(saves.into_iter().map(SavedMessage::from).collect()))
 }

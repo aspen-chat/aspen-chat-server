@@ -29,7 +29,7 @@ import {
   generalMessages,
   threadReplies,
 } from "../fixtures";
-import { type Asked, type WorldRoute, reply } from "../reply";
+import { type Asked, type WorldRoute, listed, reply } from "../reply";
 
 /** The routes of signing in, the community and its channels, messages, emoji, bots, bans, blocks, plugins, muting, notifications, and invites. */
 export function coreRoutes({
@@ -177,7 +177,7 @@ export function coreRoutes({
     ],
     ["PUT", /^\/channels\/[^/]+\/read-states\/@me$/, () => reply(null, 204)],
     ["PUT", /^\/users\/@me\/read-states$/, () => reply(null, 204)],
-    ["GET", /^\/channels\/[^/]+\/pins$/, () => []],
+    ["GET", /^\/channels\/[^/]+\/pins$/, () => listed([])],
     // A member search: everyone in the world whose name holds what was typed, Dana included,
     // though she is not in the member sample.
     [
@@ -205,7 +205,7 @@ export function coreRoutes({
     [
       "GET",
       new RegExp(`^/messages/${reactedId}/reactions/[^/]+$`),
-      () => (path.endsWith("👍") ? [users[0], users[1]] : [users[1]]),
+      () => listed(path.endsWith("👍") ? [users[0], users[1]] : [users[1]]),
     ],
     // Reacting answers with the reaction, which the app applies as its event.
     [
@@ -223,10 +223,11 @@ export function coreRoutes({
     [
       "GET",
       /^\/users\/@me\/frequent-emoji$/,
-      () => [
-        { emoji: "🎉", recentUses: 4, uses: 9 },
-        { emoji: "👍", recentUses: 0, uses: 20 },
-      ],
+      () =>
+        listed([
+          { emoji: "🎉", recentUses: 4, uses: 9 },
+          { emoji: "👍", recentUses: 0, uses: 20 },
+        ]),
     ],
     // Folding a category answers as the server does, and tells the caller's devices by event.
     [
@@ -349,7 +350,7 @@ export function coreRoutes({
     ],
     // Kate's bots: Helper, and whatever she makes, each answered as the server does. Nothing is
     // kept between requests; the app takes its records from the answers.
-    ["GET", /^\/users\/@me\/bots$/, () => users.filter((u) => u.botOwner === me)],
+    ["GET", /^\/users\/@me\/bots$/, () => listed(users.filter((u) => u.botOwner === me))],
     [
       "POST",
       /^\/users\/@me\/bots$/,
@@ -378,7 +379,11 @@ export function coreRoutes({
     ],
     // Bans: the standing list, banning (which ends the membership and tells everyone), and
     // lifting.
-    ["GET", new RegExp(`^/communities/${community}/bans$`), () => Array.from(bans.values())],
+    [
+      "GET",
+      new RegExp(`^/communities/${community}/bans$`),
+      () => listed(Array.from(bans.values())),
+    ],
     [
       "PUT",
       new RegExp(`^/communities/${community}/bans/[^/]+$`),
@@ -424,12 +429,12 @@ export function coreRoutes({
     ],
     // The deployment runs no plugins, and they say nothing about anyone; `plugins.spec.ts`
     // answers these itself.
-    ["GET", /^\/plugins$/, () => []],
+    ["GET", /^\/plugins$/, () => listed([])],
     // Nothing of the caller's is held for its previews.
-    ["GET", /^\/users\/@me\/held-messages$/, () => []],
+    ["GET", /^\/users\/@me\/held-messages$/, () => listed([])],
     // Nor is anything scheduled for later; `scheduledMessages.spec.ts` answers these itself.
-    ["GET", /^\/users\/@me\/scheduled-messages$/, () => []],
-    ["GET", /^\/users\/[^/]+\/annotations$/, () => []],
+    ["GET", /^\/users\/@me\/scheduled-messages$/, () => listed([])],
+    ["GET", /^\/users\/[^/]+\/annotations$/, () => listed([])],
     // Blocking answers as the server does, and tells the caller's devices by event.
     [
       "GET",
@@ -575,15 +580,16 @@ export function coreRoutes({
     [
       "GET",
       new RegExp(`^/communities/${community}/invites$`),
-      () => [
-        {
-          code: inviteCode,
-          community,
-          createdAt: minutesAgo(60),
-          createdBy: me,
-          expiresAt: null,
-        },
-      ],
+      () =>
+        listed([
+          {
+            code: inviteCode,
+            community,
+            createdAt: minutesAgo(60),
+            createdBy: me,
+            expiresAt: null,
+          },
+        ]),
     ],
   ];
 }

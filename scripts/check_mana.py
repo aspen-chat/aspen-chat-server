@@ -102,7 +102,7 @@ def run(stack: Stack) -> None:
         return [m["content"] for m in sorted(rows, key=lambda m: m["id"])]
 
     def held(member):
-        return stack.api("GET", "/users/@me/held-messages", token=member["token"])
+        return stack.api("GET", "/users/@me/held-messages", token=member["token"])["data"]
 
     stream = stack.events(m2["token"])
     stream.gather(0.5)
@@ -202,7 +202,7 @@ def run(stack: Stack) -> None:
             spent_at[0] = time.monotonic()
 
     def scheduled():
-        return stack.api("GET", "/users/@me/scheduled-messages", token=m1["token"])
+        return stack.api("GET", "/users/@me/scheduled-messages", token=m1["token"])["data"]
 
     keep_down()
     due = time.time() + 62

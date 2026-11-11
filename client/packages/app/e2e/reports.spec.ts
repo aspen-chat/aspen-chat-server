@@ -44,7 +44,9 @@ async function messageAction(page: Page, isMobile: boolean, action: string) {
 }
 
 async function withReports(page: Page, sent: unknown[]) {
-  await page.route(/\/api\/v1\/report-categories$/, (route) => route.fulfill({ json: categories }));
+  await page.route(/\/api\/v1\/report-categories$/, (route) =>
+    route.fulfill({ json: { data: categories } }),
+  );
   await page.route(/\/api\/v1\/messages\/[^/]+\/reports$/, (route) => {
     sent.push(route.request().postDataJSON());
     return route.fulfill({

@@ -42,7 +42,7 @@ async function withFilter(page: Page): Promise<{ publish: Publish; turnedOn: unk
   const turnedOn: unknown[] = [];
   let enabled = false;
   const publish = await signInToWorld(page, async (p) => {
-    await p.route(/\/api\/v1\/plugins$/, (route) => route.fulfill({ json: [filter] }));
+    await p.route(/\/api\/v1\/plugins$/, (route) => route.fulfill({ json: { data: [filter] } }));
     await p.route(new RegExp(`/api/v1/communities/${community}/plugins(/.*)?$`), async (route) => {
       const method = route.request().method();
       const record = () => ({
@@ -57,7 +57,7 @@ async function withFilter(page: Page): Promise<{ publish: Publish; turnedOn: unk
         enabled = true;
         await route.fulfill({ status: 201, json: record() });
       } else {
-        await route.fulfill({ json: [record()] });
+        await route.fulfill({ json: { data: [record()] } });
       }
     });
   });
@@ -253,7 +253,7 @@ const VIEW_POLICY =
 async function withBoards(page: Page): Promise<{ publish: Publish; asked: string[] }> {
   const asked: string[] = [];
   const publish = await signInToWorld(page, async (p) => {
-    await p.route(/\/api\/v1\/plugins$/, (route) => route.fulfill({ json: [boards] }));
+    await p.route(/\/api\/v1\/plugins$/, (route) => route.fulfill({ json: { data: [boards] } }));
     await p.route(`**${VIEW}`, (route) =>
       route.fulfill({
         body: PAGE,

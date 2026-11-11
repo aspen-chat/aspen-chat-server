@@ -340,20 +340,22 @@ test("a permission that another includes shows as held, and fixed, while that on
   );
   await page.route(/\/api\/v1\/admin\/roles$/, (route) =>
     route.fulfill(
-      json([
-        {
-          id: "01a0e000-0000-7000-8000-00000000a001",
-          name: "Moderators",
-          position: 1,
-          permissions: ["reviewReports", "moderateCommunities"],
-        },
-        {
-          id: deploymentAdministrator,
-          name: "Administrator",
-          position: 2,
-          permissions: administrator,
-        },
-      ]),
+      json({
+        data: [
+          {
+            id: "01a0e000-0000-7000-8000-00000000a001",
+            name: "Moderators",
+            position: 1,
+            permissions: ["reviewReports", "moderateCommunities"],
+          },
+          {
+            id: deploymentAdministrator,
+            name: "Administrator",
+            position: 2,
+            permissions: administrator,
+          },
+        ],
+      }),
     ),
   );
   // The dashboard read the roles as it opened, so it reads them again with these in place.

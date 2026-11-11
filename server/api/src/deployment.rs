@@ -5,6 +5,7 @@
 use crate::admin::AdminUser;
 use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path, Query, double_option};
+use crate::include::Listed;
 use crate::{API_PREFIX, TAG_ADMIN};
 use aspen_app::context::GlobalServerContext;
 use aspen_app::deployment::{DeploymentPermission, from_names, to_names};
@@ -16,6 +17,11 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+
+pub type DeploymentRoleList = Listed<DeploymentRole>;
+pub type ModerationEntryList = Listed<ModerationEntry>;
+pub type FileOfferEntryList = Listed<FileOfferEntry>;
+pub type ChannelList = Listed<crate::message_enum::Channel>;
 
 /// A deployment role.
 #[derive(Debug, Serialize, ToSchema)]
@@ -50,7 +56,7 @@ impl From<DeploymentRoleRow> for DeploymentRole {
     tag = TAG_ADMIN,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<DeploymentRole>),
+        (status = OK, body = DeploymentRoleList),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired`", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -59,7 +65,7 @@ impl From<DeploymentRoleRow> for DeploymentRole {
 pub async fn list_deployment_roles(
     State(state): State<GlobalServerContext>,
     _admin: AdminUser,
-) -> ApiResult<Json<Vec<DeploymentRole>>> {
+) -> ApiResult<Json<DeploymentRoleList>> {
     Ok(Json(
         app::deployment_role::read_roles(&state)
             .await?
@@ -201,7 +207,7 @@ pub struct DeploymentRoleOrderRequest {
     request_body = DeploymentRoleOrderRequest,
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<DeploymentRole>),
+        (status = OK, body = DeploymentRoleList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired` or `forbidden`", body = Problem),
@@ -212,7 +218,7 @@ pub async fn reorder_deployment_roles(
     State(state): State<GlobalServerContext>,
     AdminUser(session, _access): AdminUser,
     Json(request): Json<DeploymentRoleOrderRequest>,
-) -> ApiResult<Json<Vec<DeploymentRole>>> {
+) -> ApiResult<Json<DeploymentRoleList>> {
     Ok(Json(
         app::deployment_role::reorder_roles(&state, session.user.id, &request.roles)
             .await?
@@ -340,7 +346,7 @@ pub struct ModerationLogQuery {
     params(ModerationLogQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<ModerationEntry>),
+        (status = OK, body = ModerationEntryList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired` or `forbidden`", body = Problem),
@@ -351,7 +357,7 @@ pub async fn read_moderation_log(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
     Query(query): Query<ModerationLogQuery>,
-) -> ApiResult<Json<Vec<ModerationEntry>>> {
+) -> ApiResult<Json<ModerationEntryList>> {
     access.require(DeploymentPermission::ViewDashboard)?;
     let entries = app::moderation_log::read_moderation_log(
         &state,
@@ -423,7 +429,7 @@ pub struct FileTransferLogQuery {
     params(FileTransferLogQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<FileOfferEntry>),
+        (status = OK, body = FileOfferEntryList),
         (status = BAD_REQUEST, body = Problem),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired` or `forbidden`", body = Problem),
@@ -434,7 +440,7 @@ pub async fn read_file_transfer_log(
     State(state): State<GlobalServerContext>,
     AdminUser(_session, access): AdminUser,
     Query(query): Query<FileTransferLogQuery>,
-) -> ApiResult<Json<Vec<FileOfferEntry>>> {
+) -> ApiResult<Json<FileOfferEntryList>> {
     access.require(DeploymentPermission::ModerateCommunities)?;
     let entries = app::file_transfer::read_log(
         &state,
@@ -481,7 +487,7 @@ pub async fn read_file_transfer_log(
     params(("user" = UserId, Path), crate::dm::DmPageQuery),
     security(("bearerAuth" = [])),
     responses(
-        (status = OK, body = Vec<crate::message_enum::Channel>),
+        (status = OK, body = ChannelList),
         (status = UNAUTHORIZED, body = Problem),
         (status = FORBIDDEN, description = "`adminRequired` or `forbidden`", body = Problem),
         (status = INTERNAL_SERVER_ERROR, body = Problem),
@@ -492,7 +498,7 @@ pub async fn list_user_dms(
     AdminUser(_session, access): AdminUser,
     Path(user): Path<UserId>,
     crate::extract::Query(page): crate::extract::Query<crate::dm::DmPageQuery>,
-) -> ApiResult<Json<Vec<crate::message_enum::Channel>>> {
+) -> ApiResult<Json<ChannelList>> {
     Ok(Json(
         app::dm::list_dms_moderating(&state, &access, user, page.before, page.limit())
             .await?
