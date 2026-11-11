@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { MIN_CONTRAST, contrast, hueColors, luminanceOf } from "./nameColors";
+import { PALETTES } from "./palettes";
 
 /** The grounds a name sits on: every palette's surfaces, and `accent-soft` behind mentions. */
 const GROUND_TOKENS = [
@@ -37,9 +38,23 @@ function grounds(): { name: string; light: string; dark: string }[] {
 
 const HUES = Array.from({ length: 360 }, (_, hue) => hue);
 
+/** Every declaration of a ground token in `styles.css`, whatever its value is written as. */
+function groundDeclarations(): string[] {
+  const pattern = new RegExp(`--palette-(?:${GROUND_TOKENS.join("|")}):[^;]*;`, "g");
+  return styles.match(pattern) ?? [];
+}
+
+/** The palettes `styles.css` declares a block for, in its order. */
+function declaredPalettes(): string[] {
+  return Array.from(styles.matchAll(/\[data-theme="([^"]+)"\]\s*\{/g), (match) => match[1] ?? "");
+}
+
 describe("name colours", () => {
   it("finds the grounds of every palette", () => {
-    expect(grounds().length).toBeGreaterThanOrEqual(GROUND_TOKENS.length * 2);
+    expect(declaredPalettes()).toEqual([...PALETTES]);
+    expect(grounds()).toHaveLength(GROUND_TOKENS.length * PALETTES.length);
+    // A ground written in a form `grounds` cannot read would go unchecked.
+    expect(groundDeclarations()).toHaveLength(grounds().length);
   });
 
   it("read on every ground, in both schemes, at every hue", () => {

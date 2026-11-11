@@ -112,7 +112,10 @@ def soon(condition, seconds: float = 5) -> bool:
 
 
 def of(events: list[dict], kind: str, **fields) -> list[dict]:
-    return [e for e in events if e.get("serverEvent") == kind and all(e.get(k) == v for k, v in fields.items())]
+    """The events of `kind` that carry each of `fields` with that value. An update leaves out what
+    did not change, so `field=None` finds only an event that says the field is now null."""
+    return [e for e in events
+            if e.get("serverEvent") == kind and all(k in e and e[k] == v for k, v in fields.items())]
 
 
 class World:
@@ -656,6 +659,13 @@ def calls(world: World, check: Checks) -> None:
     check("one from someone an offer sent there counts", offered.get("counted") is True, offered)
     call = join(first["token"])
     check("the member joins the call", frame_of(call, "ready") is not None)
+    # Replayed at once, while the token is far from expiring, so that having been used is the
+    # only thing wrong with it.
+    replay = join(first["token"])
+    refused = frame_of(replay, "error")
+    check("the token they joined with admits no second connection",
+          refused is not None and refused.get("fatal") is True, refused)
+    replay.close()
     wait_for("the call's record to show the member", lambda: in_call(world), 30)
     # The join is noted just after its record is made; the failure reports are limited, so wait
     # once rather than asking over and over.
@@ -714,11 +724,6 @@ def calls(world: World, check: Checks) -> None:
     world.as_owner("PUT", f"/channels/{room}/overrides/{world.everyone}", {"allow": [], "deny": ["speak"]})
     changed = frame_of(call, "grantsChanged")
     check("taking Speak away reaches the call at once", changed is not None and not changed["grants"]["speak"], changed)
-    replay = join(first["token"])
-    refused = frame_of(replay, "error")
-    check("the token they joined with admits no second connection",
-          refused is not None and refused.get("fatal") is True, refused)
-    replay.close()
     world.as_owner("PUT", f"/channels/{room}/overrides/{world.everyone}", {"allow": [], "deny": ["joinVoice"]})
     kicked = frame_of(call, "kicked")
     check("taking Join voice away removes them, saying why",
@@ -1209,9 +1214,20 @@ def lost_presence_keys(world: World, check: Checks) -> None:
     def status_of(token: str) -> str:
         return world.stack.api("GET", f"/users/statuses?ids={world.owner['id']}", token=token)[0]["onlineStatus"]
 
+    def valkey(command: str, *kinds: str) -> int:
+        """What Valkey answers `command` over the owner's presence keys of `kinds` with, a count.
+        The keys are `app::user_status`'s and `app::presence_override::override_key`'s."""
+        keys = [f"user:{world.owner['id']}:{kind}" for kind in kinds]
+        return int(compose("exec", "-T", "valkey", "valkey-cli", command, *keys).stdout.strip())
+
     world.as_owner("PUT", "/users/@me/presence-override", {"presenceOverride": "invisible"})
-    keys = [f"user:{world.owner['id']}:{kind}" for kind in ("online", "active", "override", "listed")]
-    compose("exec", "-T", "valkey", "valkey-cli", "DEL", *keys)
+    check("Valkey holds what they chose", valkey("EXISTS", "override") == 1)
+    # Their request may have brought them online, which is written just after it is answered;
+    # deleted before that, the keys would be made again at once.
+    time.sleep(1)
+    valkey("DEL", "online", "active", "override", "listed")
+    check("and loses it with their other presence keys",
+          valkey("EXISTS", "online", "active", "override", "listed") == 0)
     # Past MARK_EVERY, so the server marks the owner online afresh when they come back.
     time.sleep(16)
     seen: list[str] = []
@@ -1230,6 +1246,8 @@ def lost_presence_keys(world: World, check: Checks) -> None:
     check("the member reads them as offline throughout, before and after the copy of what they chose",
           bool(seen) and all(s == "offline" for s in seen), {s: seen.count(s) for s in set(seen)})
     check("and they read themself as invisible once back", status_of(world.owner["token"]) == "invisible")
+    check("having come back online in Valkey, with what they chose copied there again",
+          soon(lambda: valkey("EXISTS", "online", "override") == 2, 5), valkey("EXISTS", "online", "override"))
     stream.close()
     world.as_owner("DELETE", "/users/@me/presence-override")
 
@@ -2860,10 +2878,17 @@ def calendar_channels(world: World, check: Checks) -> None:
     owners = world.as_owner("POST", events, {"title": "Theirs", "start": soon})["id"]
     check("a member may not delete someone else's event",
           stack.status("DELETE", f"{events}/{owners}", token=member) == 403)
+
+    def reminders() -> str:
+        """How many jobs are the reminder of the member's event: the timer the plugin names
+        `remind:<event>`, whose job the host keys by the plugin and that name."""
+        return psql("SELECT count(*) FROM job WHERE kind = 'firePluginTimer' "
+                    f"AND key = '{CALENDAR_ID}/remind:{mine}'", stack.database)
+
+    check("an event to come has a reminder", reminders() == "1", reminders())
     check("but may delete their own",
           stack.status("DELETE", f"{events}/{mine}", token=member) == 204)
-    check("and its reminder goes with it",
-          psql(f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND key = '{CALENDAR_ID}/remind:{mine}'", stack.database) == "0")
+    check("and its reminder goes with it", reminders() == "0", reminders())
     # Deleting the calendar deletes the reminders set in it, with its events.
     check("an event's reminder is kept in the calendar's scope",
           psql(f"SELECT count(*) FROM job WHERE kind = 'firePluginTimer' AND payload->>'scope' = '{calendar}'", stack.database) != "0")
@@ -3948,6 +3973,9 @@ def main() -> None:
     parser.add_argument("--start-services", action="store_true", help="docker compose up the services first")
     parser.add_argument("--only", help="the scenarios to run, comma separated by name; every one when absent")
     args = parser.parse_args()
+    only = None if args.only is None else {name.strip() for name in args.only.split(",")}
+    if only is not None and (unknown := only - {scenario.__name__ for scenario in SCENARIOS}):
+        parser.error(f"--only names no scenario: {', '.join(sorted(unknown))}")
     if shutil.which("docker") is None:
         sys.exit("permissions: docker is required")
     if args.start_services:
@@ -3960,7 +3988,6 @@ def main() -> None:
         say("starting a database and a NATS of its own, the chat server, and the voice server")
         with Stack(args.bin.resolve(), "permissions", PORTS, SETTINGS, public_host="localhost") as stack:
             run = format(int(time.time() * 1000) % 36**6, "x")
-            only = None if args.only is None else set(args.only.split(","))
             for index, scenario in enumerate(SCENARIOS):
                 if only is not None and scenario.__name__ not in only:
                     continue

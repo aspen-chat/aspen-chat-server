@@ -10,7 +10,7 @@ The dashboard's Server fleet tab shows each voice server's last report. Check th
 1. is running;
 2. reaches NATS, with the token, or as its own user with the permissions
    [Step 6: Voice servers](../installing/6-voice-servers.md#give-it-a-nats-user) lists. NATS logs a
-   `Permissions Violation` for anything else;
+   `Publish Violation` or a `Subscription Violation`, naming the subject, for anything else;
 3. has the `id` the registry gave it (see
    [A voice server shows as Silent](#a-voice-server-shows-as-silent-though-it-is-running)).
 

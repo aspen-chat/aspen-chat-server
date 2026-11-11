@@ -16,6 +16,7 @@ use dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use mediasoup::prelude::*;
 use mediasoup::types::data_structures::{DtlsFingerprint, DtlsRole, DtlsState};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::{NonZeroU8, NonZeroU32};
 use std::sync::Arc;
@@ -102,7 +103,8 @@ async fn media_flows_over_ipv6_beside_ipv4() {
 }
 
 /// The worker's OpenSSL is the system's shared library, not a copy built into it: only
-/// mediasoup's worker links OpenSSL in this crate, so finding it mapped means the worker did.
+/// mediasoup's worker links OpenSSL in this crate (`nothing_but_the_worker_links_openssl`), so
+/// finding it mapped means the worker did.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn the_worker_uses_the_shared_system_openssl() {
@@ -117,6 +119,57 @@ async fn the_worker_uses_the_shared_system_openssl() {
             "{library} is not mapped; the worker has a copy of OpenSSL built in"
         );
     }
+}
+
+/// What `the_worker_uses_the_shared_system_openssl` rests on: nothing else in this crate's test
+/// binary links OpenSSL. A Rust crate links the system's through `openssl-sys`, so that must not
+/// be among this crate's dependencies, its own or another's, as the workspace's lockfile lists
+/// them.
+#[test]
+fn nothing_but_the_worker_links_openssl() {
+    #[derive(serde::Deserialize)]
+    struct Lock {
+        package: Vec<Package>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Package {
+        name: String,
+        #[serde(default)]
+        dependencies: Vec<String>,
+    }
+    let lock: Lock = config::Config::builder()
+        .add_source(config::File::from_str(
+            include_str!("../../Cargo.lock"),
+            config::FileFormat::Toml,
+        ))
+        .build()
+        .expect("Cargo.lock parses")
+        .try_deserialize()
+        .expect("Cargo.lock lists packages");
+    let this = env!("CARGO_PKG_NAME");
+    let mut reached = HashSet::from([this]);
+    let mut pending = vec![this];
+    while let Some(name) = pending.pop() {
+        // Every version of a name is followed, which can only reach more.
+        for package in lock.package.iter().filter(|package| package.name == name) {
+            for dependency in &package.dependencies {
+                // `name`, or `name version` and its source where the lock holds several.
+                let dependency = dependency.split(' ').next().unwrap_or(dependency);
+                if reached.insert(dependency) {
+                    pending.push(dependency);
+                }
+            }
+        }
+    }
+    assert!(
+        reached.contains("mediasoup-sys"),
+        "the lockfile was not walked"
+    );
+    assert!(
+        !reached.contains("openssl-sys"),
+        "a dependency links OpenSSL besides the worker, so libssl being mapped no longer shows \
+         that the worker uses the system's"
+    );
 }
 
 /// One participant's transport, listening on `interfaces` and negotiated to `offered`: ICE,

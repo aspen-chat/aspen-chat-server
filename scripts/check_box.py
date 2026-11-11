@@ -130,8 +130,13 @@ class Box:
         return int(self.curl("-o", "/dev/null", "-w", "%{http_code}", *args, url, resolve=resolve) or 0)
 
     def logs(self, service: str) -> str:
-        done = self.compose("logs", "--no-color", service, check=False)
+        done = self.compose("logs", "--no-color", service)
         return done.stdout + done.stderr
+
+    def sql(self, query: str) -> str:
+        """What the box's own PostgreSQL answers `query` with."""
+        return self.compose("exec", "-T", "-e", "PGHOST=127.0.0.1", "-e", "PGUSER=aspen", "postgres",
+                            "psql", "-d", "aspen", "-Atc", query).stdout.strip()  # fmt: skip
 
     def down(self) -> None:
         self.compose("--profile", "main", "--profile", "api", "--profile", "bundled-storage", "--profile",
@@ -274,7 +279,18 @@ def check_voice_elsewhere(main: Box, images: dict) -> None:
         expect("it took the join token key over NATS", "holding the join token key" in voice.logs("voice"), True)
         listed = main.tool("run", "--", "aspen-chat-server", "voice-servers", "list").stdout
         expect("the deployment lists it", "voice-2" in listed and f"https://voice-2.{DOMAIN}" in listed, True)
-        expect("NATS refused it nothing", "Permissions Violation" in main.logs("nats"), False)
+        # Its load report, which it sends as it starts and the API server stamps the registry with.
+        reported = "SELECT last_report_at IS NOT NULL FROM voice_server WHERE name = 'voice-2'"
+        deadline = time.monotonic() + 60
+        while main.sql(reported) != "t" and time.monotonic() < deadline:
+            time.sleep(2)
+        expect("its reports reach the deployment over NATS", main.sql(reported), "t")
+        # NATS logs what it refuses a user as a violation naming the subject; the log counts
+        # only once it shows NATS starting, so an empty or unread one does not pass.
+        nats = main.logs("nats")
+        expect("NATS's log is read", "Server is ready" in nats, True)
+        refused = [line for line in nats.splitlines() if re.search(r"(Publish|Subscription) Violation", line)]
+        expect("NATS refused it nothing", refused, [])
     finally:
         voice.down()
     say("its removal")

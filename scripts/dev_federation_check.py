@@ -9,6 +9,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import struct
 import sys
 import time
@@ -116,6 +117,22 @@ def check(_args: argparse.Namespace) -> None:
     say("every check passed")
 
 
+def notices_taken(deployment: Deployment) -> int:
+    """How many notices from other deployments `deployment` has taken since it started: the
+    requests to its notices endpoint that it answered with success, by its own metrics."""
+    with urllib.request.urlopen(f"http://127.0.0.1:{deployment.metrics_port}/metrics", timeout=10) as response:
+        metrics = response.read().decode()
+    taken = 0
+    for line in metrics.splitlines():
+        series = re.fullmatch(r"aspen_http_requests_total\{(.*)\} (\S+)", line)
+        if series is None:
+            continue
+        labels = dict(re.findall(r'(\w+)="([^"]*)"', series.group(1)))
+        if labels.get("route") == "POST /federation/notices" and labels.get("status", "").startswith("2"):
+            taken += int(float(series.group(2)))
+    return taken
+
+
 def check_dms_abroad(traveller: str) -> None:
     """DMs on beta with alpha's users: beta hosts one only with one of its own in it, and tells
     alpha when one of alpha's users is put in one. That alpha passes the notice on to its user's
@@ -138,16 +155,18 @@ def check_dms_abroad(traveller: str) -> None:
     expect(status == 403 and json.loads(text)["code"] == "federationRefused",
            "beta hosts no DM between two of alpha's users")
     host_id = api(BETA, "GET", "/users/@me", token=host)["id"]
+    taken = notices_taken(ALPHA)
     dm = api(BETA, "POST", "/users/@me/dms", {"recipients": [abroad["traveller"][1]]}, token=host,
              expect=(200, 201))
     expect(dm["ty"] == "dm" and host_id in dm["recipients"], "a beta user starts a DM with alpha's user")
     status, text = request("POST", f"https://{ALPHA.domain}/api/v1/federation/notices", {"notice": "a.b.c"})
     expect(status == 401 and json.loads(text)["code"] == "assertionInvalid", "alpha refuses a forged notice")
-    # Delivered in the background; a refusal or failure is logged at once.
-    time.sleep(2)
-    log = (BETA.dir / "server.log").read_text()
-    expect("refused a notice" not in log and "gave up delivering a notice" not in log,
-           "beta delivered its notice to alpha")
+    # Delivered in the background, by a job of beta's. The forged notice above was refused, so
+    # only one alpha took counts.
+    deadline = time.monotonic() + 30
+    while notices_taken(ALPHA) == taken and time.monotonic() < deadline:
+        time.sleep(0.5)
+    expect(notices_taken(ALPHA) > taken, "beta delivered its notice to alpha, which took it")
 
 
 def abroad_alive(token: str) -> bool:
