@@ -965,9 +965,11 @@ pub const MAX_MEMBER_PAGE: i64 = 50;
 
 /// `text` as a pattern over a membership's `search_name`: any part of any of the member's names,
 /// or for fewer than `admin::MIN_CONTAINS_CHARS` characters the start of one, each of which
-/// follows a space there. The trigram index `community_user_search` serves both.
+/// follows a space there. The trigram index `community_user_search` serves both. It is in the
+/// case `text` was written in, and `search_name` is lowered by the database, so the query
+/// lowers it there too (`admin::like_pattern`).
 fn member_pattern(text: Option<&str>) -> crate::Result<Option<String>> {
-    let Some(pattern) = crate::admin::name_pattern(text)? else {
+    let Some(pattern) = crate::admin::like_pattern(text)? else {
         return Ok(None);
     };
     Ok(Some(match pattern.strip_prefix('%') {
@@ -1031,7 +1033,7 @@ pub async fn search_community_members(
         FROM community_user cu
         JOIN "user" u ON u.id = cu."user"
         WHERE cu.community = $1 AND u.deleted_at IS NULL
-          AND ($2::text IS NULL OR cu.search_name LIKE $2)
+          AND ($2::text IS NULL OR cu.search_name LIKE lower($2))
           AND ($3::uuid IS NULL OR (cu.shown_name, cu."user") > (
               SELECT p.shown_name, p."user" FROM community_user p
               WHERE p.community = $1 AND p."user" = $3))

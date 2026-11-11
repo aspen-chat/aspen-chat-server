@@ -7,11 +7,11 @@ import { toggleChipClass } from "@/features/invites/dialog";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
 import { Cell, Table } from "@/features/admin/FleetHealth";
 import { useFigures } from "@/features/admin/format";
+import { axisDate, describer } from "@/features/admin/growthDates";
 import { LineChart } from "@/features/admin/LineChart";
 import { useAdminRead } from "@/features/admin/useAdminRead";
 import { useMessages } from "@/i18n/context";
-import { dateFormat } from "@/i18n/format";
-import { format, type Messages } from "@/i18n/messages";
+import { format } from "@/i18n/messages";
 import { LoadingLabel, Skeleton } from "@/features/layout/Skeleton";
 
 const RANGES: readonly GrowthRange[] = [
@@ -21,34 +21,6 @@ const RANGES: readonly GrowthRange[] = [
   "fiveYears",
   "allTime",
 ];
-
-const DAY: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
-const MONTH: Intl.DateTimeFormatOptions = { month: "short", year: "numeric" };
-const SHORT_MONTH: Intl.DateTimeFormatOptions = { month: "short", year: "2-digit" };
-
-/** How a step of `unit` is named in `locale`, in the tooltip and the table. */
-function describer(m: Messages, locale: string, unit: GrowthSeries["unit"]) {
-  const dayFormat = dateFormat(locale, DAY);
-  const monthFormat = dateFormat(locale, MONTH);
-  return (at: string) => {
-    const date = new Date(at);
-    switch (unit) {
-      case "day":
-        return dayFormat.format(date);
-      case "week":
-        return format(m.admin.weekOf, { date: dayFormat.format(date) });
-      case "month":
-        return monthFormat.format(date);
-    }
-  };
-}
-
-function axisDate(locale: string, unit: GrowthSeries["unit"]) {
-  const dayFormat = dateFormat(locale, DAY);
-  const shortMonthFormat = dateFormat(locale, SHORT_MONTH);
-  return (at: string) =>
-    unit === "month" ? shortMonthFormat.format(new Date(at)) : dayFormat.format(new Date(at));
-}
 
 /**
  * How many users and communities the deployment has had over a range, as two charts sharing

@@ -8,6 +8,7 @@ import {
   parameterAt,
   quoteArgument,
   readCommandLine,
+  sameName,
   splitArguments,
   tokenize,
 } from "./commandLine";
@@ -124,5 +125,21 @@ group("command lines", () => {
     expect(describe(item, "fr-FR")).toBe("Lance");
     expect(describe(item, "de-AT")).toBe("Würfelt");
     expect(describe(item, "en-GB")).toBe("Rolls");
+  });
+});
+
+group("sameName", () => {
+  it("compares lowercase forms, as the server does", () => {
+    expect(sameName("PING", "ping")).toBe(true);
+    expect(sameName("Straße", "STRAßE".toLowerCase())).toBe(true);
+    expect(sameName("ÉTÉ", "été")).toBe(true);
+    expect(sameName("ping", "pong")).toBe(false);
+  });
+
+  it("keeps apart names the server keeps apart", () => {
+    // Full-width letters, and a letter composed against the same letter with a combining mark.
+    expect(sameName("ｐｉｎｇ", "ping")).toBe(false);
+    expect(sameName("caf\u00e9", "cafe\u0301")).toBe(false);
+    expect(sameName("straße", "strasse")).toBe(false);
   });
 });

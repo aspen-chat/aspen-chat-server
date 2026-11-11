@@ -82,6 +82,9 @@ its line.
 Growth is two single-series charts under one row of range buttons. Users and communities are charted
 apart. **Why:** one chart with two scales would invent a relation between them.
 
+Each point is a day, a week, or a month of UTC's calendar, and is named in UTC (`growthDates.ts`),
+whatever the viewer's time zone.
+
 ### Database latency
 
 `DatabaseLatency.tsx`, in the Server fleet tab, is two charts under one row of range buttons (an

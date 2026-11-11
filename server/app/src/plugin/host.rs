@@ -372,11 +372,7 @@ pub(super) async fn message_record(
     conn: &mut AsyncPgConnection,
     row: &MessageRow,
 ) -> crate::Result<(wit::Message, Vec<AttachmentId>)> {
-    let ids: Vec<AttachmentId> = message_attachment::table
-        .select(message_attachment::attachment_id)
-        .filter(message_attachment::message_id.eq(row.id))
-        .load(conn)
-        .await?;
+    let ids = crate::message::attachments_of(conn, row.id).await?;
     let place = place(conn, *row.channel.id()).await?;
     let community = place
         .community

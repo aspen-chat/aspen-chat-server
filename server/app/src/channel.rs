@@ -8,10 +8,9 @@ use crate::permissions::{Permissions, missing, require_member, to_names};
 use crate::role::GrantedOverride;
 use crate::t;
 use crate::{
-    AttachmentId, CategoryId, ChannelId, CommunityId, EventScope, Loadable, MaybeLoaded, MessageId,
-    UserId, publish_event,
+    CategoryId, ChannelId, CommunityId, EventScope, Loadable, MaybeLoaded, MessageId, UserId,
+    publish_event,
 };
-use aspen_schema::message_attachment;
 use aspen_schema::{channel, dm_recipient, message};
 pub use aspen_wire::channel::ChannelType;
 use aspen_wire::message_enum;
@@ -399,8 +398,8 @@ pub enum MessageWindow {
     Before { anchor: MessageId, limit: u32 },
     /// Up to `limit` messages newer than `anchor`, excluding `anchor` itself.
     After { anchor: MessageId, limit: u32 },
-    /// `anchor` itself plus up to `radius` messages on either side of it, `radius` read as at
-    /// most half of [`MAX_MESSAGES_QUERIED`].
+    /// `anchor` itself plus up to `radius` messages on either side of it, oldest first,
+    /// `radius` read as at most half of [`MAX_MESSAGES_QUERIED`].
     Around { anchor: MessageId, radius: u32 },
 }
 
@@ -442,7 +441,7 @@ pub async fn read_channel_messages(
                 .await?
         }
         MessageWindow::Around { anchor, radius } => {
-            query
+            let mut around: Vec<Message> = query
                 .limit(radius.min(MAX_MESSAGES_QUERIED / 2) as i64 + 1)
                 .filter(message::id.le(anchor))
                 .order_by(message::id.desc())
@@ -453,7 +452,10 @@ pub async fn read_channel_messages(
                         .order_by(message::id.asc()),
                 )
                 .load(conn.as_mut())
-                .await?
+                .await?;
+            // A union's rows come in no order of their own.
+            around.sort_unstable_by_key(|message| message.id);
+            around
         }
     };
     with_relations(state, conn.as_mut(), messages).await
@@ -466,15 +468,7 @@ pub async fn with_relations(
     messages: Vec<Message>,
 ) -> crate::error::Result<Vec<MessageWithRelations>> {
     let message_ids: Vec<MessageId> = messages.iter().map(|m| m.id).collect();
-    let message_attachments: Vec<(MessageId, AttachmentId)> = message_attachment::table
-        .select((
-            message_attachment::message_id,
-            message_attachment::attachment_id,
-        ))
-        .filter(message_attachment::message_id.eq_any(&message_ids))
-        .order_by(message_attachment::message_id.asc())
-        .load(conn)
-        .await?;
+    let message_attachments = crate::message::attachments_of_many(conn, &message_ids).await?;
     // Link previews live in a separate child table; batch-load them by
     // message id so we don't N+1 the query for larger backfills.
     let mut previews_by_id = load_previews(conn, state.media_store.as_ref(), &message_ids).await?;

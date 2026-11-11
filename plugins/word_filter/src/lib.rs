@@ -24,6 +24,9 @@ use aspen::plugin::types::{
 };
 use exports::aspen::plugin::hooks::Guest;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use unicode_normalization::UnicodeNormalization;
+use unicode_segmentation::UnicodeSegmentation;
 
 struct WordFilter;
 
@@ -79,44 +82,39 @@ fn text(key: &str, args: &[(&str, &str)]) -> Text {
     }
 }
 
-/// The first of `words` that `content` holds as a whole word, ignoring case.
+/// A word as words are compared: composed (NFC) and in lowercase, so that neither case nor how
+/// an accented letter is encoded tells two spellings apart.
+fn folded(word: &str) -> String {
+    let lowered = word.nfc().collect::<String>().to_lowercase();
+    // Lowercasing can leave a letter decomposed (`İ` becomes `i` and a combining dot).
+    lowered.nfc().collect()
+}
+
+/// The first of `words` that `content` holds as a whole word, by Unicode's word boundaries
+/// (UAX #29), compared as `folded` leaves them.
 fn find_word<'a>(content: &str, words: &'a [String]) -> Option<&'a str> {
-    let lowered = content.to_lowercase();
-    let found: Vec<&str> = lowered
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .collect();
+    let found: HashSet<String> = content.unicode_words().map(folded).collect();
     words
         .iter()
-        .find(|word| found.contains(&word.to_lowercase().as_str()))
+        .find(|word| found.contains(&folded(word)))
         .map(String::as_str)
 }
 
-/// `content` with every whole word in `words` replaced by as many asterisks as it has letters.
+/// `content` with every whole word in `words` replaced by as many asterisks as it has
+/// characters as people count them (grapheme clusters).
 fn mask(content: &str, words: &[String]) -> String {
-    let mut out = String::with_capacity(content.len());
-    let mut word = String::new();
-    let flush = |word: &mut String, out: &mut String| {
-        let listed = words
-            .iter()
-            .any(|w| w.to_lowercase() == word.to_lowercase());
-        if listed {
-            out.extend(std::iter::repeat_n('*', word.chars().count()));
-        } else {
-            out.push_str(word);
-        }
-        word.clear();
-    };
-    for c in content.chars() {
-        if c.is_alphanumeric() {
-            word.push(c);
-        } else {
-            flush(&mut word, &mut out);
-            out.push(c);
-        }
-    }
-    flush(&mut word, &mut out);
-    out
+    let listed: HashSet<String> = words.iter().map(|word| folded(word)).collect();
+    content
+        .split_word_bounds()
+        .map(|piece| {
+            // Pieces between words (spaces, punctuation) are never words, whatever is listed.
+            if piece.chars().any(char::is_alphanumeric) && listed.contains(&folded(piece)) {
+                "*".repeat(piece.graphemes(true).count())
+            } else {
+                piece.to_string()
+            }
+        })
+        .collect()
 }
 
 fn count_key() -> String {
@@ -296,5 +294,46 @@ mod tests {
         assert_eq!(mask("Darn it, darning", &words), "**** it, darning");
         assert_eq!(find_word("oh DARN.", &words), Some("darn"));
         assert_eq!(find_word("darning", &words), None);
+    }
+
+    #[test]
+    fn a_word_matches_however_its_accents_are_composed() {
+        let composed = "caf\u{e9}";
+        let decomposed = "cafe\u{301}";
+        for (listed, written) in [(composed, decomposed), (decomposed, composed)] {
+            let words = vec![listed.to_string()];
+            let content = format!("Un {} noir", written.to_uppercase());
+            assert_eq!(find_word(&content, &words), Some(listed));
+            assert_eq!(mask(&content, &words), "Un **** noir");
+            assert_eq!(find_word("cafe noir", &words), None);
+        }
+    }
+
+    #[test]
+    fn a_word_of_another_script_is_found_whole() {
+        // Devanagari, whose virama and vowel signs are marks inside the word.
+        let hindi = "\u{939}\u{93f}\u{928}\u{94d}\u{926}\u{940}";
+        let words = vec![
+            hindi.to_string(),
+            "\u{447}\u{451}\u{440}\u{442}".to_string(),
+        ];
+        assert_eq!(find_word(&format!("{hindi}!"), &words), Some(hindi));
+        let masked = mask(&format!("({hindi})"), &words);
+        assert!(masked.len() > 2 && masked.trim_matches(['(', ')']).chars().all(|c| c == '*'));
+        // Its first two syllables alone are another word.
+        assert_eq!(find_word("\u{939}\u{93f}\u{928}", &words), None);
+        // Cyrillic, in capitals and with its `\u{451}` decomposed.
+        let shouted = "\u{427}\u{415}\u{308}\u{420}\u{422}";
+        assert_eq!(
+            mask(&format!("{shouted}, \u{434}\u{430}"), &words),
+            "****, \u{434}\u{430}"
+        );
+    }
+
+    #[test]
+    fn what_stands_between_words_is_never_masked() {
+        let words = vec!["!".to_string(), " ".to_string(), "darn".to_string()];
+        assert_eq!(mask("darn it!", &words), "**** it!");
+        assert_eq!(find_word("it!", &words), None);
     }
 }

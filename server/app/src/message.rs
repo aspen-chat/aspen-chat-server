@@ -137,6 +137,47 @@ pub struct MessageWithRelations {
 pub struct MessageAttachment {
     message_id: MessageId,
     attachment_id: AttachmentId,
+    /// Where it stands among the message's attachments, as their author listed them. Taking
+    /// one off leaves the others' as they were, so they need not be consecutive.
+    position: i32,
+}
+
+/// A message's attachments in the order their author listed them. Rows that share a position
+/// (those a server from before positions were kept wrote) follow the order of their ids.
+pub(crate) async fn attachments_of(
+    conn: &mut AsyncPgConnection,
+    message: MessageId,
+) -> crate::Result<Vec<AttachmentId>> {
+    Ok(message_attachment::table
+        .select(message_attachment::attachment_id)
+        .filter(message_attachment::message_id.eq(message))
+        .order_by((
+            message_attachment::position.asc(),
+            message_attachment::attachment_id.asc(),
+        ))
+        .load(conn)
+        .await?)
+}
+
+/// As [`attachments_of`], for every one of `messages` at once: each message's attachments
+/// together and in their order.
+pub(crate) async fn attachments_of_many(
+    conn: &mut AsyncPgConnection,
+    messages: &[MessageId],
+) -> crate::Result<Vec<(MessageId, AttachmentId)>> {
+    Ok(message_attachment::table
+        .select((
+            message_attachment::message_id,
+            message_attachment::attachment_id,
+        ))
+        .filter(message_attachment::message_id.eq_any(messages))
+        .order_by((
+            message_attachment::message_id.asc(),
+            message_attachment::position.asc(),
+            message_attachment::attachment_id.asc(),
+        ))
+        .load(conn)
+        .await?)
 }
 
 /// The most attachments one message may carry, whoever sends it.
@@ -736,9 +777,11 @@ async fn post(
                 mention::record(conn.as_mut(), message.id, channel_id, &message.mentions).await?;
                 let held: Vec<MessageAttachment> = attachments
                     .iter()
-                    .map(|attachment| MessageAttachment {
+                    .zip(0..)
+                    .map(|(attachment, position)| MessageAttachment {
                         message_id: message.id,
                         attachment_id: *attachment,
+                        position,
                     })
                     .collect();
                 if !held.is_empty() {
@@ -845,11 +888,7 @@ pub async fn read_message(
         Some(id.0.to_string()),
     )
     .await?;
-    let attachments: Vec<AttachmentId> = message_attachment::table
-        .select(message_attachment::attachment_id)
-        .filter(message_attachment::message_id.eq(id))
-        .load(conn.as_mut())
-        .await?;
+    let attachments = attachments_of(conn.as_mut(), id).await?;
     let link_previews = load_previews(conn.as_mut(), state.media_store.as_ref(), &[id])
         .await?
         .remove(&id)
@@ -910,15 +949,7 @@ pub async fn with_relations(
     let ids: Vec<MessageId> = rows.iter().map(|m| m.id).collect();
     let mut attachments: std::collections::HashMap<MessageId, Vec<AttachmentId>> =
         std::collections::HashMap::new();
-    for (message_id, attachment_id) in message_attachment::table
-        .select((
-            message_attachment::message_id,
-            message_attachment::attachment_id,
-        ))
-        .filter(message_attachment::message_id.eq_any(&ids))
-        .load::<(MessageId, AttachmentId)>(conn)
-        .await?
-    {
+    for (message_id, attachment_id) in attachments_of_many(conn, &ids).await? {
         attachments
             .entry(message_id)
             .or_default()
@@ -1040,11 +1071,7 @@ pub async fn update_message(
             return Err(crate::Error::Validation(t!("messageNotEditable")));
         }
     }
-    let attachments: Vec<AttachmentId> = message_attachment::table
-        .select(message_attachment::attachment_id)
-        .filter(message_attachment::message_id.eq(id))
-        .load(conn.as_mut())
-        .await?;
+    let attachments = attachments_of(conn.as_mut(), id).await?;
     let retouched = match &edit.retouch {
         None => None,
         Some(retouch) => {
@@ -1425,11 +1452,7 @@ async fn current(
         .filter(message::id.eq(id).and(message::deleted_at.is_null()))
         .first(conn)
         .await?;
-    let attachments = message_attachment::table
-        .select(message_attachment::attachment_id)
-        .filter(message_attachment::message_id.eq(id))
-        .load(conn)
-        .await?;
+    let attachments = attachments_of(conn, id).await?;
     let link_previews = load_previews(conn, state.media_store.as_ref(), &[id])
         .await?
         .remove(&id)
@@ -1886,11 +1909,7 @@ pub async fn remove_attachment(
                 )
                 .await?;
             }
-            let attachments: Vec<AttachmentId> = message_attachment::table
-                .select(message_attachment::attachment_id)
-                .filter(message_attachment::message_id.eq(id))
-                .load(conn.as_mut())
-                .await?;
+            let attachments = attachments_of(conn.as_mut(), id).await?;
             publish_event(
                 state,
                 conn.as_mut(),
@@ -1934,5 +1953,81 @@ mod nesting_tests {
         assert!(check_content(&format!("{} deep", ">".repeat(40))).is_err());
         assert!(check_content(&format!("{}deep", "1. ".repeat(40))).is_err());
         assert!(check_content(&format!("{}x", ">".repeat(MAX_CONTENT_CHARS - 1))).is_err());
+    }
+}
+
+#[cfg(test)]
+mod attachment_order_tests {
+    use super::*;
+    use diesel_async::{AsyncConnection, SimpleAsyncConnection};
+
+    const ANN: &str = "a77a0000-0000-4000-8000-000000000001";
+    const CHANNEL: &str = "a77a0000-0000-4000-8000-000000000010";
+    const FIRST: &str = "a77a0000-0000-4000-8000-000000000020";
+    const SECOND: &str = "a77a0000-0000-4000-8000-000000000021";
+    // Their ids in the opposite order to the one the first message lists them in.
+    const FILE_A: &str = "a77a0000-0000-4000-8000-0000000000a1";
+    const FILE_B: &str = "a77a0000-0000-4000-8000-0000000000b2";
+    const FILE_C: &str = "a77a0000-0000-4000-8000-0000000000c3";
+
+    fn file(text: &str) -> AttachmentId {
+        AttachmentId(text.parse().unwrap())
+    }
+
+    /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing.
+    #[tokio::test]
+    async fn attachments_are_read_in_the_order_their_message_lists_them() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                 VALUES ('{ANN}', '{ANN}', '', now(), now());
+             INSERT INTO channel (id, name, ty, sort_index) VALUES ('{CHANNEL}', '', 'dm', 0);
+             INSERT INTO message (id, author, channel, content, "timestamp")
+                 VALUES ('{FIRST}', '{ANN}', '{CHANNEL}', '', now()),
+                        ('{SECOND}', '{ANN}', '{CHANNEL}', '', now());
+             INSERT INTO attachment (id, mime_type, file_name, "timestamp", storage_key)
+                 VALUES ('{FILE_A}', 'image/png', 'a', now(), 'a'),
+                        ('{FILE_B}', 'image/png', 'b', now(), 'b'),
+                        ('{FILE_C}', 'image/png', 'c', now(), 'c');
+             -- The second message's share a position, as rows written without one do.
+             INSERT INTO message_attachment (message_id, attachment_id, position)
+                 VALUES ('{FIRST}', '{FILE_A}', 2), ('{FIRST}', '{FILE_C}', 0),
+                        ('{FIRST}', '{FILE_B}', 1),
+                        ('{SECOND}', '{FILE_B}', 0), ('{SECOND}', '{FILE_A}', 0);"#,
+        ))
+        .await
+        .unwrap();
+        let (first, second) = (
+            MessageId(FIRST.parse().unwrap()),
+            MessageId(SECOND.parse().unwrap()),
+        );
+        let (a, b, c) = (file(FILE_A), file(FILE_B), file(FILE_C));
+        assert_eq!(attachments_of(&mut conn, first).await.unwrap(), [c, b, a]);
+        assert_eq!(attachments_of(&mut conn, second).await.unwrap(), [a, b]);
+        assert_eq!(
+            attachments_of_many(&mut conn, &[second, first])
+                .await
+                .unwrap(),
+            [(first, c), (first, b), (first, a), (second, a), (second, b)]
+        );
+
+        // Taking one off leaves the rest in their order.
+        diesel::delete(
+            message_attachment::table.filter(
+                message_attachment::message_id
+                    .eq(first)
+                    .and(message_attachment::attachment_id.eq(b)),
+            ),
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(attachments_of(&mut conn, first).await.unwrap(), [c, a]);
     }
 }

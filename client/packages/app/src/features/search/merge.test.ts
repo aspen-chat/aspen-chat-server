@@ -16,6 +16,14 @@ describe("mergeResults", () => {
     expect(merged[1]?.key).toBe("b");
   });
 
+  it("orders messages of one instant by their ids, the later id first", () => {
+    const merged = mergeResults([
+      { key: "home", messages: [at("0a", 10), at("09", 10)], exhausted: true },
+      { key: "b", messages: [at("ff", 10), at("1f", 10)], exhausted: true },
+    ]);
+    expect(merged.map((r) => r.message.id)).toEqual(["ff", "1f", "0a", "09"]);
+  });
+
   it("holds back what a deployment with more to give might still precede", () => {
     const merged = mergeResults([
       { key: "home", messages: [at("h2", 50), at("h1", 10)], exhausted: true },

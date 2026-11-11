@@ -1284,6 +1284,13 @@ when reviewing.
    restriction restricts, an unknown status fails the step, an unknown annotation does not compile,
    an unknown frame is answered and is not fatal. A status class is not a decision either
    (`notices::Answer::of` names which answers end a delivery).
+6. **Order and comparison are stated, and the same everywhere.** A read whose order matters has an
+   `ORDER BY` down to a unique column, and an order someone chose is stored
+   (`message_attachment.position`). Ids compare by code unit and instants by value (`compareIds` and
+   `compareInstants` in the client), never by `localeCompare`, whose answer depends on the reader's
+   language. Case is folded on one side by one function (`LIKE lower($1)` against `lower(column)`),
+   never Rust's folding against PostgreSQL's. A calendar bucket names its time zone. People's text
+   is compared by Unicode's rules (word boundaries, normalization), never by ASCII's.
 
 ## Comments document the current code, not its history
 

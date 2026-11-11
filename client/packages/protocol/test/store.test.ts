@@ -447,6 +447,20 @@ describe("RecordStore invites", () => {
     expect(store.invite("old")).toBeUndefined();
   });
 
+  it("orders by the instants named, however many fraction digits each is written with", () => {
+    const store = bootstrapped();
+    store.replaceInvites(
+      aspen.id,
+      [
+        invite("whole", aspen.id, "2026-09-25T12:00:00Z"),
+        invite("half", aspen.id, "2026-09-25T12:00:00.5Z"),
+        invite("micro", aspen.id, "2026-09-25T12:00:00.250001Z"),
+      ],
+      true,
+    );
+    expect(store.invites(aspen.id).map((i) => i.code)).toEqual(["half", "micro", "whole"]);
+  });
+
   it("adds later pages of a paged list and says when it is whole", () => {
     const store = bootstrapped();
     store.replaceInvites(aspen.id, [invite("new")], false);
@@ -1460,6 +1474,39 @@ describe("RecordStore threads and DMs", () => {
     const fresh = dm(2000, [me.id, id(3)]);
     store.applyEvent({ serverEvent: "channel", type: "create", ...fresh });
     expect(store.dms()[0]?.id).toBe(fresh.id);
+  });
+
+  it("orders DMs by activity the same on a device whose language sorts ids' letters apart", () => {
+    // Danish sorts `aa` as one letter after `z`, and ids spell it.
+    const danish = new Intl.Collator("da");
+    expect(danish.compare(id(0xaa), id(0xab))).toBeGreaterThan(0);
+    const collate = vi.spyOn(String.prototype, "localeCompare").mockImplementation(function (
+      this: string,
+      other: string,
+    ) {
+      return danish.compare(this, other);
+    });
+    try {
+      const store = bootstrapped();
+      const first = dm(50, [me.id, bob.id]);
+      const second = dm(51, [me.id, id(3)]);
+      store.setDms([first, second], true);
+      store.applyEvent({
+        serverEvent: "message",
+        type: "create",
+        ...message(1, first.id, bob.id),
+        id: id(0xaa),
+      });
+      store.applyEvent({
+        serverEvent: "message",
+        type: "create",
+        ...message(2, second.id, bob.id),
+        id: id(0xab),
+      });
+      expect(store.dms().map((c) => c.id)).toEqual([second.id, first.id]);
+    } finally {
+      collate.mockRestore();
+    }
   });
 
   it("drops a DM the caller left, with its history", () => {

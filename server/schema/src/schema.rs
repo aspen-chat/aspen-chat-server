@@ -530,6 +530,7 @@ diesel::table! {
     message_attachment (message_id, attachment_id) {
         message_id -> Uuid,
         attachment_id -> Uuid,
+        position -> Int4,
     }
 }
 

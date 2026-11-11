@@ -90,6 +90,7 @@ import type {
 import type { components } from "./generated/openapi";
 import { identityOf } from "./identity";
 import { type ChannelMana, manaFullAt } from "./mana";
+import { compareIds, compareInstants } from "./order";
 
 type UserOnlineStatus = components["schemas"]["UserOnlineStatus"];
 
@@ -605,7 +606,7 @@ export class RecordStore {
     return this.#memoized(`scheduled:${channelId}`, () =>
       Array.from(this.#scheduledMessages.values())
         .filter((scheduled) => scheduled.channelId === channelId)
-        .sort((a, b) => a.sendAt.localeCompare(b.sendAt) || a.id.localeCompare(b.id)),
+        .sort((a, b) => compareInstants(a.sendAt, b.sendAt) || compareIds(a.id, b.id)),
     );
   }
 
@@ -667,7 +668,7 @@ export class RecordStore {
         return NO_VOICE;
       }
       const participants = Array.from(this.#voiceParticipants.get(session.id)?.values() ?? []).sort(
-        (a, b) => a.joinedAt.localeCompare(b.joinedAt),
+        (a, b) => compareInstants(a.joinedAt, b.joinedAt),
       );
       const rings = Array.from(this.#voiceRings.get(session.id)?.values() ?? []);
       return { session, participants, rings };
@@ -714,7 +715,7 @@ export class RecordStore {
       const held = this.#bans.get(communityId);
       return held === undefined
         ? undefined
-        : Array.from(held.values()).sort((a, b) => b.bannedAt.localeCompare(a.bannedAt));
+        : Array.from(held.values()).sort((a, b) => compareInstants(b.bannedAt, a.bannedAt));
     });
   }
 
@@ -728,7 +729,7 @@ export class RecordStore {
       const held = this.#voiceMutes.get(communityId);
       return held === undefined
         ? undefined
-        : Array.from(held.values()).sort((a, b) => b.mutedAt.localeCompare(a.mutedAt));
+        : Array.from(held.values()).sort((a, b) => compareInstants(b.mutedAt, a.mutedAt));
     });
   }
 
@@ -1040,7 +1041,7 @@ export class RecordStore {
       }
       return Array.from(held.values())
         .filter((a) => this.plugin(a.plugin) !== undefined)
-        .sort((a, b) => a.id.localeCompare(b.id));
+        .sort((a, b) => compareIds(a.id, b.id));
     });
   }
 
@@ -1053,7 +1054,7 @@ export class RecordStore {
       }
       return Array.from(held.values())
         .filter((a) => this.plugin(a.plugin) !== undefined)
-        .sort((a, b) => a.id.localeCompare(b.id));
+        .sort((a, b) => compareIds(a.id, b.id));
     });
   }
 
@@ -1405,7 +1406,7 @@ export class RecordStore {
   saves(): readonly SavedMessage[] {
     return this.#memoized("saved", () =>
       Array.from(this.#saved, ([message, id]) => ({ id, message })).sort((a, b) =>
-        b.id.localeCompare(a.id),
+        compareIds(b.id, a.id),
       ),
     );
   }
@@ -1916,7 +1917,7 @@ export class RecordStore {
           if (activeB === undefined) {
             return -1;
           }
-          return activeB.localeCompare(activeA);
+          return compareIds(activeB, activeA);
         }
         return (listed.get(a.id) ?? Infinity) - (listed.get(b.id) ?? Infinity);
       });
@@ -2002,7 +2003,7 @@ export class RecordStore {
           list.push(invite);
         }
       }
-      return list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      return list.sort((a, b) => compareInstants(b.createdAt, a.createdAt));
     });
   }
 

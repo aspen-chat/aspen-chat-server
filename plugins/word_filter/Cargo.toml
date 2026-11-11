@@ -18,6 +18,10 @@ crate-type = ["cdylib"]
 wit-bindgen = "0.62.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Words by Unicode's boundaries, compared composed, so a listed word matches in any script and
+# however its accents are encoded.
+unicode-normalization = "0.1.25"
+unicode-segmentation = "1.13"
 
 [profile.release]
 opt-level = "s"

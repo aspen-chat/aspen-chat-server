@@ -132,22 +132,28 @@ pub const MAX_SEARCH_CHARS: usize = 100;
 /// characters, but finds a start of one from the first, so every search is served by one.
 pub const MIN_CONTAINS_CHARS: usize = 3;
 
-/// `text` as a case-insensitive `LIKE` pattern matching any name containing it, or, for fewer
-/// than [`MIN_CONTAINS_CHARS`] characters, starting with it, with the pattern's own special
+/// `text` as a `LIKE` pattern matching any name containing it, or, for fewer than
+/// [`MIN_CONTAINS_CHARS`] characters, starting with it, with the pattern's own special
 /// characters escaped; `None` for an empty search. One of more than [`MAX_SEARCH_CHARS`] is
 /// refused.
-pub fn name_pattern(text: Option<&str>) -> crate::Result<Option<String>> {
+///
+/// The pattern is in the case `text` was written in. A query that ignores case folds it with
+/// the function that folded what it is compared with, the database's (`lower(name) LIKE
+/// lower($1)`): Rust lowers some letters otherwise than PostgreSQL does (a word's last sigma,
+/// a dotted capital I, and under some collations every letter outside ASCII), and a pattern
+/// lowered here would not find the names holding them.
+pub fn like_pattern(text: Option<&str>) -> crate::Result<Option<String>> {
     let Some(text) = text else {
         return Ok(None);
     };
     let text = text.trim();
-    if text.chars().count() > MAX_SEARCH_CHARS {
+    let chars = text.chars().count();
+    if chars > MAX_SEARCH_CHARS {
         return Err(crate::Error::Validation(t!(
             "searchTooLong",
             max = MAX_SEARCH_CHARS
         )));
     }
-    let text = text.to_lowercase();
     if text.is_empty() {
         return Ok(None);
     }
@@ -158,7 +164,7 @@ pub fn name_pattern(text: Option<&str>) -> crate::Result<Option<String>> {
             other => vec![other],
         })
         .collect();
-    if text.chars().count() < MIN_CONTAINS_CHARS {
+    if chars < MIN_CONTAINS_CHARS {
         Ok(Some(format!("{escaped}%")))
     } else {
         Ok(Some(format!("%{escaped}%")))
@@ -226,7 +232,8 @@ pub async fn search_users(
         FROM "user"
         WHERE deleted_at IS NULL
           AND NOT system
-          AND ($1::text IS NULL OR lower(name) LIKE $1 OR lower(display_name) LIKE $1)
+          AND ($1::text IS NULL
+               OR lower(name) LIKE lower($1) OR lower(display_name) LIKE lower($1))
           AND (NOT $4 OR {banned})
         ORDER BY {order}
         OFFSET $2 LIMIT $3
@@ -234,7 +241,7 @@ pub async fn search_users(
         banned = crate::user_ban::BANNED_SQL,
         order = order_by(column, sort.descending, "id")
     ))
-    .bind::<Nullable<Text>, _>(name_pattern(search)?)
+    .bind::<Nullable<Text>, _>(like_pattern(search)?)
     .bind::<BigInt, _>(offset.clamp(0, MAX_OFFSET))
     .bind::<BigInt, _>(limit.clamp(1, MAX_PAGE))
     .bind::<diesel::sql_types::Bool, _>(banned_only)
@@ -282,14 +289,14 @@ pub async fn search_communities(
                    {COMMUNITY_CREATED_AT} AS created_at
             FROM community c
             WHERE c.deleted_at IS NULL
-              AND ($1::text IS NULL OR lower(c.name) LIKE $1)
+              AND ($1::text IS NULL OR lower(c.name) LIKE lower($1))
         ) listed
         ORDER BY {}
         OFFSET $2 LIMIT $3
         "#,
         order_by(column, sort.descending, "id")
     ))
-    .bind::<Nullable<Text>, _>(name_pattern(search)?)
+    .bind::<Nullable<Text>, _>(like_pattern(search)?)
     .bind::<BigInt, _>(offset.clamp(0, MAX_OFFSET))
     .bind::<BigInt, _>(limit.clamp(1, MAX_PAGE))
     .load(conn.as_mut())
@@ -386,26 +393,7 @@ pub async fn growth(
     };
     let unit = GrowthUnit::for_span((now - start).num_days());
     let totals = current_totals(conn.as_mut()).await?;
-    let mut points: Vec<GrowthPoint> = diesel::sql_query(
-        r#"
-        WITH steps AS (
-            SELECT generate_series(date_trunc($1, $2::timestamptz), date_trunc($1, now()),
-                                   ('1 ' || $1)::interval) AS at
-        )
-        SELECT steps.at, COALESCE(d.users, 0) AS users, COALESCE(d.communities, 0) AS communities
-        FROM steps
-        LEFT JOIN LATERAL (
-            SELECT users, communities FROM deployment_stats
-            WHERE day < ((steps.at + ('1 ' || $1)::interval) AT TIME ZONE 'UTC')::date
-            ORDER BY day DESC LIMIT 1
-        ) d ON true
-        ORDER BY steps.at
-        "#,
-    )
-    .bind::<Text, _>(unit.sql())
-    .bind::<Timestamptz, _>(start)
-    .load(conn.as_mut())
-    .await?;
+    let mut points = growth_steps(conn.as_mut(), unit, start).await?;
     if let Some(last) = points.last_mut() {
         last.users = totals.users;
         last.communities = totals.communities;
@@ -413,9 +401,42 @@ pub async fn growth(
     Ok((unit, points))
 }
 
+/// The steps of `unit` from the one `start` falls in to the one now falls in, each with the
+/// figures of the last day recorded before it ends. A step begins where its day, week, or month
+/// does in UTC, as `deployment_stats` counts its days: the steps are made and compared as UTC
+/// wall-clock times, so the connection's time zone, and its daylight saving, move none of them.
+async fn growth_steps(
+    conn: &mut AsyncPgConnection,
+    unit: GrowthUnit,
+    start: DateTime<Utc>,
+) -> crate::Result<Vec<GrowthPoint>> {
+    Ok(diesel::sql_query(
+        r#"
+        WITH steps AS (
+            SELECT generate_series(date_trunc($1, $2::timestamptz AT TIME ZONE 'UTC'),
+                                   date_trunc($1, now() AT TIME ZONE 'UTC'),
+                                   ('1 ' || $1)::interval) AS at
+        )
+        SELECT steps.at AT TIME ZONE 'UTC' AS at,
+               COALESCE(d.users, 0) AS users, COALESCE(d.communities, 0) AS communities
+        FROM steps
+        LEFT JOIN LATERAL (
+            SELECT users, communities FROM deployment_stats
+            WHERE day < (steps.at + ('1 ' || $1)::interval)::date
+            ORDER BY day DESC LIMIT 1
+        ) d ON true
+        ORDER BY steps.at
+        "#,
+    )
+    .bind::<Text, _>(unit.sql())
+    .bind::<Timestamptz, _>(start)
+    .load(conn)
+    .await?)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{GrowthUnit, MAX_SEARCH_CHARS, name_pattern};
+    use super::{GrowthUnit, MAX_SEARCH_CHARS, like_pattern};
 
     #[test]
     fn a_growth_series_steps_by_days_weeks_or_months_as_it_lengthens() {
@@ -428,17 +449,65 @@ mod tests {
     #[test]
     fn a_search_matches_anywhere_and_takes_like_characters_literally() {
         assert_eq!(
-            name_pattern(Some("Kate")).unwrap(),
-            Some("%kate%".to_string())
+            like_pattern(Some(" Kate ")).unwrap(),
+            Some("%Kate%".to_string())
         );
-        assert_eq!(name_pattern(Some("Ka")).unwrap(), Some("ka%".to_string()));
-        assert_eq!(name_pattern(Some("  ")).unwrap(), None);
-        assert_eq!(name_pattern(None).unwrap(), None);
+        assert_eq!(like_pattern(Some("Ka")).unwrap(), Some("Ka%".to_string()));
+        assert_eq!(like_pattern(Some("  ")).unwrap(), None);
+        assert_eq!(like_pattern(None).unwrap(), None);
         assert_eq!(
-            name_pattern(Some("50%_\\")).unwrap(),
+            like_pattern(Some("50%_\\")).unwrap(),
             Some("%50\\%\\_\\\\%".to_string())
         );
-        assert!(name_pattern(Some(&"名".repeat(MAX_SEARCH_CHARS))).is_ok());
-        assert!(name_pattern(Some(&"名".repeat(MAX_SEARCH_CHARS + 1))).is_err());
+        assert!(like_pattern(Some(&"名".repeat(MAX_SEARCH_CHARS))).is_ok());
+        assert!(like_pattern(Some(&"名".repeat(MAX_SEARCH_CHARS + 1))).is_err());
+        // The case is the database's to fold, which lowers a last sigma as any other.
+        assert_eq!(
+            like_pattern(Some("ΟΔΟΣ")).unwrap(),
+            Some("%ΟΔΟΣ%".to_string())
+        );
+    }
+
+    /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing. On a connection whose time zone is hours from
+    /// UTC and changed its clocks within the range, every step still begins at a UTC midnight,
+    /// a day after the one before, and takes the figures of the UTC day it covers.
+    #[tokio::test]
+    async fn growth_steps_begin_at_utc_midnights_whatever_the_connections_time_zone() {
+        use chrono::{Duration, NaiveTime, Utc};
+        use diesel_async::{AsyncConnection, SimpleAsyncConnection};
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(
+            "SET LOCAL TIME ZONE 'America/Los_Angeles';
+             DELETE FROM deployment_stats;
+             INSERT INTO deployment_stats (day, taken_at, users, communities)
+                 VALUES ((now() AT TIME ZONE 'UTC')::date - 1, now(), 7, 3);",
+        )
+        .await
+        .unwrap();
+        let start = Utc::now() - Duration::days(400);
+        let points = super::growth_steps(&mut conn, GrowthUnit::Day, start)
+            .await
+            .unwrap();
+        assert_eq!(points.len(), 401);
+        assert_eq!(points[0].at.date_naive(), start.date_naive());
+        for pair in points.windows(2) {
+            assert_eq!(pair[0].at.time(), NaiveTime::MIN);
+            assert_eq!(pair[1].at - pair[0].at, Duration::days(1));
+        }
+        // Yesterday's row is the figure of yesterday's step and of today's, and of none before.
+        let users: Vec<i64> = points.iter().rev().take(3).map(|p| p.users).collect();
+        assert_eq!(users, vec![7, 7, 0]);
+        let months = super::growth_steps(&mut conn, GrowthUnit::Month, start)
+            .await
+            .unwrap();
+        assert!(months.iter().all(|p| {
+            p.at.time() == NaiveTime::MIN && chrono::Datelike::day(&p.at.date_naive()) == 1
+        }));
     }
 }

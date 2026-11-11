@@ -282,6 +282,9 @@ same commit, as with comments.
 - Update events and update requests are JSON Merge Patches: an absent field is unchanged, `null`
   clears a nullable field. Apply them field by field; never replace a cached record wholesale with
   an update payload.
+- Ids are ordered with `compareIds` and instants with `compareInstants`
+  (`packages/protocol/src/order.ts`), never `localeCompare`, whose order depends on the reader's
+  language. Names are compared the way the server compares them, with `toLowerCase`, not a collator.
 
 ## UI
 

@@ -37,4 +37,29 @@ describe("visibleParticipants", () => {
       silentOnly.slice(0, VOICE_LIST_LIMIT).map((p) => p.user),
     );
   });
+
+  it("orders those who never spoke by when they joined, however the time is written", () => {
+    const silent = Array.from({ length: VOICE_LIST_LIMIT + 2 }, (_, i) => person(i + 10, null));
+    const whole = { ...person(1, null), user: "whole", joinedAt: "2026-09-26T00:00:05Z" };
+    const millis = { ...person(1, null), user: "millis", joinedAt: "2026-09-26T00:00:05.123Z" };
+    const micros = { ...person(1, null), user: "micros", joinedAt: "2026-09-26T00:00:05.123456Z" };
+    const shown = visibleParticipants([...silent, micros, millis, whole]);
+    expect(shown.slice(0, 3).map((p) => p.user)).toEqual(["whole", "millis", "micros"]);
+  });
+
+  it("orders two who joined at one moment by their ids, whichever comes first", () => {
+    const silent = Array.from({ length: VOICE_LIST_LIMIT + 2 }, (_, i) => person(i + 10, null));
+    const a = { ...person(1, null), user: "a" };
+    const b = { ...person(1, null), user: "b" };
+    expect(
+      visibleParticipants([...silent, b, a])
+        .slice(0, 2)
+        .map((p) => p.user),
+    ).toEqual(["a", "b"]);
+    expect(
+      visibleParticipants([a, b, ...silent])
+        .slice(0, 2)
+        .map((p) => p.user),
+    ).toEqual(["a", "b"]);
+  });
 });

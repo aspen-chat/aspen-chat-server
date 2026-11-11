@@ -27,7 +27,8 @@ use super::{Migration, ensure_migrations_table};
 /// and using that 14-digit string as the lookup key — see
 /// [`aspen_id_to_diesel_version`]. Every Diesel row must resolve to
 /// exactly one registry entry; a Diesel row we can't map is refused.
-/// The original `run_on` timestamp is preserved in `applied_at`.
+/// The original `run_on` timestamp is kept as `applied_at`, read as
+/// UTC.
 ///
 /// Guardrails (all enforced inside one transaction for atomicity):
 /// * `__diesel_schema_migrations` must exist; otherwise there is
@@ -89,11 +90,15 @@ pub async fn run_import_diesel(
                 );
             }
 
-            // `run_on` is a naive TIMESTAMP in Diesel's schema; cast to
-            // TIMESTAMPTZ server-side (treating the stored value as
-            // UTC, which is how Postgres hands out CURRENT_TIMESTAMP to
-            // timestamp-without-tz columns) so we can bind directly to
-            // chrono::DateTime<Utc>.
+            // `run_on` is a naive TIMESTAMP in Diesel's schema, which
+            // PostgreSQL filled from CURRENT_TIMESTAMP in the time zone
+            // of the session that ran the migration. Which zone that
+            // was is not recorded, and this session cannot ask for the
+            // database's own (its driver sets UTC when it connects),
+            // so the value is read as UTC: exact where the database
+            // keeps UTC, as the official image does, and elsewhere off
+            // by that zone's offset. `applied_at` is only shown
+            // (`status`); nothing is chosen by it.
             let diesel_rows: Vec<DieselMigrationRow> = sql_query(
                 "SELECT version, (run_on AT TIME ZONE 'UTC') AS applied_at \
                  FROM __diesel_schema_migrations \

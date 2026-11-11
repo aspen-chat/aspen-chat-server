@@ -308,6 +308,7 @@ export {
 } from "./urls";
 export { acceptLanguage, setPreferredLanguages } from "./languages";
 export { identityOf } from "./identity";
+export { compareIds, compareInstants } from "./order";
 export {
   EMPTY_PUSH_STATE,
   RelayClient,

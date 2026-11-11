@@ -1,4 +1,4 @@
-import { ApiProblemError, SAVED_PAGE, type SavedMessage } from "@aspen/protocol";
+import { ApiProblemError, compareIds, SAVED_PAGE, type SavedMessage } from "@aspen/protocol";
 import { XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "react-aria-components";
@@ -37,7 +37,7 @@ export function SavedScreen() {
   const saves = useEverywhere(["saved"], (sources) =>
     sources
       .flatMap((source) => source.sync.store.saves().map((save) => ({ source, save })))
-      .sort((a, b) => b.save.id.localeCompare(a.save.id)),
+      .sort((a, b) => compareIds(b.save.id, a.save.id)),
   );
   const [shown, setShown] = useState(SAVED_PAGE);
   const [reads, setReads] = useState<ReadonlyMap<Source, Read>>(new Map());

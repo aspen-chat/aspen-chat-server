@@ -1,3 +1,5 @@
+import { compareIds } from "@aspen/protocol";
+
 /** One deployment's search results so far, newest first. */
 export interface SourceResults<T extends { id: string; timestamp: string }> {
   readonly key: string;
@@ -33,6 +35,6 @@ export function mergeResults<T extends { id: string; timestamp: string }>(
     .sort(
       (a, b) =>
         Date.parse(b.message.timestamp) - Date.parse(a.message.timestamp) ||
-        b.message.id.localeCompare(a.message.id),
+        compareIds(b.message.id, a.message.id),
     );
 }

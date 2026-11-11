@@ -38,6 +38,8 @@ commands.
 - Points are users and communities at the end of each day up to half a year, each week up to two
   years, and each month beyond.
 - Each step's point is the last day recorded in `deployment_stats` before the step ends.
+- A step begins where its day, week, or month does in UTC, as `deployment_stats` counts its days,
+  whatever time zone the database connection is in (`growth_steps`).
 - The last step's point is the totals now.
 - The migration that made `deployment_stats` filled in every day before it.
 
@@ -46,7 +48,7 @@ commands.
 The user and community directories:
 
 - search by any part of a name through `filter[name]`, or for one or two characters by its start
-  (`admin::name_pattern`), served by trigram indexes either way;
+  (`admin::like_pattern`), served by trigram indexes either way;
 - order by `sort`, a field, `-` prefixed for descending, newest first by default, each order walked
   through an index (`user_dashboard_name`, `community_dashboard_name`, `community_by_members`, the
   key for when it was made);

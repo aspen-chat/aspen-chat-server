@@ -1,5 +1,5 @@
-//! `redo` — down one then up: useful for iterating on the most
-//! recent migration.
+//! `redo` — down one then up: useful for iterating on the migration
+//! registered last.
 
 use anyhow::Result;
 use diesel_async::AsyncPgConnection;

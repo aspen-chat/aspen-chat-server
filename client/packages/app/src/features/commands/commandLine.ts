@@ -21,9 +21,12 @@ export function offeredCommands(lists: readonly BotCommands[]): Offered[] {
   return lists.flatMap((list) => list.commands.map((command) => ({ bot: list.bot, command })));
 }
 
-/** Names compare ignoring case, as the server keeps them unique. */
+/**
+ * Names compare by their lowercase forms, as the server keeps them unique
+ * (`app::bot_command`): whatever the browser's language, and nothing else folded together.
+ */
 export function sameName(a: string, b: string): boolean {
-  return a.localeCompare(b, undefined, { sensitivity: "accent" }) === 0;
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 /** The command's name being typed: the draft's first word, while the caret is still in it. */

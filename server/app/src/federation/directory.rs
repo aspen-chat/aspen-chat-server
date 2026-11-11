@@ -241,8 +241,11 @@ pub async fn list(
         .offset(offset.clamp(0, crate::admin::MAX_OFFSET))
         .limit(limit.clamp(1, crate::admin::MAX_PAGE))
         .into_boxed();
-    if let Some(pattern) = crate::admin::name_pattern(search)? {
-        query = query.filter(federated_deployment::domain.like(pattern));
+    if let Some(pattern) = crate::admin::like_pattern(search)? {
+        // A domain is stored as `Domain::parse` folded it, ASCII letters lowered and nothing
+        // else in it, and is compared as stored, so the pattern is folded the same way: a
+        // letter outside ASCII then matches no domain, as none holds one.
+        query = query.filter(federated_deployment::domain.like(pattern.to_ascii_lowercase()));
     }
     let deployments: Vec<FederatedDeployment> = query.load(conn).await?;
     listed(conn, deployments).await
@@ -434,6 +437,38 @@ pub async fn accept_key(
 mod tests {
     use super::*;
     use diesel_async::{AsyncConnection, SimpleAsyncConnection};
+
+    /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing. A search finds a domain however its letters
+    /// were typed, and reads `%` and `_` as themselves.
+    #[tokio::test]
+    async fn a_search_finds_domains_whatever_case_it_is_typed_in() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(
+            "INSERT INTO federated_deployment (domain, origin, created_at, note) VALUES
+             ('chat.fold-search.test', 'administrator', now(), NULL),
+             ('other.example.test', 'administrator', now(), NULL);",
+        )
+        .await
+        .unwrap();
+        let found = |listed: Vec<Listed>| {
+            listed
+                .into_iter()
+                .map(|l| l.deployment.domain.as_str().to_string())
+                .collect::<Vec<_>>()
+        };
+        let typed = list(&mut conn, Some(" Chat.FOLD-Search "), 0, 10)
+            .await
+            .unwrap();
+        assert_eq!(found(typed), vec!["chat.fold-search.test"]);
+        let wildcard = list(&mut conn, Some("fold_search"), 0, 10).await.unwrap();
+        assert_eq!(found(wildcard), Vec::<String>::new());
+    }
 
     /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
     /// committed; without one it checks nothing.

@@ -46,7 +46,8 @@ enum Cmd {
         #[arg(required = true, num_args = 1..)]
         ids: Vec<String>,
     },
-    /// Roll back the most recently applied migrations, newest first.
+    /// Roll back the applied migrations that come last in the registry,
+    /// the last of them first.
     Down {
         #[arg(long, default_value_t = 1)]
         steps: usize,
@@ -60,7 +61,7 @@ enum Cmd {
         #[arg(required = true, num_args = 1..)]
         ids: Vec<String>,
     },
-    /// Roll back the most recently applied migration and reapply
+    /// Roll back the applied migration that comes last in the registry and reapply
     /// everything that's pending. Useful while authoring.
     Redo,
     /// Print applied + pending migrations.

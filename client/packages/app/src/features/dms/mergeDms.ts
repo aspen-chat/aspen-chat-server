@@ -1,3 +1,5 @@
+import { compareIds } from "@aspen/protocol";
+
 /** One deployment's DMs, in its own order, with the id of each one's newest message. */
 export interface DmSource<T> {
   readonly dms: readonly T[];
@@ -15,7 +17,7 @@ export function mergeDms<T>(sources: readonly DmSource<T>[]): T[] {
   );
   all.sort((a, b) => {
     if (a.active !== undefined && b.active !== undefined && a.active !== b.active) {
-      return b.active.localeCompare(a.active);
+      return compareIds(b.active, a.active);
     }
     if ((a.active === undefined) !== (b.active === undefined)) {
       return a.active === undefined ? 1 : -1;
