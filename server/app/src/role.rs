@@ -632,10 +632,20 @@ pub async fn delete_role(
     let mut conn = state.connection_pool.get().await?;
     conn.transaction(|conn| {
         async move {
-            let role = load_role(conn.as_mut(), role_id).await?;
             // Changes to a community's roles take turns, as making one does, so two that
-            // renumber at once cannot leave two roles at one position.
-            crate::community::hold_for_count(conn.as_mut(), role.community).await?;
+            // renumber at once cannot leave two roles at one position. Only the role's
+            // community, which never changes, is read before its turn; the role is read once
+            // the turn is taken, so its rank is the one it holds now and a role another
+            // change deleted meanwhile is not found. The community is held before the role
+            // is locked, the order `reorder_roles` takes them in.
+            let community: CommunityId = community_role::table
+                .select(community_role::community)
+                .filter(community_role::id.eq(role_id))
+                .filter(community_role::deleted_at.is_null())
+                .first(conn.as_mut())
+                .await?;
+            crate::community::hold_for_count(conn.as_mut(), community).await?;
+            let role = lock_role(conn.as_mut(), role_id).await?;
             if role.everyone {
                 return Err(crate::Error::Validation(t!("everyoneRoleFixed")));
             }

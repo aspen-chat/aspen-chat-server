@@ -7,15 +7,16 @@
 //! What happens in a DM is published once for each of its people; a plugin is handed the first
 //! copy that reaches it (`first_copy`), and a redelivery of that copy again.
 
-use super::PluginPermission;
 use super::host::{self, Instance, Phase, wit};
 use super::manifest::ObserveHook;
 use super::registry::{LoadedPlugin, Running};
+use super::{Mode, PluginPermission};
 use crate::context::GlobalServerContext;
 use crate::events::{EVENT_ID_HEADER, channel_home};
 use crate::message::Message as MessageRow;
-use crate::{ASPEN_NATS_STREAM_NAME, ChannelId, CommunityId, MessageId, UserId};
+use crate::{ASPEN_NATS_STREAM_NAME, AttachmentId, ChannelId, CommunityId, MessageId, UserId};
 use aspen_schema::message;
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use futures_util::StreamExt;
@@ -117,8 +118,10 @@ struct Seen {
     change: Option<String>,
     id: Option<MessageId>,
     content: Option<String>,
-    /// Present on a message's update when its attachments changed.
-    attachments: Option<serde::de::IgnoredAny>,
+    /// On a message's update, present when its attachments changed: those it keeps.
+    attachments: Option<Vec<AttachmentId>>,
+    /// On a message's update that edited it, when the edit was made, as the row holds it.
+    edited_at: Option<DateTime<Utc>>,
     // `botCommandInvoked`
     invocation: Option<MessageId>,
     channel: Option<ChannelId>,
@@ -165,12 +168,41 @@ async fn first_copy(
     Ok(holder.as_deref() == Some(subject))
 }
 
+/// Whether a row last edited at `stored` holds the edit an event says was made at `published`,
+/// or a later one. An event that names no edit asks nothing of the row.
+fn holds_edit(stored: Option<DateTime<Utc>>, published: Option<DateTime<Utc>>) -> bool {
+    published.is_none_or(|published| stored.is_some_and(|stored| stored >= published))
+}
+
+/// Whether a message holding the attachments `stored` shows the change an event made, which
+/// left it `published`, or a later one. A posted message only ever loses attachments, so it
+/// does once it holds none the event does not list. An event that lists none asks nothing.
+fn holds_attachments(stored: &[AttachmentId], published: Option<&[AttachmentId]>) -> bool {
+    published.is_none_or(|published| stored.iter().all(|held| published.contains(held)))
+}
+
+/// What a message's update says changed, which its row and attachments show once the
+/// transaction that published it has committed.
+#[derive(Default, Clone, Copy)]
+struct Change<'a> {
+    /// When the edit was made, of an update that edited its text.
+    edited_at: Option<DateTime<Utc>>,
+    /// The attachments it keeps, of an update that took one off.
+    attachments: Option<&'a [AttachmentId]>,
+}
+
 /// The message `id`, waiting a moment for the transaction that wrote it to commit: events are
-/// published before it does.
+/// published before it does. A message being made is not there until then, and one being
+/// changed is there as it was before: with the text from before an edit, and with the
+/// attachment a removal takes off. `None` when there is no such message; an error when the
+/// `change` has not shown in time, so the event is delivered again rather than handled with
+/// what the message held before.
 async fn message_row(
     state: &GlobalServerContext,
     id: MessageId,
-) -> crate::Result<Option<MessageRow>> {
+    change: Change<'_>,
+) -> anyhow::Result<Option<MessageRow>> {
+    let mut exists = false;
     for _ in 0..20 {
         let mut conn = state.connection_pool.get().await?;
         let found: Option<MessageRow> = message::table
@@ -179,13 +211,40 @@ async fn message_row(
             .first(conn.as_mut())
             .await
             .optional()?;
-        if found.is_some() {
-            return Ok(found);
+        exists = found.is_some();
+        if let Some(row) = found
+            && holds_edit(row.edited_at, change.edited_at)
+        {
+            let shown = match change.attachments {
+                Some(_) => {
+                    let stored = crate::message::attachments_of(conn.as_mut(), id).await?;
+                    holds_attachments(&stored, change.attachments)
+                }
+                None => true,
+            };
+            if shown {
+                return Ok(Some(row));
+            }
         }
         drop(conn);
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    anyhow::ensure!(!exists, "the change to message {} has not committed", id.0);
     Ok(None)
+}
+
+/// Whether a `communityPlugin` event (its `type` and `enabled`) says a community turned a
+/// plugin of `mode` on (`true`) or off (`false`); `None` when it did neither. An update carries
+/// `enabled` only when it changed. A community's first record of a plugin is a `create` that
+/// carries it whole: that is a plugin turned on only when it is one communities turn on and the
+/// record says it is on, since a record made by configuring one that is off says off, and a
+/// plugin that runs everywhere was never off.
+fn toggled(change: Option<&str>, enabled: Option<bool>, mode: Mode) -> Option<bool> {
+    match (change, enabled, mode) {
+        (Some("update"), enabled, _) => enabled,
+        (Some("create"), Some(true), Mode::OptIn) => Some(true),
+        _ => None,
+    }
 }
 
 /// Where `channel` is, when `plugin` runs there.
@@ -251,7 +310,16 @@ async fn handle(
         if !first_copy(state, &plugin.id, event_id, subject).await? {
             return Ok(());
         }
-        let Some(row) = message_row(state, id).await? else {
+        // Only an update's fields say what changed; a new message's are the message whole.
+        let change = if hook == ObserveHook::MessageEdit {
+            Change {
+                edited_at: seen.edited_at,
+                attachments: seen.attachments.as_deref(),
+            }
+        } else {
+            Change::default()
+        };
+        let Some(row) = message_row(state, id, change).await? else {
             return Ok(());
         };
         // A principal's own messages are not its plugin's to observe.
@@ -321,7 +389,7 @@ async fn handle(
         let Some(community) = seen.community else {
             return Ok(());
         };
-        let observed = match seen.enabled {
+        let observed = match toggled(seen.change.as_deref(), seen.enabled, plugin.mode) {
             Some(true) if wants(ObserveHook::PluginEnable) => {
                 wit::Observed::PluginEnabled(community.0.to_string())
             }
@@ -366,7 +434,7 @@ pub(super) async fn deliver(
     observed: wit::Observed,
     community: Option<String>,
     event_id: Option<&str>,
-    shown: Vec<crate::AttachmentId>,
+    shown: Vec<AttachmentId>,
 ) -> anyhow::Result<()> {
     let context = wit::Context {
         community,
@@ -411,5 +479,91 @@ mod tests {
         let b = consumer_name("org.example.a.b");
         assert!(!a.contains('.') && !b.contains('.'));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_plugin_is_told_it_was_turned_on_or_off_only_when_it_was() {
+        for mode in [Mode::OptIn, Mode::Everywhere] {
+            assert_eq!(toggled(Some("update"), Some(true), mode), Some(true));
+            assert_eq!(toggled(Some("update"), Some(false), mode), Some(false));
+            // Its settings changed there.
+            assert_eq!(toggled(Some("update"), None, mode), None);
+            // Configured where it has not been turned on.
+            assert_eq!(toggled(Some("create"), Some(false), mode), None);
+            assert_eq!(toggled(Some("delete"), None, mode), None);
+        }
+        assert_eq!(toggled(Some("create"), Some(true), Mode::OptIn), Some(true));
+        // First configured where it always ran.
+        assert_eq!(toggled(Some("create"), Some(true), Mode::Everywhere), None);
+    }
+
+    /// A removal's update names no edit, only the attachments the message keeps: the message
+    /// shows it once it holds none but those, the removed one being there until the commit.
+    #[test]
+    fn a_removed_attachment_is_awaited_by_the_ones_its_event_keeps() {
+        use aspen_wire::message_enum::server_event::{MessageEvent, ServerEvent};
+        let file = |n: u128| AttachmentId(uuid::Uuid::from_u128(n));
+        let event = ServerEvent::Message(MessageEvent::Update {
+            id: MessageId::new(),
+            content: None,
+            attachments: Some(vec![file(1), file(3)]),
+            edited_at: None,
+            link_previews: None,
+            thread: None,
+            mentions: None,
+            linked_messages: None,
+            altered_by: None,
+            card: None,
+            echo: None,
+        });
+        let seen: Seen = serde_json::from_slice(&serde_json::to_vec(&event).unwrap()).unwrap();
+        assert_eq!(seen.edited_at, None);
+        let kept = seen.attachments.as_deref();
+        assert_eq!(kept, Some([file(1), file(3)].as_slice()));
+
+        // Before the commit the removed file is still the message's.
+        assert!(!holds_attachments(&[file(1), file(2), file(3)], kept));
+        assert!(holds_attachments(&[file(1), file(3)], kept));
+        // A later removal has committed too.
+        assert!(holds_attachments(&[file(3)], kept));
+        assert!(holds_attachments(&[], kept));
+        // The last file taken off leaves none.
+        assert!(!holds_attachments(&[file(2)], Some(&[])));
+        assert!(holds_attachments(&[], Some(&[])));
+        // An update that says nothing of attachments asks nothing.
+        assert!(holds_attachments(&[file(2)], None));
+    }
+
+    #[test]
+    fn an_edit_is_awaited_by_the_time_its_event_carries() {
+        use aspen_wire::message_enum::server_event::{MessageEvent, ServerEvent};
+        // To the microsecond, as the row keeps it.
+        let edited = DateTime::from_timestamp_micros(1_800_000_000_123_456).unwrap();
+        let event = ServerEvent::Message(MessageEvent::Update {
+            id: MessageId::new(),
+            content: Some("after".to_string()),
+            attachments: None,
+            edited_at: Some(Some(edited)),
+            link_previews: None,
+            thread: None,
+            mentions: None,
+            linked_messages: None,
+            altered_by: None,
+            card: None,
+            echo: None,
+        });
+        let seen: Seen = serde_json::from_slice(&serde_json::to_vec(&event).unwrap()).unwrap();
+        assert_eq!(seen.edited_at, Some(edited));
+
+        let before = edited - chrono::Duration::seconds(5);
+        assert!(!holds_edit(None, Some(edited)));
+        assert!(!holds_edit(Some(before), Some(edited)));
+        assert!(holds_edit(Some(edited), Some(edited)));
+        assert!(holds_edit(
+            Some(edited + chrono::Duration::seconds(5)),
+            Some(edited)
+        ));
+        assert!(holds_edit(None, None));
+        assert!(holds_edit(Some(before), None));
     }
 }

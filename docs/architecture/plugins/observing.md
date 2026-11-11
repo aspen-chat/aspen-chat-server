@@ -39,4 +39,11 @@ An event elsewhere costs nothing more.
 | `botCommandInvoked`                  | `command-invoked`                                                          | Reaches the plugin whose principal it names.               |
 | A `communityPlugin` event of its own | `plugin-enabled` or `plugin-disabled`                                      | Always.                                                    |
 
+Events are published before their transaction commits, so the message is read with a short wait
+(`observe::message_row`): a new message until its row is there, an edited one until its row holds
+the edit the event names (`editedAt`) or a later one, and one an attachment was taken off, whose
+update names no edit, until it holds no attachment but those the event says it keeps (`attachments`;
+a posted message only loses them). A change that has not shown in that time fails the call, so the
+event is delivered again rather than handled with what the message held before it.
+
 Timers are delivered through `observe::deliver` too (see [Timers](timers.md)).

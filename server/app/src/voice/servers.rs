@@ -641,16 +641,17 @@ async fn note_carried(state: &GlobalServerContext, lost: &VoiceSession) {
     }
 }
 
-/// Takes what the call lost in `channel` passes on, if one was ended by an offer lately, so the
-/// next session in the channel does not take it too. A Valkey outage is logged and answers
-/// nothing.
-pub(super) async fn take_carried(
+/// What the call lost in `channel` passes on, if one was ended by an offer lately. It is read
+/// and left: the session that takes it is recorded in a transaction that may yet roll back
+/// and be tried again, and finds it again then; [`forget_carried`] removes it once that
+/// transaction commits. A Valkey outage is logged and answers nothing.
+pub(super) async fn carried(
     state: &GlobalServerContext,
     channel: ChannelId,
 ) -> Option<CarriedCall> {
-    let taken: Result<Option<String>, fred::error::Error> =
-        state.valkey.getdel(carried_key(channel)).await;
-    match taken {
+    let read: Result<Option<String>, fred::error::Error> =
+        state.valkey.get(carried_key(channel)).await;
+    match read {
         Ok(Some(carried)) => match serde_json::from_str(&carried) {
             Ok(carried) => Some(carried),
             Err(e) => {
@@ -663,6 +664,16 @@ pub(super) async fn take_carried(
             warn!(error = %e, "could not read what a lost call passes on");
             None
         }
+    }
+}
+
+/// Forgets what the call lost in `channel` passed on, once the session carrying it on is
+/// recorded for good, so the next session in the channel does not take it too. A Valkey outage
+/// is logged, and it is forgotten when it expires.
+pub(super) async fn forget_carried(state: &GlobalServerContext, channel: ChannelId) {
+    let forgotten: Result<u32, fred::error::Error> = state.valkey.del(carried_key(channel)).await;
+    if let Err(e) = forgotten {
+        warn!(error = %e, "could not forget what a lost call passed on");
     }
 }
 

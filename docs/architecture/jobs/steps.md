@@ -52,7 +52,8 @@ answered if it rolls back, and the rechecks of calls it noted run once it commit
   `failed_at` and its last error.
 - The operator can see a job given up and try it again (`aspen-chat-server jobs retry <id>`) or
   cancel it (`jobs cancel <id>`).
-- A recurring job is never given up. It waits out its backoff and runs again.
+- A recurring job is never given up. It waits out its backoff and runs again. Neither is a channel's
+  drainer (`drainManaQueue`), which nothing else could stand in for.
 
 Some kinds have backoffs and attempt counts of their own (see [Kinds](kinds.md)). Jobs given up are
 deleted after `FAILED_KEPT_DAYS` by `pruneFailedJobs`.

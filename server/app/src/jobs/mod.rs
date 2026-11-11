@@ -431,6 +431,14 @@ fn max_attempts(kind: JobKind) -> i32 {
     }
 }
 
+/// Whether a job of `kind` is given up once its attempts are spent. A channel's drainer never
+/// is: nothing else posts or drops what waits for the channel's mana, and no other drainer can
+/// be saved while its job stands, so it waits out its backoff and runs again, as a recurring
+/// job does.
+fn may_be_given_up(kind: JobKind) -> bool {
+    !matches!(kind, JobKind::DrainManaQueue)
+}
+
 /// Whether this claim of `job` is its last before it is given up, should its step fail: for a
 /// kind that does something of its own on giving up.
 pub fn last_attempt(job: &Claimed) -> bool {
@@ -440,7 +448,8 @@ pub fn last_attempt(job: &Claimed) -> bool {
 /// How long a job of `kind` waits after its `attempts`th failure before it is tried again: ten
 /// seconds, doubling, at most an hour; mail and previews a minute, doubling, as mail servers
 /// expect and as a store or `ffmpeg` that failed may take to come back; a held message half a
-/// minute each time, since its author is waiting.
+/// minute each time, since its author is waiting, and so a channel's drainer, whose authors
+/// are.
 fn backoff(kind: JobKind, attempts: i32) -> Duration {
     let doublings = u32::try_from(attempts.saturating_sub(1).clamp(0, 9)).unwrap_or(0);
     match kind {
@@ -450,7 +459,7 @@ fn backoff(kind: JobKind, attempts: i32) -> Duration {
         JobKind::MakePicturePreview | JobKind::MakeVideoPoster => {
             Duration::from_secs(60 * 2u64.pow(doublings)).min(Duration::from_secs(3600))
         }
-        JobKind::ReleaseHeldMessage => Duration::from_secs(30),
+        JobKind::ReleaseHeldMessage | JobKind::DrainManaQueue => Duration::from_secs(30),
         _ => Duration::from_secs(10 * 2u64.pow(doublings)).min(Duration::from_secs(3600)),
     }
 }
@@ -827,7 +836,9 @@ async fn fail(
     job: &Claimed,
     error: &crate::Error,
 ) -> crate::Result<bool> {
-    let given_up = job.attempts >= max_attempts(job.kind) && job.every_seconds.is_none();
+    let given_up = job.attempts >= max_attempts(job.kind)
+        && job.every_seconds.is_none()
+        && may_be_given_up(job.kind);
     if given_up {
         tracing::error!(job = %job.id, kind = %job.kind, "a job was given up: {error}");
     } else {
@@ -1001,6 +1012,21 @@ pub async fn retry(conn: &mut AsyncPgConnection, id: Uuid) -> crate::Result<bool
     Ok(retried > 0)
 }
 
+/// Tries the job of `kind` keyed `key` again at once if it was given up, on `conn`, inside the
+/// transaction that needs it running: [`enqueue`] leaves a job given up as it is. Answers
+/// whether it was.
+pub async fn revive(conn: &mut AsyncPgConnection, kind: JobKind, key: &str) -> crate::Result<bool> {
+    let revived = diesel::sql_query(
+        "UPDATE job SET failed_at = NULL, error = NULL, attempts = 0, not_before = now() \
+         WHERE kind = $1 AND key = $2 AND failed_at IS NOT NULL",
+    )
+    .bind::<Text, _>(kind)
+    .bind::<Text, _>(key)
+    .execute(conn)
+    .await?;
+    Ok(revived > 0)
+}
+
 /// Deletes a job, waiting or given up, so it is never run: for the operator (`jobs cancel`). A
 /// job running now finishes its step. Answers whether there was such a job.
 pub async fn cancel(conn: &mut AsyncPgConnection, id: Uuid) -> crate::Result<bool> {
@@ -1023,6 +1049,17 @@ mod tests {
         assert_eq!(backoff(kind, 4), Duration::from_secs(80));
         assert_eq!(backoff(kind, 20), Duration::from_secs(3600));
         assert_eq!(backoff(JobKind::SendEmail, 2), Duration::from_secs(120));
+        assert_eq!(
+            backoff(JobKind::DrainManaQueue, 20),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn a_drainer_is_never_given_up() {
+        assert!(!may_be_given_up(JobKind::DrainManaQueue));
+        assert!(may_be_given_up(JobKind::DeleteMessagesBy));
+        assert!(may_be_given_up(JobKind::ReleaseHeldMessage));
     }
 
     #[test]

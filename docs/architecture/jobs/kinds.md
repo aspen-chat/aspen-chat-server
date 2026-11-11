@@ -326,7 +326,12 @@ the first row to wait there.
 - Each tick drops what has waited two minutes, then spends what the pool earned on the
   highest-priority authors waiting: the higher ranked, then the longer there, then drawn at random.
 - It deletes its own job only while nothing waits there, in one statement, so a row saved as it
-  finishes saves a new job.
+  finishes saves a new job. A step that finds nothing waiting and its job gone (cancelled, or
+  finished by another runner once its lease ran out) ends there.
+- It is never given up: a step that fails is tried again every half minute for as long as it fails,
+  since nothing else posts or drops what waits there and no other drainer can be saved while its job
+  stands. One found given up all the same is set running again by the next row to wait
+  (`ensure_drainer`).
 
 ### `dropHeldBy`
 

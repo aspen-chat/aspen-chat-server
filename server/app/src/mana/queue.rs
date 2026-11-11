@@ -572,17 +572,32 @@ async fn standings_of(
         .collect())
 }
 
-/// Saves the drainer of `channel`'s pool unless it has one. A drainer that finds the queue
-/// empty deletes its job only while nothing waits ([`finish_if_empty`]), so a row saved as it
-/// finishes has this make it a new one.
+/// Saves the drainer of `channel`'s pool unless it has one, and sets one that was given up
+/// running again: the job is keyed by the channel, so a drainer given up would otherwise keep
+/// every later one from being saved. A drainer that finds the queue empty deletes its job only
+/// while nothing waits ([`finish_if_empty`]), so a row saved as it finishes has this make it a
+/// new one.
 async fn ensure_drainer(conn: &mut AsyncPgConnection, channel: ChannelId) -> crate::Result<()> {
+    let key = channel.0.to_string();
     jobs::enqueue(
         conn,
-        NewJob::new(JobKind::DrainManaQueue, JobClass::Interactive, &())?
-            .keyed(channel.0.to_string()),
+        NewJob::new(JobKind::DrainManaQueue, JobClass::Interactive, &())?.keyed(key.clone()),
     )
     .await?;
+    jobs::revive(conn, JobKind::DrainManaQueue, &key).await?;
     Ok(())
+}
+
+/// What a drainer that found nothing waiting did about its job ([`finish_if_empty`]).
+#[derive(Debug, PartialEq, Eq)]
+enum Finish {
+    /// Nothing waited, and its job is deleted.
+    Finished,
+    /// Something was saved to wait as it looked, so its job stands.
+    Waiting,
+    /// Its job was no longer there: cancelled, or finished by another runner that claimed it
+    /// once this one's lease ran out.
+    Gone,
 }
 
 /// Deletes the drainer's own job when nothing waits in its pool, in one statement, so a row
@@ -591,16 +606,31 @@ async fn finish_if_empty(
     conn: &mut AsyncPgConnection,
     job: uuid::Uuid,
     channel: ChannelId,
-) -> crate::Result<bool> {
-    let deleted = diesel::sql_query(
-        "DELETE FROM job WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM held_message \
-         WHERE channel = $2 AND waiting = 'mana')",
+) -> crate::Result<Finish> {
+    #[derive(QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Bool)]
+        deleted: bool,
+        #[diesel(sql_type = Bool)]
+        stood: bool,
+    }
+    // Both halves read the job as it stood before the statement.
+    let row: Row = diesel::sql_query(
+        "WITH gone AS ( \
+             DELETE FROM job WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM held_message \
+             WHERE channel = $2 AND waiting = 'mana') RETURNING id) \
+         SELECT EXISTS (SELECT 1 FROM gone) AS deleted, \
+                EXISTS (SELECT 1 FROM job WHERE id = $1) AS stood",
     )
     .bind::<PgUuid, _>(job)
     .bind::<PgUuid, _>(channel)
-    .execute(conn)
+    .get_result(conn)
     .await?;
-    Ok(deleted == 1)
+    Ok(match (row.deleted, row.stood) {
+        (true, _) => Finish::Finished,
+        (false, true) => Finish::Waiting,
+        (false, false) => Finish::Gone,
+    })
 }
 
 /// Each author's oldest waiting row in `channel`, of at most twice [`MAX_ITEMS`] authors (two
@@ -701,26 +731,36 @@ pub async fn drain_step(state: &GlobalServerContext, job: &Claimed) -> crate::Re
                     super::share(state, pool, &[]).await;
                 }
                 let mut conn = state.connection_pool.get().await?;
-                if finish_if_empty(conn.as_mut(), job.id, channel).await? {
-                    drop(conn);
-                    tell_level(state, channel).await?;
-                    return Ok(Outcome::Done);
+                match finish_if_empty(conn.as_mut(), job.id, channel).await? {
+                    Finish::Finished => {
+                        drop(conn);
+                        tell_level(state, channel).await?;
+                        return Ok(Outcome::Done);
+                    }
+                    // Nothing is left for this run to end; whatever waits next saves a
+                    // drainer of its own.
+                    Finish::Gone => return Ok(Outcome::Done),
+                    // The next tick finds what was saved, if the step has time for one.
+                    Finish::Waiting => {}
                 }
-                continue;
-            }
-            let unknown: Vec<UserId> = heads
-                .iter()
-                .map(|head| head.author)
-                .filter(|author| !standings.contains_key(author))
-                .collect();
-            if !unknown.is_empty() {
-                standings.extend(
-                    standings_of(&state.mana_order_key, conn.as_mut(), channel, &unknown).await?,
-                );
+            } else {
+                let unknown: Vec<UserId> = heads
+                    .iter()
+                    .map(|head| head.author)
+                    .filter(|author| !standings.contains_key(author))
+                    .collect();
+                if !unknown.is_empty() {
+                    standings.extend(
+                        standings_of(&state.mana_order_key, conn.as_mut(), channel, &unknown)
+                            .await?,
+                    );
+                }
             }
             (pool, heads)
         };
-        tick(state, channel, pool.as_ref(), heads, &standings).await?;
+        if !heads.is_empty() {
+            tick(state, channel, pool.as_ref(), heads, &standings).await?;
+        }
         if tokio::time::Instant::now() >= until {
             return Ok(Outcome::Progress(serde_json::Value::Null));
         }
@@ -883,5 +923,70 @@ mod tests {
         assert!(!veteran.may_displace(veteran));
         assert!(moderator.may_displace(veteran));
         assert!(veteran.may_displace(Priority { rank: 0, days: 2 }));
+    }
+
+    const ANN: &str = "d4a10000-0000-4000-8000-000000000001";
+    const CHANNEL: &str = "d4a10000-0000-4000-8000-000000000010";
+    const WAITING: &str = "d4a10000-0000-4000-8000-000000000020";
+
+    /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing.
+    #[tokio::test]
+    async fn a_drainer_given_up_runs_again_and_a_job_gone_is_told_from_one_waiting() {
+        use diesel_async::SimpleAsyncConnection;
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                 VALUES ('{ANN}', '{ANN}', '', now(), now());
+             INSERT INTO channel (id, name, ty, sort_index) VALUES ('{CHANNEL}', '', 'dm', 0);
+             INSERT INTO held_message
+                   (id, author, channel, content, attachments, echo_to_parent, locale, waiting)
+               VALUES ('{WAITING}', '{ANN}', '{CHANNEL}', '', '{{}}', false, 'en', 'mana');"#,
+        ))
+        .await
+        .unwrap();
+        let channel = ChannelId(CHANNEL.parse().unwrap());
+        #[derive(QueryableByName)]
+        struct Job {
+            #[diesel(sql_type = PgUuid)]
+            id: uuid::Uuid,
+            #[diesel(sql_type = Bool)]
+            given_up: bool,
+        }
+        let drainer = "SELECT id, failed_at IS NOT NULL AS given_up FROM job \
+                       WHERE kind = 'drainManaQueue' AND key = $1";
+        let job = |conn: &mut AsyncPgConnection| {
+            diesel::sql_query(drainer)
+                .bind::<Text, _>(CHANNEL)
+                .get_result::<Job>(conn)
+        };
+
+        ensure_drainer(&mut conn, channel).await.unwrap();
+        let saved = job(&mut conn).await.unwrap();
+        assert!(!saved.given_up);
+        conn.batch_execute("UPDATE job SET failed_at = now(), error = 'x', attempts = 5")
+            .await
+            .unwrap();
+        assert!(job(&mut conn).await.unwrap().given_up);
+        ensure_drainer(&mut conn, channel).await.unwrap();
+        let revived = job(&mut conn).await.unwrap();
+        assert_eq!(revived.id, saved.id);
+        assert!(!revived.given_up);
+
+        let finish = finish_if_empty(&mut conn, saved.id, channel).await.unwrap();
+        assert_eq!(finish, Finish::Waiting);
+        conn.batch_execute("DELETE FROM held_message")
+            .await
+            .unwrap();
+        let finish = finish_if_empty(&mut conn, saved.id, channel).await.unwrap();
+        assert_eq!(finish, Finish::Finished);
+        assert!(job(&mut conn).await.optional().unwrap().is_none());
+        let finish = finish_if_empty(&mut conn, saved.id, channel).await.unwrap();
+        assert_eq!(finish, Finish::Gone);
     }
 }

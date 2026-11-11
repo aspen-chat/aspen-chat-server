@@ -1509,19 +1509,26 @@ pub async fn delete_message(
     if author != caller && !access.community_has(Permissions::MANAGE_MESSAGES) {
         return Err(missing(Permissions::MANAGE_MESSAGES));
     }
-    if author != caller && access.moderating(Permissions::MANAGE_MESSAGES) {
-        note_moderation(
-            conn.as_mut(),
-            caller,
-            &access,
-            ModerationAction::DeleteMessage,
-            Some(id.0.to_string()),
-            Some(author),
-        )
-        .await?;
-    }
+    let moderating = author != caller && access.moderating(Permissions::MANAGE_MESSAGES);
     conn.transaction(|conn| {
-        async move { soft_delete(state, conn.as_mut(), id).await }.scope_boxed()
+        async move {
+            // Logged in the transaction that deletes, so a deletion that does not happen (the
+            // message gone meanwhile, its event refused) is not in the log; and first, since
+            // it refuses a moderator who does not outrank the author.
+            if moderating {
+                note_moderation(
+                    conn,
+                    caller,
+                    &access,
+                    ModerationAction::DeleteMessage,
+                    Some(id.0.to_string()),
+                    Some(author),
+                )
+                .await?;
+            }
+            soft_delete(state, conn, id).await
+        }
+        .scope_boxed()
     })
     .await?;
     Ok(())

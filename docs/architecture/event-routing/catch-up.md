@@ -39,6 +39,25 @@ model newer than their moment, and the model from before the change, which decid
 view, is lost. A catch-up through such a community from before that change is incomplete too. A
 creation the adopted model already reflects is not counted: nobody viewed the channel before it.
 
+## What came before a resync
+
+What a subject's events announced at or before a retained resync of it may not have happened (see
+[Settling and resyncs](settling.md#resyncs)), so they are never laid over what the database says
+(`resync_floor`):
+
+- The user's own events at or before a `userResync` are delivered and change nothing of what the
+  connection reads: its communities, roles, moderation, and followed profiles are the database's
+  from there, with the user's later events applied. An end of the sign-in or a ban still refuses,
+  since the session is not checked again.
+- Nothing of a community from at or before the user's resync is delivered, since what they read of
+  it then is not known, and a catch-up that leaves any of it out is incomplete.
+- A model adopted from the database is not given the community's changes at or before a
+  `communityResync`. It is attached to those events as it is, and a catch-up through them is
+  incomplete, as above.
+
+This holds only for a reading taken after the resync, and the dispatcher takes no other (see
+[Registering a connection](#registering-a-connection)).
+
 ## What `ready` says of the replay
 
 Every `ready` frame carries what the catch-up could not vouch for, on a first connection as on a
@@ -66,17 +85,24 @@ treats the stream as live from `ready`.
 
 A connection is registered inside the dispatcher's loop:
 
-1. Registering reads the user's communities, roles, models, and the people of their most recent DMs
-   (`recent_dms`), then gives its database connection back before it waits for the dispatcher.
+1. Registering notes the last stream sequence the dispatcher has taken in (`EventFeed::seen`), then
+   reads the user's communities, roles, models, and the people of their most recent DMs
+   (`recent_dms`), and gives its database connection back before it waits for the dispatcher.
    Connections waiting their turn hold none of the pool.
-2. The dispatcher decides, from the user's own events alone, whether the sign-in ended and what the
-   connection reads once caught up.
-3. It takes the retained events the catch-up may pass through (`Snapshot`): the user's own, each
+2. If the stream retains a resync of the user, or of a community whose model the registration brings
+   for the dispatcher to adopt, later than the sequence noted, the registration is answered
+   `Outcome::Reread`: it reads everything again, now after the resync, and registers again.
+3. The dispatcher decides, from the user's own events alone, whether the sign-in ended and what the
+   connection reads once caught up. If that includes a community whose model it lacks (one joined
+   since the reading), it lets go of the models it was handed that no other connection reads and
+   answers `Outcome::Load`; the registration loads the models of every community it reads and
+   registers again. A registration is tried three times (`REGISTER_ATTEMPTS`).
+4. It takes the retained events the catch-up may pass through (`Snapshot`): the user's own, each
    community's, and each followed profile's.
-4. It sends them with the connection down its shard's ordered channel, ahead of the next event.
-5. The shard judges and orders what the connection missed (`catch_up`, timed by
+5. It sends them with the connection down its shard's ordered channel, ahead of the next event.
+6. The shard judges and orders what the connection missed (`catch_up`, timed by
    `aspen_event_catch_up_duration_seconds`) and queues it.
-6. The shard adds the connection before routing anything later.
+7. The shard adds the connection before routing anything later.
 
 So it sees each event once, a reconnect storm costs NATS nothing, and catch-ups are judged across
 the shards rather than one after another on the dispatcher.

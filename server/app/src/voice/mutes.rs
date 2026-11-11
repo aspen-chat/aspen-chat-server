@@ -183,23 +183,33 @@ pub async fn set_muted(
                         muted_by: Some(caller),
                         muted_at: Utc::now(),
                     };
-                    // Two moderators muting at once: the second finds it standing.
                     let inserted = diesel::insert_into(voice_mute::table)
                         .values(&row)
                         .on_conflict_do_nothing()
                         .execute(conn.as_mut())
                         .await?;
-                    let record = message_enum::VoiceMute::from(&row);
-                    if inserted > 0 {
-                        publish_event(
-                            state,
-                            conn.as_mut(),
-                            EventScope::Community(community),
-                            &ServerEvent::VoiceMute(VoiceMuteEvent::Create(record.clone())),
-                        )
-                        .await?;
+                    if inserted == 0 {
+                        // Two moderators muting at once: the lock above held no row for
+                        // either, and the second's insert waited for the first's. The mute
+                        // that stands is the first's, which is what is answered.
+                        let standing: Option<VoiceMuteRow> = voice_mute::table
+                            .select(VoiceMuteRow::as_select())
+                            .filter(voice_mute::community.eq(community))
+                            .filter(voice_mute::user.eq(user))
+                            .first(conn.as_mut())
+                            .await
+                            .optional()?;
+                        return Ok((standing.as_ref().map(message_enum::VoiceMute::from), false));
                     }
-                    Ok((Some(record), inserted > 0))
+                    let record = message_enum::VoiceMute::from(&row);
+                    publish_event(
+                        state,
+                        conn.as_mut(),
+                        EventScope::Community(community),
+                        &ServerEvent::VoiceMute(VoiceMuteEvent::Create(record.clone())),
+                    )
+                    .await?;
+                    Ok((Some(record), true))
                 }
                 (Some(_), false) => {
                     diesel::delete(voice_mute::table)

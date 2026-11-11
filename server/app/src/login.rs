@@ -708,6 +708,7 @@ pub async fn try_change_password(
     }
     let user_id = caller.user;
     let current_session = caller.session_digest.as_str();
+    let sign_in = caller.sign_in();
     if let Err(requirement) = check_new_password(new_password) {
         // Refused before the old password is tried, so a password that cannot be set costs no
         // attempt.
@@ -756,7 +757,7 @@ pub async fn try_change_password(
             .set(schema::user::password_hash.eq(new_password_hash))
             .execute(conn)
             .await?;
-            revoke_other_sessions(state, conn, user_id, &current_session).await?;
+            revoke_other_sessions(state, conn, user_id, &current_session, &sign_in).await?;
             crate::plugin::capability::revoke_all(conn, user_id).await?;
             crate::email::outbox::notify(
                 state,
@@ -913,14 +914,29 @@ pub async fn revoke_other_sign_ins(
     announce_ended(state, conn, user_id, None, Some(kept.to_string())).await
 }
 
-/// Expires every session and sign-in of `user_id` except the one the session whose digest is
-/// `current_session` (`token_digest`) belongs to, so a stolen credential stops working once its
-/// owner secures the account.
+/// Expires every session of `user_id` except the one whose digest is `current_session`
+/// (`token_digest`), and every sign-in except `kept` (`sign_in_id`), the one that session
+/// belongs to, so a stolen credential stops working once its owner secures the account.
 pub async fn revoke_other_sessions(
     state: &impl Publishing,
     conn: &mut AsyncPgConnection,
     user_id: UserId,
     current_session: &str,
+    kept: &str,
+) -> crate::Result<()> {
+    expire_other_sessions(conn, user_id, current_session, kept).await?;
+    announce_ended(state, conn, user_id, None, Some(kept.to_string())).await
+}
+
+/// The writes of [`revoke_other_sessions`]. The sign-in kept is the one the caller's session
+/// was authenticated as part of, never looked up from the session's row: a row gone by now
+/// (the sign-in signed out meanwhile) keeps nothing, where a lookup finding none would
+/// compare every sign-in with `NULL` and end none.
+async fn expire_other_sessions(
+    conn: &mut AsyncPgConnection,
+    user_id: UserId,
+    current_session: &str,
+    kept: &str,
 ) -> crate::Result<()> {
     diesel::sql_query(
         "
@@ -937,28 +953,20 @@ pub async fn revoke_other_sessions(
     .bind::<diesel::sql_types::Uuid, _>(&user_id)
     .execute(conn)
     .await?;
-    diesel::sql_query(
+    diesel::sql_query(format!(
         "
         UPDATE refresh_token
         SET expires = now()
         WHERE refresh_token.user = $2
             AND refresh_token.expires > now()
-            AND refresh_token.token != (
-                SELECT session.refresh_token FROM session WHERE session.token = $1
-            );
-    ",
-    )
-    .bind::<diesel::sql_types::Text, _>(current_session)
+            AND NOT ({SIGN_IN_ID_IS_SQL}$1);
+    "
+    ))
+    .bind::<diesel::sql_types::Text, _>(kept)
     .bind::<diesel::sql_types::Uuid, _>(&user_id)
     .execute(conn)
     .await?;
-    let kept: Option<String> = schema::session::table
-        .select(schema::session::refresh_token)
-        .filter(schema::session::token.eq(current_session))
-        .first(conn)
-        .await
-        .optional()?;
-    announce_ended(state, conn, user_id, None, kept.as_deref().map(sign_in_id)).await
+    Ok(())
 }
 
 #[cfg(test)]
@@ -973,6 +981,87 @@ mod token_tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         assert_eq!(sign_in_id(&digest), "ba7816bf8f01cfea414140de5dae2223");
+    }
+}
+
+#[cfg(test)]
+mod revocation_tests {
+    use super::*;
+    use diesel::QueryableByName;
+    use diesel_async::SimpleAsyncConnection;
+    use uuid::Uuid;
+
+    #[derive(QueryableByName)]
+    struct Live {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        token: String,
+    }
+
+    async fn live(conn: &mut AsyncPgConnection, table: &str, user: Uuid) -> Vec<String> {
+        let owner = match table {
+            "session" => "refresh_token IN (SELECT token FROM refresh_token WHERE \"user\" = $1)",
+            _ => "\"user\" = $1",
+        };
+        diesel::sql_query(format!(
+            "SELECT token FROM {table} WHERE {owner} AND expires > now() ORDER BY token"
+        ))
+        .bind::<diesel::sql_types::Uuid, _>(user)
+        .load::<Live>(conn)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.token)
+        .collect()
+    }
+
+    /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing.
+    #[tokio::test]
+    async fn a_password_change_keeps_the_callers_sign_in_and_no_other() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        let user = Uuid::now_v7();
+        let (mine, theirs) = (token_digest("mine"), token_digest("theirs"));
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                   VALUES ('{user}', '{user}', '', now(), now());
+               INSERT INTO refresh_token (token, expires, "user", method) VALUES
+                   ('{mine}', now() + interval '1 day', '{user}', 'password'),
+                   ('{theirs}', now() + interval '1 day', '{user}', 'password');
+               INSERT INTO session (token, expires, refresh_token) VALUES
+                   ('current', now() + interval '1 hour', '{mine}'),
+                   ('earlier', now() + interval '1 hour', '{mine}'),
+                   ('stolen', now() + interval '1 hour', '{theirs}');"#
+        ))
+        .await
+        .unwrap();
+        // With the caller's session row gone, as when its sign-in is signed out while the
+        // password is hashed, every other sign-in still ends.
+        conn.batch_execute("SAVEPOINT before").await.unwrap();
+        conn.batch_execute(&format!(
+            "DELETE FROM session WHERE refresh_token = '{mine}';
+             DELETE FROM refresh_token WHERE token = '{mine}'"
+        ))
+        .await
+        .unwrap();
+        expire_other_sessions(&mut conn, UserId(user), "current", &sign_in_id(&mine))
+            .await
+            .unwrap();
+        assert!(live(&mut conn, "session", user).await.is_empty());
+        assert!(live(&mut conn, "refresh_token", user).await.is_empty());
+        conn.batch_execute("ROLLBACK TO SAVEPOINT before")
+            .await
+            .unwrap();
+
+        expire_other_sessions(&mut conn, UserId(user), "current", &sign_in_id(&mine))
+            .await
+            .unwrap();
+        assert_eq!(live(&mut conn, "session", user).await, ["current"]);
+        assert_eq!(live(&mut conn, "refresh_token", user).await, [mine]);
     }
 }
 

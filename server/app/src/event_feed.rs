@@ -395,6 +395,10 @@ pub struct EventFeed {
     shards: Arc<[mpsc::Sender<ShardCommand>]>,
     unregister: mpsc::UnboundedSender<u64>,
     next_id: Arc<AtomicU64>,
+    /// The sequence of the last stream message the dispatcher has taken in. Whatever a
+    /// registration reads from the database after looking here, it reads after everything up
+    /// to this was published (`Register::read_after`).
+    seen: Arc<AtomicU64>,
     queue_size: usize,
     /// How many streams each user and each client address hold open here, against the caps.
     pub caps: StreamCaps,
@@ -496,6 +500,10 @@ struct Register {
     following: Following,
     /// Models of the communities, as the database had them, for those the dispatcher lacks.
     models: HashMap<CommunityId, CommunityModel>,
+    /// The stream sequence everything above is known to have been read from the database
+    /// after: what the dispatcher had taken in when the reading began (`EventFeed::seen`), or
+    /// the resync a refused attempt was told to read again for (`Outcome::Reread`).
+    read_after: u64,
     resume_after: Option<u64>,
     deliveries: mpsc::Sender<Delivery>,
     outcome: oneshot::Sender<Outcome>,
@@ -513,6 +521,10 @@ enum Outcome {
     /// The communities the connection reads once caught up whose models it must load before
     /// registering again.
     Load(Vec<CommunityId>),
+    /// The stream retains a resync, at this sequence, of the user or of a community whose
+    /// model the registration brought, and the registration is not known to have read the
+    /// database after it: it reads everything again and registers as having read after it.
+    Reread(u64),
     /// Refused: the stream retains an event before the resumed position that ends it.
     Ended(StreamEnd),
 }
@@ -531,8 +543,9 @@ impl From<crate::Error> for Refused {
     }
 }
 
-/// How many times a connection loads models it turns out to need before giving up. Each retry
-/// is for a community joined in the moments since the last.
+/// How many times a connection registers before giving up. Each retry is for a community
+/// joined in the moments since the last, whose model it loads, or for a resync retained since
+/// it read the database, which it reads again.
 const REGISTER_ATTEMPTS: usize = 3;
 
 impl EventFeed {
@@ -546,6 +559,7 @@ impl EventFeed {
             shards: Arc::new([]),
             unregister,
             next_id: Arc::new(AtomicU64::new(0)),
+            seen: Arc::new(AtomicU64::new(0)),
             queue_size: 1,
             caps: StreamCaps::new(&Default::default()),
         }
@@ -571,18 +585,21 @@ impl EventFeed {
             })
             .collect();
         let held: Arc<[mpsc::Sender<ShardCommand>]> = shards.clone().into();
+        let seen = Arc::new(AtomicU64::new(0));
         tokio::spawn(dispatch(
             context,
             shards,
             retained_bytes,
             registrations_rx,
             unregister_rx,
+            seen.clone(),
         ));
         Self {
             registrations,
             shards: held,
             unregister,
             next_id: Arc::new(AtomicU64::new(0)),
+            seen,
             // A catch-up and the `CaughtUp` after it are queued together before the connection
             // reads anything.
             queue_size: queue_size.max(2),
@@ -608,22 +625,22 @@ impl EventFeed {
     }
 }
 
-/// Registers a connection of `user`'s, of the sign-in `sign_in`, resuming after `resume_after`
-/// when that is still retained.
-pub async fn subscribe(
-    state: &GlobalServerContext,
-    user: UserId,
-    sign_in: SignIn,
-    resume_after: Option<u64>,
-) -> Result<Subscription, Refused> {
-    // The connection goes back to the pool before the dispatcher is waited on, so a crowd of
-    // reconnections waiting their turn holds none.
-    let (communities, roles, mut models, moderator, following) = {
-        let mut conn = state
-            .connection_pool
-            .get()
-            .await
-            .map_err(crate::Error::from)?;
+/// What a registration reads from the database: the user's communities, the roles they hold
+/// in each, the communities' models, whether they moderate the deployment, and whose profiles
+/// they follow.
+struct Read {
+    communities: Vec<CommunityId>,
+    roles: HashMap<CommunityId, Vec<RoleId>>,
+    models: HashMap<CommunityId, CommunityModel>,
+    moderator: bool,
+    following: Following,
+}
+
+impl Read {
+    /// Reads it on a connection that goes back to the pool before the dispatcher is waited
+    /// on, so a crowd of reconnections waiting their turn holds none.
+    async fn of(state: &GlobalServerContext, user: UserId) -> crate::Result<Read> {
+        let mut conn = state.connection_pool.get().await?;
         let communities = memberships(conn.as_mut(), user).await?;
         let roles = member_roles(conn.as_mut(), user, &communities).await?;
         let models = CommunityModel::load(conn.as_mut(), &communities).await?;
@@ -633,9 +650,27 @@ pub async fn subscribe(
         for (dm, people) in recent_dms(conn.as_mut(), user, cap).await? {
             following.follow(user, dm, &people);
         }
-        (communities, roles, models, moderator, following)
-    };
+        Ok(Read {
+            communities,
+            roles,
+            models,
+            moderator,
+            following,
+        })
+    }
+}
+
+/// Registers a connection of `user`'s, of the sign-in `sign_in`, resuming after `resume_after`
+/// when that is still retained.
+pub async fn subscribe(
+    state: &GlobalServerContext,
+    user: UserId,
+    sign_in: SignIn,
+    resume_after: Option<u64>,
+) -> Result<Subscription, Refused> {
     let feed = &state.event_feed;
+    let mut read_after = AtomicU64::load(&feed.seen, Ordering::Acquire);
+    let mut read = Read::of(state, user).await?;
     let id = feed.next_id.fetch_add(1, Ordering::Relaxed);
     let (deliveries_tx, deliveries) = mpsc::channel(feed.queue_size);
     for _ in 0..REGISTER_ATTEMPTS {
@@ -645,11 +680,12 @@ pub async fn subscribe(
                 id,
                 user,
                 sign_in: sign_in.clone(),
-                communities: communities.clone(),
-                roles: roles.clone(),
-                moderator,
-                following: following.clone(),
-                models: std::mem::take(&mut models),
+                communities: read.communities.clone(),
+                roles: read.roles.clone(),
+                moderator: read.moderator,
+                following: read.following.clone(),
+                models: std::mem::take(&mut read.models),
+                read_after,
                 resume_after,
                 deliveries: deliveries_tx.clone(),
                 outcome: outcome_tx,
@@ -686,12 +722,25 @@ pub async fn subscribe(
                 });
             }
             Outcome::Load(missing) => {
+                // The dispatcher let go of the models it was handed that no other connection
+                // reads, so the next attempt brings every one it may lack, not the missing
+                // alone.
+                let mut wanted = read.communities.clone();
+                wanted.extend(
+                    missing
+                        .into_iter()
+                        .filter(|c| !read.communities.contains(c)),
+                );
                 let mut conn = state
                     .connection_pool
                     .get()
                     .await
                     .map_err(crate::Error::from)?;
-                models = CommunityModel::load(conn.as_mut(), &missing).await?
+                read.models = CommunityModel::load(conn.as_mut(), &wanted).await?
+            }
+            Outcome::Reread(resync) => {
+                read_after = resync.max(AtomicU64::load(&feed.seen, Ordering::Acquire));
+                read = Read::of(state, user).await?;
             }
             Outcome::Ended(end) => return Err(Refused::Ended(end)),
         }
@@ -1136,6 +1185,24 @@ impl Retained {
         Window::since(self, owner, after)
     }
 
+    /// The newest resync retained on the subjects a registration of `user`'s leans on, if
+    /// its database reading is not known to follow it (`read_after`): the user's own, and each
+    /// of `adopting`, the communities whose models it brings and would have adopted. What was
+    /// announced on a subject before its resync may not have happened, so only a reading taken
+    /// after the resync can stand in for it ([`resync_floor`]).
+    fn unvouched_resync(
+        &self,
+        user: UserId,
+        adopting: impl IntoIterator<Item = CommunityId>,
+        read_after: u64,
+    ) -> Option<u64> {
+        std::iter::once(SubjectOwner::User(user))
+            .chain(adopting.into_iter().map(SubjectOwner::Community))
+            .map(|owner| resync_floor(self.since(owner, 0)))
+            .max()
+            .filter(|newest| *newest > read_after)
+    }
+
     /// Where a connection's catch-up starts and whether that honours `resume_after`: a position
     /// the stream still holds the next event after, and not ahead of it (which happens when the
     /// in-memory stream was recreated and its sequence restarted). `resume_after` is the
@@ -1206,6 +1273,19 @@ impl Window for Snapshot {
     }
 }
 
+/// The sequence of the newest resync among `events`, one subject's retained events; 0 without
+/// one. What the subject's events at or before it announced may not have happened
+/// (`app::events::settle`), so they are never laid over what the database says: a membership,
+/// a role, or a model read from the database after the resync (the dispatcher takes no other,
+/// `Outcome::Reread`) already holds whatever of them did.
+fn resync_floor<'a>(events: impl Iterator<Item = &'a Arc<FeedEvent>>) -> u64 {
+    events
+        .filter(|e| e.resync)
+        .map(|e| e.sequence)
+        .last()
+        .unwrap_or(0)
+}
+
 /// What a connection of `user`'s, of the sign-in `sign_in`, reading what `reading` says
 /// missed after `after`, and what it reads once it has caught up.
 /// The database was read at some moment in the retained window, possibly before changes
@@ -1227,6 +1307,12 @@ impl Window for Snapshot {
 /// catch-up incomplete (the `bool`), and a resumed connection is then told it did not
 /// resume, so that its client reads its state again.
 ///
+/// The user's own events at or before a resync of theirs ([`resync_floor`]) are delivered
+/// and change nothing of what the connection reads, which is the database's from there. What
+/// the user read of a community before the resync is then not known, so nothing of a
+/// community from at or before it is delivered, and a catch-up that leaves any of it out is
+/// incomplete.
+///
 /// The session was checked against the database just as possibly before an end of the
 /// sign-in or a ban was committed, so a retained event at or before `after` that ends the
 /// connection refuses it, with why: resuming past it is not a way around it. One after
@@ -1246,11 +1332,17 @@ fn catch_up(
         mut moderator,
         mut following,
     } = reading;
+    let floor = resync_floor(window.since(own, 0));
     for e in window.since(own, 0).take_while(|e| e.sequence <= after) {
+        // An end is not passed over for a resync after it: the session was not checked again
+        // since, so whether it happened is not known, and it refuses.
         if let Some(end) = e.ends
             && e.reaches(sign_in)
         {
             return Err(end);
+        }
+        if e.sequence <= floor {
+            continue;
         }
         apply_membership(&mut reading, &mut roles, e);
         moderator = e.moderator.unwrap_or(moderator);
@@ -1258,13 +1350,15 @@ fn catch_up(
             following.apply(user, dm);
         }
     }
+    // Where the user's own events begin to say what they read.
+    let said_after = after.max(floor);
     // The user's own changes beyond `after`, each community's and the deployment's first.
     let mut joins_ahead = HashSet::new();
     let mut roles_ahead = HashSet::new();
     let mut moderation_ahead = false;
     let mut memberships_seen = HashSet::new();
     let mut roles_seen = HashSet::new();
-    for e in window.since(own, after) {
+    for e in window.since(own, said_after) {
         if let Some((community, joined)) = e.membership
             && memberships_seen.insert(community)
             && joined
@@ -1287,7 +1381,7 @@ fn catch_up(
     let mut owners = reading.clone();
     owners.extend(
         window
-            .since(own, after)
+            .since(own, said_after)
             .filter_map(|e| e.membership)
             .filter(|(_, joined)| *joined)
             .map(|(community, _)| community),
@@ -1314,22 +1408,28 @@ fn catch_up(
     events.sort_unstable_by_key(|e| e.sequence);
     events.retain(|e| match e.owner {
         SubjectOwner::User(_) => {
-            apply_membership(&mut reading, &mut roles, e);
-            if let Some((community, _)) = &e.roles {
-                roles_ahead.remove(community);
-            }
-            if let Some(now) = e.moderator {
-                moderator = now;
-                moderation_ahead = false;
-            }
-            if let Some(dm) = &e.dm {
-                following.apply(user, dm);
+            if e.sequence > floor {
+                apply_membership(&mut reading, &mut roles, e);
+                if let Some((community, _)) = &e.roles {
+                    roles_ahead.remove(community);
+                }
+                if let Some(now) = e.moderator {
+                    moderator = now;
+                    moderation_ahead = false;
+                }
+                if let Some(dm) = &e.dm {
+                    following.apply(user, dm);
+                }
             }
             e.reaches(sign_in)
         }
         SubjectOwner::Profile(profile) => following.follows(profile),
         SubjectOwner::Community(community) => {
             if !reading.contains(&community) {
+                return false;
+            }
+            if e.sequence <= floor {
+                complete = false;
                 return false;
             }
             let judged = |moderator| {
@@ -1622,11 +1722,12 @@ fn ended_by(own: &[Arc<FeedEvent>], sign_in: &SignIn, after: u64) -> Option<Stre
 }
 
 /// What a connection reads once caught up: `initial` with every membership, role,
-/// moderation, and DM change of the user's own retained events applied in order, as
-/// [`catch_up`] leaves it.
+/// moderation, and DM change of the user's own retained events applied in order, but those at
+/// or before a resync of theirs ([`resync_floor`]), as [`catch_up`] leaves it.
 fn reading_after(initial: &Reading, own: &[Arc<FeedEvent>], user: UserId) -> Reading {
     let mut reading = initial.clone();
-    for e in own {
+    let floor = resync_floor(own.iter());
+    for e in own.iter().filter(|e| e.sequence > floor) {
         apply_membership(&mut reading.communities, &mut reading.roles, e);
         reading.moderator = e.moderator.unwrap_or(reading.moderator);
         if let Some(dm) = &e.dm {
@@ -2079,14 +2180,25 @@ impl Models {
     /// was read after it) is noted in `adopted_over` when it is to who views a channel or
     /// category: the model before it is then lost, and with it whom the change took a view
     /// from. A creation is not: nobody viewed the channel before it.
+    ///
+    /// A change at or before a resync of the community ([`resync_floor`]) may not have
+    /// happened and is not applied: the snapshot, read after the resync, is attached to its
+    /// event as it is, and noted in `adopted_over` as one the snapshot already reflects.
     fn adopt(&mut self, retained: &Retained, community: CommunityId, snapshot: CommunityModel) {
         if self.models.contains_key(&community) {
             return;
         }
         let mut model = Arc::new(snapshot);
         let mut over = None;
-        for e in retained.since(SubjectOwner::Community(community), 0) {
-            let changed = apply_and_attach(&mut model, e);
+        let owner = SubjectOwner::Community(community);
+        let floor = resync_floor(retained.since(owner, 0));
+        for e in retained.since(owner, 0) {
+            let changed = if e.sequence > floor {
+                apply_and_attach(&mut model, e)
+            } else {
+                attach(&model, e);
+                e.change.as_ref().map(|_| false)
+            };
             let views = (e.channel.is_some() || e.category.is_some())
                 && !matches!(e.change, Some(ModelChange::ChannelCreated { .. }));
             if changed == Some(false) && views {
@@ -2237,6 +2349,15 @@ fn apply_and_attach(model: &mut Arc<CommunityModel>, event: &FeedEvent) -> Optio
     changed
 }
 
+/// Attaches `model` to `event` as the model it is judged by, before its change and after it
+/// alike, without applying the change. Events already given models keep them.
+fn attach(model: &Arc<CommunityModel>, event: &FeedEvent) {
+    if event.change.is_some() && (event.channel.is_some() || event.category.is_some()) {
+        let _ = event.before.set(model.clone());
+    }
+    let _ = event.access.set(model.clone());
+}
+
 /// The events a relay of what happens in a channel and is never kept (`app::typing::Relay`:
 /// someone typing, a channel's mana) makes for this server's readers: one for the community,
 /// carrying its model as it stands, or one for each of a DM's people who read here. None for an
@@ -2344,6 +2465,7 @@ async fn dispatch(
     retained_bytes: usize,
     mut registrations: mpsc::Receiver<Register>,
     mut unregister: mpsc::UnboundedReceiver<u64>,
+    seen: Arc<AtomicU64>,
 ) {
     let window_start = || DeliverPolicy::ByStartTime {
         start_time: time::OffsetDateTime::now_utc() - MAX_EVENT_AGE,
@@ -2361,6 +2483,7 @@ async fn dispatch(
             && let Ok(stream_info) = stream.info().await
         {
             retained.last_sequence = stream_info.state.last_sequence;
+            seen.store(retained.last_sequence, Ordering::Release);
             vouch_loaded_window(&mut retained, started, stream_info);
         }
         info!("event feed ready");
@@ -2436,6 +2559,7 @@ async fn dispatch(
                     }
                     None => retained.skip(sequence),
                 }
+                seen.store(sequence, Ordering::Release);
                 if !loaded && pending == 0 {
                     loaded = true;
                     if let Ok(mut stream) = context.get_stream(ASPEN_NATS_STREAM_NAME).await
@@ -2450,6 +2574,24 @@ async fn dispatch(
                 if !loaded {
                     warn!("event feed serving connections before its retained window loaded");
                     loaded = true;
+                }
+                let adopting = registration
+                    .models
+                    .keys()
+                    .filter(|community| !models.models.contains_key(community))
+                    .copied();
+                // A position ahead of the stream is from before the stream was made again,
+                // and says nothing of this one.
+                let read_after = if registration.read_after > retained.last_sequence {
+                    0
+                } else {
+                    registration.read_after
+                };
+                if let Some(resync) =
+                    retained.unvouched_resync(registration.user, adopting, read_after)
+                {
+                    let _ = registration.outcome.send(Outcome::Reread(resync));
+                    continue;
                 }
                 for (community, snapshot) in registration.models {
                     models.adopt(&retained, community, snapshot);
@@ -3349,6 +3491,180 @@ mod tests {
         // The community is still read, by the other user's connection.
         assert!(models.models.contains_key(&community));
         assert_eq!(models.readers.get(&community), Some(&1));
+    }
+
+    fn resync(sequence: u64, owner: SubjectOwner) -> Arc<FeedEvent> {
+        let mut e = plain(sequence, owner, None);
+        e.resync = true;
+        Arc::new(e)
+    }
+
+    #[test]
+    fn what_a_users_events_said_before_their_resync_is_not_laid_over_the_database() {
+        let user = UserId::new();
+        let (kept, rolled_back, later) =
+            (CommunityId::new(), CommunityId::new(), CommunityId::new());
+        let role = RoleId::new();
+        let own = SubjectOwner::User(user);
+        let mut granted = plain(3, own, None);
+        granted.roles = Some((kept, vec![role]));
+        let mut promoted = plain(4, own, None);
+        promoted.moderator = Some(true);
+        let mut retained = Retained::default();
+        for e in [
+            event(1, SubjectOwner::Community(kept), None),
+            // A join, a role, and a deployment role that were rolled back, and a leave.
+            event(2, own, Some((rolled_back, true))),
+            Arc::new(granted),
+            Arc::new(promoted),
+            event(5, own, Some((kept, false))),
+            event(6, SubjectOwner::Community(rolled_back), None),
+            resync(7, own),
+            event(8, SubjectOwner::Community(kept), None),
+            event(9, own, Some((later, true))),
+            event(10, SubjectOwner::Community(later), None),
+        ] {
+            retained.push(e);
+        }
+        // The database, read after the resync: a member of `kept` alone, with no roles.
+        let initial = Reading {
+            communities: HashSet::from([kept]),
+            roles: HashMap::new(),
+            moderator: false,
+            following: Following::default(),
+        };
+        let own_events: Vec<Arc<FeedEvent>> = retained.since(own, 0).cloned().collect();
+        let reads = reading_after(&initial, &own_events, user);
+        assert_eq!(reads.communities, HashSet::from([kept, later]));
+        assert!(reads.roles.is_empty());
+        assert!(!reads.moderator);
+
+        let none = HashMap::new();
+        // From the start of the window: the user's own events are all delivered, nothing of
+        // a community from before the resync is, and the client is told to read again.
+        let (missed, caught_up, complete) = retained
+            .catch_up(user, &SignIn::default(), initial.clone(), 0, &none)
+            .unwrap();
+        assert_eq!(sequences(&missed), vec![2, 3, 4, 5, 7, 8, 9, 10]);
+        assert_eq!(caught_up.communities, reads.communities);
+        assert!(caught_up.roles.is_empty());
+        assert!(!caught_up.moderator);
+        assert!(!complete);
+        // Resumed from after the resync, it misses nothing.
+        let (missed, caught_up, complete) = retained
+            .catch_up(user, &SignIn::default(), initial.clone(), 7, &none)
+            .unwrap();
+        assert_eq!(sequences(&missed), vec![8, 9, 10]);
+        assert_eq!(caught_up.communities, reads.communities);
+        assert!(complete);
+    }
+
+    #[test]
+    fn an_end_before_a_resync_still_refuses() {
+        let user = UserId::new();
+        let own = SubjectOwner::User(user);
+        let mut banned = plain(1, own, None);
+        banned.ends = Some(StreamEnd::Banned);
+        let mut retained = Retained::default();
+        retained.push(Arc::new(banned));
+        retained.push(resync(2, own));
+        let reading = Reading {
+            communities: HashSet::new(),
+            roles: HashMap::new(),
+            moderator: false,
+            following: Following::default(),
+        };
+        let none = HashMap::new();
+        assert!(matches!(
+            retained.catch_up(user, &SignIn::default(), reading, 2, &none),
+            Err(StreamEnd::Banned)
+        ));
+        let own_events: Vec<Arc<FeedEvent>> = retained.since(own, 0).cloned().collect();
+        assert_eq!(
+            ended_by(&own_events, &SignIn::default(), 2),
+            Some(StreamEnd::Banned)
+        );
+    }
+
+    #[test]
+    fn a_model_adopted_after_a_resync_is_not_given_what_came_before_it() {
+        use crate::permissions::Permissions;
+        let community = CommunityId::new();
+        let (open, hidden, moderator, everyone) = (
+            ChannelId::new(),
+            ChannelId::new(),
+            RoleId::new(),
+            RoleId::new(),
+        );
+        let member = UserId::new();
+        let hide = |channel| ModelChange::ChannelOverride {
+            channel,
+            role: everyone,
+            set: Some((Permissions::empty(), Permissions::VIEW_CHANNEL)),
+        };
+        let change = |sequence: u64, channel: ChannelId| {
+            let mut e = plain(sequence, SubjectOwner::Community(community), None);
+            e.channel = Some(channel);
+            e.change = Some(hide(channel));
+            Arc::new(e)
+        };
+        let owner = SubjectOwner::Community(community);
+        let mut retained = Retained::default();
+        // An override hiding `open` that was rolled back, and one made after the resync.
+        let rolled_back = change(1, open);
+        retained.push(rolled_back.clone());
+        retained.push(resync(2, owner));
+        let other = ChannelId::new();
+        retained.push(change(3, other));
+
+        let mut models = Models::default();
+        let snapshot = two_channels_with(community, open, hidden, moderator, everyone);
+        models.adopt(&retained, community, snapshot);
+        let model = &models.models[&community];
+        assert!(model.can_view(member, &[], open));
+        // What follows the resync is applied as ever.
+        assert!(!model.can_view(member, &[], other));
+        // The rolled-back event is judged by the model as read, on either side of it, and a
+        // catch-up from before it is told it is incomplete.
+        let attached = rolled_back.access.get().unwrap();
+        assert!(attached.can_view(member, &[], open));
+        assert!(
+            rolled_back
+                .before
+                .get()
+                .unwrap()
+                .can_view(member, &[], open)
+        );
+        assert_eq!(models.adopted_over.get(&community), Some(&1));
+    }
+
+    #[test]
+    fn a_registration_reads_again_after_a_resync_it_may_not_have_read_after() {
+        let user = UserId::new();
+        let (held, brought, unrelated) =
+            (CommunityId::new(), CommunityId::new(), CommunityId::new());
+        let mut retained = Retained::default();
+        for e in [
+            resync(3, SubjectOwner::Community(held)),
+            resync(5, SubjectOwner::User(user)),
+            resync(8, SubjectOwner::Community(brought)),
+            resync(9, SubjectOwner::Community(unrelated)),
+            resync(10, SubjectOwner::User(UserId::new())),
+            // A resync of the user's is announced on their own subject, not their profile's.
+            event(11, SubjectOwner::Profile(user), None),
+        ] {
+            retained.push(e);
+        }
+        // Read before either: told of the newest, so one reading answers both.
+        assert_eq!(retained.unvouched_resync(user, [brought], 0), Some(8));
+        assert_eq!(retained.unvouched_resync(user, [brought], 7), Some(8));
+        assert_eq!(retained.unvouched_resync(user, [brought], 8), None);
+        assert_eq!(retained.unvouched_resync(user, [brought], 11), None);
+        // A community whose model the dispatcher holds is not adopted, so its resync is not
+        // the registration's to answer.
+        assert_eq!(retained.unvouched_resync(user, [], 0), Some(5));
+        assert_eq!(retained.unvouched_resync(user, [], 5), None);
+        assert_eq!(retained.unvouched_resync(UserId::new(), [], 0), None);
     }
 
     #[test]

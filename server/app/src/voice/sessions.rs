@@ -540,7 +540,15 @@ pub(super) async fn apply_report(
                         session,
                         channel,
                     } => {
-                        record_session(state, conn.as_mut(), server, session, channel).await?;
+                        record_session(
+                            state,
+                            conn.as_mut(),
+                            server,
+                            session,
+                            channel,
+                            &mut after.carried,
+                        )
+                        .await?;
                     }
                     VoiceReport::ParticipantJoined {
                         session,
@@ -685,6 +693,7 @@ pub(super) async fn apply_report(
                             session,
                             channel,
                             participants,
+                            &mut after.carried,
                         )
                         .await?
                         {
@@ -706,6 +715,9 @@ pub(super) async fn apply_report(
             .scope_boxed()
         })
         .await?;
+    if let Some(channel) = after.carried {
+        super::servers::forget_carried(state, channel).await;
+    }
     let file_transfers = state.settings().file_transfers;
     for joiner in after.joiners {
         let Joiner {
@@ -761,6 +773,10 @@ struct AfterCommit {
     joiners: Vec<Joiner>,
     /// The channel whose call a snapshot described, everyone in which is rechecked.
     snapshot_of: Option<ChannelId>,
+    /// The channel whose lost call the session recorded carries on, with what Valkey held of
+    /// it (`servers::carried`), which is forgotten only now: taken inside the transaction, a
+    /// rollback would leave the report's next delivery nothing to carry on.
+    carried: Option<ChannelId>,
 }
 
 /// Someone a report recorded as joining, as the work after its commit needs them.
@@ -909,13 +925,16 @@ async fn close_room(
 
 /// Records the session a voice server started, or returns the one already recorded under its
 /// id. `None` when the channel's call could not be recorded as this one: then the room is a
-/// second call in the channel, and its server is told to close it.
+/// second call in the channel, and its server is told to close it. `carried` is set to the
+/// channel when the session carries on a call Valkey held (`servers::carried`), for the caller
+/// to forget once its transaction commits.
 async fn record_session(
     state: &GlobalServerContext,
     conn: &mut AsyncPgConnection,
     server: uuid::Uuid,
     session: uuid::Uuid,
     channel: uuid::Uuid,
+    carried: &mut Option<ChannelId>,
 ) -> crate::Result<Option<VoiceSession>> {
     let now = Utc::now();
     let mut row = VoiceSession {
@@ -984,10 +1003,11 @@ async fn record_session(
         }
         // A call a join offer ended as lost a moment ago goes on here the same way.
         None => {
-            if let Some(carried) = super::servers::take_carried(state, row.channel).await {
-                row.created_at = carried.created_at;
-                row.started_by = carried.started_by;
-                row.had_company = carried.had_company;
+            if let Some(lost) = super::servers::carried(state, row.channel).await {
+                row.created_at = lost.created_at;
+                row.started_by = lost.started_by;
+                row.had_company = lost.had_company;
+                *carried = Some(row.channel);
             }
         }
     }
@@ -1134,11 +1154,13 @@ async fn apply_snapshot(
     session: uuid::Uuid,
     channel: uuid::Uuid,
     participants: Vec<ParticipantSnapshot>,
+    carried: &mut Option<ChannelId>,
 ) -> crate::Result<Option<(ChannelId, Vec<Joiner>)>> {
     let known = find_session(conn, VoiceSessionId::from(session))
         .await?
         .is_some();
-    let Some(mut existing) = record_session(state, conn, server, session, channel).await? else {
+    let Some(mut existing) = record_session(state, conn, server, session, channel, carried).await?
+    else {
         return Ok(None);
     };
     let recorded: Vec<VoiceParticipant> = voice_participant::table

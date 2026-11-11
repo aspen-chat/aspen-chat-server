@@ -40,3 +40,7 @@ A failure after the publishing transaction committed announces nothing. What it 
 | ---------------------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | A community                                          | `communityResync` for each | Drop the community's model. Connections reading it resume with it loaded afresh.                            | Read the community again.                                     |
 | A user's own subject (a DM, a membership, a setting) | `userResync` to each       | Drop the user's connections, which register afresh with their communities and roles read from the database. | Read everything they hold again, as when a resume is refused. |
+
+The events that may not have happened stay retained until they age out, so a connection registering
+within that time, the dropped ones included, does not have them applied to what it read from the
+database or to a model it brings (see [Catch-up](catch-up.md#what-came-before-a-resync)).

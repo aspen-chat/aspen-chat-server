@@ -59,10 +59,11 @@ them. Three things do, in this order:
    session with `serverLost`, in a transaction of its own, before being offered fresh servers. The
    call's people are told to rejoin, as any `serverLost` does. The offer notes the lost call's
    start, starter, and whether it had company in Valkey (`voice_carried:{channel}`, kept for as long
-   as a report of the new session is believed), and `record_session` takes the note when the new
+   as a report of the new session is believed), and `record_session` reads the note when the new
    server's `sessionStarted` arrives, so the call goes on with its record as if the row had still
-   been there (see [When a room is lost](#when-a-room-is-lost)). A Valkey outage loses the note, and
-   the call starts afresh.
+   been there (see [When a room is lost](#when-a-room-is-lost)). The note is deleted only once that
+   report's transaction commits, so a report that fails and is delivered again finds it again. A
+   Valkey outage loses the note, and the call starts afresh.
 2. **A new server's `sessionStarted`**, when a joiner reaches one before any offer found the server
    silent (see [When a room is lost](#when-a-room-is-lost)).
 3. **The reaper**, after `session_silence_seconds`, for the calls nobody tried to join.

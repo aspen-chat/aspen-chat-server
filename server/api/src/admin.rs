@@ -658,17 +658,22 @@ pub async fn create_registration_invite(
 ) -> ApiResult<Created<RegistrationInvite>> {
     access.require(DeploymentPermission::ManageRegistrationInvites)?;
     let terms = app::registration_invite::Terms::from(&request);
-    let mut conn = state
-        .connection_pool
-        .get()
-        .await
-        .map_err(app::Error::from)?;
-    let invite = match request.community {
+    let connection = || async { state.connection_pool.get().await.map_err(app::Error::from) };
+    // A dual invite is made on a connection `create_dual` takes itself, so this one is taken
+    // only afterwards: none is held while waiting for another.
+    let (invite, mut conn) = match request.community {
         Some(community) => {
-            app::registration_invite::create_dual(&state, session.user.id, community, terms).await?
+            let invite =
+                app::registration_invite::create_dual(&state, session.user.id, community, terms)
+                    .await?;
+            (invite, connection().await?)
         }
         None => {
-            app::registration_invite::create(conn.as_mut(), Some(session.user.id), terms).await?
+            let mut conn = connection().await?;
+            let invite =
+                app::registration_invite::create(conn.as_mut(), Some(session.user.id), terms)
+                    .await?;
+            (invite, conn)
         }
     };
     let communities =

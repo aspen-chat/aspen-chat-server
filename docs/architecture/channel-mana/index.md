@@ -266,6 +266,9 @@ there.
 - **Finishing:** a drainer that finds nothing waiting gives every credit back to the pool, then
   deletes its own job, in one statement, only while nothing waits (`finish_if_empty`), so a row
   saved at that moment sees the job gone and saves another (`ensure_drainer`).
+- **Failing:** a drainer whose steps fail (NATS or the database away) is never given up; it is tried
+  again every half minute, so the queue drains once they are back (see
+  [Jobs](../jobs/kinds.md#drainmanaqueue)).
 - **A channel that can no longer have a pool** (made something else, or gone) has what waits there
   posted without paying.
 - **Capacity bounds a long queue:** a thousand items of 100 mana each is 100,000 mana, over half an
