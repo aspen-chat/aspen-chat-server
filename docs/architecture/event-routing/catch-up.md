@@ -51,6 +51,12 @@ resumed one:
 | `replayedSince`  | When the window begins, when that is later than `MAX_EVENT_AGE` ago; `null` when the whole window was held, or the connection resumed. A client whose REST reads began before it reads again.    |
 | `catchUpFollows` | Always `true`: the replay follows, ended by a `caughtUp` frame.                                                                                                                                  |
 
+It also carries `serverTime`, this API server's clock as the frame is written. The client keeps the
+difference from its own clock at receipt, one per deployment, and judges by it every time the
+deployment stamped: `replayedSince` here, and a ring's `until`, a token's expiry, a poll's
+`closesAt`, a mute's end. So a device whose clock is wrong reaches the answers of one whose clock is
+right. A client connecting to a server whose `ready` lacks it takes the two clocks to agree.
+
 The replay is queued with the connection, so it is written right after `ready`, and a `caughtUp`
 frame (`Delivery::CaughtUp`) follows it, written whether or not the replay held anything. Every
 `event` after it happened live. A client connecting to a server whose `ready` lacks `catchUpFollows`

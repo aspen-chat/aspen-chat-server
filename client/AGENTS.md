@@ -285,6 +285,19 @@ same commit, as with comments.
 - Ids are ordered with `compareIds` and instants with `compareInstants`
   (`packages/protocol/src/order.ts`), never `localeCompare`, whose order depends on the reader's
   language. Names are compared the way the server compares them, with `toLowerCase`, not a collator.
+- A time the server stamped (an expiry, a ring's `until`, a poll's close) is judged on that
+  deployment's clock: `AspenClient.clock` (`ServerClock`, `packages/protocol/src/serverClock.ts`),
+  whose offset `AspenSync` takes from each `ready` frame's `serverTime`, zero for a server without
+  it. The offset is saved on the device for each deployment (`ClockOffsetStore`), and a run starts
+  from the saved one until its first `ready`; `ServerClock.heard` is true only once a `ready` of
+  this run has been taken, which is what anything that cannot be undone waits for. Never compare one
+  with `Date.now()`. What the device stamped itself, on receipt, it judges with its own clock.
+  `docs/architecture/deployments.md` lists each judgement.
+- A read that fails is not a read that found nothing. Only the answer that means it (a Problem's
+  `notFound`, through `refusedWith`; a `404` from an endpoint an older deployment may lack) is taken
+  as absent. Any other failure is surfaced or tried again, never installed as an empty list.
+- Every `RecordStore` method that changes what a topic shows does so inside `#batch`, which is what
+  tells listeners; a write outside one changes the store and re-renders nothing.
 
 ## UI
 

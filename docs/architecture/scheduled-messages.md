@@ -61,7 +61,11 @@ above the message box, moments from being posted.
 ## When it is due
 
 Each has a `releaseHeldMessage` job keyed by it, due at `send_at` (see
-[Jobs](jobs/kinds.md#releaseheldmessage)). When the job runs (`held::release_step`):
+[Jobs](jobs/kinds.md#releaseheldmessage)). Whether it is due is judged by the database's clock
+alone, in the job's look as in the statements that post or fail it, so servers whose clocks differ
+agree. A look before its time (a preview settling wakes the job) waits out the rest, and the job
+ends only once its row is posted, failed, waiting for mana, or gone. When the job runs
+(`held::release_step`):
 
 1. An earlier one of the same author in the same channel that is still to be posted is waited for, a
    second at a time (`scheduled::behind_another`), so several due together post in the order they

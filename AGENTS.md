@@ -722,17 +722,18 @@ at least, spreading every retry over a growing window (see Event routing). After
 only `{"type":"activity"}` and `{"type":"watchPresence","userIds":[…]}` frames (see Presence under
 Event routing), and `{"type":"typing"|"stoppedTyping","channelId":…}` and
 `{"type":"viewing","channelIds":[…]}` frames (see Typing). The server replies
-`{"type":"ready","userId":…,"resumed":bool}` and then `{"type":"event","sequence":N,"event":{…}}`
-frames. `sequence` is the JetStream stream sequence; a client that reconnects with `resumeAfter` set
-to the last sequence it processed gets exactly the events it missed and `resumed: true` when that
-position is still within `MAX_EVENT_AGE`, otherwise the usual replay window and `resumed: false`,
-which tells it to rebuild its cached state from REST. The server pings every 30 seconds and drops
-peers that miss two pongs. Each `event` payload is an object tagged with `serverEvent` (the entity)
-and `type` (`create`, `update`, `delete`) with the record's fields at the top level, plus a few
-custom events such as `voiceSpeaking`. The frame carries `eventId` when the event may reach the
-client more than once. What happens and is never kept, who is typing and changes to the presence of
-those a connection watches, comes as `{"type":"ephemeral","event":{…}}` frames instead, with no
-sequence, never replayed on resuming.
+`{"type":"ready","userId":…,"resumed":bool,"serverTime":…}` (`serverTime` is the API server's clock
+as the frame is written, by which the client judges the times the server stamped) and then
+`{"type":"event","sequence":N,"event":{…}}` frames. `sequence` is the JetStream stream sequence; a
+client that reconnects with `resumeAfter` set to the last sequence it processed gets exactly the
+events it missed and `resumed: true` when that position is still within `MAX_EVENT_AGE`, otherwise
+the usual replay window and `resumed: false`, which tells it to rebuild its cached state from REST.
+The server pings every 30 seconds and drops peers that miss two pongs. Each `event` payload is an
+object tagged with `serverEvent` (the entity) and `type` (`create`, `update`, `delete`) with the
+record's fields at the top level, plus a few custom events such as `voiceSpeaking`. The frame
+carries `eventId` when the event may reach the client more than once. What happens and is never
+kept, who is typing and changes to the presence of those a connection watches, comes as
+`{"type":"ephemeral","event":{…}}` frames instead, with no sequence, never replayed on resuming.
 
 ### Layers
 
@@ -1291,6 +1292,11 @@ when reviewing.
    language. Case is folded on one side by one function (`LIKE lower($1)` against `lower(column)`),
    never Rust's folding against PostgreSQL's. A calendar bucket names its time zone. People's text
    is compared by Unicode's rules (word boundaries, normalization), never by ASCII's.
+7. **A time is judged against the clock that stamped it.** The client reads a time the server
+   stamped through that deployment's `ServerClock`, whose offset comes from `ready`'s `serverTime`;
+   the server decides whether a row is due in the query that reads it (`send_at <= now()`), on the
+   database's clock; and what a device stamps on receipt it judges with its own. Never one machine's
+   `now` against another's timestamp.
 
 ## Comments document the current code, not its history
 

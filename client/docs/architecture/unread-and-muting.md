@@ -133,8 +133,9 @@ A thread's list marks it read the same way. A thread's position is kept apart (`
   (`channelMutes`, a mute or kept unmuted) and each category's mute (`categoryMutes`), replaced
   whole at each bootstrap by `replaceMutes`.
 - `channelMuteChanged` and `categoryMuteChanged` events keep them current.
-- `AspenSync` ends timed mutes by the device's clock (`nextMuteEnd`, `expireMutes`), since the
-  server announces no end it did not make.
+- `AspenSync` ends timed mutes itself (`nextMuteEnd`, `expireMutes`), since the server announces no
+  end it did not make. It judges each end by the server's clock, once the stream has said what it is
+  (see [Each deployment's clock](deployments.md#each-deployments-clock)).
 - A deleted category takes the caller's mute of it, its fold, and its notification level with it
   (`#forgetCategory`), and a deleted channel its threads, with their windows, positions, and follows
   (`#removeChannel`): the server tells nothing more of either.

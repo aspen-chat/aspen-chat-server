@@ -97,8 +97,10 @@ and `AspenSync` decides from it whether the cache can be trusted:
   resumed or not.
 - `replayedSince` says when the replayed window begins, when it is shorter than the usual minute
   (events let go of early, or a server that started reading the stream less than a minute ago). A
-  bootstrap that began before it, less `REPLAY_CLOCK_SLACK_MS` for the two clocks disagreeing, may
-  have missed events between, so the cache is read again. A server that does not say leaves the
+  bootstrap that began before it may have missed events between, so the cache is read again. The
+  bootstrap's beginning is read on the server's clock
+  ([`ServerClock`](../deployments.md#each-deployments-clock)), as `replayedSince` is, less
+  `REPLAY_CLOCK_SLACK_MS` for what that reading is off by. A server that does not say leaves the
   fallback: a first connection's bootstrap that took longer than `BOOTSTRAP_STALE_AFTER_MS` is read
   again.
 - `catchUpFollows: true` says the server ends the replay with a `caughtUp` frame. The sync stays

@@ -69,8 +69,10 @@ See [Calls in DMs](dm-calls.md).
 
 - **No one moderates a DM's call.** Moderating a call takes Manage calls, a community permission no
   one holds in a DM.
-- **A ring that runs out ends by every client's clock, with no event.** The reaper only clears the
-  rows, and reads never return a spent one.
+- **A ring that runs out ends on every client, with no event.** The reaper only clears the rows, and
+  reads never return a spent one. Each client judges `until` by the server's clock, which `ready`
+  tells it (`serverTime`), so a device whose own clock is wrong by more than a ring's length still
+  rings.
 - **A replacing session keeps its start, starter, and `had_company`.** So its people rejoining rings
   no one again.
 - **`call` and `missed_call` messages wake no phone, notify no one, and are left out of search.**

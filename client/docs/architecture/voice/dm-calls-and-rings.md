@@ -33,7 +33,9 @@ While it shows:
 - Nothing rings in do not disturb (`IncomingCalls`, by the home's answer; see
   [Presence](../presence.md#do-not-disturb)): the servers ring no one in it, and a ring from a
   deployment that does not know it is left unshown.
-- A ring ends at its `until` by the clock (`useNow`).
+- A ring ends at its `until` with no event (`useNow`), judged by the clock of the deployment that
+  set it (`ringing`, see [Each deployment's clock](../deployments.md#each-deployments-clock)), so a
+  device whose own clock is wrong rings as long as the rest.
 
 ## Ringing out
 

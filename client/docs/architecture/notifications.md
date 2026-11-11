@@ -38,7 +38,8 @@ chime and, where allowed, shows a system notification.
 ## Announcing
 
 `AspenSync.onNotify` announces such messages as they arrive live. It never announces the replay a
-connection starts with.
+connection starts with: a message is news only if it was posted since the sync began, both read on
+the server's clock (see [Each deployment's clock](deployments.md#each-deployments-clock)).
 
 `NotifyOnMessages` runs for every deployment the user uses. For each message, it:
 

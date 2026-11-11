@@ -26,7 +26,8 @@ Code: `app::voice::ring`, table `voice_ring`.
 
 A ring that runs out:
 
-- Ends at its `until` by every client's clock, with no event.
+- Ends at its `until` on every client, with no event. Each judges it by the server's clock, which
+  `ready` tells it (`serverTime`), not its device's own.
 - The reaper only clears the rows.
 - Reads never return a spent one.
 

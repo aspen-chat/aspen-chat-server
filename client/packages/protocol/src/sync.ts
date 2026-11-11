@@ -54,6 +54,7 @@ import {
 } from "./preferences";
 import type { ActivityView } from "./notifyRules";
 import type { OverrideGrant } from "./permissions";
+import type { ServerClock } from "./serverClock";
 import { REACTION_SUMMARY_USERS, type ReadOptions, RecordStore } from "./store";
 import type {
   HeldMessage,
@@ -212,8 +213,9 @@ export const EVENT_REPLAY_WINDOW_MS = 60_000;
 const BOOTSTRAP_STALE_AFTER_MS = EVENT_REPLAY_WINDOW_MS - 10_000;
 /**
  * How far before this sync's bootstrap began a connection's replay may begin and still be taken
- * to cover it, allowing for the server's clock and the device's disagreeing: `replayedSince` is
- * the server's clock, the bootstrap's start the device's.
+ * to cover it. Both are readings of the server's clock, the bootstrap's start through
+ * `ServerClock`, whose offset is late by the time `ready` took to arrive; this allows for that,
+ * and for a server whose `ready` gives no time, whose clock is taken to agree with the device's.
  */
 const REPLAY_CLOCK_SLACK_MS = 5_000;
 /**
@@ -263,8 +265,10 @@ export function positionBefore(id: string): string {
 }
 
 /**
- * How far before this sync began a message may say it was posted and still notify, allowing for
- * the server's clock and the device's disagreeing; well inside the minute a connection replays.
+ * How far before this sync began a message may say it was posted and still notify; well inside
+ * the minute a connection replays. The sync's beginning is read on the server's clock
+ * (`ServerClock`), as the message's timestamp is, and this allows for what that reading is off
+ * by: the time `ready` took to arrive, and the whole difference when the server gives no time.
  */
 const NOTIFY_CLOCK_SLACK_MS = 5_000;
 
@@ -600,6 +604,10 @@ export class AspenSync {
       url: eventStreamUrl(options.client.baseUrl),
       authenticate: (o) => options.client.freshSessionToken(o),
       onReady: (info) => {
+        this.#client.clock.note(info.serverTime, this.#now());
+        // What ends by the server's clock waited for it, or was timed by it as it stood.
+        this.#scheduleMuteEnd();
+        this.#scheduleChosenPresenceEnd();
         this.#setWebClientBuild(info.webClientBuild);
         this.#onReady(info);
       },
@@ -625,7 +633,8 @@ export class AspenSync {
             level: event.level,
             max: event.max,
             recharge: event.recharge,
-            at: Date.parse(event.at),
+            at: this.#now(),
+            serverAt: Date.parse(event.at),
             queued: event.queued ?? false,
           });
           return;
@@ -698,6 +707,19 @@ export class AspenSync {
 
   get lastError(): Problem | null {
     return this.#lastError;
+  }
+
+  /**
+   * This server's clock, set by each `ready` of the stream: what the server stamped (a ring's
+   * `until`, a poll's `closesAt`) is compared with `clock.at(now)`, never with the device's `now`.
+   */
+  get clock(): ServerClock {
+    return this.#client.clock;
+  }
+
+  /** The server's time at `deviceTime`, a reading of this device's clock. */
+  #serverTimeAt(deviceTime: number): number {
+    return this.#client.clock.at(deviceTime);
   }
 
   /**
@@ -3965,7 +3987,7 @@ export class AspenSync {
     return {
       invite,
       community,
-      expired: expiresAt != null && Date.parse(expiresAt) < this.#now(),
+      expired: expiresAt != null && Date.parse(expiresAt) < this.#serverTimeAt(this.#now()),
       member: this.store.communities().some((c) => c.id === community.id),
     };
   }
@@ -4604,7 +4626,10 @@ export class AspenSync {
       return true;
     }
     if (info.replayedSince !== null) {
-      return Date.parse(info.replayedSince) > this.#bootstrappedAt - REPLAY_CLOCK_SLACK_MS;
+      return (
+        Date.parse(info.replayedSince) >
+        this.#serverTimeAt(this.#bootstrappedAt) - REPLAY_CLOCK_SLACK_MS
+      );
     }
     return !info.resumed && this.#now() - this.#bootstrappedAt > BOOTSTRAP_STALE_AFTER_MS;
   }
@@ -4630,8 +4655,8 @@ export class AspenSync {
       const message = this.store.message(event.id);
       if (
         message !== undefined &&
-        // Some seconds' allowance for the server's clock and this device's disagreeing.
-        Date.parse(message.timestamp) >= this.#bootstrappedAt - NOTIFY_CLOCK_SLACK_MS
+        Date.parse(message.timestamp) >=
+          this.#serverTimeAt(this.#bootstrappedAt) - NOTIFY_CLOCK_SLACK_MS
       ) {
         for (const listener of this.#arrivalListeners) {
           listener(message);
@@ -5042,8 +5067,10 @@ export class AspenSync {
   }
 
   /**
-   * Ends each timed mute when its time comes, by this device's clock, since the server announces
-   * no end it did not make; a device that slept past one ends it on waking, when the timer runs.
+   * Ends each timed mute when its time comes, by the server's clock as this device reckons it
+   * (`ServerClock`), since the server announces no end it did not make; a device that slept past
+   * one ends it on waking, when the timer runs. None ends before the stream's first `ready` has
+   * said what that clock is: a mute dropped by a wrong clock stays dropped until the next read.
    */
   #scheduleMuteEnd(): void {
     if (this.#muteTimer !== null) {
@@ -5051,21 +5078,21 @@ export class AspenSync {
       this.#muteTimer = null;
     }
     const next = this.store.nextMuteEnd();
-    if (next === null) {
+    if (next === null || !this.#client.clock.heard) {
       return;
     }
     // A timer longer than this overflows and fires at once; a later end is waited for in steps.
-    const delay = Math.min(Math.max(next - Date.now(), 0), MAX_TIMER_MS);
+    const delay = Math.min(Math.max(next - this.#serverTimeAt(this.#now()), 0), MAX_TIMER_MS);
     this.#muteTimer = setTimeout(() => {
       this.#muteTimer = null;
-      this.store.expireMutes(Date.now());
+      this.store.expireMutes(this.#serverTimeAt(this.#now()));
       this.#scheduleMuteEnd();
     }, delay);
   }
 
   /**
-   * Ends the caller's timed presence override when its time comes, by this device's clock, as a
-   * mute's, and then reads what their own status is without it: whether they are online or away
+   * Ends the caller's timed presence override when its time comes, by the server's clock and
+   * not before it is heard, as a mute's, and then reads what their own status is without it: whether they are online or away
    * is their connections' to say, not this device's to assume.
    */
   #scheduleChosenPresenceEnd(): void {
@@ -5074,14 +5101,14 @@ export class AspenSync {
       this.#chosenPresenceTimer = null;
     }
     const end = this.store.chosenPresenceEnd();
-    if (end === null) {
+    if (end === null || !this.#client.clock.heard) {
       return;
     }
-    const delay = Math.min(Math.max(end - Date.now(), 0), MAX_TIMER_MS);
+    const delay = Math.min(Math.max(end - this.#serverTimeAt(this.#now()), 0), MAX_TIMER_MS);
     this.#chosenPresenceTimer = setTimeout(() => {
       this.#chosenPresenceTimer = null;
       // `stop()` clears this timer, so the sync holds a session here, live or on its way.
-      if (this.store.expireChosenPresence(Date.now())) {
+      if (this.store.expireChosenPresence(this.#serverTimeAt(this.#now()))) {
         const me = this.store.myUserId;
         if (me !== null) {
           void this.#readStatuses([me]).catch(() => undefined);

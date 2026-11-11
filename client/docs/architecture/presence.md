@@ -121,9 +121,10 @@ deployment that refuses says so in a toast naming it.
 The store holds it (`RecordStore.chosenPresence`) from `GET /users/@me/presence-override` at
 bootstrap, the answer to a change, and `presenceOverrideChanged` events from the user's other
 devices. Holding one shows the user's own status by it at once, and ending one by hand, here or on
-another device, shows them online, since they just acted. A timed one ends by this device's clock,
-as a mute does (`AspenSync`'s `#scheduleChosenPresenceEnd`): the server publishes nothing when it
-runs out, only telling watchers the status it leaves. Whether that is online or away is for the
+another device, shows them online, since they just acted. A timed one ends on this device, by the
+server's clock, as a mute does (`AspenSync`'s `#scheduleChosenPresenceEnd`, see
+[Each deployment's clock](deployments.md#each-deployments-clock)): the server publishes nothing when
+it runs out, only telling watchers the status it leaves. Whether that is online or away is for the
 user's connections to say, so the store leaves their own status as it was shown
 (`expireChosenPresence`) and `AspenSync` reads it at once (`GET /users/statuses` for the user
 alone).

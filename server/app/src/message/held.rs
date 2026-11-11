@@ -652,6 +652,32 @@ async fn behind_another(conn: &mut AsyncPgConnection, held: &HeldMessage) -> cra
     Ok(found.behind)
 }
 
+/// A held row as its job looks at it.
+#[derive(QueryableByName)]
+struct Looked {
+    #[diesel(embed)]
+    held: HeldMessage,
+    /// For a scheduled one, the milliseconds until `send_at` by the database's clock, rounded
+    /// up so that waiting that long reaches it; zero or less once it is due.
+    #[diesel(sql_type = Nullable<diesel::sql_types::BigInt>)]
+    due_in_millis: Option<i64>,
+}
+
+/// The held row `id` and how long until it is due. That is asked of the database, whose clock
+/// every statement that then posts or fails the row judges `send_at` by ([`take`],
+/// [`fail_held`]) and a job's next look is set by, so that a row found due here is due there.
+async fn look(conn: &mut AsyncPgConnection, id: HeldMessageId) -> crate::Result<Option<Looked>> {
+    Ok(diesel::sql_query(format!(
+        "SELECT {COLUMNS}, \
+             CEIL(EXTRACT(EPOCH FROM send_at - now()) * 1000)::bigint AS due_in_millis \
+         FROM held_message WHERE id = $1"
+    ))
+    .bind::<PgUuid, _>(id)
+    .get_result(conn)
+    .await
+    .optional()?)
+}
+
 /// One held message's job: posts it once nothing holds it, or waits.
 pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::Result<Outcome> {
     let Some(id) = job
@@ -664,14 +690,12 @@ pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::
     };
     let held = {
         let mut conn = state.connection_pool.get().await?;
-        let held: Option<HeldMessage> =
-            diesel::sql_query(format!("SELECT {COLUMNS} FROM held_message WHERE id = $1"))
-                .bind::<PgUuid, _>(id)
-                .get_result(conn.as_mut())
-                .await
-                .optional()?;
         // Posted, or gone with its author or channel.
-        let Some(held) = held else {
+        let Some(Looked {
+            held,
+            due_in_millis,
+        }) = look(conn.as_mut(), id).await?
+        else {
             return Ok(Outcome::Done);
         };
         // Failed, it waits for its author; released already, for its channel's mana, whose
@@ -679,12 +703,10 @@ pub async fn release_step(state: &GlobalServerContext, job: &Claimed) -> crate::
         if held.failure.is_some() || held.waiting == HeldWaiting::Mana {
             return Ok(Outcome::Done);
         }
-        let behind = match held.send_at {
-            Some(send_at) => {
-                if let Ok(left) = (send_at - Utc::now()).to_std()
-                    && !left.is_zero()
-                {
-                    return Ok(Outcome::Later(left));
+        let behind = match due_in_millis {
+            Some(left) => {
+                if let Some(left) = u64::try_from(left).ok().filter(|left| *left > 0) {
+                    return Ok(Outcome::Later(Duration::from_millis(left)));
                 }
                 super::scheduled::behind_another(conn.as_mut(), &held).await?
             }
@@ -918,7 +940,14 @@ async fn release(
         None => return Err(error),
     };
     fail_held(state, id, author, channel, read.send_at.is_some(), reason).await?;
-    Ok(Outcome::Done)
+    // `fail_held` leaves a scheduled row as it is when it is not due or was given another
+    // time; this job is all that will post one still waiting for its time, so it looks again.
+    Ok(match standing(state, id).await? {
+        Some(now) if now.waiting == HeldWaiting::Scheduled && !now.failed => {
+            Outcome::Later(BEHIND_WAIT)
+        }
+        _ => Outcome::Done,
+    })
 }
 
 /// Why a message cannot be posted, for its author, when it never will be; `None` for a failure
@@ -1227,4 +1256,72 @@ pub(crate) async fn drop_held(
         .scope_boxed()
     })
     .await
+}
+
+#[cfg(test)]
+mod database_tests {
+    use super::*;
+    use diesel_async::{AsyncConnection, SimpleAsyncConnection};
+
+    const ANN: &str = "4e1d0000-0000-4000-8000-000000000001";
+    const CHANNEL: &str = "4e1d0000-0000-4000-8000-000000000010";
+    const SOON: &str = "4e1d0000-0000-4000-8000-000000000020";
+    const DUE: &str = "4e1d0000-0000-4000-8000-000000000021";
+    const UNSCHEDULED: &str = "4e1d0000-0000-4000-8000-000000000022";
+
+    fn held(text: &str) -> HeldMessageId {
+        HeldMessageId(text.parse().unwrap())
+    }
+
+    /// A connection to the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed, with an author and a channel; `None` without one, when the test checks
+    /// nothing.
+    async fn connection() -> Option<AsyncPgConnection> {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return None;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                 VALUES ('{ANN}', '{ANN}', '', now(), now());
+             INSERT INTO channel (id, name, ty, sort_index) VALUES ('{CHANNEL}', '', 'dm', 0);"#,
+        ))
+        .await
+        .unwrap();
+        Some(conn)
+    }
+
+    #[tokio::test]
+    async fn a_scheduled_row_is_due_by_the_databases_clock() {
+        let Some(mut conn) = connection().await else {
+            return;
+        };
+        conn.batch_execute(&format!(
+            r#"INSERT INTO held_message
+                   (id, author, channel, content, attachments, echo_to_parent, locale, waiting,
+                    send_at)
+               VALUES
+                   ('{SOON}', '{ANN}', '{CHANNEL}', '', '{{}}', false, 'en', 'scheduled',
+                    now() + interval '1 hour'),
+                   ('{DUE}', '{ANN}', '{CHANNEL}', '', '{{}}', false, 'en', 'scheduled', now()),
+                   ('{UNSCHEDULED}', '{ANN}', '{CHANNEL}', '', '{{}}', false, 'en', 'preview',
+                    NULL);"#,
+        ))
+        .await
+        .unwrap();
+        // `now()` is the transaction's start, so each is exact.
+        let soon = look(&mut conn, held(SOON)).await.unwrap().unwrap();
+        assert_eq!(soon.held.id, held(SOON));
+        assert_eq!(soon.due_in_millis, Some(3_600_000));
+        let due = look(&mut conn, held(DUE)).await.unwrap().unwrap();
+        assert_eq!(due.due_in_millis, Some(0));
+        // What `look` calls due, `take` takes.
+        take(&mut conn, held(DUE)).await.unwrap();
+        assert!(take(&mut conn, held(SOON)).await.is_err());
+        let unscheduled = look(&mut conn, held(UNSCHEDULED)).await.unwrap().unwrap();
+        assert_eq!(unscheduled.due_in_millis, None);
+        assert!(look(&mut conn, held(DUE)).await.unwrap().is_none());
+    }
 }

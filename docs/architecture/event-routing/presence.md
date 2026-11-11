@@ -55,8 +55,9 @@ while or until they change it (`app::presence_override`).
 | `PUT /users/@me/presence-override`    | Sets one. `durationSeconds` is absent or `null` for until changed, at most thirty days (`MAX_OVERRIDE_SECONDS`). `201` when none was in force, `200` when it replaced one |
 | `DELETE /users/@me/presence-override` | Ends it                                                                                                                                                                   |
 
-- An override that runs out ends on each device by its own clock, with no event. Valkey lets its
-  copy go at the same moment, and the row's `until` has passed, so neither is read back.
+- An override that runs out ends on each device, with no event, judged there by the server's clock
+  (`serverTime` on `ready`). Valkey lets its copy go at the same moment, and the row's `until` has
+  passed, so neither is read back.
 - The copy is written while the transaction that changes the row holds it locked, so concurrent
   changes reach Valkey in the order they commit. A transaction that fails after writing it puts back
   what is committed.

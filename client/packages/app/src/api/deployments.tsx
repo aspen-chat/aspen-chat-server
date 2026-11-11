@@ -18,7 +18,7 @@ import { Button } from "react-aria-components";
 import { reportActivity } from "./activity";
 import type { Source } from "./everywhere";
 import { AspenClientContext, useHomeClient } from "./context";
-import { deviceStore, solveInWorker } from "./devices";
+import { clockStore, deviceStore, solveInWorker } from "./devices";
 import {
   DeploymentsContext,
   ScopeDomainContext,
@@ -63,6 +63,7 @@ export function DeploymentsProvider({
               sessionKey(home.session?.userId ?? "", domain),
             ),
             deviceStore: deviceStore(deploymentUrl(domain)),
+            clockStore: clockStore(deploymentUrl(domain)),
             solvePuzzle: solveInWorker,
           }),
         sync: (client) =>

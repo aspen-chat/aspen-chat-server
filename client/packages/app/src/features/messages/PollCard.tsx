@@ -44,6 +44,7 @@ import {
   sharePercent,
   type PollChoice,
 } from "@/features/messages/poll";
+import { usePollNow } from "@/features/messages/usePollNow";
 import { displayNameOf } from "@/features/users/profile";
 import { PersonAvatar, PersonName } from "@/features/users/PersonName";
 import { RowsSkeleton } from "@/features/layout/ScreenSkeletons";
@@ -92,7 +93,7 @@ function LoadedPollCard({ poll }: { poll: Poll }) {
   const me = useMe();
   const moderate = useChannelCan(poll.channelId, "manageMessages");
   const myWriteIns = useMyWriteIns(poll.id);
-  const now = useNow(poll);
+  const now = usePollNow(poll, useSync().clock);
   const open = pollOpen(poll, now);
   const total = poll.results.reduce((sum, r) => sum + r.count, 0);
   const canWriteIn =
@@ -540,29 +541,4 @@ function ConfirmRemove({
       </div>
     </>
   );
-}
-
-/**
- * The current time, refreshed while the poll is open: every second in its last hour, when
- * seconds are shown, and every minute before that.
- */
-function useNow(poll: Poll): number {
-  const [now, setNow] = useState(() => Date.now());
-  const open = pollOpen(poll, now);
-  const lastHour = Date.parse(poll.closesAt) - now < 3_600_000;
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const timer = setInterval(
-      () => {
-        setNow(Date.now());
-      },
-      lastHour ? 1000 : 60_000,
-    );
-    return () => {
-      clearInterval(timer);
-    };
-  }, [open, lastHour]);
-  return now;
 }

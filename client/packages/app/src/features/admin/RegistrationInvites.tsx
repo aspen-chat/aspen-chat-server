@@ -87,7 +87,8 @@ export function RegistrationInvites({
   const invites = useAdminRead(load);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [showing, setShowing] = useState<string | null>(null);
-  const now = invites.at;
+  // An invite's expiry is the server's, so it is compared with the server's time of the read.
+  const now = sync.clock.at(invites.at);
   return (
     <Section
       id="admin-invites"

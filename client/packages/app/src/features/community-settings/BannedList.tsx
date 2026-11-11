@@ -20,12 +20,12 @@ const EXPIRY_CHECK_MS = 30_000;
 /**
  * The community's standing bans, newest first, a page at a time, each with its reason and end,
  * and a button that lifts it. Shown to holders of Ban members, whose events keep it current; a ban whose
- * end passes leaves the list by this device's clock.
+ * end passes leaves the list by the server's clock as this device reckons it (`AspenSync.clock`).
  */
 export function BannedList({ communityId }: { communityId: string }) {
   const m = useMessages();
   const sync = useSync();
-  const now = useNow(EXPIRY_CHECK_MS);
+  const now = sync.clock.at(useNow(EXPIRY_CHECK_MS));
   const bans = useBans(communityId)?.filter(
     (ban) => ban.until == null || Date.parse(ban.until) > now,
   );

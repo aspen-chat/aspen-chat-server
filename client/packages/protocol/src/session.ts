@@ -98,12 +98,11 @@ export function isSession(value: unknown): value is Session {
   );
 }
 
-/** Whether the session token expires within `withinMs` of `now`. */
-export function sessionTokenExpiresSoon(
-  session: Session,
-  withinMs: number,
-  now: number = Date.now(),
-): boolean {
+/**
+ * Whether the session token expires within `withinMs` of `now`, a reading of the clock of the
+ * server that issued it (`ServerClock`), which stamped the expiry.
+ */
+export function sessionTokenExpiresSoon(session: Session, withinMs: number, now: number): boolean {
   const expires = Date.parse(session.sessionTokenExpires);
   return Number.isNaN(expires) || expires - now <= withinMs;
 }

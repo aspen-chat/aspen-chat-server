@@ -78,7 +78,7 @@ export function optionName(option: PollOption | undefined): string {
   return option.emoji == null ? option.label : `${option.emoji} ${option.label}`;
 }
 
-/** Whether votes are still accepted at `now`. */
+/** Whether votes are still accepted at `now`, a reading of the poll's server's clock. */
 export function pollOpen(poll: Poll, now: number): boolean {
   return poll.closedAt == null && Date.parse(poll.closesAt) > now;
 }

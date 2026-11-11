@@ -57,6 +57,49 @@ Each deployment has:
 
 `DeploymentsProvider` owns them, under the home's `SyncProvider`.
 
+### Each deployment's clock
+
+A time a deployment stamped is judged against that deployment's clock, never the device's own, which
+may be minutes or hours wrong. `AspenClient.clock` (`ServerClock`, also `AspenSync.clock`) is that
+clock as this device reckons it:
+
+- Every `ready` of the deployment's event stream carries `serverTime`. `AspenSync` notes how far it
+  is from the device's clock at receipt (`ServerClock.note`), one offset per deployment.
+- `clock.at(deviceTime)` and `clock.now()` add the offset to a reading of the device's clock.
+- Each `ready` also saves the offset on the device (`ClockOffsetStore`, which the app keeps in
+  `localStorage` under `aspen.clock.<host>`, one key per deployment, as it keeps the device
+  credential; `clockStore` in `src/api/devices.ts`). It outlives signing out.
+- A run starts from the saved offset (`ServerClock.restored`), so what is judged before its first
+  `ready` (the sign-in screen's ceremonies and codes, a restored session's token) is corrected on a
+  device whose clock is wrong. The home's client, signed in or not, and each other deployment's
+  client are given their own. The first `ready` replaces it.
+- A saved value that is not a finite number, or is further than `CLOCK_OFFSET_MAX_MS` (30 days) from
+  zero, is ignored.
+- The offset is zero where none is saved, and for a deployment whose `ready` gives no time: the two
+  clocks are then taken to agree.
+- It is late by the time `ready` spent on its way, and no more.
+
+What is judged by it:
+
+| Judgement                                                                      | Where                                                 |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------- |
+| Whether the session token is about to expire                                   | `AspenClient` (`sessionTokenExpiresSoon`)             |
+| How long a conditional passkey sign-in's ceremony has left                     | `runConditionalPasskeySignIn`                         |
+| Whether a connection's replay covers the bootstrap (`replayedSince`)           | `AspenSync`'s `#replayMayLack`                        |
+| Whether a message was posted since the sync began, and so is news              | `AspenSync`'s `#onEvent`                              |
+| Whether an invite has expired, and the expiry a new or changed invite is given | `lookupInvite`, `InviteDialog`, `RegistrationInvites` |
+| When a timed mute or presence override ends                                    | `#scheduleMuteEnd`, `#scheduleChosenPresenceEnd`      |
+| Whether a ring is still in force                                               | `ringing` (`features/voice/ringing.ts`)               |
+| Whether a poll still takes votes, and how long it has left                     | `usePollNow`                                          |
+| Whether a ban has ended                                                        | `BannedList`                                          |
+| How long a sign-in code has left                                               | `DeviceLinkCode`                                      |
+
+A timed mute or override is not ended before this run's first `ready` has said what the clock is
+(`ServerClock.heard`, which an offset saved by an earlier run does not set), since one dropped by a
+wrong clock stays dropped until the next read. New code that compares a time the server stamped with
+now reads `clock.at` or `clock.now`, not `Date.now()`. Times this device stamped itself (a file
+offer's expiry, a mana level's receipt, who is typing) stay on its own clock.
+
 ## Scopes
 
 `AspenClientContext` and `AspenSyncContext` are the deployment being shown. Every component that

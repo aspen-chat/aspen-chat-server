@@ -20,8 +20,18 @@ export interface ChannelMana {
   max: number;
   /** Mana earned back a second. */
   recharge: number;
-  /** When `level` was so, in milliseconds since 1970. */
+  /**
+   * When this device was told `level`, in milliseconds since 1970 by its own clock, which is
+   * the clock the level is worked out against afterwards: the server's and the device's may be
+   * minutes apart. The level is up to a tick older than that, and the server's coalescing of
+   * frames, which is small beside what clocks differ by.
+   */
   at: number;
+  /**
+   * When `level` was so by the server's clock, in milliseconds since 1970. It orders frames
+   * among themselves and is never set against this device's clock.
+   */
+  serverAt: number;
   /** Whether anything waits for the channel's mana: its priority queue is in force. */
   queued: boolean;
 }

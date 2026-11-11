@@ -2,6 +2,7 @@ import { DESKTOP_NOTIFICATIONS, type VoiceRing } from "@aspen/protocol";
 import { PhoneIcon, PhoneXIcon } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useContext, useEffect, useState } from "react";
+import { ringing } from "./ringing";
 import { closeRingNotifications, postRingNotification } from "./ringNotifications";
 import { Button, Dialog, Modal, ModalOverlay } from "react-aria-components";
 import { SourceScope } from "@/api/deployments";
@@ -35,7 +36,9 @@ interface Ringing {
 /**
  * Rings the user for a DM call they are not in, on any deployment they use: the first ring
  * still in force shows as `IncomingCall`. A ring ends when they join or decline, when its
- * call ends, or at its `until`, which the clock here decides, as every device does. Nothing
+ * call ends, or at its `until`, which every device decides for itself, by the clock of the
+ * deployment that set it (`AspenSync.clock`), so a device whose own clock is wrong rings as
+ * long as the rest. Nothing
  * rings in do not disturb, by the home's answer: the servers ring no one in it, and a ring from
  * a deployment that does not know it is kept quiet here.
  */
@@ -46,7 +49,7 @@ export function IncomingCalls() {
       : sources.flatMap((source) => source.sync.store.myRings().map((ring) => ({ ring, source }))),
   );
   const now = useNow(500, rings.length > 0);
-  const current = rings.find(({ ring }) => Date.parse(ring.until) > now);
+  const current = rings.find(({ ring, source }) => ringing(ring, source.sync.clock, now));
   const key = current === undefined ? null : ringKey(current);
   // A ring that stopped showing (answered, declined, over, or run out) takes its notification.
   useEffect(() => {

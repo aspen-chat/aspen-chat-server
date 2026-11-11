@@ -3,7 +3,14 @@ import { RecordStore, manaAt, manaDrawnAt, manaFullAt, type ChannelMana } from "
 
 const at = Date.parse("2026-10-18T12:00:00Z");
 // 100 mana at most, 10 a second: 2,000 thousandths a 200 ms tick; at -10 in debt.
-const busy: ChannelMana = { level: -10_000, max: 100, recharge: 10, at, queued: true };
+const busy: ChannelMana = {
+  level: -10_000,
+  max: 100,
+  recharge: 10,
+  at,
+  serverAt: at,
+  queued: true,
+};
 
 function id(n: number): string {
   return `0190f0a0-0000-7000-8000-${n.toString(16).padStart(12, "0")}`;
@@ -86,16 +93,16 @@ describe("mana frames out of order", () => {
     const channel = id(10);
     store.noteMana(channel, busy);
     // A frame from before the one held, overtaken on its way from another server.
-    store.noteMana(channel, { ...busy, level: -5_000, at: at - 1_000 });
+    store.noteMana(channel, { ...busy, level: -5_000, serverAt: at - 1_000 });
     expect(store.mana(channel)).toEqual(busy);
-    const later: ChannelMana = { ...busy, level: -2_000, at: at + 1_000 };
+    const later: ChannelMana = { ...busy, level: -2_000, serverAt: at + 1_000 };
     store.noteMana(channel, later);
     expect(store.mana(channel)).toEqual(later);
     // One that said the channel was full stands against an older one that says it was not.
     const other = id(11);
-    store.noteMana(other, { ...busy, level: 100_000, at: at - 1_000 });
+    store.noteMana(other, { ...busy, level: 100_000, serverAt: at - 1_000 });
     expect(store.mana(other)).toBeUndefined();
-    store.noteMana(other, { ...busy, at: at - 2_000 });
+    store.noteMana(other, { ...busy, serverAt: at - 2_000 });
     expect(store.mana(other)).toBeUndefined();
   });
 });

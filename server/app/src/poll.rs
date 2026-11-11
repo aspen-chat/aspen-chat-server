@@ -149,20 +149,6 @@ pub async fn create_poll(
     waited: Option<HeldMessageId>,
 ) -> crate::Result<CreatedPoll> {
     let (question, options) = validate(&request)?;
-    let now = Utc::now();
-    let row = Poll {
-        id: PollId::new(),
-        channel,
-        created_by: creator,
-        question,
-        multiple_choice: request.multiple_choice,
-        anonymous: request.anonymous,
-        allow_write_ins: request.allow_write_ins,
-        created_at: now,
-        closes_at: now + chrono::Duration::seconds(i64::from(request.duration_seconds)),
-        closed_at: None,
-    };
-    let message_row = poll_message(&row, MessageKind::Poll, now);
     let mut conn = state.connection_pool.get().await?;
     // A poll is posted as a message, so it takes what posting one does: a channel that holds
     // messages (not a plugin's), and sending there.
@@ -171,7 +157,7 @@ pub async fn create_poll(
     // It spends its channel's mana as a message does (`app::mana`), and waits its turn in a
     // busy channel; one that waited has been paid for, and counts its duration from now.
     if waited.is_none() {
-        let cost = crate::mana::glyphs(&shown_text(&row.question, &options));
+        let cost = crate::mana::glyphs(&shown_text(&question, &options));
         if crate::mana::decide_for(state, conn.as_mut(), creator, channel, cost).await?
             == crate::mana::Decision::Wait
         {
@@ -182,7 +168,7 @@ pub async fn create_poll(
                     author: creator,
                     channel,
                     kind: crate::message::held::HeldKind::Poll,
-                    content: row.question.clone(),
+                    content: question.clone(),
                     attachments: Vec::new(),
                     echo_to_parent: false,
                     reply: None,
@@ -208,7 +194,7 @@ pub async fn create_poll(
             intercept::Draft {
                 author: creator,
                 access: &access,
-                content: shown_text(&row.question, &options),
+                content: shown_text(&question, &options),
                 attachments: &[],
                 retouched: None,
                 editing: None,
@@ -220,6 +206,25 @@ pub async fn create_poll(
     }
     conn.transaction(|conn| {
         async move {
+            // The poll and its message are made here, once nothing is left to wait for but
+            // the writes: a message's id is its place among the channel's and in every
+            // reader's position, so one made before the mana, the plugins, and the wait for
+            // this connection would be posted behind messages already read. Its duration,
+            // its closing job, and its thread's last reply count from the same moment.
+            let now = Utc::now();
+            let row = Poll {
+                id: PollId::new(),
+                channel,
+                created_by: creator,
+                question,
+                multiple_choice: request.multiple_choice,
+                anonymous: request.anonymous,
+                allow_write_ins: request.allow_write_ins,
+                created_at: now,
+                closes_at: now + chrono::Duration::seconds(i64::from(request.duration_seconds)),
+                closed_at: None,
+            };
+            let message_row = poll_message(&row, MessageKind::Poll, now);
             if let Some(waited) = waited {
                 crate::message::held::take_waited(conn.as_mut(), waited).await?;
                 crate::message::held::announce_edited(

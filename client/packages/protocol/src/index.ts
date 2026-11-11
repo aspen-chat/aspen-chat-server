@@ -87,6 +87,13 @@ export {
   type ProblemCode,
 } from "./problem";
 export {
+  CLOCK_OFFSET_MAX_MS,
+  MemoryClockOffsetStore,
+  ServerClock,
+  WebStorageClockOffsetStore,
+  type ClockOffsetStore,
+} from "./serverClock";
+export {
   MemorySessionStore,
   WebStorageSessionStore,
   isSession,

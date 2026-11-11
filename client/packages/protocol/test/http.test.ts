@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ApiProblemError,
   AspenClient,
+  MemoryClockOffsetStore,
   MemorySessionStore,
   PasskeyCancelledError,
   setPreferredLanguages,
@@ -445,6 +446,66 @@ describe("AspenClient", () => {
     // openapi-fetch percent-encodes every path parameter; axum decodes it before matching.
     expect(calls[0]?.url).toBe(`${baseUrl}/api/v1/users/%40me`);
     expect(calls[0]?.authorization).toBe("Bearer session-1");
+  });
+
+  it("judges whether its token is about to expire by the server's clock", async () => {
+    const me = () => jsonResponse(200, { id: uuid, name: "kate", icon: null });
+    const read = (client: AspenClient) =>
+      client.api.GET("/api/v1/users/{user}", { params: { path: { user: "@me" } } });
+    // The device runs a day fast, which alone puts the token's three hours in its past.
+    const store = new MemorySessionStore();
+    store.save(liveSession());
+    const fast = scriptedFetch([me]);
+    const ahead = new AspenClient({
+      baseUrl,
+      sessionStore: store,
+      fetch: fast.fetch,
+      now: () => Date.now() + 86_400_000,
+    });
+    ahead.clock.note(new Date().toISOString());
+    await read(ahead);
+    expect(fast.calls.map((c) => c.method)).toEqual(["GET"]);
+    // A day slow, a token already expired is refreshed before it is sent.
+    const stale = new MemorySessionStore();
+    stale.save({
+      ...liveSession(),
+      sessionTokenExpires: new Date(Date.now() - 1_000).toISOString(),
+    });
+    const slow = scriptedFetch([
+      () => jsonResponse(200, { sessionToken: "session-2", sessionTokenExpires: farFuture() }),
+      me,
+    ]);
+    const behind = new AspenClient({
+      baseUrl,
+      sessionStore: stale,
+      fetch: slow.fetch,
+      now: () => Date.now() - 86_400_000,
+    });
+    behind.clock.note(new Date().toISOString());
+    await read(behind);
+    expect(slow.calls.map((c) => c.method)).toEqual(["POST", "GET"]);
+    expect(slow.calls[1]?.authorization).toBe("Bearer session-2");
+  });
+
+  it("judges its token by the offset the last run saved, before any ready", async () => {
+    // The device runs a day fast, and the last run found so: the token's three hours stand.
+    const clockStore = new MemoryClockOffsetStore();
+    clockStore.save(-86_400_000);
+    const store = new MemorySessionStore();
+    store.save(liveSession());
+    const { fetch, calls } = scriptedFetch([
+      () => jsonResponse(200, { id: uuid, name: "kate", icon: null }),
+    ]);
+    const client = new AspenClient({
+      baseUrl,
+      sessionStore: store,
+      fetch,
+      now: () => Date.now() + 86_400_000,
+      clockStore,
+    });
+    expect(client.clock.heard).toBe(false);
+    await client.api.GET("/api/v1/users/{user}", { params: { path: { user: "@me" } } });
+    expect(calls.map((c) => c.method)).toEqual(["GET"]);
   });
 
   it("refreshes once and replays the request, body included, after a 401", async () => {

@@ -48,6 +48,10 @@ The card offers Close poll while the poll is open, to:
 Closing calls `AspenSync.closePoll`. The closing arrives as the poll's update and the announcement,
 as a deadline's does.
 
+Until either arrives, a poll is open while its `closesAt` is ahead of its server's clock
+(`usePollNow`, see [Each deployment's clock](deployments.md#each-deployments-clock)), so a device
+whose own clock is fast does not hide voting the server still takes.
+
 ## Write-ins
 
 A poll whose creator allowed write-ins lists its `writeIns` after its `options`.

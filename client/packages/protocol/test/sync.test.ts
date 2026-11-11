@@ -5,12 +5,15 @@ import {
   AspenClient,
   AspenSync,
   type AspenSyncOptions,
+  type ClockOffsetStore,
+  manaAt,
   INPUT_VOLUME,
   OUTPUT_VOLUME,
   MEMBER_SEARCH_PAGE,
   MESSAGE_AROUND_RADIUS,
   MESSAGE_AROUND_RADIUS_MAX,
   MESSAGE_PAGE_SIZE,
+  MemoryClockOffsetStore,
   MemorySessionStore,
   PRESENCE_POLL_MS,
   PRESENCE_READ_MS,
@@ -195,12 +198,20 @@ function makeSync(
   routes: Record<string, Route>,
   now = () => 0,
   extra: Partial<AspenSyncOptions> = {},
+  clockStore?: ClockOffsetStore,
 ) {
   FakeSocket.instances = [];
   const store = new MemorySessionStore();
   store.save(liveSession());
   const { fetch, calls } = routedFetch(routes);
-  const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
+  // One device clock for both, as the offset the sync notes is the client's to apply.
+  const client = new AspenClient({
+    baseUrl,
+    sessionStore: store,
+    fetch,
+    now,
+    ...(clockStore === undefined ? {} : { clockStore }),
+  });
   const sync = new AspenSync({
     client,
     WebSocket: FakeSocket as unknown as typeof WebSocket,
@@ -573,6 +584,35 @@ describe("AspenSync", () => {
     unwatch();
     expect(socket.sent.at(-1)).toEqual({ type: "viewing", channelIds: [] });
     sync.stop();
+  });
+
+  it("works a channel's mana out from when this device was told it, not the server's clock", async () => {
+    // The device's clock runs two minutes ahead of the server's.
+    const serverNow = Date.parse("2026-10-18T12:00:00Z");
+    const deviceNow = serverNow + 120_000;
+    const { sync } = makeSync(bootstrapResponses(), () => deviceNow);
+    const socket = await goLive(sync);
+    const frame = (level: number, at: number) => {
+      socket.frame({
+        type: "ephemeral",
+        event: {
+          type: "mana",
+          channelId: general.id,
+          level,
+          max: 100,
+          recharge: 10,
+          at: new Date(at).toISOString(),
+        },
+      });
+    };
+    frame(-10_000, serverNow);
+    const mana = sync.store.mana(general.id);
+    expect(mana).toMatchObject({ at: deviceNow, serverAt: serverNow });
+    // Just told, it has earned nothing back, where the server's stamp would read as full.
+    expect(mana === undefined ? undefined : manaAt(mana, deviceNow)).toBe(-10_000);
+    // Frames are still ordered by the server's stamps.
+    frame(-5_000, serverNow - 1_000);
+    expect(sync.store.mana(general.id)?.level).toBe(-10_000);
   });
 
   it("reads the caller's chosen presence at bootstrap, and sets and ends it", async () => {
@@ -1143,9 +1183,15 @@ describe("AspenSync", () => {
       },
       () => Date.parse("2026-09-25T12:30:00Z"),
     );
-    await goLive(sync);
+    const socket = await goLive(sync);
     const lookup = await sync.lookupInvite("join-me");
     expect(lookup).toEqual({ invite, community: cedar, expired: false, member: false });
+    // Whether it has expired is the server's clock's to say: here the device runs an hour slow.
+    socket.frame(ready({ resumed: true, serverTime: "2026-09-25T13:30:00Z" }));
+    expect((await sync.lookupInvite("join-me")).expired).toBe(true);
+    // And here two hours fast, which alone would call the invite expired.
+    socket.frame(ready({ resumed: true, serverTime: "2026-09-25T10:30:00Z" }));
+    expect((await sync.lookupInvite("join-me")).expired).toBe(false);
     await sync.joinCommunity(cedar.id, "join-me");
     expect(sync.store.communities().map((c) => c.name)).toEqual(["Aspen", "Cedar"]);
     expect(sync.store.channels(cedar.id)).toEqual([lobby]);
@@ -2304,6 +2350,57 @@ describe("AspenSync and the replay a connection starts with", () => {
     early.sync.stop();
   });
 
+  it("judges where the replay begins by the server's clock on a device whose own is wrong", async () => {
+    const T = 1_760_000_000_000;
+    const at = (ms: number) => new Date(ms).toISOString();
+    // A device a minute fast: the replay begins a second after the bootstrap did, which the
+    // device's own clock would put most of a minute before it.
+    const fast = await connectWith(
+      ready({ replayedSince: at(T + 1_000), serverTime: at(T) }),
+      () => T + 60_000,
+    );
+    expect(fast.sync.clock.offsetMs).toBe(-60_000);
+    expect(fast.sync.status).toBe("resyncing");
+    await settle();
+    expect(fast.listings()).toBe(2);
+    fast.sync.stop();
+    // A device a minute slow: the replay begins ten seconds before the bootstrap did, and
+    // covers it, where the device's own clock would put it after.
+    const slow = await connectWith(
+      ready({ replayedSince: at(T - 10_000), serverTime: at(T) }),
+      () => T - 60_000,
+    );
+    expect(slow.sync.status).toBe("live");
+    expect(slow.listings()).toBe(1);
+    slow.sync.stop();
+  });
+
+  it("tells of a message posted since the sync began, by the server's clock", async () => {
+    const T = Date.parse("2026-09-25T12:00:00Z");
+    const at = (ms: number) => new Date(ms).toISOString();
+    const arrivals = async (deviceNow: number, postedAt: number) => {
+      const { sync, socket } = await connectWith(ready({ serverTime: at(T) }), () => deviceNow);
+      const arrived: string[] = [];
+      sync.onArrival((arrival) => arrived.push(arrival.id));
+      socket.frame({
+        type: "event",
+        sequence: 1,
+        event: {
+          serverEvent: "message",
+          type: "create",
+          ...message(7, bob.id),
+          timestamp: at(postedAt),
+        },
+      });
+      sync.stop();
+      return arrived;
+    };
+    // Ten minutes fast, a message posted a second after the sync began is news.
+    expect(await arrivals(T + 600_000, T + 1_000)).toEqual([message(7).id]);
+    // Ten minutes slow, one the replay brings from half a minute before it is not.
+    expect(await arrivals(T - 600_000, T - 30_000)).toEqual([]);
+  });
+
   it("goes live, and reads windows, only once the replay has been delivered", async () => {
     const { sync, socket, calls } = await connectWith(ready({ catchUpFollows: true }));
     expect(sync.status).toBe("connecting");
@@ -2523,6 +2620,83 @@ describe("AspenSync following the caller's other devices", () => {
     expect(sync.store.chosenPresence()).toBeNull();
     expect(statusReads).toEqual([me.id]);
     expect(sync.store.me()?.onlineStatus).toBe("online");
+    sync.stop();
+  });
+
+  it("ends a timed override and a timed mute by the server's clock", async () => {
+    // The device runs half an hour fast, so by its own clock both ends have long passed.
+    const fast = 1_800_000;
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        "/api/v1/users/@me/presence-override": () =>
+          json({ presenceOverride: "away", until: new Date(Date.now() + 60).toISOString() }),
+        "/api/v1/users/statuses": (url) =>
+          json(
+            (url.searchParams.get("ids") ?? "")
+              .split(",")
+              .map((id) => ({ id, onlineStatus: "online" })),
+          ),
+      },
+      () => Date.now() + fast,
+    );
+    sync.start();
+    await settle();
+    const socket = FakeSocket.instances[0];
+    if (socket === undefined) {
+      throw new Error("stream did not connect");
+    }
+    socket.onopen?.();
+    socket.frame(ready({ serverTime: new Date().toISOString() }));
+    socket.frame({
+      type: "event",
+      sequence: 1,
+      event: {
+        serverEvent: "channelMuteChanged",
+        channel: general.id,
+        muted: true,
+        until: new Date(Date.now() + 60).toISOString(),
+      },
+    });
+    await settle();
+    expect(sync.store.chosenPresence()?.presenceOverride).toBe("away");
+    expect(sync.store.mute(general.id)).toBeDefined();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await settle();
+    expect(sync.store.chosenPresence()).toBeNull();
+    expect(sync.store.mute(general.id)).toBeUndefined();
+    sync.stop();
+  });
+
+  it("ends no timed override by an offset kept from the last run, only by this run's ready", async () => {
+    // The last run left an offset half an hour ahead, by which the override's end has passed.
+    const clockStore = new MemoryClockOffsetStore();
+    clockStore.save(1_800_000);
+    const { sync } = makeSync(
+      {
+        ...bootstrapResponses(),
+        "/api/v1/users/@me/presence-override": () =>
+          json({ presenceOverride: "away", until: new Date(Date.now() + 1_200_000).toISOString() }),
+      },
+      () => Date.now(),
+      {},
+      clockStore,
+    );
+    expect(sync.clock.offsetMs).toBe(1_800_000);
+    sync.start();
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(sync.clock.heard).toBe(false);
+    expect(sync.store.chosenPresence()?.presenceOverride).toBe("away");
+    const socket = FakeSocket.instances[0];
+    if (socket === undefined) {
+      throw new Error("stream did not connect");
+    }
+    socket.onopen?.();
+    socket.frame(ready({ serverTime: new Date().toISOString() }));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(sync.store.chosenPresence()?.presenceOverride).toBe("away");
+    expect(Math.abs(clockStore.load() ?? Number.NaN)).toBeLessThan(1_000);
     sync.stop();
   });
 });

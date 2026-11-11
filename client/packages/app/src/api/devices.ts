@@ -1,7 +1,9 @@
 import {
+  type ClockOffsetStore,
   type DeviceCredentialStore,
   type PuzzleSolver,
   solvePuzzle,
+  WebStorageClockOffsetStore,
   WebStorageDeviceCredentialStore,
 } from "@aspen/protocol";
 
@@ -13,6 +15,17 @@ export function deviceStore(baseUrl: string): DeviceCredentialStore {
   return new WebStorageDeviceCredentialStore(
     window.localStorage,
     `aspen.device.${new URL(baseUrl).host}`,
+  );
+}
+
+/**
+ * Where the clock offset of the deployment at `baseUrl` is kept between runs: one key per
+ * deployment, so no deployment's clock is judged by another's offset.
+ */
+export function clockStore(baseUrl: string): ClockOffsetStore {
+  return new WebStorageClockOffsetStore(
+    window.localStorage,
+    `aspen.clock.${new URL(baseUrl).host}`,
   );
 }
 

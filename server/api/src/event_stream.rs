@@ -15,8 +15,9 @@
 //! repair from REST. `ready` also says what the replay could not vouch for: `replayComplete`
 //! is false when the feed had to leave out events it could not judge (`app::event_feed`), and
 //! `replayedSince` names where the window begins when it is shorter than `MAX_EVENT_AGE`, for
-//! the client to compare with when it began reading its state. The replay is written right
-//! after `ready` and ends with a `caughtUp` frame, after which every `event` happened live.
+//! the client to compare with when it began reading its state, which it can because `ready`
+//! carries this server's clock too (`serverTime`). The replay is written right after `ready`
+//! and ends with a `caughtUp` frame, after which every `event` happened live.
 //!
 //! Besides events, the stream carries what happens and is never kept (`ephemeral` frames: who
 //! is typing, `app::typing`, changes to the presence of those the client watches,
@@ -258,6 +259,13 @@ pub enum ServerMessage<'a> {
         /// here from another deployment) has nothing to compare it with.
         #[serde(skip_serializing_if = "Option::is_none")]
         web_client_build: Option<String>,
+        /// This API server's clock as the frame is written. A client keeps the difference
+        /// from its own clock at receipt, and judges by it every time this deployment stamped
+        /// (a ring's `until`, a token's expiry, `replayedSince`), so a device whose clock is
+        /// wrong does not misjudge them. A client whose `ready` lacks it takes the two clocks
+        /// to agree.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        server_time: Option<chrono::DateTime<chrono::Utc>>,
     },
     /// One server event. `sequence` increases monotonically within a connection and is what
     /// the client hands back as `resumeAfter`.
@@ -497,6 +505,7 @@ async fn handle_socket_conn(
         replayed_since: subscription.replayed_since,
         catch_up_follows: true,
         web_client_build: crate::web_client::build(&state.config).await,
+        server_time: Some(chrono::Utc::now()),
     };
     if let Err(e) = send_json(&mut socket, &ready).await {
         log_send_error(&e);
@@ -1082,6 +1091,7 @@ mod tests {
             replayed_since: None,
             catch_up_follows: true,
             web_client_build: None,
+            server_time: None,
         };
         assert_eq!(
             serde_json::to_string(&ready).unwrap(),
@@ -1100,10 +1110,12 @@ mod tests {
             replayed_since: Some(since),
             catch_up_follows: true,
             web_client_build: None,
+            server_time: Some(since + chrono::Duration::milliseconds(61_250)),
         };
         let json: serde_json::Value = serde_json::to_value(&short).unwrap();
         assert_eq!(json["replayComplete"], false);
         assert_eq!(json["replayedSince"], "2026-10-29T12:00:00Z");
+        assert_eq!(json["serverTime"], "2026-10-29T12:01:01.250Z");
         assert_eq!(
             serde_json::to_string(&ServerMessage::CaughtUp).unwrap(),
             r#"{"type":"caughtUp"}"#

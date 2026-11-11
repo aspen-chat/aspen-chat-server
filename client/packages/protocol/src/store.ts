@@ -1672,11 +1672,11 @@ export class RecordStore {
   /**
    * Notes a channel's mana as the server told it. Frames come from whichever API server last
    * spent or saw the channel's mana, and one from another server may arrive after a later one,
-   * so a frame older than the one held (by its `at`) is dropped.
+   * so a frame older than the one held (by its `serverAt`) is dropped.
    */
   noteMana(channelId: string, mana: ChannelMana): void {
     const held = this.#mana.get(channelId);
-    if (held !== undefined && mana.at < held.at) {
+    if (held !== undefined && mana.serverAt < held.serverAt) {
       return;
     }
     this.#mana.delete(channelId);

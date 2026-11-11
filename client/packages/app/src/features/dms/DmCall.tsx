@@ -8,6 +8,7 @@ import { useNow } from "@/features/layout/useNow";
 import { loopSound } from "@/features/notifications/sounds";
 import { voiceOutputDevice } from "@/features/settings/audioDevices";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { ringing as stillRinging } from "@/features/voice/ringing";
 import { ShareControl } from "@/features/voice/ShareControl";
 import { CallStage } from "@/features/voice/VoiceScreen";
 import { useMessages } from "@/i18n/context";
@@ -62,6 +63,7 @@ export function DmCall({ channel }: { channel: Channel }) {
  */
 function useDialTone(connected: boolean, voice: ChannelVoice) {
   const home = useContext(HomeSyncContext);
+  const sync = useSync();
   const me = useMe();
   const now = useNow(500, connected && voice.rings.length > 0);
   const ringing =
@@ -69,7 +71,7 @@ function useDialTone(connected: boolean, voice: ChannelVoice) {
     voice.rings.some(
       (ring) =>
         ring.user !== me?.id &&
-        Date.parse(ring.until) > now &&
+        stillRinging(ring, sync.clock, now) &&
         !voice.participants.some((participant) => participant.user === ring.user),
     );
   useEffect(() => {

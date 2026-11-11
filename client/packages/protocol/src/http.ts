@@ -28,6 +28,7 @@ import {
   type PasskeyTransport,
 } from "./passkeys";
 import { ApiProblemError, isProblem, transportProblem, type Problem } from "./problem";
+import { ServerClock, type ClockOffsetStore } from "./serverClock";
 import { type Session, type SessionStore, sessionTokenExpiresSoon } from "./session";
 import { API_PREFIX, requireSecure } from "./urls";
 import type {
@@ -61,8 +62,15 @@ export interface AspenClientOptions {
   onSessionChange?: (session: Session | null) => void;
   /** Waits the given milliseconds; tests replace it. */
   sleep?: (ms: number) => Promise<void>;
+  /** Reads the device's clock, as milliseconds since the epoch; tests replace it. */
+  now?: () => number;
   /** Where this server's device credential is kept (`device.ts`). Defaults to memory. */
   deviceStore?: DeviceCredentialStore;
+  /**
+   * Where this server's clock offset is kept between runs (`serverClock.ts`), so the clock is
+   * corrected before the event stream's first `ready`. Without one it starts from zero.
+   */
+  clockStore?: ClockOffsetStore;
   /**
    * Solves the puzzle a device credential is earned with. Defaults to `solvePuzzle`, on the
    * calling thread; a page passes one that runs in a worker.
@@ -138,6 +146,12 @@ export type PasskeyOutcome =
 export class AspenClient {
   readonly api: AspenHttpClient;
   readonly baseUrl: string;
+  /**
+   * This server's clock, which every time it stamped is judged against. `AspenSync` sets it by
+   * each `ready` of the event stream; until one arrives it stands where the last run left it
+   * (`clockStore`), or is the device's own.
+   */
+  readonly clock: ServerClock;
 
   readonly #store: SessionStore;
   readonly #fetch: typeof globalThis.fetch;
@@ -178,6 +192,7 @@ export class AspenClient {
       return fetch(input, { ...init, headers });
     };
     this.#refreshLeewayMs = options.refreshLeewayMs ?? 60_000;
+    this.clock = new ServerClock(options.now, options.clockStore);
     this.#onSessionChange = options.onSessionChange;
     this.#sleep =
       options.sleep ?? ((ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms)));
@@ -527,7 +542,8 @@ export class AspenClient {
       ending.abort();
     };
     signal.addEventListener("abort", end);
-    const lifetime = Date.parse(started.expiresAt) - Date.now() - CONDITIONAL_EXPIRY_MARGIN_MS;
+    const lifetime =
+      Date.parse(started.expiresAt) - this.clock.now() - CONDITIONAL_EXPIRY_MARGIN_MS;
     const expiry = setTimeout(end, Math.max(0, lifetime));
     let credential: Record<string, unknown>;
     try {
@@ -879,6 +895,11 @@ export class AspenClient {
     return this.#refreshing;
   }
 
+  /** Whether the session token is about to expire, by the clock of the server that set it. */
+  #expiresSoon(session: Session): boolean {
+    return sessionTokenExpiresSoon(session, this.#refreshLeewayMs, this.clock.now());
+  }
+
   /**
    * The session token to present out of band, for example in the event stream's `identify`
    * frame. Refreshes first when the token is about to expire, or unconditionally when
@@ -890,7 +911,7 @@ export class AspenClient {
     if (session === null) {
       return null;
     }
-    if (options.forceRefresh === true || sessionTokenExpiresSoon(session, this.#refreshLeewayMs)) {
+    if (options.forceRefresh === true || this.#expiresSoon(session)) {
       await this.refreshSession();
       session = this.session;
     }
@@ -998,7 +1019,7 @@ export class AspenClient {
    */
   async #pluginFetch(request: Request): Promise<Response> {
     let session = this.session;
-    if (session !== null && sessionTokenExpiresSoon(session, this.#refreshLeewayMs)) {
+    if (session !== null && this.#expiresSoon(session)) {
       await this.refreshSession();
       session = this.session;
     }
@@ -1021,7 +1042,7 @@ export class AspenClient {
 
   async #sessionFetch(request: Request): Promise<Response> {
     let session = this.session;
-    if (session !== null && sessionTokenExpiresSoon(session, this.#refreshLeewayMs)) {
+    if (session !== null && this.#expiresSoon(session)) {
       await this.refreshSession();
       session = this.session;
     }

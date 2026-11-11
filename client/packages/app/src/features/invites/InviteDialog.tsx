@@ -140,8 +140,9 @@ export function InviteManager({ communityId }: { communityId: string }) {
   // The invite just made shows its QR code at once; any other shows it when asked.
   const [shown, setShown] = useState<string | null>(null);
   const [made, setMade] = useState<RegistrationInvite | null>(null);
-  // "Expired" is judged against the moment the dialog opened; it is a label, not a timer.
-  const [openedAt] = useState(() => Date.now());
+  // "Expired" is judged against the moment the dialog opened, by the server's clock, which
+  // decides it; it is a label, not a timer.
+  const [openedAt] = useState(() => sync.clock.now());
 
   // Read again when Manage invites is gained or lost, since it decides whose invites are shown
   // and no event brings those made before it was gained.
@@ -168,7 +169,7 @@ export function InviteManager({ communityId }: { communityId: string }) {
       } else {
         const chosen = code.trim();
         const invite = await sync.createInvite(communityId, {
-          expiresAt: lifetime === null ? null : new Date(Date.now() + lifetime).toISOString(),
+          expiresAt: lifetime === null ? null : new Date(sync.clock.now() + lifetime).toISOString(),
           ...(manageAll && chosen !== "" ? { customCode: chosen } : {}),
         });
         setCode("");
@@ -431,7 +432,9 @@ function InviteRow({
                   sync
                     .updateInvite(
                       invite.code,
-                      lifetime === null ? null : new Date(Date.now() + lifetime).toISOString(),
+                      lifetime === null
+                        ? null
+                        : new Date(sync.clock.now() + lifetime).toISOString(),
                     )
                     .catch((e: unknown) => {
                       setChangeError(e instanceof ApiProblemError ? e.message : String(e));

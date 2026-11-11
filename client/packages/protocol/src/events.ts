@@ -75,6 +75,11 @@ export interface ReadyInfo {
   catchUpFollows: boolean;
   /** The build of the web client the server serves, or `null` when it names none. */
   webClientBuild: string | null;
+  /**
+   * The server's clock as it wrote the frame, which `ServerClock` takes its offset from; `null`
+   * from a server that does not say.
+   */
+  serverTime: string | null;
 }
 
 export interface EventStreamHandlers {
@@ -413,6 +418,7 @@ export class EventStream {
           replayedSince: frame.replayedSince ?? null,
           catchUpFollows: older.catchUpFollows ?? false,
           webClientBuild: frame.webClientBuild ?? null,
+          serverTime: frame.serverTime ?? null,
         });
         break;
       }

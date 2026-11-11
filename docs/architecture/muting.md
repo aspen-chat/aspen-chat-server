@@ -39,7 +39,8 @@ the channel has no setting of its own.
 
 ## Expiry
 
-- A mute that runs out ends on each device by its own clock, with no event.
+- A mute that runs out ends on each device, with no event. The device judges `until` by the server's
+  clock, which `ready` tells it (`serverTime`).
 - A row whose `until` has passed is simply not read back. Rows are never swept: each is one per user
   and channel or category, replaced by the user's next setting there and removed with the channel,
   the category, or the user.

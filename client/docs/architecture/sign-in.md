@@ -148,7 +148,10 @@ conditional mediation. `useConditionalPasskey` starts a `signIn` ceremony as the
 (`runConditionalPasskeySignIn`, `mediation: "conditional"`), and the one picked signs in.
 
 - Signing in with a password, pressing the passkey button, or leaving the form aborts it first.
-- It ends 15 seconds before its ceremony expires.
+- It ends 15 seconds before its ceremony expires, by the server's clock as the device last heard it:
+  the signed-out client starts from the offset an earlier run's event stream saved for this
+  deployment, and from the device's own clock where none is saved (see
+  [Each deployment's clock](deployments.md#each-deployments-clock)).
 - Another starts only when the person returns to the username field with none waiting, never on a
   timer: each start counts toward the sign-in rate limits.
 - A refused start is silent. A passkey the server refuses shows its Problem, as the button's does.

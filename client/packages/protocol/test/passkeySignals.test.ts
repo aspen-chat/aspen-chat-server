@@ -221,6 +221,42 @@ describe("conditional passkey sign-in", () => {
     ).rejects.toBeInstanceOf(PasskeyCancelledError);
     expect(paths).toHaveLength(1);
   });
+
+  it("counts what is left of its ceremony on the server's clock", async () => {
+    waitingBrowser();
+    // The device runs ten minutes fast, which alone puts a five-minute ceremony in its past.
+    const fast = scripted([started("cer-5")]);
+    const ahead = new AspenClient({
+      baseUrl,
+      sessionStore: new MemorySessionStore(),
+      fetch: fast.fetch,
+      now: () => Date.now() + 600_000,
+    });
+    ahead.clock.note(new Date().toISOString());
+    const controller = new AbortController();
+    let ended = false;
+    const waiting = ahead
+      .runConditionalPasskeySignIn("aspen.test", controller.signal)
+      .finally(() => {
+        ended = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(ended).toBe(false);
+    controller.abort();
+    await expect(waiting).rejects.toBeInstanceOf(PasskeyCancelledError);
+    // And ten minutes slow, a ceremony about to expire still ends in time.
+    const slow = scripted([started("cer-6", 15_050)]);
+    const behind = new AspenClient({
+      baseUrl,
+      sessionStore: new MemorySessionStore(),
+      fetch: slow.fetch,
+      now: () => Date.now() - 600_000,
+    });
+    behind.clock.note(new Date().toISOString());
+    await expect(
+      behind.runConditionalPasskeySignIn("aspen.test", new AbortController().signal),
+    ).rejects.toBeInstanceOf(PasskeyCancelledError);
+  });
 });
 
 describe("native passkeys", () => {

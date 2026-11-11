@@ -369,9 +369,13 @@ conversation never moves when it comes or goes.
   the channel to recharge enough for it.
 - **Levels:** the server tells them at most twice a second while the channel spends, as `mana`
   ephemeral frames for channels the connection views, and once as it starts viewing a busy one. The
-  store keeps the latest of up to 32 channels (`RecordStore.noteMana`), by each frame's `at`, since
-  frames from different API servers can pass one another on the way and an older one must not
-  replace a newer, and forgets them all when the connection is lost (`forgetMana`).
+  store keeps the latest of up to 32 channels (`RecordStore.noteMana`), by each frame's `at`
+  (`ChannelMana.serverAt`), since frames from different API servers can pass one another on the way
+  and an older one must not replace a newer, and forgets them all when the connection is lost
+  (`forgetMana`).
+- **Clocks:** a level is worked out from when this device received it (`ChannelMana.at`), by the
+  device's own clock, never from the server's `at`: the two clocks may be minutes apart, which would
+  show a short channel as full or hold the bar still.
 - **Between levels** it fills steadily as the channel recharges, drawn 15 times a second
   (`manaDrawnAt`, `MANA_FRAME_MS`) with its width unrounded, with no frames from the server.
 - **Read out** as a meter, its value a percentage.

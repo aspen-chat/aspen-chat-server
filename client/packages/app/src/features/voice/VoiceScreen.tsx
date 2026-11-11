@@ -43,6 +43,7 @@ import { TransferLinks } from "@/features/voice/TransferLinks";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 import { useNow } from "@/features/layout/useNow";
+import { ringing as stillRinging } from "@/features/voice/ringing";
 import { dangerButtonClass } from "@/features/invites/dialog";
 import { CopyIdButton } from "@/features/layout/CopyId";
 import { isMobilePlatform } from "@/features/layout/platform";
@@ -123,11 +124,11 @@ export function CallStage({
   const mayJoin = useChannelCan(channel.id, "joinVoice");
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const tiles = useRef<HTMLDivElement>(null);
-  // A ring ends at its `until` by the clock, so the clock is read while any ring is out.
+  // A ring ends at its `until` with no event, so the clock is read while any ring is out.
   const now = useNow(1000, voice.rings.length > 0);
   const ringing = voice.rings.filter(
     (ring) =>
-      Date.parse(ring.until) > now &&
+      stillRinging(ring, sync.clock, now) &&
       !voice.participants.some((participant) => participant.user === ring.user),
   );
   const silenced = useSilenced(

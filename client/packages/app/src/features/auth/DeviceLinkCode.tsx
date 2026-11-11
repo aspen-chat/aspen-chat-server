@@ -51,7 +51,8 @@ export function DeviceLinkCode() {
   const offering = client.session !== null;
   const withReauth = useOptionalReauth();
   const [phase, setPhase] = useState<Phase>({ kind: "starting" });
-  const now = useNow(1_000, phase.kind === "showing");
+  // The code's `expiresAt` is the server's, so what is left of it is counted on its clock.
+  const now = client.clock.at(useNow(1_000, phase.kind === "showing"));
   const live = useRef<string | null>(null);
 
   /** Makes a code, and what to show for it. */
@@ -182,12 +183,12 @@ export function DeviceLinkCode() {
         live.current = null;
         setPhase((current) => (current.kind === "showing" ? { kind: "expired" } : current));
       },
-      Math.max(0, expiresAt - Date.now()),
+      Math.max(0, expiresAt - client.clock.now()),
     );
     return () => {
       window.clearTimeout(timer);
     };
-  }, [expiresAt]);
+  }, [expiresAt, client]);
 
   async function approve(link: DeviceLink, deviceName: string) {
     try {
