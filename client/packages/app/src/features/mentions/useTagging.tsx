@@ -21,7 +21,8 @@ import {
 import { Avatar } from "@/features/communities/Avatar";
 import { useMemberSearch } from "@/features/community-settings/memberSearch";
 import { SuggestionList, type Suggestion } from "@/features/mentions/SuggestionList";
-import { encodeTags, tagQueryAt, type PickedTag } from "@/features/mentions/tags";
+import { tagQueryAt } from "@/features/mentions/tags";
+import type { PickTarget, Splice } from "@/features/messages/picks";
 import { displayNameOf, handleOf } from "@/features/users/profile";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -31,15 +32,16 @@ const MAX_SUGGESTIONS = 8;
 interface Tag extends Suggestion {
   /** What the message box shows once picked. */
   readonly text: string;
-  /** What it is sent as. */
-  readonly token: string;
+  /** What the text stands for; none for what is sent as it is written (`@everyone`). */
+  readonly target?: PickTarget;
 }
 
 /**
  * Tagging in a message box. Typing `@` offers the people of the channel's community or DM, its
  * roles, and `@everyone`, each only with the permission
  * to tag it in this channel; the arrow keys choose, Enter or Tab picks, and Escape dismisses.
- * A picked tag shows as `@username` or `@Role`, and `encode` turns the text into what is sent.
+ * A picked tag shows as `@username` or `@Role` and is written through `splice`, which remembers
+ * where it stands and what it tags (`picks.ts`).
  * People come from the member sample, joined as the caller types by a search of every member
  * where the server lets them search (`useMemberSearch`), so a large community's members can be
  * tagged by name though the sample holds only the most recently seen.
@@ -55,15 +57,13 @@ interface Tag extends Suggestion {
 export function useTagging({
   channelId,
   draft,
-  setDraft,
-  initialPicks = [],
+  splice,
   off = false,
 }: {
   channelId: string;
   draft: string;
-  setDraft: (next: string) => void;
-  /** The tags a message being edited already holds (`decodeTags`). */
-  initialPicks?: readonly PickedTag[];
+  /** Writes into the draft, remembering a pick (`usePickedText`). */
+  splice: Splice;
   /** Offers nothing, while something else completes what is typed (a command's arguments). */
   off?: boolean;
 }) {
@@ -79,7 +79,6 @@ export function useTagging({
   const roles = useRoles(home?.community ?? "");
   const nicknames = useNicknames(home?.community);
   const [caret, setCaret] = useState(0);
-  const [picks, setPicks] = useState<readonly PickedTag[]>(initialPicks);
   const [active, setActive] = useState(0);
   const [dismissedAt, setDismissedAt] = useState<number | null>(null);
   /** Where to put the caret once a pick's text is committed. */
@@ -107,7 +106,7 @@ export function useTagging({
           suggestions.push({
             key: `user:${user.id}`,
             text: `@${user.name}`,
-            token: `<@${user.id}>`,
+            target: { kind: "user", id: user.id },
             label: called,
             detail: handleOf(user),
             icon: <Avatar name={called} iconId={user.icon} size="sm" />,
@@ -121,7 +120,7 @@ export function useTagging({
           suggestions.push({
             key: `role:${role.id}`,
             text: `@${role.name}`,
-            token: `<@&${role.id}>`,
+            target: { kind: "role", id: role.id },
             label: `@${role.name}`,
             detail: m.tagging.role,
             icon: <UsersIcon size={18} aria-hidden="true" className="text-ink-muted" />,
@@ -133,7 +132,6 @@ export function useTagging({
       suggestions.push({
         key: "everyone",
         text: "@everyone",
-        token: "@everyone",
         label: "@everyone",
         detail: m.tagging.everyone,
         icon: <UsersThreeIcon size={18} aria-hidden="true" className="text-ink-muted" />,
@@ -149,18 +147,13 @@ export function useTagging({
       if (typing === null) {
         return;
       }
-      const before = draft.slice(0, typing.start) + suggestion.text + " ";
-      setDraft(before + draft.slice(caret));
-      setPicks((held) =>
-        held.some((p) => p.token === suggestion.token)
-          ? held
-          : [...held, { text: suggestion.text, token: suggestion.token }],
-      );
+      splice(typing.start, caret, suggestion.text, suggestion.target, " ");
+      const after = typing.start + suggestion.text.length + 1;
       setActive(0);
-      setCaret(before.length);
-      placing.current = { box, at: before.length };
+      setCaret(after);
+      placing.current = { box, at: after };
     },
-    [typing, draft, caret, setDraft],
+    [typing, caret, splice],
   );
 
   // The caret goes after the picked tag as the new text is committed, before anything else
@@ -201,19 +194,23 @@ export function useTagging({
   };
 
   /**
-   * Puts `tag` at the end of the draft, picked as though chosen from the list, from somewhere
-   * outside the box (a user's Mention); the caret goes after it, in `box` when given.
+   * Puts a tag of `target`, shown as `text`, at the end of the draft, picked as though chosen
+   * from the list, from somewhere outside the box (a user's Mention); the caret goes after it,
+   * in `box` when given.
    */
   const insert = useCallback(
-    (tag: PickedTag, box: HTMLTextAreaElement | null) => {
-      const before = draft === "" || /\s$/u.test(draft) ? draft : draft + " ";
-      const after = before + tag.text + " ";
-      setDraft(after);
-      setPicks((held) => (held.some((p) => p.token === tag.token) ? held : [...held, tag]));
-      setCaret(after.length);
-      placing.current = { box, at: after.length };
+    (text: string, target: PickTarget, box: HTMLTextAreaElement | null) => {
+      let at = draft.length;
+      if (draft !== "" && !/\s$/u.test(draft)) {
+        splice(at, at, " ");
+        at += 1;
+      }
+      splice(at, at, text, target, " ");
+      const after = at + text.length + 1;
+      setCaret(after);
+      placing.current = { box, at: after };
     },
-    [draft, setDraft],
+    [draft, splice],
   );
 
   const followCaret = (event: SyntheticEvent<HTMLTextAreaElement>) => {
@@ -249,19 +246,9 @@ export function useTagging({
     list: suggestionList,
     /** What a polite status beside the box says of the suggestions: how many, how to pick. */
     announcement,
-    /** The tags picked, which a draft keeps with its text. */
-    picks,
-    /** The text as it is sent, picked tags and all. */
-    encode: (text: string) => encodeTags(text, picks),
     insert,
-    /** Takes `held` as the picks, of text put in the box whole (`decodeTags`). */
-    restore: (held: readonly PickedTag[]) => {
-      setPicks(held);
-      setDismissedAt(null);
-    },
-    /** Forgets the picks, once what they were for is sent. */
+    /** Forgets where the list was dismissed, once the box holds other text. */
     reset: () => {
-      setPicks([]);
       setDismissedAt(null);
     },
   };

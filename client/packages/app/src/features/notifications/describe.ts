@@ -32,7 +32,7 @@ export function describe(
           community: community.name,
         });
   const roles = place?.community == null ? [] : store.roles(place.community);
-  const { text } = decodeTags(
+  const text = decodeTags(
     message.content,
     (id) => store.user(id)?.name,
     (id) => roles.find((role) => role.id === id)?.name,

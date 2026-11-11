@@ -10,6 +10,7 @@
 
 use super::{Room, RoomError, Rooms, Seat, seated};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::info;
@@ -77,6 +78,15 @@ fn mode_label(mode: TransferMode) -> &'static str {
     }
 }
 
+/// Removes the offer under `id`, and with a `record` only when it is the one made as that
+/// record; whether one was removed.
+fn take_offer(offers: &mut HashMap<Uuid, Offer>, id: Uuid, record: Option<Uuid>) -> bool {
+    let meant = offers
+        .get(&id)
+        .is_some_and(|offer| record.is_none_or(|record| offer.record == record));
+    meant && offers.remove(&id).is_some()
+}
+
 impl Room {
     /// The offers that may still be accepted, for a newcomer.
     pub(super) fn standing_offers(&self) -> Vec<FileOffer> {
@@ -101,6 +111,15 @@ impl Room {
                 receiver: *receiver,
             })
             .collect()
+    }
+
+    /// Ends the offer under `id`, if it still stands, telling everyone. Given a `record`, only
+    /// the offer made as that record is ended: ids are the client's and may be used again once
+    /// free, records are made here and never repeat.
+    fn end_offer(&self, id: Uuid, reason: OfferEnd, record: Option<Uuid>) {
+        if take_offer(&mut self.offers.lock().expect("offers lock"), id, record) {
+            self.broadcast(&ServerMessage::FileWithdrawn { offer: id, reason }, None);
+        }
     }
 
     /// Sends to one participant; false when they are not in the call.
@@ -153,7 +172,7 @@ impl Rooms {
     /// checked the join token's Transfer files grant.
     #[allow(clippy::too_many_arguments)]
     pub async fn offer_file(
-        self: &Arc<Self>,
+        &self,
         seat: Seat,
         id: Uuid,
         name: String,
@@ -229,10 +248,14 @@ impl Rooms {
             offer = id.to_string(),
             "file offered"
         );
-        let rooms = Arc::clone(self);
+        // The timer ends the offer it was made for and no other: the sender may since have
+        // withdrawn it and offered again under the same id, here or in the channel's next call.
+        let room = Arc::downgrade(&room);
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(u64::from(valid_for_seconds))).await;
-            rooms.end_offer(channel, id, OfferEnd::Expired);
+            if let Some(room) = room.upgrade() {
+                room.end_offer(id, OfferEnd::Expired, Some(record));
+            }
         });
         Ok(())
     }
@@ -251,7 +274,7 @@ impl Rooms {
         if !own {
             return Err(RoomError::UnknownOffer);
         }
-        self.end_offer(channel, offer, OfferEnd::Withdrawn);
+        room.end_offer(offer, OfferEnd::Withdrawn, None);
         Ok(())
     }
 
@@ -270,23 +293,7 @@ impl Rooms {
             .map(|(id, _)| *id)
             .collect();
         for offer in own {
-            self.end_offer(channel, offer, OfferEnd::NotPermitted);
-        }
-    }
-
-    /// Ends an offer, if it still stands, telling everyone.
-    fn end_offer(&self, channel: Uuid, offer: Uuid, reason: OfferEnd) {
-        let Ok(room) = self.room(channel) else {
-            return;
-        };
-        if room
-            .offers
-            .lock()
-            .expect("offers lock")
-            .remove(&offer)
-            .is_some()
-        {
-            room.broadcast(&ServerMessage::FileWithdrawn { offer, reason }, None);
+            room.end_offer(offer, OfferEnd::NotPermitted, None);
         }
     }
 
@@ -569,5 +576,41 @@ impl Rooms {
         for key in keys {
             self.finish(room, key, user, TransferEnd::Left).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn offer(record: Uuid) -> Offer {
+        Offer {
+            record,
+            from: Uuid::now_v7(),
+            name: "notes.txt".to_string(),
+            size: 1,
+            allow_direct: true,
+            expires: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn an_expiry_ends_only_the_offer_it_was_set_for() {
+        let (id, first, second) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        let mut offers = HashMap::from([(id, offer(second))]);
+        // The first offer under this id was withdrawn and the id used again.
+        assert!(!take_offer(&mut offers, id, Some(first)));
+        assert!(offers.contains_key(&id));
+        assert!(take_offer(&mut offers, id, Some(second)));
+        assert!(!take_offer(&mut offers, id, Some(second)));
+    }
+
+    #[test]
+    fn a_withdrawal_ends_whichever_offer_holds_the_id() {
+        let id = Uuid::now_v7();
+        let mut offers = HashMap::from([(id, offer(Uuid::now_v7()))]);
+        assert!(!take_offer(&mut offers, Uuid::now_v7(), None));
+        assert!(take_offer(&mut offers, id, None));
+        assert!(offers.is_empty());
     }
 }

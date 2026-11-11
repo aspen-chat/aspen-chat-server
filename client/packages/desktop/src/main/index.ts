@@ -1,4 +1,12 @@
-import { BrowserWindow, app, desktopCapturer, ipcMain, session, shell } from "electron";
+import {
+  BrowserWindow,
+  app,
+  desktopCapturer,
+  ipcMain,
+  session,
+  shell,
+  webContents,
+} from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { claimAppLinks, serveAppLinks } from "./appLinks";
@@ -188,7 +196,7 @@ function serveDisplayMedia(): void {
         .then(async (sources) => {
           const chosen = SYSTEM_PICKER
             ? { id: sources[0]?.id ?? null, systemAudio: false }
-            : await askRenderer(request.frame?.processId, sources);
+            : await askRenderer(request.frame, sources);
           const source = sources.find((candidate) => candidate.id === chosen.id);
           if (source === undefined) {
             answer({});
@@ -209,14 +217,17 @@ function serveDisplayMedia(): void {
   );
 }
 
-/** Shows the renderer the sources and waits for its choice, or for it to dismiss the picker. */
+/**
+ * Shows the sources in the window whose frame asked for them (the first window when the frame is
+ * gone) and waits for its choice, or for it to dismiss the picker.
+ */
 function askRenderer(
-  processId: number | undefined,
+  frame: Electron.WebFrameMain | null,
   sources: Electron.DesktopCapturerSource[],
 ): Promise<SourceChoice> {
   const target =
-    BrowserWindow.getAllWindows().find((w) => w.webContents.getOSProcessId() === processId)
-      ?.webContents ?? BrowserWindow.getAllWindows()[0]?.webContents;
+    (frame === null ? undefined : webContents.fromFrame(frame)) ??
+    BrowserWindow.getAllWindows()[0]?.webContents;
   if (target === undefined) {
     return Promise.resolve({ id: null, systemAudio: false });
   }

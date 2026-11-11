@@ -104,7 +104,7 @@ function Original({
   // Tags read as names, as the message shows them; one whose record is not here reads as a tag
   // with no name rather than as its id.
   const roles = home.community === null ? [] : store.roles(home.community);
-  const { text } = decodeTags(
+  const text = decodeTags(
     original.content,
     (id) => store.user(id)?.name ?? "…",
     (id) => roles.find((role) => role.id === id)?.name ?? "…",

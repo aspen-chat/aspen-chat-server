@@ -1,5 +1,5 @@
 import type { Attachment, Reply } from "@aspen/protocol";
-import type { PickedTag } from "@/features/mentions/tags";
+import { soundPicks, type Picked } from "@/features/messages/picks";
 
 /**
  * Drafts: what someone has written in a message box and not sent, kept on this device per
@@ -17,8 +17,12 @@ import type { PickedTag } from "@/features/mentions/tags";
 
 export interface Draft {
   readonly text: string;
-  /** The tags picked in it, so they are sent as tags (`encodeTags`). */
-  readonly picks: readonly PickedTag[];
+  /**
+   * What was picked in it and where (`picks.ts`), so that a draft restored is sent as it would
+   * have been: the text is kept as written, not as sent, since the names to read it back by
+   * may not have loaded when a box opens, or may have changed.
+   */
+  readonly picks: readonly Picked[];
   /** Files uploaded for it. */
   readonly attachments: readonly Attachment[];
   /** In a thread, whether to show the reply in its parent channel too. */
@@ -73,7 +77,12 @@ export function isEmpty(draft: Pick<Draft, "text" | "attachments">): boolean {
 export function readDraft(userId: string, channelId: string): Draft | null {
   const key = keyOf(userId, channelId);
   const latest = noted.get(key);
-  return latest !== undefined ? latest : (readAll()[key] ?? null);
+  if (latest !== undefined) {
+    return latest;
+  }
+  const kept = readAll()[key];
+  // Storage may hold what another version of the app kept, so its picks are checked.
+  return kept === undefined ? null : { ...kept, picks: soundPicks(kept.text, kept.picks) };
 }
 
 /** Notes the draft of `channelId` as it stands, for `readDraft`, before it is kept. */

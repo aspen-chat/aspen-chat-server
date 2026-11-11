@@ -61,14 +61,19 @@ function catalogue(language: Language): Messages {
     switch (language) {
       case "en-XA":
         messages = pseudoCatalogue(en, accented);
+        register(messages, language);
         break;
       case "ar-XB":
         messages = pseudoCatalogue(en, mirrored);
+        register(messages, language);
         break;
-      default:
-        messages = translated(en, TRANSLATIONS[language] ?? {});
+      default: {
+        const translation = TRANSLATIONS[language] ?? {};
+        messages = translated(en, translation);
+        // Only what the translation itself holds is in its language: the rest reads in English.
+        register(translation, language);
+      }
     }
-    register(messages, language);
     made.set(language, messages);
   }
   return messages;

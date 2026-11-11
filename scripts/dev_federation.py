@@ -175,11 +175,23 @@ def pid_file(deployment: Deployment) -> Path:
 
 
 def running_pid(deployment: Deployment) -> int | None:
+    """The pid of `deployment`'s server, when it runs. The recorded pid outlives its process (a
+    crash, a reboot) and may by then be some other process's, so it counts only while it is an
+    `aspen-chat-server` whose working directory is the deployment's, as `start_server` starts it.
+    Where there is no `/proc` to ask, a live process with that pid is taken to be the server."""
     try:
         pid = int(pid_file(deployment).read_text())
         os.kill(pid, 0)
+        if not Path("/proc/self").exists():
+            return pid
+        process = Path("/proc") / str(pid)
+        program = (process / "cmdline").read_bytes().split(b"\0")[0]
+        if Path(os.fsdecode(program)).name != "aspen-chat-server":
+            return None
+        if not deployment.dir.samefile(process / "cwd"):
+            return None
         return pid
-    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+    except (OSError, ValueError):
         return None
 
 

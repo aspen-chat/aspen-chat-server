@@ -186,7 +186,7 @@ function ScheduledRow({
       message.content,
       (id) => sync.store.user(id)?.name,
       (id) => roles.find((role) => role.id === id)?.name,
-    ).text,
+    ),
     community === null ? [] : sync.store.customEmoji(community),
   );
 

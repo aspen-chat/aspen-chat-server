@@ -1237,6 +1237,20 @@ Crates that provide these traits are welcome, and the workspace uses several:
 
 A conversion that takes one value and nothing else is `impl From`, not a `*_to_api` function.
 
+### Assumptions nothing enforces
+
+Code that is right only while something nobody checks stays true is a bug that has not happened yet.
+Each of these was found in this codebase many times over; look for them by name when writing and
+when reviewing.
+
+1. **A thing is known by its id, never by a name or by text that can repeat.** Usernames repeat
+   across deployments, role names within a community, display names between two running programs,
+   and a pid is reused. What someone picked is remembered as what it is (the composer's `Picked`
+   ranges, `client/packages/app/src/features/messages/picks.ts`), not found again by searching for
+   its text. A timer ends the record it was set for, not whatever holds that id when it fires. Where
+   no id exists (a program's audio across its restart), match on everything stable that is known and
+   act only when exactly one candidate fits.
+
 ## Comments document the current code, not its history
 
 Every comment and docstring anywhere in this repository — Rust in `server/`, TypeScript in

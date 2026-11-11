@@ -32,6 +32,11 @@ A manifest with a `principal` makes its account:
 An upgrade replaces the manifest and component. It keeps the mode, the order, whether it is on, and
 the settings it still has. It asks again when the plugin asks for more.
 
+A plugin receives only the settings its manifest declares now (`settings::effective`), the
+deployment's and each community's alike: a stored value whose field is gone, or whose field has
+changed its type, range, or options so that the value no longer fits, is not passed on, and the
+field's default is in its place.
+
 ## Remove and purge
 
 | Command  | Does                                                                                                                                                                                      | Keeps                                                                                             |

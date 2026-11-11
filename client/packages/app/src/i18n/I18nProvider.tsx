@@ -3,6 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactN
 import { I18nProvider as AriaI18nProvider } from "react-aria-components";
 import { LanguageContext, MessagesContext } from "./context";
 import { AUTOMATIC, platformLanguages, resolveLocale } from "./locales";
+import { showLanguage } from "./messages";
 
 /**
  * Where this install remembers the language last chosen, so the sign-in screen shows it too;
@@ -36,6 +37,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     };
   }, []);
   const resolved = useMemo(() => resolveLocale(choice, platform), [choice, platform]);
+  // While rendering, since everything below formats its templates as it renders.
+  showLanguage(resolved.language);
   // Before any child's effects, so the first requests already name the language.
   useLayoutEffect(() => {
     document.documentElement.lang = resolved.locale;

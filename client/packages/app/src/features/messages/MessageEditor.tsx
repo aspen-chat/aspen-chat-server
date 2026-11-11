@@ -4,10 +4,10 @@ import { TOUCH_ONLY, useMediaQuery } from "@/features/layout/useMediaQuery";
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Button, TextArea, TextField } from "react-aria-components";
 import { useAttachments, useSync } from "@/api/hooks";
-import { decodeCustomEmoji } from "@/features/emoji/customEmoji";
+import { encodeCustomEmoji } from "@/features/emoji/customEmoji";
 import { EmojiKeyboard } from "@/features/emoji/EmojiKeyboard";
 import { useEmojiCompletion } from "@/features/emoji/useEmojiCompletion";
-import { decodeTags } from "@/features/mentions/tags";
+import { decodePicked, encodePicked, trimPicked, usePickedText } from "@/features/messages/picks";
 import { useTagging } from "@/features/mentions/useTagging";
 import { MESSAGE_MAX_CHARS, messageLength } from "@/features/messages/messageLength";
 import { MessageLengthNote } from "@/features/messages/MessageLengthNote";
@@ -21,7 +21,9 @@ import { useMessages } from "@/i18n/context";
 
 /**
  * Replaces a message's text in place. Enter saves, Escape cancels, Shift+Enter breaks a line.
- * Its tags read as they were written (`@username`, `@Role`), and more can be picked as in the
+ * Its tags and custom emoji read as they were written (`@username`, `@Role`, `:name:`), each
+ * a pick of what it named (`decodePicked`), so what is not changed is sent back as it was, and
+ * more can be picked as in the
  * message box, whose emoji keyboard it has too, docked below it; Escape puts that away before
  * it cancels the edit. Its files stay as they are, but each can be described or marked a
  * spoiler, saved as soon as it is changed.
@@ -47,23 +49,25 @@ export function MessageEditor({
     const community = store.channel(channelId)?.community;
     const roles = community == null ? [] : store.roles(community);
     const custom = community == null ? [] : store.customEmoji(community);
-    const tags = decodeTags(
-      initial,
-      (id) => store.user(id)?.name,
-      (id) => roles.find((role) => role.id === id)?.name,
-    );
-    return { ...tags, text: decodeCustomEmoji(tags.text, custom) };
+    return decodePicked(initial, {
+      usernameOf: (id) => store.user(id)?.name,
+      roleNameOf: (id) => roles.find((role) => role.id === id)?.name,
+      emojiNameOf: (id) => custom.find((e) => e.id.toLowerCase() === id.toLowerCase())?.name,
+    });
   });
-  const [draft, setDraft] = useState(decoded.text);
-  const tagging = useTagging({ channelId, draft, setDraft, initialPicks: decoded.picks });
-  const emoji = useEmojiCompletion({ channelId, draft, setDraft });
+  const written = usePickedText(decoded);
+  const draft = written.held.text;
+  const tagging = useTagging({ channelId, draft, splice: written.splice });
+  const emoji = useEmojiCompletion({ channelId, draft, splice: written.splice });
   const box = useRef<HTMLTextAreaElement>(null);
   const [keyboard, setKeyboard] = useState(false);
   const keyboardId = useId();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const content = emoji.encode(tagging.encode(draft.trim()));
+  const content = encodePicked(trimPicked(written.held), (text) =>
+    encodeCustomEmoji(text, emoji.custom),
+  );
   const length = messageLength(content);
   const tooLong = length > MESSAGE_MAX_CHARS;
 
@@ -130,7 +134,9 @@ export function MessageEditor({
       <TextField
         aria-label={m.editMessageLabel}
         value={draft}
-        onChange={setDraft}
+        onChange={(next) => {
+          written.type(next, box.current?.selectionStart);
+        }}
         autoFocus
         className="relative"
       >

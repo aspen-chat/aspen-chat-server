@@ -37,7 +37,11 @@ from the helper instead of the browser:
 `native/capture/src/pipewire_audio.rs`, which the catalogue names `aspen_pipewire_app_audio`:
 
 - opens a capture stream and links one application's output ports to it;
-- follows that application by process id while it runs, and by name across a restart.
+- follows that application by process id while it runs, and across a restart by its name and binary
+  together (`application.name` and `application.process.binary`). Names repeat between programs
+  (`SDL Application`, `Chromium`), so the name alone finds it only when a single process carries
+  that name and nothing says that process runs another binary; otherwise the capture is silent until
+  the application plays again.
 
 The game keeps playing to its own output while the call hears it.
 

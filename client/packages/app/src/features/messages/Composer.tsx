@@ -61,8 +61,15 @@ import { ScheduleMessageModal } from "@/features/messages/ScheduleMessageDialog"
 import { ScheduleBar } from "@/features/messages/ScheduleBar";
 import { ScheduledStrip } from "@/features/messages/ScheduledMessages";
 import { describeTimeProblem, timeProblem } from "@/features/messages/scheduleTimes";
-import { decodeCustomEmoji } from "@/features/emoji/customEmoji";
-import { decodeTags } from "@/features/mentions/tags";
+import { encodeCustomEmoji } from "@/features/emoji/customEmoji";
+import {
+  decodePicked,
+  NOTHING_WRITTEN,
+  encodePicked,
+  trimPicked,
+  usePickedText,
+  type PickedText,
+} from "@/features/messages/picks";
 import { MEDIUM_SCREEN, useMediaQuery, TOUCH_ONLY } from "@/features/layout/useMediaQuery";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { useMessages } from "@/i18n/context";
@@ -193,7 +200,9 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   // (`heldPlace`).
   const draftKey = startsThreadOf === undefined ? channelId : `thread-of:${startsThreadOf}`;
   const [saved] = useState(() => (me === null ? null : readDraft(me.id, draftKey)));
-  const [draft, setDraft] = useState(saved?.text ?? "");
+  // The box's text and the picks in it, which the completions below write through.
+  const written = usePickedText({ text: saved?.text ?? "", picks: saved?.picks ?? [] });
+  const draft = written.held.text;
   const [echo, setEcho] = useState(saved?.echo ?? false);
   const [reply, setReply] = useState<Reply | null>(saved?.reply ?? null);
   const [scheduledFor, setScheduledFor] = useState<Date | null>(
@@ -230,18 +239,22 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   const mayPoll = !starting && permissions.has("createPolls");
   const blockedPeer = useBlockedDmPeer(channelId);
   const systemPeer = useSystemDmPeer(channelId);
-  const commands = useCommandLine({ channelId, draft, setDraft });
+  const commands = useCommandLine({ channelId, draft, splice: written.splice });
   const wide = useMediaQuery(MEDIUM_SCREEN);
   const [polling, setPolling] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const tagging = useTagging({
     channelId,
     draft,
-    setDraft,
+    splice: written.splice,
     off: commands.active,
-    initialPicks: saved?.picks ?? [],
   });
-  const emoji = useEmojiCompletion({ channelId, draft, setDraft, off: commands.active });
+  const emoji = useEmojiCompletion({
+    channelId,
+    draft,
+    splice: written.splice,
+    off: commands.active,
+  });
   const box = useRef<HTMLTextAreaElement>(null);
   const [keyboard, setKeyboard] = useState(false);
   const keyboardId = useId();
@@ -257,8 +270,8 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   // a message's Reply makes what is written here a reply to it, tagging its author unless the
   // reader turns that off.
   useComposerTarget(channelId, mayPost && !starting, {
-    insert: (tag) => {
-      tagging.insert(tag, box.current);
+    insert: (text, target) => {
+      tagging.insert(text, target, box.current);
       box.current?.focus();
     },
     reply: (messageId) => {
@@ -277,7 +290,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     }
     const current = {
       text: draft,
-      picks: tagging.picks,
+      picks: written.held.picks,
       attachments: pending.flatMap((p) => (p.state.kind === "ready" ? [p.state.attachment] : [])),
       echo,
       ...(reply === null ? {} : { reply }),
@@ -293,7 +306,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     return () => {
       clearTimeout(timer);
     };
-  }, [draft, pending, echo, reply, scheduledFor, tagging.picks]);
+  }, [written.held, pending, echo, reply, scheduledFor]);
   useEffect(() => {
     const flush = () => keep.current?.();
     window.addEventListener("pagehide", flush);
@@ -332,8 +345,14 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   const readyIds = pending.flatMap((p) =>
     p.state.kind === "ready" ? [p.state.attachment.id] : [],
   );
+  /**
+   * The draft as a message's text is sent: trimmed, each pick as its reference, and a custom
+   * emoji's `:name:` typed by hand looked up among the community's.
+   */
+  const encode = (trimmed: PickedText) =>
+    encodePicked(trimmed, (text) => encodeCustomEmoji(text, emoji.custom));
   // Counted as sent, tags and custom emoji written out as their references.
-  const length = messageLength(emoji.encode(tagging.encode(draft.trim())));
+  const length = messageLength(encode(trimPicked(written.held)));
   const canSend =
     !sending &&
     !uploading &&
@@ -494,18 +513,19 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     setSending(true);
     setError(null);
     try {
-      const text = draft.trim();
+      const trimmed = trimPicked(written.held);
+      const { text } = trimmed;
       // A line beginning with `/` is read against the commands here, which it may be sent
       // before they have been read.
       if (text.startsWith("/") && sync.store.commands(channelId) === undefined) {
         await sync.loadCommands(channelId).catch(() => undefined);
       }
       if (scheduledFor !== null) {
-        await schedule(text, scheduledFor);
+        await schedule(trimmed, scheduledFor);
         return;
       }
       await saveFileChanges();
-      const prepared = commands.prepare(text, readyIds);
+      const prepared = commands.prepare(trimmed, readyIds);
       if (prepared.kind === "refused") {
         setError(prepared.reason);
         return;
@@ -521,14 +541,9 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
           startsThreadOf === undefined ? channelId : (await sync.openThread(startsThreadOf)).id;
         await sync.invokeCommand(target, prepared.invocation);
       } else if (startsThreadOf !== undefined) {
-        await sync.replyInThread(
-          startsThreadOf,
-          emoji.encode(tagging.encode(text)),
-          readyIds,
-          options,
-        );
+        await sync.replyInThread(startsThreadOf, encode(trimmed), readyIds, options);
       } else {
-        await sync.sendMessage(channelId, emoji.encode(tagging.encode(text)), readyIds, options);
+        await sync.sendMessage(channelId, encode(trimmed), readyIds, options);
       }
       clearBox();
     } catch (e) {
@@ -539,13 +554,13 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
   }
 
   /**
-   * Schedules `text`, the box's trimmed draft, with its files for `at`, and empties the box as
+   * Schedules `trimmed`, the box's trimmed draft, with its files for `at`, and empties the box as
    * sending it would. What cannot be scheduled is thrown for `send` to say, the bar staying so
    * the reader may change the message or the time: a reply also shown in the thread's parent
    * channel, a time no longer far enough ahead (the bar was set a while ago) or too far, and a
    * command, which is run when it is sent.
    */
-  async function schedule(text: string, at: Date) {
+  async function schedule(trimmed: PickedText, at: Date) {
     if (echoTarget !== undefined && echo) {
       throw new Error(format(m.scheduled.noEcho, { channel: echoTarget }));
     }
@@ -553,14 +568,14 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     if (problem !== null) {
       throw new Error(describeTimeProblem(m, problem));
     }
-    const prepared = commands.prepare(text, readyIds);
+    const prepared = commands.prepare(trimmed, readyIds);
     if (prepared.kind !== "message") {
       throw new Error(prepared.kind === "refused" ? prepared.reason : m.scheduled.noCommands);
     }
     await saveFileChanges();
     await sync.scheduleMessage(
       channelId,
-      emoji.encode(tagging.encode(text)),
+      encode(trimmed),
       readyIds,
       at,
       reply === null ? {} : { reply },
@@ -581,15 +596,15 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     }
     const { scheduled, attachments } = await sync.unschedule(scheduledId);
     const roles = community === null ? [] : sync.store.roles(community);
-    const tags = decodeTags(
-      scheduled.content,
-      (id) => sync.store.user(id)?.name,
-      (id) => roles.find((role) => role.id === id)?.name,
+    const custom = community === null ? [] : sync.store.customEmoji(community);
+    written.set(
+      decodePicked(scheduled.content, {
+        usernameOf: (id) => sync.store.user(id)?.name,
+        roleNameOf: (id) => roles.find((role) => role.id === id)?.name,
+        emojiNameOf: (id) => custom.find((e) => e.id.toLowerCase() === id.toLowerCase())?.name,
+      }),
     );
-    setDraft(
-      decodeCustomEmoji(tags.text, community === null ? [] : sync.store.customEmoji(community)),
-    );
-    tagging.restore(tags.picks);
+    tagging.reset();
     setPending(attachments.map(pendingOf));
     setEcho(false);
     setReply(
@@ -627,7 +642,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
 
   /** Empties the box once what it held is sent or scheduled, and forgets its draft. */
   function clearBox() {
-    setDraft("");
+    written.set(NOTHING_WRITTEN);
     tagging.reset();
     commands.reset();
     if (me !== null) {
@@ -927,7 +942,9 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
         <TextField
           aria-label={m.messageLabel}
           value={draft}
-          onChange={setDraft}
+          onChange={(next) => {
+            written.type(next, box.current?.selectionStart);
+          }}
           className="message-text relative min-w-0 flex-1"
         >
           <p role="status" className="sr-only">

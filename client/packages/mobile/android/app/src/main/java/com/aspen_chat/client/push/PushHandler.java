@@ -5,6 +5,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.service.notification.StatusBarNotification;
 import android.util.Base64;
@@ -188,6 +189,12 @@ public final class PushHandler {
         open.putExtra("message", message);
         open.putExtra("community", community);
         open.putExtra("parentChannel", parentChannel);
+        // Two pending intents are one unless their request codes or their intents differ, and
+        // extras are not part of that comparison while data is. Hash codes can collide, so the
+        // data names the notification, and a tap opens what its own notification showed. The
+        // intent names the activity, so the address is never resolved, and the app opens only
+        // addresses of its own link scheme.
+        open.setData(new Uri.Builder().scheme("aspen-push").authority(channel).appendPath(id).build());
         PendingIntent tap = PendingIntent.getActivity(
             context,
             id.hashCode(),

@@ -649,21 +649,39 @@ fn packets_per_second(kind: Kind, shape: &CallShape) -> f64 {
 /// Lets every consumer start (a video consumer waits for a keyframe), then measures the
 /// workers' CPU, the packets that arrived, and the allocator's growth since `allocated_before`
 /// over `seconds`.
-async fn measure(sink: &Sink, allocated_before: u64, seconds: Duration) -> (f64, f64, f64) {
+async fn measure(
+    sink: &Sink,
+    allocated_before: u64,
+    seconds: Duration,
+) -> anyhow::Result<(f64, f64, f64)> {
     tokio::time::sleep(Duration::from_secs(2)).await;
     let cpu_before = worker_cpu();
     let received_before = sink.received();
     let started = Instant::now();
     tokio::time::sleep(seconds).await;
     let elapsed = started.elapsed().as_secs_f64();
-    let cpu = (worker_cpu() - cpu_before) / elapsed;
+    let cpu = cores_used(cpu_before, worker_cpu(), elapsed)?;
     let arrived = (sink.received() - received_before) as f64 / elapsed;
     let allocated = aspen_metrics::allocated_bytes().unwrap_or(0);
-    (
+    Ok((
         cpu,
         arrived,
         allocated.saturating_sub(allocated_before) as f64,
-    )
+    ))
+}
+
+/// The cores the workers used between two readings of `worker_cpu`, `elapsed` seconds apart.
+/// Forwarding the calibration's streams always costs a worker time, so a reading that did not
+/// rise means the workers' threads were not found (`metrics::worker_cpu_seconds`), and an
+/// estimate made from it would count CPU as free.
+fn cores_used(before: f64, after: f64, elapsed: f64) -> anyhow::Result<f64> {
+    anyhow::ensure!(
+        after > before,
+        "the mediasoup workers' CPU time could not be measured (no thread of this process named \
+         `mediasoup-worker-…` was found under /proc/self/task, or none used any time), so no \
+         capacity can be estimated"
+    );
+    Ok((after - before) / elapsed)
 }
 
 /// Forwards synthetic streams of `kind` through a router on `worker` for `seconds` and measures
@@ -704,7 +722,7 @@ async fn calibrate(
         }
         sources.push(source);
     }
-    let (cpu, arrived, allocated) = measure(&sink, allocated_before, seconds).await;
+    let (cpu, arrived, allocated) = measure(&sink, allocated_before, seconds).await?;
     stop.store(true, Ordering::Relaxed);
     for source in &mut sources {
         let _ = (&mut source.sender).await;
@@ -786,7 +804,7 @@ async fn calibrate_calls(
         }
         kept.push((router, sources, receivers, consumers));
     }
-    let (cpu, arrived, allocated) = measure(&sink, allocated_before, seconds).await;
+    let (cpu, arrived, allocated) = measure(&sink, allocated_before, seconds).await?;
     stop.store(true, Ordering::Relaxed);
     for (_, sources, _, _) in &mut kept {
         for (_, source) in sources {
@@ -966,6 +984,13 @@ mod tests {
             audio_kbps: 64.0,
             screen_kbps: 2500.0,
         }
+    }
+
+    #[test]
+    fn cpu_that_was_not_measured_stops_the_estimate() {
+        assert_eq!(cores_used(1.0, 2.0, 4.0).unwrap(), 0.25);
+        assert!(cores_used(0.0, 0.0, 4.0).is_err());
+        assert!(cores_used(3.0, 3.0, 4.0).is_err());
     }
 
     #[test]

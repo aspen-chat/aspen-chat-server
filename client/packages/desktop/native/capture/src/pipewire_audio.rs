@@ -11,15 +11,19 @@
 //! out. This is the same mechanism the desktop's own per-application audio tools
 //! use, and it needs only a PipeWire socket, not a particular session manager.
 //!
-//! The application is named by process id and name (`application.process.id` and
-//! `application.name` on its nodes). The nodes with that process id are the target while any
-//! exist; when none does, the nodes with that name are, which follows a game across a restart.
+//! The application is named by process id, name, and binary (`application.process.id`,
+//! `application.name`, and `application.process.binary` on its nodes). The nodes with that
+//! process id are the target while any exist; when none does, the nodes with that name and
+//! binary are, which follows a game across a restart. Names repeat between programs (`SDL
+//! Application`, `Chromium`), so the name alone finds a target only when a single process
+//! carries it and nothing says that process runs another binary.
 //! Nodes come and go while the capture runs (games open a stream per sound device, browsers
 //! one per tab), and the registry listener relinks as they do.
 //!
-//! A `Target` is `pid` (the process id, 0 for none) and `application` (the name), as the
-//! settings of a `startAudio` request carry it; `playing_applications` lists what can be
-//! captured right now in the same vocabulary.
+//! A `Target` is `pid` (the process id, 0 for none), `application` (the name), and `binary`
+//! (the binary's name, when the node gave one), as the settings of a `startAudio` request
+//! carry it; `playing_applications` lists what can be captured right now in the same
+//! vocabulary.
 
 use crate::AudioTarget;
 use pipewire as pw;
@@ -54,6 +58,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Target {
     pid: Option<u32>,
     application: String,
+    binary: Option<String>,
 }
 
 impl Target {
@@ -63,11 +68,14 @@ impl Target {
         if let Some(pid) = self.pid {
             settings.insert("pid".into(), pid.into());
         }
+        if let Some(binary) = &self.binary {
+            settings.insert("binary".into(), binary.clone().into());
+        }
         serde_json::Value::Object(settings)
     }
 
-    /// The target `settings` name, a JSON object with `application` and `pid`; none, an empty
-    /// target, which captures nothing until retargeted.
+    /// The target `settings` name, a JSON object with `application`, `pid`, and `binary`; none,
+    /// an empty target, which captures nothing until retargeted.
     pub fn from_settings(settings: Option<&str>) -> Result<Target, String> {
         let Some(json) = settings else {
             return Ok(Target::default());
@@ -75,6 +83,7 @@ impl Target {
         let mut target: Target =
             serde_json::from_str(json).map_err(|e| format!("audio settings: {e}"))?;
         target.pid = target.pid.filter(|pid| *pid != 0);
+        target.binary = target.binary.filter(|binary| !binary.is_empty());
         Ok(target)
     }
 }
@@ -84,6 +93,7 @@ impl Target {
 struct NodeInfo {
     application: String,
     pid: Option<u32>,
+    binary: Option<String>,
 }
 
 /// An audio port of some node. Monitor ports and ports without an audio channel are not kept.
@@ -102,8 +112,8 @@ fn is_output_stream(global: &GlobalObject<&DictRef>) -> bool {
 }
 
 /// What a node's properties say of its application. The registry announces only a node's
-/// headline properties (its name, class, and application name); the process id arrives with
-/// the node's own info once it is bound, so this runs on both.
+/// headline properties (its name, class, and application name); the process id and binary
+/// arrive with the node's own info once it is bound, so this runs on both.
 fn node_info(props: &DictRef) -> NodeInfo {
     let application = props
         .get("application.name")
@@ -115,7 +125,15 @@ fn node_info(props: &DictRef) -> NodeInfo {
         .get("application.process.id")
         .and_then(|pid| pid.parse().ok())
         .filter(|pid| *pid != 0);
-    NodeInfo { application, pid }
+    let binary = props
+        .get("application.process.binary")
+        .filter(|binary| !binary.is_empty())
+        .map(str::to_string);
+    NodeInfo {
+        application,
+        pid,
+        binary,
+    }
 }
 
 /// Binds an application stream's node so its full properties arrive, handing each reading to
@@ -246,10 +264,15 @@ fn group_applications(nodes: Vec<NodeInfo>) -> Vec<AudioTarget> {
             Some(pid) => Key::Pid(pid),
             None => Key::Name(node.application.clone()),
         };
-        groups.entry(key).or_insert(Target {
+        let group = groups.entry(key).or_insert(Target {
             pid: node.pid,
             application: node.application,
+            binary: None,
         });
+        // A stream announced without its binary must not hide the one a sibling stream gave.
+        if group.binary.is_none() {
+            group.binary = node.binary;
+        }
     }
     let mut targets: Vec<Target> = groups.into_values().collect();
     targets.sort_by(|a, b| {
@@ -380,9 +403,11 @@ impl Graph {
     }
 }
 
-/// The nodes the target names: those of its process while any exist, else those of its name.
+/// The nodes the target names: those of its process while any exist; else those of its name
+/// and binary; else those of its name, when they are one process's and none is known to run
+/// another binary. A name shared by several processes names none of them.
 fn select_nodes(nodes: &HashMap<u32, NodeInfo>, target: &Target) -> Vec<u32> {
-    let mut by_pid: Vec<u32> = match target.pid {
+    let mut selected: Vec<u32> = match target.pid {
         Some(pid) => nodes
             .iter()
             .filter(|(_, node)| node.pid == Some(pid))
@@ -390,15 +415,31 @@ fn select_nodes(nodes: &HashMap<u32, NodeInfo>, target: &Target) -> Vec<u32> {
             .collect(),
         None => Vec::new(),
     };
-    if by_pid.is_empty() && !target.application.is_empty() {
-        by_pid = nodes
+    if selected.is_empty() && !target.application.is_empty() {
+        let named: Vec<(u32, &NodeInfo)> = nodes
             .iter()
             .filter(|(_, node)| node.application == target.application)
-            .map(|(id, _)| *id)
+            .map(|(id, node)| (*id, node))
             .collect();
+        let same_binary = |node: &NodeInfo| target.binary.is_some() && node.binary == target.binary;
+        if named.iter().any(|(_, node)| same_binary(node)) {
+            selected = named
+                .iter()
+                .filter(|(_, node)| same_binary(node))
+                .map(|(id, _)| *id)
+                .collect();
+        } else {
+            let other_binary = named
+                .iter()
+                .any(|(_, node)| target.binary.is_some() && node.binary.is_some());
+            let one_process = named.iter().all(|(_, node)| node.pid == named[0].1.pid);
+            if !other_binary && one_process {
+                selected = named.iter().map(|(id, _)| *id).collect();
+            }
+        }
     }
-    by_pid.sort_unstable();
-    by_pid
+    selected.sort_unstable();
+    selected
 }
 
 /// Pairs output ports with input ports by channel name; an output whose channel has no input
@@ -699,6 +740,23 @@ mod tests {
         NodeInfo {
             application: application.into(),
             pid,
+            binary: None,
+        }
+    }
+
+    fn program(application: &str, pid: u32, binary: &str) -> NodeInfo {
+        NodeInfo {
+            application: application.into(),
+            pid: Some(pid),
+            binary: Some(binary.into()),
+        }
+    }
+
+    fn target(application: &str, pid: Option<u32>, binary: Option<&str>) -> Target {
+        Target {
+            pid,
+            application: application.into(),
+            binary: binary.map(str::to_string),
         }
     }
 
@@ -706,7 +764,7 @@ mod tests {
     fn applications_are_grouped_by_process_and_sorted_by_name() {
         let targets = group_applications(vec![
             node("Firefox", Some(10)),
-            node("Firefox", Some(10)),
+            program("Firefox", 10, "firefox"),
             node("doom.exe", Some(20)),
             node("Chromium", Some(30)),
             node("Chromium", Some(31)),
@@ -732,6 +790,10 @@ mod tests {
             serde_json::json!({ "application": "Chromium", "pid": 30 })
         );
         assert_eq!(
+            targets[3].settings,
+            serde_json::json!({ "application": "Firefox", "pid": 10, "binary": "firefox" })
+        );
+        assert_eq!(
             targets[4].settings,
             serde_json::json!({ "application": "Nameless process" })
         );
@@ -744,22 +806,51 @@ mod tests {
         nodes.insert(2, node("doom.exe", Some(20)));
         nodes.insert(3, node("doom.exe", Some(99)));
         nodes.insert(4, node("Firefox", Some(10)));
-        let target = Target {
-            pid: Some(20),
-            application: "doom.exe".into(),
-        };
-        assert_eq!(select_nodes(&nodes, &target), vec![1, 2]);
+        let doom = target("doom.exe", Some(20), None);
+        assert_eq!(select_nodes(&nodes, &doom), vec![1, 2]);
         nodes.remove(&1);
         nodes.remove(&2);
-        assert_eq!(select_nodes(&nodes, &target), vec![3]);
+        assert_eq!(select_nodes(&nodes, &doom), vec![3]);
         nodes.remove(&3);
-        assert!(select_nodes(&nodes, &target).is_empty());
-        let by_name = Target {
-            pid: None,
-            application: "Firefox".into(),
-        };
+        assert!(select_nodes(&nodes, &doom).is_empty());
+        let by_name = target("Firefox", None, None);
         assert_eq!(select_nodes(&nodes, &by_name), vec![4]);
         assert!(select_nodes(&nodes, &Target::default()).is_empty());
+    }
+
+    #[test]
+    fn a_restarted_process_is_found_by_its_name_and_binary() {
+        let mut nodes = HashMap::new();
+        nodes.insert(1, program("SDL Application", 30, "celeste"));
+        nodes.insert(2, program("SDL Application", 31, "celeste"));
+        nodes.insert(3, program("SDL Application", 40, "hollow_knight"));
+        nodes.insert(4, node("SDL Application", Some(50)));
+        let celeste = target("SDL Application", Some(20), Some("celeste"));
+        assert_eq!(select_nodes(&nodes, &celeste), vec![1, 2]);
+        // Its own process, while it plays, comes before any namesake.
+        nodes.insert(5, program("SDL Application", 20, "celeste"));
+        assert_eq!(select_nodes(&nodes, &celeste), vec![5]);
+    }
+
+    #[test]
+    fn a_name_alone_finds_only_a_single_process_not_known_to_be_another_program() {
+        let mut nodes = HashMap::new();
+        nodes.insert(1, program("Chromium", 30, "electron"));
+        nodes.insert(2, program("Chromium", 30, "electron"));
+        // Another program under the same name is not the target.
+        let game = target("Chromium", Some(20), Some("game"));
+        assert!(select_nodes(&nodes, &game).is_empty());
+        // A target whose binary was never learnt takes the one process carrying its name.
+        let unnamed = target("Chromium", Some(20), None);
+        assert_eq!(select_nodes(&nodes, &unnamed), vec![1, 2]);
+        nodes.insert(3, program("Chromium", 31, "chromium"));
+        assert!(select_nodes(&nodes, &unnamed).is_empty());
+        // Nodes that say nothing of their binary are taken when one process holds them all.
+        let mut silent = HashMap::new();
+        silent.insert(1, node("Chromium", Some(30)));
+        assert_eq!(select_nodes(&silent, &game), vec![1]);
+        silent.insert(2, node("Chromium", Some(31)));
+        assert!(select_nodes(&silent, &game).is_empty());
     }
 
     #[test]
@@ -782,24 +873,22 @@ mod tests {
 
     #[test]
     fn the_target_is_written_the_way_the_capture_reads_it() {
-        let target = Target {
-            pid: Some(7),
-            application: "game".into(),
-        };
+        let target = target("game", Some(7), Some("game.x86_64"));
         let settings = target.settings();
         assert_eq!(
             settings,
-            serde_json::json!({ "application": "game", "pid": 7 })
+            serde_json::json!({ "application": "game", "pid": 7, "binary": "game.x86_64" })
         );
         assert_eq!(
             Target::from_settings(Some(&settings.to_string())).unwrap(),
             target
         );
         assert_eq!(
-            Target::from_settings(Some(r#"{"application":"game","pid":0}"#)).unwrap(),
+            Target::from_settings(Some(r#"{"application":"game","pid":0,"binary":""}"#)).unwrap(),
             Target {
                 pid: None,
-                application: "game".into()
+                application: "game".into(),
+                binary: None,
             }
         );
         assert_eq!(Target::from_settings(None).unwrap(), Target::default());

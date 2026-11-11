@@ -473,7 +473,7 @@ function SearchResult({
   const author = useUser(message.author);
   const { place, home, link, where } = useMessagePlace(message, domain);
   const roles = place?.community == null ? [] : sync.store.roles(place.community);
-  const { text } = decodeTags(
+  const text = decodeTags(
     message.content,
     (id) => sync.store.user(id)?.name,
     (id) => roles.find((role) => role.id === id)?.name,

@@ -11,10 +11,11 @@ import {
 } from "react";
 import { useChannel, useCustomEmoji } from "@/api/hooks";
 import { CustomEmojiGlyph } from "@/features/emoji/CustomEmojiGlyph";
-import { decodeCustomEmoji, encodeCustomEmoji } from "@/features/emoji/customEmoji";
+import { emojiIdOf } from "@/features/emoji/customEmoji";
 import { useEmojiLanguage } from "@/features/emoji/emojiData";
 import { loadEmojiNames, searchEmojiNames, type NamedEmoji } from "@/features/emoji/emojiNames";
 import { SuggestionList, type Suggestion } from "@/features/mentions/SuggestionList";
+import type { PickTarget, Splice } from "@/features/messages/picks";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -25,6 +26,8 @@ const MIN_QUERY_CHARS = 2;
 /** An emoji offered for what is typed: what the pick writes into the box. */
 interface EmojiSuggestion extends Suggestion {
   readonly text: string;
+  /** The custom emoji the text stands for; none for a glyph, which is sent as it is. */
+  readonly target?: PickTarget;
 }
 
 /**
@@ -42,20 +45,21 @@ export function emojiQueryAt(text: string, caret: number): { start: number; quer
 /**
  * Completes emoji in a message box: a colon followed by part of a name offers the community's
  * own emoji and every unicode emoji that answers to it, the community's first. A unicode pick
- * writes the glyph; a custom pick writes `:name:`, which `encode` turns into the emoji's
- * reference as the message is sent. The unicode names are the picker's, in the reader's
+ * writes the glyph; a custom pick writes `:name:` through `splice`, which remembers where it
+ * stands and which emoji it is (`picks.ts`). The unicode names are the picker's, in the reader's
  * language (`emojiData.ts`). The list is keyed as `useTagging`'s is, and reads the same way.
  * `insert` writes what the box's emoji keyboard (`EmojiKeyboard`) picks the same way.
  */
 export function useEmojiCompletion({
   channelId,
   draft,
-  setDraft,
+  splice,
   off = false,
 }: {
   channelId: string;
   draft: string;
-  setDraft: (next: string) => void;
+  /** Writes into the draft, remembering a pick (`usePickedText`). */
+  splice: Splice;
   /** Offers nothing, while something else completes what is typed. */
   off?: boolean;
 }) {
@@ -107,6 +111,7 @@ export function useEmojiCompletion({
         suggestions.push({
           key: `custom:${emoji.id}`,
           text: `:${emoji.name}:`,
+          target: { kind: "emoji", id: emoji.id.toLowerCase() },
           label: `:${emoji.name}:`,
           detail: m.emoji.customDetail,
           icon: <CustomEmojiGlyph id={emoji.id} communityId={communityId} size="large" />,
@@ -138,18 +143,18 @@ export function useEmojiCompletion({
       if (typing === null) {
         return;
       }
-      const before = draft.slice(0, typing.start) + suggestion.text + " ";
-      setDraft(before + draft.slice(caret));
+      splice(typing.start, caret, suggestion.text, suggestion.target, " ");
+      const after = typing.start + suggestion.text.length + 1;
       setActive(0);
-      setCaret(before.length);
-      placing.current = { box, at: before.length };
+      setCaret(after);
+      placing.current = { box, at: after };
     },
-    [typing, draft, caret, setDraft],
+    [typing, caret, splice],
   );
 
   /**
    * Puts `emoji`, as the keyboard names it (a glyph, or a custom emoji's reference, written
-   * as `:name:`), into the box where its caret is, in place of whatever is selected, and
+   * as `:name:` and picked as that emoji), into the box where its caret is, in place of whatever is selected, and
    * leaves the caret after it. The box's own selection is read, since the keyboard has the
    * focus as it picks; a box not drawn yet takes it at the end.
    */
@@ -157,12 +162,20 @@ export function useEmojiCompletion({
     (emoji: string, box: HTMLTextAreaElement | null) => {
       const start = box?.selectionStart ?? draft.length;
       const end = box?.selectionEnd ?? draft.length;
-      const before = draft.slice(0, start) + decodeCustomEmoji(emoji, custom);
-      setDraft(before + draft.slice(end));
-      setCaret(before.length);
-      placing.current = { box, at: before.length };
+      const id = emojiIdOf(emoji);
+      const named = id === null ? undefined : custom.find((e) => e.id.toLowerCase() === id);
+      const shown = named === undefined ? emoji : `:${named.name}:`;
+      splice(
+        start,
+        end,
+        shown,
+        id === null || named === undefined ? undefined : { kind: "emoji", id },
+      );
+      const after = start + shown.length;
+      setCaret(after);
+      placing.current = { box, at: after };
     },
-    [draft, setDraft, custom],
+    [draft, splice, custom],
   );
 
   // The caret goes after the pick or insertion as the new text is committed, before anything
@@ -228,9 +241,7 @@ export function useEmojiCompletion({
     insert,
     /** The community the box's channel is in, whose own emoji a keyboard offers; none in a DM. */
     communityId,
-    /** The text as it is sent: each `:name:` of the community's emoji as its reference. */
-    encode: (text: string) => encodeCustomEmoji(text, custom),
-    /** The community's emoji, for decoding a message being edited. */
+    /** The community's emoji, which a `:name:` typed by hand is looked up among as it is sent. */
     custom,
   };
 }

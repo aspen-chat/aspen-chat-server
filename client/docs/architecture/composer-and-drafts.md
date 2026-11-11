@@ -16,6 +16,7 @@ or for a busy channel, messages scheduled for later, the mana bar, and drafts.
 | Mana bar        | `ManaBar.tsx`, `manaDrawnAt` (`@aspen/protocol`), `TopSendersDialog.tsx`                    |
 | Replying        | `ReplyBar`, `composerTargets.ts`; the line above a reply is `ReplyLine`                     |
 | Drafts          | `src/features/messages/drafts.ts`                                                           |
+| Picks           | `src/features/messages/picks.ts`; see [Picks](tagging.md#picks)                             |
 | Emoji keyboard  | `EmojiKeyboard`, `useEmojiCompletion`'s `insert` (`src/features/emoji`)                     |
 
 ## Layout
@@ -384,8 +385,9 @@ conversation never moves when it comes or goes.
 
 `src/features/messages/drafts.ts` keeps what is written in a message box and not sent:
 
-- text
-- picked tags
+- text, as written
+- what was picked in it (tags, custom emoji, a command's arguments) and where
+  ([Picks](tagging.md#picks))
 - files already uploaded
 - a thread's echo choice
 - the message it replies to, kept only with text or files
@@ -400,5 +402,10 @@ notification opened, and a reload. It goes once sent.
 2. On every change it notes the draft in memory (`noteDraft`). `readDraft` reads memory first.
 3. It keeps the draft in `localStorage` after a short pause, and at once when it unmounts or the
    page is hidden.
+
+**Why the text is kept as written, with its picks, not as it would be sent:** reading references
+back needs the names of what they name, which may not have loaded when a box opens, or may have
+changed since. Picks read from storage are checked (`soundPicks`): what another version of the app
+kept in another shape is left out, and its text stays text.
 
 `e2e/drafts.spec.ts` checks the notification path.

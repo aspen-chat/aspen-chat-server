@@ -25,33 +25,55 @@ export interface StringTree {
 }
 
 /**
- * The language each catalogue's templates are written in, which picks a template's plural
- * forms and how `#` writes its number. The first catalogue to hold a text names it: a string a
- * translation leaves in English is English, and two languages that write a template
- * identically write it alike.
+ * The templates written in each language, by its tag: English's own, each translation's, and
+ * each pseudo-locale's. A catalogue's language picks its templates' plural forms and how `#`
+ * and `{n, number}` write their number.
  */
-const languages = new Map<string, string>();
+const written = new Map<string, Set<string>>();
 
-/** Templates parsed, each of some catalogue's, so they number at most what the catalogues hold. */
-const parsed = new Map<string, Parsed>();
+/**
+ * Templates parsed, by the language each was parsed in and then by text: every one some
+ * catalogue's, so they number at most what the catalogues hold.
+ */
+const parsed = new Map<string, Map<string, Parsed>>();
 
-/** The language of templates no catalogue holds. */
+/**
+ * The language of English's own templates, of a string a translation leaves in English, and of
+ * templates no catalogue holds.
+ */
 const DEFAULT_LANGUAGE = "en";
+
+/**
+ * The catalogue `format` reads templates as being of. A text two catalogues hold is written in
+ * each one's language, so only the catalogue shown can say which a template is in.
+ */
+let shown = DEFAULT_LANGUAGE;
 
 /** Notes `messages`' templates as written in `language`; `locales.ts` does so for each it makes. */
 export function register(messages: StringTree, language: string): void {
+  let templates = written.get(language);
+  if (templates === undefined) {
+    templates = new Set();
+    written.set(language, templates);
+  }
   for (const value of Object.values(messages)) {
     if (typeof value === "string") {
-      if (!languages.has(value)) {
-        languages.set(value, language);
-      }
+      templates.add(value);
     } else {
       register(value, language);
     }
   }
 }
 
-register(en, "en");
+register(en, DEFAULT_LANGUAGE);
+
+/**
+ * Has `format` read templates as the catalogue of `language`'s from here on. `I18nProvider`
+ * calls it with the language it shows before anything it holds formats.
+ */
+export function showLanguage(language: string): void {
+  shown = language;
+}
 
 interface Parsed {
   /** `null` when the template is not valid MessageFormat, and is shown as written. */
@@ -74,24 +96,27 @@ function placeholdersOf(elements: readonly MessageFormatElement[], into: Set<str
 }
 
 function parse(template: string): Parsed {
-  const known = parsed.get(template);
+  const language = written.get(shown)?.has(template) === true ? shown : DEFAULT_LANGUAGE;
+  const known = parsed.get(language)?.get(template);
   if (known !== undefined) {
     return known;
   }
-  const language = languages.get(template);
   let result: Parsed;
   try {
     // Text in angle brackets is text: no template marks anything up.
-    const message = new IntlMessageFormat(template, language ?? DEFAULT_LANGUAGE, undefined, {
-      ignoreTag: true,
-    });
+    const message = new IntlMessageFormat(template, language, undefined, { ignoreTag: true });
     result = { message, placeholders: [...placeholdersOf(message.getAst(), new Set())] };
   } catch (error) {
     console.error(`Not a valid message template: ${JSON.stringify(template)}`, error);
     result = { message: null, placeholders: [] };
   }
-  if (language !== undefined) {
-    parsed.set(template, result);
+  if (written.get(language)?.has(template) === true) {
+    let ofLanguage = parsed.get(language);
+    if (ofLanguage === undefined) {
+      ofLanguage = new Map();
+      parsed.set(language, ofLanguage);
+    }
+    ofLanguage.set(template, result);
   }
   return result;
 }

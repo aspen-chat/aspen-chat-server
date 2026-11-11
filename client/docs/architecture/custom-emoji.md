@@ -30,8 +30,12 @@ A message's text names a custom emoji as `<:id>`.
 
 The message box shows a custom emoji as `:name:`.
 
-- On send, `encodeCustomEmoji` turns `:name:` into the reference.
-- For an edit, `decodeCustomEmoji` turns it back.
+- One picked from the completion or the keyboard is a pick ([Picks](tagging.md#picks)): it is sent
+  as the reference of the emoji that was picked, whatever else shares or resembles its name.
+- One typed by hand is looked up by name on send (`encodeCustomEmoji`): as written first, then
+  ignoring case when exactly one emoji has the name so.
+- For an edit, `decodePicked` turns each reference back into `:name:`, a pick of the same emoji.
+- `decodeCustomEmoji` reads references as names where a line of a message is shown.
 
 ### Completion
 
@@ -40,14 +44,14 @@ The message box shows a custom emoji as `:name:`.
 - the community's emoji
 - every unicode emoji, by its names
 
-A unicode pick writes the glyph. A custom pick writes `:name:`.
+A unicode pick writes the glyph. A custom pick writes `:name:` and remembers which emoji it is.
 
 ### The keyboard
 
 The smiley left of Send docks the picker below the box (`EmojiKeyboard`; see
 [The emoji keyboard](composer-and-drafts.md#the-emoji-keyboard)). The community's emoji are its own
 section. A pick is written as the completion writes one, through `useEmojiCompletion`'s `insert`,
-which turns the picker's reference into `:name:`.
+which turns the picker's reference into `:name:`, a pick of that emoji.
 
 ### Emoji data
 

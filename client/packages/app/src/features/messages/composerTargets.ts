@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
-import type { PickedTag } from "@/features/mentions/tags";
+import type { PickTarget } from "@/features/messages/picks";
 
 /** What a message box offers the rest of the page. */
 interface ComposerTarget {
-  /** Puts a tag in it where the reader is writing, and their focus with it. */
-  insert: (tag: PickedTag) => void;
+  /** Puts a tag in it, shown as `text` and picked as `target`, and the reader's focus with it. */
+  insert: (text: string, target: PickTarget) => void;
   /** Makes what is written there a reply to the message, and brings the reader's focus there. */
   reply: (messageId: string) => void;
 }
@@ -27,8 +27,8 @@ export function useComposerTarget(channelId: string, on: boolean, target: Compos
       return;
     }
     const own: ComposerTarget = {
-      insert: (tag) => {
-        latest.current.insert(tag);
+      insert: (text, target) => {
+        latest.current.insert(text, target);
       },
       reply: (messageId) => {
         latest.current.reply(messageId);
@@ -48,9 +48,9 @@ export function hasComposer(channelId: string): boolean {
   return boxes.has(channelId);
 }
 
-/** Puts `tag` in the message box of `channelId`, as a user's Mention does. */
-export function mentionIn(channelId: string, tag: PickedTag): void {
-  boxes.get(channelId)?.insert(tag);
+/** Puts a tag of `target`, shown as `text`, in the message box of `channelId`. */
+export function mentionIn(channelId: string, text: string, target: PickTarget): void {
+  boxes.get(channelId)?.insert(text, target);
 }
 
 /** Starts a reply to `messageId` in the message box of `channelId`, its channel. */

@@ -511,6 +511,10 @@ same commit, as with comments.
   which reloads the newest page.
 - The UI thread is the only thread. Anything that awaits (network, storage) must not block
   rendering; keep async work in effects or event handlers and surface pending state in the UI.
+- What the writer picked (a tag, a command's argument, a custom emoji) is remembered by its range in
+  the draft (`usePickedText`, `src/features/messages/picks.ts`) and encoded from that range. Never
+  find a pick again by searching the text for its name, which other text and other picks can share.
+  A new kind of pick is a `Picked` kind, not a map keyed by what is shown.
 
 ## Verification before handing work back
 

@@ -24,6 +24,7 @@ import { useForeignDeployments } from "@/api/deploymentsContext";
 import { Avatar } from "@/features/communities/Avatar";
 import { useMemberSearch } from "@/features/community-settings/memberSearch";
 import { SuggestionList, type Suggestion } from "@/features/mentions/SuggestionList";
+import { pickAt, type PickedText, type PickKind, type Splice } from "@/features/messages/picks";
 import { displayNameOf, handleOf } from "@/features/users/profile";
 import { useLanguageSetting, useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
@@ -46,13 +47,22 @@ import {
 
 const MAX_SUGGESTIONS = 8;
 
+/** What a picked argument is, for each type of parameter whose values are picked by name. */
+const PICKED_AS: Partial<Record<ParameterType, PickKind>> = {
+  userId: "user",
+  roleId: "role",
+  channelId: "channel",
+  communityId: "community",
+  deploymentHost: "deployment",
+};
+
 /** A completion: the text it puts in the box, and for a value, what that text stands for. */
 interface Completion extends Suggestion {
-  /** Replaces the text from `from` to the caret. */
+  /** Replaces the text from `from` to the caret; a space follows it. */
   readonly text: string;
   readonly from: number;
   /** The value the text stands for, for an argument whose text is a name. */
-  readonly value?: { type: ParameterType; id: string };
+  readonly value?: { kind: PickKind; id: string };
 }
 
 /** What sending the draft comes to. */
@@ -68,19 +78,21 @@ export type Prepared =
  * another bot answers to the same name writes that bot's tag after it, which is how a line
  * says which it means. While an argument is typed, the command's form is shown above the box,
  * the parameter at the caret marked, with what it takes and suggestions of that type: people,
- * roles, channels, communities, and deployments by name, which `prepare` turns into the ids
- * the server reads. `useTagging` offers nothing meanwhile (`active`).
+ * roles, channels, communities, and deployments by name, each written through `splice`, which
+ * remembers where it stands and what it names (`picks.ts`), so `prepare` sends the id of what
+ * was picked whatever else shares its name. `useTagging` offers nothing meanwhile (`active`).
  *
  * The keyboard and assistive technology work as `useTagging` describes.
  */
 export function useCommandLine({
   channelId,
   draft,
-  setDraft,
+  splice,
 }: {
   channelId: string;
   draft: string;
-  setDraft: (next: string) => void;
+  /** Writes into the draft, remembering a pick (`usePickedText`). */
+  splice: Splice;
 }) {
   const m = useMessages();
   const { resolved } = useLanguageSetting();
@@ -105,9 +117,6 @@ export function useCommandLine({
   const [caret, setCaret] = useState(0);
   const [active, setActive] = useState(0);
   const [dismissedAt, setDismissedAt] = useState<string | null>(null);
-  const [values, setValues] = useState<ReadonlyMap<string, { type: ParameterType; id: string }>>(
-    new Map(),
-  );
   const placing = useRef<{ box: HTMLTextAreaElement | null; at: number } | null>(null);
 
   const line = commandsNeeded ? readCommandLine(draft, offered, usernameOf) : null;
@@ -150,7 +159,7 @@ export function useCommandLine({
         const tag = shared.length > 1 ? ` @${usernameOf(o.bot) ?? o.bot}` : "";
         completions.push({
           key: `${o.bot}:${o.command.name}`,
-          text: `/${o.command.name}${tag} `,
+          text: `/${o.command.name}${tag}`,
           from: 0,
           label: `/${o.command.name}`,
           detail: displayOf(o.bot),
@@ -163,7 +172,7 @@ export function useCommandLine({
       const from = at.token.start;
       const offer = (
         id: string,
-        type: ParameterType,
+        kind: PickKind,
         shown: string,
         name: string,
         detail: string | null,
@@ -171,13 +180,13 @@ export function useCommandLine({
       ) => {
         if (name.toLowerCase().includes(query) || shown.toLowerCase().includes(query)) {
           completions.push({
-            key: `${type}:${id}`,
-            text: `${quoteArgument(shown)} `,
+            key: `${kind}:${id}`,
+            text: quoteArgument(shown),
             from,
             label: name,
             detail,
             icon,
-            value: { type, id },
+            value: { kind, id },
           });
         }
       };
@@ -194,7 +203,7 @@ export function useCommandLine({
             const called = nicknames.get(user.id) ?? displayNameOf(user);
             offer(
               user.id,
-              "userId",
+              "user",
               `@${user.name}`,
               called,
               handleOf(user),
@@ -207,7 +216,7 @@ export function useCommandLine({
           for (const role of roles) {
             offer(
               role.id,
-              "roleId",
+              "role",
               `@${role.name}`,
               `@${role.name}`,
               null,
@@ -219,7 +228,7 @@ export function useCommandLine({
           for (const c of channels) {
             offer(
               c.id,
-              "channelId",
+              "channel",
               `#${c.name}`,
               `#${c.name}`,
               null,
@@ -231,7 +240,7 @@ export function useCommandLine({
           for (const c of communities) {
             offer(
               c.id,
-              "communityId",
+              "community",
               c.name,
               c.name,
               null,
@@ -243,7 +252,7 @@ export function useCommandLine({
           for (const d of deployments) {
             offer(
               d.domain,
-              "deploymentHost",
+              "deployment",
               d.domain,
               d.domain,
               null,
@@ -266,18 +275,15 @@ export function useCommandLine({
 
   const pick = useCallback(
     (completion: Completion, box: HTMLTextAreaElement | null) => {
-      const before = draft.slice(0, completion.from) + completion.text;
-      setDraft(before + draft.slice(caret).trimStart());
-      if (completion.value !== undefined) {
-        const shownText = completion.text.trim();
-        const value = completion.value;
-        setValues((held) => new Map(held).set(unquote(shownText), value));
-      }
+      const rest = draft.slice(caret);
+      const end = caret + rest.length - rest.trimStart().length;
+      splice(completion.from, end, completion.text, completion.value, " ");
+      const after = completion.from + completion.text.length + 1;
       setActive(0);
-      setCaret(before.length);
-      placing.current = { box, at: before.length };
+      setCaret(after);
+      placing.current = { box, at: after };
     },
-    [draft, caret, setDraft, setValues],
+    [draft, caret, splice],
   );
 
   useLayoutEffect(() => {
@@ -386,9 +392,11 @@ export function useCommandLine({
   /**
    * What sending the draft comes to: a message where it is not a command of a bot here, a
    * command with its arguments as ids where it is, or why it cannot be sent as it stands.
-   * `attachments` are the files going with it, which its file parameters take in order.
+   * `written` is the draft as it is sent (`trimPicked`), and `attachments` the files going with
+   * it, which its file parameters take in order.
    */
-  const prepare = (text: string, attachments: readonly string[]): Prepared => {
+  const prepare = (written: PickedText, attachments: readonly string[]): Prepared => {
+    const { text, picks } = written;
     const read = readCommandLine(
       text,
       offeredCommands(store.commands(channelId) ?? []),
@@ -409,11 +417,12 @@ export function useCommandLine({
       };
     }
     const split = splitArguments(text, read.argumentsAt, read.command);
+    // Each value but a last one taking the rest of the line is one word, in order, which is
+    // where a pick stands.
+    const words = tokenize(text, read.argumentsAt);
     // More arguments than parameters go as they are, for the server to say how many it takes.
-    const typed =
-      split.kind === "ok"
-        ? [...split.values]
-        : tokenize(text, read.argumentsAt).map((t) => t.value);
+    const typed = split.kind === "ok" ? [...split.values] : words.map((t) => t.value);
+    let word = 0;
     const files = [...attachments];
     const args: string[] = [];
     for (const p of read.command.parameters ?? []) {
@@ -429,7 +438,11 @@ export function useCommandLine({
       if (value === undefined) {
         break;
       }
-      args.push(resolve(p.type, value));
+      const at = words[word++];
+      const kind = PICKED_AS[p.type];
+      const picked =
+        at === undefined || kind === undefined ? undefined : pickAt(picks, at.start, at.end, kind);
+      args.push(picked?.id ?? resolve(p.type, value));
     }
     args.push(...typed);
     return {
@@ -443,12 +456,8 @@ export function useCommandLine({
     };
   };
 
-  /** A typed value as the server reads it: a name picked or known as its id. */
+  /** A value typed by hand as the server reads it: a name known as its id. */
   const resolve = (type: ParameterType, value: string): string => {
-    const picked = values.get(value);
-    if (picked?.type === type) {
-      return picked.id;
-    }
     const trimmed = value.trim();
     switch (type) {
       case "userId": {
@@ -510,16 +519,9 @@ export function useCommandLine({
     /** What a polite status beside the box says of the suggestions: how many, how to pick. */
     announcement,
     prepare,
-    /** Forgets the values picked, once what they were for is sent. */
+    /** Forgets where the list was dismissed, once the box holds other text. */
     reset: () => {
-      setValues(new Map());
       setDismissedAt(null);
     },
   };
-}
-
-function unquote(text: string): string {
-  return text.startsWith('"') && text.endsWith('"') && text.length >= 2
-    ? text.slice(1, -1).replaceAll('\\"', '"').replaceAll("\\\\", "\\")
-    : text;
 }

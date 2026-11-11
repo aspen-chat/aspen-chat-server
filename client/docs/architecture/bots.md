@@ -99,8 +99,9 @@ The channel's commands are store state:
 - While an argument is typed, the command's form shows above the box:
   - the parameter at the caret is marked, with what it takes
   - a warning shows when a `regex` value does not match
-- People, roles, channels, communities, and deployments are suggested by name. A pick is remembered,
-  so sending turns its text into the id.
+- People, roles, channels, communities, and deployments are suggested by name. A pick is remembered
+  by its place on the line ([Picks](tagging.md#picks)), so sending gives the id of what was picked,
+  though another shares its name. A name typed by hand is looked up.
 
 ### Reading the line
 

@@ -18,6 +18,9 @@ Each voice server is its own machine (or container) with its own `voice_server.t
    upload as `[rtc] upload_mbps` in `voice_server.toml` (or `--link-mbps`) before measuring. Each
    participant takes about 3 Mbit/s of upload when everyone sends video.
 
+   It prints no capacity when it cannot measure the workers' CPU time, which it reads from `/proc`:
+   run it where `/proc` is mounted and readable.
+
 2. Where an API server runs, register it:
 
    ```

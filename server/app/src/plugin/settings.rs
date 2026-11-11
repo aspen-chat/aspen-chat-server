@@ -346,17 +346,22 @@ pub fn apply(
     Ok(next)
 }
 
-/// What the plugin receives: `stored` with each missing field's default.
+/// What the plugin receives: for each field, its stored value, or its default when none is
+/// stored or the stored one is not what the field takes now. A value stored under another
+/// version of the plugin is so never passed on by its name alone: one whose field is gone, or
+/// has since changed its type, range, or options, is left out. Roles and channels are passed as
+/// stored; `check_community` checked them when they were set.
 pub fn effective(fields: &[SettingField], stored: &Map<String, Value>) -> Map<String, Value> {
-    let mut out = stored.clone();
-    for field in fields {
-        if !out.contains_key(&field.name)
-            && let Some(default) = &field.default
-        {
-            out.insert(field.name.clone(), default.clone());
-        }
-    }
-    out
+    fields
+        .iter()
+        .filter_map(|field| {
+            stored
+                .get(&field.name)
+                .filter(|value| check_value(field, value).is_ok())
+                .or(field.default.as_ref())
+                .map(|value| (field.name.clone(), value.clone()))
+        })
+        .collect()
 }
 
 /// What people with the right to configure it read: `stored` without its secrets, and the
@@ -539,6 +544,22 @@ mod tests {
         let (shown, secrets) = readable(&fields, &cleared);
         assert!(shown.get("key").is_none());
         assert_eq!(secrets, vec!["key".to_string()]);
+    }
+
+    #[test]
+    fn stored_values_the_fields_no_longer_take_are_not_passed_on() {
+        let fields = fields();
+        let stored = object(json!({
+            "limit": "5",
+            "action": "ban",
+            "words": ["a"],
+            "key": "hunter2",
+            "dropped": true,
+        }));
+        assert_eq!(
+            Value::Object(effective(&fields, &stored)),
+            json!({"words": ["a"], "action": "mask", "key": "hunter2"})
+        );
     }
 
     #[test]

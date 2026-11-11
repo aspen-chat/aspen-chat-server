@@ -192,7 +192,7 @@ export function UserMenuItems({
             label={m.userMenu.mention}
             icon={<AtIcon aria-hidden="true" />}
             onAction={() => {
-              mentionIn(mentionChannel, { text: `@${user.name}`, token: `<@${user.id}>` });
+              mentionIn(mentionChannel, `@${user.name}`, { kind: "user", id: user.id });
             }}
           />
         )}

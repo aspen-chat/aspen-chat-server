@@ -181,6 +181,10 @@ servers' reports, so the voice server is where the count is exact.
    cost, with a mediasoup worker on loopback for a few seconds.
 4. It reports the smallest of the CPU, memory, bandwidth, and port limits after a safety margin.
 
+It stops without a figure when a measurement finds the workers used no CPU time: their time is read
+from the threads named `mediasoup-worker-…` under `/proc/self/task`, and a cost of nothing would
+leave CPU out of the limits.
+
 The call shape is given by flags: `--call-size`, `--screen-share`, `--audio-kbps`, `--screen-kbps`,
 `--margin`, `--link-mbps`, `--json`.
 

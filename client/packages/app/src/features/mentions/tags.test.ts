@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeTags, encodeTags, tagQueryAt } from "@/features/mentions/tags";
+import { decodeTags, tagQueryAt } from "@/features/mentions/tags";
 
 const A = "01a0e95a-8b0f-75df-a00b-29a4f0b878d1";
 const B = "01a0e95a-8b0f-75df-a00b-29a4f0b878d2";
@@ -12,24 +12,13 @@ describe("tags", () => {
     expect(tagQueryAt("hi @kate done", 13)).toBeNull();
   });
 
-  it("sends picked tags as tokens, whole words only, longest first", () => {
-    const picks = [
-      { text: "@Team", token: `<@&${A}>` },
-      { text: "@Team leads", token: `<@&${B}>` },
-      { text: "@kate", token: `<@${A}>` },
-    ];
-    expect(encodeTags("@Team leads and @Team, not @kated, but @kate.", picks)).toBe(
-      `<@&${B}> and <@&${A}>, not @kated, but <@${A}>.`,
-    );
-  });
-
-  it("reads a sent message back as it was written", () => {
-    const decoded = decodeTags(
-      `<@${A}> and <@&${B}> and <@${B}>`,
-      (id) => (id === A ? "kate" : undefined),
-      (id) => (id === B ? "Team" : undefined),
-    );
-    expect(decoded.text).toBe(`@kate and @Team and <@${B}>`);
-    expect(encodeTags(decoded.text, decoded.picks)).toBe(`<@${A}> and <@&${B}> and <@${B}>`);
+  it("reads a sent message's tags as names, leaving unknown ones as sent", () => {
+    expect(
+      decodeTags(
+        `<@${A}> and <@&${B}> and <@${B}>`,
+        (id) => (id === A ? "kate" : undefined),
+        (id) => (id === B ? "Team" : undefined),
+      ),
+    ).toBe(`@kate and @Team and <@${B}>`);
   });
 });

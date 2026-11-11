@@ -166,8 +166,9 @@ fn sort_applications(applications: &mut [Application]) -> Vec<AudioTarget> {
         .collect()
 }
 
-/// The application the target names: by process id while it runs, else by bundle id, else by
-/// name, which follows an application across a restart.
+/// The application the target names: by process id while it runs, else by bundle id, which
+/// follows an application across a restart, else by name when a single application carries
+/// it. Names repeat between applications, so one that several carry names none of them.
 fn select_application(applications: &[Application], target: &Target) -> Option<usize> {
     if let Some(pid) = target.pid
         && let Some(index) = applications.iter().position(|a| a.pid == Some(pid))
@@ -182,9 +183,14 @@ fn select_application(applications: &[Application], target: &Target) -> Option<u
     if target.application.is_empty() {
         return None;
     }
-    applications
+    let mut named = applications
         .iter()
-        .position(|a| a.name == target.application)
+        .enumerate()
+        .filter(|(_, a)| a.name == target.application);
+    match (named.next(), named.next()) {
+        (Some((index, _)), None) => Some(index),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -480,6 +486,12 @@ mod tests {
             application: "Firefox".into(),
         };
         assert_eq!(select_application(&applications, &by_name), Some(2));
+        let shared_name = Target {
+            pid: None,
+            bundle: None,
+            application: "doom".into(),
+        };
+        assert_eq!(select_application(&applications, &shared_name), None);
         assert_eq!(select_application(&applications, &Target::default()), None);
         assert_eq!(Target::from_settings(None).unwrap(), Target::default());
     }
