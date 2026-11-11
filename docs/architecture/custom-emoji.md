@@ -59,8 +59,11 @@ A community holds at most the deployment setting `custom_emoji_limit` (1000; see
 - A message's text names one as `<:id>`, by the id alone, so a rename changes no message.
 - A reader resolves it from the community's list, rendering an unknown id as a marked placeholder.
 - The message box shows `:name:` and encodes it as it sends.
-- The server never parses `<:id>` in text. An id from elsewhere resolves to nothing where it is
-  read, which is all the rule needs.
+- The server stores `<:id>` in text as written, checking nothing. An id from elsewhere resolves to
+  nothing where it is read, which is all the rule needs.
+- The server reads `<:id>` only where it writes a message's text out for a reader with nothing to
+  resolve ids by (`app::message::tokens`): a digest's excerpts, and a phone's notification
+  (`app::message::notification`), which names an emoji only in its own community.
 
 ## In reactions
 

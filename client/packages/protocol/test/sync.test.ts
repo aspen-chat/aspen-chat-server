@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { positionBefore } from "../src/sync";
 import {
@@ -8,6 +9,7 @@ import {
   OUTPUT_VOLUME,
   MEMBER_SEARCH_PAGE,
   MESSAGE_AROUND_RADIUS,
+  MESSAGE_AROUND_RADIUS_MAX,
   MESSAGE_PAGE_SIZE,
   MemorySessionStore,
   PRESENCE_POLL_MS,
@@ -1674,6 +1676,66 @@ describe("AspenSync", () => {
     await sync.unblockUser(bob);
     expect(sync.store.blocked(bob)).toBe(false);
     expect(blocks).toEqual(["PUT", "DELETE"]);
+  });
+
+  it("reads a long window's reactions again in as many reads as the server's cap takes", async () => {
+    const bob = id(2);
+    const carol = id(3);
+    const held = Array.from({ length: 250 }, (_, n) => message(n));
+    const summaries = (users: string[]) =>
+      held.map((m) => ({ messageId: m.id, emoji: "👍", count: users.length, me: false, users }));
+    const limits: number[] = [];
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      "/api/v1/users/@me/communities": (url) =>
+        url.searchParams.get("include") === "readStates"
+          ? json({ data: [aspen], included: { readStates: [] } })
+          : json({ data: [aspen], included: { channels: [general], users: [me] } }),
+      [`/api/v1/channels/${general.id}/messages`]: (url) => {
+        const around = url.searchParams.get("around");
+        if (around === null) {
+          return json({
+            data: held,
+            included: { users: [], attachments: [], reactions: summaries([bob, carol]) },
+          });
+        }
+        // As the server answers: a limit over its most is refused, and each side is capped.
+        const limit = Number(url.searchParams.get("limit"));
+        limits.push(limit);
+        if (limit > MESSAGE_AROUND_RADIUS_MAX * 2) {
+          return json({ code: "validation", title: "Invalid", status: 400 }, 400);
+        }
+        const radius = Math.min(limit, MESSAGE_AROUND_RADIUS_MAX);
+        const at = held.findIndex((m) => m.id === around);
+        const data = held.slice(Math.max(at - radius, 0), at + radius + 1);
+        const returned = new Set(data.map((m) => m.id));
+        return json({
+          data,
+          included: { reactions: summaries([carol]).filter((r) => returned.has(r.messageId)) },
+        });
+      },
+      [`/api/v1/users/@me/blocks/${bob}`]: () =>
+        json({ user: bob, createdAt: "2026-09-28T12:00:00Z" }, 201),
+    });
+    await goLive(sync);
+    await sync.loadLatest(general.id);
+    expect(sync.store.messages(general.id)?.ids).toHaveLength(held.length);
+    await sync.blockUser(bob);
+    await settle();
+    expect(limits.sort((a, b) => a - b)).toEqual([24, MESSAGE_AROUND_RADIUS_MAX]);
+    // Every message, the window's ends among them, counts carol's reaction and not bob's.
+    for (const m of held) {
+      expect(sync.store.reactions(m.id).get("👍")?.users).toEqual([carol]);
+    }
+  });
+
+  it("knows the most the server returns around a message", () => {
+    const source = readFileSync(
+      new URL("../../../../server/app/src/channel.rs", import.meta.url),
+      "utf8",
+    );
+    const most = /pub const MAX_MESSAGES_QUERIED: u32 = (\d+);/.exec(source)?.[1];
+    expect(Number(most) / 2).toBe(MESSAGE_AROUND_RADIUS_MAX);
   });
 
   it("opens polls, votes, and fetches a poll on demand with the caller's votes", async () => {

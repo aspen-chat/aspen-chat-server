@@ -942,6 +942,9 @@ pub struct PasskeySummary {
 
 /// Everything the caller's security settings show.
 pub struct SecurityOverview {
+    /// Whether sign-in asks the account for a second factor
+    /// ([`SecondFactorMethods::any_factor`]).
+    pub two_factor_enabled: bool,
     pub totp: bool,
     pub passkeys: Vec<PasskeySummary>,
     pub recovery_codes_remaining: i64,
@@ -974,6 +977,7 @@ pub async fn overview(
         .await?;
     let identities = crate::identity_provider::identity::list(&mut conn, user_id).await?;
     Ok(SecurityOverview {
+        two_factor_enabled: found.any_factor(),
         totp: found.totp,
         passkeys,
         recovery_codes_remaining,

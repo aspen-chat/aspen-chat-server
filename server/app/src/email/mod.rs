@@ -213,6 +213,11 @@ fn unsubscribe_token() -> String {
     BASE64_URL_SAFE_NO_PAD.encode(CHACHA_RNG.with(|rng| rng.borrow_mut().random::<[u8; 24]>()))
 }
 
+/// The time zone a digest's hour is told in until its account chooses one, an IANA name.
+pub const DEFAULT_DIGEST_TIME_ZONE: &str = "UTC";
+/// The hour of the day a digest is sent at until its account chooses one.
+pub const DEFAULT_DIGEST_HOUR: u8 = 8;
+
 /// An account's address and what it receives there, as `user_email` holds it.
 #[derive(Debug, Clone, PartialEq, Eq, Queryable, Selectable)]
 #[diesel(table_name = user_email)]
@@ -275,6 +280,8 @@ pub async fn register(
             user_email::user.eq(user_id),
             user_email::address.eq(address),
             user_email::newsletter.eq(newsletter),
+            user_email::digest_time_zone.eq(DEFAULT_DIGEST_TIME_ZONE),
+            user_email::digest_hour.eq(i16::from(DEFAULT_DIGEST_HOUR)),
             user_email::locale.eq(crate::locale::current()),
             user_email::unsubscribe_token.eq(unsubscribe_token()),
         ))
@@ -300,6 +307,8 @@ pub async fn register_verified(
             user_email::address.eq(address),
             user_email::verified_at.eq(diesel::dsl::now),
             user_email::newsletter.eq(newsletter),
+            user_email::digest_time_zone.eq(DEFAULT_DIGEST_TIME_ZONE),
+            user_email::digest_hour.eq(i16::from(DEFAULT_DIGEST_HOUR)),
             user_email::locale.eq(crate::locale::current()),
             user_email::unsubscribe_token.eq(unsubscribe_token()),
         ))
@@ -376,6 +385,8 @@ pub async fn set_address(
                     .values((
                         user_email::user.eq(user_id),
                         user_email::address.eq(&address),
+                        user_email::digest_time_zone.eq(DEFAULT_DIGEST_TIME_ZONE),
+                        user_email::digest_hour.eq(i16::from(DEFAULT_DIGEST_HOUR)),
                         user_email::locale.eq(crate::locale::current()),
                         user_email::unsubscribe_token.eq(unsubscribe_token()),
                     ))

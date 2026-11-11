@@ -285,8 +285,13 @@ pub async fn remove_user_deployment_role(
 #[serde(rename_all = "camelCase")]
 pub struct ModerationEntry {
     pub id: uuid::Uuid,
-    /// Who did it; `null` once their account is gone.
+    /// The account that did it; `null` for an operator's command from the terminal, which no
+    /// account takes, and once the account's record is gone.
     pub actor: Option<UserId>,
+    /// Who did it: the account `actor` names, an operator from the terminal, or an account
+    /// since gone. A deployment of a version without it leaves it out.
+    #[schema(required = false)]
+    pub actor_kind: app::moderation_log::ActorKind,
     /// What they did: `readDm`, `deleteMessage`, `removeAttachment`,
     /// `removeReaction`, `removeMember`, `renameChannel`, `deleteChannel`, `renameCommunity`,
     /// `deleteCommunity`, or `removeWriteIn`.
@@ -305,6 +310,7 @@ impl From<app::moderation_log::ModerationEntry> for ModerationEntry {
         Self {
             id: e.id,
             actor: e.actor,
+            actor_kind: e.actor_kind,
             action: e.action,
             community: e.community,
             channel: e.channel,

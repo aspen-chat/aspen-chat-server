@@ -103,7 +103,7 @@ pub struct IconUpload {
 }
 
 pub fn storage_key(id: IconId) -> String {
-    format!("icons/{}", id.0)
+    crate::media_store::PublicPrefix::Icons.key(id.0)
 }
 
 /// How an icon is served: as its type, shown in place.

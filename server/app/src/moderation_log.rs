@@ -56,7 +56,7 @@ pub enum ModerationAction {
     ListDms,
     /// Evidence deleted outright from the terminal (`aspen-chat-server attachments purge`,
     /// `app::attachment::evidence::purge`); the subject is the message it was in or taken off
-    /// and the attachment, and the entry has no actor.
+    /// and the attachment, and the entry is an operator's.
     PurgeAttachment,
 }
 
@@ -93,8 +93,9 @@ pub async fn log_moderation(
     Ok(())
 }
 
-/// Writes an operator's action from the terminal to the moderation log, with no actor, since
-/// no account took it, and to the server's own log.
+/// Writes an operator's action from the terminal to the moderation log, as an operator's
+/// (`ActorKind::Operator`) and with no actor, since no account took it, and to the server's own
+/// log.
 pub async fn log_operator_moderation(
     conn: &mut AsyncPgConnection,
     action: ModerationAction,
@@ -114,6 +115,7 @@ pub async fn log_operator_moderation(
         .values((
             moderation_log::id.eq(uuid::Uuid::now_v7()),
             moderation_log::actor.eq(None::<UserId>),
+            moderation_log::by_operator.eq(true),
             moderation_log::action.eq(action),
             moderation_log::community.eq(community),
             moderation_log::channel.eq(channel),
@@ -124,11 +126,36 @@ pub async fn log_operator_moderation(
     Ok(())
 }
 
+/// Who took an action of the moderation log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ActorKind {
+    /// The account the entry's `actor` names.
+    User,
+    /// An operator, with a command from the terminal; the entry names no account.
+    Operator,
+    /// An account whose record is gone; the entry no longer names it.
+    DeletedAccount,
+}
+
+impl ActorKind {
+    /// Who an entry says acted, from its row: whether an operator command wrote it, and the
+    /// actor it still names.
+    fn of(by_operator: bool, actor: Option<UserId>) -> Self {
+        match (by_operator, actor) {
+            (true, _) => ActorKind::Operator,
+            (false, Some(_)) => ActorKind::User,
+            (false, None) => ActorKind::DeletedAccount,
+        }
+    }
+}
+
 /// One entry of the moderation log, with what its ids name.
 #[derive(Debug, Clone)]
 pub struct ModerationEntry {
     pub id: uuid::Uuid,
     pub actor: Option<UserId>,
+    pub actor_kind: ActorKind,
     pub action: String,
     pub community: Option<CommunityId>,
     pub channel: Option<ChannelId>,
@@ -260,6 +287,7 @@ pub async fn read_moderation_log(
     type Row = (
         uuid::Uuid,
         Option<UserId>,
+        bool,
         String,
         Option<CommunityId>,
         Option<ChannelId>,
@@ -271,6 +299,7 @@ pub async fn read_moderation_log(
         .select((
             moderation_log::id,
             moderation_log::actor,
+            moderation_log::by_operator,
             moderation_log::action,
             moderation_log::community,
             moderation_log::channel,
@@ -286,12 +315,12 @@ pub async fn read_moderation_log(
     let rows: Vec<Row> = query.load(conn.as_mut()).await?;
     let subjects: Vec<Option<Subject>> = rows
         .iter()
-        .map(|(_, _, action, _, _, subject, _)| {
+        .map(|(_, _, _, action, _, _, subject, _)| {
             subject.as_deref().and_then(|s| subject_of(action, s))
         })
         .collect();
 
-    let community_ids: Vec<CommunityId> = rows.iter().filter_map(|r| r.3).collect();
+    let community_ids: Vec<CommunityId> = rows.iter().filter_map(|r| r.4).collect();
     let communities: HashMap<CommunityId, LoggedCommunity> = community::table
         .select((
             community::id,
@@ -372,7 +401,7 @@ pub async fn read_moderation_log(
         .map(|(poll, index, label)| ((poll, index), label))
         .collect();
 
-    let channel_ids: Vec<ChannelId> = rows.iter().filter_map(|r| r.4).collect();
+    let channel_ids: Vec<ChannelId> = rows.iter().filter_map(|r| r.5).collect();
     let channels: Vec<(
         ChannelId,
         String,
@@ -418,7 +447,7 @@ pub async fn read_moderation_log(
         .into_iter()
         .zip(subjects)
         .map(
-            |((id, actor, action, community, channel, subject, at), named)| {
+            |((id, actor, by_operator, action, community, channel, subject, at), named)| {
                 let mut details = ModerationDetails {
                     community: community.and_then(|c| communities.get(&c).cloned()),
                     channel: channel.and_then(|c| channels.get(&c).cloned()),
@@ -451,6 +480,7 @@ pub async fn read_moderation_log(
                 ModerationEntry {
                     id,
                     actor,
+                    actor_kind: ActorKind::of(by_operator, actor),
                     action,
                     community,
                     channel,
@@ -509,6 +539,20 @@ mod tests {
         );
         assert_eq!(subject_of("deleteChannel", a), None);
         assert_eq!(subject_of("somethingNew", a), None);
+    }
+
+    /// An operator's entry is told from one whose actor's record is gone by what wrote it, not
+    /// by its action: both name no account.
+    #[test]
+    fn an_entry_says_who_acted() {
+        let someone = UserId(uuid::Uuid::from_u128(1));
+        assert_eq!(ActorKind::of(false, Some(someone)), ActorKind::User);
+        assert_eq!(ActorKind::of(false, None), ActorKind::DeletedAccount);
+        assert_eq!(ActorKind::of(true, None), ActorKind::Operator);
+        assert_eq!(
+            serde_json::to_value(ActorKind::DeletedAccount).unwrap(),
+            "deletedAccount"
+        );
     }
 
     /// The log's action names are the ones `spec/moderation_actions.json` lists, which the

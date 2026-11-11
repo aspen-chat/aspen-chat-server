@@ -1,6 +1,7 @@
 import type { AspenSync, Message } from "@aspen/protocol";
 import { decodeTags } from "@/features/mentions/tags";
 import { growthText } from "@/features/messages/growth";
+import { isImageType } from "@/features/messages/images";
 import { outcomeText } from "@/features/messages/poll";
 import { displayNameOf } from "@/features/users/profile";
 import { format, type Messages } from "@/i18n/messages";
@@ -63,8 +64,23 @@ function recorded(
     case "communityGrew":
       return growthText(m, message.growth, community ?? m.communityGrew.thisCommunity);
     default:
-      return message.attachments.length > 0
-        ? m.notifications.attachment
-        : m.notifications.newMessage;
+      return held(
+        m,
+        message.attachments.map((id) => sync.store.attachment(id)?.mimeType),
+      );
   }
+}
+
+/**
+ * What a message says by its files alone, each given as the type it was uploaded as, or
+ * `undefined` for one not held: pictures when every one is known to be, as the server's
+ * notification text says of the same message (`app::message::notification`).
+ */
+export function held(m: Messages, types: readonly (string | undefined)[]): string {
+  if (types.length === 0) {
+    return m.notifications.newMessage;
+  }
+  return types.every((type) => type !== undefined && isImageType(type))
+    ? format(m.notifications.pictures, { count: types.length })
+    : m.notifications.attachment;
 }

@@ -16,6 +16,7 @@ import {
   type Poll,
   type User,
 } from "../src";
+import { kindNotifies } from "../src/notifyRules";
 
 /** UUIDv7-shaped ids whose lexical order is their numeric order. */
 function id(n: number): string {
@@ -2059,6 +2060,25 @@ describe("RecordStore notifications", () => {
       mentions: { users: [], roles: [], everyone: true },
     };
     expect(store.notifies(grew)).toBe(true);
+  });
+
+  it("follows what the deployment says of whether a message may notify, over its own list", () => {
+    const store = bootstrapped();
+    store.ingest({
+      readStates: [{ channel: general.id, lastRead: id(1000), lastMessage: null, mentions: 0 }],
+    });
+    store.replaceNotificationSettings([{ community: aspen.id, channel: null, level: "all" }]);
+    const said = (kind: Message["kind"], notifies: boolean): Message => ({
+      ...message(2, general.id, bob.id),
+      kind,
+      notifies,
+    });
+    // A kind this app's own list would tell of, which the deployment says only records.
+    expect(store.notifies(said("standard", false))).toBe(false);
+    // And one its list leaves out, which the deployment says tells.
+    expect(store.notifies(said("command", true))).toBe(true);
+    expect(kindNotifies({ kind: "call" })).toBe(false);
+    expect(kindNotifies({ kind: "call", notifies: true })).toBe(true);
   });
 
   it("notifies of others' unread messages as the level asks, never muted or blocked ones", () => {

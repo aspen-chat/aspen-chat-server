@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { MAX_LINK_LENGTH, linkify } from "./linkify";
+import { KNOWN_TLDS, MAX_LINK_LENGTH, linkify } from "./linkify";
 
 const text = (t: string) => ({ kind: "text" as const, text: t });
 const link = (url: string, t = url) => ({ kind: "link" as const, url, text: t });
@@ -104,5 +107,26 @@ describe("linkify", () => {
 
   it("returns the same runs for the same text", () => {
     expect(linkify("see example.org")).toBe(linkify("see example.org"));
+  });
+});
+
+describe("the known TLDs", () => {
+  it("are the ones the server previews links by", () => {
+    const servers = readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../../../../../server/app/src/link_preview/tlds.txt",
+      ),
+      "utf8",
+    )
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("#"));
+    expect(servers.length).toBeGreaterThan(1000);
+    const client = [...KNOWN_TLDS];
+    expect({
+      serverOnly: servers.filter((tld) => !KNOWN_TLDS.has(tld)),
+      clientOnly: client.filter((tld) => !servers.includes(tld)),
+    }).toEqual({ serverOnly: [], clientOnly: [] });
   });
 });

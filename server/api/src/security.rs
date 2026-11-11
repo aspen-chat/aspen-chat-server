@@ -74,7 +74,7 @@ pub async fn get_security(
     own(&session, user)?;
     let overview = app::two_factor::overview(&state, &session.caller).await?;
     Ok(Json(SecuritySettings {
-        two_factor_enabled: overview.totp || !overview.passkeys.is_empty(),
+        two_factor_enabled: overview.two_factor_enabled,
         two_factor_required: overview.required,
         totp: overview.totp,
         passkeys: overview.passkeys.into_iter().map(Passkey::from).collect(),

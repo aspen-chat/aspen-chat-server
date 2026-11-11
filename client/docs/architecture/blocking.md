@@ -25,7 +25,8 @@ A change from either source (an answer or an event):
    "mute for me" say.
 2. Reads again what the server counts without them:
    - every read state
-   - the reactions of each held message window, one `around` read per window
+   - the reactions of each held message window, in `around` reads of at most 100 messages a side, as
+     many as cover the window; only the messages a read returned take its reactions
 
 The event stream is filtered the same way. A blocked user's reactions are never counted, and their
 messages never move `lastMessage`.

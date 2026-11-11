@@ -3,8 +3,11 @@ import tlds from "tlds";
 /** A run of message text: either plain, or a link to open. */
 export type TextRun = { kind: "text"; text: string } | { kind: "link"; url: string; text: string };
 
-/** Every TLD IANA delegates, lower case, for recognising bare domains such as `github.io`. */
-const KNOWN_TLDS: ReadonlySet<string> = new Set(tlds);
+/**
+ * Every TLD IANA delegates, lower case, for recognising bare domains such as `github.io`. The
+ * server finds links to preview by the same set (`server/app/src/link_preview/tlds.txt`).
+ */
+export const KNOWN_TLDS: ReadonlySet<string> = new Set(tlds);
 
 /**
  * TLDs that are far more often file extensions in chat about software (`main.rs`, `setup.py`)

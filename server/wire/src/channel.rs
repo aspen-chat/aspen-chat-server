@@ -6,6 +6,7 @@ use diesel::serialize::{IsNull, Output, ToSql};
 use diesel::{AsExpression, FromSqlRow};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use strum::VariantArray as _;
 
 #[derive(
     Debug,
@@ -19,6 +20,7 @@ use std::io::Write;
     schemars::JsonSchema,
     FromSqlRow,
     AsExpression,
+    strum::VariantArray,
 )]
 #[serde(rename_all = "camelCase")]
 #[diesel(sql_type = aspen_schema::sql_types::ChannelType)]
@@ -38,16 +40,23 @@ pub enum ChannelType {
 
 crate::wire_name_traits!(ChannelType);
 
+impl ChannelType {
+    /// The variant's label in the database's `channel_type` enum, read in both directions.
+    const fn sql_name(self) -> &'static str {
+        match self {
+            ChannelType::Text => "text",
+            ChannelType::Voice => "voice",
+            ChannelType::Thread => "thread",
+            ChannelType::Dm => "dm",
+            ChannelType::GroupDm => "group_dm",
+            ChannelType::Plugin => "plugin",
+        }
+    }
+}
+
 impl ToSql<aspen_schema::sql_types::ChannelType, Pg> for ChannelType {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
-        out.write_all(match self {
-            ChannelType::Text => b"text",
-            ChannelType::Voice => b"voice",
-            ChannelType::Thread => b"thread",
-            ChannelType::Dm => b"dm",
-            ChannelType::GroupDm => b"group_dm",
-            ChannelType::Plugin => b"plugin",
-        })?;
+        out.write_all(self.sql_name().as_bytes())?;
         Ok(IsNull::No)
     }
 }
@@ -56,18 +65,16 @@ impl FromSql<aspen_schema::sql_types::ChannelType, Pg> for ChannelType {
     fn from_sql(
         bytes: <Pg as diesel::backend::Backend>::RawValue<'_>,
     ) -> diesel::deserialize::Result<Self> {
-        match bytes.as_bytes() {
-            b"voice" => Ok(ChannelType::Voice),
-            b"text" => Ok(ChannelType::Text),
-            b"thread" => Ok(ChannelType::Thread),
-            b"dm" => Ok(ChannelType::Dm),
-            b"group_dm" => Ok(ChannelType::GroupDm),
-            b"plugin" => Ok(ChannelType::Plugin),
-            _ => Err(format!(
-                "Unrecognized enum variant: {:?}",
-                String::from_utf8_lossy(bytes.as_bytes())
-            )
-            .into()),
-        }
+        Self::VARIANTS
+            .iter()
+            .copied()
+            .find(|variant| variant.sql_name().as_bytes() == bytes.as_bytes())
+            .ok_or_else(|| {
+                format!(
+                    "Unrecognized enum variant: {:?}",
+                    String::from_utf8_lossy(bytes.as_bytes())
+                )
+                .into()
+            })
     }
 }

@@ -1802,6 +1802,7 @@
     "poll": "Posted a poll",
     "pollClosed": "A poll has closed",
     "attachment": "Sent an attachment",
+    "pictures": "{count, plural, one {Sent an image} other {Sent images}}",
     "newMessage": "New message",
     "announced": "{name}: {body}",
     "menu": "Notifications",

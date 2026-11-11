@@ -3,7 +3,7 @@
 //! program shows no HTML reads the same thing. Mail that belongs to a list carries the RFC 8058
 //! one-click unsubscribe headers and a link to leave it at its foot (`api::email`).
 
-use super::outbox::{Factor, List, Mail, Recipient};
+use super::outbox::{Factor, Mail, Recipient};
 use super::{Mailer, newsletter};
 use crate::context::GlobalServerContext;
 use crate::t;
@@ -43,23 +43,15 @@ pub(super) async fn message(
     let deployment = state.settings().name().to_string();
     let locale = crate::locale::negotiate(&recipient.locale);
     let unsubscribe = mail.list().map(|list| {
-        let list_name: &'static str = match list {
-            List::Newsletter => "newsletter",
-            List::Digest => "digest",
-        };
         format!(
-            "{}/email/unsubscribe?list={list_name}&token={}",
+            "{}/email/unsubscribe?list={list}&token={}",
             mailer.public_url, recipient.unsubscribe_token
         )
     });
     let letter = crate::locale::scope(locale, async {
         let mut letter = write(mail, &name, &deployment, post.as_ref());
         letter.lang = locale.to_string();
-        letter.dir = if locale == crate::locale::MIRRORED {
-            "rtl"
-        } else {
-            "ltr"
-        };
+        letter.dir = crate::locale::direction(locale).as_str();
         letter.deployment = deployment.clone();
         letter
             .footer

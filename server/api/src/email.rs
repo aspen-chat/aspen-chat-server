@@ -65,8 +65,8 @@ impl From<Option<email::EmailAccount>> for EmailAccount {
                 shown: false,
                 newsletter: false,
                 digest: false,
-                digest_time_zone: "UTC".to_string(),
-                digest_hour: 8,
+                digest_time_zone: email::DEFAULT_DIGEST_TIME_ZONE.to_string(),
+                digest_hour: email::DEFAULT_DIGEST_HOUR,
                 digest_next_at: None,
             },
         }

@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Button } from "react-aria-components";
 import { useSync, useUser, useUserLoading, useIdWizard } from "@/api/hooks";
 import { ReadFailed, Section } from "@/features/admin/AdminDashboard";
+import { actorKindOf } from "@/features/admin/moderationActor";
 import { Cell, Table } from "@/features/admin/FleetHealth";
 import { secondaryButtonClass } from "@/features/invites/dialog";
 import { UserMention } from "@/features/messages/Mention";
@@ -111,7 +112,7 @@ export function ModerationLog() {
             <tr key={entry.id}>
               <Cell>{timeFormat.format(new Date(entry.at))}</Cell>
               <Cell>
-                <Actor userId={entry.actor ?? undefined} action={entry.action} />
+                <Actor entry={entry} />
               </Cell>
               <Cell>
                 <span className="block">{actionName(m, entry.action)}</span>
@@ -150,16 +151,18 @@ function actionName(m: Messages, action: string): string {
   return names[action] ?? action;
 }
 
-/**
- * Who took an action: a person, or, for what only the terminal does, an operator, since such an
- * entry names no account.
- */
-function Actor({ userId, action }: { userId: string | undefined; action: string }) {
+/** Who took an action: a person, an operator from the terminal, or an account since gone. */
+function Actor({ entry }: { entry: ModerationEntry }) {
   const m = useMessages();
-  if (userId !== undefined) {
-    return <Person id={userId} />;
+  switch (actorKindOf(entry)) {
+    case "user":
+      // A deployment that calls the actor a user names them.
+      return entry.actor == null ? <>{m.admin.logAccountGone}</> : <Person id={entry.actor} />;
+    case "operator":
+      return <>{m.admin.logOperator}</>;
+    case "deletedAccount":
+      return <>{m.admin.logAccountGone}</>;
   }
-  return <>{action === "purgeAttachment" ? m.admin.logOperator : m.admin.logAccountGone}</>;
 }
 
 /**

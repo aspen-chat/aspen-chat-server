@@ -86,8 +86,10 @@ pub struct Message {
 }
 
 pub mod held;
+pub mod notification;
 pub mod reply;
 pub mod scheduled;
+pub(crate) mod tokens;
 
 /// The message's wire record, with the relations it carries from child tables.
 pub fn record(
@@ -105,6 +107,7 @@ pub fn record(
         attachments,
         link_previews,
         kind: row.kind,
+        notifies: row.kind.notifies(),
         poll: row.poll,
         thread: row.thread,
         echo_of: row.echo_of,

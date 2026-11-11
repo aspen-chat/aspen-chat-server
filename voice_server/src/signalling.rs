@@ -17,10 +17,15 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 use voice_protocol::signal::{ClientMessage, ServerMessage};
 use voice_protocol::token::{JoinClaims, TokenError, key_of, verify, verify_shared};
+
+/// The paths of this server's two routes: the router serves them and `limit_http` finds each
+/// one's limits by them.
+pub const HEALTH_PATH: &str = "/health";
+pub const SIGNALLING_PATH: &str = "/ws";
 
 /// How long a client has to identify before the socket is closed.
 const IDENTIFY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -77,7 +82,17 @@ fn too_many(wait: Duration) -> Response {
     response
 }
 
-/// Middleware on both routes: counts the request against its route's limits.
+/// The name a route's limits are kept under (`limits`), by its path.
+fn limited_as(path: &str) -> Option<&'static str> {
+    match path {
+        HEALTH_PATH => Some(HEALTH),
+        SIGNALLING_PATH => Some(SIGNALLING),
+        _ => None,
+    }
+}
+
+/// Middleware on both routes: counts the request against its route's limits. A route under it
+/// that `limited_as` does not name is refused rather than served unlimited.
 pub async fn limit_http(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -85,10 +100,12 @@ pub async fn limit_http(
     request: Request,
     next: Next,
 ) -> Response {
-    let route = match matched.as_str() {
-        "/health" => HEALTH,
-        "/ws" => SIGNALLING,
-        _ => return next.run(request).await,
+    let Some(route) = limited_as(matched.as_str()) else {
+        error!(
+            path = matched.as_str(),
+            "a route has no rate limits and is refused; name it in `limited_as`"
+        );
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let ip = client_ip(&state, peer, request.headers());
     match state.limits.check_http(route, ip) {
@@ -162,32 +179,38 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         let _ = sink.close().await;
     });
 
-    let claims = match tokio::time::timeout(IDENTIFY_TIMEOUT, next_frame(&mut stream)).await {
-        Ok(Some(ClientMessage::Identify { token })) => {
-            let at = now();
-            match check_token(&state, &token, at).await.and_then(|claims| {
-                if state.used_tokens.claim(claims.nonce, claims.expires_at, at) {
-                    Ok(claims)
-                } else {
-                    Err(TokenError::Used)
-                }
-            }) {
-                Ok(claims) => claims,
-                Err(e) => {
-                    outbox.send(&ServerMessage::Error {
-                        detail: e.to_string(),
-                        fatal: true,
-                        retry_after_seconds: None,
-                        refused: None,
-                    });
-                    close(outbox, writer).await;
-                    return;
-                }
+    let first = match tokio::time::timeout(IDENTIFY_TIMEOUT, next_frame(&mut stream)).await {
+        Ok(Some(frame)) => {
+            let kind = frame.kind();
+            match frame {
+                ClientMessage::Identify { token } => Some((kind, token)),
+                _ => None,
             }
         }
-        _ => {
+        _ => None,
+    };
+    let Some((identify, token)) = first else {
+        outbox.send(&ServerMessage::Error {
+            detail: "the first frame must be identify".to_string(),
+            fatal: true,
+            retry_after_seconds: None,
+            refused: None,
+        });
+        close(outbox, writer).await;
+        return;
+    };
+    let at = now();
+    let claims = match check_token(&state, &token, at).await.and_then(|claims| {
+        if state.used_tokens.claim(claims.nonce, claims.expires_at, at) {
+            Ok(claims)
+        } else {
+            Err(TokenError::Used)
+        }
+    }) {
+        Ok(claims) => claims,
+        Err(e) => {
             outbox.send(&ServerMessage::Error {
-                detail: "the first frame must be identify".to_string(),
+                detail: e.to_string(),
                 fatal: true,
                 retry_after_seconds: None,
                 refused: None,
@@ -204,10 +227,10 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         user: Some(user),
         channel: Some(channel),
     };
-    if let Err(wait) = state.limits.check_frame("identify", &caller) {
+    if let Err(wait) = state.limits.check_frame(identify, &caller) {
         outbox.send(&ServerMessage::Error {
             detail: format!(
-                "too many identify frames; try again in {}s",
+                "too many {identify} frames; try again in {}s",
                 wait.as_secs().max(1)
             ),
             fatal: true,
@@ -406,6 +429,13 @@ async fn next_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_route_has_limits_and_no_other_path_does() {
+        assert_eq!(limited_as(HEALTH_PATH), Some(HEALTH));
+        assert_eq!(limited_as(SIGNALLING_PATH), Some(SIGNALLING));
+        assert_eq!(limited_as("/ws/v2"), None);
+    }
 
     #[test]
     fn a_token_admits_one_connection_until_it_expires() {

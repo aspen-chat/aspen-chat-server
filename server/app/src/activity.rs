@@ -440,12 +440,13 @@ pub async fn read_activity(
         .bind::<Array<PgUuid>, _>(uuids(threads))
         .bind::<Array<PgUuid>, _>(uuids(tagging))
         // What only records something says nothing of its own, as it wakes no phone.
-        .bind::<Array<aspen_schema::sql_types::MessageKind>, _>(vec![
-            MessageKind::ThreadEcho,
-            MessageKind::Call,
-            MessageKind::MissedCall,
-            MessageKind::Command,
-        ])
+        .bind::<Array<aspen_schema::sql_types::MessageKind>, _>(
+            <MessageKind as strum::VariantArray>::VARIANTS
+                .iter()
+                .copied()
+                .filter(|kind| !kind.notifies())
+                .collect::<Vec<_>>(),
+        )
         .load(conn.as_mut())
         .await?;
     let messages: Vec<Message> = message::table

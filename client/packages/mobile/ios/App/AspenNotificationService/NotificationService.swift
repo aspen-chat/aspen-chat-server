@@ -66,6 +66,11 @@ final class NotificationService: UNNotificationServiceExtension {
             contentHandler(content)
             return
         }
+        guard pointer["v"] as? Int == 1 else {
+            log.error("the pointer is of a version this app does not know; the placeholder stays")
+            contentHandler(content)
+            return
+        }
         if let badge = pointer["badge"] as? Int {
             content.badge = NSNumber(value: badge)
         }
@@ -132,7 +137,7 @@ extension ShownMessage {
 }
 
 /// Reads what a pointer names, as the app would (`GET /messages/{id}` with the authors,
-/// channels, tagged people, and memberships sideloaded, or
+/// channels, tagged people, memberships, and what its notification says sideloaded, or
 /// `GET /users/@me/plugin-notices/{id}`), with the account's session, renewed once on `401`.
 final class MessageFetcher {
     private static let timeout: TimeInterval = 12
@@ -154,7 +159,8 @@ final class MessageFetcher {
             }
             fetch(
                 account: account,
-                url: "\(account.origin)/api/v1/messages/\(messageId)?include=authors,channels,mentions,memberships",
+                url: "\(account.origin)/api/v1/messages/\(messageId)"
+                    + "?include=authors,channels,mentions,memberships,notificationTexts",
                 parse: { Self.shown(from: $0, messageId: messageId) },
                 done: done
             )
@@ -242,7 +248,8 @@ final class MessageFetcher {
 
     /// The notification a message read makes: its author's name as the title, the channel as
     /// the place (`#name` in a community; none in a DM, whose people the title already names),
-    /// and its text with tags as names, or what it holds instead of text.
+    /// and what the deployment says its notification says, or, from a deployment of a version
+    /// that does not say, its text with tags as names or what it holds instead of text.
     static func shown(from data: Data, messageId: String) -> ShownMessage? {
         guard let read = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let message = read["data"] as? [String: Any],
@@ -267,7 +274,7 @@ final class MessageFetcher {
             title: nickname ?? author.map(nameOf)
                 ?? NSLocalizedString("notification.someone", comment: "Someone"),
             place: place,
-            body: body(of: message, included: included),
+            body: written(included, messageId: messageId) ?? body(of: message, included: included),
             channel: channelId,
             message: messageId,
             community: community,
@@ -294,6 +301,14 @@ final class MessageFetcher {
             community: notice["community"] as? String,
             parentChannel: notice["parentChannel"] as? String
         )
+    }
+
+    /// What the deployment says the message's notification says (`included.notificationTexts`),
+    /// ready to show as given; `nil` from a deployment of a version that does not say.
+    private static func written(_ included: [String: Any], messageId: String) -> String? {
+        let texts = included["notificationTexts"] as? [[String: Any]] ?? []
+        let text = texts.first(where: { $0["message"] as? String == messageId })?["text"] as? String
+        return text?.isEmpty == false ? text : nil
     }
 
     private static func body(of message: [String: Any], included: [String: Any]) -> String {

@@ -14,6 +14,8 @@ public final class PushStore {
 
     private static final String FILE = "aspen_push";
     private static final String KEY = "state";
+    /** The {@code version} of the state this code reads. */
+    private static final int VERSION = 1;
 
     private final SharedPreferences preferences;
 
@@ -30,14 +32,21 @@ public final class PushStore {
         preferences.edit().putString(KEY, state).apply();
     }
 
-    /** The account a push's subscription names; {@code null} when none does. */
+    /**
+     * The account a push's subscription names; {@code null} when none does, or when the state is
+     * of a version this code does not know, whose fields may mean something else.
+     */
     public synchronized JSONObject account(String subscription) {
         String state = load();
         if (state == null) {
             return null;
         }
         try {
-            JSONArray accounts = new JSONObject(state).getJSONArray("accounts");
+            JSONObject parsed = new JSONObject(state);
+            if (parsed.optInt("version") != VERSION) {
+                return null;
+            }
+            JSONArray accounts = parsed.getJSONArray("accounts");
             for (int i = 0; i < accounts.length(); i++) {
                 JSONObject account = accounts.getJSONObject(i);
                 if (subscription.equals(account.optString("subscription"))) {

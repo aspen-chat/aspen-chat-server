@@ -40,10 +40,15 @@ still silences it (see [Threads and DMs](threads-and-dms/index.md)).
 ## Which messages may tell
 
 Every kind of message may, by the rules above, but those that only record something told of already:
-a thread reply's echo, a call's record, and a bot command, whose bot's answer is what tells. A
-poll's result, a join, and a community growing large tell as any message does, each described by the
-apps in the reader's language since it has no text of its own (`describe` in the client, and the iOS
-and Android push code; see [Push](push.md)).
+a thread reply's echo, a call's record, and a bot command, whose bot's answer is what tells.
+`MessageKind::notifies` is the one list of them: the push dispatcher and the activity feed read it,
+and every message's record carries its answer as `notifies`, which the apps follow (`kindNotifies`).
+It goes by the kind alone, which never changes, so no `Update` event carries it. An app reading a
+deployment of a version without the field judges by the kinds that only recorded something then.
+
+A poll's result, a join, and a community growing large tell as any message does, each described in
+the reader's language since it has no text of its own: by `describe` in the client, and for a
+phone's notification by the server (`include=notificationTexts`; see [Push](push.md)).
 
 Do not disturb outranks them all: while the user is in it, nothing tells them, and no phone is woken
 (see [Presence](event-routing/presence.md#choosing-a-status)). The activity feed still lists what

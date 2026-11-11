@@ -17,8 +17,8 @@ use super::{Migration, ensure_migrations_table, list_applied};
 /// migration out of a larger pending set.
 ///
 /// The requested set may be given in any order; we always iterate the
-/// registry to preserve the chronological invariant the rest of the
-/// runner depends on.
+/// registry, whose order is the only order migrations have (their
+/// timestamps name them and do not order them).
 pub async fn run_apply(
     conn: &mut AsyncPgConnection,
     migrations: &[&dyn Migration],

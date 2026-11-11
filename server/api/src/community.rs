@@ -77,25 +77,10 @@ pub async fn sideload_communities(
     include: &IncludeSet<CommunityInclude>,
 ) -> ApiResult<Included> {
     // What lists channels, or things in them, is read through what the caller may view, which
-    // its readers take.
-    let visible = if [
-        CommunityInclude::Channels,
-        CommunityInclude::Categories,
-        CommunityInclude::Collapses,
-        CommunityInclude::Voice,
-        CommunityInclude::ReadStates,
-        CommunityInclude::Mutes,
-        CommunityInclude::Notifications,
-        CommunityInclude::Roles,
-    ]
-    .iter()
-    .any(|i| include.contains(*i))
-    {
-        Some(app::visibility::Visibility::load(state, caller, communities).await?)
-    } else {
-        None
-    };
-    let visible = visible.as_ref();
+    // its readers take: loaded by the first of them that is asked for, and once.
+    let loaded = tokio::sync::OnceCell::new();
+    let visible =
+        || loaded.get_or_try_init(|| app::visibility::Visibility::load(state, caller, communities));
     // Read one after another, each taking a connection only while it reads, so one read of a
     // community list never holds more than one of the pool's connections however much it
     // sideloads; every reader is bounded, so the reads are quick in turn.
@@ -112,24 +97,24 @@ pub async fn sideload_communities(
         emoji,
     ) = (
         async {
-            match visible {
-                Some(visible) if include.contains(CommunityInclude::Channels) => {
-                    app::channel::read_communities_channels(state, visible)
-                        .await
-                        .map(Some)
-                }
-                _ => Ok(None),
+            if include.contains(CommunityInclude::Channels) {
+                let visible = visible().await?;
+                app::channel::read_communities_channels(state, visible)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
             }
         }
         .await?,
         async {
-            match visible {
-                Some(visible) if include.contains(CommunityInclude::Categories) => {
-                    app::category::read_communities_categories(state, visible)
-                        .await
-                        .map(Some)
-                }
-                _ => Ok(None),
+            if include.contains(CommunityInclude::Categories) {
+                let visible = visible().await?;
+                app::category::read_communities_categories(state, visible)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
             }
         }
         .await?,
@@ -144,69 +129,68 @@ pub async fn sideload_communities(
         }
         .await?,
         async {
-            match visible {
-                Some(visible) if include.contains(CommunityInclude::Voice) => {
-                    app::voice::read_communities_voice(state, visible)
-                        .await
-                        .map(Some)
-                }
-                _ => Ok(None),
+            if include.contains(CommunityInclude::Voice) {
+                let visible = visible().await?;
+                app::voice::read_communities_voice(state, visible)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
             }
         }
         .await?,
         async {
-            match visible {
-                Some(visible) if include.contains(CommunityInclude::ReadStates) => {
-                    app::read_state::read_communities_read_states(state, visible)
-                        .await
-                        .map(Some)
-                }
-                _ => Ok(None),
+            if include.contains(CommunityInclude::ReadStates) {
+                let visible = visible().await?;
+                app::read_state::read_communities_read_states(state, visible)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
             }
         }
         .await?,
         async {
-            match visible {
-                Some(visible) if include.contains(CommunityInclude::Mutes) => {
-                    let channels = app::channel_mute::read_community_mutes(state, visible).await?;
-                    let categories =
-                        app::category_mute::read_category_mutes(state, visible).await?;
-                    Ok::<_, app::Error>(Some((channels, categories)))
-                }
-                _ => Ok(None),
+            if include.contains(CommunityInclude::Mutes) {
+                let visible = visible().await?;
+                let channels = app::channel_mute::read_community_mutes(state, visible).await?;
+                let categories = app::category_mute::read_category_mutes(state, visible).await?;
+                Ok::<_, app::Error>(Some((channels, categories)))
+            } else {
+                Ok(None)
             }
         }
         .await?,
         async {
-            match visible {
-                Some(visible) if include.contains(CommunityInclude::Notifications) => {
-                    app::notification_setting::read_community_settings(state, visible)
-                        .await
-                        .map(Some)
-                }
-                _ => Ok(None),
+            if include.contains(CommunityInclude::Notifications) {
+                let visible = visible().await?;
+                app::notification_setting::read_community_settings(state, visible)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
             }
         }
         .await?,
         async {
-            match visible {
-                Some(visible) if include.contains(CommunityInclude::Collapses) => {
-                    app::category_collapse::read_collapsed(state, visible)
-                        .await
-                        .map(Some)
-                }
-                _ => Ok(None),
+            if include.contains(CommunityInclude::Collapses) {
+                let visible = visible().await?;
+                app::category_collapse::read_collapsed(state, visible)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
             }
         }
         .await?,
         async {
-            match visible {
-                Some(visible) if include.contains(CommunityInclude::Roles) => {
-                    let roles = app::role::read_communities_roles(state, communities).await?;
-                    let overrides = app::role::read_communities_overrides(state, visible).await?;
-                    Ok::<_, app::Error>(Some((roles, overrides)))
-                }
-                _ => Ok(None),
+            if include.contains(CommunityInclude::Roles) {
+                let visible = visible().await?;
+                let roles = app::role::read_communities_roles(state, communities).await?;
+                let overrides = app::role::read_communities_overrides(state, visible).await?;
+                Ok::<_, app::Error>(Some((roles, overrides)))
+            } else {
+                Ok(None)
             }
         }
         .await?,

@@ -208,8 +208,11 @@ async fn main() -> anyhow::Result<()> {
     // The health check is what clients measure latency against, from any origin. The limits
     // run inside the CORS layer, so a refusal still reaches the page that asked.
     let app = Router::new()
-        .route("/health", get(|| async { StatusCode::NO_CONTENT }))
-        .route("/ws", get(signalling::upgrade))
+        .route(
+            signalling::HEALTH_PATH,
+            get(|| async { StatusCode::NO_CONTENT }),
+        )
+        .route(signalling::SIGNALLING_PATH, get(signalling::upgrade))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             signalling::limit_http,

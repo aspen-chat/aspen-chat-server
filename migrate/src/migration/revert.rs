@@ -9,7 +9,7 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use super::{Migration, ensure_migrations_table, list_applied};
 
 /// Roll back a specific subset of registered migrations selected by id,
-/// in reverse registry order (newest first). Unknown ids are refused
+/// in reverse registry order. Unknown ids are refused
 /// up-front — before any DB work — so a typo can't leave a half-reverted
 /// subset behind. Ids that are not currently recorded in
 /// `__aspen_migrations` are silently skipped, mirroring `run_apply`'s
@@ -17,9 +17,10 @@ use super::{Migration, ensure_migrations_table, list_applied};
 /// re-runnable.
 ///
 /// The requested set may be given in any order; we always iterate the
-/// registry in reverse so that if the set contains migrations with
-/// dependency-like ordering, the newer one comes down before the older
-/// one it was stacked on — the same invariant `run_down` relies on.
+/// registry in reverse, so a migration comes down before any registered
+/// ahead of it, which it may be stacked on. The registry's order is the
+/// only order migrations have: their timestamps name them and do not
+/// order them.
 pub async fn run_revert(
     conn: &mut AsyncPgConnection,
     migrations: &[&dyn Migration],

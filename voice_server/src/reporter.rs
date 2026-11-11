@@ -26,12 +26,6 @@ pub struct Reporter {
 }
 
 impl Reporter {
-    /// What the subjects of this server's replies start with, rather than NATS's shared
-    /// `_INBOX`, so a NATS user for the server may be allowed its own replies and no one else's.
-    pub fn inbox_prefix(server: Uuid) -> String {
-        format!("_INBOX_voice.{server}")
-    }
-
     /// Connects to NATS as `config` says, signing in with `auth`, and warns when the connection
     /// is unencrypted beyond this machine.
     pub async fn connect(config: &VoiceServerConfig, auth: NatsAuth) -> anyhow::Result<Self> {
@@ -45,7 +39,7 @@ impl Reporter {
             NatsAuth::Token(token) => async_nats::ConnectOptions::with_token(token),
         };
         let options = aspen_tls::nats_options(options, config.nats.tls.as_ref())
-            .custom_inbox_prefix(Self::inbox_prefix(server))
+            .custom_inbox_prefix(voice_protocol::control::inbox_prefix(server))
             .event_callback({
                 let reconnected = Arc::clone(&reconnected);
                 move |event| {

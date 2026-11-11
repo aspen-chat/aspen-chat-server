@@ -1711,6 +1711,52 @@ mod tests {
         assert!(s3.check_development_credentials().is_err());
     }
 
+    /// The credentials `docker-compose.yaml` and the scripts give the development services
+    /// are the ones refused, so one changed or added there is changed or added here.
+    #[test]
+    fn the_development_credentials_are_the_ones_the_repository_publishes() {
+        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let read = |file: &str| std::fs::read_to_string(repository.join(file)).unwrap();
+        // The value after `key` on the one line of `file` that sets it, without the quotes and
+        // spaces around it, and of `${NAME:-default}` the default.
+        let value = |file: &str, key: &str| -> String {
+            let text = read(file);
+            let mut values = text.lines().filter_map(|line| {
+                let value = line.trim().trim_start_matches("- ").strip_prefix(key)?;
+                let value = value.trim().trim_matches('"');
+                Some(match value.strip_prefix("${") {
+                    Some(variable) => {
+                        let (_, default) = variable.split_once(":-").unwrap();
+                        default.strip_suffix('}').unwrap()
+                    }
+                    None => value,
+                })
+            });
+            let found = values
+                .next()
+                .unwrap_or_else(|| panic!("{file} sets no {key}"));
+            assert_eq!(values.next(), None, "{file} sets {key} twice");
+            found.to_string()
+        };
+        let compose = "docker-compose.yaml";
+        for password in [
+            value(compose, "POSTGRES_PASSWORD:"),
+            value(compose, "command: --jetstream --auth"),
+        ] {
+            assert!(DEVELOPMENT_PASSWORDS.contains(&&*password), "{password}");
+        }
+        for key in [
+            value(compose, "AWS_ACCESS_KEY_ID="),
+            value(compose, "AWS_SECRET_ACCESS_KEY="),
+            value("scripts/stack.py", "S3_ACCESS_KEY ="),
+            value("scripts/stack.py", "S3_SECRET_KEY ="),
+            value("scripts/dev_federation.py", "S3_ACCESS_KEY ="),
+            value("scripts/dev_federation.py", "S3_SECRET_KEY ="),
+        ] {
+            assert!(DEVELOPMENT_S3_KEYS.contains(&&*key), "{key}");
+        }
+    }
+
     /// Development federation settings are only for deployments on this machine.
     #[test]
     fn federation_development_is_only_for_this_machine() {

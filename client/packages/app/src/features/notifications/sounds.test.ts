@@ -114,3 +114,11 @@ describe("sound limits", () => {
     expect(FakePlaying.playing.size).toBe(1);
   });
 });
+
+describe("the recordings", () => {
+  it("hold a file for every sound", async () => {
+    const { SOUND_FILES, recordingOf } = await sounds();
+    const names = Object.keys(SOUND_FILES) as (keyof typeof SOUND_FILES)[];
+    expect(names.filter((sound) => recordingOf(sound) === undefined)).toEqual([]);
+  });
+});

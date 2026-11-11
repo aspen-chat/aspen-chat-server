@@ -35,6 +35,12 @@ public final class PushHandler {
     private static final String TAG = "AspenPush";
     private static final String CHANNEL = "messages";
     private static final int TIMEOUT_MILLISECONDS = 8000;
+    /**
+     * What a message is read with: who wrote it, where, and what its notification says, written
+     * out by the deployment ({@code notificationTexts}), with the people it tags for a
+     * deployment of a version that does not write it out.
+     */
+    private static final String MESSAGE_INCLUDE = "?include=authors,channels,mentions,memberships,notificationTexts";
     private static final Pattern USER_TAG = Pattern.compile("<@([0-9a-fA-F-]{36})>");
     private static final Pattern ROLE_TAG = Pattern.compile("<@&[0-9a-fA-F-]{36}>");
 
@@ -91,7 +97,7 @@ public final class PushHandler {
     private void show(String subscription, JSONObject account, String channel, String messageId)
         throws IOException, JSONException {
         String origin = account.getString("origin");
-        JSONObject read = fetch(subscription, account, origin + "/api/v1/messages/" + messageId + "?include=authors,channels,mentions,memberships");
+        JSONObject read = fetch(subscription, account, origin + "/api/v1/messages/" + messageId + MESSAGE_INCLUDE);
         if (read == null) {
             return;
         }
@@ -112,9 +118,12 @@ public final class PushHandler {
         }
         String nickname = nicknameOf(included, community, message.getString("author"));
         String name = nickname != null ? nickname : nameOf(author);
-        String text = readable(message.optString("content"), included);
-        if (text.trim().isEmpty()) {
-            text = recorded(message);
+        String text = written(included, messageId);
+        if (text == null) {
+            text = readable(message.optString("content"), included);
+            if (text.trim().isEmpty()) {
+                text = recorded(message);
+            }
         }
         post(
             origin,
@@ -237,8 +246,10 @@ public final class PushHandler {
         }
     }
 
-    /** What the app calls a user: their display name, or else their username. */
-    /** What a message with no text of its own says, by its kind. */
+    /**
+     * What a message with no text of its own says, by its kind, when the deployment has not
+     * said.
+     */
     private String recorded(JSONObject message) {
         switch (message.optString("kind")) {
             case "poll":
@@ -260,6 +271,7 @@ public final class PushHandler {
         }
     }
 
+    /** What the app calls a user: their display name, or else their username. */
     private static String nameOf(JSONObject user) {
         if (user == null) {
             return "";
@@ -294,7 +306,29 @@ public final class PushHandler {
         return channel + "/" + message;
     }
 
-    /** The message's text as a notification shows it: tags as names, not tokens. */
+    /**
+     * What the deployment says the message's notification says, ready to show as given;
+     * {@code null} from a deployment of a version that does not say.
+     */
+    private static String written(JSONObject included, String messageId) {
+        JSONArray texts = included == null ? null : included.optJSONArray("notificationTexts");
+        if (texts == null) {
+            return null;
+        }
+        for (int i = 0; i < texts.length(); i++) {
+            JSONObject text = texts.optJSONObject(i);
+            if (text != null && messageId.equals(text.optString("message")) && !text.isNull("text")) {
+                String given = text.optString("text");
+                return given.isEmpty() ? null : given;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The message's text as a notification shows it when the deployment has not written it
+     * out: tags as names, not tokens.
+     */
     private String readable(String content, JSONObject included) {
         Matcher matcher = USER_TAG.matcher(content);
         StringBuffer out = new StringBuffer();
@@ -365,11 +399,16 @@ public final class PushHandler {
         return new JSONObject(body(connection.getInputStream())).optString("sessionToken", null);
     }
 
-    private static HttpURLConnection open(String url) throws IOException {
+    /** Opens a request that asks for its answer in the languages the phone shows the app in. */
+    private HttpURLConnection open(String url) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setConnectTimeout(TIMEOUT_MILLISECONDS);
         connection.setReadTimeout(TIMEOUT_MILLISECONDS);
         connection.setRequestProperty("Accept", "application/json");
+        String languages = context.getResources().getConfiguration().getLocales().toLanguageTags();
+        if (!languages.isEmpty()) {
+            connection.setRequestProperty("Accept-Language", languages);
+        }
         return connection;
     }
 

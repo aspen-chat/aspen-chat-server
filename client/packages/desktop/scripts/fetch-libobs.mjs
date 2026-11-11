@@ -30,7 +30,11 @@ const OBS_VERSION = "32.2.2";
 const RELEASE_URL = `https://github.com/obsproject/obs-studio/releases/download/${OBS_VERSION}/OBS-Studio-${OBS_VERSION}-Windows-x64.zip`;
 const RELEASE_SHA256 = "4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1";
 const SOURCE_URL = `https://github.com/obsproject/obs-studio/archive/refs/tags/${OBS_VERSION}.zip`;
-/** The modules the helper loads (`MODULES` in its `obs/startup.rs`) that Windows has. */
+/**
+ * The modules the helper loads that Windows has (`MODULES` in its `obs/startup.rs`).
+ * `check-libobs.mjs` fails a package lacking one the helper names there, so a module added to
+ * the helper and not here cannot ship missing.
+ */
 const MODULES = [
   "obs-nvenc",
   "obs-qsv11",

@@ -11,10 +11,11 @@ use super::ast_rewrite::{append_mod_declaration, append_registry_entry};
 /// Lay down `migrate/src/migrations/m<utc_now>_<slug>/{mod.rs,up.sql,down.sql}`
 /// AND register the new module in `migrations/mod.rs` + `registry.rs`.
 /// All disk writes happen after the in-memory rewrites succeed, so a
-/// malformed `registry.rs` is caught before any files exist on disk —
-/// and since the timestamp prefix from `Utc::now()` is strictly later
-/// than every existing entry, append-style inserts preserve the
-/// chronological invariant `registry.rs` depends on.
+/// malformed `registry.rs` is caught before any files exist on disk.
+/// The entry is appended: the registry's order is the only order
+/// migrations have, whatever their timestamps say (branches merge
+/// their entries in the order git places them), so a new migration
+/// goes after every one it could build on.
 pub fn scaffold_new(slug: &str) -> Result<()> {
     let trimmed = slug.trim();
     if trimmed.is_empty() {

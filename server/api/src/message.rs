@@ -81,6 +81,11 @@ pub enum MessageInclude {
     /// How far the caller has read each channel the messages were posted in, threads included,
     /// as `included.readStates`, so a reader can tell which of them are unread.
     ReadStates,
+    /// What a notification says of each message, as `included.notificationTexts`: plain text
+    /// in the request's language with tags and custom emoji written as names, for a reader
+    /// that shows it as given, a phone's notification code say. A message with no text says
+    /// what its kind records, or what it holds.
+    NotificationTexts,
 }
 
 /// Body of a message read; a named alias for the same reason as `api::community::CommunityRead`.
@@ -178,6 +183,7 @@ pub(crate) async fn sideload_messages(
         memberships,
         annotations,
         read_states,
+        notification_texts,
     ) = tokio::try_join!(
         async {
             let authors = include.contains(MessageInclude::Authors);
@@ -305,6 +311,15 @@ pub(crate) async fn sideload_messages(
                 Ok(None)
             }
         },
+        async {
+            if include.contains(MessageInclude::NotificationTexts) {
+                app::message::notification::read_notification_texts(state, messages)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        },
     )?;
     let (polls, poll_votes, own_write_ins) = match polls {
         Some((polls, votes, write_ins)) => (Some(polls), Some(votes), Some(write_ins)),
@@ -357,6 +372,7 @@ pub(crate) async fn sideload_messages(
         user_communities: memberships,
         message_annotations: annotations,
         read_states,
+        notification_texts,
         ..Included::default()
     })
 }
@@ -483,15 +499,7 @@ pub async fn search_messages(
             );
         }
     };
-    let holding = [
-        MessageHolding::Attachment,
-        MessageHolding::Image,
-        MessageHolding::Poll,
-    ]
-    .into_iter()
-    .filter(|h| query.has.contains(*h))
-    .map(app::search::Holding::from)
-    .collect();
+    let holding = query.has.iter().map(app::search::Holding::from).collect();
     let page = app::search::search_messages(
         &state,
         user.id,

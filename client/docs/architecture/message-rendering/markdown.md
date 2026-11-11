@@ -72,7 +72,9 @@ Rules:
 
 **Keep in step with the server.** The server's preview extractor
 (`server/app/src/link_preview/urls.rs`, list in `tlds.txt` beside it) applies the same rules, so
-what renders as a link is what gets a preview. Change both together.
+what renders as a link is what gets a preview. Change both together. `linkify.test.ts` reads
+`tlds.txt` and fails when the `tlds` package's list differs from it, as it may after the lockfile
+moves.
 
 ## Code highlighting
 

@@ -139,3 +139,33 @@ pub async fn list_applied(conn: &mut AsyncPgConnection) -> Result<Vec<AppliedMig
     .context("failed to read __aspen_migrations")?;
     Ok(rows)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::MIGRATIONS;
+    use std::collections::HashSet;
+
+    #[test]
+    fn every_registered_migration_has_an_id_of_its_own() {
+        let mut seen = HashSet::new();
+        for migration in MIGRATIONS {
+            assert!(seen.insert(migration.id()), "{} twice", migration.id());
+        }
+    }
+
+    /// A hand-written `mod.rs` copied from another keeps the other's id unless it is changed,
+    /// which is otherwise found only when its row meets the primary key after its `up` ran.
+    #[test]
+    fn every_registered_migration_is_named_as_its_module() {
+        let modules: Vec<&str> = include_str!("../registry.rs")
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("&migrations::m")?
+                    .strip_suffix("::M,")
+            })
+            .collect();
+        let ids: Vec<&str> = MIGRATIONS.iter().map(|migration| migration.id()).collect();
+        assert_eq!(ids, modules);
+    }
+}

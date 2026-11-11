@@ -451,27 +451,29 @@ it is the way it is.
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request: `cargo fmt --check`,
 `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the example plugins' format,
 lints, tests, and builds for `wasm32-wasip2` (`plugins/word_filter`, `plugins/forum`,
-`plugins/calendar`, and `plugins/blackjack`, each a workspace of its own); the API, event, and
-signalling schemas, written by the two servers in a job of their own that the client, Android,
-Windows, macOS, iOS, and Flatpak jobs wait for rather than the workspace's tests; the client's
-format (`pnpm format:check`), typecheck, lint, and tests, with its browser tests on Chromium (a
-desktop and a phone) split across three runners; the Android app's build, its unit tests, and its
-device tests on an emulator, the debug APK kept as an artifact
-(`client/docs/architecture/android-builds.md`); the desktop app's Flatpak, built with
+`plugins/calendar`, and `plugins/blackjack`, each a workspace of its own), whose copies of
+`views/bridge.js` must be the same; the API, event, and signalling schemas, written by the two
+servers in a job of their own that the client, Android, Windows, macOS, iOS, and Flatpak jobs wait
+for rather than the workspace's tests; the client's format (`pnpm format:check`), typecheck, lint,
+and tests, with its browser tests on Chromium (a desktop and a phone) split across three runners;
+the Android app's build, its unit tests, and its device tests on an emulator, the debug APK kept as
+an artifact (`client/docs/architecture/android-builds.md`); the desktop app's Flatpak, built with
 `package:flatpak`, installed, and its capture helper asked what it can capture inside the sandbox;
 on macOS, the capture helper's lints and tests, the iOS app built for the simulator with the
 extension's Web Push check, and on a pull request an unsigned dmg, while `main` builds signed dmgs,
 sent to Apple's notary service without waiting, and an App Store build for TestFlight from the
 `apple-signing` environment (`client/docs/architecture/apple-builds.md`);
 `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the
-debug build; both AWS configurations' `tofu test`, and `scripts/check_box.py` against images built
-in the job; an ARM build in a `debian:bookworm` container on GitHub's arm64 runner (tests included);
-the cross-compile script on x86-64; and `scripts/smoke_servers.py` on an arm64 runner against both
-ARM builds, which are kept as artifacts; `scripts/check_permissions.py`,
-`scripts/check_nats_memory.py`, and `scripts/check_mana.py` run in the x86-64 job against its debug
-build, the first building and installing the example plugins. Every job runs the toolchain
-`rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the example plugins need, so
-rustup installs both wherever the repository is built. Clippy warnings fail the build.
+debug build; both AWS configurations' `tofu test`, `scripts/check_media_prefixes.py` (every list of
+the public media prefixes against the server's, `media_store::PublicPrefix`), and
+`scripts/check_box.py` against images built in the job; an ARM build in a `debian:bookworm`
+container on GitHub's arm64 runner (tests included); the cross-compile script on x86-64; and
+`scripts/smoke_servers.py` on an arm64 runner against both ARM builds, which are kept as artifacts;
+`scripts/check_permissions.py`, `scripts/check_nats_memory.py`, and `scripts/check_mana.py` run in
+the x86-64 job against its debug build, the first building and installing the example plugins. Every
+job runs the toolchain `rust-toolchain.toml` pins, which lists the `wasm32-wasip2` target the
+example plugins need, so rustup installs both wherever the repository is built. Clippy warnings fail
+the build.
 
 The version of every action a workflow uses (`uses: actions/checkout@v7`), and of anything else a
 workflow pins (a runner image, a Node.js or Java release), is looked up when it is written or
@@ -570,17 +572,17 @@ HTTP caches, proxies, OpenAPI tooling, and (eventually) federation all see the s
   one response type per endpoint. `included` is keyed by record type (`communities`, `channels`,
   `categories`, `users`, `userCommunities`, `messages`, `attachments`, `reactions`, `polls`,
   `pollVotes`, `ownWriteIns`, `readStates`, `channelMutes`, `categoryCollapses`, `voiceSessions`,
-  `voiceParticipants`, `customEmoji`); a key is present exactly when the caller asked for the
-  relationship that produces it, and holds the same wire records the entity's own endpoints return.
-  The member sample is capped, but the caller's own membership of each community is always among
-  `userCommunities`, because it carries the order of their community list. Each endpoint declares
-  its accepted names as an enum (`api::community::CommunityInclude`, `api::message::MessageInclude`,
-  `api::invite::InviteInclude`, `api::dm::DmInclude`) and parses the parameter with `IncludeSet<E>`,
-  documented in OpenAPI as an array with `style = Form, explode = false`; a name the enum lacks is
-  ignored, never refused, since a newer client or another deployment's may ask for a relationship
-  this version does not have. Sideloads are batched in the `app` layer, one query per relationship
-  however many parent records there are; never load them per record. Reads that do not support
-  `include` return the bare record or array.
+  `voiceParticipants`, `customEmoji`, `notificationTexts`); a key is present exactly when the caller
+  asked for the relationship that produces it, and holds the same wire records the entity's own
+  endpoints return. The member sample is capped, but the caller's own membership of each community
+  is always among `userCommunities`, because it carries the order of their community list. Each
+  endpoint declares its accepted names as an enum (`api::community::CommunityInclude`,
+  `api::message::MessageInclude`, `api::invite::InviteInclude`, `api::dm::DmInclude`) and parses the
+  parameter with `IncludeSet<E>`, documented in OpenAPI as an array with
+  `style = Form, explode = false`; a name the enum lacks is ignored, never refused, since a newer
+  client or another deployment's may ask for a relationship this version does not have. Sideloads
+  are batched in the `app` layer, one query per relationship however many parent records there are;
+  never load them per record. Reads that do not support `include` return the bare record or array.
 - **List parameters use `sort=` and `filter[field]=`.** When a list endpoint gains ordering or
   filtering, name the parameters `sort` (a field name, `-` prefixed for descending) and
   `filter[<field>]`, deserialized with `#[serde(rename = "filter[name]")]` on the query struct, so
@@ -1265,6 +1267,14 @@ when reviewing.
    index by name (`api::error::violates`), or write the statement so the error is not needed
    (`ON CONFLICT … DO NOTHING RETURNING`). Nothing branches on localized text or on a name meant for
    display.
+4. **One list, one constant.** What two places must agree on is written once and read by both
+   (`MessageKind::notifies`, `media_store::PublicPrefix`, `voice_protocol::control::inbox_prefix`, a
+   `strum` derive for names). Where they cannot share code (server and client, code and a Caddy
+   template, the example plugins' copies of `bridge.js`), a test or CI step reads both and fails
+   when they differ (`scripts/check_media_prefixes.py`, the client's test of its TLD list against
+   `tlds.txt`). What a client would otherwise work out from other fields, the server says in a field
+   of its own (`notifies`, `actorKind`, `notificationTexts`). A struct whose every field must be
+   decided on is destructured with no `..`.
 
 ## Comments document the current code, not its history
 
@@ -1392,15 +1402,16 @@ both pass `spec/pseudo_locale_vectors.json`; change the three together.
 - `server/locales/en.yml` — English, the default and the catalogue every translation is made from
   (along with the pseudo-locales). `es.yml` is Latin American Spanish, in beta: informal tú,
   infinitives on buttons, and the region's words (video, computadora, configuración, reportar,
-  banear). Additional locale files (`fr.yml`, `de.yml`) go alongside them and are negotiated with no
-  further change; the client needs a catalogue of its own for each
-  (`client/packages/app/src/i18n/locales/<language>.json`, beside its `en.json`, named in
-  `LANGUAGES` and `TRANSLATIONS` in `client/packages/app/src/i18n/locales.ts`, in `BETA` while it is
-  one, and in `NATIVE_NAMES` when its name is not what `Intl.DisplayNames` gives its tag). The
-  client's strings are ICU MessageFormat, with plurals; see `client/AGENTS.md`. A string added to
-  either English catalogue is added to each translation too, or left out of it: a translation's
-  tests (`aspen_locale`'s and `locales.test.ts`) refuse a key English lacks or placeholders that
-  differ from English's, and a key a translation lacks reads in English.
+  banear). Additional locale files (`fr.yml`, `de.yml`) go alongside them and are negotiated once
+  `aspen_locale::DIRECTIONS` names the language's direction (a test fails until it does); the client
+  needs a catalogue of its own for each (`client/packages/app/src/i18n/locales/<language>.json`,
+  beside its `en.json`, named in `LANGUAGES` and `TRANSLATIONS` in
+  `client/packages/app/src/i18n/locales.ts`, in `BETA` while it is one, and in `NATIVE_NAMES` when
+  its name is not what `Intl.DisplayNames` gives its tag). The client's strings are ICU
+  MessageFormat, with plurals; see `client/AGENTS.md`. A string added to either English catalogue is
+  added to each translation too, or left out of it: a translation's tests (`aspen_locale`'s and
+  `locales.test.ts`) refuse a key English lacks or placeholders that differ from English's, and a
+  key a translation lacks reads in English.
 
 ## Git Policy
 

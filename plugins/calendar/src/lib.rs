@@ -629,6 +629,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_channel_kind_is_the_manifests() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../aspen-plugin.json")).unwrap();
+        let id = manifest["id"].as_str().unwrap();
+        let kinds: Vec<String> = manifest["channelTypes"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|key| format!("{id}:{key}"))
+            .collect();
+        assert_eq!(kinds, [CALENDAR]);
+    }
+
+    #[test]
     fn times_go_both_ways() {
         let at = parse_time("2026-10-04T18:30:00Z").unwrap();
         assert_eq!(format_time(at), "2026-10-04T18:30:00Z");

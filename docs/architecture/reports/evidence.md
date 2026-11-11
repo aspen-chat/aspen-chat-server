@@ -80,8 +80,8 @@ An operator deletes evidence at once with:
 - `aspen-chat-server attachments purge --attachment <id>`: one attachment.
 
 The purge deletes the rows and every object at the keys they may be at. It writes each to the
-moderation log as `purgeAttachment` with no actor (`moderation_log::log_operator_moderation`). An
-attachment a standing message holds is refused.
+moderation log as `purgeAttachment`, an operator's entry with no actor
+(`moderation_log::log_operator_moderation`). An attachment a standing message holds is refused.
 
 ## When access is given or taken away
 

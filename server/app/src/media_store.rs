@@ -52,6 +52,39 @@ use std::time::Duration as StdDuration;
 
 use crate::aspen_config::{AspenConfig, MediaS3Config};
 
+/// A prefix of the store whose objects clients read without credentials, at `public_base_url`:
+/// everything the server stores to be downloaded has a key `<prefix>/<id>` under one of these
+/// ([`PublicPrefix::key`]), and nothing else is public. Each read path lists the same prefixes
+/// (docs/operators/installing/storage-read-path.md), which `scripts/check_media_prefixes.py`
+/// holds to [`PublicPrefix::as_str`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::VariantArray)]
+pub enum PublicPrefix {
+    /// What people upload to messages (`app::attachment`).
+    Attachments,
+    /// The previews made of them (`app::attachment::preview`).
+    AttachmentPreviews,
+    /// Icons of communities, users, and the deployment (`app::icon`).
+    Icons,
+    /// The pictures of link previews (`app::link_preview`).
+    LinkPreviewImages,
+}
+
+impl PublicPrefix {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            PublicPrefix::Attachments => "attachments",
+            PublicPrefix::AttachmentPreviews => "attachment-previews",
+            PublicPrefix::Icons => "icons",
+            PublicPrefix::LinkPreviewImages => "link-preview-images",
+        }
+    }
+
+    /// The key of the object `id` names under this prefix.
+    pub fn key(self, id: uuid::Uuid) -> String {
+        format!("{}/{id}", self.as_str())
+    }
+}
+
 /// Where clients' uploads land until they are confirmed (see the module docs).
 pub const UPLOAD_PREFIX: &str = "uploads/";
 
@@ -703,6 +736,38 @@ mod tests {
             secret_key: Some("test-secret-key".to_string()),
             ..MediaS3Config::default()
         }
+    }
+
+    /// Every public object's key is `<prefix>/<id>` under a prefix of its own, each a plain
+    /// name as the read paths write them, and none one the read path must not serve.
+    #[test]
+    fn public_keys_lie_under_the_public_prefixes() {
+        use strum::VariantArray;
+        let id = uuid::Uuid::from_u128(7);
+        let keys = [
+            crate::attachment::storage_key(crate::AttachmentId(id)),
+            crate::attachment::preview::storage_key(crate::AttachmentId(id)),
+            crate::icon::storage_key(crate::IconId(id)),
+            crate::link_preview::image_storage_key(crate::LinkPreviewImageId(id)),
+        ];
+        let mut prefixes: Vec<&str> = Vec::new();
+        for (key, prefix) in keys.iter().zip(PublicPrefix::VARIANTS) {
+            assert_eq!(key, &format!("{}/{id}", prefix.as_str()));
+            prefixes.push(prefix.as_str());
+        }
+        assert_eq!(keys.len(), PublicPrefix::VARIANTS.len());
+        for prefix in &prefixes {
+            assert!(
+                prefix
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "{prefix}"
+            );
+            assert!(!UPLOAD_PREFIX.starts_with(prefix) && !EVIDENCE_PREFIX.starts_with(prefix));
+        }
+        prefixes.sort_unstable();
+        prefixes.dedup();
+        assert_eq!(prefixes.len(), PublicPrefix::VARIANTS.len());
     }
 
     /// Evidence keeps its key beneath its own prefix, once however often it is moved.

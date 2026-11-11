@@ -351,6 +351,12 @@ enum MessageEnumSource {
         // /channels/{channel}/polls` and by the poll closer, with `poll` naming their poll.
         #[message_gen(server_authoritative)]
         kind: MessageKind,
+        // Whether the message may tell anyone of itself (`MessageKind::notifies`), by its kind
+        // alone, so it never changes: a reader's own settings then decide whether it tells
+        // them. A record from a deployment of a version without it leaves it out, and its
+        // reader judges by the kinds it knows.
+        #[message_gen(server_authoritative, default)]
+        notifies: bool,
         #[message_gen(server_authoritative)]
         poll: Option<PollId>,
         // The thread this message started, once someone replies to it in a thread; announced

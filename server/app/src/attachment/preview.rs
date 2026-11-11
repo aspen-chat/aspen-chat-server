@@ -111,7 +111,7 @@ pub fn wanted(mime_type: &str) -> bool {
 /// Where an attachment's preview is stored: beside the originals rather than under the
 /// original's own key, which some object stores cannot hold as both an object and a prefix.
 pub fn storage_key(id: AttachmentId) -> String {
-    format!("attachment-previews/{}", id.0)
+    crate::media_store::PublicPrefix::AttachmentPreviews.key(id.0)
 }
 
 /// Whether a preview of `preview_bytes` is worth showing in place of an original of

@@ -7,21 +7,22 @@ credentials, is its own repository (`aspen-push-relay`). Design notes:
 
 ## Where it lives
 
-| Part                   | Where                                                              |
-| ---------------------- | ------------------------------------------------------------------ |
-| What a push says       | `app::push::Pointer`                                               |
-| Encryption and signing | `app::push::webpush` (the `aspen_webpush` crate)                   |
-| HTTP client            | `app::push::client`                                                |
-| Dispatcher             | `app::push::spawn_dispatcher`, one per API server                  |
-| Who to wake            | `RECIPIENTS_SQL`, `visibility::viewers`                            |
-| Send queue             | `app::push::queue`                                                 |
-| Who has phones         | `phones_of`                                                        |
-| Badge count            | `push::badge_of`, kept for `BADGE_KEPT`                            |
-| Address check          | `reaches_inside`                                                   |
-| Table of subscriptions | `push_subscription`                                                |
-| Table of the push key  | `push_key`                                                         |
-| Metrics                | `aspen_pushes_total` (by outcome), `aspen_pushes_waiting` (queued) |
-| Development check      | `scripts/dev_push.py`, standing in for relay and phone             |
+| Part                   | Where                                                               |
+| ---------------------- | ------------------------------------------------------------------- |
+| What a push says       | `app::push::Pointer`                                                |
+| Encryption and signing | `app::push::webpush` (the `aspen_webpush` crate)                    |
+| HTTP client            | `app::push::client`                                                 |
+| Dispatcher             | `app::push::spawn_dispatcher`, one per API server                   |
+| Who to wake            | `RECIPIENTS_SQL`, `visibility::viewers`                             |
+| Send queue             | `app::push::queue`                                                  |
+| Who has phones         | `phones_of`                                                         |
+| Badge count            | `push::badge_of`, kept for `BADGE_KEPT`                             |
+| Address check          | `reaches_inside`                                                    |
+| Table of subscriptions | `push_subscription`                                                 |
+| Table of the push key  | `push_key`                                                          |
+| Metrics                | `aspen_pushes_total` (by outcome), `aspen_pushes_waiting` (queued)  |
+| A notification's text  | `app::message::notification`, read with `include=notificationTexts` |
+| Development check      | `scripts/dev_push.py`, standing in for relay and phone              |
 
 ## What a push is
 
@@ -53,6 +54,28 @@ Every push is Web Push.
   five minutes.
 - A `read` push to someone in do not disturb carries 0 (`shown_badge`, which reads their presence
   override's Valkey copy). Pushes that tell of something new never reach them then.
+
+## What a notification says
+
+A pointer carries no text. The phone fetches the message, and with `include=notificationTexts` the
+read answers what its notification says, written out (`app::message::notification`,
+`included.notificationTexts`), so the phones' notification code parses nothing.
+
+- A message's text has its tokens (`app::message::tokens`) written as names outside code: `@name`
+  for a person or role, `:name:` for an emoji. Its Markdown stays as written.
+- A person or role is named only when the message tags it (`Message.mentions`, what its author was
+  allowed to tag) or is its author, and an emoji only when it is live and of the channel's own
+  community. Anything else reads `@…` or `:…:`, so a notification names nothing its reader could not
+  otherwise see.
+- A message with no text says what its kind records (`recorded`), in the request's language. For a
+  kind that records nothing in words it says what the message holds (`held`): one picture, several,
+  files that are not all pictures, or nothing. A file is a picture by the type it was uploaded as
+  (`attachment::pictured`), read for the whole read in one query.
+- The names of a whole read are loaded in one query each for people, roles, and emoji
+  (`read_notification_texts`), however many messages it holds.
+
+A phone reading a deployment of a version without the include writes the text out itself, as
+`spec/push.md` says.
 
 ## Subscriptions
 

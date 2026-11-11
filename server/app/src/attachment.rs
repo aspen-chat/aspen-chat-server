@@ -200,6 +200,13 @@ pub(crate) fn essence(mime_type: &str) -> String {
     essence.trim().to_ascii_lowercase()
 }
 
+/// Whether an attachment of `mime_type`, as its uploader named it, is a picture.
+pub(crate) fn pictured(mime_type: &str) -> bool {
+    essence(mime_type)
+        .split_once('/')
+        .is_some_and(|(kind, _)| kind == "image")
+}
+
 /// [`essence`] of the declared type in the SQL expression `$declared`, for a statement that
 /// decides by an attachment's type: `attachment.mime_type` holds the type as it was declared
 /// ([`declarable`]: printable ASCII in any case, parameters and all), never its essence. The
@@ -341,7 +348,7 @@ pub struct AttachmentUpload {
 }
 
 pub fn storage_key(id: AttachmentId) -> String {
-    format!("attachments/{}", id.0)
+    crate::media_store::PublicPrefix::Attachments.key(id.0)
 }
 
 /// An upload's size as its client declares it, which every upload URL is signed for, so storage
@@ -901,6 +908,8 @@ mod essence_tests {
         assert_eq!(essence(" Image/Jpeg ; q=1"), "image/jpeg");
         assert_eq!(essence("text/plain;charset=UTF-8"), "text/plain");
         assert_eq!(essence(" ; image/png"), "");
+        assert!(pictured(" Image/Jpeg ; q=1"));
+        assert!(!pictured("video/mp4") && !pictured("image") && !pictured("x-image/png"));
     }
 
     #[derive(diesel::QueryableByName)]

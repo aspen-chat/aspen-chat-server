@@ -9,7 +9,6 @@ use aspen_app::context::{GlobalServerContext, Role};
 // The catalogue `t!` reads, which `aspen_locale` holds.
 use aspen_locale::{_rust_i18n_try_translate, t};
 pub use aspen_wire::API_PREFIX;
-use axum::http::Method;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, LOCATION, RETRY_AFTER};
 use axum::routing::any;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -188,13 +187,7 @@ impl Modify for SecurityAddon {
 fn cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::any())
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PUT,
-            Method::PATCH,
-            Method::DELETE,
-        ])
+        .allow_methods(rate_limit::API_METHODS)
         .allow_headers([
             AUTHORIZATION,
             CONTENT_TYPE,
@@ -604,11 +597,14 @@ fn api_routes() -> OpenApiRouter<GlobalServerContext> {
         )
         .route(
             rate_limit::PLUGIN_ROUTE,
-            axum::routing::get(plugin::route)
-                .post(plugin::route)
-                .put(plugin::route)
-                .patch(plugin::route)
-                .delete(plugin::route),
+            rate_limit::API_METHODS.iter().fold(
+                axum::routing::MethodRouter::new(),
+                |router, method| {
+                    let method = axum::routing::MethodFilter::try_from(method.clone())
+                        .expect("every API method is one a route can be given");
+                    router.on(method, plugin::route)
+                },
+            ),
         )
         // The event stream is a WebSocket and has no OpenAPI representation; its frames are
         // described by `event_schema.json`.

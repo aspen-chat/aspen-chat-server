@@ -562,6 +562,7 @@ diesel::table! {
         channel -> Nullable<Uuid>,
         subject -> Nullable<Text>,
         at -> Timestamptz,
+        by_operator -> Bool,
     }
 }
 

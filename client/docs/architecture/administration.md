@@ -134,6 +134,11 @@ Opens any community.
 
 ## Moderation log
 
+Each entry says who acted from the server's `actorKind` (`actorKindOf` in `moderationActor.ts`): a
+person, an operator from the terminal, or an account since gone. A deployment of a version without
+the field is read by the actor and the action: no actor is an operator for `purgeAttachment`, the
+one action such a deployment logged from the terminal, and a deleted account otherwise.
+
 Each entry names what it names from the server's `details`:
 
 - people as chips that open their cards

@@ -1802,6 +1802,7 @@
     "poll": "Publicó una encuesta",
     "pollClosed": "Una encuesta cerró",
     "attachment": "Envió un archivo adjunto",
+    "pictures": "{count, plural, one {Envió una imagen} other {Envió imágenes}}",
     "newMessage": "Mensaje nuevo",
     "announced": "{name}: {body}",
     "menu": "Notificaciones",

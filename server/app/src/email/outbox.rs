@@ -33,8 +33,20 @@ const SEND_RATE_KEY: &str = "email:send-rate";
 /// a minute and doubling, add up to about a day.
 pub const MAX_ATTEMPTS: i32 = 11;
 
-/// A mailing list an address can leave by the links its mail carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::EnumString)]
+/// A mailing list an address can leave by the links its mail carries, which name it as it is
+/// written here (`Display`) and are read back the same way (`FromStr`).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+    strum::VariantArray,
+)]
 #[serde(rename_all = "camelCase")]
 #[strum(serialize_all = "camelCase")]
 pub enum List {
@@ -381,6 +393,14 @@ pub fn retry_wait(attempts: i32) -> chrono::Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strum::VariantArray;
+
+    #[test]
+    fn a_list_is_read_back_from_the_name_its_links_write() {
+        for list in List::VARIANTS {
+            assert_eq!(list.to_string().parse::<List>().as_ref(), Ok(list));
+        }
+    }
 
     #[test]
     fn codes_someone_waits_for_are_sent_before_everything_else() {

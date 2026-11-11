@@ -94,8 +94,15 @@ pub const PLUGIN_ROUTE: &str = "/plugins/{plugin}/routes/{*path}";
 pub const PLUGIN_ASSET: &str = "/plugins/{plugin}/assets/{*path}";
 /// People's private URLs to plugins' routes (`api::plugin::capability`).
 pub const PLUGIN_CAPABILITY: &str = "/plugins/{plugin}/capabilities/{secret}";
-/// The methods plugins' routes answer.
-const PLUGIN_ROUTE_METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+/// The methods the API answers: those its OpenAPI operations are under ([`operations`]),
+/// which plugins' routes answer too and CORS allows.
+pub const API_METHODS: [Method; 5] = [
+    Method::GET,
+    Method::POST,
+    Method::PUT,
+    Method::PATCH,
+    Method::DELETE,
+];
 
 /// Every route the limits can name: the OpenAPI document's operations, the event stream, the
 /// passkey page, the federation document, the Digital Asset Links, the unsubscribe page, the
@@ -127,38 +134,44 @@ pub fn routes() -> Vec<Route> {
     ] {
         routes.push(Route::new(method, template, Access::Anonymous));
     }
-    for method in PLUGIN_ROUTE_METHODS {
-        routes.push(Route::new(method, PLUGIN_ROUTE, Access::Authenticated));
+    for method in &API_METHODS {
+        routes.push(Route::new(
+            method.as_str(),
+            PLUGIN_ROUTE,
+            Access::Authenticated,
+        ));
     }
     routes.push(Route::new("GET", PLUGIN_ASSET, Access::Anonymous));
     routes.push(Route::new("GET", PLUGIN_CAPABILITY, Access::Anonymous));
     routes
 }
 
+/// A path's operations with their methods, borrowed as `$borrow` says (`&` or `&mut`): the
+/// one list of the `PathItem` fields the limits read, a field for each of [`API_METHODS`].
+macro_rules! operations {
+    ($item:expr, $($borrow:tt)+) => {
+        [
+            ("GET", $($borrow)+ $item.get),
+            ("POST", $($borrow)+ $item.post),
+            ("PUT", $($borrow)+ $item.put),
+            ("PATCH", $($borrow)+ $item.patch),
+            ("DELETE", $($borrow)+ $item.delete),
+        ]
+    };
+}
+
 fn operations(item: &utoipa::openapi::PathItem) -> Vec<(&'static str, &Operation)> {
-    [
-        ("GET", &item.get),
-        ("POST", &item.post),
-        ("PUT", &item.put),
-        ("PATCH", &item.patch),
-        ("DELETE", &item.delete),
-    ]
-    .into_iter()
-    .filter_map(|(method, operation)| operation.as_ref().map(|op| (method, op)))
-    .collect()
+    operations!(item, &)
+        .into_iter()
+        .filter_map(|(method, operation)| operation.as_ref().map(|op| (method, op)))
+        .collect()
 }
 
 fn operations_mut(item: &mut utoipa::openapi::PathItem) -> Vec<(&'static str, &mut Operation)> {
-    [
-        ("GET", &mut item.get),
-        ("POST", &mut item.post),
-        ("PUT", &mut item.put),
-        ("PATCH", &mut item.patch),
-        ("DELETE", &mut item.delete),
-    ]
-    .into_iter()
-    .filter_map(|(method, operation)| operation.as_mut().map(|op| (method, op)))
-    .collect()
+    operations!(item, &mut)
+        .into_iter()
+        .filter_map(|(method, operation)| operation.as_mut().map(|op| (method, op)))
+        .collect()
 }
 
 /// An operation's `security`: none, a list including the empty requirement (optional), or
@@ -732,6 +745,26 @@ impl ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An operation under a method [`operations`] does not read would get no `Route`: its
+    /// requests would be counted by address alone, and the document would say nothing of
+    /// their limits.
+    #[test]
+    fn every_operation_is_under_a_method_the_limits_read() {
+        let mut openapi = crate::openapi();
+        for (path, item) in openapi.paths.paths.iter_mut() {
+            assert!(
+                item.head.is_none() && item.options.is_none() && item.trace.is_none(),
+                "{path} has an operation under a method no route is compiled for"
+            );
+            let read: Vec<&str> = operations!(item, &mut)
+                .into_iter()
+                .map(|(method, _)| method)
+                .collect();
+            let known: Vec<&str> = API_METHODS.iter().map(Method::as_str).collect();
+            assert_eq!(read, known);
+        }
+    }
 
     #[test]
     fn built_in_limits_compile_against_the_real_routes() {

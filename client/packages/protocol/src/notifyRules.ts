@@ -63,8 +63,15 @@ export function communityDefaultLevel(small: boolean): NotificationLevel {
   return small ? "all" : "tags";
 }
 
-/** Whether a message's kind is one that may notify at all. */
-export function kindNotifies(message: Message): boolean {
+/**
+ * Whether a message is one that may notify at all, by its kind. The deployment says
+ * (`Message.notifies`, the server's `MessageKind::notifies`); one of a version that does not is
+ * judged by the kinds that only recorded something then, any other kind notifying.
+ */
+export function kindNotifies(message: Pick<Message, "kind" | "notifies">): boolean {
+  if (message.notifies !== undefined) {
+    return message.notifies;
+  }
   // An echo says nothing of its own, a call's record follows the ring that already told of the
   // call, and a command is for its bot, whose answer is what tells.
   if (

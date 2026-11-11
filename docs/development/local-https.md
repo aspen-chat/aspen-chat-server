@@ -90,7 +90,10 @@ The filer lists directories and takes uploads and deletes from anyone, so Caddy 
 only `GET` and `HEAD` of a single file under the bucket's four prefixes clients read
 (`attachments/`, `attachment-previews/`, `icons/`, `link-preview-images/`), as the box does
 (`docs/operators/installing/storage-read-path.md`), and answers everything else, the files of
-deleted messages under `evidence/` among them, with 404.
+deleted messages under `evidence/` among them, with 404. `scripts/check_media_prefixes.py`, which CI
+runs, fails when that list, the box's, or AWS's differs from the prefixes the server stores public
+objects under (`PublicPrefix` in `server/app/src/media_store.rs`, the one list every key of a public
+object is built from).
 
 1. Issue a certificate for the host and the names under it, and start Caddy:
 

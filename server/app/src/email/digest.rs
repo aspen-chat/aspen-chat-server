@@ -22,6 +22,7 @@ use super::EmailAccount;
 use super::outbox::{self, Mail};
 use super::render::{Item, Letter, Section};
 use crate::context::GlobalServerContext;
+use crate::message::tokens::{self, Token};
 use crate::t;
 use crate::{ChannelId, CommunityId, CustomEmojiId, UserId};
 use aspen_schema::{
@@ -46,8 +47,6 @@ pub const MAX_PLACES: i64 = 20;
 const MAX_COUNTED: i64 = 10_000;
 /// The longest excerpt of one message, in characters.
 const EXCERPT_CHARS: usize = 300;
-/// The longest tag or custom emoji reference in a message's text, in bytes: `<@&`, a UUID, `>`.
-const TOKEN_MAX_BYTES: usize = 40;
 /// How often the digests that are due are made (`make_step`).
 pub const TICK: Duration = Duration::from_secs(60);
 /// How many digests one step makes.
@@ -630,74 +629,25 @@ impl Names {
         cut
     }
 
-    /// `text` with each `<@user>`, `<@&role>`, and `<:emoji>` written as the name it stands for.
+    /// `text` with each `<@user>`, `<@&role>`, and `<:emoji>` written as the name it stands for;
+    /// one that names nothing known stays as written.
     fn name_tokens(&self, text: &str) -> String {
-        let mut out = String::with_capacity(text.len());
-        let mut rest = text;
-        while let Some(start) = rest.find('<') {
-            out.push_str(&rest[..start]);
-            rest = &rest[start..];
-            // A tag or an emoji's reference is at most `<@&`, an id, and `>`; only that much
-            // is read for its end, so text of many `<` is read once.
-            let Some(end) = rest.bytes().take(TOKEN_MAX_BYTES).position(|b| b == b'>') else {
-                out.push('<');
-                rest = &rest[1..];
-                continue;
-            };
-            let token = &rest[..=end];
-            let named = if let Some(id) = token
-                .strip_prefix("<@&")
-                .and_then(|t| uuid::Uuid::parse_str(&t[..t.len() - 1]).ok())
-            {
-                self.roles.get(&id).map(|name| format!("@{name}"))
-            } else if let Some(id) = token
-                .strip_prefix("<@")
-                .and_then(|t| uuid::Uuid::parse_str(&t[..t.len() - 1]).ok())
-            {
-                self.users.get(&UserId(id)).map(|name| format!("@{name}"))
-            } else {
-                crate::custom_emoji::referenced(token)
-                    .and_then(|id| self.emoji.get(&id))
-                    .map(|name| format!(":{name}:"))
-            };
-            match named {
-                Some(name) => {
-                    out.push_str(&name);
-                    rest = &rest[end + 1..];
-                }
-                None => {
-                    out.push('<');
-                    rest = &rest[1..];
-                }
-            }
-        }
-        out.push_str(rest);
-        out
+        tokens::rewritten(text, |token| match token {
+            Token::User(id) => self.users.get(&id).map(|name| format!("@{name}")),
+            Token::Role(id) => self.roles.get(&id.0).map(|name| format!("@{name}")),
+            Token::Emoji(id) => self.emoji.get(&id).map(|name| format!(":{name}:")),
+        })
     }
 }
 
 /// The custom emoji `content` names: every reference `name_tokens` would find there.
 fn custom_emoji_in(content: &str) -> Vec<CustomEmojiId> {
-    const OPEN: &str = "<:";
     let mut found = Vec::new();
-    let mut rest = content;
-    while let Some(start) = rest.find(OPEN) {
-        rest = &rest[start..];
-        // As `name_tokens` reads: a `<:` that no reference follows (an emoticon, say) is
-        // passed by alone, so one after it is still found.
-        let reference = rest
-            .bytes()
-            .take(TOKEN_MAX_BYTES)
-            .position(|b| b == b'>')
-            .and_then(|end| Some((end, crate::custom_emoji::referenced(&rest[..=end])?)));
-        match reference {
-            Some((end, id)) => {
-                found.push(id);
-                rest = &rest[end + 1..];
-            }
-            None => rest = &rest[OPEN.len()..],
+    tokens::each(content, |token| {
+        if let Token::Emoji(id) = token {
+            found.push(id);
         }
-    }
+    });
     found
 }
 

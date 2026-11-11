@@ -551,10 +551,11 @@ fn for_community(event: &ServerEvent) -> Option<ServerEvent> {
             membership.sort_index = None;
         }
         ServerEvent::UserCommunity(UserCommunityEvent::Update {
+            community: _,
+            user: _,
             sort_index,
             roles,
             nickname,
-            ..
         }) => {
             *sort_index = None;
             if roles.is_none() && nickname.is_none() {

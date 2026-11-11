@@ -7,6 +7,7 @@ use diesel::{AsExpression, FromSqlRow};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use strum::VariantArray as _;
 use utoipa::ToSchema;
 
 /// What a message is. Both poll kinds and echoes carry no `content`; the client renders the poll
@@ -23,6 +24,7 @@ use utoipa::ToSchema;
     JsonSchema,
     FromSqlRow,
     AsExpression,
+    strum::VariantArray,
 )]
 #[serde(rename_all = "camelCase")]
 #[diesel(sql_type = aspen_schema::sql_types::MessageKind)]
@@ -58,20 +60,47 @@ pub enum MessageKind {
     CommunityGrew,
 }
 
+impl MessageKind {
+    /// Whether a message of this kind may tell anyone of itself: wake a phone, sound, count
+    /// in the activity feed. The rest only record something: an echo says nothing of its own,
+    /// a call's record follows the ring that already told everyone of the call, and a command
+    /// is for its bot, whose answer is what tells. This is the one list of them; a message's
+    /// record carries the answer as `notifies`.
+    pub const fn notifies(self) -> bool {
+        match self {
+            MessageKind::Standard
+            | MessageKind::Poll
+            | MessageKind::PollClosed
+            | MessageKind::Warning
+            | MessageKind::MemberJoined
+            | MessageKind::CommunityGrew => true,
+            MessageKind::ThreadEcho
+            | MessageKind::Call
+            | MessageKind::MissedCall
+            | MessageKind::Command => false,
+        }
+    }
+
+    /// The variant's label in the database's `message_kind` enum, read in both directions.
+    const fn sql_name(self) -> &'static str {
+        match self {
+            MessageKind::Standard => "standard",
+            MessageKind::Poll => "poll",
+            MessageKind::PollClosed => "poll_closed",
+            MessageKind::ThreadEcho => "thread_echo",
+            MessageKind::Call => "call",
+            MessageKind::MissedCall => "missed_call",
+            MessageKind::Command => "command",
+            MessageKind::Warning => "warning",
+            MessageKind::MemberJoined => "member_joined",
+            MessageKind::CommunityGrew => "community_grew",
+        }
+    }
+}
+
 impl ToSql<aspen_schema::sql_types::MessageKind, Pg> for MessageKind {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> diesel::serialize::Result {
-        out.write_all(match self {
-            MessageKind::Standard => b"standard",
-            MessageKind::Poll => b"poll",
-            MessageKind::PollClosed => b"poll_closed",
-            MessageKind::ThreadEcho => b"thread_echo",
-            MessageKind::Call => b"call",
-            MessageKind::MissedCall => b"missed_call",
-            MessageKind::Command => b"command",
-            MessageKind::Warning => b"warning",
-            MessageKind::MemberJoined => b"member_joined",
-            MessageKind::CommunityGrew => b"community_grew",
-        })?;
+        out.write_all(self.sql_name().as_bytes())?;
         Ok(IsNull::No)
     }
 }
@@ -80,23 +109,17 @@ impl FromSql<aspen_schema::sql_types::MessageKind, Pg> for MessageKind {
     fn from_sql(
         bytes: <Pg as diesel::backend::Backend>::RawValue<'_>,
     ) -> diesel::deserialize::Result<Self> {
-        match bytes.as_bytes() {
-            b"standard" => Ok(MessageKind::Standard),
-            b"poll" => Ok(MessageKind::Poll),
-            b"poll_closed" => Ok(MessageKind::PollClosed),
-            b"thread_echo" => Ok(MessageKind::ThreadEcho),
-            b"call" => Ok(MessageKind::Call),
-            b"command" => Ok(MessageKind::Command),
-            b"missed_call" => Ok(MessageKind::MissedCall),
-            b"warning" => Ok(MessageKind::Warning),
-            b"member_joined" => Ok(MessageKind::MemberJoined),
-            b"community_grew" => Ok(MessageKind::CommunityGrew),
-            _ => Err(format!(
-                "Unrecognized enum variant: {:?}",
-                String::from_utf8_lossy(bytes.as_bytes())
-            )
-            .into()),
-        }
+        Self::VARIANTS
+            .iter()
+            .copied()
+            .find(|variant| variant.sql_name().as_bytes() == bytes.as_bytes())
+            .ok_or_else(|| {
+                format!(
+                    "Unrecognized enum variant: {:?}",
+                    String::from_utf8_lossy(bytes.as_bytes())
+                )
+                .into()
+            })
     }
 }
 
@@ -127,3 +150,20 @@ pub struct CommunityGrowth {
 }
 
 crate::jsonb_sql_traits!(CommunityGrowth);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What only records something told of already tells no one; what announces something
+    /// with no text of its own tells as any message does.
+    #[test]
+    fn records_do_not_notify_and_announcements_do() {
+        assert!(MessageKind::Standard.notifies());
+        assert!(MessageKind::PollClosed.notifies());
+        assert!(MessageKind::MemberJoined.notifies());
+        assert!(!MessageKind::ThreadEcho.notifies());
+        assert!(!MessageKind::MissedCall.notifies());
+        assert!(!MessageKind::Command.notifies());
+    }
+}

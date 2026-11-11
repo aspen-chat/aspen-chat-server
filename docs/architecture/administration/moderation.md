@@ -55,6 +55,11 @@ Bans and lifts are also logged (`banUser`, `liftUserBan`); see
 
 The dashboard shows the log (`GET /admin/moderation-log`) to holders of View dashboard.
 
+- Each entry says who acted (`actorKind`): `user`, the account its `actor` names; `operator`, a
+  command from the terminal, which no account takes (`log_operator_moderation`, which marks the row
+  `by_operator`); or `deletedAccount`, an account whose row is gone, which the entry no longer
+  names. An operator's entry and a deleted account's both have a null `actor`, so the column, not
+  the action, tells them apart.
 - Each entry carries what its ids name, read as the log is read (`details`), so the dashboard names
   things rather than showing ids.
 - `details` takes one query per kind of record for a page: the community, the channel or DM and its

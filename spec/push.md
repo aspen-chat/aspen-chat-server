@@ -174,9 +174,9 @@ subscription's keys beside the session it registered them with.
 
 - `kind`, and what it needs:
   - `message` (`channel`, `message`): a message the person should be told of. The app fetches it
-    (`GET /api/v1/messages/{message}?include=authors,channels,mentions,memberships`) and shows who
-    wrote it (by the nickname their membership carries, in a community), where, and what it says,
-    grouped by channel.
+    (`GET /api/v1/messages/{message}?include=authors,channels,mentions,memberships,notificationTexts`)
+    and shows who wrote it (by the nickname their membership carries, in a community), where, and
+    what it says (The notification's text, below), grouped by channel.
   - `read` (`channel`, `message`): the person read the channel up to `message` on another device;
     the app removes that channel's notifications up to it. It shows nothing.
   - `deleted` (`channel`, `message`): the message is gone; the app removes its notification. It
@@ -252,14 +252,39 @@ For a push, the notification code:
 
 1. finds the account whose `subscription` is the push's `s`, and decrypts `c` with its keys;
 2. for `message`, fetches
-   `GET {origin}/api/v1/messages/{message}?include=authors,channels,mentions,memberships` with
-   `sessionToken` (on `401`, gets another with `POST /api/v1/auth/token-refresh` and `refreshToken`,
-   and keeps it), and shows who wrote it (by their nickname in a community), where, and what it says
-   (tags as names), grouped by channel, with the message id as the notification's identifier;
+   `GET {origin}/api/v1/messages/{message}?include=authors,channels,mentions,memberships,notificationTexts`
+   with `sessionToken` (on `401`, gets another with `POST /api/v1/auth/token-refresh` and
+   `refreshToken`, and keeps it), and shows who wrote it (by their nickname in a community), where,
+   and what it says (The notification's text, below), grouped by channel, with the message id as the
+   notification's identifier;
 3. for `read`, removes that channel's notifications up to `message`; for `deleted`, that one; either
    shows nothing; for `notice`, fetches it as the message is fetched and shows its title and body,
    with the notice id as the notification's identifier;
 4. sets the badge to the sum of every account's latest `badge`.
+
+### The notification's text
+
+The deployment writes out what a message's notification says, so the notification code interprets
+nothing of a message's text. `include=notificationTexts` on the fetch answers
+`included.notificationTexts`, a list of `{ "message": "<message id>", "text": "…" }` with one entry
+per message of the read. `text` is plain text, shown as given, in the language the fetch asks for
+with `Accept-Language`:
+
+- for a message with text of its own, that text with each person and role it tags written as
+  `@name`, each emoji of its community (`<:id>`) as `:name:`, and `@…` or `:…:` where the message
+  names something its reader could not be shown: a person or role it does not tag, an emoji of
+  another community or since deleted. Code (a code span or block) is left as written, and so is the
+  text's Markdown;
+- for a message with no text, what its kind records: a poll, a poll's closing, a join, or a
+  community become large (with what its `growth` changed);
+- for a message with no text whose kind records nothing in words, what it holds: "Sent an image" for
+  one picture, "Sent images" for several, "Sent an attachment" for files that are not all pictures
+  (by the type each was uploaded as), and "New message" for none.
+
+The notification code writes the text out in words of its own when `included` has no
+`notificationTexts`, which is how a deployment of a version without it answers, an `include` name it
+does not know being ignored: tags of the people in `included.users` as `@name`, any other tag as
+`@…`, and by its `kind` a message with no text.
 
 A notification it posts carries `{ origin, channel, message, community, parentChannel }`, the
 channel's community (`null` in a DM) and, for a message in a thread, the channel the thread is in,
@@ -288,10 +313,10 @@ role they hold, or everyone), unless:
 
 Which messages those settings ask for is part of notifications in general, not of this protocol. A
 message with no text of its own (a poll's result, a join, a community becoming large) is described
-by its `kind`, and a `communityGrew` message by its `growth`. When they read a channel that had
-woken their phone, the deployment sends `read`; when such a message is deleted, `deleted`. When they
-mark a channel unread, it sends `read` at the position the channel moved back to, which takes down
-nothing still shown but carries the new `badge`.
+by its `kind`, and a `communityGrew` message by its `growth` (The notification's text). When they
+read a channel that had woken their phone, the deployment sends `read`; when such a message is
+deleted, `deleted`. When they mark a channel unread, it sends `read` at the position the channel
+moved back to, which takes down nothing still shown but carries the new `badge`.
 
 ## Quotas and abuse
 

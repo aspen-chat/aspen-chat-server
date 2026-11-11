@@ -3,13 +3,17 @@
 // beside the helper (`obs-*-test.exe`), each of which must be there, or the encoder whose module
 // runs it silently never appears. A file that differs has been signed again or otherwise
 // rewritten on its way into the package, and no longer carries the signature the OBS Project
-// gave it (see `fetch-libobs.mjs` for why that signature matters).
+// gave it (see `fetch-libobs.mjs` for why that signature matters). It also fails a build that
+// lacks a module the helper loads on Windows (`MODULES` in its `obs/startup.rs`, read from the
+// source): the helper skips a module that is not there, and its sources or encoder are then
+// simply absent.
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const native = join(import.meta.dirname, "..", "native");
 const fetched = join(native, "libobs");
+const startup = join(native, "capture", "src", "obs", "startup.rs");
 
 function sha256(file) {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
@@ -22,6 +26,20 @@ function filesUnder(directory) {
     .map((entry) => relative(directory, join(entry.parentPath, entry.name)));
 }
 
+/**
+ * The modules the helper loads on Windows: the names in the `MODULES` list of its
+ * `obs/startup.rs`. Throws when the list is not found as it is declared there, rather than
+ * checking nothing.
+ */
+export function helperModules(source) {
+  const list = /^const MODULES: &\[&str\] = &\[([^\]]*)\];\r?$/m.exec(source);
+  const names = list === null ? [] : [...list[1].matchAll(/"([^"]+)"/g)].map(([, name]) => name);
+  if (names.length === 0) {
+    throw new Error(`${startup} no longer declares MODULES the way check-libobs.mjs reads it`);
+  }
+  return names;
+}
+
 export default function checkLibobs(context) {
   if (context.electronPlatformName !== "win32") {
     return;
@@ -31,6 +49,15 @@ export default function checkLibobs(context) {
   const files = filesUnder(packaged);
   if (!files.includes("VERSION")) {
     throw new Error(`${packaged} holds no libobs; run pnpm fetch:libobs before packaging`);
+  }
+  const unpackaged = helperModules(readFileSync(startup, "utf8")).filter(
+    (name) => !files.includes(join("obs-plugins", "64bit", `${name}.dll`)),
+  );
+  if (unpackaged.length > 0) {
+    throw new Error(
+      `the helper loads OBS modules the package lacks: ${unpackaged.join(", ")}. ` +
+        `Add them to MODULES in fetch-libobs.mjs, run pnpm fetch:libobs, and package again.`,
+    );
   }
   // Each packaged file against the one fetched, by its path under `libobs/`, and each test
   // program fetched against the one packaged beside the helper.

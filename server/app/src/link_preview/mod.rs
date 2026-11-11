@@ -86,11 +86,8 @@ use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 use url::Url;
 
-/// S3 key prefix under which preview-image blobs live inside the media store.
-pub const IMAGE_STORAGE_PREFIX: &str = "link-preview-images";
-
 pub fn image_storage_key(id: LinkPreviewImageId) -> String {
-    format!("{IMAGE_STORAGE_PREFIX}/{}", id.0)
+    crate::media_store::PublicPrefix::LinkPreviewImages.key(id.0)
 }
 
 /// Hard ceiling on how many preview cards a single message can carry.

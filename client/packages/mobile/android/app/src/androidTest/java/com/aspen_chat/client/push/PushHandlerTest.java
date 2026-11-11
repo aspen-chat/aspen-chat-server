@@ -44,7 +44,8 @@ import org.junit.runner.RunWith;
 /**
  * The notification code end to end, on a device: a pointer encrypted as a deployment encrypts
  * it, the message fetched from a stand-in deployment (whose first answer says the session has
- * expired, so the code must refresh it), and the notification that results, then taken down.
+ * expired, so the code must refresh it), and the notification that results, in the deployment's
+ * words where it gives them, then taken down.
  */
 @RunWith(AndroidJUnit4.class)
 public class PushHandlerTest {
@@ -56,6 +57,7 @@ public class PushHandlerTest {
     private static final String READER = "0190f0a0-0000-7000-8000-000000000001";
     private static final String FIRST = "0190f0a0-0000-7000-8001-000000000201";
     private static final String SECOND = "0190f0a0-0000-7000-8001-000000000202";
+    private static final String EMOJI = "0190f0a0-0000-7000-8002-000000000301";
 
     private Context context;
     private NotificationManager notifications;
@@ -132,7 +134,13 @@ public class PushHandlerTest {
         assertEquals("fresh", new PushStore(context).account(SUBSCRIPTION).getString("sessionToken"));
 
         handler.handle(SUBSCRIPTION, pointer("message", SECOND, 3));
-        assertNotNull(shown(SECOND));
+        StatusBarNotification second = shown(SECOND);
+        assertNotNull(second);
+        assertEquals(
+            "what the deployment wrote out is shown as given",
+            "@Kate lunch? :party:",
+            second.getNotification().extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+        );
         handler.handle(SUBSCRIPTION, pointer("read", FIRST, 1));
         assertNull("what was read elsewhere is taken down", gone(FIRST));
         assertNotNull("and what came after it stays", shown(SECOND));
@@ -281,10 +289,17 @@ public class PushHandlerTest {
         JSONArray users = new JSONArray()
             .put(new JSONObject().put("id", AUTHOR).put("name", "bob").put("displayName", "Bob"))
             .put(new JSONObject().put("id", READER).put("name", "kate").put("displayName", "Kate"));
-        return new JSONObject()
-            .put("data", message)
-            .put("included", new JSONObject().put("users", users).put("channels", new JSONArray().put(channel)))
-            .toString();
+        JSONObject included = new JSONObject().put("users", users).put("channels", new JSONArray().put(channel));
+        // The second message comes as a deployment that writes notifications out answers; the
+        // first as one of a version that does not.
+        if (id.equals(SECOND)) {
+            message.put("content", "<@" + READER + "> lunch? <:" + EMOJI + ">");
+            included.put(
+                "notificationTexts",
+                new JSONArray().put(new JSONObject().put("message", id).put("text", "@Kate lunch? :party:"))
+            );
+        }
+        return new JSONObject().put("data", message).put("included", included).toString();
     }
 
     private static byte[] point(ECPublicKey key) {

@@ -52,6 +52,13 @@ impl<E: PartialEq> IncludeSet<E> {
     }
 }
 
+impl<E: Copy> IncludeSet<E> {
+    /// Every name the parameter gave, once each, in the order first given.
+    pub fn iter(&self) -> impl Iterator<Item = E> + '_ {
+        self.0.iter().copied()
+    }
+}
+
 impl<'de, E> Deserialize<'de> for IncludeSet<E>
 where
     E: Deserialize<'de> + PartialEq,
@@ -137,6 +144,11 @@ pub struct Included {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub read_states: Option<Vec<ReadState>>,
+    /// What a notification says of each message in the read, ready to show: one record per
+    /// message that has text or whose kind records something in words.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub notification_texts: Option<Vec<aspen_app::message::notification::NotificationText>>,
     /// The caller's own settings in force among the channels in the read: mutes, and channels
     /// kept unmuted while their category is muted.
     #[serde(skip_serializing_if = "Option::is_none")]

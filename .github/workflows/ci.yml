@@ -74,6 +74,13 @@ jobs:
             cargo test --locked --manifest-path plugins/$plugin/Cargo.toml
             cargo build --locked --release --manifest-path plugins/$plugin/Cargo.toml --target wasm32-wasip2
           done
+      # Each example with views ships a copy of `bridge.js`, the views' side of the app's port
+      # protocol, so that each stands alone; the copies are one text.
+      - name: Example plugins' view bridges are alike
+        run: |
+          for bridge in plugins/*/views/bridge.js; do
+            cmp plugins/forum/views/bridge.js "$bridge"
+          done
       # Every change to access tried against a deployment of its own, watching what each side
       # of it already has open: REST, event streams, calls, operator commands, attachments.
       - name: Changes to access reach everything already open
@@ -745,6 +752,9 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
+      # The box's read path, AWS's, and the development one pass the prefixes the server stores
+      # public objects under, read from the files before anything is built.
+      - run: python3 scripts/check_media_prefixes.py
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # The images workflow's cache for this architecture, read but not written: a pull
       # request's build is not one to build from.

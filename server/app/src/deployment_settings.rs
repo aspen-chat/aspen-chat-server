@@ -243,42 +243,108 @@ pub struct SettingsChange {
 }
 
 impl SettingsChange {
-    /// Whether it changes a federation gate, which takes Manage federation.
-    fn touches_federation(&self) -> bool {
-        self.users_emigration.is_some()
-            || self.users_immigration.is_some()
-            || self.users_shared_list.is_some()
-            || self.users_immigration_invite_required.is_some()
-            || self.bots_emigration.is_some()
-            || self.bots_immigration.is_some()
-            || self.bots_shared_list.is_some()
-            || self.bots_immigration_invite_required.is_some()
+    /// Whether it changes a federation gate, which takes Manage federation, and whether it
+    /// changes anything else, which takes Manage deployment settings. Every field is named,
+    /// so one added to the change is not compiled until it is placed on one side.
+    fn touches(&self) -> Touched {
+        let SettingsChange {
+            display_name,
+            icon,
+            registration_invite_required,
+            require_two_factor,
+            bots_enabled,
+            bots_max_per_user,
+            large_community_members,
+            custom_emoji_limit,
+            upload_quota_gib,
+            mana_max_recharge,
+            mana_max,
+            mana_attachment_cost,
+            evidence_retention_days,
+            file_transfers,
+            email_required,
+            email_verification_required,
+            newsletter_enabled,
+            event_stream_mib,
+            voice_report_stream_mib,
+            users_emigration,
+            users_immigration,
+            users_shared_list,
+            users_immigration_invite_required,
+            bots_emigration,
+            bots_immigration,
+            bots_shared_list,
+            bots_immigration_invite_required,
+        } = self;
+        Touched {
+            federation: users_emigration.is_some()
+                || users_immigration.is_some()
+                || users_shared_list.is_some()
+                || users_immigration_invite_required.is_some()
+                || bots_emigration.is_some()
+                || bots_immigration.is_some()
+                || bots_shared_list.is_some()
+                || bots_immigration_invite_required.is_some(),
+            settings: display_name.is_some()
+                || icon.is_some()
+                || registration_invite_required.is_some()
+                || require_two_factor.is_some()
+                || bots_enabled.is_some()
+                || bots_max_per_user.is_some()
+                || large_community_members.is_some()
+                || custom_emoji_limit.is_some()
+                || upload_quota_gib.is_some()
+                || mana_max_recharge.is_some()
+                || mana_max.is_some()
+                || mana_attachment_cost.is_some()
+                || evidence_retention_days.is_some()
+                || file_transfers.is_some()
+                || email_required.is_some()
+                || email_verification_required.is_some()
+                || newsletter_enabled.is_some()
+                || event_stream_mib.is_some()
+                || voice_report_stream_mib.is_some(),
+        }
     }
 
-    /// Whether it changes anything else, which takes Manage deployment settings.
-    fn touches_settings(&self) -> bool {
-        let federation_only = SettingsChange {
-            users_emigration: self.users_emigration,
-            users_immigration: self.users_immigration,
-            users_shared_list: self.users_shared_list,
-            users_immigration_invite_required: self.users_immigration_invite_required,
-            bots_emigration: self.bots_emigration,
-            bots_immigration: self.bots_immigration,
-            bots_shared_list: self.bots_shared_list,
-            bots_immigration_invite_required: self.bots_immigration_invite_required,
-            ..SettingsChange::default()
-        };
-        *self != federation_only
-    }
-
-    /// The settings as they would be with this change made, for checking them whole.
+    /// The settings as they would be with this change made, for checking them whole. Every
+    /// field is named here too, so none added to the change is left unapplied.
     fn applied_to(&self, settings: &DeploymentSettings) -> DeploymentSettings {
+        let SettingsChange {
+            display_name,
+            icon,
+            registration_invite_required,
+            require_two_factor,
+            bots_enabled,
+            bots_max_per_user,
+            large_community_members,
+            custom_emoji_limit,
+            upload_quota_gib,
+            mana_max_recharge,
+            mana_max,
+            mana_attachment_cost,
+            evidence_retention_days,
+            file_transfers,
+            email_required,
+            email_verification_required,
+            newsletter_enabled,
+            event_stream_mib,
+            voice_report_stream_mib,
+            users_emigration,
+            users_immigration,
+            users_shared_list,
+            users_immigration_invite_required,
+            bots_emigration,
+            bots_immigration,
+            bots_shared_list,
+            bots_immigration_invite_required,
+        } = self.clone();
         let mut next = settings.clone();
         let users = &mut next.federation.users;
         let bots = &mut next.federation.bots;
         macro_rules! apply {
             ($($field:ident => $target:expr),* $(,)?) => {
-                $(if let Some(value) = self.$field.clone() {
+                $(if let Some(value) = $field {
                     $target = value;
                 })*
             };
@@ -314,6 +380,46 @@ impl SettingsChange {
         );
         next
     }
+
+    /// Writes the change, whose result `wanted` is, and returns the row's new revision. The
+    /// counts the change leaves out of its own columns (`skip_update`) are written from
+    /// `wanted`, which [`validate`] kept within `INTEGER`.
+    async fn write(
+        &self,
+        conn: &mut AsyncPgConnection,
+        wanted: &DeploymentSettings,
+    ) -> crate::Result<i64> {
+        let count = |n: u32| i32::try_from(n).unwrap_or(i32::MAX);
+        Ok(diesel::update(deployment_settings::table)
+            .set((
+                self,
+                deployment_settings::bots_max_per_user.eq(count(wanted.bots_max_per_user)),
+                deployment_settings::large_community_members
+                    .eq(count(wanted.large_community_members)),
+                deployment_settings::custom_emoji_limit.eq(count(wanted.custom_emoji_limit)),
+                deployment_settings::upload_quota_gib.eq(count(wanted.upload_quota_gib)),
+                deployment_settings::mana_max_recharge.eq(count(wanted.mana_max_recharge)),
+                deployment_settings::mana_max.eq(count(wanted.mana_max)),
+                deployment_settings::mana_attachment_cost.eq(count(wanted.mana_attachment_cost)),
+                deployment_settings::evidence_retention_days
+                    .eq(count(wanted.evidence_retention_days)),
+                deployment_settings::event_stream_mib.eq(wanted.event_stream_mib.map(count)),
+                deployment_settings::voice_report_stream_mib
+                    .eq(wanted.voice_report_stream_mib.map(count)),
+                deployment_settings::revision.eq(deployment_settings::revision + 1),
+            ))
+            .returning(deployment_settings::revision)
+            .get_result(conn)
+            .await?)
+    }
+}
+
+/// What a [`SettingsChange`] changes.
+struct Touched {
+    /// A federation gate.
+    federation: bool,
+    /// Anything but a federation gate.
+    settings: bool,
 }
 
 /// The settings with their icon, as the profile shows them.
@@ -438,10 +544,11 @@ pub async fn update_as(
     access: &DeploymentAccess,
     change: SettingsChange,
 ) -> crate::Result<WithIcon> {
-    if change.touches_federation() {
+    let touched = change.touches();
+    if touched.federation {
         access.require(DeploymentPermission::ManageFederation)?;
     }
-    if change.touches_settings() {
+    if touched.settings {
         access.require(DeploymentPermission::ManageDeploymentSettings)?;
     }
     let mut conn = state.connection_pool.get().await?;
@@ -521,32 +628,7 @@ pub async fn update(
                 if wanted == before {
                     return Ok((before.clone(), before));
                 }
-                // `validate` kept each within `INTEGER`.
-                let count = |n: u32| i32::try_from(n).unwrap_or(i32::MAX);
-                let revision: i64 = diesel::update(deployment_settings::table)
-                    .set((
-                        &change,
-                        deployment_settings::bots_max_per_user.eq(count(wanted.bots_max_per_user)),
-                        deployment_settings::large_community_members
-                            .eq(count(wanted.large_community_members)),
-                        deployment_settings::custom_emoji_limit
-                            .eq(count(wanted.custom_emoji_limit)),
-                        deployment_settings::upload_quota_gib.eq(count(wanted.upload_quota_gib)),
-                        deployment_settings::mana_max_recharge.eq(count(wanted.mana_max_recharge)),
-                        deployment_settings::mana_max.eq(count(wanted.mana_max)),
-                        deployment_settings::mana_attachment_cost
-                            .eq(count(wanted.mana_attachment_cost)),
-                        deployment_settings::evidence_retention_days
-                            .eq(count(wanted.evidence_retention_days)),
-                        deployment_settings::event_stream_mib
-                            .eq(wanted.event_stream_mib.map(count)),
-                        deployment_settings::voice_report_stream_mib
-                            .eq(wanted.voice_report_stream_mib.map(count)),
-                        deployment_settings::revision.eq(deployment_settings::revision + 1),
-                    ))
-                    .returning(deployment_settings::revision)
-                    .get_result(conn)
-                    .await?;
+                let revision = change.write(conn, &wanted).await?;
                 if wanted.name() != before.name() {
                     // The system account belongs to no community, so no event of its profile
                     // reaches anyone; those holding its record see the new name when they next
@@ -774,21 +856,97 @@ mod tests {
 
     #[test]
     fn a_change_says_which_permissions_it_needs() {
+        let touched = |change: SettingsChange| {
+            let touched = change.touches();
+            (touched.federation, touched.settings)
+        };
+        assert_eq!(touched(SettingsChange::default()), (false, false));
         let gates = SettingsChange {
             users_immigration: Some(Gate::Open),
             ..SettingsChange::default()
         };
-        assert!(gates.touches_federation() && !gates.touches_settings());
+        assert_eq!(touched(gates), (true, false));
         let policy = SettingsChange {
             require_two_factor: Some(true),
             ..SettingsChange::default()
         };
-        assert!(!policy.touches_federation() && policy.touches_settings());
+        assert_eq!(touched(policy), (false, true));
         let both = SettingsChange {
             display_name: Some(None),
             bots_shared_list: Some(false),
             ..SettingsChange::default()
         };
-        assert!(both.touches_federation() && both.touches_settings());
+        assert_eq!(touched(both), (true, true));
+    }
+
+    /// A change of every field at once, each but the icon to a value `before` does not hold.
+    /// Every field is named, so one added to the change is not compiled until it is changed
+    /// here.
+    fn every_field_changed(before: &DeploymentSettings) -> SettingsChange {
+        // A list, which a shared list needs both of its gates to be, and the same one.
+        let other = |gate: Gate| match gate {
+            Gate::AllowList => Gate::BlockList,
+            _ => Gate::AllowList,
+        };
+        let size = |mib: Option<u32>| Some(Some(mib.map_or(64, |mib| mib + 1)));
+        let (users, bots) = (&before.federation.users, &before.federation.bots);
+        SettingsChange {
+            display_name: Some(Some(format!("{} changed", before.name()))),
+            icon: Some(None),
+            registration_invite_required: Some(!before.registration_invite_required),
+            require_two_factor: Some(!before.require_two_factor),
+            bots_enabled: Some(!before.bots_enabled),
+            bots_max_per_user: Some(before.bots_max_per_user + 1),
+            large_community_members: Some(before.large_community_members + 1),
+            custom_emoji_limit: Some(before.custom_emoji_limit + 1),
+            upload_quota_gib: Some(before.upload_quota_gib + 1),
+            mana_max_recharge: Some(before.mana_max_recharge + 1),
+            mana_max: Some(before.mana_max + 1),
+            mana_attachment_cost: Some(before.mana_attachment_cost + 1),
+            evidence_retention_days: Some(before.evidence_retention_days + 1),
+            file_transfers: Some(!before.file_transfers),
+            email_required: Some(!before.email_required),
+            email_verification_required: Some(!before.email_verification_required),
+            newsletter_enabled: Some(!before.newsletter_enabled),
+            event_stream_mib: size(before.event_stream_mib),
+            voice_report_stream_mib: size(before.voice_report_stream_mib),
+            users_emigration: Some(other(users.emigration)),
+            users_immigration: Some(other(users.immigration)),
+            users_shared_list: Some(!users.shared_list),
+            users_immigration_invite_required: Some(!users.immigration_invite_required),
+            bots_emigration: Some(other(bots.emigration)),
+            bots_immigration: Some(other(bots.immigration)),
+            bots_shared_list: Some(!bots.shared_list),
+            bots_immigration_invite_required: Some(!bots.immigration_invite_required),
+        }
+    }
+
+    /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing.
+    #[tokio::test]
+    async fn every_field_of_a_change_is_written() {
+        use diesel_async::SimpleAsyncConnection;
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        // Gates open only with a domain pinned, and a list is shared only by two gates alike.
+        conn.batch_execute(
+            "UPDATE deployment_settings SET federation_domain = 'chat.example.org', \
+                 users_shared_list = false, users_emigration = 'closed', \
+                 users_immigration = 'closed', bots_shared_list = false, \
+                 bots_emigration = 'closed', bots_immigration = 'closed'",
+        )
+        .await
+        .unwrap();
+        let before = load_locked(&mut conn).await.unwrap();
+        let change = every_field_changed(&before);
+        let wanted = change.applied_to(&before);
+        let revision = change.write(&mut conn, &wanted).await.unwrap();
+        assert_eq!(revision, before.revision + 1);
+        let stored = load_locked(&mut conn).await.unwrap();
+        assert_eq!(stored, DeploymentSettings { revision, ..wanted });
     }
 }

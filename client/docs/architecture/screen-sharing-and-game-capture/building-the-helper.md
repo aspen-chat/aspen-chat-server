@@ -38,7 +38,9 @@ Then:
 
 - The installer ships that directory as the `libobs` resource and the test programs beside the
   helper (`electron-builder.yml`), and `scripts/check-libobs.mjs` fails a package in which any of
-  them is missing or differs from the fetched file.
+  them is missing or differs from the fetched file, or which lacks a module the helper loads on
+  Windows (`MODULES` in the helper's `obs/startup.rs`, which the script reads; the fetch script
+  keeps a list of its own of what to take from the release).
 - The shell starts the helper with its libraries on the `PATH`, and names its modules and data in
   every request (`bundledLibobs` in `gameCapture.ts`).
 - CI packages the Windows installer that way.

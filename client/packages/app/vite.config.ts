@@ -51,14 +51,12 @@ function devHttps(env: Record<string, string>): { cert: Buffer; key: Buffer } | 
   return { cert: readFileSync(cert), key: readFileSync(key) };
 }
 
-/** The paths the server answers itself rather than with the web client (`api::start`). */
-const serverPaths = [
-  "/api",
-  "/auth/passkey",
-  "/auth/oidc",
-  "/.well-known/aspen",
-  "/email/unsubscribe",
-];
+/**
+ * The paths the server answers itself rather than with the web client (`api::start`).
+ * `/.well-known` is the server's whole (its federation document, the Android apps that may use
+ * its passkeys): the web client has no page there.
+ */
+const serverPaths = ["/api", "/auth/passkey", "/auth/oidc", "/.well-known", "/email/unsubscribe"];
 
 /**
  * The Content Security Policy of the desktop and mobile apps' page, written into it by

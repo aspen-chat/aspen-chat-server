@@ -27,6 +27,9 @@ On the mobile app, `WakeThisPhone`:
 - A build without that plugin simply has no push.
 - Signing out forgets every account.
 - Tapping a notification opens its message. A notice about no message opens its channel.
+- The notification code on both phones reads only what it knows the meaning of: a `PushState` whose
+  `version` is 1 and a pointer whose `v` is 1, as the app's own code does (`pushBridge.ts`,
+  `protocol/src/push.ts`). For any other, Android shows nothing and iOS leaves the placeholder.
 
 ## Android
 
@@ -43,8 +46,11 @@ The project is `packages/mobile/android`.
 `PushHandler`:
 
 1. decrypts (`WebPush`);
-2. fetches with the account's session, refreshing it on `401`;
-3. posts the notification, tagged `channel/message`, so `read` and `deleted` take it down.
+2. fetches with the account's session, refreshing it on `401`, asking for the phone's languages
+   (`Accept-Language`);
+3. posts the notification, tagged `channel/message`, so `read` and `deleted` take it down. Its text
+   is the one the deployment wrote out (`included.notificationTexts`), shown as given; from a
+   deployment of a version that writes none, `readable` and `recorded` make it.
 
 A `notice` pointer:
 
@@ -88,11 +94,14 @@ A build naming no relay registers for nothing. `describe` refuses there, before 
 `NotificationService.swift`:
 
 1. decrypts the push's ciphertext with the account's keys (`WebPush.swift`, CryptoKit);
-2. fetches the message with the session, with `include=authors,channels,mentions,memberships` so
-   tags show as names and the author by their nickname in a community. It renews the session once on
-   `401` and writes the new token back;
-3. shows the author, the channel, and the text with tags as names, carrying where the message is for
-   a tap.
+2. fetches the message with the session, with
+   `include=authors,channels,mentions,memberships,notificationTexts` so the author shows by their
+   nickname in a community and the text as the deployment wrote it out. It renews the session once
+   on `401` and writes the new token back;
+3. shows the author, the channel, and the text the deployment wrote out
+   (`included.notificationTexts`), carrying where the message is for a tap. From a deployment of a
+   version that writes none, it shows the text with tags as names, or what the message holds instead
+   of text.
 
 - A `notice` pointer: it fetches the notice and shows its plugin's name and text.
 - A `read` or `deleted` pointer, and any failure, leaves the placeholder. The build holds no

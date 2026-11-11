@@ -94,11 +94,15 @@ pub(super) unsafe fn reset_video(width: u32, height: u32, fps: u32) -> Result<()
     }
 }
 
-/// The modules the capture needs, by file name without extension; missing ones are skipped,
-/// since each platform ships its own capture plugin. `obs-nvenc`, `obs-qsv11`, and `obs-ffmpeg`
-/// (AMD's encoder, beside the Opus one) each register their H.264 encoder only when the test
-/// program they run finds that vendor's GPU; `obs-x264` always has one (see
-/// `capture::VIDEO_ENCODERS`).
+/// The modules the capture needs that the Windows build ships, by file name without extension.
+/// Every platform loads those of them it has; missing ones are skipped, since each platform
+/// has its own capture plugin. `obs-nvenc`, `obs-qsv11`, and `obs-ffmpeg` (AMD's encoder,
+/// beside the Opus one) each register their H.264 encoder only when the test program they run
+/// finds that vendor's GPU; `obs-x264` always has one (see `capture::VIDEO_ENCODERS`).
+///
+/// `scripts/check-libobs.mjs` reads this list from this file, by the declaration's first line
+/// as written here, and fails a Windows package that lacks one of them, since a module
+/// skipped here takes its sources or encoder with it without a word.
 const MODULES: &[&str] = &[
     "obs-nvenc",
     "obs-qsv11",
@@ -107,8 +111,10 @@ const MODULES: &[&str] = &[
     "image-source",
     "win-wasapi",
     "win-capture",
-    "mac-capture",
 ];
+
+/// The capture plugin of macOS, which no Windows package holds.
+const MAC_MODULES: &[&str] = &["mac-capture"];
 
 #[cfg(target_os = "windows")]
 const MODULE_EXTENSION: &str = "dll";
@@ -117,7 +123,7 @@ const MODULE_EXTENSION: &str = "so";
 
 unsafe fn load_modules(plugin_dir: &str, data_dir: &str) -> Result<()> {
     let mut loaded = 0;
-    for name in MODULES {
+    for name in MODULES.iter().chain(MAC_MODULES) {
         let path = format!("{plugin_dir}/{name}.{MODULE_EXTENSION}");
         if !std::path::Path::new(&path).exists() {
             continue;

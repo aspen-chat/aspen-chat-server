@@ -1800,6 +1800,94 @@ fn server_event_of(payload: &str) -> Option<String> {
         .map(|tag| tag.server_event)
 }
 
+/// What an event's payload tells the feed itself, by whose subject it is on: each field is
+/// the [`FeedEvent`] field of its name.
+struct Glanced {
+    membership: Option<(CommunityId, bool)>,
+    roles: Option<(CommunityId, Vec<RoleId>)>,
+    moderator: Option<bool>,
+    dm: Option<DmChange>,
+    change: Option<ModelChange>,
+    ends: Option<StreamEnd>,
+    sign_ins: Option<EndedSignIns>,
+    ends_at: Option<DateTime<Utc>>,
+    resync: bool,
+    email_unverified: Option<bool>,
+}
+
+impl Glanced {
+    /// Reads `payload`, a serialized `ServerEvent` published on `owner`'s subject. The tags
+    /// and fields it looks for are the wire's names, which the tests hold it to by reading
+    /// serialized events.
+    fn read(owner: SubjectOwner, payload: &str) -> Glanced {
+        let kind = server_event_of(payload);
+        let kind = kind.as_deref();
+        let (membership, roles, moderator, dm, change) = match owner {
+            SubjectOwner::User(user) => {
+                let (membership, roles) = own_membership(payload, user);
+                (
+                    membership,
+                    roles,
+                    moderation_change(kind, payload),
+                    own_dm_change(payload),
+                    None,
+                )
+            }
+            SubjectOwner::Profile(_) => (None, None, None, None, None),
+            SubjectOwner::Community(_) => (None, None, None, None, ModelChange::read(payload)),
+        };
+        let own = matches!(owner, SubjectOwner::User(_));
+        let sign_ins = (own && kind == Some("signInsEnded"))
+            .then(|| serde_json::from_str::<EndedSignIns>(payload).ok())
+            .flatten();
+        let ends_at = (own && matches!(kind, Some("signInsEnded" | "accountBanned")))
+            .then(|| {
+                #[derive(Deserialize)]
+                struct Ending {
+                    at: Option<DateTime<Utc>>,
+                }
+                serde_json::from_str::<Ending>(payload).ok()
+            })
+            .flatten()
+            .and_then(|ending| ending.at);
+        let ends = if own && kind == Some("accountBanned") {
+            Some(StreamEnd::Banned)
+        } else if sign_ins.is_some() {
+            Some(StreamEnd::SignedOut)
+        } else {
+            None
+        };
+        let resync = match owner {
+            SubjectOwner::Community(_) => kind == Some("communityResync"),
+            SubjectOwner::User(_) => kind == Some("userResync"),
+            // A resync of a user is announced on their own subject, not their profile's.
+            SubjectOwner::Profile(_) => false,
+        };
+        let email_unverified = (own && kind == Some("emailAccountChanged"))
+            .then(|| {
+                #[derive(Deserialize)]
+                struct Changed {
+                    unverified: bool,
+                }
+                serde_json::from_str::<Changed>(payload).ok()
+            })
+            .flatten()
+            .map(|changed| changed.unverified);
+        Glanced {
+            membership,
+            roles,
+            moderator,
+            dm,
+            change,
+            ends,
+            sign_ins,
+            ends_at,
+            resync,
+            email_unverified,
+        }
+    }
+}
+
 /// Reads a delivered message into an event; `None` for one that is not an event.
 fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
     let info = match message.info() {
@@ -1823,59 +1911,18 @@ fn read(message: &jetstream::Message) -> Option<(FeedEvent, u64)> {
             return None;
         }
     };
-    let kind = server_event_of(payload.get());
-    let kind = kind.as_deref();
-    let (membership, roles, moderator, dm, change) = match owner {
-        SubjectOwner::User(user) => {
-            let (membership, roles) = own_membership(payload.get(), user);
-            (
-                membership,
-                roles,
-                moderation_change(kind, payload.get()),
-                own_dm_change(payload.get()),
-                None,
-            )
-        }
-        SubjectOwner::Profile(_) => (None, None, None, None, None),
-        SubjectOwner::Community(_) => (None, None, None, None, ModelChange::read(payload.get())),
-    };
-    let own = matches!(owner, SubjectOwner::User(_));
-    let sign_ins = (own && kind == Some("signInsEnded"))
-        .then(|| serde_json::from_str::<EndedSignIns>(payload.get()).ok())
-        .flatten();
-    let ends_at = (own && matches!(kind, Some("signInsEnded" | "accountBanned")))
-        .then(|| {
-            #[derive(Deserialize)]
-            struct Ending {
-                at: Option<DateTime<Utc>>,
-            }
-            serde_json::from_str::<Ending>(payload.get()).ok()
-        })
-        .flatten()
-        .and_then(|ending| ending.at);
-    let ends = if own && kind == Some("accountBanned") {
-        Some(StreamEnd::Banned)
-    } else if sign_ins.is_some() {
-        Some(StreamEnd::SignedOut)
-    } else {
-        None
-    };
-    let resync = match owner {
-        SubjectOwner::Community(_) => kind == Some("communityResync"),
-        SubjectOwner::User(_) => kind == Some("userResync"),
-        // A resync of a user is announced on their own subject, not their profile's.
-        SubjectOwner::Profile(_) => false,
-    };
-    let email_unverified = (own && kind == Some("emailAccountChanged"))
-        .then(|| {
-            #[derive(Deserialize)]
-            struct Changed {
-                unverified: bool,
-            }
-            serde_json::from_str::<Changed>(payload.get()).ok()
-        })
-        .flatten()
-        .map(|changed| changed.unverified);
+    let Glanced {
+        membership,
+        roles,
+        moderator,
+        dm,
+        change,
+        ends,
+        sign_ins,
+        ends_at,
+        resync,
+        email_unverified,
+    } = Glanced::read(owner, payload.get());
     let channel = message
         .headers
         .as_ref()
@@ -2459,6 +2506,7 @@ async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aspen_wire::message_enum::server_event::{ChannelEvent, ServerEvent, UserCommunityEvent};
 
     fn event(
         sequence: u64,
@@ -2520,46 +2568,135 @@ mod tests {
         events.iter().map(|e| e.sequence).collect()
     }
 
+    /// What the feed reads of `event` as it is published on `owner`'s subject.
+    fn glanced(owner: SubjectOwner, event: &ServerEvent) -> Glanced {
+        Glanced::read(owner, &serde_json::to_string(event).unwrap())
+    }
+
     #[test]
     fn membership_changes_are_read_from_the_users_own_events() {
         let user = UserId::new();
         let community = CommunityId::new();
-        let join = format!(
-            r#"{{"serverEvent":"userCommunity","type":"create","user":"{}","community":"{}"}}"#,
-            user.0, community.0
-        );
-        assert_eq!(own_membership(&join, user), (Some((community, true)), None));
-        let leave = join.replace("create", "delete");
-        assert_eq!(
-            own_membership(&leave, user),
-            (Some((community, false)), None)
-        );
-        assert_eq!(own_membership(&join, UserId::new()), (None, None));
-        let moderation =
-            |payload: &str| moderation_change(server_event_of(payload).as_deref(), payload);
-        assert_eq!(
-            moderation(
-                r#"{"serverEvent":"deploymentAccessChanged","permissions":["viewDashboard","moderateCommunities"]}"#
-            ),
-            Some(true)
-        );
-        assert_eq!(
-            moderation(r#"{"serverEvent":"deploymentAccessChanged","permissions":[]}"#),
-            Some(false)
-        );
-        assert_eq!(
-            own_membership(r#"{"serverEvent":"message","type":"create"}"#, user),
-            (None, None)
-        );
+        let own = SubjectOwner::User(user);
+        let join = ServerEvent::UserCommunity(UserCommunityEvent::Create(
+            aspen_wire::message_enum::UserCommunity {
+                community,
+                user,
+                sort_index: Some(0),
+                roles: Vec::new(),
+                nickname: None,
+            },
+        ));
+        let read = glanced(own, &join);
+        assert_eq!(read.membership, Some((community, true)));
+        assert_eq!(read.roles, Some((community, Vec::new())));
+        let leave = ServerEvent::UserCommunity(UserCommunityEvent::Delete { community, user });
+        let read = glanced(own, &leave);
+        assert_eq!(read.membership, Some((community, false)));
+        assert_eq!(read.roles, None);
+        // Someone else's membership, as a community's subject carries it, is not the user's.
+        let read = glanced(SubjectOwner::User(UserId::new()), &join);
+        assert_eq!((read.membership, read.roles), (None, None));
         let role = RoleId::new();
-        let promoted = format!(
-            r#"{{"serverEvent":"userCommunity","type":"update","user":"{}","community":"{}","roles":["{}"]}}"#,
-            user.0, community.0, role.0
-        );
+        let promoted = ServerEvent::UserCommunity(UserCommunityEvent::Update {
+            community,
+            user,
+            sort_index: None,
+            roles: Some(vec![role]),
+            nickname: None,
+        });
+        let read = glanced(own, &promoted);
+        assert_eq!(read.membership, None);
+        assert_eq!(read.roles, Some((community, vec![role])));
+        let read = glanced(own, &ServerEvent::UserResync { user });
+        assert_eq!((read.membership, read.roles), (None, None));
+    }
+
+    #[test]
+    fn deployment_access_says_whether_its_user_moderates() {
+        use crate::deployment::DeploymentPermission;
+        let own = SubjectOwner::User(UserId::new());
+        let access = |permissions| ServerEvent::DeploymentAccessChanged { permissions };
+        let moderating = access(vec![
+            DeploymentPermission::ViewDashboard,
+            DeploymentPermission::ModerateCommunities,
+        ]);
+        assert_eq!(glanced(own, &moderating).moderator, Some(true));
+        assert_eq!(glanced(own, &access(Vec::new())).moderator, Some(false));
         assert_eq!(
-            own_membership(&promoted, user),
-            (None, Some((community, vec![role])))
+            glanced(SubjectOwner::Community(CommunityId::new()), &moderating).moderator,
+            None
         );
+    }
+
+    #[test]
+    fn ends_resyncs_and_email_changes_are_read_from_the_events_that_say_them() {
+        let user = UserId::new();
+        let community = CommunityId::new();
+        let own = SubjectOwner::User(user);
+        let at = Utc::now();
+
+        let one = glanced(
+            own,
+            &ServerEvent::SignInsEnded {
+                ended: Some("a".into()),
+                kept: None,
+                at,
+            },
+        );
+        assert_eq!(one.ends, Some(StreamEnd::SignedOut));
+        assert_eq!(one.ends_at, Some(at));
+        let ended = one.sign_ins.unwrap();
+        assert!(ended.covers("a") && !ended.covers("b"));
+
+        let others = glanced(
+            own,
+            &ServerEvent::SignInsEnded {
+                ended: None,
+                kept: Some("a".into()),
+                at,
+            },
+        );
+        assert_eq!(others.ends, Some(StreamEnd::SignedOut));
+        let ended = others.sign_ins.unwrap();
+        assert!(!ended.covers("a") && ended.covers("b"));
+
+        let banned = glanced(
+            own,
+            &ServerEvent::AccountBanned {
+                reason: None,
+                until: None,
+                at,
+            },
+        );
+        assert_eq!(banned.ends, Some(StreamEnd::Banned));
+        assert_eq!(banned.ends_at, Some(at));
+        assert_eq!(banned.sign_ins, None);
+
+        let user_resync = ServerEvent::UserResync { user };
+        let community_resync = ServerEvent::CommunityResync { community };
+        assert!(glanced(own, &user_resync).resync);
+        assert!(glanced(SubjectOwner::Community(community), &community_resync).resync);
+        // Each on the subject it is announced on, and no other.
+        assert!(!glanced(SubjectOwner::Profile(user), &user_resync).resync);
+        assert!(!glanced(own, &community_resync).resync);
+        assert!(!glanced(SubjectOwner::Community(community), &user_resync).resync);
+
+        for unverified in [true, false] {
+            let changed = ServerEvent::EmailAccountChanged { user, unverified };
+            assert_eq!(glanced(own, &changed).email_unverified, Some(unverified));
+        }
+
+        let plain = glanced(
+            own,
+            &ServerEvent::DeploymentAccessChanged {
+                permissions: vec![],
+            },
+        );
+        assert_eq!(plain.ends, None);
+        assert_eq!(plain.ends_at, None);
+        assert!(!plain.resync);
+        assert_eq!(plain.email_unverified, None);
     }
 
     #[test]
@@ -3664,42 +3801,60 @@ mod tests {
 
     #[test]
     fn own_dm_events_say_whom_to_follow() {
+        use crate::channel::ChannelType;
         let (dm, me, other) = (ChannelId::new(), UserId::new(), UserId::new());
-        let created = format!(
-            r#"{{"serverEvent":"channel","type":"create","id":"{}","community":null,"ty":"dm","name":"","sortIndex":0,"recipients":["{}","{}"]}}"#,
-            dm.0, me.0, other.0
-        );
-        assert_eq!(
-            own_dm_change(&created),
-            Some(DmChange {
-                channel: dm,
-                recipients: vec![me, other],
+        let own = SubjectOwner::User(me);
+        let channel = |ty, community, recipients| {
+            ServerEvent::Channel(ChannelEvent::Create(aspen_wire::message_enum::Channel {
+                id: dm,
+                parent_category: None,
+                community,
+                name: String::new(),
+                ty,
+                sort_index: 0,
+                parent_channel: None,
+                starter_message: None,
+                reply_count: 0,
+                last_reply_at: None,
+                recipients,
+                plugin_type: None,
+                mana_recharge: None,
+                mana_max: None,
+            }))
+        };
+        let update = |name: Option<String>, recipients| {
+            ServerEvent::Channel(ChannelEvent::Update {
+                id: dm,
+                parent_category: None,
+                community: None,
+                name,
+                sort_index: None,
+                reply_count: None,
+                last_reply_at: None,
+                recipients,
+                mana_recharge: None,
+                mana_max: None,
             })
-        );
-        let left = format!(
-            r#"{{"serverEvent":"channel","type":"update","id":"{}","recipients":["{}"]}}"#,
-            dm.0, other.0
-        );
+        };
+        for ty in [ChannelType::Dm, ChannelType::GroupDm] {
+            assert_eq!(
+                glanced(own, &channel(ty, None, vec![me, other])).dm,
+                Some(DmChange {
+                    channel: dm,
+                    recipients: vec![me, other],
+                })
+            );
+        }
         assert_eq!(
-            own_dm_change(&left),
+            glanced(own, &update(None, Some(vec![other]))).dm,
             Some(DmChange {
                 channel: dm,
                 recipients: vec![other],
             })
         );
-        let text = format!(
-            r#"{{"serverEvent":"channel","type":"create","id":"{}","community":"{}","ty":"text","name":"","sortIndex":0,"recipients":[]}}"#,
-            dm.0,
-            CommunityId::new().0
-        );
-        assert_eq!(own_dm_change(&text), None);
-        assert_eq!(
-            own_dm_change(&format!(
-                r#"{{"serverEvent":"channel","type":"update","id":"{}","name":"n"}}"#,
-                dm.0
-            )),
-            None
-        );
+        let text = channel(ChannelType::Text, Some(CommunityId::new()), Vec::new());
+        assert_eq!(glanced(own, &text).dm, None);
+        assert_eq!(glanced(own, &update(Some("n".into()), None)).dm, None);
     }
 
     #[test]
@@ -3953,7 +4108,7 @@ mod tests {
 
     #[test]
     fn an_events_kind_is_its_own_tag_not_one_it_carries() {
-        let event = aspen_wire::message_enum::server_event::ServerEvent::PluginEvent {
+        let event = ServerEvent::PluginEvent {
             plugin: "example".into(),
             kind: "anything".into(),
             channel: None,

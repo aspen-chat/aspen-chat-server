@@ -497,6 +497,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_channel_kind_is_the_manifests() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../aspen-plugin.json")).unwrap();
+        let id = manifest["id"].as_str().unwrap();
+        let kinds: Vec<String> = manifest["channelTypes"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|key| format!("{id}:{key}"))
+            .collect();
+        assert_eq!(kinds, [TABLE_KIND]);
+    }
+
+    #[test]
     fn timers_never_fall_due_early() {
         assert_eq!(format_time(0), "1970-01-01T00:00:00Z");
         assert_eq!(format_time(1), "1970-01-01T00:00:01Z");

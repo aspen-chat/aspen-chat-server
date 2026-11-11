@@ -39,8 +39,8 @@ https://s3.{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTPS_PORT:443} {
 # `[media.s3] public_base_url`, the filer's `/buckets/<bucket>`. The filer lists directories and
 # takes uploads and deletes without credentials, so only reads of single files under the four
 # prefixes clients read reach it (docs/operators/installing/storage-read-path.md), as
-# deploy/box/caddy/media.tmpl allows; everything else, the files of deleted messages under
-# `evidence/` among them, answers 404.
+# deploy/box/caddy/media.tmpl allows (scripts/check_media_prefixes.py holds both to the server's
+# keys); everything else, the files of deleted messages under `evidence/` among them, answers 404.
 https://media.{$ASPEN_DEV_HOST}:{$ASPEN_DEV_HTTPS_PORT:443} {
 	import dev_tls
 	@public {

@@ -19,7 +19,6 @@ use crate::channel::Channel;
 use crate::context::GlobalServerContext;
 use crate::events::{SubjectOwner, subject_owner};
 use crate::message::Message;
-use crate::message::MessageKind;
 use crate::notification_setting::default_level;
 use crate::t;
 use crate::two_factor::Caller;
@@ -730,15 +729,7 @@ async fn message_created(state: &GlobalServerContext, id: MessageId) -> crate::R
     let Some(found) = found.filter(|found| found.deleted_at.is_none()) else {
         return Ok(());
     };
-    // An echo says nothing of its own, a call's record follows the ring that already told
-    // everyone of the call, and a command is for its bot, whose answer is what tells.
-    if matches!(
-        found.kind,
-        MessageKind::ThreadEcho
-            | MessageKind::Call
-            | MessageKind::MissedCall
-            | MessageKind::Command
-    ) {
+    if !found.kind.notifies() {
         return Ok(());
     }
     let channel_id = *found.channel.id();

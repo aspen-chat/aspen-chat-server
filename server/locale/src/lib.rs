@@ -45,6 +45,47 @@ pub const ACCENTED: &str = "en-XA";
 /// English with every word set right to left.
 pub const MIRRORED: &str = "ar-XB";
 
+/// Which way a locale's text runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    LeftToRight,
+    RightToLeft,
+}
+
+impl Direction {
+    /// As HTML's `dir` attribute names it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Direction::LeftToRight => "ltr",
+            Direction::RightToLeft => "rtl",
+        }
+    }
+}
+
+/// The direction of each language this server speaks, by the language subtag of its locales
+/// (`ar` for [`MIRRORED`]). A translation into a language not listed here is added with its
+/// direction: the tests refuse a locale in `locales/` whose language this leaves out.
+const DIRECTIONS: &[(&str, Direction)] = &[
+    ("ar", Direction::RightToLeft),
+    ("en", Direction::LeftToRight),
+    ("es", Direction::LeftToRight),
+];
+
+/// Which way `locale`'s text runs, when its language is one of [`DIRECTIONS`].
+fn declared_direction(locale: &str) -> Option<Direction> {
+    let language = locale.split('-').next()?;
+    DIRECTIONS
+        .iter()
+        .find(|(declared, _)| declared.eq_ignore_ascii_case(language))
+        .map(|(_, direction)| *direction)
+}
+
+/// Which way `locale`'s text runs. Every locale this server speaks has its language's direction
+/// declared; any other reads left to right, as [`DEFAULT`] does.
+pub fn direction(locale: &str) -> Direction {
+    declared_direction(locale).unwrap_or(Direction::LeftToRight)
+}
+
 /// How many languages of an `Accept-Language` are considered; a longer list is cut short.
 const MAX_PREFERENCES: usize = 16;
 
@@ -287,6 +328,19 @@ mod tests {
         assert_eq!(pick("zh-Hant-TW"), "en");
         assert_eq!(pick(""), "en");
         assert_eq!(pick("de;q=nonsense"), "en");
+    }
+
+    #[test]
+    fn every_locale_this_server_speaks_has_a_direction() {
+        for locale in available() {
+            assert!(
+                declared_direction(locale).is_some(),
+                "{locale}: add its language to DIRECTIONS"
+            );
+        }
+        assert_eq!(direction(MIRRORED), Direction::RightToLeft);
+        assert_eq!(direction(ACCENTED), Direction::LeftToRight);
+        assert_eq!(direction(DEFAULT), Direction::LeftToRight);
     }
 
     #[test]

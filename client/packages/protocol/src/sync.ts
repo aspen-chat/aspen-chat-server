@@ -197,6 +197,11 @@ export const MESSAGE_PAGE_SIZE = 50;
 export const HISTORY_PAGE_SIZE = 50;
 /** Messages fetched on each side of a linked message. */
 export const MESSAGE_AROUND_RADIUS = 25;
+/**
+ * The most messages the server returns on each side of the one a read is `around`; mirrors half
+ * the server's `MAX_MESSAGES_QUERIED`.
+ */
+export const MESSAGE_AROUND_RADIUS_MAX = 100;
 /** How long the server keeps events replayable; mirrors the server's `MAX_EVENT_AGE`. */
 export const EVENT_REPLAY_WINDOW_MS = 60_000;
 /**
@@ -3019,8 +3024,10 @@ export class AspenSync {
 
   /**
    * Reads again what the server leaves blocked users out of: every read state, and the
-   * reactions of each held message window, one read per window (a window never holds more than
-   * a read returns on each side of its middle).
+   * reactions of each held message window, in as many reads as cover it: a window may hold
+   * more than one read returns (`MESSAGE_AROUND_RADIUS_MAX` on each side of its middle), so it
+   * is read in runs of that many. Only the messages a read returned take its reactions, since
+   * `setReactions` reads a message without a summary as having none.
    */
   async #refreshBlockedCounts(): Promise<void> {
     const generation = this.#generation;
@@ -3043,30 +3050,49 @@ export class AspenSync {
     ]) {
       this.store.putReadState(state);
     }
-    await Promise.all(
-      this.store.heldWindows().map(async (channelId) => {
-        const ids = this.store.messages(channelId)?.ids ?? [];
-        const middle = ids[Math.floor(ids.length / 2)];
-        if (middle === undefined) {
-          return;
-        }
-        const since = this.#now();
-        const result = await this.#client.api
-          .GET("/api/v1/channels/{channel}/messages", {
-            params: {
-              path: { channel: channelId },
-              query: {
-                around: middle,
-                limit: Math.ceil(ids.length / 2),
-                include: ["reactions"],
-              },
-            },
-          })
-          .catch(() => undefined);
-        if (result?.data !== undefined && generation === this.#generation) {
-          this.store.setReactions(ids, result.data.included.reactions ?? [], { since });
-        }
-      }),
+    const run = MESSAGE_AROUND_RADIUS_MAX * 2 + 1;
+    const reads: Promise<void>[] = [];
+    for (const channelId of this.store.heldWindows()) {
+      const ids = this.store.messages(channelId)?.ids ?? [];
+      for (let start = 0; start < ids.length; start += run) {
+        reads.push(this.#refreshReactions(channelId, ids.slice(start, start + run), generation));
+      }
+    }
+    await Promise.all(reads);
+  }
+
+  /**
+   * Reads again the reactions of `ids`, consecutive messages of a channel's window and at most
+   * `MESSAGE_AROUND_RADIUS_MAX` on each side of their middle.
+   */
+  async #refreshReactions(
+    channelId: string,
+    ids: readonly string[],
+    generation: number,
+  ): Promise<void> {
+    const radius = Math.floor(ids.length / 2);
+    const middle = ids[radius];
+    if (middle === undefined) {
+      return;
+    }
+    const since = this.#now();
+    const result = await this.#client.api
+      .GET("/api/v1/channels/{channel}/messages", {
+        params: {
+          path: { channel: channelId },
+          // A lone message is read with the least the server takes.
+          query: { around: middle, limit: Math.max(radius, 1), include: ["reactions"] },
+        },
+      })
+      .catch(() => undefined);
+    if (result?.data === undefined || generation !== this.#generation) {
+      return;
+    }
+    const returned = new Set(result.data.data.map((message) => message.id));
+    this.store.setReactions(
+      ids.filter((id) => returned.has(id)),
+      result.data.included.reactions ?? [],
+      { since },
     );
   }
 

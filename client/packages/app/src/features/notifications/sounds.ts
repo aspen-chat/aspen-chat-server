@@ -26,7 +26,7 @@ export type Sound =
  * Effects Pack's, under CC BY-SA 4.0 rather than the app's license (its `NOTICE` and `LICENSE`,
  * which the attributions page lists).
  */
-const SOUND_FILES: Record<Sound, string> = {
+export const SOUND_FILES: Record<Sound, string> = {
   chime: "aspen-sound-effects-pack/chime.wav",
   ringtone: "ringtone.wav",
   dialTone: "dial-tone.wav",
@@ -52,8 +52,13 @@ const recordings = import.meta.glob<string>("./sounds/**/*.wav", {
 /** Each recording decoded, kept from the first time it plays. */
 const decoded = new Map<Sound, Promise<AudioBuffer>>();
 
+/** What loads `sound`'s recording, or `undefined` when `SOUND_FILES` names a file `sounds/` lacks. */
+export function recordingOf(sound: Sound): (() => Promise<string>) | undefined {
+  return recordings[`./sounds/${SOUND_FILES[sound]}`];
+}
+
 async function decode(sound: Sound, context: BaseAudioContext): Promise<AudioBuffer> {
-  const load = recordings[`./sounds/${SOUND_FILES[sound]}`];
+  const load = recordingOf(sound);
   if (load === undefined) {
     throw new Error(`No recording for ${sound}`);
   }
