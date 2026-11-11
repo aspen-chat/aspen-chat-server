@@ -2,7 +2,7 @@
 //! through `PATCH /users/{user}`, by the bot itself or by its owner.
 
 use crate::auth::SessionUser;
-use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
+use crate::error::{ApiResult, Problem};
 use crate::extract::{Created, Json, NoContent, Path};
 use crate::message_enum::{User, UserCommunity};
 use crate::{API_PREFIX, TAG_USERS};
@@ -12,7 +12,6 @@ use aspen_app::{self as app, CommunityId, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
-use diesel::result::DatabaseErrorKind;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -50,16 +49,6 @@ pub struct BotToken {
 pub struct BotOwnerRequest {
     /// A person, not a bot, who owns fewer bots than the server allows.
     pub owner: UserId,
-}
-
-fn username_taken(e: app::Error) -> ApiError {
-    match e {
-        app::Error::Diesel(diesel::result::Error::DatabaseError(
-            DatabaseErrorKind::UniqueViolation,
-            _,
-        )) => ApiError::new(ProblemCode::UsernameTaken),
-        other => other.into(),
-    }
 }
 
 /// The bots the caller owns, the oldest first.
@@ -105,7 +94,7 @@ pub async fn create_bot(
 ) -> ApiResult<Created<BotCreated>> {
     let (bot, token) = app::bot::create(&state, user.id, request.name, request.display_name)
         .await
-        .map_err(username_taken)?;
+        .map_err(crate::user::username_taken)?;
     let bot = User::from(bot);
     Ok(Created::new(
         format!("{API_PREFIX}/users/{}", bot.id.0),

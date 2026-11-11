@@ -133,10 +133,10 @@ pub async fn receive<T: Statement>(
             t!("statementKeyPending", domain = from.as_str()),
         ));
     }
-    let verified = known
-        .as_ref()
-        .and_then(|d| d.public_key.as_deref())
-        .and_then(|key| unverified.verify::<T>(T::TYPE, key).ok());
+    let verified = match known.as_ref().and_then(|d| d.public_key.as_deref()) {
+        Some(key) => signed_with::<T>(&from, &unverified, key)?,
+        None => None,
+    };
     let (claims, sender) = match (verified, known) {
         (Some(claims), Some(known)) => (claims, known),
         // A sender no gate admits is not contacted, so only the key already pinned will do.
@@ -273,29 +273,27 @@ async fn contact_sender<T: Statement>(
                 ),
             ));
         };
-        let claims = known
-            .public_key
-            .as_deref()
-            .and_then(|key| unverified.verify::<T>(T::TYPE, key).ok())
-            .ok_or_else(|| {
-                invalid(
-                    Some(from),
-                    t!(
-                        "statementSenderContactedRecently",
-                        domain = from.as_str(),
-                        seconds = UNREACHED_INTERVAL_SECONDS
-                    ),
-                )
-            })?;
+        let verified = match known.public_key.as_deref() {
+            Some(key) => signed_with::<T>(from, unverified, key)?,
+            None => None,
+        };
+        let claims = verified.ok_or_else(|| {
+            invalid(
+                Some(from),
+                t!(
+                    "statementSenderContactedRecently",
+                    domain = from.as_str(),
+                    seconds = UNREACHED_INTERVAL_SECONDS
+                ),
+            )
+        })?;
         return Ok((claims, known));
     }
     // A key never pinned, or one the sender has since handed over from: contacting it pins or
     // follows the handover, and a key that changed unannounced stays refused. Nothing is
     // recorded unless the statement verifies against the key it presents.
     let contacted = contact_verifying(state, from, |key| {
-        unverified
-            .verify::<T>(T::TYPE, key)
-            .map_err(|_| signature())
+        signed_with::<T>(from, unverified, key)?.ok_or_else(signature)
     })
     .await;
     let (listed, outcome, claims) = match contacted {
@@ -328,6 +326,33 @@ async fn contact_sender<T: Statement>(
         ));
     }
     Ok((claims, listed.deployment))
+}
+
+/// The claims of `unverified` when `key` signed it, and `None` when its signature is not `key`'s,
+/// which another key of the sender's may yet answer for. A statement of another kind than `T`,
+/// or one `key` signed whose claims this version cannot read, is refused: no other key changes
+/// that, so its sender is not contacted over it, and the refusal says so rather than blaming
+/// the signature.
+fn signed_with<T: Statement>(
+    from: &Domain,
+    unverified: &jws::Unverified<'_>,
+    key: &[u8],
+) -> crate::Result<Option<T>> {
+    match unverified.verify::<T>(T::TYPE, key) {
+        Ok(claims) => Ok(Some(claims)),
+        Err(jws::JwsError::Signature) => Ok(None),
+        Err(jws::JwsError::Type) => Err(invalid(
+            Some(from),
+            t!("statementWrongKind", domain = from.as_str()),
+        )),
+        Err(jws::JwsError::Claims) => Err(invalid(
+            Some(from),
+            t!("statementUnreadable", domain = from.as_str()),
+        )),
+        Err(jws::JwsError::Malformed | jws::JwsError::Algorithm) => {
+            Err(invalid(Some(from), t!("statementMalformed")))
+        }
+    }
 }
 
 /// What is wrong with the times a statement claims.
@@ -376,6 +401,78 @@ pub fn refused(from: &Domain, direction: Direction) -> crate::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_lc_rs::rand::SystemRandom;
+    use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair};
+
+    #[derive(serde::Serialize, Deserialize)]
+    struct Claims {
+        iss: Domain,
+        jti: Uuid,
+    }
+
+    impl Statement for Claims {
+        const TYPE: &'static str = "aspen-test+jwt";
+        fn issuer(&self) -> &Domain {
+            &self.iss
+        }
+        fn audience(&self) -> &Domain {
+            &self.iss
+        }
+        fn issued_at(&self) -> i64 {
+            0
+        }
+        fn expires_at(&self) -> i64 {
+            0
+        }
+        fn id(&self) -> Uuid {
+            self.jti
+        }
+    }
+
+    fn key() -> Ed25519KeyPair {
+        let document = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+        Ed25519KeyPair::from_pkcs8(document.as_ref()).unwrap()
+    }
+
+    #[test]
+    fn only_a_signature_of_another_key_leaves_a_statement_to_another_key() {
+        let from = Domain::parse("b.example").unwrap();
+        let (signer, other) = (key(), key());
+        let (public, kid) = (signer.public_key().as_ref(), crate::FederationKeyId::new());
+        let claims = Claims {
+            iss: from.clone(),
+            jti: Uuid::now_v7(),
+        };
+        let reason = |result: crate::Result<Option<Claims>>| match result {
+            Err(crate::Error::AssertionInvalid(reason)) => reason,
+            _ => panic!("not refused"),
+        };
+
+        let token = jws::sign(Claims::TYPE, kid, &signer, &claims);
+        let statement = jws::parse(&token).unwrap();
+        let read = signed_with::<Claims>(&from, &statement, public).unwrap();
+        assert_eq!(read.map(|claims| claims.jti), Some(claims.jti));
+        let read = signed_with::<Claims>(&from, &statement, other.public_key().as_ref());
+        assert!(matches!(read, Ok(None)));
+
+        let token = jws::sign("aspen-other+jwt", kid, &signer, &claims);
+        let statement = jws::parse(&token).unwrap();
+        assert_eq!(
+            reason(signed_with::<Claims>(&from, &statement, public)),
+            t!("statementWrongKind", domain = from.as_str())
+        );
+
+        let token = jws::sign(Claims::TYPE, kid, &signer, &serde_json::json!({"iss": 1}));
+        let statement = jws::parse(&token).unwrap();
+        assert_eq!(
+            reason(signed_with::<Claims>(&from, &statement, public)),
+            t!("statementUnreadable", domain = from.as_str())
+        );
+        // Unreadable claims under a signature that is not this key's say nothing of the
+        // sender: another key may have signed them.
+        let read = signed_with::<Claims>(&from, &statement, other.public_key().as_ref());
+        assert!(matches!(read, Ok(None)));
+    }
 
     #[test]
     fn times_are_checked_without_overflow() {

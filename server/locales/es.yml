@@ -373,6 +373,8 @@ statementMalformed: "Esto no es una declaración firmada por otro servidor de As
 statementFromHere: "Esto lo firmó este mismo servidor, y tiene que venir de otro servidor."
 statementKeyChanged: "%{domain} firmó esto con una llave que este servidor no ha aceptado. Si %{domain} reemplazó su llave, los administradores de este servidor deben aceptar la nueva en Administración, Federación, después de confirmarla con los administradores de %{domain}."
 statementSignature: "Esto no lleva una firma válida de %{domain}: se alteró en el camino, o no vino de %{domain}. Pide una nueva a %{domain}."
+statementWrongKind: "Esta es una declaración firmada de un tipo distinto del que acepta esta solicitud. Si sigue pasando, %{domain} y este servidor usan versiones de Aspen que no se entienden entre sí, y hay que actualizar la más antigua."
+statementUnreadable: "%{domain} firmó esto, pero este servidor no puede leer lo que dice. Lo más probable es que %{domain} use una versión de Aspen más nueva que la de este servidor, cuyos administradores deben actualizarlo."
 statementSenderUnreachable: "No se pudo contactar a %{domain} para comprobar lo que firmó. Intenta más tarde. Si sigue fallando, los administradores de este servidor pueden ver por qué contactando a %{domain} en Administración, Federación."
 statementSenderContactedRecently: "Esto no se verifica con la llave que %{domain} presentó hace unos momentos. Intenta de nuevo en %{seconds} segundos; si sigue fallando, pide una nueva a %{domain}."
 statementWrongAudience: "Esto se firmó para %{audience}, no para este servidor (%{here}). Pide una hecha para %{here}."

@@ -381,6 +381,33 @@ fn unstorable_text(message: &str) -> bool {
         || message.starts_with("unsupported Unicode escape sequence")
 }
 
+/// The unique indexes whose violations handlers answer by name, as PostgreSQL names them in
+/// the violation.
+pub(crate) mod unique {
+    /// A local account's name (`"user"`), whatever its case.
+    pub const USERNAME: &str = "user_name_key";
+    /// An invite's code.
+    pub const INVITE_CODE: &str = "invite_pkey";
+    /// A person's membership of a community.
+    pub const MEMBERSHIP: &str = "community_user_pkey";
+    /// One person's reaction with one emoji to a message.
+    pub const REACTION: &str = "react_pkey";
+    /// A custom emoji's name within its community, whatever its case.
+    pub const CUSTOM_EMOJI_NAME: &str = "custom_emoji_name_key";
+}
+
+/// Whether `error` is the violation of the unique index named `index` (one of [`unique`]'s),
+/// and of no other: a write that can violate several is answered for the one it did.
+pub(crate) fn violates(error: &app::Error, index: &str) -> bool {
+    matches!(
+        error,
+        app::Error::Diesel(diesel::result::Error::DatabaseError(
+            DatabaseErrorKind::UniqueViolation,
+            info,
+        )) if info.constraint_name() == Some(index)
+    )
+}
+
 /// How long a client told `serverBusy` waits before trying again.
 const BUSY_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -393,8 +420,9 @@ impl From<app::Error> for ApiError {
                 _,
             )) => Self::new(ProblemCode::Conflict),
             // Text PostgreSQL cannot store (U+0000, which the extractors refuse, reaching it
-            // another way): the request's fault, not the server's. The database names neither
-            // case by a kind of its own, only by its message.
+            // another way): the request's fault, not the server's. PostgreSQL names each case
+            // by its SQLSTATE, which diesel does not pass on: both arrive as `Unknown`, told
+            // apart only by their messages.
             app::Error::Diesel(diesel::result::Error::DatabaseError(
                 DatabaseErrorKind::Unknown,
                 ref info,
@@ -552,3 +580,66 @@ impl IntoResponse for ApiError {
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diesel::result::DatabaseErrorInformation;
+
+    struct Violation(Option<&'static str>);
+
+    impl DatabaseErrorInformation for Violation {
+        fn message(&self) -> &str {
+            "duplicate key value violates unique constraint"
+        }
+        fn details(&self) -> Option<&str> {
+            None
+        }
+        fn hint(&self) -> Option<&str> {
+            None
+        }
+        fn table_name(&self) -> Option<&str> {
+            None
+        }
+        fn column_name(&self) -> Option<&str> {
+            None
+        }
+        fn constraint_name(&self) -> Option<&str> {
+            self.0
+        }
+        fn statement_position(&self) -> Option<i32> {
+            None
+        }
+    }
+
+    fn violation(kind: DatabaseErrorKind, index: Option<&'static str>) -> app::Error {
+        app::Error::Diesel(diesel::result::Error::DatabaseError(
+            kind,
+            Box::new(Violation(index)),
+        ))
+    }
+
+    #[test]
+    fn a_violation_is_answered_only_for_the_index_it_names() {
+        let unique_violation = |index| violation(DatabaseErrorKind::UniqueViolation, index);
+        assert!(violates(
+            &unique_violation(Some(unique::USERNAME)),
+            unique::USERNAME
+        ));
+        assert!(!violates(
+            &unique_violation(Some("user_email_pkey")),
+            unique::USERNAME
+        ));
+        assert!(!violates(&unique_violation(None), unique::USERNAME));
+        assert!(!violates(
+            &violation(
+                DatabaseErrorKind::ForeignKeyViolation,
+                Some(unique::USERNAME)
+            ),
+            unique::USERNAME
+        ));
+        // Any other unique violation is still a conflict, never `usernameTaken`.
+        let problem = crate::user::username_taken(unique_violation(Some("user_email_pkey")));
+        assert_eq!(problem.problem.code, ProblemCode::Conflict);
+    }
+}

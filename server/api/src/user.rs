@@ -1,6 +1,6 @@
 use crate::auth::SessionUser;
 use crate::community::{CommunityList, CommunityReadQuery};
-use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
+use crate::error::{ApiError, ApiResult, Problem, ProblemCode, unique, violates};
 use crate::extract::{Created, Json, NoContent, Path, Query};
 use crate::message_enum::User;
 use crate::message_enum::request::{UserCreateRequest, UserUpdateRequest};
@@ -14,7 +14,6 @@ use aspen_app::login::ChangePasswordOutcome;
 pub use aspen_wire::user::{CustomStatus, UserOnlineStatus, UserStatusRecord};
 use axum::Extension;
 use axum::extract::State;
-use diesel::result::DatabaseErrorKind;
 use serde::{Deserialize, Serialize};
 use utoipa::openapi::schema::{ObjectBuilder, SchemaType, Type};
 use utoipa::openapi::{RefOr, Schema};
@@ -293,14 +292,12 @@ pub async fn change_password(
     }
 }
 
-/// A new account's unique violation, which only its name can cause, as `usernameTaken`.
+/// A violation of the index keeping account names unique, as `usernameTaken`.
 pub fn username_taken(e: app::Error) -> ApiError {
-    match e {
-        app::Error::Diesel(diesel::result::Error::DatabaseError(
-            DatabaseErrorKind::UniqueViolation,
-            _,
-        )) => ApiError::new(ProblemCode::UsernameTaken),
-        other => other.into(),
+    if violates(&e, unique::USERNAME) {
+        ApiError::new(ProblemCode::UsernameTaken)
+    } else {
+        e.into()
     }
 }
 

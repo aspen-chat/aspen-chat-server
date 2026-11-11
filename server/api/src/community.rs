@@ -1,5 +1,5 @@
 use crate::auth::SessionUser;
-use crate::error::{ApiResult, Problem};
+use crate::error::{ApiResult, Problem, unique, violates};
 use crate::extract::{Created, Json, NoContent, Path, Query, double_option};
 use crate::include::{IncludeSet, Included, Sideloaded, SideloadedList};
 use crate::message_enum::request::{
@@ -13,7 +13,6 @@ use aspen_app::context::GlobalServerContext;
 use aspen_app::{CommunityId, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;
-use diesel::result::DatabaseErrorKind;
 use serde::Deserialize;
 use std::collections::HashSet;
 use utoipa::{IntoParams, ToSchema};
@@ -559,10 +558,7 @@ pub async fn join_community(
 ) -> ApiResult<(StatusCode, Json<UserCommunity>)> {
     match app::community::join_community(&state, user.id, community, request.invite_code).await {
         Ok(membership) => Ok((StatusCode::CREATED, Json(membership))),
-        Err(app::Error::Diesel(diesel::result::Error::DatabaseError(
-            DatabaseErrorKind::UniqueViolation,
-            _,
-        ))) => {
+        Err(e) if violates(&e, unique::MEMBERSHIP) => {
             let membership = app::community::read_membership(&state, user.id, community).await?;
             Ok((StatusCode::OK, Json(membership)))
         }

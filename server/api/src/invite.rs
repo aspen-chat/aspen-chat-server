@@ -1,5 +1,5 @@
 use crate::auth::SessionUser;
-use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
+use crate::error::{ApiError, ApiResult, Problem, ProblemCode, unique, violates};
 use crate::extract::double_option;
 use crate::extract::{Created, Json, NoContent, Path, Query};
 use crate::include::{IncludeSet, Included, Sideloaded};
@@ -11,7 +11,6 @@ use aspen_app::{self as app, CommunityId};
 use axum::Extension;
 use axum::extract::State;
 use chrono::{DateTime, Utc};
-use diesel::result::DatabaseErrorKind;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -55,12 +54,12 @@ pub async fn create_invite(
         request.expires_at,
     )
     .await
-    .map_err(|e| match e {
-        app::Error::Diesel(diesel::result::Error::DatabaseError(
-            DatabaseErrorKind::UniqueViolation,
-            _,
-        )) => ApiError::new(ProblemCode::InviteCodeTaken),
-        other => other.into(),
+    .map_err(|e| {
+        if violates(&e, unique::INVITE_CODE) {
+            ApiError::new(ProblemCode::InviteCodeTaken)
+        } else {
+            e.into()
+        }
     })?;
     Ok(Created::new(
         format!("{API_PREFIX}/invites/{}", invite.code),

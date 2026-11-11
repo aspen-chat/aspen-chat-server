@@ -1569,6 +1569,30 @@ describe("AspenSync", () => {
     expect(sync.store.attachment(record.id)).toEqual(record);
   });
 
+  it("takes a record as missing only on the server's own notFound", async () => {
+    let answer = (): Response => new Response("Not Found", { status: 404 });
+    let reads = 0;
+    const { sync } = makeSync({
+      ...bootstrapResponses(),
+      [`/api/v1/icons/${id(902)}`]: () => {
+        reads += 1;
+        return answer();
+      },
+    });
+    await goLive(sync);
+    sync.ensureIcon(id(902));
+    await settle();
+    // A 404 that is not the API's says nothing of the icon, so it is asked for again.
+    expect(sync.store.missing("icon", id(902))).toBe(false);
+    answer = () => json({ code: "notFound", title: "Not found", status: 404 }, 404);
+    sync.ensureIcon(id(902));
+    await settle();
+    expect(sync.store.missing("icon", id(902))).toBe(true);
+    sync.ensureIcon(id(902));
+    await settle();
+    expect(reads).toBe(2);
+  });
+
   it("adds and removes the caller's reaction, updating the cache at once", async () => {
     const target = message(3);
     let removed = false;

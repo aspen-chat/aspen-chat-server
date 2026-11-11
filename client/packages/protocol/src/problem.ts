@@ -13,6 +13,15 @@ export function isProblem(value: unknown): value is Problem {
 }
 
 /**
+ * Whether a failed request's `error` is the server's own Problem with one of `codes`. An answer
+ * with the same status and no Problem (a proxy's, a route not yet deployed) is not: it says
+ * nothing about the record asked for.
+ */
+export function refusedWith(error: unknown, ...codes: ProblemCode[]): boolean {
+  return isProblem(error) && codes.includes(error.code);
+}
+
+/**
  * Thrown by the convenience wrappers when the server answers with a Problem. Callers that use
  * the raw openapi-fetch client receive the Problem as `error` instead and never see this.
  */

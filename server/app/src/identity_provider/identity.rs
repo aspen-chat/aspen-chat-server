@@ -101,32 +101,32 @@ pub async fn insert(
     provider: &Provider,
     subject: &str,
 ) -> crate::Result<UserIdentityId> {
-    let id = UserIdentityId::new();
+    // An identity that is held is answered by no row rather than by an error whose constraint
+    // would have to be told by name, which leaves one unique violation this insert can raise:
+    // the account's second identity of the provider.
     diesel::insert_into(user_identity::table)
         .values((
-            user_identity::id.eq(id),
+            user_identity::id.eq(UserIdentityId::new()),
             user_identity::user.eq(user_id),
             user_identity::provider.eq(provider.id),
             user_identity::issuer.eq(&provider.issuer),
             user_identity::subject.eq(subject),
             user_identity::last_used_at.eq(diesel::dsl::now),
         ))
-        .execute(conn)
+        .on_conflict((user_identity::provider, user_identity::subject))
+        .do_nothing()
+        .returning(user_identity::id)
+        .get_result(conn)
         .await
-        .map_err(|error| match &error {
-            diesel::result::Error::DatabaseError(
-                diesel::result::DatabaseErrorKind::UniqueViolation,
-                info,
-            ) if info.constraint_name() == Some("user_identity_provider_subject_key") => {
-                crate::Error::IdentityTaken
-            }
+        .optional()
+        .map_err(|error| match error {
             diesel::result::Error::DatabaseError(
                 diesel::result::DatabaseErrorKind::UniqueViolation,
                 _,
             ) => crate::Error::Conflict(t!("identityProviderAlreadyLinkedGenerally")),
-            _ => error.into(),
-        })?;
-    Ok(id)
+            error => error.into(),
+        })?
+        .ok_or(crate::Error::IdentityTaken)
 }
 
 /// Links `subject` at `provider` to `user_id`, as a claimed `link` flow does.
@@ -202,4 +202,63 @@ pub async fn unlink(
         .scope_boxed()
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diesel_async::SimpleAsyncConnection;
+
+    /// Runs against the database `DATABASE_URL` names, inside a transaction that is never
+    /// committed; without one it checks nothing.
+    #[tokio::test]
+    async fn a_held_identity_and_a_second_of_one_provider_are_refused_apart() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("DATABASE_URL is not set; skipped");
+            return;
+        };
+        let provider = Provider {
+            id: IdentityProviderId::new(),
+            name: "Example".to_string(),
+            issuer: "https://id.example.test".to_string(),
+            client_id: "aspen".to_string(),
+            client_secret: "secret".to_string(),
+            enabled: true,
+            skip_invite: false,
+            enforces_two_factor: false,
+            trust_email: false,
+            created_at: Utc::now(),
+            removed_at: None,
+        };
+        let (holder, other) = (UserId::new(), UserId::new());
+        let mut conn = crate::database::connect(&url).await.unwrap();
+        conn.begin_test_transaction().await.unwrap();
+        conn.batch_execute(&format!(
+            r#"INSERT INTO "user" (id, name, password_hash, created_at, last_seen_at)
+                 VALUES ('{}', 'identity-holder', '', now(), now()),
+                        ('{}', 'identity-other', '', now(), now());
+             INSERT INTO identity_provider (id, name, issuer, client_id, client_secret)
+                 VALUES ('{}', 'Example', 'https://id.example.test', 'aspen', 'secret');"#,
+            holder.0, other.0, provider.id.0
+        ))
+        .await
+        .unwrap();
+
+        let linked = insert(&mut conn, holder, &provider, "subject-1")
+            .await
+            .unwrap();
+        assert_eq!(
+            of(&mut conn, holder, &provider).await.unwrap(),
+            Some(linked)
+        );
+        assert!(matches!(
+            insert(&mut conn, other, &provider, "subject-1").await,
+            Err(crate::Error::IdentityTaken)
+        ));
+        // Last, since a unique violation ends the transaction.
+        assert!(matches!(
+            insert(&mut conn, holder, &provider, "subject-2").await,
+            Err(crate::Error::Conflict(_))
+        ));
+    }
 }

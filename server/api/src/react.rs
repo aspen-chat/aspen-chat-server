@@ -12,7 +12,7 @@
 
 use crate::TAG_REACTIONS;
 use crate::auth::SessionUser;
-use crate::error::{ApiResult, Problem};
+use crate::error::{ApiResult, Problem, unique, violates};
 use crate::extract::{Json, NoContent, Path, Query};
 use crate::message_enum::{React, User};
 use crate::user::{UserRef, not_your_account};
@@ -21,7 +21,6 @@ use aspen_app::context::GlobalServerContext;
 use aspen_app::{CommunityId, MessageId, UserId};
 use axum::extract::State;
 use axum::http::StatusCode;
-use diesel::result::DatabaseErrorKind;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -141,10 +140,7 @@ pub async fn add_reaction(
     };
     match app::react::create_react(&state, user.id, message, emoji).await {
         Ok(_) => Ok((StatusCode::CREATED, Json(record))),
-        Err(app::Error::Diesel(diesel::result::Error::DatabaseError(
-            DatabaseErrorKind::UniqueViolation,
-            _,
-        ))) => Ok((StatusCode::OK, Json(record))),
+        Err(e) if violates(&e, unique::REACTION) => Ok((StatusCode::OK, Json(record))),
         Err(e) => Err(e.into()),
     }
 }

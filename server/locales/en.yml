@@ -373,6 +373,8 @@ statementMalformed: "This is not a signed statement from another Aspen server. I
 statementFromHere: "This was signed by this server itself, and has to come from another server."
 statementKeyChanged: "%{domain} signed this with a key this server has not accepted. If %{domain} replaced its key, this server's administrators need to accept the new one under Administration, Federation, after confirming it with %{domain}'s administrators."
 statementSignature: "This does not carry a valid signature of %{domain}: it was altered on the way, or it did not come from %{domain}. Ask %{domain} for a new one."
+statementWrongKind: "This is a signed statement of another kind than this request takes. If it keeps happening, %{domain} and this server run versions of Aspen that do not understand each other, and the older one needs updating."
+statementUnreadable: "%{domain} signed this, but this server cannot read what it says. %{domain} most likely runs a newer version of Aspen than this server, whose administrators need to update it."
 statementSenderUnreachable: "%{domain} could not be reached to check what it signed. Try again later. If it keeps failing, this server's administrators can see why by contacting %{domain} under Administration, Federation."
 statementSenderContactedRecently: "This does not verify against the key %{domain} presented moments ago. Try again in %{seconds} seconds; if it still fails, ask %{domain} for a new one."
 statementWrongAudience: "This was signed for %{audience}, not for this server (%{here}). Ask for one made for %{here}."

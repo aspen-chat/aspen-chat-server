@@ -35,7 +35,7 @@ import type {
 } from "./generated/events";
 import type { components } from "./generated/openapi";
 import { type AspenClient, problemOf, retryAfterOf } from "./http";
-import { ApiProblemError, type Problem, transportProblem } from "./problem";
+import { ApiProblemError, type Problem, refusedWith, transportProblem } from "./problem";
 import {
   AUDIO_INPUT,
   AUDIO_OUTPUT,
@@ -1018,10 +1018,10 @@ export class AspenSync {
     }
     const load = this.#client.api
       .GET("/api/v1/icons/{icon}", { params: { path: { icon: iconId } } })
-      .then(({ data, response }) => {
+      .then(({ data, error }) => {
         if (data !== undefined) {
           this.store.putIcon(data);
-        } else if (response.status === 404) {
+        } else if (refusedWith(error, "notFound")) {
           this.store.markMissing("icon", iconId);
         }
       })
@@ -1185,10 +1185,10 @@ export class AspenSync {
     }
     const load = this.#client.api
       .GET("/api/v1/attachments/{attachment}", { params: { path: { attachment: attachmentId } } })
-      .then(({ data, response }) => {
+      .then(({ data, error }) => {
         if (data !== undefined) {
           this.store.ingest({ attachments: [data] });
-        } else if (response.status === 404) {
+        } else if (refusedWith(error, "notFound")) {
           this.store.markMissing("attachment", attachmentId);
         }
       })
@@ -1516,10 +1516,10 @@ export class AspenSync {
     const since = this.#now();
     const load = this.#client.api
       .GET("/api/v1/channels/{channel}", { params: { path: { channel: channelId } } })
-      .then(({ data, response }) => {
+      .then(({ data, error }) => {
         if (data !== undefined) {
           this.store.ingest({ channels: [data] }, { since });
-        } else if (response.status === 403 || response.status === 404) {
+        } else if (refusedWith(error, "forbidden", "notFound")) {
           this.store.markMissing("channel", channelId);
         }
       })
@@ -1562,7 +1562,7 @@ export class AspenSync {
       },
     });
     if (result.data === undefined) {
-      if (result.response.status === 403 || result.response.status === 404) {
+      if (refusedWith(result.error, "forbidden", "notFound")) {
         this.store.markMissing("message", messageId);
       }
       throw new ApiProblemError(problemOf(result.error, result.response));
@@ -2615,10 +2615,10 @@ export class AspenSync {
       .GET("/api/v1/polls/{poll}", {
         params: { path: { poll: pollId }, query: { include: ["votes"] } },
       })
-      .then(({ data, response }) => {
+      .then(({ data, error }) => {
         if (data !== undefined) {
           this.store.ingest({ ...data.included, polls: [data.data] }, { since });
-        } else if (response.status === 404) {
+        } else if (refusedWith(error, "notFound")) {
           this.store.markMissing("poll", pollId);
         }
       })
@@ -2754,7 +2754,7 @@ export class AspenSync {
     this.store.ingest({ users: found }, { since: rereadSince });
     for (const [index, answer] of reread.entries()) {
       const bot = stale[index];
-      if (answer.response.status === 404 && bot !== undefined) {
+      if (refusedWith(answer.error, "notFound") && bot !== undefined) {
         this.store.forgetUser(bot.id);
       }
     }
@@ -3201,7 +3201,7 @@ export class AspenSync {
     );
     if (result.data !== undefined) {
       this.store.setVoiceMuted(communityId, userId, true);
-    } else if (result.response.status === 404) {
+    } else if (refusedWith(result.error, "notFound")) {
       this.store.setVoiceMuted(communityId, userId, false);
     } else {
       throw new ApiProblemError(problemOf(result.error, result.response));
@@ -3424,7 +3424,7 @@ export class AspenSync {
     const result = await this.#client.api.GET("/api/v1/communities/{community}/members/{user}", {
       params: { path: { community: communityId, user: userId } },
     });
-    if (result.response.status === 404) {
+    if (refusedWith(result.error, "notFound")) {
       return false;
     }
     if (result.data === undefined) {
@@ -4004,10 +4004,10 @@ export class AspenSync {
     const since = this.#now();
     const load = this.#client.api
       .GET("/api/v1/users/{user}", { params: { path: { user: userId } } })
-      .then(({ data, response }) => {
+      .then(({ data, error }) => {
         if (data !== undefined) {
           this.store.ingest({ users: [data] }, { since });
-        } else if (response.status === 404) {
+        } else if (refusedWith(error, "notFound")) {
           this.store.markMissing("user", userId);
         }
       })

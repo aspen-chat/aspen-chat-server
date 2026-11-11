@@ -1259,6 +1259,12 @@ when reviewing.
    against a URL's whole path and a type against the whole media type. Where two implementations
    must read the same text alike (bare URLs, bot command patterns, pseudo-locales, permissions), a
    vector file in `spec/` that both sides' tests run holds them together, and they change with it.
+3. **Failures are told apart by code, type, or constraint, never by wording.** Not an error's
+   message (PostgreSQL's follows `lc_messages`), not a log line, not "any 404" or "any unique
+   violation": match the `ProblemCode`, the error enum's variant with no wildcard, the violated
+   index by name (`api::error::violates`), or write the statement so the error is not needed
+   (`ON CONFLICT … DO NOTHING RETURNING`). Nothing branches on localized text or on a name meant for
+   display.
 
 ## Comments document the current code, not its history
 

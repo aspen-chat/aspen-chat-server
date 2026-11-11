@@ -3,7 +3,7 @@
 //! `include=emoji`.
 
 use crate::auth::SessionUser;
-use crate::error::{ApiError, ApiResult, Problem, ProblemCode};
+use crate::error::{ApiError, ApiResult, Problem, ProblemCode, unique, violates};
 use crate::extract::{Created, Json, NoContent, Path};
 use crate::message_enum::CustomEmoji;
 use crate::message_enum::request::{CustomEmojiCreateRequest, CustomEmojiUpdateRequest};
@@ -12,7 +12,6 @@ use aspen_app as app;
 use aspen_app::context::GlobalServerContext;
 use aspen_app::{CommunityId, CustomEmojiId};
 use axum::extract::State;
-use diesel::result::DatabaseErrorKind;
 
 /// A community's emoji, by name.
 #[utoipa::path(
@@ -129,13 +128,12 @@ pub async fn delete_emoji(
     Ok(NoContent)
 }
 
-/// A unique violation here can only be the name, the one thing the table keeps unique.
+/// A violation of the index keeping a community's emoji names unique, as
+/// `customEmojiNameTaken`.
 fn name_taken(e: app::Error) -> ApiError {
-    match e {
-        app::Error::Diesel(diesel::result::Error::DatabaseError(
-            DatabaseErrorKind::UniqueViolation,
-            _,
-        )) => ApiError::new(ProblemCode::CustomEmojiNameTaken),
-        other => other.into(),
+    if violates(&e, unique::CUSTOM_EMOJI_NAME) {
+        ApiError::new(ProblemCode::CustomEmojiNameTaken)
+    } else {
+        e.into()
     }
 }

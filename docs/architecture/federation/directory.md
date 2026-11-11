@@ -90,6 +90,11 @@ A statement whose sender has no key pinned, or that does not verify against the 
 
 So a forged statement naming a stranger leaves no row and pins nothing.
 
+Only a signature that is not the pinned key's has the sender contacted. A statement of another kind
+than the endpoint takes (`statementWrongKind`), or one the pinned key signed whose claims this
+version cannot read (`statementUnreadable`, an assertion with a `method` it does not know, say), is
+refused at once with that reason (`received::signed_with`): no other key would change it.
+
 ## Forgetting deployments
 
 - A deployment recorded on first contact and not in use is forgotten, with its pin, once it has gone
