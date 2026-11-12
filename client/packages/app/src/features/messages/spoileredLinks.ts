@@ -4,6 +4,7 @@ import { unified } from "unified";
 import { visit } from "unist-util-visit";
 import { opensTooDeeply } from "@/features/messages/markdownLimits";
 import { MESSAGE_REMARK_PLUGINS } from "@/features/messages/remarkPipeline";
+import { mayHoldSpoiler } from "@/features/messages/remarkSpoilers";
 
 const processor = unified().use(remarkParse).use(MESSAGE_REMARK_PLUGINS);
 
@@ -15,12 +16,12 @@ const NONE: ReadonlySet<string> = new Set();
 /**
  * The addresses linked from inside a spoiler in a message body, read as `Markdown` reads it,
  * each as `normalizedUrl` writes it, so a link preview of one can be hidden as its link is. A
- * body with no spoiler marker is not parsed; nor is one `Markdown` shows as plain text, whose
+ * body that can hold no spoiler (`mayHoldSpoiler`) is not parsed; nor is one `Markdown` shows as plain text, whose
  * markers hide nothing. The answers for the last `CACHE_SIZE` texts are kept and shared, so
  * they must not be changed.
  */
 export function spoileredLinks(content: string): ReadonlySet<string> {
-  if ((!content.includes("||") && !content.includes(">!")) || opensTooDeeply(content)) {
+  if (!mayHoldSpoiler(content) || opensTooDeeply(content)) {
     return NONE;
   }
   const cached = cache.get(content);

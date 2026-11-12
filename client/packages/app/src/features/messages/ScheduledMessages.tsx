@@ -13,6 +13,7 @@ import {
 } from "@/features/invites/dialog";
 import { DialogHeading } from "@/features/layout/DialogHeading";
 import { decodeTags } from "@/features/mentions/tags";
+import { maskSpoilers } from "@/features/messages/maskSpoilers";
 import { ScheduleTimeForm } from "@/features/messages/ScheduleMessageDialog";
 import { SCHEDULED_TIME_FORMAT } from "@/features/messages/scheduleTimes";
 import { useMessages } from "@/i18n/context";
@@ -178,12 +179,13 @@ function ScheduledRow({
   const [error, setError] = useState<string | null>(null);
   const time = shown.format(new Date(message.sendAt));
   const files = message.attachments.length;
-  // Tags and custom emoji read as they were written, as a reply's quote of a message does.
+  // Tags and custom emoji read as they were written, as a reply's quote of a message does,
+  // with spoilers masked first: a name may hold what would read as a marker.
   const community = (channel?.parentChannel != null ? parent : channel)?.community ?? null;
   const roles = community === null ? [] : sync.store.roles(community);
   const text = decodeCustomEmoji(
     decodeTags(
-      message.content,
+      maskSpoilers(message.content, m.replies.spoiler),
       (id) => sync.store.user(id)?.name,
       (id) => roles.find((role) => role.id === id)?.name,
     ),

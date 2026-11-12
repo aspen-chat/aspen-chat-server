@@ -1,0 +1,920 @@
+{
+  "description": "Where a message's spoilers are, which the client's renderer (features/messages/remarkSpoilers.ts, read through spoilerTree in maskSpoilers.ts) and the server's notification text and email digest (app::message::notification::spoilers) both find alike. content: a message's text. shown: what a reader is shown of it before revealing anything, with ▮ for each spoiler. hidden: what each spoiler hides, in order. Both are the text alone, markup taken off, with ⌷ for each code span or block, a space for anything else that is not text (a line break, HTML), a line break after whatever is not in a line of text (a paragraph, a heading, a table cell), and each run of spaces, tabs, and line breaks read as one space and none at either end.",
+  "vectors": [
+    {
+      "name": "Discord's markers",
+      "content": "the killer is ||the butler|| obviously",
+      "shown": "the killer is ▮ obviously",
+      "hidden": [
+        "the butler"
+      ]
+    },
+    {
+      "name": "Reddit's markers",
+      "content": ">!hidden!< and >!also hidden!<",
+      "shown": "▮ and ▮",
+      "hidden": [
+        "hidden",
+        "also hidden"
+      ]
+    },
+    {
+      "name": "Reddit's markers in a line",
+      "content": "it was >!the cook!< all along",
+      "shown": "it was ▮ all along",
+      "hidden": [
+        "the cook"
+      ]
+    },
+    {
+      "name": "both spellings",
+      "content": "||one|| and >!two!<",
+      "shown": "▮ and ▮",
+      "hidden": [
+        "one",
+        "two"
+      ]
+    },
+    {
+      "name": "markup inside a spoiler",
+      "content": "the killer is ||**the butler**|| obviously",
+      "shown": "the killer is ▮ obviously",
+      "hidden": [
+        "the butler"
+      ]
+    },
+    {
+      "name": "a spoiler across markup",
+      "content": "a ||b **c** d|| e",
+      "shown": "a ▮ e",
+      "hidden": [
+        "b c d"
+      ]
+    },
+    {
+      "name": "a spoiler inside markup",
+      "content": "**a ||b|| c**",
+      "shown": "a ▮ c",
+      "hidden": [
+        "b"
+      ]
+    },
+    {
+      "name": "markers on either side of emphasis's edge",
+      "content": "*||a*||",
+      "shown": "||a||",
+      "hidden": []
+    },
+    {
+      "name": "code inside a spoiler",
+      "content": "a || `code` || b",
+      "shown": "a ▮ b",
+      "hidden": [
+        "⌷"
+      ]
+    },
+    {
+      "name": "a marker in a code span",
+      "content": "`||a||` b ||c||",
+      "shown": "⌷ b ▮",
+      "hidden": [
+        "c"
+      ]
+    },
+    {
+      "name": "a marker in a fenced block",
+      "content": "```\n||a||\n```\n\n||b||",
+      "shown": "⌷▮",
+      "hidden": [
+        "b"
+      ]
+    },
+    {
+      "name": "a marker in an indented block",
+      "content": "a\n\n    ||b||",
+      "shown": "a ⌷",
+      "hidden": []
+    },
+    {
+      "name": "a spoiler closed in a code span",
+      "content": "||a `b||` c",
+      "shown": "||a ⌷ c",
+      "hidden": []
+    },
+    {
+      "name": "no closing marker",
+      "content": "a || b",
+      "shown": "a || b",
+      "hidden": []
+    },
+    {
+      "name": "no opening marker",
+      "content": "a !< b",
+      "shown": "a !< b",
+      "hidden": []
+    },
+    {
+      "name": "nothing between the markers",
+      "content": "||||",
+      "shown": "||||",
+      "hidden": []
+    },
+    {
+      "name": "blank between the markers",
+      "content": "a || || b",
+      "shown": "a || || b",
+      "hidden": []
+    },
+    {
+      "name": "a no-break space between the markers",
+      "content": "|| ||",
+      "shown": "|| ||",
+      "hidden": []
+    },
+    {
+      "name": "a spoiler after markers with nothing between them",
+      "content": "||||secret||",
+      "shown": "||▮",
+      "hidden": [
+        "secret"
+      ]
+    },
+    {
+      "name": "a spoiler after markers with only blank text between them",
+      "content": "|| || then ||real||",
+      "shown": "|| || then ▮",
+      "hidden": [
+        "real"
+      ]
+    },
+    {
+      "name": "three pipes each side",
+      "content": "|||a|||",
+      "shown": "▮|",
+      "hidden": [
+        "|a"
+      ]
+    },
+    {
+      "name": "two spoilers touching",
+      "content": "||a||||b||",
+      "shown": "▮▮",
+      "hidden": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "name": "a spoiler across lines",
+      "content": "||one\ntwo||",
+      "shown": "▮",
+      "hidden": [
+        "one two"
+      ]
+    },
+    {
+      "name": "a spoiler across a hard break",
+      "content": "||one  \ntwo||",
+      "shown": "▮",
+      "hidden": [
+        "one two"
+      ]
+    },
+    {
+      "name": "nothing but a hard break between the markers",
+      "content": "||\\\n||",
+      "shown": "▮",
+      "hidden": [
+        ""
+      ]
+    },
+    {
+      "name": "markers in two paragraphs",
+      "content": "||one\n\ntwo||",
+      "shown": "||one two||",
+      "hidden": []
+    },
+    {
+      "name": "pipes written with backslashes",
+      "content": "\\|\\|a\\|\\| b",
+      "shown": "||a|| b",
+      "hidden": []
+    },
+    {
+      "name": "an escaped backslash before the marker",
+      "content": "\\\\||a|| b",
+      "shown": "\\▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "pipes written as character references",
+      "content": "&#124;&vert;a|&#x7c; b",
+      "shown": "||a|| b",
+      "hidden": []
+    },
+    {
+      "name": "a spoiler in a spoiler",
+      "content": "||a **||b||** c||",
+      "shown": "▮",
+      "hidden": [
+        "a b c"
+      ]
+    },
+    {
+      "name": "a named link's text",
+      "content": "[||named||](https://named.example)",
+      "shown": "[▮](https://named.example)",
+      "hidden": [
+        "named"
+      ]
+    },
+    {
+      "name": "a named link in a spoiler",
+      "content": "||[a](https://x.example)|| b",
+      "shown": "▮ b",
+      "hidden": [
+        "[a](https://x.example)"
+      ]
+    },
+    {
+      "name": "a picture's text",
+      "content": "![||a||](https://x.example/p.png)",
+      "shown": "![▮](https://x.example/p.png)",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "a bare address in a spoiler",
+      "content": "see ||https://example.org|| now",
+      "shown": "see ▮ now",
+      "hidden": [
+        "https://example.org"
+      ]
+    },
+    {
+      "name": "an autolink in a spoiler",
+      "content": "||<https://auto.example/a>|| b",
+      "shown": "▮ b",
+      "hidden": [
+        "https://auto.example/a"
+      ]
+    },
+    {
+      "name": "an email address in a spoiler",
+      "content": "||a@b.example|| c",
+      "shown": "▮ c",
+      "hidden": [
+        "a@b.example"
+      ]
+    },
+    {
+      "name": "a reference's definition",
+      "content": "[x]: https://x.example \"||s||\"",
+      "shown": "[x]: https://x.example \"▮\"",
+      "hidden": [
+        "s"
+      ]
+    },
+    {
+      "name": "a heading",
+      "content": "# ||a|| b",
+      "shown": "▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "a list item across lines",
+      "content": "- ||a\n  b||\n- c",
+      "shown": "▮ c",
+      "hidden": [
+        "a b"
+      ]
+    },
+    {
+      "name": "a list item's text around code",
+      "content": "- ||a\n  ```\n  x\n  ```\n  b||",
+      "shown": "||a ⌷b||",
+      "hidden": []
+    },
+    {
+      "name": "a table cell",
+      "content": "| a | b |\n|---|---|\n| \\|\\|x\\|\\| y | z |",
+      "shown": "a b ▮ y z",
+      "hidden": [
+        "x"
+      ]
+    },
+    {
+      "name": "strikethrough",
+      "content": "~~||a||~~ ||~~b~~||",
+      "shown": "▮ ▮",
+      "hidden": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "name": "inline HTML in a spoiler",
+      "content": "||a <b>c</b>|| d",
+      "shown": "▮ d",
+      "hidden": [
+        "a c"
+      ]
+    },
+    {
+      "name": "a spoiler in a quote",
+      "content": "> a\n> ||b|| c",
+      "shown": "a ▮ c",
+      "hidden": [
+        "b"
+      ]
+    },
+    {
+      "name": "a quote that is a spoiler",
+      "content": ">!a!< b",
+      "shown": "▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "a quote that is a spoiler, spaced",
+      "content": "  > !a!< b",
+      "shown": "▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "a quote that is a spoiler across lines",
+      "content": ">!a\n>b!< c",
+      "shown": "▮ c",
+      "hidden": [
+        "a b"
+      ]
+    },
+    {
+      "name": "a quote in a quote that is a spoiler",
+      "content": "> >!a!< b",
+      "shown": "▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "a quote starting with ! that closes nothing",
+      "content": "> !a b",
+      "shown": "!a b",
+      "hidden": []
+    },
+    {
+      "name": "a quote that would be a blank spoiler",
+      "content": ">! !<",
+      "shown": ">! !<",
+      "hidden": []
+    },
+    {
+      "name": "a quote that is a spoiler, then a paragraph of it",
+      "content": ">!a!<\n>\n> b ||c||",
+      "shown": "▮ b ▮",
+      "hidden": [
+        "a",
+        "c"
+      ]
+    },
+    {
+      "name": "Reddit's marker opens first",
+      "content": ">!a || b!< c ||",
+      "shown": "▮ c ||",
+      "hidden": [
+        "a || b"
+      ]
+    },
+    {
+      "name": "Discord's marker opens first",
+      "content": "||a >!b|| c!<",
+      "shown": "▮ c!<",
+      "hidden": [
+        "a >!b"
+      ]
+    },
+    {
+      "name": "a spoiler of another script",
+      "content": "||秘密|| 🌲",
+      "shown": "▮ 🌲",
+      "hidden": [
+        "秘密"
+      ]
+    },
+    {
+      "name": "a spoiler across a Windows line break",
+      "content": "||a\r\nb||",
+      "shown": "▮",
+      "hidden": [
+        "a b"
+      ]
+    },
+    {
+      "name": "a tag and an emoji in a spoiler",
+      "content": "||<@0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b> <:0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b>|| x",
+      "shown": "▮ x",
+      "hidden": [
+        "<@0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b> <:0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b>"
+      ]
+    },
+    {
+      "name": "nested as deep as is drawn",
+      "content": "*a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a `||a||` a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a*",
+      "shown": "a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a ⌷ a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a",
+      "hidden": []
+    },
+    {
+      "name": "nested deeper than is drawn",
+      "content": "*a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a `||a||` a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a*",
+      "shown": "*a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a *a _a `▮` a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a* a_ a*",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "a line opening too many quotes",
+      "content": ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>||a||",
+      "shown": ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>||a||",
+      "hidden": []
+    },
+    {
+      "name": "a heading underlined",
+      "content": "||a||\n===",
+      "shown": "▮",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "a marker in a block of HTML",
+      "content": "<div>\n||a||\n</div>\n\n||b||",
+      "shown": "▮",
+      "hidden": [
+        "b"
+      ]
+    },
+    {
+      "name": "a www address in a spoiler",
+      "content": "||www.example.org/x|| y",
+      "shown": "▮ y",
+      "hidden": [
+        "www.example.org/x"
+      ]
+    },
+    {
+      "name": "a list in a list",
+      "content": "1. a\n   - ||b||\n   - c ||d\n     e||",
+      "shown": "a ▮ c ▮",
+      "hidden": [
+        "b",
+        "d e"
+      ]
+    },
+    {
+      "name": "a list with blank lines",
+      "content": "- ||a||\n\n- b",
+      "shown": "▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "Reddit's markers written as character references",
+      "content": "&gt;!a!&lt; b",
+      "shown": ">!a!< b",
+      "hidden": []
+    },
+    {
+      "name": "a spoiler closed inside a named link",
+      "content": "||[a||](https://x.example)",
+      "shown": "▮](https://x.example)",
+      "hidden": [
+        "[a"
+      ]
+    },
+    {
+      "name": "code spans of two backticks",
+      "content": "``||a||`` ||b ``c`` d||",
+      "shown": "⌷ ▮",
+      "hidden": [
+        "b ⌷ d"
+      ]
+    },
+    {
+      "name": "markers in an autolink's address",
+      "content": "<https://a.example/||x||>",
+      "shown": "https://a.example/▮",
+      "hidden": [
+        "x"
+      ]
+    },
+    {
+      "name": "a spoiler across a line ending in a space",
+      "content": "||a \n b||",
+      "shown": "▮",
+      "hidden": [
+        "a b"
+      ]
+    },
+    {
+      "name": "a tab between the markers, then a spoiler",
+      "content": "||\t||a||",
+      "shown": "|| ||a||",
+      "hidden": []
+    },
+    {
+      "name": "a marker in an HTML comment in a spoiler",
+      "content": "||a <!-- || --> b||",
+      "shown": "▮",
+      "hidden": [
+        "a b"
+      ]
+    },
+    {
+      "name": "a quote's spoiler across a line with no >",
+      "content": "> ||a\nb||",
+      "shown": "▮",
+      "hidden": [
+        "a b"
+      ]
+    },
+    {
+      "name": "a quote that is a spoiler, then a line with no >",
+      "content": ">!a!<\nb",
+      "shown": "▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "markers in two quotes",
+      "content": "> !a\n\n> b!<",
+      "shown": "!a b!<",
+      "hidden": []
+    },
+    {
+      "name": "a heading closed",
+      "content": "## ||a|| ##",
+      "shown": "▮",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "a reference link's text",
+      "content": "[||a||][x]\n\n[x]: /u",
+      "shown": "[▮][x] [x]: /u",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "underscores for emphasis",
+      "content": "__||a||__ _||b||_",
+      "shown": "▮ ▮",
+      "hidden": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "name": "an email address between spoilers",
+      "content": "||a|| x@y.example ||b||",
+      "shown": "▮ x@y.example ▮",
+      "hidden": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "name": "a spoiler between angle brackets",
+      "content": "a <b ||c|| d> e",
+      "shown": "a <b ▮ d> e",
+      "hidden": [
+        "c"
+      ]
+    },
+    {
+      "name": "Reddit's markers in an indented block",
+      "content": "    >!a!<",
+      "shown": "⌷",
+      "hidden": []
+    },
+    {
+      "name": "a quote that is a spoiler in a list item",
+      "content": "- >!a!< b",
+      "shown": "▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "a quote whose ! is escaped",
+      "content": ">\\!a!<",
+      "shown": "!a!<",
+      "hidden": []
+    },
+    {
+      "name": "a zero width space between the markers",
+      "content": "||​||",
+      "shown": "▮",
+      "hidden": [
+        "​"
+      ]
+    },
+    {
+      "name": "a byte order mark between the markers",
+      "content": "||﻿||",
+      "shown": "||﻿||",
+      "hidden": []
+    },
+    {
+      "name": "a next line character between the markers",
+      "content": "||||",
+      "shown": "▮",
+      "hidden": [
+        ""
+      ]
+    },
+    {
+      "name": "several blank pairs before a spoiler",
+      "content": "|| || ||\t|| ||real|| after",
+      "shown": "|| || || || ▮ after",
+      "hidden": [
+        "real"
+      ]
+    },
+    {
+      "name": "several empty pairs before a spoiler",
+      "content": "||||||||a|| b",
+      "shown": "||||||▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "an odd run of pipes before a spoiler",
+      "content": "|||||a|| b",
+      "shown": "||▮ b",
+      "hidden": [
+        "|a"
+      ]
+    },
+    {
+      "name": "a run of pipes",
+      "content": "a ||||||||||| b",
+      "shown": "a ||||||||||| b",
+      "hidden": []
+    },
+    {
+      "name": "blank and empty pairs, then nothing closed",
+      "content": "|| |||| || a",
+      "shown": "|| |||| || a",
+      "hidden": []
+    },
+    {
+      "name": "Reddit's markers with nothing between them, then a spoiler",
+      "content": ">!!<>!a!< b",
+      "shown": ">!!<▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "Reddit's markers with only blank text between them, then a spoiler",
+      "content": "x >! !< >!a!< b",
+      "shown": "x >! !< ▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "an opener nothing closes, then the other spelling",
+      "content": "|| >!a!< b",
+      "shown": "|| ▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "a blank pair, then the other spelling",
+      "content": "|| || >!a!< b",
+      "shown": "|| || ▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "Reddit's blank pair, then Discord's spoiler",
+      "content": "x >! !< ||a|| b",
+      "shown": "x >! !< ▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "an opener after a blank pair closed in later text",
+      "content": "|| || ||a **b** c|| d",
+      "shown": "|| || ▮ d",
+      "hidden": [
+        "a b c"
+      ]
+    },
+    {
+      "name": "an opener after an empty pair closed in later text",
+      "content": "||||a **b** c|| d",
+      "shown": "||▮ d",
+      "hidden": [
+        "a b c"
+      ]
+    },
+    {
+      "name": "an escaped opener with a plain closer",
+      "content": "\\|\\|a|| b",
+      "shown": "||a|| b",
+      "hidden": []
+    },
+    {
+      "name": "an escaped opener, then a plain pair",
+      "content": "\\|\\|a|| b ||c||",
+      "shown": "||a▮c||",
+      "hidden": [
+        "b"
+      ]
+    },
+    {
+      "name": "a plain opener with an escaped closer",
+      "content": "||a\\|\\| b",
+      "shown": "||a|| b",
+      "hidden": []
+    },
+    {
+      "name": "a plain opener past an escaped closer to a plain one",
+      "content": "||a\\|\\| b|| c",
+      "shown": "▮ c",
+      "hidden": [
+        "a|| b"
+      ]
+    },
+    {
+      "name": "one pipe of the opener escaped",
+      "content": "\\|||a|| b",
+      "shown": "|▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "one pipe of the closer escaped",
+      "content": "||a|\\| b",
+      "shown": "||a|| b",
+      "hidden": []
+    },
+    {
+      "name": "escaped pipes inside a spoiler",
+      "content": "||a \\|\\| b|| c",
+      "shown": "▮ c",
+      "hidden": [
+        "a || b"
+      ]
+    },
+    {
+      "name": "a pipe written as a character reference beside a plain one",
+      "content": "&#124;|a|| b",
+      "shown": "||a|| b",
+      "hidden": []
+    },
+    {
+      "name": "Reddit's opener escaped",
+      "content": "\\>!a!< b",
+      "shown": ">!a!< b",
+      "hidden": []
+    },
+    {
+      "name": "Reddit's opener escaped at its !",
+      "content": "x >\\!a!< b",
+      "shown": "x >!a!< b",
+      "hidden": []
+    },
+    {
+      "name": "Reddit's closer escaped",
+      "content": ">!a\\!< b",
+      "shown": "!a!< b",
+      "hidden": []
+    },
+    {
+      "name": "Reddit's closer escaped at its <",
+      "content": "x >!a!\\< b",
+      "shown": "x >!a!< b",
+      "hidden": []
+    },
+    {
+      "name": "Reddit's ! written as a character reference",
+      "content": "x >&excl;a!< b",
+      "shown": "x >!a!< b",
+      "hidden": []
+    },
+    {
+      "name": "escaped pipes in emphasis",
+      "content": "*\\|\\|a\\|\\|* b",
+      "shown": "||a|| b",
+      "hidden": []
+    },
+    {
+      "name": "escaped pipes in a heading",
+      "content": "# \\|\\|a\\|\\|",
+      "shown": "||a||",
+      "hidden": []
+    },
+    {
+      "name": "escaped pipes before a bare address",
+      "content": "\\|\\|a\\|\\| https://example.org/x b@c.example",
+      "shown": "||a|| https://example.org/x b@c.example",
+      "hidden": []
+    },
+    {
+      "name": "escaped pipes in a named link's text",
+      "content": "[\\|\\|a\\|\\|](https://x.example)",
+      "shown": "[\\|\\|a\\|\\|](https://x.example)",
+      "hidden": []
+    },
+    {
+      "name": "escaped pipes after a backslash line break",
+      "content": "a\\\n\\|\\|b\\|\\|",
+      "shown": "a ||b||",
+      "hidden": []
+    },
+    {
+      "name": "a table cell's emphasis",
+      "content": "| a | b |\n|---|---|\n| *\\|\\|x\\|\\|* | z |",
+      "shown": "a b ▮ z",
+      "hidden": [
+        "x"
+      ]
+    },
+    {
+      "name": "a table cell's pipes written as character references",
+      "content": "| a | b |\n|---|---|\n| &#124;&#124;x&#124;&#124; | z |",
+      "shown": "a b ||x|| z",
+      "hidden": []
+    },
+    {
+      "name": "a table cell's one pipe written as a character reference",
+      "content": "| a | b |\n|---|---|\n| \\|&#124;x\\|\\| | \\|\\|y\\|\\| |",
+      "shown": "a b ||x|| ▮",
+      "hidden": [
+        "y"
+      ]
+    },
+    {
+      "name": "Reddit's markers in a table cell",
+      "content": "| a | b |\n|---|---|\n| >!x!< | \\>\\!y\\!\\< |",
+      "shown": "a b ▮ >!y!<",
+      "hidden": [
+        "x"
+      ]
+    },
+    {
+      "name": "a table header's cell",
+      "content": "| \\|\\|a\\|\\| | b |\n|---|---|\n| c | d |",
+      "shown": "▮ b c d",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "a blank pair before an email address, then a spoiler",
+      "content": "|| || x@y.example ||a|| b",
+      "shown": "|| || x@y.example ▮ b",
+      "hidden": [
+        "a"
+      ]
+    },
+    {
+      "name": "an empty pair, then a spoiler holding an email address",
+      "content": "||||x@y.example|| ||a|| b",
+      "shown": "||▮ ▮ b",
+      "hidden": [
+        "x@y.example",
+        "a"
+      ]
+    },
+    {
+      "name": "an opener closed past an email address",
+      "content": "|| x@y.example || a",
+      "shown": "▮ a",
+      "hidden": [
+        "x@y.example"
+      ]
+    }
+  ]
+}

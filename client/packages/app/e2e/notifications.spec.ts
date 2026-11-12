@@ -50,18 +50,19 @@ test.beforeEach(async ({ page }) => {
 
 let sent = 900;
 
-/** A new message by Bob in #roadmap, as the stream announces it. */
+/** A new message by Bob in #roadmap, as the stream announces it. Returns its id. */
 function post(
   publish: Publish,
   content: string,
   tags: string[] = [],
   record: Record<string, unknown> = {},
-) {
+): string {
   sent += 1;
+  const id = `0190f0a0-0000-7000-8001-${String(sent).padStart(12, "0")}`;
   publish({
     serverEvent: "message",
     type: "create",
-    id: `0190f0a0-0000-7000-8001-${String(sent).padStart(12, "0")}`,
+    id,
     channelId: roadmap,
     author: bob,
     content,
@@ -78,6 +79,7 @@ function post(
     mentions: { users: tags, roles: [], everyone: false },
     ...record,
   });
+  return id;
 }
 
 async function turnOnSystemNotifications(page: Page) {
@@ -104,6 +106,55 @@ test("a tag elsewhere shows a system notification and plays the sound", async ({
   post(publish, "Just thinking out loud");
   await page.waitForTimeout(500);
   expect(await page.evaluate(() => window.shownNotifications.length)).toBe(1);
+});
+
+test("a system notification says what the deployment says of its message", async ({ page }) => {
+  const publish = await signInToWorld(page);
+  await expect(page.getByText("roadmap, unread")).toBeAttached();
+  // What the deployment writes out for each message it is asked about; none for the rest, as
+  // a deployment of a version that writes none answers.
+  const worded = new Map<string, string>();
+  const read: string[] = [];
+  await page.route(/\/api\/v1\/messages\/[^/?]+\?include=notificationTexts$/, (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").pop() ?? "";
+    read.push(id);
+    const text = worded.get(id);
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: { id },
+        included: text === undefined ? {} : { notificationTexts: [{ message: id, text }] },
+      }),
+    });
+  });
+
+  // No notification is shown yet, so nothing is read for one.
+  post(publish, `<@${me}> first`, [me]);
+  await page.waitForTimeout(500);
+  expect(read).toEqual([]);
+
+  await turnOnSystemNotifications(page);
+  const told = post(publish, `<@${me}> it was ||the butler||`, [me]);
+  worded.set(told, "@Kate it was [spoiler]");
+  await expect
+    .poll(() => page.evaluate(() => window.shownNotifications))
+    .toEqual([
+      { title: expect.stringContaining("#roadmap (Family)"), body: "@Kate it was [spoiler]" },
+    ]);
+  expect(read).toEqual([told]);
+
+  // Without the deployment's wording the app's own hides the spoiler too.
+  const unworded = post(publish, `<@${me}> or ||the cook||`, [me]);
+  await expect
+    .poll(() => page.evaluate(() => window.shownNotifications[1]?.body))
+    .toBe("@kate or [spoiler]");
+  expect(read).toEqual([told, unworded]);
+
+  // A message that tells of nothing is not read.
+  post(publish, "Just thinking out loud");
+  await page.waitForTimeout(500);
+  expect(read).toEqual([told, unworded]);
 });
 
 test("do not disturb keeps every notification and sound from the user", async ({ page }) => {

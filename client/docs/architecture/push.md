@@ -50,7 +50,8 @@ The project is `packages/mobile/android`.
    (`Accept-Language`);
 3. posts the notification, tagged `channel/message`, so `read` and `deleted` take it down. Its text
    is the one the deployment wrote out (`included.notificationTexts`), shown as given; from a
-   deployment of a version that writes none, `readable` and `recorded` make it.
+   deployment of a version that writes none, `readable` and `recorded` make it. Text holding a
+   spoiler's marker is not shown (`SpoilerMarkers`; see The phones' own wording).
 
 A `notice` pointer:
 
@@ -101,13 +102,30 @@ A build naming no relay registers for nothing. `describe` refuses there, before 
 3. shows the author, the channel, and the text the deployment wrote out
    (`included.notificationTexts`), carrying where the message is for a tap. From a deployment of a
    version that writes none, it shows the text with tags as names, or what the message holds instead
-   of text.
+   of text, which is also what it shows of text holding a spoiler's marker (see The phones' own
+   wording).
 
 - A `notice` pointer: it fetches the notice and shows its plugin's name and text.
 - A `read` or `deleted` pointer, and any failure, leaves the placeholder. The build holds no
   filtering entitlement.
 
 The `AppDelegate` posts APNs registration to the Capacitor push plugin.
+
+## The phones' own wording
+
+A deployment of a version that answers no `notificationTexts` leaves the notification code to word a
+message itself. Neither phone reads Markdown, and which markers make a spoiler is the renderer's to
+say ([Markdown](message-rendering/markdown.md#what-makes-a-spoiler)), so neither tries:
+
+- Text holding a spoiler's marker anywhere is not shown at all: `||`, `>!`, `!<`, or `\|\|`, which
+  is how a table's cell writes the first (`SpoilerMarkers.present` on Android; the same four in
+  `MessageFetcher.body` on iOS). No spoiler is written without one of them.
+- Such a message reads as one with no text of its own: what its kind records, or "New message" (on
+  iOS, "Sent an attachment" when it holds files).
+- **The trade-off:** nothing a spoiler hides is ever shown, and some texts that only look as if they
+  held one are hidden too: a table, a shell pipeline (`ls | wc || true`), code holding `||`. A
+  second and third copy of the spoiler grammar, in Java and Swift, would have to be kept in step
+  with the renderer and the server for the sake of deployments too old to write the text out.
 
 ## Testing
 

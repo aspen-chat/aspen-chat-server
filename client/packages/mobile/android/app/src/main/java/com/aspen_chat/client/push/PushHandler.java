@@ -120,7 +120,10 @@ public final class PushHandler {
         String name = nickname != null ? nickname : nameOf(author);
         String text = written(included, messageId);
         if (text == null) {
-            text = readable(message.optString("content"), included);
+            String content = message.optString("content");
+            // Text that may hold a spoiler is not shown (SpoilerMarkers): the message reads as
+            // one with no text.
+            text = SpoilerMarkers.present(content) ? "" : readable(content, included);
             if (text.trim().isEmpty()) {
                 text = recorded(message);
             }
@@ -327,7 +330,7 @@ public final class PushHandler {
 
     /**
      * The message's text as a notification shows it when the deployment has not written it
-     * out: tags as names, not tokens.
+     * out: tags as names, not tokens. Only for text that holds no spoiler's marker.
      */
     private String readable(String content, JSONObject included) {
         Matcher matcher = USER_TAG.matcher(content);

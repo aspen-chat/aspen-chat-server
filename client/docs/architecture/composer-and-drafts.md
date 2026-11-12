@@ -166,11 +166,12 @@ next message sent a reply to it. The server's side is `docs/architecture/replies
 - Sending passes `reply` to `AspenSync.sendMessage`, and clears it. A message deleted meanwhile is
   said to be in the bar, and the server refuses the send.
 - Above a reply, `ReplyLine` shows the original's author (with `@` when the reply tagged them) and a
-  line of its text (`replyPreview`: tags and custom emoji as names, spoilers masked, fences
-  dropped), which jumps to it (`JumpToMessageContext`, given by `MessageList`: in the window it is
-  flashed where it is; otherwise a channel opens around it by its route, and a thread reads around
-  it). A deleted original is said to be, as the link's state or a failed read of it finds. A reply
-  always begins its author's group (`breakBefore` in `useGroupContinuations`).
+  line of its text (`replyPreview`: tags and custom emoji as names, each spoiler the message would
+  hide as a word for one (`maskSpoilers`), fences dropped, then cut to length), which jumps to it
+  (`JumpToMessageContext`, given by `MessageList`: in the window it is flashed where it is;
+  otherwise a channel opens around it by its route, and a thread reads around it). A deleted
+  original is said to be, as the link's state or a failed read of it finds. A reply always begins
+  its author's group (`breakBefore` in `useGroupContinuations`).
 
 ## Who is typing
 

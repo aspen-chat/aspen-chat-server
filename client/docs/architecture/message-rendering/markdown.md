@@ -100,3 +100,76 @@ moves.
   colour.
 - A card for a link inside one is covered too (see
   [link and video cards](link-cards.md#links-inside-spoilers)).
+
+### What makes a spoiler
+
+- **Where markers are looked for.** In the text of one parent of the syntax tree (a paragraph, a
+  heading, a table cell, emphasis). Code is not text, so a marker in code is none. A link named by
+  its author's words, a picture, and a reference's definition are the text they were written as
+  (`remarkLiteralLinks.ts`), backslashes and all, and the markers that text holds count.
+- **A marker is two characters written as themselves.** One written with a backslash (`\|`, `\>`,
+  `\!`, `\<`) or as a character reference (`&#124;`, `&vert;`, `&gt;`) is text and opens and closes
+  nothing, in either spelling: `\|\|a\|\|` shows `||a||`. The parser alone knows how a character was
+  written, so `remarkMarkerText` (`markerText.ts`, the first plugin) keeps that from its tokens, and
+  `markersOf` is a text node's value as markers are looked for in it.
+- **A table cell is the one exception, for the pipe.** GFM ends a cell at a plain `|`, so `\|` is
+  the only way a cell writes one, and `\|\|text\|\|` is how a cell writes a spoiler. A pipe written
+  as a character reference is text there as anywhere, and so are Reddit's markers written with
+  backslashes.
+- **How markers pair** (`opening`). Each spelling's openers are tried from left to right, each
+  closing at the nearest closer after it:
+  - something between the two that is not blank (by JavaScript's `trim`) makes a spoiler, so
+    `|||a|||` hides `|a` and leaves a `|`;
+  - only blank text between them (`|| ||`) makes none, both markers are text, and the search goes on
+    from the end of the closer: `|| || then ||real||` hides `real`;
+  - nothing between them (`||||`) makes none, the first marker is text, and the search goes on from
+    the second, which may open: `||||secret||` hides `secret`;
+  - no closer in the same run of text leaves the opener, and every later one of that run, open: it
+    closes at the first closer in a later run of text of the same parent, whatever stands between,
+    code and markup included (`||**hidden**||`), or else is text.
+
+  Of the two spellings the one that opens first wins, and what follows a spoiler is read on the same
+  way. Every step ends at least a marker further on, so a long run of pipes is read once.
+
+- **A quote that is a spoiler.** A line starting `>!` parses as a quote, so a quote whose first
+  paragraph starts with `!` and holds `!<`, each written as itself, is unwrapped and given its `>`
+  back before markers are looked for.
+- **A body shown as plain text** (past `MAX_NESTING`) is read as text with no Markdown, and one
+  never parsed (`opensTooDeeply`) hides nothing.
+- `mayHoldSpoiler` tells from a body's text alone whether it can hold one: none does without `||`,
+  `!<`, or a cell's `\|\|`. `maskSpoilers` and `spoileredLinks` parse nothing else.
+
+### One reading everywhere
+
+Nothing else in the client decides what a spoiler is.
+
+- `maskSpoilers` (`maskSpoilers.ts`) writes a body out with each spoiler as a word, for a line of it
+  where nothing can be revealed. It reads the body with the plugins that decide where spoilers are
+  (`SPOILER_REMARK_PLUGINS`, the first of what `Markdown` renders with), so it hides exactly what
+  `Markdown` would.
+  - What is not in a spoiler stays as written, Markdown included: each node holding no spoiler is
+    its source, and one holding some is its children with the source between them.
+  - Nodes the plugins make record where they were written (`extentOf`, `sourceExtent.ts`): a spoiler
+    and the text left on either side share the ends of the text they were cut from.
+  - The text a spoiler was cut from reads as it is shown, not as written (an escaped `\*` as `*`),
+    since the tree does not say where in the source a character of text was. Markup around text
+    whose place the tree does not record (a bare address GFM linked after parsing) is left out.
+  - A body that can hold no spoiler is returned without being parsed, and the answers for the last
+    256 bodies that were parsed are kept, so a line in a row of a list costs a parse once.
+
+| Where a line of a message is shown      | How its spoilers are hidden                                    |
+| --------------------------------------- | -------------------------------------------------------------- |
+| The app's own wording of a notification | `describe`, through `maskSpoilers`                             |
+| A message read out as it arrives        | `announceArrivals`, through `describe`                         |
+| A reply's line                          | `replyPreview`, through `maskSpoilers`, before it is cut       |
+| A search result                         | `SearchResult`, through `maskSpoilers`                         |
+| Pins, saved messages, the activity feed | `ListedMessage` draws the body with `Markdown`                 |
+| A linked message, an echoed reply       | `EmbeddedMessage` and `EchoedReply` draw it with `Markdown`    |
+| The author's own scheduled or held text | `ScheduledMessages` and `HeldMessages`, through `maskSpoilers` |
+
+- Names (tags, custom emoji) are written after spoilers are found, since a name may hold what would
+  read as a marker.
+- The server's notification text and email digest hide the same spoilers
+  (`server/app/src/message/notification/spoilers.rs`). `spec/spoiler_vectors.json` holds texts both
+  read alike: `maskSpoilers.test.ts` and the server's tests each run every one. A change to what
+  makes a spoiler changes all three.

@@ -46,6 +46,7 @@ import { DialogHeading } from "@/features/layout/DialogHeading";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { decodeTags } from "@/features/mentions/tags";
 import { messageLink } from "@/features/messages/links";
+import { maskSpoilers } from "@/features/messages/maskSpoilers";
 import { useMessagePlace } from "@/features/messages/place";
 import { mergeResults, type SourceResults } from "@/features/search/merge";
 import { positionTime, searchUntilFound } from "@/features/search/rounds";
@@ -455,7 +456,8 @@ function SearchPanel({
 }
 
 /**
- * One message found: who wrote it and when, where, and its text with its tags as names,
+ * One message found: who wrote it and when, where, and its text with its tags as names and
+ * each spoiler as a word for one (`maskSpoilers`), since nothing here can be revealed,
  * linking to it in place (in its thread, for a reply). Run in its deployment's scope.
  */
 function SearchResult({
@@ -473,8 +475,9 @@ function SearchResult({
   const author = useUser(message.author);
   const { place, home, link, where } = useMessagePlace(message, domain);
   const roles = place?.community == null ? [] : sync.store.roles(place.community);
+  // Spoilers first: a name may hold what would read as a marker.
   const text = decodeTags(
-    message.content,
+    maskSpoilers(message.content, m.replies.spoiler),
     (id) => sync.store.user(id)?.name,
     (id) => roles.find((role) => role.id === id)?.name,
   );

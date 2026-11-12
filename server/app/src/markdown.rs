@@ -14,6 +14,19 @@ pub fn parser(content: &str) -> Parser<'_> {
     Parser::new_ext(content, options)
 }
 
+/// `text` written so that a message shows exactly it: a backslash before each character
+/// Markdown could read as markup.
+pub fn escaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_ascii_punctuation() {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Gives `each` every run of `content` that a message shows as text, never code of any kind:
 /// what stands between one piece of markup and the next, its line breaks as `\n`.
 pub fn text_runs(content: &str, mut each: impl FnMut(&str)) {

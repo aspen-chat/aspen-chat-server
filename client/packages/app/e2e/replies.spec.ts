@@ -89,6 +89,30 @@ test("a reply tags the author of what it answers, and shows it above itself", as
   await expect(page.locator(`article[data-message-id="${answered}"]`)).toHaveClass(/motion-flash/);
 });
 
+test("a reply's line hides what the message it answers hides", async ({ page }) => {
+  const publish = await signInToWorld(page);
+  await openGeneral(page);
+  // A spoiler after markers that hold nothing, pipes written with backslashes, and code.
+  const content = "the killer is ||||the butler|| not \\|\\|the cook\\|\\| or `||the maid||`";
+  publish({ serverEvent: "message", type: "create", ...message(971, bob, content, 0) });
+  const original = page.locator(`article[data-message-id="${messageId(971)}"]`);
+  await expect(original.getByRole("button", { name: "Spoiler, activate to reveal" })).toHaveCount(
+    1,
+  );
+  await expect(original.locator(".message-body")).toContainText("not ||the cook|| or ||the maid||");
+
+  publish({
+    serverEvent: "message",
+    type: "create",
+    ...message(972, bob, "I knew it", 0, { replyTo: messageId(971) }),
+  });
+  const line = page
+    .locator(`article[data-message-id="${messageId(972)}"]`)
+    .getByRole("button", { name: /^Replying to/ });
+  await expect(line).toContainText("the killer is ||[spoiler] not ||the cook|| or `||the maid||`");
+  await expect(line).not.toContainText("butler");
+});
+
 test("a reply may leave its author untagged, and Escape lets it go", async ({ page, isMobile }) => {
   const posted = await signIn(page);
   await openGeneral(page);

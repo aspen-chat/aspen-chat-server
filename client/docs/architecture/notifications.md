@@ -11,7 +11,7 @@ chime and, where allowed, shows a system notification.
 | Thread follows                 | `follows` (topic `follow:<threadId>`)                                           |
 | Deciding                       | `notifies(message)`                                                             |
 | Announcing                     | `AspenSync.onNotify`, `onPluginNotice`                                          |
-| Chime and system notifications | `NotifyOnMessages`, `src/features/notifications`                                |
+| Chime and system notifications | `NotifyOnMessages`, `tell.ts`, `messageBody.ts`, `describe.ts`                  |
 | Sounds                         | `sounds.ts`, `sounds/`, `speakers.ts`; `PlaySounds`                             |
 
 ## State
@@ -44,10 +44,37 @@ the server's clock (see [Each deployment's clock](deployments.md#each-deployment
 `NotifyOnMessages` runs for every deployment the user uses. For each message, it:
 
 - plays the chime (`chime.wav`, see [Sounds](#sounds), through the notification speaker)
-- shows the system's notification (`describe`), which opens the message, when
-  `DESKTOP_NOTIFICATIONS` is on and the browser allows
+- shows the system's notification, which opens the message, when `DESKTOP_NOTIFICATIONS` is on and
+  the browser allows
 
-It tells of plugins' notices (`onPluginNotice`) the same way (see [Plugins](plugins/index.md)).
+It tells of plugins' notices (`onPluginNotice`) the same way (see [Plugins](plugins/index.md)),
+worded by the server already. `tell` (`tell.ts`) is the order of it: nothing when quiet, then the
+chime, then the notification, described only once it is known it will be shown.
+
+### What a message's notification says
+
+- The title is who wrote it and where, from the store (`describe`).
+- The body is the deployment's wording of the message (`AspenSync.notificationText`, a
+  `GET /messages/{message}?include=notificationTexts`), as a phone's notification shows: tags and
+  emoji as names, each spoiler as a word for one, and what a message with no text records. See the
+  server's [Push](../../../docs/architecture/push.md#what-a-notification-says).
+- It is read only for a notification that will be shown: not in do not disturb, not for the
+  conversation in view, not with system notifications off or refused, not in the mobile app. The
+  chime does not wait for it.
+- `messageBody` falls back to the app's own wording (`describe`'s body) when the read fails or is
+  rate limited, answers no `notificationTexts` (a deployment of a version that writes none), or
+  takes longer than `SERVER_TEXT_WAIT_MS` (1.5 seconds).
+- Reads are budgeted for each deployment (`ReadBudget`): `TEXT_READS_AT_ONCE` (five) at once and one
+  more every `TEXT_READ_EVERY_MS` (three seconds), twenty a minute. **Why:** each is a request of
+  the user's 1200 a minute on that deployment, and a busy channel set to tell of every message can
+  post faster than that. A message past the budget is worded by the app at once.
+- A body that was waited for is shown only if the notification still would be: the user has not come
+  to look, do not disturb is still off, and the message has not been deleted.
+- The app's own wording writes tags and the community's emoji as names (`decodeTags`,
+  `decodeCustomEmoji`) and each spoiler as "[spoiler]" (`maskSpoilers`, which reads the text as
+  `Markdown` renders it; see [Markdown](message-rendering/markdown.md#spoilers)), so it never shows
+  what the server's would hide. The same wording is read out for a message arriving in a list on
+  screen (`useAnnounceArrivals`).
 
 Exceptions:
 

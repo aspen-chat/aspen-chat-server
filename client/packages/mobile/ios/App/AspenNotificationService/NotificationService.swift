@@ -313,7 +313,13 @@ final class MessageFetcher {
 
     private static func body(of message: [String: Any], included: [String: Any]) -> String {
         let content = (message["content"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !content.isEmpty {
+        // Text holding a spoiler's marker (`||`, `>!`, `!<`, or a table cell's `\|\|`) is not
+        // shown, and the message reads as one with no text. Which markers make a spoiler is the
+        // client's Markdown to say (spec/spoiler_vectors.json) and nothing here reads Markdown,
+        // so this shows nothing a spoiler hides, at the cost of hiding some texts that only look
+        // as if they held one (a table, a shell pipeline).
+        let spoilerMarkers = ["||", ">!", "!<", "\\|\\|"]
+        if !content.isEmpty && !spoilerMarkers.contains(where: { content.contains($0) }) {
             return readable(content, included: included)
         }
         switch message["kind"] as? String {
@@ -342,7 +348,8 @@ final class MessageFetcher {
         }
     }
 
-    /// The text as a notification shows it: people's tags as `@name`, roles' as `@…`.
+    /// The text as a notification shows it: people's tags as `@name`, roles' as `@…`. Only for
+    /// text that holds no spoiler's marker.
     private static func readable(_ content: String, included: [String: Any]) -> String {
         var text = content
         if let users = try? NSRegularExpression(pattern: "<@([0-9a-fA-F-]{36})>") {

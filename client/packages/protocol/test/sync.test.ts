@@ -697,6 +697,27 @@ describe("AspenSync", () => {
     expect(sync.store.community(aspen.id)?.name).toBe("Aspen!");
   });
 
+  it("reads what a deployment says a message's notification says, keeping nothing of the read", async () => {
+    const [told, unworded, gone] = [message(1), message(2), message(3)];
+    const { sync } = makeSync({
+      [`/api/v1/messages/${told.id}`]: (url) => {
+        expect(url.searchParams.get("include")).toBe("notificationTexts");
+        return json({
+          data: told,
+          included: { notificationTexts: [{ message: told.id, text: "hi @Bob :party:" }] },
+        });
+      },
+      // A deployment of a version that writes none ignores the name.
+      [`/api/v1/messages/${unworded.id}`]: () => json({ data: unworded, included: {} }),
+      [`/api/v1/messages/${gone.id}`]: () =>
+        json({ code: "notFound", title: "Not found", status: 404 }, 404),
+    });
+    await expect(sync.notificationText(told.id)).resolves.toBe("hi @Bob :party:");
+    await expect(sync.notificationText(unworded.id)).resolves.toBeUndefined();
+    await expect(sync.notificationText(gone.id)).rejects.toMatchObject({ code: "notFound" });
+    expect(sync.store.message(told.id)).toBeUndefined();
+  });
+
   it("reports a failed bootstrap and can be started again", async () => {
     let attempts = 0;
     const timers = heldTimers();

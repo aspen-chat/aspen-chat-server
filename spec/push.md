@@ -265,7 +265,11 @@ For a push, the notification code:
 ### The notification's text
 
 The deployment writes out what a message's notification says, so the notification code interprets
-nothing of a message's text. `include=notificationTexts` on the fetch answers
+nothing of a message's text. Whatever shows a notification with nothing but the message to go on
+reads it: the phones' notification code here, and Aspen's web and desktop client for the system's
+notification of a message that arrives while it is open
+(`GET /api/v1/messages/{message}?include=notificationTexts`), which words the message itself only
+when the read fails or is slow. `include=notificationTexts` on the fetch answers
 `included.notificationTexts`, a list of `{ "message": "<message id>", "text": "…" }` with one entry
 per message of the read. `text` is plain text, shown as given, in the language the fetch asks for
 with `Accept-Language`:
@@ -274,7 +278,10 @@ with `Accept-Language`:
   `@name`, each emoji of its community (`<:id>`) as `:name:`, and `@…` or `:…:` where the message
   names something its reader could not be shown: a person or role it does not tag, an emoji of
   another community or since deleted. Code (a code span or block) is left as written, and so is the
-  text's Markdown;
+  text's Markdown. A spoiler (`||text||` or `>!text!<`, where Aspen's client would draw one) is
+  written as a word for one, "[spoiler]" in English, in place of its markers and everything between
+  them, code included, so a notification never shows what the message hides. Text that is nothing
+  but spoilers is still text;
 - for a message with no text, what its kind records: a poll, a poll's closing, a join, or a
   community become large (with what its `growth` changed);
 - for a message with no text whose kind records nothing in words, what it holds: "Sent an image" for
@@ -284,7 +291,12 @@ with `Accept-Language`:
 The notification code writes the text out in words of its own when `included` has no
 `notificationTexts`, which is how a deployment of a version without it answers, an `include` name it
 does not know being ignored: tags of the people in `included.users` as `@name`, any other tag as
-`@…`, and by its `kind` a message with no text.
+`@…`, and by its `kind` a message with no text. Text that holds a spoiler's marker anywhere (`||`,
+`>!`, `!<`, or `\|\|`, a table cell's spelling of the first) it does not show at all, and words the
+message as one with no text. Which markers make a spoiler is the client's Markdown to say
+(`spec/spoiler_vectors.json` holds texts the client and the deployment read alike) and the
+notification code reads no Markdown, so it shows nothing a spoiler hides at the cost of hiding some
+texts that only look as if they held one, a table or a shell pipeline among them.
 
 A notification it posts carries `{ origin, channel, message, community, parentChannel }`, the
 channel's community (`null` in a DM) and, for a message in a thread, the channel the thread is in,

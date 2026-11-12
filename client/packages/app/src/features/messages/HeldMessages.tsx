@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Button } from "react-aria-components";
 import { useHeldMessages, useSync } from "@/api/hooks";
 import { secondaryButtonClass } from "@/features/invites/dialog";
+import { maskSpoilers } from "@/features/messages/maskSpoilers";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -40,7 +41,7 @@ function HeldRow({ entry }: { entry: HeldEntry }) {
   const count = message.attachments.length;
   const shown = [
     message.kind === "message" ? null : m.held.kind[message.kind],
-    message.content === "" ? null : message.content,
+    message.content === "" ? null : maskSpoilers(message.content, m.replies.spoiler),
     count === 0 ? null : format(m.held.files, { count }),
   ]
     .filter((part) => part !== null)

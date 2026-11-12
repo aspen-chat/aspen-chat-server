@@ -86,6 +86,52 @@ describe("Markdown", () => {
     expect(html).toContain('href="https://x.example/"');
   });
 
+  it("hides what follows markers that hold nothing or only blank text", () => {
+    const hidden = (content: string) =>
+      Array.from(
+        render(content).matchAll(/<span inert="" class="spoiler-content">(.*?)<\/span>/g),
+        (match) => match[1],
+      );
+    expect(hidden("||||secret||")).toEqual(["secret"]);
+    expect(render("||||secret||")).toContain("<p>||<span");
+    expect(hidden("|| || then ||real||")).toEqual(["real"]);
+    expect(render("|| || then ||real||")).toContain("<p>|| || then <span");
+    expect(hidden("|| || ||\t|| >!!< >!one!< ||two||")).toEqual(["one", "two"]);
+    // The first opener still closes at the nearest closer, and blank markers hide nothing.
+    expect(hidden("|||a|||")).toEqual(["|a"]);
+    expect(hidden("|| || and >! !<")).toEqual([]);
+  });
+
+  it("reads no marker in a character written with a backslash or as a reference", () => {
+    const spoilers = (content: string) => (render(content).match(/role="button"/g) ?? []).length;
+    expect(render("\\|\\|shown\\|\\|")).toBe('<div class="message-body"><p>||shown||</p></div>');
+    expect(render("&#124;&vert;shown|&#x7c;")).toBe(
+      '<div class="message-body"><p>||shown||</p></div>',
+    );
+    for (const shown of [
+      "\\|\\|a|| b",
+      "||a\\|\\| b",
+      "|\\|a|\\|",
+      "\\>!a!< b",
+      "x >\\!a!< b",
+      "x >!a\\!< b",
+      "x >!a!\\< b",
+      "&gt;!a!&lt;",
+      "*\\|\\|a\\|\\|* https://example.org",
+    ]) {
+      expect(spoilers(shown), shown).toBe(0);
+    }
+    // A plain marker beside an escaped one still pairs with another plain one.
+    expect(render("||a\\|\\| b|| c")).toContain(
+      '<span inert="" class="spoiler-content">a|| b</span>',
+    );
+    // A table cell can write a pipe only as `\|`, so there that spells a spoiler.
+    const table = render("| a |\n|---|\n| \\|\\|x\\|\\| &#124;&#124;y&#124;&#124; \\>\\!z\\!\\< |");
+    expect(table).toContain('<span inert="" class="spoiler-content">x</span>');
+    expect(table).toContain("||y|| &gt;!z!&lt;");
+    expect((table.match(/role="button"/g) ?? []).length).toBe(1);
+  });
+
   it("hides spoilers in either spelling until revealed, keeping markup inside them", () => {
     const html = render("the killer is ||**the butler**|| obviously");
     expect(html).toContain('role="button"');

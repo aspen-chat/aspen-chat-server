@@ -1436,7 +1436,10 @@ run time (`aspen_locale::PseudoLocales`, laid over the catalogue as a rust-i18n 
 accents every letter, doubles every vowel, and brackets the whole, which shows untranslated text and
 whether a layout takes longer strings, and `ar-XB` sets each word right to left, which exercises
 right-to-left layout. The client has the same two (`client/packages/app/src/i18n/pseudo.ts`), and
-both pass `spec/pseudo_locale_vectors.json`; change the three together.
+both pass `spec/pseudo_locale_vectors.json`; change the three together. What a notification or an
+email digest hides as a spoiler is likewise what the client renders as one: both are written out by
+`app::message::notification::written_out`, and `notification::spoilers`, the client's
+`remarkSpoilers.ts`, and `spec/spoiler_vectors.json` change together.
 
 ### Rules
 

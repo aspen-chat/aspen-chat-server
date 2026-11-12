@@ -104,13 +104,17 @@ function Original({
   // Tags read as names, as the message shows them; one whose record is not here reads as a tag
   // with no name rather than as its id.
   const roles = home.community === null ? [] : store.roles(home.community);
-  const text = decodeTags(
-    original.content,
-    (id) => store.user(id)?.name ?? "…",
-    (id) => roles.find((role) => role.id === id)?.name ?? "…",
-  );
   const emoji = home.community === null ? [] : store.customEmoji(home.community);
-  const preview = replyPreview(decodeCustomEmoji(text, emoji), m.replies.spoiler);
+  const preview = replyPreview(original.content, m.replies.spoiler, (text) =>
+    decodeCustomEmoji(
+      decodeTags(
+        text,
+        (id) => store.user(id)?.name ?? "…",
+        (id) => roles.find((role) => role.id === id)?.name ?? "…",
+      ),
+      emoji,
+    ),
+  );
   const tagged = reply.mentions.users.includes(original.author);
   const contents = (
     <>

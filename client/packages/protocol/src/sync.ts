@@ -1912,6 +1912,22 @@ export class AspenSync {
   }
 
   /**
+   * What the deployment says a notification of `messageId` says, in this client's language
+   * (`included.notificationTexts`, `spec/push.md`): the message's text with its tags and emoji
+   * as names and its spoilers left out, or what a message with no text records. `undefined`
+   * from a deployment of a version that writes none. Nothing is put in the store.
+   */
+  async notificationText(messageId: string): Promise<string | undefined> {
+    const result = await this.#client.api.GET("/api/v1/messages/{message}", {
+      params: { path: { message: messageId }, query: { include: ["notificationTexts"] } },
+    });
+    if (result.data === undefined) {
+      throw new ApiProblemError(problemOf(result.error, result.response));
+    }
+    return result.data.included.notificationTexts?.find((text) => text.message === messageId)?.text;
+  }
+
+  /**
    * Opens a DM with the people named: with one person their one-to-one DM, which the server
    * returns as it is when it exists; with more, a new group DM.
    */

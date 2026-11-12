@@ -47,8 +47,10 @@ It goes by the kind alone, which never changes, so no `Update` event carries it.
 deployment of a version without the field judges by the kinds that only recorded something then.
 
 A poll's result, a join, and a community growing large tell as any message does, each described in
-the reader's language since it has no text of its own: by `describe` in the client, and for a
-phone's notification by the server (`include=notificationTexts`; see [Push](push.md)).
+the reader's language since it has no text of its own: for a notification by the server
+(`include=notificationTexts`, which phones and the web client's system notification both read; see
+[Push](push.md)), and by `describe` in the client where it announces a message aloud or cannot read
+the server's wording in time.
 
 Do not disturb outranks them all: while the user is in it, nothing tells them, and no phone is woken
 (see [Presence](event-routing/presence.md#choosing-a-status)). The activity feed still lists what

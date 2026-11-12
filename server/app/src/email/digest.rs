@@ -22,6 +22,7 @@ use super::EmailAccount;
 use super::outbox::{self, Mail};
 use super::render::{Item, Letter, Section};
 use crate::context::GlobalServerContext;
+use crate::message::notification;
 use crate::message::tokens::{self, Token};
 use crate::t;
 use crate::{ChannelId, CommunityId, CustomEmojiId, UserId};
@@ -45,8 +46,11 @@ pub const PER_PLACE: i64 = 5;
 pub const MAX_PLACES: i64 = 20;
 /// The most unread messages of one place counted; more reads as this many.
 const MAX_COUNTED: i64 = 10_000;
-/// The longest excerpt of one message, in characters.
+/// The longest excerpt of one message, in characters, each spoiler counting as one.
 const EXCERPT_CHARS: usize = 300;
+/// What stands for a spoiler in an excerpt until its letter is written, in whatever language
+/// that is: a character an excerpt holds nowhere else.
+const SPOILER: char = '\u{fffc}';
 /// How often the digests that are due are made (`make_step`).
 pub const TICK: Duration = Duration::from_secs(60);
 /// How many digests one step makes.
@@ -97,7 +101,8 @@ pub enum PlaceKind {
 pub struct Excerpt {
     pub author: String,
     pub at: DateTime<Utc>,
-    /// The message's text as plain text, cut short; empty for a message of attachments alone.
+    /// The message's text as plain text, cut short, with [`SPOILER`] for each spoiler; empty
+    /// for a message of attachments alone.
     pub text: String,
 }
 
@@ -128,7 +133,7 @@ impl Digest {
                             text: if message.text.is_empty() {
                                 t!("digestNoText").into()
                             } else {
-                                message.text.clone()
+                                message.text.replace(SPOILER, &t!("notificationSpoiler"))
                             },
                         })
                         .collect(),
@@ -606,10 +611,21 @@ impl Names {
         }
     }
 
-    /// `content` as plain text, its tags and custom emoji by name, cut to [`EXCERPT_CHARS`].
+    /// `content` as plain text, cut to [`EXCERPT_CHARS`]: its tags and custom emoji by name,
+    /// and [`SPOILER`] for each spoiler. A message is written out as a notification's is
+    /// (`notification::written_out`), which leaves nothing of a spoiler in the text, and only
+    /// then read as Markdown for its plain text and cut, so no cut falls inside one.
     fn excerpt(&self, content: &str) -> String {
+        // The message's own use of the character that stands for a spoiler would read as one.
+        let content = content.replace(SPOILER, "\u{fffd}");
+        // Names are escaped so that the Markdown read below gives them back as they are.
+        let written = notification::written_out(
+            &notification::parts(&content),
+            SPOILER.encode_utf8(&mut [0; 4]),
+            |token| self.name(token).map(|name| crate::markdown::escaped(&name)),
+        );
         let mut text = String::new();
-        for event in crate::markdown::parser(content) {
+        for event in crate::markdown::parser(&written) {
             match event {
                 Event::Text(t) | Event::Code(t) => text.push_str(&t),
                 Event::SoftBreak
@@ -619,8 +635,7 @@ impl Names {
                 _ => {}
             }
         }
-        let named = self.name_tokens(&text);
-        let collapsed = named.split_whitespace().collect::<Vec<_>>().join(" ");
+        let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
         if collapsed.chars().count() <= EXCERPT_CHARS {
             return collapsed;
         }
@@ -629,18 +644,18 @@ impl Names {
         cut
     }
 
-    /// `text` with each `<@user>`, `<@&role>`, and `<:emoji>` written as the name it stands for;
-    /// one that names nothing known stays as written.
-    fn name_tokens(&self, text: &str) -> String {
-        tokens::rewritten(text, |token| match token {
+    /// What `token` reads as: `@name` for a person or role, `:name:` for an emoji, or nothing
+    /// for one that names nothing known, which stays as written.
+    fn name(&self, token: Token) -> Option<String> {
+        match token {
             Token::User(id) => self.users.get(&id).map(|name| format!("@{name}")),
             Token::Role(id) => self.roles.get(&id.0).map(|name| format!("@{name}")),
             Token::Emoji(id) => self.emoji.get(&id).map(|name| format!(":{name}:")),
-        })
+        }
     }
 }
 
-/// The custom emoji `content` names: every reference `name_tokens` would find there.
+/// The custom emoji `content` names.
 fn custom_emoji_in(content: &str) -> Vec<CustomEmojiId> {
     let mut found = Vec::new();
     tokens::each(content, |token| {
@@ -754,7 +769,7 @@ mod tests {
         );
         assert_eq!(custom_emoji_in(&text), vec![first, second]);
         assert_eq!(
-            names().name_tokens(&format!("<:) {}", reference(first))),
+            names().excerpt(&format!("<:) {}", reference(first))),
             "<:) :party:"
         );
     }
@@ -766,6 +781,103 @@ mod tests {
         let emoji = uuid::Uuid::from_u128(3);
         let text = format!("**Hi** <@{user}> and <@&{role}> <:{emoji}>\n\n- one\n- `two`");
         assert_eq!(names().excerpt(&text), "Hi @Alex and @Mods :party: one two");
+    }
+
+    /// A name is shown as it is, whatever Markdown would make of it, and code names nothing.
+    #[test]
+    fn names_are_not_read_as_markdown() {
+        let user = UserId(uuid::Uuid::from_u128(1));
+        let mut names = names();
+        names.users.insert(user, "*Al_ex* ||x|| `".to_string());
+        assert_eq!(
+            names.excerpt(&format!("<@{}> and `<@{}>` b`", user.0, user.0)),
+            format!("@*Al_ex* ||x|| ` and <@{}> b`", user.0)
+        );
+    }
+
+    /// What the excerpt of `content` reads as in a letter.
+    fn lettered(content: &str) -> String {
+        let digest = Digest {
+            time_zone: "UTC".to_string(),
+            places: vec![Place {
+                kind: PlaceKind::Dm {
+                    name: "Alex".to_string(),
+                },
+                link: String::new(),
+                messages: vec![Excerpt {
+                    author: "Alex".to_string(),
+                    at: DateTime::UNIX_EPOCH,
+                    text: names().excerpt(content),
+                }],
+                more: 0,
+            }],
+            more_places: 0,
+        };
+        digest.letter("Aspen").sections[0].items[0].text.clone()
+    }
+
+    #[test]
+    fn spoilers_are_not_shown() {
+        assert_eq!(
+            lettered("the killer is ||**the butler**|| and >!the cook!<"),
+            "the killer is [spoiler] and [spoiler]"
+        );
+        // Text that is all spoilers is still text.
+        assert_eq!(lettered("||secret||"), "[spoiler]");
+        // Markers nothing pairs hide nothing, and the message's own stand-in is no spoiler.
+        assert_eq!(lettered("a || b \u{fffc} c"), "a || b \u{fffd} c");
+    }
+
+    /// A spoiler takes what it holds with it: a tag, an emoji, code.
+    #[test]
+    fn a_spoiler_beside_names_hides_only_its_own() {
+        let user = uuid::Uuid::from_u128(1);
+        let emoji = uuid::Uuid::from_u128(3);
+        let content = format!("<:{emoji}>||<@{user}> did `it` <:{emoji}>||<@{user}> <:{emoji}>");
+        assert_eq!(lettered(&content), ":party:[spoiler]@Alex :party:");
+    }
+
+    /// Markers in code are code, and a spoiler hides the code it holds.
+    #[test]
+    fn code_holding_markers_is_shown_as_code() {
+        assert_eq!(
+            lettered("`a || b` and `||c||` then ||d `e` f||\n\n```\n||g||\n```"),
+            "a || b and ||c|| then [spoiler] ||g||"
+        );
+    }
+
+    /// The spoiler is hidden before the excerpt is cut, so a cut leaves no part of one.
+    #[test]
+    fn a_cut_never_falls_inside_a_spoiler() {
+        let before = "ж".repeat(EXCERPT_CHARS - 20);
+        let secret = "s".repeat(EXCERPT_CHARS);
+        let excerpt = lettered(&format!("{before} ||{secret}|| after {secret}"));
+        assert!(excerpt.starts_with(&format!("{before} [spoiler] after sss")));
+        assert!(excerpt.ends_with('…'));
+        assert!(!excerpt.contains("||"));
+        // Unpaired, the same text is cut as any other.
+        let cut = lettered(&format!("{before} ||{secret}"));
+        assert_eq!(cut.chars().count(), EXCERPT_CHARS);
+        assert!(cut.ends_with(" ||ssssssssssssssss…"), "{cut}");
+    }
+
+    /// The word for a spoiler is the letter's language's, whatever the excerpt was made in.
+    #[tokio::test]
+    async fn a_spoiler_is_named_in_the_letters_language() {
+        let excerpt = names().excerpt("a ||b|| c");
+        assert_eq!(excerpt, format!("a {SPOILER} c"));
+        for locale in ["en", "es", crate::locale::ACCENTED] {
+            let (word, lettered) = crate::locale::scope(locale, async {
+                (t!("notificationSpoiler"), lettered("a ||b|| c"))
+            })
+            .await;
+            assert_eq!(lettered, format!("a {word} c"));
+        }
+        let accented = crate::locale::scope(crate::locale::ACCENTED, async {
+            t!("notificationSpoiler").into_owned()
+        })
+        .await;
+        assert_ne!(accented, t!("notificationSpoiler"));
     }
 
     #[test]

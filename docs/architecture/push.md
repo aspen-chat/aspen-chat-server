@@ -59,10 +59,48 @@ Every push is Web Push.
 
 A pointer carries no text. The phone fetches the message, and with `include=notificationTexts` the
 read answers what its notification says, written out (`app::message::notification`,
-`included.notificationTexts`), so the phones' notification code parses nothing.
+`included.notificationTexts`), so the phones' notification code parses nothing. The web and desktop
+client reads the same for the system notification of a message that arrives while it is open
+(`AspenSync.notificationText`), so every notification of a message reads alike.
 
 - A message's text has its tokens (`app::message::tokens`) written as names outside code: `@name`
   for a person or role, `:name:` for an emoji. Its Markdown stays as written.
+- A spoiler is written as a word for one (`notificationSpoiler`, in the request's language) in place
+  of its markers and all it holds, code and tags included, and nothing in it is looked up. Text that
+  is all spoilers is still the message's text, so it never reads "New message". An attachment's
+  spoiler mark changes nothing here: a message of files alone says what kind they are and shows none
+  of them.
+- A spoiler is whatever the client draws as one. `notification::spoilers` reads pulldown-cmark's
+  events into the tree the client's renderer has and looks through it as `remarkSpoilers.ts` does
+  (the client's
+  [Markdown](../../client/docs/architecture/message-rendering/markdown.md#what-makes-a-spoiler) has
+  the grammar in full):
+  - markers pair within one parent's text, across markup and code but never from inside code;
+  - a marker is two characters written as themselves: one written with a backslash (`\|`) or as a
+    character reference (`&#124;`) is text, but for a table cell's `\|`, the only way a cell writes
+    a pipe, so `\|\|text\|\|` is a cell's spoiler. pulldown-cmark starts a new text after each
+    escape's backslash and gives a reference as text that differs from its source, which is how
+    `Builder::text` tells them;
+  - openers are tried from left to right, each closing at the nearest closer after it (`opening`).
+    After markers holding only blank text (`|| ||`) the search goes on from the end of the closer,
+    and after markers holding nothing (`||||`) from the second, which may open; an opener nothing
+    closes in its own text closes in a later text of the same parent, or not at all;
+  - a named link, a picture, and a definition are the text they were written as;
+  - a quote starting `!` and holding `!<`, each written as itself, is a `>!` spoiler;
+  - a message nested deeper than the client draws (`MAX_NESTING`) is read with no Markdown, or, when
+    its lines open too many quotes and lists, with no spoilers.
+
+  `spec/spoiler_vectors.json` holds texts both read alike, which the tests of each run; change the
+  two together.
+
+- Where pulldown-cmark and the client's parser build different trees the two can differ. What
+  pulldown-cmark reports nothing of is not read: a definition of a label already defined, and a
+  table cell past its table's width, both of which the client shows. A table too large for the
+  client to draw is code to it and a table here. In each the server may show a spoiler as written; a
+  spoiler is a courtesy of its author's, not a secret, and the message itself is readable by whoever
+  is told.
+- The email digest's excerpts are written out by the same function (`notification::written_out`), so
+  they hide the same spoilers (see [the daily digest](email/digest.md#what-a-digest-holds)).
 - A person or role is named only when the message tags it (`Message.mentions`, what its author was
   allowed to tag) or is its author, and an emoji only when it is live and of the channel's own
   community. Anything else reads `@…` or `:…:`, so a notification names nothing its reader could not

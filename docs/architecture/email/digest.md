@@ -57,6 +57,18 @@ never through its history.
 | Messages per place | The five earliest, plus how many more it holds   |
 | Message length     | 300 characters of plain text                     |
 
-- Text has tags and custom emoji by name (`Names::excerpt`).
+An excerpt (`Names::excerpt`) is a message's text written out for a reader outside the app, as a
+notification's is (`notification::written_out`; see
+[what a notification says](../push.md#what-a-notification-says)), and then read as Markdown for its
+plain text:
+
+- Tags and custom emoji outside code are written by name, escaped so that the Markdown read gives
+  each name back as it is. One that names nothing known stays as written.
+- A spoiler is not shown: `written_out` puts one character (`digest::SPOILER`) in place of its
+  markers and all it holds, and the letter writes that as a word for one (`notificationSpoiler`), in
+  the letter's language, when the mail is written. A message that holds that character itself has it
+  replaced first.
+- The excerpt is cut to length after its spoilers are gone, a spoiler counting as one character, so
+  no cut shows part of one.
 - Each place links to itself in the web client (`public_url`).
 - The digest says how many more places hold something.

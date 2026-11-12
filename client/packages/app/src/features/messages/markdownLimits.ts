@@ -85,6 +85,9 @@ export function remarkLimits() {
         lang: null,
         value: start === undefined || end === undefined ? "" : source.slice(start, end),
       };
+      if (table.position !== undefined) {
+        code.position = table.position;
+      }
       parent.children[index] = code;
     }
   };

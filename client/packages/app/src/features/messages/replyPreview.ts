@@ -1,18 +1,24 @@
+import { maskSpoilers } from "@/features/messages/maskSpoilers";
+
 /** The most characters of a message a reply's line keeps; the line cuts it shorter to fit. */
 export const REPLY_PREVIEW_MAX_CHARS = 200;
 
-/** Discord's `||text||` and Reddit's `>!text!<`, as `remarkSpoilers` reads them, across lines. */
-const SPOILER = /\|\|[\s\S]*?\|\||>![\s\S]*?!</g;
 /** The lines that open and close a fenced code block. */
 const FENCE = /^[ \t]*(?:```|~~~).*$/gm;
 
 /**
- * What a reply's line shows of the message it answers, from that message's text with its tags
- * and custom emoji already written out as names: one line, each spoiler as `spoiler` so the line
- * never shows what it hides, and code fences left out.
+ * What a reply's line shows of the message it answers, from that message's body: one line,
+ * each spoiler as `spoiler` so the line never shows what it hides (`maskSpoilers`, before the
+ * line is cut, so no cut falls inside one), the tags and custom emoji of what is left written
+ * out by `named`, and code fences left out. Names are written after spoilers are found, since
+ * a name may hold what would read as a marker.
  */
-export function replyPreview(text: string, spoiler: string): string {
-  const line = text.replace(FENCE, "").replace(SPOILER, spoiler).replace(/\s+/g, " ").trim();
+export function replyPreview(
+  content: string,
+  spoiler: string,
+  named: (text: string) => string,
+): string {
+  const line = named(maskSpoilers(content, spoiler)).replace(FENCE, "").replace(/\s+/g, " ").trim();
   const chars = Array.from(line);
   return chars.length > REPLY_PREVIEW_MAX_CHARS
     ? chars.slice(0, REPLY_PREVIEW_MAX_CHARS).join("")

@@ -544,6 +544,19 @@ same commit, as with comments.
   text for a piece of a route. A bot command's pattern is compiled through `compilePattern`
   (`src/features/commands/pattern.ts`), which gives `\d`, `\w`, `\s`, `\b`, and `.` the server's
   meaning; it, the server's check, and `spec/bot_command_pattern_vectors.json` change together.
+- A spoiler is found by `remarkSpoilers` alone, reading each text as `markersOf` gives it
+  (`markerText.ts`: a marker character written with a backslash or as a character reference is none,
+  but for a table cell's `\|`). Every line of a message shown outside it (a notification's wording,
+  a reply's line, a search result, a scheduled or held message's row) masks through `maskSpoilers`
+  (`src/features/messages/maskSpoilers.ts`), never a pattern of its own, and whoever only needs to
+  know whether a body can hold one asks `mayHoldSpoiler`; these, the server's
+  `notification::spoilers`, and `spec/spoiler_vectors.json` change together. A plugin that makes,
+  splits, or joins text nodes before `remarkSpoilers` records where they were written (`extentOf`)
+  and carries their markers (`sliceText`, `appendText`).
+- A system notification says what the deployment says of the message (`AspenSync.notificationText`),
+  read only once it is certain to be shown, within `SERVER_TEXT_WAIT_MS` and `ReadBudget`; past
+  either, or from a deployment that says nothing, it says the app's own wording (`describe`), which
+  names emoji and masks spoilers too.
 - A switch or table over a generated union names every member (`Record<Union, …>`, or a `default`
   that is `satisfies never`) and says what a value this build's types lack shows as, since a newer
   deployment may send one (`kindActions`, `channelGlyphKind`).

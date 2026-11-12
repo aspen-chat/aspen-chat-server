@@ -1,5 +1,7 @@
 import type { Nodes, Parent, Root, RootContent, Text } from "mdast";
 import { SKIP, visit } from "unist-util-visit";
+import { appendText } from "@/features/messages/markerText";
+import { extentOf } from "@/features/messages/sourceExtent";
 
 /**
  * The syntax that names a link with words of its author's choosing: `[text](url)`,
@@ -18,7 +20,8 @@ const NAMED = new Set(["link", "linkReference", "image", "imageReference", "defi
  * by `remarkBareLinks` with the server's rules. GFM ends one only at whitespace or `<`, so in
  * `||https://example.org||` it would take the spoiler's closing marker into the address. A
  * definition line, a block of its own, becomes a paragraph. The literal text joins the text
- * beside it, so it is read on as typed text is.
+ * beside it, so it is read on as typed text is, and the text made knows where it was written
+ * (`extentOf`), for whoever writes the message out again (`maskSpoilers`).
  */
 export function remarkLiteralLinks() {
   return (tree: Root, file: { value: unknown }) => {
@@ -42,6 +45,11 @@ export function remarkLiteralLinks() {
       const text: Text = { type: "text", value: written };
       const literal: RootContent =
         node.type === "definition" ? { type: "paragraph", children: [text] } : text;
+      // A literal link GFM found after parsing has no position to hand on.
+      if (node.position !== undefined) {
+        text.position = node.position;
+        literal.position = node.position;
+      }
       parent.children.splice(index, 1, literal);
       return [SKIP, index + 1];
     });
@@ -64,7 +72,10 @@ function writtenAs(node: Nodes, source: string): string | null {
   return only?.type === "text" ? only.value : null;
 }
 
-/** Joins each run of adjacent text nodes into one. */
+/**
+ * Joins each run of adjacent text nodes into one, written from the first's start to the
+ * last's end, reading for spoiler markers as its parts did (`markersOf`).
+ */
 function joinText(tree: Root) {
   visit(tree, (node) => {
     if (!("children" in node)) {
@@ -75,7 +86,11 @@ function joinText(tree: Root) {
       const here = children[i];
       const before = children[i - 1];
       if (here?.type === "text" && before?.type === "text") {
-        before.value += here.value;
+        before.data = {
+          ...before.data,
+          extent: { start: extentOf(before).start, end: extentOf(here).end },
+        };
+        appendText(before, here);
         children.splice(i, 1);
       }
     }

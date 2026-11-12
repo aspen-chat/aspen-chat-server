@@ -23,5 +23,7 @@ Each deployment is searched through its own `AspenSync.searchMessages`.
 ## Results
 
 - Each result renders in its deployment's `SourceScope`.
-- A result is a plain-text preview with tags as names (`decodeTags`).
+- A result is a plain-text preview with tags as names (`decodeTags`) and each spoiler as a word for
+  one (`maskSpoilers`; see [Markdown](message-rendering/markdown.md#one-reading-everywhere)), since
+  nothing in a result can be revealed.
 - **Why:** a result is a link, and a message's Markdown may hold links of its own.
