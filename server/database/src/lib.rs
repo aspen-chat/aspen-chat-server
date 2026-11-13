@@ -27,6 +27,11 @@
 //! mode is the OpenSSL setting libpq makes for it: no verification, verification without the
 //! host name, or OpenSSL's full verification. What is this crate's own is reading the TLS
 //! parameters out of `database_url`, which its tests hold to tokio-postgres's reading of the rest.
+//!
+//! `connect_timeout` is [`CONNECT_TIMEOUT`] unless `database_url` gives one, `0` waiting without
+//! a limit as in libpq. Without one, a connection opened while the database is unreachable waits on
+//! the operating system, which on Linux gives up on an unanswered connection after about two
+//! minutes, and so does the request that opened it.
 
 pub mod latency;
 
@@ -44,6 +49,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_postgres::config::SslMode;
+
+/// How long each attempt to open a connection may take, unless `database_url`'s
+/// `connect_timeout` says otherwise.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Why `database_url` cannot be connected with.
 #[derive(Debug, thiserror::Error)]
@@ -151,6 +160,9 @@ impl std::str::FromStr for Database {
             }
         };
         config.ssl_mode(ssl_mode);
+        if !tls.connect_timeout_given {
+            config.connect_timeout(CONNECT_TIMEOUT);
+        }
         let tls = connector(
             check,
             roots.unwrap_or(Roots::System),
@@ -255,23 +267,30 @@ pub enum ConnectError {
     Connection(#[from] diesel::ConnectionError),
 }
 
-/// The libpq TLS parameters tokio-postgres does not read.
+/// The libpq TLS parameters tokio-postgres does not read, and whether `connect_timeout` was
+/// given, since tokio-postgres reads its `0` as no limit, the same as leaving it out.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct TlsParams {
     mode: Option<String>,
     root_cert: Option<String>,
     cert: Option<String>,
     key: Option<String>,
+    connect_timeout_given: bool,
 }
 
 impl TlsParams {
-    /// Takes `key`'s value when it is one of these, answering whether it was.
+    /// Takes `key`'s value when it is one of these, answering whether it was. `connect_timeout`
+    /// is noted and left for tokio-postgres.
     fn take(&mut self, key: &str, value: String) -> bool {
         let slot = match key {
             "sslmode" => &mut self.mode,
             "sslrootcert" => &mut self.root_cert,
             "sslcert" => &mut self.cert,
             "sslkey" => &mut self.key,
+            "connect_timeout" => {
+                self.connect_timeout_given = true;
+                return false;
+            }
             _ => return false,
         };
         *slot = Some(value);
@@ -471,6 +490,29 @@ mod tests {
         let (rest, tls) = split("postgres://db/aspen");
         assert_eq!(rest, "postgres://db/aspen");
         assert_eq!(tls, TlsParams::default());
+    }
+
+    #[test]
+    fn connects_within_ten_seconds_unless_told_otherwise() {
+        let timeout = |url: &str| {
+            url.parse::<Database>()
+                .unwrap()
+                .config
+                .get_connect_timeout()
+                .copied()
+        };
+        assert_eq!(timeout("postgres://db/aspen"), Some(CONNECT_TIMEOUT));
+        assert_eq!(timeout("host=db user=aspen"), Some(CONNECT_TIMEOUT));
+        assert_eq!(
+            timeout("postgres://db/aspen?connect_timeout=3"),
+            Some(Duration::from_secs(3))
+        );
+        assert_eq!(
+            timeout("host=db connect_timeout=30"),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(timeout("postgres://db/aspen?connect_timeout=0"), None);
+        assert_eq!(timeout("host=db connect_timeout=0"), None);
     }
 
     #[test]
