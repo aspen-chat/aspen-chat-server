@@ -32,6 +32,10 @@ It takes libpq's TLS parameters:
 | `sslrootcert`       | A PEM file of the authorities to trust, or `system`.                                                                                                           |
 | `sslcert`, `sslkey` | A client certificate and its key.                                                                                                                              |
 
+Each attempt to open a connection gives up after 10 seconds unless `connect_timeout` says
+otherwise; `connect_timeout=0` waits as long as the operating system does, about two minutes on
+Linux when PostgreSQL does not answer.
+
 `aspen-migrate` and the operator commands read it the same way. See
 [Network exposure](../installing/network-exposure.md#postgresql) for how to set PostgreSQL up for
 TLS.
