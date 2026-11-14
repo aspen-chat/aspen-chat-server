@@ -7,6 +7,7 @@ import { DmHeader } from "@/features/dms/DmHeader";
 import { DmPluginNotice } from "@/features/plugins/Annotations";
 import { useDmTitle } from "@/features/dms/useDmTitle";
 import { Composer } from "@/features/messages/Composer";
+import { DropZone } from "@/features/messages/DropZone";
 import { PinsButton } from "@/features/messages/PinsButton";
 import { SearchButton } from "@/features/search/SearchDialog";
 import { MessageList } from "@/features/messages/MessageList";
@@ -115,35 +116,37 @@ export function ChannelScreen() {
       <main
         className={`${threadId === undefined && starterId === undefined ? "flex" : "hidden md:flex"} min-h-0 min-w-0 flex-1 flex-col`}
       >
-        {isDm(channel) ? (
-          <DmHeader channel={channel} />
-        ) : (
-          <ChannelHeader
-            communityId={communityId ?? ""}
-            channelId={channel.id}
-            glyph="#"
-            name={channel.name}
-          >
-            <SearchButton
-              channelId={channelId}
-              channelName={channel.name}
-              communityId={communityId ?? null}
-            />
-            <PinsButton channelId={channelId} channelName={channel.name} home={home} />
-          </ChannelHeader>
-        )}
-        {isDm(channel) && <DmPluginNotice />}
-        {isDm(channel) && <DmCall channel={channel} />}
-        {loadError !== null && (
-          <p role="alert" className="bg-danger-soft px-4 py-2 text-sm text-danger">
-            {loadError}
-          </p>
-        )}
-        <div className="relative flex min-h-0 flex-1 flex-col">
-          <MessageList channelId={channelId} highlightId={messageId} home={home} />
-          <Toasts />
-        </div>
-        <ChannelComposer key={channel.id} channel={channel} />
+        <DropZone className="flex min-h-0 flex-1 flex-col">
+          {isDm(channel) ? (
+            <DmHeader channel={channel} />
+          ) : (
+            <ChannelHeader
+              communityId={communityId ?? ""}
+              channelId={channel.id}
+              glyph="#"
+              name={channel.name}
+            >
+              <SearchButton
+                channelId={channelId}
+                channelName={channel.name}
+                communityId={communityId ?? null}
+              />
+              <PinsButton channelId={channelId} channelName={channel.name} home={home} />
+            </ChannelHeader>
+          )}
+          {isDm(channel) && <DmPluginNotice />}
+          {isDm(channel) && <DmCall channel={channel} />}
+          {loadError !== null && (
+            <p role="alert" className="bg-danger-soft px-4 py-2 text-sm text-danger">
+              {loadError}
+            </p>
+          )}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <MessageList channelId={channelId} highlightId={messageId} home={home} />
+            <Toasts />
+          </div>
+          <ChannelComposer key={channel.id} channel={channel} />
+        </DropZone>
       </main>
       {threadId !== undefined && (
         <ThreadPanel home={home} parentId={channelId} threadId={threadId} />

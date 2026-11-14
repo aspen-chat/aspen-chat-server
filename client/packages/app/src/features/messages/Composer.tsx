@@ -86,6 +86,11 @@ import { ReplyBar } from "@/features/messages/ReplyBar";
 import { mediaUrl } from "@/features/layout/safeUrl";
 import { MESSAGE_MAX_CHARS, messageLength } from "@/features/messages/messageLength";
 import { MessageLengthNote } from "@/features/messages/MessageLengthNote";
+import { useDropReceiver } from "@/features/messages/dropZoneContext";
+import { ImageGallery } from "@/features/messages/ImageGallery";
+import { OnceOpen } from "@/features/layout/OnceOpen";
+import { timestampedName, transferredContent } from "@/features/messages/transferredContent";
+import { useKeyboardContent } from "@/api/keyboardContent";
 
 /** A file chosen for the next message, at whatever stage its upload has reached. */
 interface Pending {
@@ -157,27 +162,28 @@ const toolButtonClass = toolButtonShape + " border-line text-ink-muted hover:tex
 const openToolButtonClass = toolButtonShape + " border-accent text-accent";
 
 /**
- * The message box. Enter sends, Shift+Enter breaks a line. Files chosen with the attach button
- * upload at once and are sent with the next message; a message may be files alone. A message
- * sent while some are still uploading is sent all the same: the server holds it until each has
- * arrived, the uploads going on without the box (`AspenSync.uploads`), and it is shown not yet
- * sent at the foot of the list (`PendingMessages`), from where it may be taken back into the
- * box. Text pasted
- * that would take the message past its length limit is attached as a text file instead. The
- * schedule control chooses a time (`ScheduleMessageModal`), shown in a bar over the box
- * (`ScheduleBar`) until the next message is sent, which then is scheduled for that time rather
- * than posted; the bar's X sends now after all, and the control opens the dialog on the time
- * to change it. What is scheduled here is counted above the box (`ScheduledStrip`), from where
- * one may be taken back into the box to be changed, its time with it. A message's
- * Reply makes the next message a reply to it (`replyIn`), shown in a bar over the box
- * (`ReplyBar`) until it is sent, cancelled, or Escape is pressed in the box. In a thread,
- * `echoTarget` names the parent channel and a checkbox offers to show the reply there too; it
- * clears after each message. Only what the caller may do here is offered: without sending (or,
- * in a thread, sending in threads) the box gives way to a note saying so, in a DM with
- * someone the caller blocked, to a note offering to unblock them, and in the system account's
- * DM, to a note that its notices are not answered. Above it, a line kept for who else is
- * typing there (`TypingIndicator`), whether or not the caller may write. With `startsThreadOf`
- * it writes the first reply of a thread not made yet, which sending makes.
+ * The message box. Enter sends, Shift+Enter breaks a line. Files chosen with the attach button,
+ * pasted, dropped on the box's pane (`DropZone`), or inserted by an Android keyboard upload at once
+ * and are sent with the next message; a message may be files alone. A file that came without a name
+ * (a screenshot pasted) is named for the moment it came (`timestampedName`). Pressing a picture's
+ * thumbnail shows it whole, uploaded yet or not. A message sent while some files are still
+ * uploading is sent all the same: the server holds it until each has arrived, the uploads going on
+ * without the box (`AspenSync.uploads`), and it is shown not yet sent at the foot of the list
+ * (`PendingMessages`), from where it may be taken back into the box. Text pasted or dropped that
+ * would take the message past its length limit is attached as a text file instead. The schedule
+ * control chooses a time (`ScheduleMessageModal`), shown in a bar over the box (`ScheduleBar`)
+ * until the next message is sent, which then is scheduled for that time rather than posted; the
+ * bar's X sends now after all, and the control opens the dialog on the time to change it. What is
+ * scheduled here is counted above the box (`ScheduledStrip`), from where one may be taken back into
+ * the box to be changed, its time with it. A message's Reply makes the next message a reply to it
+ * (`replyIn`), shown in a bar over the box (`ReplyBar`) until it is sent, cancelled, or Escape is
+ * pressed in the box. In a thread, `echoTarget` names the parent channel and a checkbox offers to
+ * show the reply there too; it clears after each message. Only what the caller may do here is
+ * offered: without sending (or, in a thread, sending in threads) the box gives way to a note saying
+ * so, in a DM with someone the caller blocked, to a note offering to unblock them, and in the
+ * system account's DM, to a note that its notices are not answered. Above it, a line kept for who
+ * else is typing there (`TypingIndicator`), whether or not the caller may write. With
+ * `startsThreadOf` it writes the first reply of a thread not made yet, which sending makes.
  */
 export function Composer(props: ComposerProps) {
   return (
@@ -306,6 +312,11 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     takeBack,
   });
 
+  useDropReceiver(mayPost ? onDrop : null);
+  useKeyboardContent(box, mayPost && permissions.has("attachFiles"), (file) => {
+    upload([new File([file], nameFor(file), { type: file.type })]);
+  });
+
   // The draft is noted as it changes, kept a moment after, and kept at once when the box goes
   // (another channel, a notification opened) or the page is hidden or left.
   const keep = useRef<(() => void) | null>(null);
@@ -383,6 +394,15 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     !sending &&
     length <= MESSAGE_MAX_CHARS &&
     (draft.trim().length > 0 || readyIds.length > 0 || uploading);
+
+  // The box's pictures, shown whole from their own bytes (or the server's, for a draft's files)
+  // whether or not they have finished uploading, opening on `viewing`.
+  const pictures = pending.flatMap((p) =>
+    p.thumbnail === null
+      ? []
+      : [{ key: p.key, src: p.thumbnail, name: p.name, description: p.description || null }],
+  );
+  const [viewing, setViewing] = useState<number | null>(null);
 
   // Object URLs hold their file's bytes until revoked; release them once no chip shows them.
   const thumbnails = useRef(new Set<string>());
@@ -486,24 +506,91 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
     upload(chosen);
   }
 
+  /** The name for a file pasted, dropped, or inserted that came without one of its own. */
+  function nameFor(file: File): string {
+    const stem = isImageType(file.type) ? m.pastedImageStem : m.pastedFileStem;
+    return timestampedName(stem, file.type, new Date());
+  }
+
   /**
-   * Attaches pasted text as a file when pasting it would take the message past
-   * `MESSAGE_MAX_CHARS`, so it can still be sent whole. Where the caller may not attach files,
-   * or the message carries all it may, the text is pasted and the length note says it is too
-   * long.
+   * Attaches `files`, or says why they cannot be: the caller may not attach files here.
+   * Answers whether they were taken.
+   */
+  function attachAll(files: File[]): boolean {
+    if (!permissions.has("attachFiles")) {
+      setError(m.attachingNotAllowed);
+      return false;
+    }
+    upload(files);
+    return true;
+  }
+
+  /**
+   * Whether `text` written in place of `replaced` characters would take the message past
+   * `MESSAGE_MAX_CHARS`, and so is to be attached as a file instead, so it can still be sent
+   * whole. Where the caller may not attach files, or the message carries all it may, it is
+   * written in and the length note says it is too long.
+   */
+  function attachesAsFile(text: string, replaced: string): boolean {
+    return (
+      text !== "" &&
+      permissions.has("attachFiles") &&
+      pending.length < MAX_ATTACHMENTS &&
+      length - messageLength(replaced) + messageLength(text) > MESSAGE_MAX_CHARS
+    );
+  }
+
+  function textFile(text: string): File {
+    return new File([text], m.pastedTextFileName, { type: PASTED_TEXT_TYPE });
+  }
+
+  /**
+   * Takes all a paste carries that a message can: its files are attached, and its text is
+   * written in where the reader is writing, as the box does itself, unless it goes as a file.
+   * Where the files cannot be attached, the box writes in the clipboard's text as ever.
    */
   function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const text = event.clipboardData.getData("text/plain");
-    if (text === "" || !permissions.has("attachFiles") || pending.length >= MAX_ATTACHMENTS) {
-      return;
-    }
+    const { files, text } = transferredContent(event.clipboardData, nameFor);
     const { selectionStart, selectionEnd } = event.currentTarget;
-    const replaced = messageLength(draft.slice(selectionStart, selectionEnd));
-    if (length - replaced + messageLength(text) <= MESSAGE_MAX_CHARS) {
+    const asFile = attachesAsFile(text, draft.slice(selectionStart, selectionEnd));
+    if (files.length === 0 && !asFile) {
       return;
     }
-    event.preventDefault();
-    upload([new File([text], m.pastedTextFileName, { type: PASTED_TEXT_TYPE })]);
+    if (!attachAll(asFile ? [...files, textFile(text)] : files)) {
+      return;
+    }
+    // The clipboard's text is attached, or left out as only naming its files.
+    if (asFile || text === "") {
+      event.preventDefault();
+    }
+  }
+
+  /** Writes `text` in over the box's selection, or at its end when it has none to go by. */
+  function writeIn(text: string) {
+    const element = box.current;
+    const start = element?.selectionStart ?? draft.length;
+    const end = element?.selectionEnd ?? draft.length;
+    written.splice(start, end, text);
+    const caret = start + text.length;
+    requestAnimationFrame(() => {
+      element?.focus();
+      element?.setSelectionRange(caret, caret);
+    });
+  }
+
+  /** Takes all a drop on the box's pane carries, as a paste would be taken. */
+  function onDrop(data: DataTransfer) {
+    const { files, text } = transferredContent(data, nameFor);
+    const element = box.current;
+    const replaced =
+      element === null ? "" : draft.slice(element.selectionStart, element.selectionEnd);
+    const asFile = attachesAsFile(text, replaced);
+    if (files.length > 0 || asFile) {
+      attachAll(asFile ? [...files, textFile(text)] : files);
+    }
+    if (!asFile && text !== "") {
+      writeIn(text);
+    }
   }
 
   function upload(chosen: File[]) {
@@ -993,14 +1080,22 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
               }
             >
               {p.thumbnail !== null ? (
-                <img
-                  src={p.thumbnail}
-                  alt=""
-                  className={
-                    "h-14 w-14 rounded object-cover bg-surface-sunken" +
-                    (p.spoiler ? " blur-sm" : "")
-                  }
-                />
+                <Button
+                  aria-label={format(m.viewAttachment, { name: p.name })}
+                  onPress={() => {
+                    setViewing(pictures.findIndex((picture) => picture.key === p.key));
+                  }}
+                  className="shrink-0 rounded outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                >
+                  <img
+                    src={p.thumbnail}
+                    alt=""
+                    className={
+                      "h-14 w-14 rounded object-cover bg-surface-sunken" +
+                      (p.spoiler ? " blur-sm" : "")
+                    }
+                  />
+                </Button>
               ) : (
                 <FileIcon size={20} aria-hidden="true" className="text-ink-muted" />
               )}
@@ -1055,6 +1150,7 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
                     {describable(p.mimeType) && (
                       <AttachmentDescriptionButton
                         name={p.name}
+                        picture={p.thumbnail}
                         description={p.description}
                         onSave={(description) => {
                           changeAttachment(p.key, { description }, m.describeFailed);
@@ -1069,6 +1165,19 @@ function MessageBox({ channelId, placeholder, echoTarget, startsThreadOf }: Comp
           ))}
         </ul>
       )}
+      <OnceOpen isOpen={viewing !== null}>
+        <ImageGallery
+          pictures={pictures}
+          initial={viewing ?? 0}
+          isOpen={viewing !== null}
+          onClose={() => {
+            setViewing(null);
+          }}
+          // The caller's own pictures, which they marked themselves, are shown to them whole.
+          isCovered={() => false}
+          onReveal={() => undefined}
+        />
+      </OnceOpen>
       <div className="flex items-end gap-2">
         <input
           ref={fileInput}

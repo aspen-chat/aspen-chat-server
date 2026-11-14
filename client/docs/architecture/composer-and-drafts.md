@@ -18,6 +18,7 @@ or for a busy channel, messages scheduled for later, the mana bar, and drafts.
 | Replying        | `ReplyBar`, `composerTargets.ts`; the line above a reply is `ReplyLine`                     |
 | Drafts          | `src/features/messages/drafts.ts`                                                           |
 | Picks           | `src/features/messages/picks.ts`; see [Picks](tagging.md#picks)                             |
+| Attaching files | `transferredContent.ts`, `DropZone`, `dropZoneContext.ts`, `src/api/keyboardContent.ts`     |
 | Emoji keyboard  | `EmojiKeyboard`, `useEmojiCompletion`'s `insert` (`src/features/emoji`)                     |
 
 ## Layout
@@ -233,6 +234,62 @@ What it tells is kept in `RecordStore.typers` (topic `typing:<channelId>`):
 
 For the server's side, see `docs/architecture/typing.md` at the repository's root.
 
+## Attaching files
+
+A file reaches the box by any of four routes, and each uploads at once (`upload`):
+
+- **The attach button**, or the + menu's Attach a file, through the system's file picker.
+- **A paste.** `transferredContent` reads the clipboard: its files (a screenshot, a picture copied
+  from a page, files copied in a file manager) are attached, and its text is written in where the
+  user is writing, as the box writes any paste. The box leaves writing to the browser, so undo
+  undoes it.
+- **A drop** on the pane the box is in (`DropZone`, around the channel's column, a thread's panel,
+  and each thread in the activity feed): its files are attached and its text written in where the
+  user was writing. Text dragged within the box, or into it with no files, is left to the box, which
+  puts it where it is dropped and moves it when it came from the box. While files are dragged over
+  the pane, a dashed veil says they will be attached.
+- **A keyboard on Android** inserting a GIF, a sticker, or an image (below).
+
+What each route carries is all used where a message can use it:
+
+- **Text that only names the files is left out.** A file manager puts a copied file's name or path
+  (or `file:` URL) on the clipboard beside it; when every line of the text names one of the files,
+  only the files are taken.
+- **A file without a name of its own is named for the moment it came.** Browsers name image data
+  `image.png` whatever it is, so a picture named `image.<ext>`, or a file with no name, is named
+  `img_YYYYMMDD_HHMMSS.<ext>` (local time; `pastedImageStem`, and `pastedFileStem` for other files,
+  in the user's language), its extension from its type (`timestampedName`).
+- **Text too long for the message goes as a file** (see Counting length).
+- **Where the user may not attach files**, files pasted or dropped are refused with a note saying so
+  and naming the permission; the text is written in all the same.
+
+### Seeing a file before it is sent
+
+Pressing a picture's thumbnail in the box opens the gallery on it (`ImageGallery`, over the box's
+pictures alone), from the file's own bytes (its object URL) or, for a draft's files restored from
+the server, from storage, so a picture can be seen whole while it is still uploading. The gallery
+covers none of them: they are the user's own, spoilers included. The dialog describing a picture for
+readers who cannot see it (`AttachmentDescriptionButton`) shows the picture above the description,
+in the box and in a message being edited.
+
+### Keyboard content on Android
+
+The web view offers a keyboard text alone in a `<textarea>`, so a keyboard's GIFs and stickers would
+not reach the box. The Android app replaces Capacitor's web view with its own (`AspenWebView`, put
+in place by the app's `capacitor_bridge_layout_main.xml`):
+
+- While a message box that may attach files is focused, the page says so
+  (`AspenKeyboardContent.setAccepting`, from `useKeyboardContent`), and the app restarts the
+  keyboard's input so it reads that the field takes `image/*` and `video/*`.
+- What the keyboard commits is copied into the app's cache (up to 64 MiB), since the keyboard's
+  permission to read it ends with the insertion, and announced to the page with a `file:` URL.
+- The focused box reads it through Capacitor's file server, attaches it as a file named for the
+  moment it came, and releases the copy. Copies left behind are removed when the app next starts.
+
+The app listens on the input connection rather than with the view's own content receiver
+(`ViewCompat.setOnReceiveContentListener`), which would tell keyboards every field of the page takes
+images and would take the web view's pastes and drops as well.
+
 ## Message length
 
 | Limit                       | Value                                                       | Where                                                                                          |
@@ -249,10 +306,10 @@ custom emoji written out as references.
   (`MessageLengthNote`).
 - Over the limit, they say by how much and what to do. Send and Save wait until the text is
   shortened.
-- Text pasted into the message box that would take it over the limit is attached instead, as a text
-  file named `message.txt` in the user's language, and the box keeps what it held. Where the user
-  may not attach files, or the message already carries the most attachments it may, the text is
-  pasted and the box says it is too long.
+- Text pasted or dropped into the message box that would take it over the limit is attached instead,
+  as a text file named `message.txt` in the user's language, and the box keeps what it held. Where
+  the user may not attach files, or the message already carries the most attachments it may, the
+  text is pasted and the box says it is too long.
 
 ### Nesting
 

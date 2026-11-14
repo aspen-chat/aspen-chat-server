@@ -1,4 +1,5 @@
 import { ApiProblemError } from "@aspen/protocol";
+import { DropZone } from "@/features/messages/DropZone";
 import { PaneEdge, ResizablePane } from "@/features/layout/ResizablePane";
 import { THREAD_PANEL } from "@/features/layout/paneSizes";
 import { ChatsCircleIcon, XIcon } from "@phosphor-icons/react";
@@ -278,7 +279,7 @@ function ThreadShell({
           </Tooltip>
           {threadId !== null && <CopyIdButton id={threadId} thing="thread" />}
         </header>
-        {children}
+        <DropZone className="flex min-h-0 flex-1 flex-col">{children}</DropZone>
         <PaneEdge />
       </section>
     </ResizablePane>

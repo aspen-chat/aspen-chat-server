@@ -40,6 +40,7 @@ import { MenuAction, menuClass } from "@/features/layout/menu";
 import { LoadingLabel } from "@/features/layout/Skeleton";
 import { toast } from "@/features/layout/toast";
 import { Composer } from "@/features/messages/Composer";
+import { DropZone } from "@/features/messages/DropZone";
 import { channelLink, threadLink, type ChannelHome } from "@/features/messages/links";
 import {
   ListedMessage,
@@ -797,34 +798,36 @@ function ThreadItem({
     return null;
   }
   return (
-    <li className="flex flex-col gap-1 py-1.5">
-      <EntryHead
-        unread={lastRead === undefined || newest > lastRead}
-        place={domain === null ? where : `${where} · ${format(m.search.onDomain, { domain })}`}
-        link={
-          thread?.parentChannel == null
-            ? undefined
-            : threadLink(home, thread.parentChannel, threadId)
-        }
-        channelId={threadId}
-        newest={newest}
-        thread
-      />
-      {replies === null ? (
-        <EntryMessagesSkeleton label={m.activity.loadingReplies} />
-      ) : (
-        <ul
-          aria-label={m.activity.latestReplies}
-          className="ms-2 flex flex-col gap-1 border-s-2 border-line"
-        >
-          {replies.map((id) => (
-            <EntryMessage key={id} id={id} home={home} />
-          ))}
-        </ul>
-      )}
-      <div className="flex flex-col px-2">
-        <Composer key={threadId} channelId={threadId} placeholder={m.activity.replyPlaceholder} />
-      </div>
+    <li className="py-1.5">
+      <DropZone className="flex flex-col gap-1">
+        <EntryHead
+          unread={lastRead === undefined || newest > lastRead}
+          place={domain === null ? where : `${where} · ${format(m.search.onDomain, { domain })}`}
+          link={
+            thread?.parentChannel == null
+              ? undefined
+              : threadLink(home, thread.parentChannel, threadId)
+          }
+          channelId={threadId}
+          newest={newest}
+          thread
+        />
+        {replies === null ? (
+          <EntryMessagesSkeleton label={m.activity.loadingReplies} />
+        ) : (
+          <ul
+            aria-label={m.activity.latestReplies}
+            className="ms-2 flex flex-col gap-1 border-s-2 border-line"
+          >
+            {replies.map((id) => (
+              <EntryMessage key={id} id={id} home={home} />
+            ))}
+          </ul>
+        )}
+        <div className="flex flex-col px-2">
+          <Composer key={threadId} channelId={threadId} placeholder={m.activity.replyPlaceholder} />
+        </div>
+      </DropZone>
     </li>
   );
 }

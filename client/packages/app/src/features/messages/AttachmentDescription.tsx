@@ -31,16 +31,19 @@ export const pendingControlClass =
 /**
  * The control on a file, waiting to be sent or in a message being edited, that describes what it
  * shows, for readers who cannot see it: a button (filled once there is a description) opening a
- * modal with the text, kept when saved. What is saved, and when it reaches the server, is the
+ * modal with the text, kept when saved, beneath the picture itself when there is one to show. What is saved, and when it reaches the server, is the
  * business of what holds it.
  */
 export function AttachmentDescriptionButton({
   name,
+  picture,
   description,
   onSave,
   className,
 }: {
   name: string;
+  /** Where the file's picture is read from, when it is one that can be shown. */
+  picture: string | null;
   description: string;
   onSave: (description: string) => void;
   className: string;
@@ -68,6 +71,7 @@ export function AttachmentDescriptionButton({
                 {({ close }) => (
                   <DescriptionForm
                     name={name}
+                    picture={picture}
                     description={description}
                     onSave={(text) => {
                       onSave(text);
@@ -87,10 +91,12 @@ export function AttachmentDescriptionButton({
 /** The modal's contents, made afresh each time it opens so it starts from what was saved. */
 function DescriptionForm({
   name,
+  picture,
   description,
   onSave,
 }: {
   name: string;
+  picture: string | null;
   description: string;
   onSave: (description: string) => void;
 }) {
@@ -110,6 +116,14 @@ function DescriptionForm({
       className="flex flex-col gap-4"
     >
       <DialogHeading>{format(m.describeAttachment, { name })}</DialogHeading>
+      {picture !== null && (
+        // What is being described is the picture itself, so it has no text in place of it.
+        <img
+          src={picture}
+          alt=""
+          className="max-h-64 w-full rounded-md bg-surface-sunken object-contain"
+        />
+      )}
       <TextField
         value={text}
         onChange={setText}
