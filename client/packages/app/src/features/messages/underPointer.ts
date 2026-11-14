@@ -10,6 +10,8 @@ export type UnderPointer =
       readonly url: string;
       readonly name: string;
       readonly picture: boolean;
+      /** What carries the address: a picture's button, which pressing opens the gallery on it. */
+      readonly element: HTMLElement;
     }
   | { readonly kind: "link"; readonly url: string; readonly anchor: HTMLAnchorElement }
   | null;
@@ -26,6 +28,7 @@ export function underPointer(target: EventTarget | null): UnderPointer {
       url: media.dataset.mediaUrl,
       name: media.dataset.mediaName ?? "",
       picture: media.dataset.mediaPicture !== undefined,
+      element: media,
     };
   }
   // Links within the app (invites, links to messages) offer their own menus or go nowhere new.

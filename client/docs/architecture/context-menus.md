@@ -89,11 +89,16 @@ edited.
    `compact`), with Add a reaction beside them.
 2. What was right-clicked inside it (`underPointer`), when it is:
    - an attachment or a link's picture (`data-media-url`, on pictures, video posters, and file
-     chips, with `data-media-name` and, on a picture, `data-media-picture`): Open original, Save
-     picture or Save file, Copy picture (a picture, where the clipboard takes one), and Copy file
-     address. Saving and copying read the file from the deployment's storage (`mediaFile.ts`), whose
-     read path lets any origin read it (`docs/operators/installing/storage-read-path.md`); a picture
-     is copied as a PNG. A storage that does not is named as the reason (`UnreadableFile`);
+     chips, with `data-media-name` and, on a picture, `data-media-picture`): on a picture, View
+     image (which presses the picture's own button, opening the gallery on it), Download image, Copy
+     picture (where the clipboard takes one), and Copy file address; on any other file, Open
+     original, Save file, and Copy file address. Every address is the original's, never the smaller
+     copy a picture shows inline. A finger's long press on a picture opens the same picture actions
+     in a popover beneath it instead (`PictureMenu`; see
+     [inline pictures](message-rendering/attachments.md#inline-pictures)). Saving and copying read
+     the file from the deployment's storage (`mediaFile.ts`), whose read path lets any origin read
+     it (`docs/operators/installing/storage-read-path.md`); a picture is copied as a PNG. A storage
+     that does not is named as the reason (`UnreadableFile`);
    - a link in its text that opens elsewhere (`a[target=_blank]`): Open link, which follows the link
      itself, and Copy link address.
 3. Every action the message has (`MessageActions`), by name: those the row of buttons over it

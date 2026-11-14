@@ -391,8 +391,14 @@ test("a picture right-clicked in a message is saved or copied from the menu", as
   await picture(page).scrollIntoViewIfNeeded();
   await picture(page).click({ button: "right" });
   const menu = messageMenu(page);
+  await menu.getByRole("menuitem", { name: "View image" }).click();
+  const gallery = page.getByRole("dialog", { name: "Images" });
+  await expect(gallery).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(gallery).toBeHidden();
+  await picture(page).click({ button: "right" });
   const saved = page.waitForEvent("download");
-  await menu.getByRole("menuitem", { name: "Save picture" }).click();
+  await menu.getByRole("menuitem", { name: "Download image" }).click();
   expect((await saved).suggestedFilename()).toContain("ghost");
   test.skip(
     browserName !== "chromium",
@@ -414,6 +420,6 @@ test("a storage that does not let the app read files is named as the reason", as
   await page.route(PIXEL_PNG, (route) => route.abort("failed"));
   await picture(page).scrollIntoViewIfNeeded();
   await picture(page).click({ button: "right" });
-  await messageMenu(page).getByRole("menuitem", { name: "Save picture" }).click();
+  await messageMenu(page).getByRole("menuitem", { name: "Download image" }).click();
   await expect(page.getByText(/file storage doesn't let the app read files/)).toBeVisible();
 });

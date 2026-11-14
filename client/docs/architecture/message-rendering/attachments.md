@@ -56,6 +56,19 @@ into place unless motion is reduced; pulled past the first or last picture they 
 (`rubberBand`) and spring back. On a touch-only device (`TOUCH_ONLY`) the arrows are left out, since
 they would take width from the picture on a phone.
 
+A finger resting on an inline picture for `LONG_PRESS_MS` opens the picture's own menu
+(`PictureMenu.tsx`), a popover beneath it (above it when there is no room beneath): View image,
+which opens the gallery on it, Download image, where the clipboard takes a picture, Copy picture,
+and last, where the message has a sheet of its actions (a touch-only screen, the message not being
+edited), More options, which opens that sheet as the message's own long press does
+(`OpenMessageActionsContext`, which `MessageItem` provides). Every picture action takes the original
+(`Picture.src`), never the smaller copy shown inline. The timer is the picture's own, on the
+button's press events: the button's press goes no further, so the message's long press never sees
+it, and letting go once the menu has opened is not a press on the picture. Android answers a
+finger's long press with `contextmenu`, which the picture keeps from the message's menu while a
+finger presses it; a pointer's right click goes on up to the message's context menu, which offers
+the same actions (see [context menus](../context-menus.md)).
+
 ## Previews and posters
 
 Inline, an attachment shows the preview the server made of it where there is one: the record's

@@ -1,4 +1,10 @@
-import { ArrowSquareOutIcon, CopyIcon, DownloadSimpleIcon, LinkIcon } from "@phosphor-icons/react";
+import {
+  ArrowSquareOutIcon,
+  CopyIcon,
+  DownloadSimpleIcon,
+  EyeIcon,
+  LinkIcon,
+} from "@phosphor-icons/react";
 import type { ComponentProps, RefObject } from "react";
 import { Menu, MenuSection } from "react-aria-components";
 import { copyText } from "@/features/layout/clipboard";
@@ -31,7 +37,8 @@ function openElsewhere(url: string) {
  * A message's actions, opened by right-clicking it or by the last button of the row over it
  * (`button`), beside which it then opens: the reader's quick reactions, where they may react,
  * with Add a reaction beside them; what was right-clicked, when it is an attachment or a link's
- * picture (open it, save it, copy a picture, copy its address) or a link (open it, copy its
+ * picture (view it in the gallery, download it, copy it, copy its address), another file (open
+ * it, save it, copy its address), or a link (open it, copy its
  * address); and then every action the message has, by name, through the same `MessageActions`,
  * those the row offers and those it leaves to the menu. What an action opens goes through
  * `open`, outside the menu, which closes as it is chosen.
@@ -92,20 +99,34 @@ export function MessageContextMenu({
             <MenuSection
               aria-label={under.kind === "media" ? m.contextMenu.attachment : m.contextMenu.link}
             >
-              <MenuAction
-                label={under.kind === "media" ? m.contextMenu.openOriginal : m.contextMenu.openLink}
-                icon={<ArrowSquareOutIcon aria-hidden="true" />}
-                onAction={() => {
-                  if (under.kind === "link") {
-                    under.anchor.click();
-                  } else {
-                    openElsewhere(under.url);
+              {under.kind === "media" && under.picture ? (
+                // Pressing the picture opens the gallery on it, where the original is also
+                // opened in a new tab; the same as a finger's long press offers (`PictureMenu`).
+                <MenuAction
+                  label={m.contextMenu.viewImage}
+                  icon={<EyeIcon aria-hidden="true" />}
+                  onAction={() => {
+                    under.element.click();
+                  }}
+                />
+              ) : (
+                <MenuAction
+                  label={
+                    under.kind === "media" ? m.contextMenu.openOriginal : m.contextMenu.openLink
                   }
-                }}
-              />
+                  icon={<ArrowSquareOutIcon aria-hidden="true" />}
+                  onAction={() => {
+                    if (under.kind === "link") {
+                      under.anchor.click();
+                    } else {
+                      openElsewhere(under.url);
+                    }
+                  }}
+                />
+              )}
               {under.kind === "media" && (
                 <MenuAction
-                  label={under.picture ? m.contextMenu.savePicture : m.contextMenu.saveFile}
+                  label={under.picture ? m.contextMenu.downloadImage : m.contextMenu.saveFile}
                   icon={<DownloadSimpleIcon aria-hidden="true" />}
                   onAction={() => {
                     saveFrom(under.url, under.name).catch(failed);

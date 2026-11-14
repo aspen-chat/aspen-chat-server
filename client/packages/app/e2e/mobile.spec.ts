@@ -15,7 +15,9 @@ import {
   general,
   generalMessages,
   message,
+  messageId,
   PIXEL_PNG,
+  PIXEL_PNG_BYTES,
   threadRecord,
   users,
 } from "./world/fixtures";
@@ -567,6 +569,89 @@ test.describe("on a phone", () => {
     await swipeAcross(page, y, middle - 100, middle + 100);
     await settleAnimations(page);
     await expect(gallery.getByText("1 of 3")).toBeVisible();
+  });
+
+  test("a long press on a picture offers to view and download the original, beneath it", async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium", "only Chromium takes synthetic touch input");
+    // Newest in #general, a picture the server made a smaller copy of, which is what shows
+    // inline; the menu's actions must take the original.
+    const original = "https://media.test/world/photo-original.png";
+    const preview = "https://media.test/world/photo-preview.png";
+    const picture = {
+      id: "0190f0a0-0000-7000-8002-000000000031",
+      fileName: "photo.png",
+      mimeType: "image/png",
+      downloadUrl: original,
+      width: 400,
+      height: 300,
+      preview: { url: preview, width: 200, height: 150 },
+    };
+    const fetched: string[] = [];
+    for (const url of [original, preview]) {
+      await page.route(url, (route) => {
+        fetched.push(url);
+        return route.fulfill({ contentType: "image/png", body: PIXEL_PNG_BYTES });
+      });
+    }
+    await page.route(/\/api\/v1\/attachments\/[^/?]+$/, (route) =>
+      new URL(route.request().url()).pathname.endsWith(picture.id)
+        ? route.fulfill({ json: picture })
+        : route.fallback(),
+    );
+    await page.route(new RegExp(`/api/v1/channels/${general}/messages(\\?.*)?$`), (route) => {
+      const url = new URL(route.request().url());
+      // Nothing older or newer: the world's own older pages would hold a message of this number.
+      if (url.searchParams.has("before") || url.searchParams.has("after")) {
+        return route.fulfill({ json: { data: [], included: { users: [] } } });
+      }
+      return route.fulfill({
+        json: {
+          // Oldest of the window, so that scrolled to the top it has the screen beneath it; the
+          // world's older messages are numbered up to 120.
+          data: [
+            ...generalMessages.filter((m) => (m.id as string) > messageId(150)),
+            message(150, bob, "Photo", 90, { attachments: [picture.id] }),
+          ],
+          included: { users },
+        },
+      });
+    });
+    await openChannel(page, "general");
+    const button = page.getByRole("button", { name: "Image: photo.png" });
+    await scrollListTo(page.locator("[data-message-list]"), 0);
+    await expect(button.locator("img")).toHaveAttribute("src", preview);
+    // The route answers a moment after the picture's address is set.
+    await expect.poll(() => fetched).toEqual([preview]);
+
+    await longPress(page, button);
+    const menu = page.getByRole("menu", { name: "Image actions" });
+    await expect(menu).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Images" })).toHaveCount(0);
+    const above = await button.boundingBox();
+    const below = await menu.boundingBox();
+    expect(below?.y ?? 0).toBeGreaterThanOrEqual((above?.y ?? 0) + (above?.height ?? 0));
+    await expect(menu.getByRole("menuitem", { name: "View image" })).toBeVisible();
+    const downloaded = page.waitForEvent("download");
+    await menu.getByRole("menuitem", { name: "Download image" }).tap();
+    expect((await downloaded).suggestedFilename()).toContain("photo");
+    await expect.poll(() => fetched).toEqual([preview, original]);
+    await expect(menu).toBeHidden();
+
+    await longPress(page, button);
+    await menu.getByRole("menuitem", { name: "View image" }).tap();
+    const gallery = page.getByRole("dialog", { name: "Images" });
+    await expect(gallery).toBeVisible();
+    await expect(gallery.locator("img").first()).toHaveAttribute("src", original);
+    await page.keyboard.press("Escape");
+    await expect(gallery).toBeHidden();
+
+    // The message's own actions, as its long press offers them.
+    await longPress(page, button);
+    await menu.getByRole("menuitem", { name: "More options" }).tap();
+    await expect(page.getByRole("dialog", { name: "Message actions" })).toBeVisible();
   });
 
   test("an invite shows its code, and copies its link without the Clipboard API", async ({

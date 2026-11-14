@@ -2712,12 +2712,18 @@
     "deleteCategory": "Delete category",
     "collapseAll": "Collapse all categories",
     "expandAll": "Expand all categories",
-    "savePicture": "Save picture",
+    "viewImage": "View image",
+    "downloadImage": "Download image",
     "saveFile": "Save file",
     "copyPicture": "Copy picture",
     "copiedPicture": "Copied the picture",
     "unreadableFile": "This server's file storage doesn't let the app read files, so this one can't be saved or copied. Its administrators need to let it, as Aspen's operator guide says.",
     "fileFailed": "The file couldn't be read: {problem}"
+  },
+  "pictureMenu": {
+    "more": "More options",
+    "label": "Image actions",
+    "longPress": "Long press for image actions"
   },
   "userMenu": {
     "label": "Actions for {name}",

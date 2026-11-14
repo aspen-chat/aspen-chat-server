@@ -67,6 +67,7 @@ import { feelPress } from "@/features/messages/haptics";
 import { MessageActionSheet } from "@/features/messages/MessageActionSheet";
 import { MessageActions, actionClass, type MessageSheet } from "@/features/messages/MessageActions";
 import { MessageContextMenu } from "@/features/messages/MessageContextMenu";
+import { OpenMessageActionsContext } from "@/features/messages/messageActionsContext";
 import { underPointer, type UnderPointer } from "@/features/messages/underPointer";
 import { useContextMenu } from "@/features/layout/contextMenuState";
 import { ACTION_ICON } from "@/features/messages/actionIcon";
@@ -380,246 +381,256 @@ export const MessageItem = memo(function MessageItem({
   // A reply's line stands above the rest, across the picture's column too; a reply always
   // begins its author's group (`useGroupContinuations`), so it has its header under the line.
   const replyTo = message.replyTo ?? null;
-  return (
-    <article
-      ref={row}
-      data-message-id={id}
-      data-mentions-me={tagsMe ? "true" : undefined}
-      {...rowProps}
-      onContextMenu={(event) => {
-        if (!editing) {
-          const target = event.target;
-          menu.onContextMenu(event, () => {
-            readQuickReactions();
-            setUnder(underPointer(target));
-          });
+  // What is inside the message (a picture's menu) opens the actions' sheet as a long press does.
+  const openActions =
+    touchOnly && !editing
+      ? () => {
+          setPressed(true);
+          setSheet("actions");
         }
-      }}
-      {...(touchOnly
-        ? longPressProps
-        : {
-            onPointerEnter: () => {
-              pointed();
-              placeToolbar();
-            },
-            // A pointer the row came to under (a scroll, a row drawn where it rests) enters
-            // nothing; its next move engages the row.
-            ...(engaged ? {} : { onPointerMove: pointed }),
-            onFocus: () => {
-              rowProps.onFocus();
-              placeToolbar();
-            },
-          })}
-      className={
-        "group relative flex gap-x-3 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50 " +
-        (replyTo !== null ? "flex-wrap gap-y-0.5 " : "") +
-        (grouped ? "pt-0.5 " : "pt-1.5 ") +
-        (continued ? "pb-0.5 " : "pb-1.5 ") +
-        (touchOnly ? "select-none [-webkit-touch-callout:none] " : "") +
-        arriving +
-        (highlighted ? "motion-flash " : "") +
-        (tagsMe ? "border-s-2 border-accent pe-2 ps-1.5 " : "px-2 ") +
-        (tagsMe
-          ? "bg-accent-soft/50"
-          : "hover:bg-surface-hover/60 focus-within:bg-surface-hover/60")
-      }
-    >
-      {menu.opened && (
-        <MessageContextMenu
-          menu={menu}
-          under={under}
-          canReact={permissions.has("addReactions")}
-          actions={actions}
-          open={setSheet}
-          button={moreButton}
-        />
-      )}
-      {(pressed || menu.opened) && (
-        <>
-          {touchOnly && (
-            <MessageActionSheet
+      : null;
+  return (
+    <OpenMessageActionsContext.Provider value={openActions}>
+      <article
+        ref={row}
+        data-message-id={id}
+        data-mentions-me={tagsMe ? "true" : undefined}
+        {...rowProps}
+        onContextMenu={(event) => {
+          if (!editing) {
+            const target = event.target;
+            menu.onContextMenu(event, () => {
+              readQuickReactions();
+              setUnder(underPointer(target));
+            });
+          }
+        }}
+        {...(touchOnly
+          ? longPressProps
+          : {
+              onPointerEnter: () => {
+                pointed();
+                placeToolbar();
+              },
+              // A pointer the row came to under (a scroll, a row drawn where it rests) enters
+              // nothing; its next move engages the row.
+              ...(engaged ? {} : { onPointerMove: pointed }),
+              onFocus: () => {
+                rowProps.onFocus();
+                placeToolbar();
+              },
+            })}
+        className={
+          "group relative flex gap-x-3 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50 " +
+          (replyTo !== null ? "flex-wrap gap-y-0.5 " : "") +
+          (grouped ? "pt-0.5 " : "pt-1.5 ") +
+          (continued ? "pb-0.5 " : "pb-1.5 ") +
+          (touchOnly ? "select-none [-webkit-touch-callout:none] " : "") +
+          arriving +
+          (highlighted ? "motion-flash " : "") +
+          (tagsMe ? "border-s-2 border-accent pe-2 ps-1.5 " : "px-2 ") +
+          (tagsMe
+            ? "bg-accent-soft/50"
+            : "hover:bg-surface-hover/60 focus-within:bg-surface-hover/60")
+        }
+      >
+        {menu.opened && (
+          <MessageContextMenu
+            menu={menu}
+            under={under}
+            canReact={permissions.has("addReactions")}
+            actions={actions}
+            open={setSheet}
+            button={moreButton}
+          />
+        )}
+        {(pressed || menu.opened) && (
+          <>
+            {touchOnly && (
+              <MessageActionSheet
+                messageId={id}
+                communityId={home.community}
+                sentAt={fullTime.format(sentAt)}
+                canReact={permissions.has("addReactions")}
+                {...sheetProps("actions")}
+                onClosed={() => {
+                  const run = afterSheet.current;
+                  afterSheet.current = null;
+                  run?.();
+                }}
+                onMore={() => {
+                  setSheet("react");
+                }}
+              >
+                <MessageActions
+                  {...actions}
+                  open={setSheet}
+                  onDone={() => {
+                    setSheet(null);
+                  }}
+                  afterClosing={(run) => {
+                    afterSheet.current = run;
+                  }}
+                />
+              </MessageActionSheet>
+            )}
+            <ReactionPickerOverlay
               messageId={id}
               communityId={home.community}
-              sentAt={fullTime.format(sentAt)}
-              canReact={permissions.has("addReactions")}
-              {...sheetProps("actions")}
-              onClosed={() => {
-                const run = afterSheet.current;
-                afterSheet.current = null;
-                run?.();
-              }}
-              onMore={() => {
-                setSheet("react");
-              }}
-            >
-              <MessageActions
-                {...actions}
-                open={setSheet}
-                onDone={() => {
-                  setSheet(null);
-                }}
-                afterClosing={(run) => {
-                  afterSheet.current = run;
-                }}
-              />
-            </MessageActionSheet>
-          )}
-          <ReactionPickerOverlay
-            messageId={id}
-            communityId={home.community}
-            // Where a right click opened the menu that opened it; a touch screen's is a sheet.
-            triggerRef={menu.anchorRef}
-            placement="bottom start"
-            {...sheetProps("react")}
-          />
-          <ReactionsDialog
-            messageId={id}
-            communityId={home.community}
-            {...sheetProps("reactions")}
-          />
-          <DeleteMessageModal messageId={id} {...sheetProps("delete")} />
-          <ReportModal target={{ kind: "message", messageId: id }} {...sheetProps("report")} />
-        </>
-      )}
-      {replyTo !== null && <ReplyLine message={message} replyTo={replyTo} home={home} />}
-      {grouped ? (
-        <div className="w-11 shrink-0" aria-hidden="true" />
-      ) : author === undefined ? (
-        authorLoading ? (
-          <Skeleton className="h-11 w-11 shrink-0 rounded-full" />
-        ) : (
-          <Avatar name="?" />
-        )
-      ) : (
-        // The picture opens the same card as the name. It stays out of the tab order, where the
-        // name already offers the card, so a keyboard does not stop on each message twice.
-        <ProfilePopover user={author} channelId={channelId}>
-          <Button
-            aria-label={format(m.profile.show, { name: authorName ?? displayNameOf(author) })}
-            excludeFromTabOrder
-            className="h-fit shrink-0 rounded-full outline-none pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
-          >
-            <Avatar name={authorName ?? displayNameOf(author)} iconId={author.icon} />
-          </Button>
-        </ProfilePopover>
-      )}
-      <div className="min-w-0 flex-1">
+              // Where a right click opened the menu that opened it; a touch screen's is a sheet.
+              triggerRef={menu.anchorRef}
+              placement="bottom start"
+              {...sheetProps("react")}
+            />
+            <ReactionsDialog
+              messageId={id}
+              communityId={home.community}
+              {...sheetProps("reactions")}
+            />
+            <DeleteMessageModal messageId={id} {...sheetProps("delete")} />
+            <ReportModal target={{ kind: "message", messageId: id }} {...sheetProps("report")} />
+          </>
+        )}
+        {replyTo !== null && <ReplyLine message={message} replyTo={replyTo} home={home} />}
         {grouped ? (
-          <span className="sr-only">
-            {authorName ?? (author === undefined ? m.unknownUser : displayNameOf(author))}{" "}
-            <time dateTime={message.timestamp}>{fullTime.format(sentAt)}</time>
-          </span>
+          <div className="w-11 shrink-0" aria-hidden="true" />
+        ) : author === undefined ? (
+          authorLoading ? (
+            <Skeleton className="h-11 w-11 shrink-0 rounded-full" />
+          ) : (
+            <Avatar name="?" />
+          )
         ) : (
-          <MessageHeader
-            message={message}
-            author={author}
-            authorLoading={authorLoading}
-            home={home}
-            channelId={channelId}
-            parentId={parentId}
-            savedMark={touchOnly}
-          />
+          // The picture opens the same card as the name. It stays out of the tab order, where the
+          // name already offers the card, so a keyboard does not stop on each message twice.
+          <ProfilePopover user={author} channelId={channelId}>
+            <Button
+              aria-label={format(m.profile.show, { name: authorName ?? displayNameOf(author) })}
+              excludeFromTabOrder
+              className="h-fit shrink-0 rounded-full outline-none pressed:opacity-80 focus-visible:ring-2 focus-visible:ring-accent/50"
+            >
+              <Avatar name={authorName ?? displayNameOf(author)} iconId={author.icon} />
+            </Button>
+          </ProfilePopover>
         )}
-        {!editing && !touchOnly && (
-          // Out of the header's flow, so its buttons never make the header taller than its
-          // text; after the header in the document, so a keyboard reaches it before the body.
-          // Hidden, it lets the pointer through to the message it rises over.
-          <div
-            role="group"
-            aria-label={m.messageActionsLabel}
-            ref={toolbar}
-            className="pointer-events-none absolute end-2 z-10 flex gap-0.5 rounded-lg border border-line bg-surface-raised p-0.5 opacity-0 shadow-sm group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
-            style={{ top: -toolbarRise }}
-          >
-            {engaged ? (
-              <>
-                <MessageActions {...actions} />
-                <Tooltip text={m.moreMessageActions}>
-                  <Button
-                    ref={moreButton}
-                    aria-label={m.moreMessageActions}
-                    onPress={(event) => {
-                      readQuickReactions();
-                      setUnder(null);
-                      menu.toggleFromButton(event.pointerType === "keyboard");
-                    }}
-                    className={actionClass}
-                  >
-                    <DotsThreeIcon size={ACTION_ICON} aria-hidden="true" />
-                  </Button>
-                </Tooltip>
-              </>
-            ) : (
-              <ActionsStandIn
-                onReach={(end) => {
-                  focusActions.current = end;
-                }}
-                onActivate={() => {
-                  focusActions.current = "first";
-                  pointed();
-                }}
-              />
-            )}
-          </div>
-        )}
-        {editing ? (
-          <MessageEditor
-            messageId={id}
-            channelId={message.channelId}
-            initial={message.content}
-            attachments={message.attachments}
-            onDone={() => {
-              setEditing(false);
-            }}
-          />
-        ) : message.kind === "threadEcho" && message.echoOf != null ? (
-          <EchoedReply replyId={message.echoOf} home={home} channelId={channelId} />
-        ) : null}
-        {message.kind === "warning" && !editing ? (
-          <WarningBody message={message} home={home} />
-        ) : (
-          <MessageBody
-            message={message}
-            home={home}
-            hideText={editing || (message.kind === "threadEcho" && message.echoOf != null)}
-            {...(trailingDrop === undefined ? {} : { trailingDrop })}
-            savedMark={grouped || !touchOnly}
-            {...(grouped && !touchOnly
-              ? {
-                  // Read out with the author above, so shown alone.
-                  trailing: (
-                    <time
-                      aria-hidden="true"
-                      dateTime={message.timestamp}
-                      title={fullTime.format(sentAt)}
-                      className="hidden text-xs whitespace-nowrap text-ink-faint group-focus-within:inline group-hover:inline"
+        <div className="min-w-0 flex-1">
+          {grouped ? (
+            <span className="sr-only">
+              {authorName ?? (author === undefined ? m.unknownUser : displayNameOf(author))}{" "}
+              <time dateTime={message.timestamp}>{fullTime.format(sentAt)}</time>
+            </span>
+          ) : (
+            <MessageHeader
+              message={message}
+              author={author}
+              authorLoading={authorLoading}
+              home={home}
+              channelId={channelId}
+              parentId={parentId}
+              savedMark={touchOnly}
+            />
+          )}
+          {!editing && !touchOnly && (
+            // Out of the header's flow, so its buttons never make the header taller than its
+            // text; after the header in the document, so a keyboard reaches it before the body.
+            // Hidden, it lets the pointer through to the message it rises over.
+            <div
+              role="group"
+              aria-label={m.messageActionsLabel}
+              ref={toolbar}
+              className="pointer-events-none absolute end-2 z-10 flex gap-0.5 rounded-lg border border-line bg-surface-raised p-0.5 opacity-0 shadow-sm group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+              style={{ top: -toolbarRise }}
+            >
+              {engaged ? (
+                <>
+                  <MessageActions {...actions} />
+                  <Tooltip text={m.moreMessageActions}>
+                    <Button
+                      ref={moreButton}
+                      aria-label={m.moreMessageActions}
+                      onPress={(event) => {
+                        readQuickReactions();
+                        setUnder(null);
+                        menu.toggleFromButton(event.pointerType === "keyboard");
+                      }}
+                      className={actionClass}
                     >
-                      {timeOfDay.format(sentAt)}
-                    </time>
-                  ),
-                }
-              : {})}
-            {...(own || permissions.has("manageMessages")
-              ? {
-                  onRemoveAttachment: (attachmentId: string) => {
-                    void sync.removeAttachment(id, attachmentId).catch(() => undefined);
-                  },
-                }
-              : {})}
+                      <DotsThreeIcon size={ACTION_ICON} aria-hidden="true" />
+                    </Button>
+                  </Tooltip>
+                </>
+              ) : (
+                <ActionsStandIn
+                  onReach={(end) => {
+                    focusActions.current = end;
+                  }}
+                  onActivate={() => {
+                    focusActions.current = "first";
+                    pointed();
+                  }}
+                />
+              )}
+            </div>
+          )}
+          {editing ? (
+            <MessageEditor
+              messageId={id}
+              channelId={message.channelId}
+              initial={message.content}
+              attachments={message.attachments}
+              onDone={() => {
+                setEditing(false);
+              }}
+            />
+          ) : message.kind === "threadEcho" && message.echoOf != null ? (
+            <EchoedReply replyId={message.echoOf} home={home} channelId={channelId} />
+          ) : null}
+          {message.kind === "warning" && !editing ? (
+            <WarningBody message={message} home={home} />
+          ) : (
+            <MessageBody
+              message={message}
+              home={home}
+              hideText={editing || (message.kind === "threadEcho" && message.echoOf != null)}
+              {...(trailingDrop === undefined ? {} : { trailingDrop })}
+              savedMark={grouped || !touchOnly}
+              {...(grouped && !touchOnly
+                ? {
+                    // Read out with the author above, so shown alone.
+                    trailing: (
+                      <time
+                        aria-hidden="true"
+                        dateTime={message.timestamp}
+                        title={fullTime.format(sentAt)}
+                        className="hidden text-xs whitespace-nowrap text-ink-faint group-focus-within:inline group-hover:inline"
+                      >
+                        {timeOfDay.format(sentAt)}
+                      </time>
+                    ),
+                  }
+                : {})}
+              {...(own || permissions.has("manageMessages")
+                ? {
+                    onRemoveAttachment: (attachmentId: string) => {
+                      void sync.removeAttachment(id, attachmentId).catch(() => undefined);
+                    },
+                  }
+                : {})}
+            />
+          )}
+          {!editing && <LinkedMessages message={message} />}
+          {!editing && <MessageAnnotations messageId={id} />}
+          <ReactionChips
+            messageId={id}
+            canReact={permissions.has("addReactions")}
+            communityId={home.community}
           />
-        )}
-        {!editing && <LinkedMessages message={message} />}
-        {!editing && <MessageAnnotations messageId={id} />}
-        <ReactionChips
-          messageId={id}
-          canReact={permissions.has("addReactions")}
-          communityId={home.community}
-        />
-        {canThread && message.thread != null && (
-          <ThreadSummary threadId={message.thread} home={home} channelId={channelId} />
-        )}
-      </div>
-    </article>
+          {canThread && message.thread != null && (
+            <ThreadSummary threadId={message.thread} home={home} channelId={channelId} />
+          )}
+        </div>
+      </article>
+    </OpenMessageActionsContext.Provider>
   );
 });
 

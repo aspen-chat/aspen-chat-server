@@ -10,12 +10,14 @@ import {
   SpeakerSlashIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Button, Slider, useLocale } from "react-aria-components";
 import { useAttachments, useStore } from "@/api/hooks";
 import { Tooltip } from "@/features/layout/Tooltip";
+import { feelPress } from "@/features/messages/haptics";
 import { ImageGallery } from "@/features/messages/ImageGallery";
+import { PictureMenu } from "@/features/messages/PictureMenu";
 import {
   inlinePreview,
   isAudioType,
@@ -298,8 +300,12 @@ export function MessageMedia({
   );
 }
 
+/** How long a finger rests on a picture before its menu opens, as long as a message's own. */
+const LONG_PRESS_MS = 450;
+
 /**
- * A picture in the message; pressing it opens the message's gallery on that picture. It shows
+ * A picture in the message; pressing it opens the message's gallery on that picture, and a
+ * finger's long press opens its own menu beneath it (`PictureMenu`). It shows
  * the server's smaller copy where there is one, at the copy's exact size, and the original if
  * the copy cannot be loaded; an original already loaded stays when a copy arrives later, as its
  * bytes are already here. A picture whose size is known keeps exactly its room while it loads
@@ -311,6 +317,23 @@ export function MessageMedia({
 function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void }) {
   const m = useMessages();
   const keepStill = useKeepStill();
+  const button = useRef<HTMLButtonElement>(null);
+  const [menu, setMenu] = useState(false);
+  // A finger resting on the picture opens its menu, on a timer of the picture's own: the
+  // button's press goes no further, so the message's long press never sees it. A pointer
+  // right-clicks for the message's context menu instead, with the same actions. Letting go
+  // after the menu has opened is not a press on the picture.
+  const pressing = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touching = useRef(false);
+  const pressedLong = useRef(false);
+  const endPress = () => {
+    touching.current = false;
+    if (pressing.current !== null) {
+      clearTimeout(pressing.current);
+      pressing.current = null;
+    }
+  };
+  useEffect(() => endPress, []);
   const [arrived, setArrived] = useState<string | null>(null);
   const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
   const preview: InlinePreview | undefined =
@@ -349,40 +372,78 @@ function InlineImage({ picture, onOpen }: { picture: Picture; onOpen: () => void
     );
   }
   return (
-    // Named by the picture's own text alternative, its description where it has one: a label on
-    // the button would hide it, since a button's content is presentational to assistive technology.
-    <Button
-      onPress={onOpen}
-      data-media-url={picture.src}
-      data-media-name={picture.name}
-      data-media-picture
-      className="inline-block max-w-full rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-    >
-      <img
-        src={src}
-        alt={pictureAlt(picture, format(m.imageAlt, { name: picture.name }))}
-        loading="lazy"
-        // A finger dragging from the picture pans the list; it does not pick the picture up.
-        draggable={false}
-        referrerPolicy="no-referrer"
-        {...(size ?? {})}
-        style={size === undefined ? undefined : keptRoom(size.width, size.height)}
-        onLoad={arrive}
-        onError={() => {
-          flushSync(() => {
-            setFailed((before) => new Set(before).add(src));
-          });
-        }}
-        className={
-          imageClass +
-          (known ? " h-auto" : "") +
-          (guessed ? " h-48 w-48 object-cover" : "") +
-          (waiting
-            ? " animate-pulse bg-surface-hover motion-reduce:animate-none"
-            : " bg-surface-sunken")
+    // Android answers a finger's long press with `contextmenu`, which is this menu's press, not
+    // the message's; a pointer's goes on up to the message's menu.
+    <span
+      className="contents"
+      onContextMenu={(event) => {
+        if (touching.current) {
+          event.preventDefault();
+          event.stopPropagation();
         }
+      }}
+    >
+      {/* Named by the picture's own text alternative, its description where it has one: a label
+          on the button would hide it, since a button's content is presentational to assistive
+          technology. */}
+      <Button
+        ref={button}
+        onPressStart={(event) => {
+          pressedLong.current = false;
+          touching.current = event.pointerType === "touch";
+          if (touching.current) {
+            pressing.current = setTimeout(() => {
+              pressing.current = null;
+              pressedLong.current = true;
+              feelPress();
+              setMenu(true);
+            }, LONG_PRESS_MS);
+          }
+        }}
+        onPressEnd={endPress}
+        onPress={() => {
+          if (!pressedLong.current) {
+            onOpen();
+          }
+        }}
+        data-media-url={picture.src}
+        data-media-name={picture.name}
+        data-media-picture
+        className="inline-block max-w-full rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <img
+          src={src}
+          alt={pictureAlt(picture, format(m.imageAlt, { name: picture.name }))}
+          loading="lazy"
+          // A finger dragging from the picture pans the list; it does not pick the picture up.
+          draggable={false}
+          referrerPolicy="no-referrer"
+          {...(size ?? {})}
+          style={size === undefined ? undefined : keptRoom(size.width, size.height)}
+          onLoad={arrive}
+          onError={() => {
+            flushSync(() => {
+              setFailed((before) => new Set(before).add(src));
+            });
+          }}
+          className={
+            imageClass +
+            (known ? " h-auto" : "") +
+            (guessed ? " h-48 w-48 object-cover" : "") +
+            (waiting
+              ? " animate-pulse bg-surface-hover motion-reduce:animate-none"
+              : " bg-surface-sunken")
+          }
+        />
+      </Button>
+      <PictureMenu
+        picture={picture}
+        triggerRef={button}
+        isOpen={menu}
+        onOpenChange={setMenu}
+        onView={onOpen}
       />
-    </Button>
+    </span>
   );
 }
 

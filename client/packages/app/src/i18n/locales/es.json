@@ -2712,12 +2712,18 @@
     "deleteCategory": "Eliminar categoría",
     "collapseAll": "Contraer todas las categorías",
     "expandAll": "Expandir todas las categorías",
-    "savePicture": "Guardar imagen",
+    "viewImage": "Ver imagen",
+    "downloadImage": "Descargar imagen",
     "saveFile": "Guardar archivo",
     "copyPicture": "Copiar imagen",
     "copiedPicture": "Se copió la imagen",
     "unreadableFile": "El almacenamiento de archivos de este servidor no deja que la app lea archivos, así que este no se puede guardar ni copiar. Sus administradores deben permitirlo, como indica la guía para operadores de Aspen.",
     "fileFailed": "No se pudo leer el archivo: {problem}"
+  },
+  "pictureMenu": {
+    "more": "Más opciones",
+    "label": "Acciones de la imagen",
+    "longPress": "Mantén presionado para las acciones de la imagen"
   },
   "userMenu": {
     "label": "Acciones para {name}",
