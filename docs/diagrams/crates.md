@@ -90,6 +90,7 @@ flowchart TB
     str0m[/"str0m (crates.io)<br/>WebRTC, crypto through AWS-LC"/]
     resvg[/"resvg (crates.io)<br/>parsing and drawing SVGs"/]
     seccompiler[/"seccompiler (crates.io)<br/>its seccomp filter"/]
+    voice_client["voice_client<br/>the mobile apps' call engine"]
     limits["aspen_limits<br/>limit format, GCRA, trusted proxies"]
     metrics["aspen_metrics<br/>Prometheus exporter, jemalloc stats"]
     sockets["aspen_sockets<br/>dual-stack listeners"]
@@ -123,6 +124,9 @@ flowchart TB
   it) runs it as a program, once for each SVG, under resource limits, and it installs a seccomp
   filter on itself before reading the SVG. resvg and seccompiler are drawn as the crates outside the
   workspace it is built on. See [SVGs](../architecture/attachment-previews/svgs.md).
+- `voice_client` is the call engine the mobile apps run natively, shared by both: it drives each
+  platform's WebRTC through an interface the iOS and Android layers implement. No crate depends on
+  it yet, and it depends on none of the workspace's.
 - `aspen-migrate` needs the database connection, and `aspen_search_text` for the migration that
   found the words of every message written before `search_text` existed, at the version the server
   finds them with; its migrations are its own (`migrate/src/migrations/`), and `aspen_schema` is
