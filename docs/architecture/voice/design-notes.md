@@ -214,6 +214,18 @@ Why the voice pieces are shaped as they are. The how is in the [voice pages](ind
   about 1,200 connections on the kernel's default 208 KiB.
 - **A call lives on one media thread.** Forwarding never crosses threads, so a packet's path takes
   no lock.
+- **Resends may be half of what a stream sends.** Over a lossy, slow link a receiver asks again for
+  packets whose resends are still on their way, and str0m's default cap (resends at most 15% of a
+  stream's bytes) dropped most of what such a link needed: through a relay losing 5% each way with
+  50 ms of delay, the picture froze 38 times in 30 seconds, and 11 times with the cap at half, where
+  mediasoup froze 15 to 28. Half still bounds a receiver that asks for everything to making the
+  server send twice the media.
+- **Audio lost on its way up is not recovered.** mediasoup NACKs a browser's Opus, which a browser
+  answers by sending the packet again; str0m NACKs only a stream with RTX, which browsers never use
+  for audio. Through a relay losing 5% toward the server alone, a listener lost 4% of the audio
+  where mediasoup lost 0.07%. Kept for now, as a known shortfall against mediasoup; closing it means
+  str0m NACKing such streams (a change to str0m), or RED (RFC 2198), which also covers the way down
+  at the cost of about twice each voice's bitrate.
 
 ## Signalling
 

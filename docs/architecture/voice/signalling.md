@@ -158,7 +158,11 @@ What a client receives is bounded whatever the size of the call, so an offer's s
   carries starts over (a new slot occupant, a source paused and resumed, a section resumed).
 - Payload types are mapped to the receiving connection's own.
 - NACK and retransmission are per leg, video only. A retransmission from before a source began on a
-  section is dropped.
+  section is dropped. A sending stream resends from its last three seconds, up to 1,024 packets, and
+  resends may be up to half of what it sends in a second (`RESEND_SHARE_CAP` in
+  `voice_media/src/connection.rs`) before those still queued are dropped.
+- Audio lost on its way to the server stays lost: str0m NACKs only a stream that has RTX, which
+  browsers do not send for Opus. Opus's in-band FEC and the receiver's concealment cover it.
 - The audio level and voice activity extensions are carried on.
 - Bandwidth estimation is off on the server. Each sender's own estimate works from the
   transport-wide feedback the server returns.

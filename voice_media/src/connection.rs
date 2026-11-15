@@ -7,9 +7,9 @@
 
 use crate::sdp::{FormatEdit, edit_format_parameters};
 use crate::{Failure, ParticipantId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use str0m::change::{SdpAnswer, SdpPendingOffer};
 use str0m::format::{Codec, FormatParams};
 use str0m::media::{Direction, Frequency, KeyframeRequestKind, MediaKind as RtcKind, Mid};
@@ -40,10 +40,23 @@ pub struct Sectioned {
     pub content: SectionContent,
 }
 
+/// How much of what a sending stream sends in a second may be resends, before str0m drops the
+/// ones still queued: half, so a receiver that asks again for packets still on their way over a
+/// slow link (one tenth lost, say, a round trip of a few hundred milliseconds) has its asking
+/// answered, while one that asks for everything makes the server send at most twice the media.
+/// str0m's own default, 0.15, drops most of what such a link needs repaired, and the picture
+/// freezes until a keyframe.
+const RESEND_SHARE_CAP: f32 = 0.5;
+/// What a sending stream keeps to resend from: str0m's own defaults.
+const RESEND_CACHE_PACKETS: usize = 1024;
+const RESEND_CACHE_AGE: Duration = Duration::from_secs(3);
+
 pub struct Connection {
     pub participant: ParticipantId,
     pub kind: ConnectionKind,
     rtc: Rtc,
+    /// The sections whose sending stream has its resend cache set (`RESEND_SHARE_CAP`).
+    resending: HashSet<Mid>,
     /// When str0m next wants a timeout; the thread's timer heap holds the latest.
     pub timeout: Instant,
     /// The ICE username fragment clients address this connection by.
@@ -131,6 +144,7 @@ impl Connection {
             offered_at: None,
             created_at: Instant::now(),
             restart_ice: false,
+            resending: HashSet::new(),
             sections: Vec::new(),
             codecs: Vec::new(),
             ssrc_mid: HashMap::new(),
@@ -258,6 +272,7 @@ impl Connection {
         })?;
         let (added, restarted, offer) = applied;
         self.sections.retain(|s| !extra.contains(&s.mid));
+        self.resending.retain(|mid| !extra.contains(mid));
         self.sections
             .extend(
                 added
@@ -400,17 +415,30 @@ impl Connection {
     /// Writes one packet to the section `mid` sends on; `false` when it has no stream yet (its
     /// offer not answered).
     pub fn write(&mut self, mid: Mid, write: RtpWrite) -> bool {
-        self.guarded(|rtc| {
-            let mut api = rtc.direct_api();
-            match api.stream_tx_by_mid(mid, None) {
-                Some(stream) => {
-                    stream.write_rtp(write);
-                    true
+        let first = !self.resending.contains(&mid);
+        let written = self
+            .guarded(|rtc| {
+                let mut api = rtc.direct_api();
+                match api.stream_tx_by_mid(mid, None) {
+                    Some(stream) => {
+                        if first {
+                            stream.set_rtx_cache(
+                                RESEND_CACHE_PACKETS,
+                                RESEND_CACHE_AGE,
+                                Some(RESEND_SHARE_CAP),
+                            );
+                        }
+                        stream.write_rtp(write);
+                        true
+                    }
+                    None => false,
                 }
-                None => false,
-            }
-        })
-        .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if written && first {
+            self.resending.insert(mid);
+        }
+        written
     }
 
     pub fn request_keyframe(&mut self, ssrc: u32, kind: KeyframeRequestKind) {
