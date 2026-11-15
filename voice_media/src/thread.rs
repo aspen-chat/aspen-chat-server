@@ -36,6 +36,9 @@ use voice_protocol::signal::{
 
 /// How long an offer may go unanswered before its connection counts as failed.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a connection has to complete ICE and DTLS, so a client cannot hold one it never
+/// uses: the worst networks a call works over take a few seconds.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// The least time between keyframe requests to one source, however many consumers ask.
 const KEYFRAME_REQUEST_INTERVAL: Duration = Duration::from_millis(300);
 /// The longest the thread sleeps with nothing to do, so a missed wake costs little.
@@ -54,6 +57,10 @@ pub struct Census {
     pub participants: usize,
     pub connections: usize,
     pub sections: usize,
+    /// Bytes the thread has allocated and not freed, by jemalloc's count of its own
+    /// allocations: what its connections hold, whatever else the process allocates. `None`
+    /// without the `jemalloc` feature.
+    pub allocated_bytes: Option<u64>,
 }
 
 /// Raised when any media thread ends, which the server treats as fatal.
@@ -134,6 +141,19 @@ impl Handle {
         let _ = self.waker.send(&[0]);
         true
     }
+}
+
+/// What this thread has allocated less what it has freed, by jemalloc's counters for it.
+#[cfg(feature = "jemalloc")]
+fn thread_allocated_bytes() -> Option<u64> {
+    let allocated = tikv_jemalloc_ctl::thread::allocatedp::read().ok()?.get();
+    let freed = tikv_jemalloc_ctl::thread::deallocatedp::read().ok()?.get();
+    Some(allocated.saturating_sub(freed))
+}
+
+#[cfg(not(feature = "jemalloc"))]
+fn thread_allocated_bytes() -> Option<u64> {
+    None
 }
 
 type SourceKey = (ParticipantId, MediaSource);
@@ -369,6 +389,7 @@ impl Thread {
                 }
                 self.settle(participant);
             }
+            Command::Restate { participant } => self.restate(participant),
             Command::Census { reply } => {
                 let _ = reply.send(self.census());
             }
@@ -381,6 +402,7 @@ impl Thread {
             participants: self.participants.len(),
             connections: self.conns.iter().flatten().count(),
             sections: self.conns.iter().flatten().map(|c| c.sections.len()).sum(),
+            allocated_bytes: thread_allocated_bytes(),
         }
     }
 
@@ -523,7 +545,40 @@ impl Thread {
             });
         }
         self.routes.remove(&(participant, source));
+        // The capture connection goes with the last source the helper sends.
+        if let Some(p) = self.participants.get_mut(&participant)
+            && !p.sending.values().any(|s| s.external)
+            && let Some(capture) = p.capture.take()
+        {
+            self.remove_connection(capture);
+        }
         self.sources_changed(participant, source);
+    }
+
+    fn restate(&mut self, participant: ParticipantId) {
+        let Some(p) = self.participants.get(&participant) else {
+            return;
+        };
+        for index in [Some(p.conn), p.capture].into_iter().flatten() {
+            let Some(conn) = self.conns[index].as_ref() else {
+                continue;
+            };
+            let sections = conn.sections_for_client();
+            p.tell(match &conn.offered_sdp {
+                Some(sdp) => Event::Offer {
+                    participant,
+                    connection: conn.kind,
+                    revision: conn.revision,
+                    sdp: sdp.clone(),
+                    sections,
+                },
+                None => Event::Sections {
+                    participant,
+                    connection: conn.kind,
+                    sections,
+                },
+            });
+        }
     }
 
     /// After a participant starts or stops sending `source`: its own connections, everyone who
@@ -925,6 +980,9 @@ impl Thread {
             {
                 conn.offered_at = None;
                 conn.failed.get_or_insert(Failure::AnswerTimedOut);
+                self.report(index);
+            } else if !conn.connected && now.duration_since(conn.created_at) > CONNECT_TIMEOUT {
+                conn.failed.get_or_insert(Failure::NeverConnected);
                 self.report(index);
             }
         }

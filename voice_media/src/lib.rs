@@ -19,6 +19,8 @@ mod connection;
 mod keyframe;
 mod levels;
 mod net;
+#[cfg(feature = "peer")]
+pub mod peer;
 mod sdp;
 mod thread;
 
@@ -114,6 +116,11 @@ pub enum Command {
         participant: ParticipantId,
         connection: ConnectionKind,
     },
+    /// Says again, for a client that resumed: each connection's outstanding offer, or its
+    /// sections (`Event::Sections`) where none is outstanding.
+    Restate {
+        participant: ParticipantId,
+    },
     Census {
         reply: tokio::sync::oneshot::Sender<Census>,
     },
@@ -128,6 +135,12 @@ pub enum Event {
         connection: ConnectionKind,
         revision: u64,
         sdp: String,
+        sections: Vec<Section>,
+    },
+    /// What every section of a connection with no outstanding offer carries (`Restate`).
+    Sections {
+        participant: ParticipantId,
+        connection: ConnectionKind,
         sections: Vec<Section>,
     },
     Connected {
@@ -163,6 +176,8 @@ pub enum Failure {
     BadAnswer,
     /// ICE or DTLS ended the connection.
     Disconnected,
+    /// ICE and DTLS did not complete within `CONNECT_TIMEOUT` of the connection's first offer.
+    NeverConnected,
     /// str0m failed an internal check on this connection; it was dropped and nothing else.
     Internal,
 }

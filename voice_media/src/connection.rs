@@ -53,7 +53,11 @@ pub struct Connection {
     /// since the client cannot take it before it has answered.
     pub answered: u64,
     pending: Option<SdpPendingOffer>,
+    /// The outstanding offer's text, to say again to a client that resumed.
+    pub offered_sdp: Option<String>,
     pub offered_at: Option<Instant>,
+    /// When the connection was made, for `CONNECT_TIMEOUT`.
+    pub created_at: Instant,
     pub restart_ice: bool,
     /// Every section offered (the outstanding offer's included), in order.
     pub sections: Vec<Sectioned>,
@@ -123,7 +127,9 @@ impl Connection {
             revision: 0,
             answered: 0,
             pending: None,
+            offered_sdp: None,
             offered_at: None,
+            created_at: Instant::now(),
             restart_ice: false,
             sections: Vec::new(),
             codecs: Vec::new(),
@@ -270,10 +276,9 @@ impl Connection {
             self.ufrag = ufrag;
         }
         let edits = self.format_edits();
-        Some((
-            self.revision,
-            edit_format_parameters(&offer.to_sdp_string(), &edits),
-        ))
+        let sdp = edit_format_parameters(&offer.to_sdp_string(), &edits);
+        self.offered_sdp = Some(sdp.clone());
+        Some((self.revision, sdp))
     }
 
     /// The format parameters each section's codecs are offered with beyond the connection's own.
@@ -328,6 +333,7 @@ impl Connection {
         let answer = SdpAnswer::from_sdp_string(sdp).map_err(|_| Failure::BadAnswer)?;
         let pending = self.pending.take().expect("checked above");
         self.offered_at = None;
+        self.offered_sdp = None;
         match self.guarded(|rtc| rtc.sdp_api().accept_answer(pending, answer)) {
             Some(Ok(())) => {
                 self.answered = revision;
