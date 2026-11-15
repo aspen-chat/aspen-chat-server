@@ -618,3 +618,38 @@ async fn a_client_without_udp_connects_over_tcp() {
     assert!(bob.drain().len() > 10, "Bob hears Ann, who sends over TCP");
     assert!(ann.drain().len() > 10, "Ann hears Bob over TCP");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_muted_microphone_gives_up_its_slot_at_once() {
+    // One slot, two microphones, neither speaking: Bob, first, holds it until he is muted.
+    let media = media(1);
+    let call = call();
+    let mut ann = Peer::join(&media, call, 1);
+    let mut bob = Peer::join(&media, call, 2);
+    let mut cat = Peer::join(&media, call, 3);
+    for peer in [&mut ann, &mut bob, &mut cat] {
+        peer.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
+            .await
+            .unwrap();
+    }
+    let bob_mid = open_microphone(&media, &mut bob).await;
+    bob.send_audio(&bob_mid, Some(-20));
+    open_microphone(&media, &mut cat).await;
+    ann.settle(&media).await;
+    assert_eq!(ann.slots.get(&0), Some(&Some(bob.user)));
+    send(
+        &media,
+        Command::SetSourcePaused {
+            participant: bob.id,
+            source: MediaSource::Microphone,
+            paused: true,
+        },
+    );
+    // Within a moment, not at the next interval of anyone's speaking.
+    ann.until(&media, Duration::from_millis(100), |e| {
+        matches!(e, Event::Slots { .. })
+    })
+    .await
+    .expect("the slot moves as Bob is muted");
+    assert_eq!(ann.slots.get(&0), Some(&Some(cat.user)));
+}

@@ -587,6 +587,12 @@ impl Thread {
         if !paused && source.kind() == MediaKind::Video {
             self.request_keyframe((participant, source), KeyframeRequestKind::Pli);
         }
+        // A microphone paused or resumed changes who is loudest now, not at the next interval.
+        if source == MediaSource::Microphone
+            && let Some(call) = self.participants.get(&participant).map(|p| p.call)
+        {
+            self.assign_slots(call);
+        }
     }
 
     fn answer(
@@ -781,14 +787,14 @@ impl Thread {
     // --- Slots and speaking -----------------------------------------------------------------
 
     /// Fills each participant's audio slots: everyone else's microphone while they fit, else the
-    /// most recently loud. An occupant stays in its slot while it is among those chosen, so a
-    /// slot changes speaker only to make room.
+    /// most recently loud of those not muted. An occupant stays in its slot while it is among
+    /// those chosen, so a slot changes speaker only to make room.
     fn assign_slots(&mut self, call: CallId) {
         let Some(members) = self.calls.get(&call).map(|c| c.participants.clone()) else {
             return;
         };
         let slots = usize::from(self.config.audio_slots);
-        let mut ranked: Vec<(usize, ParticipantId, bool, Option<Instant>)> = members
+        let mut ranked: Vec<(usize, ParticipantId, bool, bool, Option<Instant>)> = members
             .iter()
             .enumerate()
             .filter_map(|(order, id)| {
@@ -797,11 +803,23 @@ impl Thread {
                     .get(id)?
                     .sending
                     .get(&MediaSource::Microphone)?;
-                Some((order, *id, mic.levels.speaking(), mic.levels.last_spoke))
+                Some((
+                    order,
+                    *id,
+                    !mic.paused,
+                    mic.levels.speaking(),
+                    mic.levels.last_spoke,
+                ))
             })
             .collect();
-        // Speaking now first, then the most recently loud, then who joined first.
-        ranked.sort_by(|a, b| b.2.cmp(&a.2).then(b.3.cmp(&a.3)).then(a.0.cmp(&b.0)));
+        // A muted microphone, which sends nothing, last; then speaking now, the most recently
+        // loud, and who joined first.
+        ranked.sort_by(|a, b| {
+            b.2.cmp(&a.2)
+                .then(b.3.cmp(&a.3))
+                .then(b.4.cmp(&a.4))
+                .then(a.0.cmp(&b.0))
+        });
         let users: HashMap<ParticipantId, Uuid> = members
             .iter()
             .filter_map(|id| Some((*id, self.participants.get(id)?.user)))
@@ -809,7 +827,7 @@ impl Thread {
         for receiver in members {
             let chosen: Vec<ParticipantId> = ranked
                 .iter()
-                .map(|(_, id, _, _)| *id)
+                .map(|(_, id, _, _, _)| *id)
                 .filter(|id| *id != receiver)
                 .take(slots)
                 .collect();

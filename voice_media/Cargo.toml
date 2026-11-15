@@ -16,4 +16,7 @@ uuid = "1.16.0"
 voice_protocol = { path = "../voice_protocol" }
 
 [dev-dependencies]
+anyhow = "1.0.102"
+axum = "0.8.4"
+serde_json = "1.0.140"
 tokio = { version = "1.51.1", features = ["full"] }
