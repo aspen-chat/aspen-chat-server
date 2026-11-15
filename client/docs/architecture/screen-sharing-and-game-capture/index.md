@@ -6,12 +6,12 @@ share goes through a picker.
 
 ## Pages
 
-- [The capture helper](helper.md): what the helper is, how the shell runs it, and how the renderer
-  shares through it.
+- [The capture helper](helper.md): what the helper is, its requests, how the shell runs it, how the
+  renderer shares through it, and its WebRTC connection to the voice server.
 - [Building the helper](building-the-helper.md): build requirements per platform, the bundled libobs
   on Windows, and the `libobs` feature elsewhere.
 - [Windows game capture](windows-capture.md): the game hook, its fallback to window capture, the
-  window's sound, and answering RTCP.
+  window's sound, and following the server's feedback.
 - [Application audio on macOS and Linux](application-audio.md): the browser's picture with the
   helper's sound, through ScreenCaptureKit and PipeWire.
 - [The game capture dialog](game-capture-dialog.md): `GameCaptureDialog` per platform, the test
@@ -25,10 +25,12 @@ share goes through a picker.
 | ---------------------------------- | ------------------------------------------------------------- |
 | Helper (Rust, own Cargo workspace) | `packages/desktop/native/capture`                             |
 | Helper's request protocol          | top of the helper's `main.rs`                                 |
+| The capture connection (str0m)     | `native/capture/src/rtp.rs`                                   |
 | libobs bindings (Windows)          | `native/capture/src/obs/`                                     |
 | macOS sound                        | `native/capture/src/sck_audio.rs`                             |
 | Linux sound                        | `native/capture/src/pipewire_audio.rs`, `app_audio.rs`        |
 | Fetching libobs                    | `scripts/fetch-libobs.mjs` (`pnpm fetch:libobs`)              |
 | Main process side                  | `packages/desktop/src/main/gameCapture.ts`, `captureKinds.ts` |
 | Renderer side                      | `src/features/voice/gameCapture.ts`                           |
+| Answering the capture's offers     | `ExternalSender` in `packages/protocol/src/voiceMedia.ts`     |
 | Dialogs                            | `GameCaptureDialog`, `ShareControl`, `SourcePickerDialog`     |

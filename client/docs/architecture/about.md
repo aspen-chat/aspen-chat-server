@@ -94,7 +94,7 @@ the page opens.
 | The app         | The npm packages `@aspen/app` depends on in production, and theirs, walked through `node_modules` as Node resolves them. Workspace packages are Aspen's own, so they are walked through but not listed. Noto Color Emoji, which `scripts/noto_emoji.py` builds, is listed from its directory, and the Aspen Sound Effects Pack, whose sounds the app plays, from `src/features/notifications/sounds/aspen-sound-effects-pack/` (its `NOTICE` and `LICENSE`, CC BY-SA 4.0), with no version. |
 | The desktop app | Electron (a development dependency, since electron-builder copies it in). Chromium (see below). The capture helper's crates. What the Windows app ships from OBS Studio's release.                                                                                                                                                                                                                                                                                                          |
 | The phone apps  | The npm packages `@aspen/mobile` depends on: Capacitor and its plugins, which carry the native Android and iOS code.                                                                                                                                                                                                                                                                                                                                                                        |
-| The servers     | The crates the API server, the voice server, and `aspen-migrate` are built from, on the platforms they are built for. The C and C++ libraries mediasoup's worker builds from its Meson wraps.                                                                                                                                                                                                                                                                                               |
+| The servers     | The crates the API server, the voice server, and `aspen-migrate` are built from, on the platforms they are built for.                                                                                                                                                                                                                                                                                                                                                                       |
 
 Chromium's notices are too many to carry in the list. They ship as `LICENSES.chromium.html` among
 the app's resources (`electron-builder.yml`). The file comes with Electron's own files, which a
@@ -117,8 +117,8 @@ Each package's licence files are read from its directory:
 
 A package that publishes none gets, in order:
 
-1. Its project's text from `attributions/texts/` (`PACKAGE_TEXTS` in `attributions/native.ts`, for
-   mediasoup's crates).
+1. Its project's text from `attributions/texts/` (`PACKAGE_TEXTS` in `attributions/native.ts`),
+   which names its copyright holders. No package needs one at present.
 2. Otherwise, the standard text of each licence its expression names, from `attributions/spdx/`. The
    page says so.
 
@@ -126,12 +126,8 @@ Identical texts are kept once.
 
 ### What no package manager records
 
-`attributions/native.ts` lists these. Each is tied to where its version is decided, so the build
-stops when that moves:
-
-- mediasoup's subprojects, tied to the wraps of the locked `mediasoup-sys`. Every wrap a shipped
-  build compiles must be listed, at its version.
-- The libraries shipped from OBS Studio, tied to `OBS_VERSION` in `fetch-libobs.mjs`.
+`attributions/native.ts` lists these: the libraries shipped from OBS Studio, tied to `OBS_VERSION`
+in `fetch-libobs.mjs`, so the build stops when that moves.
 
 Their texts in `attributions/texts/` are taken from each project's source at that version. They are
 kept exactly as published (`.prettierignore`).

@@ -229,14 +229,16 @@ class FakeSocket {
           carries: "sending",
           source: frame.source,
         };
+        // Sent on once its media arrives, which a browser's here does at once, and a sender
+        // outside the browser's never does.
         if (frame.external === true) {
           this.capture.push(section);
           this.offer("capture");
         } else {
           this.sending.push(section);
           this.offer();
+          this.frame({ type: "sending", source: frame.source });
         }
-        this.frame({ type: "sending", source: frame.source });
         break;
       }
       case "stopSending": {
@@ -1198,6 +1200,20 @@ describe("VoiceCall", () => {
       { type: "stopSending", source: "screen" },
       { type: "watch", video: [] },
     ]);
+    // a share whose capture connection fails before its media arrives ends when the server
+    // says it did not take what was asked
+    const unreached = fakeSender(false);
+    await call.startExternalScreenShare(unreached.sender as never);
+    expect(call.state.sharingScreen).toBe(true);
+    socket?.frame({
+      type: "error",
+      detail: "the game capture's connection to the voice server failed",
+      fatal: false,
+      refused: "send",
+    });
+    await settle();
+    expect(call.state.sharingScreen).toBe(false);
+    expect(unreached.stopped()).toBe(1);
   });
 
   it("takes a moderator's mute as its own state and a kick as a reason to tell the user", async () => {

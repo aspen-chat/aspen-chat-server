@@ -946,12 +946,14 @@ impl Rooms {
                     let Some(p) = participants.get(&user) else {
                         return;
                     };
+                    // Answering the `send` that asked for the capture: a client stops what still
+                    // waited to be sent on it, and hears of what was already sent by `sources`.
                     p.send(ServerMessage::Error {
                         detail: "the game capture's connection to the voice server failed"
                             .to_string(),
                         fatal: false,
                         retry_after_seconds: None,
-                        refused: None,
+                        refused: Some("send".to_string()),
                     });
                     p.sending
                         .iter()

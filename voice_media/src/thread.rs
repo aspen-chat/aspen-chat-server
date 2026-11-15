@@ -39,7 +39,7 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a connection has to complete ICE and DTLS, so a client cannot hold one it never
 /// uses: the worst networks a call works over take a few seconds.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-/// The least time between keyframe requests to one source, however many consumers ask.
+/// The least time between keyframe requests to one source, however many of its watchers ask.
 const KEYFRAME_REQUEST_INTERVAL: Duration = Duration::from_millis(300);
 /// The longest the thread sleeps with nothing to do, so a missed wake costs little.
 const MAX_SLEEP: Duration = Duration::from_millis(100);

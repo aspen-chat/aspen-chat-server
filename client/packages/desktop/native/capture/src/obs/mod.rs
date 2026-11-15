@@ -6,10 +6,10 @@
 //! through a scene sized to the requested output, an H.264 encoder (the GPU's where OBS has a
 //! module for it, NVIDIA's NVENC, Intel's Quick Sync, or AMD's AMF, and `obs_x264` otherwise;
 //! constrained baseline either way, so every browser can decode it), and an output registered
-//! in `startup` whose only job is to hand every encoded packet to the SRTP sender in `rtp`, which
-//! delivers it straight to the voice server's plain RTP transport. The application's sound goes
-//! with the picture where the platform's OBS source can capture it on its own, encoded as Opus
-//! by obs-ffmpeg.
+//! in `startup` whose only job is to hand every encoded packet to its sender in `rtp`, which
+//! delivers it straight to the voice server on the capture connection. The application's sound
+//! goes with the picture where the platform's OBS source can capture it on its own, encoded as
+//! Opus by obs-ffmpeg and sent on the same connection.
 //!
 //! libobs itself is started once and kept for the life of the process, since it does not
 //! support a second startup.

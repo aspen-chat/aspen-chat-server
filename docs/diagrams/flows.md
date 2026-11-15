@@ -61,15 +61,24 @@ sequenceDiagram
     C->>V: GET /health on each candidate, nearest first
     C->>V: WebSocket GET /ws: identify with the token
     V->>V: verify the token, use it once
-    V-->>C: ready: RTP capabilities, who is in the call
-    C->>V: setCapabilities, transports, produce microphone
-    C-)V: media (DTLS-SRTP)
+    V-->>C: ready: who is in the call and what each sends,<br/>audio slots, a resume secret
+    V-->>C: offer (revision 1): one audio slot
+    V-->>C: slots: whom each audio slot carries,<br/>when others are in the call
+    C->>V: answer, then send {source: microphone}
+    C-)V: ICE (UDP, else TCP), DTLS
+    V-->>C: offer (revision 2): a slot per other microphone,<br/>and a section for the microphone
+    C->>V: answer, the microphone's track on that section
+    C-)V: media (SRTP)
+    V-->>C: sending {microphone}, and sources to everyone
     V-)N: report on aspen.voice.report.{lane}.{server}
     N-)A: one durable consumer per lane, shared by every API server
     A->>A: apply the report: voice session rows,<br/>events to the channel's viewers
     Note over A,V: when access changes, the API server commands<br/>the voice server on aspen.voice.command.{server}
 ```
 
+- The voice server is the only side that offers; whatever the client wants (to send, to watch
+  someone's video) is a request it turns into the next offer. See
+  [Signalling and media](../architecture/voice/signalling.md).
 - The voice server never sees the database or a session token; the join token and the grants in it
   are all it knows of the joiner, and rechecks keep the grants current. See
   [Join tokens](../architecture/voice/join-tokens.md) and

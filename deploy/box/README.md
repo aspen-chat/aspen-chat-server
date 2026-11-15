@@ -211,7 +211,9 @@ A computer at home works, with more to get right than a rented one:
   power is cut. `doctor` says when the data is on one.
 - **The router** must forward TCP 80 and 443, UDP 3478, and UDP and TCP 40000 to 40199 to the
   machine. Port 80 is for Caddy's certificates and for sending people who type the name without
-  `https://` on to it; `doctor` checks that it answers.
+  `https://` on to it; `doctor` checks that it answers. The voice server's media threads, one per
+  core, each take one UDP and one TCP port from 40000 up, so a machine with 8 cores uses 40000 to
+  40007; forwarding the whole range leaves room for a larger one.
 - **Some providers share one address between customers**, and then nothing can be forwarded.
   `doctor` shows the address the internet sees; if your router's own outside address is a different
   one, this is why. IPv6 alone does not help people whose own network lacks it.

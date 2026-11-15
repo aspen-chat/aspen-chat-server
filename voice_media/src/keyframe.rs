@@ -1,4 +1,4 @@
-//! Telling a keyframe from the first packet of a frame, so a video consumer starts on one.
+//! Telling a keyframe from the first packet of a frame, so whoever starts watching a video starts on one.
 
 use str0m::format::Codec;
 

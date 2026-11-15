@@ -54,8 +54,8 @@ pub enum MediaSource {
 }
 
 impl MediaSource {
-    /// The kind of media a producer of this source carries. A producer of any other kind is
-    /// refused: what a participant may send, and what a mute pauses, is decided by source, so a
+    /// The kind of media this source is sent as, which decides the kind of the section offered
+    /// for it: what a participant may send, and what a mute pauses, is decided by source, so a
     /// source must mean what it says.
     pub fn kind(self) -> MediaKind {
         match self {

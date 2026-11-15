@@ -15,7 +15,7 @@
 - Under its buttons it shows camera errors, refused state changes, and how long to wait after a
   refusal (see [media](media.md#camera-failures),
   [muting](muting-and-moderation.md#refused-state-changes), and
-  [joining](joining.md#request-timeouts-and-refusals)).
+  [joining](joining.md#timeouts-and-refusals)).
 - Where one pane shows at a time (below `md`), the call bar shows under the voice channel from the
   moment the user presses Join, so joining and a failure to join are visible there, and the call
   screen leaves out its own Leave Call (`leaveInBar`).
@@ -77,7 +77,9 @@ Clicking a voice channel row:
 
 ## `VoiceScreen` and `CallStage`
 
-`VoiceScreen` holds `CallStage`, which a DM's call shares. It shows:
+`VoiceScreen` holds `CallStage`, which a DM's call shares. While it is mounted and the user is in
+its call, it holds `VoiceCall.showVideo()`, so the call receives others' screens and cameras only
+while something shows them (see [media](media.md#receiving)). It shows:
 
 - the shared screens: one large, the others as thumbnails to pick;
 - everyone in the call as tiles;

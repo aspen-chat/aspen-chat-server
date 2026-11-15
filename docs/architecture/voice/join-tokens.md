@@ -42,9 +42,9 @@ The grants are the joiner's permissions as they stood when the token was issued:
 
 | Grant          | Permission     | Allows                                                   |
 | -------------- | -------------- | -------------------------------------------------------- |
-| `speak`        | Speak          | Microphone producer                                      |
-| `share_screen` | Share screen   | Screen and screen audio producers                        |
-| `camera`       | Use camera     | Camera producer                                          |
+| `speak`        | Speak          | Sending the microphone                                   |
+| `share_screen` | Share screen   | Sending a screen and its sound                           |
+| `camera`       | Use camera     | Sending the camera                                       |
 | offer files    | Transfer files | File offers (see [File transfers](../file-transfers.md)) |
 
 The voice server holds the participant to the grants as they now stand, which

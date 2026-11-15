@@ -121,8 +121,8 @@ pub struct Estimate {
     pub margin: f64,
     pub audio_stream: Cost,
     pub video_stream: Cost,
-    /// Measured in whole calls of the shape, which counts each call's router and each
-    /// participant's transports as well as the streams.
+    /// Measured in whole calls of the shape, which counts each participant's connection, its
+    /// sections, and the slots and levels kept for it as well as the streams.
     pub participant_in_calls: Cost,
     /// Per participant: share of a core, bytes, Mbit/s out.
     pub participant_cpu: f64,

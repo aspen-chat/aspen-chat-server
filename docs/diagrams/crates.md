@@ -69,7 +69,7 @@ server and the voice server, and the plumbing every server needs.
 flowchart TB
     subgraph bins["Binaries"]
         chat["aspen-chat-server"]
-        voice_server["voice_server<br/>mediasoup SFU, STUN and TURN"]
+        voice_server["voice_server<br/>rooms, signalling, STUN and TURN"]
         migrate["aspen-migrate<br/>migrations and their registry"]
         bench["aspen-bench<br/>(crate aspen_bench): load generator"]
     end
@@ -78,6 +78,8 @@ flowchart TB
     database["aspen_database"]
     search_text["aspen_search_text"]
     voice_protocol["voice_protocol<br/>join tokens, control, signalling"]
+    voice_media["voice_media<br/>media threads, the synthetic peer"]
+    str0m[/"str0m (crates.io)<br/>WebRTC, crypto through AWS-LC"/]
     limits["aspen_limits<br/>limit format, GCRA, trusted proxies"]
     metrics["aspen_metrics<br/>Prometheus exporter, jemalloc stats"]
     sockets["aspen_sockets<br/>dual-stack listeners"]
@@ -87,9 +89,10 @@ flowchart TB
 
     chat --> app & voice_protocol & limits & metrics & sockets & bench_protocol
     app --> database & voice_protocol & tls & config_values & bench_protocol
-    voice_server --> voice_protocol & limits & metrics & sockets & tls & config_values
+    voice_server --> voice_protocol & voice_media & limits & metrics & sockets & tls & config_values
     migrate --> database & search_text
-    bench --> voice_protocol & limits & metrics & bench_protocol
+    bench --> voice_protocol & voice_media & limits & metrics & bench_protocol
+    voice_media --> voice_protocol & sockets & str0m
     voice_protocol --> limits
     database --> metrics
 ```
@@ -97,6 +100,11 @@ flowchart TB
 - `voice_protocol` is the whole contract between the two servers: the join token the API server
   signs and the voice server checks, the reports and commands they exchange over NATS, and the
   signalling frames clients exchange with the voice server.
+- `voice_media` is the voice server's media: threads holding str0m connections, forwarding between
+  them, and filling the audio slots. Its `peer` feature is a synthetic str0m client, which
+  `voice_server`'s `estimate-capacity` and the bench's simulated participants run on. str0m is drawn
+  because it is the one crate outside the workspace the voice server's media is built on; see
+  [Voice](../architecture/voice/voice-server.md#media-threads).
 - `aspen-migrate` needs the database connection, and `aspen_search_text` for the migration that
   found the words of every message written before `search_text` existed, at the version the server
   finds them with; its migrations are its own (`migrate/src/migrations/`), and `aspen_schema` is
@@ -128,12 +136,14 @@ flowchart LR
     plugin_rt -- "wasmtime bindgen" --> wit
     word_filter & forum & calendar & blackjack -- "wit-bindgen" --> wit
     desktop -- "spawns" --> capture
-    capture -- "plain RTP" --> voice_server
+    capture -- "WebRTC capture connection<br/>(str0m, through the desktop's offers)" --> voice_server
 ```
 
 - Plugins and the server share nothing but `spec/plugin.wit`; a plugin is a WebAssembly component
   the operator installs, and `aspen_plugin_runtime` runs it. See
   [Plugins](../architecture/plugins/index.md).
 - `aspen_capture` is the desktop app's helper process for game and window capture, built by
-  `pnpm build:native` in `client/packages/desktop`, since it links libobs. See
+  `pnpm build:native` in `client/packages/desktop`, since it links libobs. It sends to the voice
+  server as a str0m WebRTC peer of its own (the capture connection), answering the offers the
+  desktop app passes it, its DTLS and SRTP through str0m's Rust crypto. See
   [Client packages](client.md).

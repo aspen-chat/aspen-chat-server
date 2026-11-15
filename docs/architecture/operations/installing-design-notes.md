@@ -12,8 +12,12 @@ Why the operator's installation guide
 
 ## Building
 
-- **Both servers link the system's OpenSSL 3 rather than a copy built in.** Its security updates
-  then reach them with the system's. See [Step 2](../../operators/installing/2-building.md).
+- **The API server links the system's OpenSSL 3 rather than a copy built in.** Its security updates
+  then reach it with the system's. It needs OpenSSL for passkeys (`webauthn-rs`) and PostgreSQL's
+  TLS. See [Step 2](../../operators/installing/2-building.md).
+- **The voice server needs no OpenSSL.** Its calls' DTLS and SRTP go through AWS-LC (`aws-lc-rs`),
+  the crypto rustls uses in both servers, so the voice server has one crypto library compiled in and
+  nothing of the system's to match, and its build needs only a C compiler and `make`.
 
 ## The deployment's address
 

@@ -5,8 +5,9 @@ screen share, and the helper captures only the sound (see
 [application audio](application-audio.md)).
 
 The helper captures one source through libobs, encodes it as H.264 constrained baseline, with the
-GPU's encoder where OBS has a module for it and x264 otherwise, and sends it as SRTP straight to the
-voice server's plain RTP transport, answering the server's RTCP itself.
+GPU's encoder where OBS has a module for it and x264 otherwise, and sends it straight to the voice
+server on the capture connection (see [the helper's connection](helper.md#its-connection)), whose
+feedback steers it.
 
 ## The game hook
 
@@ -34,15 +35,17 @@ through libobs: an application's picture (`screen_capture` type 2) and its sound
 alone, as [Application audio](application-audio.md) describes.
 
 - It is encoded as Opus by obs-ffmpeg.
-- It is sent as its own SRTP stream to a second producer (`produceRtp` with source `screenAudio`).
-- The sharer does not consume it back.
+- It is sent on the same capture connection, in a `sending` section of its own for the share's
+  `screenAudio`.
+- The sharer is not sent it back.
 
 ## The encoder
 
 Every encoder produces H.264 constrained baseline, which every browser decodes, with no B-frames, at
-a constant bitrate, with a keyframe every second. Which one encodes is decided as the capture starts
-(`VIDEO_ENCODERS` in `obs/capture.rs`): the first of these whose module registered it and that
-starts.
+a constant bitrate, with a keyframe every second. The bitrate it starts at is the one the capture
+was started with (12 Mbps from the app), and the connection's bandwidth estimate moves it from
+there. Which one encodes is decided as the capture starts (`VIDEO_ENCODERS` in `obs/capture.rs`):
+the first of these whose module registered it and that starts.
 
 | Encoder                             | OBS module   | Registered when                                                                      |
 | ----------------------------------- | ------------ | ------------------------------------------------------------------------------------ |
@@ -68,10 +71,10 @@ starts.
   balanced target usage with one frame in flight; AMF the quality preset, which the module lowers to
   what the GPU keeps up with at the size and rate; x264 veryfast, tuned for zero latency.
 
-## Answering RTCP
+## Following the server's feedback
 
-| RTCP from the server          | The helper's answer                                                                    |
-| ----------------------------- | -------------------------------------------------------------------------------------- |
-| NACK                          | Resends from a buffer of recent packets.                                               |
-| Receiver's bandwidth estimate | Re-tunes the encoder's bitrate (NVENC answers each change with a keyframe of its own). |
-| Keyframe request              | Relies on a one-second keyframe interval, since libobs cannot be asked for one.        |
+| Feedback from the server | What the helper does                                                                                                                                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| NACK                     | str0m resends from what it sent.                                                                                                                                                                       |
+| Transport-wide feedback  | str0m's bandwidth estimate follows it, and re-tunes the encoder's bitrate at most every 1.5 seconds, from 500 kbps to the bitrate started with (NVENC answers each change with a keyframe of its own). |
+| Keyframe request         | Counted; the one-second keyframe interval answers it, since libobs cannot be asked for one.                                                                                                            |

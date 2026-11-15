@@ -58,8 +58,10 @@ A run is plan, seed, run, purge.
   `channelBusy`, or dropped. A `channelBusy` refusal is not an error.
 - A coordinator can spread users over agents on other machines (`aspen-bench agent`). Clocks are
   synchronised by Cristian's algorithm, so delivery latency is measured across machines.
-- Calls use real SRTP through `produceRtp` and `consumeRtp`, measuring loss, RFC 3550 jitter, and
-  round-trip time.
+- Each simulated participant in a call is a `voice_media::peer` client: a str0m WebRTC connection
+  the voice server offers and it answers, with the ICE, DTLS, SRTP, and RTCP a browser has. It sends
+  its microphone, and its screen when it shares one, watches every screen shared in the call, and
+  measures loss, RFC 3550 jitter, and round-trip time.
 - It samples the `[target] metrics` endpoints and names what ran short in the report (`report.json`,
   `report.html`).
 - `--mode capacity` raises the load step by step until a service level breaks.
@@ -146,9 +148,10 @@ constant in `aspen_metrics`.
 
 Configured by `[metrics]` in `voice_server.toml` (`127.0.0.1:9465`).
 
-- Rooms, participants, producers, consumers, and transports.
+- Rooms, participants, peer connections, and media sections: `aspen_voice_rooms`,
+  `aspen_voice_participants`, `aspen_voice_connections`, `aspen_voice_sections`.
 - Signalling frames and refusals.
-- mediasoup worker CPU.
+- Each media thread's CPU, by thread: `aspen_voice_media_thread_cpu_seconds`.
 
 ### Both
 

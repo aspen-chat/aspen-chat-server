@@ -69,8 +69,20 @@ The reasons behind the settings described in
   place on a voice server.
 - **A voice server's `url` must be `https` wherever `public_url` is.** Browsers on an `https` page
   refuse unencrypted WebSockets.
-- **Transports that have not connected within thirty seconds are closed.** Ports are not held by
-  transports nobody uses. ([Voice server](../../operators/configuration/voice-server.md))
+- **Each media thread takes one UDP and one TCP port, and every connection on it shares them.** The
+  thread tells a datagram's connection by the address it came from, or for a first ICE check by the
+  username it names, so the ports a server takes follow the number of threads rather than the number
+  of people, and no range need be sized to its capacity. TCP is there for networks that block UDP.
+  ([Voice server](../../operators/configuration/voice-server.md#media-threads))
+- **`min_port` and `max_port` are a range, though each thread takes one port.** The range is what an
+  operator opens, so threads can be added without touching the firewall, and the server refuses to
+  start when the range has too few ports rather than taking ports nobody opened.
+- **A connection that has not connected within thirty seconds ends, and takes its person out of the
+  call.** Someone whose media cannot arrive is not shown in a call they cannot hear, and their
+  client joins again. ([Voice server](../../operators/configuration/voice-server.md))
+- **Each media thread's UDP socket asks for 4 MiB buffers.** Every connection on the thread shares
+  the socket, so a burst of joins (a thousand DTLS handshakes at once) must fit in it; the kernel's
+  default of about 208 KiB drops handshakes at that load.
 
 ## Plugins
 

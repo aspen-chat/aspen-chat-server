@@ -19,13 +19,13 @@ import { parseReply, type Answer, type Reply } from "./captureReplies";
  * whose offers the renderer passes in (the first with `start` or `startAudio`, each later one
  * with `answer`) and whose answers it passes back; the shell never touches the video. On Linux
  * it captures only one application's sound (`startAudio`), since there the picture comes from
- * the browser's own screen share. The helper is a process of its own, spawned on first use and spoken to over its pipes: one JSON request per
- * line on its stdin, one JSON reply per line on its stdout (the requests are described at the
- * top of the crate's `main.rs`). The helper answers every request, one it cannot read with a
- * failure, and a line that is not a reply is logged (`captureReplies.ts`). One capture runs at
- * a time, for one renderer, and only of a kind the helper listed (`captureKinds.ts`). Without
- * the helper on disk (a build without libobs) the bridge reports no capture kinds and the app
- * shows no game option.
+ * the browser's own screen share. The helper is a process of its own, spawned on first use and
+ * spoken to over its pipes: one JSON request per line on its stdin, one JSON reply per line on
+ * its stdout (the requests are described at the top of the crate's `main.rs`). The helper answers
+ * every request, one it cannot read with a failure, and a line that is not a reply is logged
+ * (`captureReplies.ts`). One capture runs at a time, for one renderer, and only of a kind the
+ * helper listed (`captureKinds.ts`). Without the helper on disk (a build without libobs) the
+ * bridge reports no capture kinds and the app shows no game option.
  */
 
 export interface CaptureTarget {

@@ -27,10 +27,13 @@ from the helper instead of the browser:
 
 1. The picture is picked in the system's picker, and marked `contentHint: "motion"`.
 2. `VoiceCall.startScreenShare({ audio })` takes an `ExternalAudio`.
-3. It asks the voice server for a `screenAudio` RTP producer and hands its target to the
-   `ExternalAudio`.
-4. Any sound the browser captured is dropped.
-5. The helper's `startAudio` request captures the application's sound alone.
+3. Any sound the browser captured is dropped.
+4. It sends the picture from the browser, and asks the voice server to receive `screenAudio` from
+   outside it (`send` with `external: true`).
+5. The voice server offers the capture connection for it, and the `ExternalAudio` hands the first
+   offer to the helper's `startAudio` request, which answers it and captures the application's sound
+   alone. Later offers go to `answer` (see [the helper](helper.md#its-requests)). `startScreenShare`
+   resolves once the first offer is answered.
 
 ### The PipeWire capture
 
@@ -45,8 +48,10 @@ from the helper instead of the browser:
 
 The game keeps playing to its own output while the call hears it.
 
-`app_audio.rs` cuts what arrives into 20 ms frames, encodes them as Opus with libopus, and sends
-them as SRTP.
+`app_audio.rs` cuts what arrives into 20 ms frames, encodes them as Opus with libopus (128 kbps
+unless asked otherwise), and sends them on the capture connection (see
+[the helper's connection](helper.md#its-connection)). Its bitrate does not follow the bandwidth
+estimate.
 
 ### What the helper offers on Linux
 

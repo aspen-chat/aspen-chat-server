@@ -364,8 +364,8 @@ unsafe fn start_output(
     ))
 }
 
-/// Starts capturing: the source, sized into the output, encoded, and sent as SRTP to the
-/// target. Answers with the id of the encoder the picture goes through. One capture at a time;
+/// Starts capturing: the source, sized into the output, encoded, and sent on the capture
+/// connection (`rtp`). Answers with the id of the encoder the picture goes through. One capture at a time;
 /// a second call while one runs is an error.
 pub fn start_capture(options: StartOptions) -> Result<&'static str> {
     ensure_started(
@@ -587,8 +587,8 @@ unsafe fn create_audio(
     }
 }
 
-/// Starts capturing the application's sound alone, encoded as Opus and sent as SRTP to its
-/// target. One capture at a time, with or without a picture.
+/// Starts capturing the application's sound alone, encoded as Opus and sent on the capture
+/// connection (`rtp`). One capture at a time, with or without a picture.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn start_audio_capture(options: AudioStart) -> Result<()> {
     ensure_started(

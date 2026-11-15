@@ -14,6 +14,10 @@ and joins them into one universal binary with `lipo`, adding both Rust targets w
 
 The `libobs` feature on Linux and macOS is for developing the picture path there.
 
+Every platform's build takes its WebRTC from str0m, built without its default features and with
+`rust-crypto`, so its DTLS and SRTP are Rust alone and need neither OpenSSL nor a C toolchain for
+crypto (see [the helper's connection](helper.md#its-connection)).
+
 ## Windows
 
 On Windows the libobs is the build's own. `pnpm fetch:libobs` (`scripts/fetch-libobs.mjs`) lays the

@@ -35,29 +35,34 @@ Who is in each channel's call is store state:
 
 Volume and muting here are for this user alone. Nothing the server or the other person can see.
 
-| Control             | Device preference                                        | `AspenSync` setter | Applied as              | To consumers  |
+| Control             | Device preference                                        | `AspenSync` setter | Applied as              | To sound      |
 | ------------------- | -------------------------------------------------------- | ------------------ | ----------------------- | ------------- |
 | Voice volume        | `userVolume(userId)`, a gain from 0 to `MAX_USER_VOLUME` | `setUserVolume`    | `effectiveUserVolume`   | `microphone`  |
 | Voice "mute for me" | `userMuted(userId)` (keeps their volume)                 | `setUserMuted`     | `effectiveUserVolume`   | `microphone`  |
 | Stream volume       | `streamVolume`                                           | `setStreamVolume`  | `effectiveStreamVolume` | `screenAudio` |
 | Stream mute         | `streamMuted`                                            | `setStreamMuted`   | `effectiveStreamVolume` | `screenAudio` |
 
-`VoiceCall` asks `userVolume(user, source)` for the gain of each consumer.
+`VoiceCall` asks `userVolume(user, source)` for the gain of each sound it plays: a share's sound
+(`screenAudio`) for its sharer, and an audio slot (`microphone`) for whoever the voice server's
+latest `slots` frame says the slot carries. A slot changes speaker as the server fills it with
+whoever is loudest (see [media](media.md#receiving)), so its gain is set again on every `slots`
+frame (`refreshVolumes`); a slot that carries no one plays at 1. `setUserVolume` sets the slot
+carrying that person now.
 
 The call's own volume (`OUTPUT_VOLUME`, from the deafen arrow or Settings) scales every person's
-voice and stream on top of their own volume: `AspenSync` multiplies the two, and sets every
-consumer's gain again (`refreshVolumes`) when it changes.
+voice and stream on top of their own volume: `AspenSync` multiplies the two, and sets every sound's
+gain again (`refreshVolumes`) when it changes.
 
 ### Playback through Web Audio
 
 - Playback runs through a Web Audio gain node, since an element's own volume stops at 1.
 - The call's media keeps one context, which the microphone (see [media](media.md#the-microphone))
-  and every consumer play through, open only while one of them uses it (`browserMedia.ts`), so each
-  call opens its own. One left open between calls breaks Web Audio on iOS: once the app has gone to
-  the background with nothing playing, as when the phone locks between calls, WebKit stops running
-  every audio context of the page, new ones too, as soon as anything plays through the one left
-  open, so the next call's voices, its microphone, and the app's sounds go silent until the app
+  and every received sound play through, open only while one of them uses it (`browserMedia.ts`), so
+  each call opens its own. One left open between calls breaks Web Audio on iOS: once the app has
+  gone to the background with nothing playing, as when the phone locks between calls, WebKit stops
+  running every audio context of the page, new ones too, as soon as anything plays through the one
+  left open, so the next call's voices, its microphone, and the app's sounds go silent until the app
   starts again.
-- Each participant's raw stream also plays through a muted element (`browserMedia.ts`). Chromium,
-  and so the desktop app, feeds a remote WebRTC track into Web Audio only while the track also plays
-  through a media element. Without it the graph is silent there. Firefox plays either way.
+- Each received track also plays through a muted element (`browserMedia.ts`). Chromium, and so the
+  desktop app, feeds a remote WebRTC track into Web Audio only while the track also plays through a
+  media element. Without it the graph is silent there. Firefox plays either way.

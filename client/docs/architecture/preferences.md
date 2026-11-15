@@ -59,8 +59,9 @@ The palette (light or dark) and the fonts ([fonts.md](fonts.md)) are kept per in
   change.
 - `resolveDevice` finds the device by id, then by label.
 - `notificationOutputDevice` resolves `NOTIFICATION_OUTPUT` for whatever plays notification sounds.
-- `AspenSync` feeds the audio choices to `VoiceCall.setAudioDevices`. That swaps the microphone
-  producer's track mid-call and re-routes playback with `setSinkId` where the browser has it.
+- `AspenSync` feeds the audio choices to `VoiceCall.setAudioDevices`. That replaces the sent
+  microphone's track mid-call (`replaceTrack`, with no new offer) and re-routes playback with
+  `setSinkId` where the browser has it.
 - `useAudioDevices` asks for the microphone once, so devices are named, and follows `devicechange`.
 
 ### Name colours

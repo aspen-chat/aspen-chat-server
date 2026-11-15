@@ -6,6 +6,9 @@
   which keeps it disabled whenever `muted` is shown). The voice server never refuses them.
 - Unmuting and undeafening are only asked for (`#asked`). They show once a `participantState` frame
   about the user themself says the server did them.
+- A muted microphone is paused at the voice server too, and ranks last for an audio slot, so it
+  gives up its slots to whoever speaks. A deafened user is sent no sound at all: the server stops
+  their audio slots and shares' sound until they undeafen.
 - That frame sets `muted` and `deafened` in the call state. This is how a server mute shows on the
   user's own controls.
 - The frame never shows the user less silenced than they have since asked to be. **Why:** an answer

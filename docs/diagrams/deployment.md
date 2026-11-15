@@ -23,7 +23,7 @@ flowchart TB
     end
 
     subgraph voice_tier["Voice servers (voice_server), any number"]
-        voice["Voice server<br/>mediasoup SFU, signalling GET /ws,<br/>STUN and TURN for file transfers"]
+        voice["Voice server<br/>media threads (str0m), signalling GET /ws,<br/>STUN and TURN for file transfers"]
     end
 
     subgraph shared["Shared services"]
@@ -43,7 +43,7 @@ flowchart TB
     clients -- "HTTPS, WebSockets" --> proxy
     proxy --> api
     proxy -- "voice signalling" --> voice
-    clients -- "media (UDP), TURN" --> voice
+    clients -- "WebRTC media (UDP, or TCP), TURN" --> voice
     clients -- "presigned uploads, downloads" --> s3
 
     api_tier --> pg & valkey & s3
@@ -61,9 +61,10 @@ flowchart TB
   work (mail, voice reports, standing checks, plugins' observers and timers, push). See
   [the web client](../architecture/web-client/index.md) and `app::context::Role`.
 - Clients signal with a voice server over its own WebSocket (`GET /ws`, through the proxy where one
-  terminates TLS) and send media straight to it. The API server offers them candidates and signs the
-  token they join with; the voice server never reads the database. See
-  [Voice](../architecture/voice/index.md).
+  terminates TLS) and send media straight to it, over a WebRTC connection the voice server offers:
+  to one UDP and one TCP port per media thread. The desktop app's capture helper holds a connection
+  of its own the same way. The API server offers them candidates and signs the token they join with;
+  the voice server never reads the database. See [Voice](../architecture/voice/index.md).
 - Clients upload attachments straight to storage with presigned URLs, and download them from
   `public_base_url`. The API server only signs, confirms, and makes previews (with `ffmpeg` and
   `ffprobe` as processes of their own for videos). See

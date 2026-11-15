@@ -30,21 +30,37 @@ pub struct Listener {
     pub tcp_local: SocketAddr,
 }
 
+/// How many free UDP ports `Listener::bind` tries, given port 0, for one whose number TCP also
+/// has free.
+const EPHEMERAL_ATTEMPTS: u32 = 16;
+
 impl Listener {
-    /// Binds UDP and TCP on `port` of `ip`; port 0 takes a free port for UDP and the same for
-    /// TCP, as tests do.
+    /// Binds UDP and TCP on `port` of `ip`. Port 0, as tests and `estimate-capacity` give,
+    /// takes a free UDP port and the same for TCP, trying other ports while something else
+    /// holds that one over TCP (`EPHEMERAL_ATTEMPTS`).
     pub fn bind(
         ip: std::net::IpAddr,
         announced: Option<std::net::IpAddr>,
         port: u16,
     ) -> io::Result<Self> {
-        let bound = SocketAddr::new(ip, port);
-        let udp = aspen_sockets::std_udp_socket(bound, Some(UDP_BUFFER_BYTES))
-            .map_err(|e| io::Error::new(e.kind(), format!("media UDP on {bound}: {e}")))?;
-        let port = udp.local_addr()?.port();
-        let bound = SocketAddr::new(ip, port);
-        let tcp = aspen_sockets::std_tcp_listener(bound)
-            .map_err(|e| io::Error::new(e.kind(), format!("media TCP on {bound}: {e}")))?;
+        let mut attempts = if port == 0 { EPHEMERAL_ATTEMPTS } else { 1 };
+        let (udp, tcp, port, bound) = loop {
+            let bound = SocketAddr::new(ip, port);
+            let udp = aspen_sockets::std_udp_socket(bound, Some(UDP_BUFFER_BYTES))
+                .map_err(|e| io::Error::new(e.kind(), format!("media UDP on {bound}: {e}")))?;
+            let port = udp.local_addr()?.port();
+            let bound = SocketAddr::new(ip, port);
+            match aspen_sockets::std_tcp_listener(bound) {
+                Ok(tcp) => break (udp, tcp, port, bound),
+                Err(e) if e.kind() == io::ErrorKind::AddrInUse && attempts > 1 => attempts -= 1,
+                Err(e) => {
+                    return Err(io::Error::new(
+                        e.kind(),
+                        format!("media TCP on {bound}: {e}"),
+                    ));
+                }
+            }
+        };
         if let Ok((receive, _)) = aspen_sockets::buffer_sizes(&udp)
             && receive < UDP_BUFFER_BYTES
         {

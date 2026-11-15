@@ -46,11 +46,12 @@ and writes it into its working directory before starting the server.
 - **Fargate for the API servers and NATS.** They keep nothing on disk and take TCP alone, so there
   is no machine worth owning beneath them.
 - **A machine each for the voice servers.** People's devices send media to a voice server's own
-  address, over a thousand UDP ports. No load balancer carries that, so each has an Elastic IP and
-  the host's network. ECS still runs its container, so it is released the way the API servers are.
-  On the host's network the instance metadata service would answer the voice server with the machine
-  role's credentials, so the voice image runs as a user of its own (10002), which every machine
-  running it refuses that address from boot (`deploy/aws-single/machine/voice-imds.service`).
+  address, over UDP and TCP ports of its own. No load balancer carries that, so each has an Elastic
+  IP and the host's network. ECS still runs its container, so it is released the way the API servers
+  are. On the host's network the instance metadata service would answer the voice server with the
+  machine role's credentials, so the voice image runs as a user of its own (10002), which every
+  machine running it refuses that address from boot
+  (`deploy/aws-single/machine/voice-imds.service`).
 - **Signalling goes through the load balancer**, which already holds a certificate for every name
   under the domain. A voice server then needs no certificate of its own to renew.
 - **The servers are in public subnets.** The API servers must reach the internet directly (link
@@ -169,12 +170,12 @@ most wants to reach: a small rented server, or a small computer at home.
   system has both, or one package away. A compiled tool would need building for each architecture
   before it could help anyone start.
 - **Every container on the machine's network, every service on loopback.** The voice server's media
-  is a range of UDP ports, which Docker publishes one process a port. With everything beside it, no
-  service is reachable from another machine whatever the firewall says, which matters most where
-  there is no firewall but a home router.
+  is a range of UDP and TCP ports, which Docker publishes one process a port. With everything beside
+  it, no service is reachable from another machine whatever the firewall says, which matters most
+  where there is no firewall but a home router.
 - **Nothing on loopback trusts a caller for being there.** Loopback is shared with the voice server,
-  which takes media from the internet through a large C++ library, so a flaw there must not reach
-  the rest: Valkey asks for a password, Caddy's admin API, which could rewrite the whole proxy, is a
+  which reads media, DTLS, and STUN from anyone on the internet, so a flaw there must not reach the
+  rest: Valkey asks for a password, Caddy's admin API, which could rewrite the whole proxy, is a
   socket inside Caddy's own container that `caddy reload` run there reaches, and PostgreSQL, NATS,
   and Garage each ask for credentials of their own.
 - **Two places for the API server, one running.** An upgrade, or a changed `aspen.toml`, starts the
