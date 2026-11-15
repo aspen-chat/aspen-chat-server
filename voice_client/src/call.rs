@@ -22,8 +22,8 @@
 use crate::api::{Api, ApiError, Candidate, Credentials, JoinOffer};
 use crate::peer_connection::{
     Configuration, ConnectionState, DescriptionKind, Direction, PeerConnection,
-    PeerConnectionError, PeerConnectionFactory, PeerConnectionObserver, SendEncoding,
-    SessionDescription, TrackId, TransceiverId,
+    PeerConnectionError, PeerConnectionFactory, PeerConnectionObserver, SessionDescription,
+    TrackId, TransceiverId,
 };
 use crate::signalling::{Incoming, Signalling, signalling_url};
 use crate::state::{
@@ -61,12 +61,6 @@ pub const REJOIN_DELAY_MAX: Duration = Duration::from_secs(1);
 pub const DEAD_SERVER_RETRY: Duration = Duration::from_secs(60);
 /// How long the server keeps a participant whose socket dropped, for `resume`.
 pub const RESUME_GRACE: Duration = Duration::from_secs(RESUME_GRACE_SECONDS);
-
-/// A shared screen is sent as one layer allowed up to 25 Mbps at 60 frames a second, a ceiling
-/// the connection's bandwidth estimate brings down, and a camera up to 4 Mbps at 30, which a
-/// 1080p camera fills well. Asked of the sender once its section is answered.
-const SCREEN_ENCODING: (u32, f64) = (25_000_000, 60.0);
-const CAMERA_ENCODING: (u32, f64) = (4_000_000, 30.0);
 
 /// The platform's side of the network and of WebRTC.
 pub struct Platform {
@@ -328,8 +322,10 @@ struct Live {
     secret: String,
     sections: Vec<Section>,
     transceivers: HashMap<String, TransceiverId>,
-    /// Sending sections whose encodings have been asked of the sender.
-    tuned: Vec<String>,
+    /// The answer to the call connection's latest offer, by revision. The server restates an
+    /// offer still outstanding after a resume, with the same revision, and the peer connection
+    /// has already applied it: the same answer is sent again and nothing is negotiated anew.
+    answered: Option<(u64, String)>,
     /// The track on the microphone's sender: `None` while the user shows muted.
     microphone_attached: Option<TrackId>,
     /// The volume last set on each receiver, so one is set only when it changes.
@@ -801,13 +797,18 @@ impl Call {
         link.send(ClientMessage::StopSending { source }).await;
     }
 
-    async fn set_watched(&mut self, video: Vec<WatchedVideo>) {
-        self.state.watching = video.clone();
+    /// Asks for `video`, the first `max_watched_video` of it: the server gives sections for no
+    /// more and leaves the rest out, so asking for them would only mislead the state.
+    async fn set_watched(&mut self, mut video: Vec<WatchedVideo>) {
         if self.state.status == CallStatus::Connected
             && let Some(live) = &self.live
         {
+            video.truncate(self.state.max_watched_video as usize);
+            self.state.watching = video.clone();
             let link = live.link.clone();
             link.send(ClientMessage::Watch { video }).await;
+        } else {
+            self.state.watching = video;
         }
     }
 
@@ -1062,11 +1063,18 @@ impl Call {
                 user,
                 participants,
                 audio_slots,
+                max_watched_video,
                 resume,
                 ..
             } => {
-                self.admitted(session, user, participants, audio_slots, resume)
-                    .await
+                self.admitted(
+                    session,
+                    user,
+                    participants,
+                    (audio_slots, max_watched_video),
+                    resume,
+                )
+                .await
             }
             // Turned away for joining too fast is a refusal to wait out, not the server failing,
             // and another server would refuse it no differently.
@@ -1099,7 +1107,7 @@ impl Call {
         session: Uuid,
         user: Uuid,
         participants: Vec<ParticipantInfo>,
-        audio_slots: u8,
+        (audio_slots, max_watched_video): (u8, u32),
         secret: String,
     ) {
         let Some(trying) = self.attempt.as_mut().and_then(|a| a.current.take()) else {
@@ -1113,6 +1121,7 @@ impl Call {
         self.state.user = Some(user);
         self.state.participants = participants.into_iter().map(participant).collect();
         self.state.audio_slots = audio_slots;
+        self.state.max_watched_video = max_watched_video;
         self.live = Some(Live {
             server: trying.candidate,
             link,
@@ -1120,7 +1129,7 @@ impl Call {
             secret,
             sections: Vec::new(),
             transceivers: HashMap::new(),
-            tuned: Vec::new(),
+            answered: None,
             microphone_attached: None,
             volumes_applied: HashMap::new(),
             resuming: None,
@@ -1273,6 +1282,7 @@ impl Call {
         self.state.participants.clear();
         self.state.sources.clear();
         self.state.audio_slots = 0;
+        self.state.max_watched_video = 0;
         self.state.slots.clear();
         self.state.videos.clear();
         self.state.share_audio.clear();
@@ -1672,12 +1682,29 @@ impl Call {
         }
     }
 
-    /// Answers the server's offer: each section the client sends gets its track and direction
-    /// before the answer is made, so the answer carries them; the answer is applied and sent;
-    /// and only then are the sections taken as the connection's, so what the state shows is
-    /// what media flows on.
+    /// Answers the server's offer, as the web client's `VoiceCall` does: each section the client
+    /// sends is set `sendonly` with its track before the answer is made, so the answer carries
+    /// them; the answer is applied; the encodings of a screen or camera sent are bounded, which
+    /// the applied answer makes the sender's; the answer is sent; and only then are the sections
+    /// taken as the connection's, so what the state shows is what media flows on. Offers arrive
+    /// one at a time, since the server waits for each answer before its next.
     async fn apply_offer(&mut self, revision: u64, sdp: String, sections: Vec<Section>) {
-        let Some(peer) = self.live.as_ref().and_then(|live| live.connection.clone()) else {
+        let Some(live) = &self.live else {
+            return;
+        };
+        if let Some((answered, answer)) = &live.answered
+            && *answered == revision
+        {
+            let (link, answer) = (live.link.clone(), answer.clone());
+            link.send(ClientMessage::Answer {
+                connection: ConnectionKind::Call,
+                revision,
+                sdp: answer,
+            })
+            .await;
+            return;
+        }
+        let Some(peer) = live.connection.clone() else {
             return;
         };
         let outgoing: HashMap<MediaSource, Option<TrackId>> = self
@@ -1688,6 +1715,7 @@ impl Call {
             .chain([(MediaSource::Microphone, self.outgoing_microphone())])
             .collect();
         let result: Result<String, PeerConnectionError> = async {
+            let mut encodings = Vec::new();
             peer.pc
                 .set_remote_description(SessionDescription {
                     kind: DescriptionKind::Offer,
@@ -1702,11 +1730,15 @@ impl Call {
                     )));
                 };
                 if let SectionContent::Sending { source } = &section.content {
-                    let track = outgoing.get(source).cloned().flatten();
-                    peer.pc.replace_track(transceiver, track).await?;
+                    // The server receives on a section it offers for what this client sends.
                     peer.pc
                         .set_direction(transceiver, Direction::SendOnly)
                         .await?;
+                    let track = outgoing.get(source).cloned().flatten();
+                    peer.pc.replace_track(transceiver, track).await?;
+                    if let Some(encoding) = encoding_of(*source) {
+                        encodings.push((transceiver, encoding));
+                    }
                 }
             }
             let answer = peer.pc.create_answer().await?;
@@ -1716,6 +1748,9 @@ impl Call {
                     sdp: answer.clone(),
                 })
                 .await?;
+            for (transceiver, encoding) in encodings {
+                encode(&peer, transceiver, encoding).await?;
+            }
             Ok(answer)
         }
         .await;
@@ -1724,6 +1759,7 @@ impl Call {
                 let Some(live) = &mut self.live else {
                     return;
                 };
+                live.answered = Some((revision, answer.clone()));
                 live.microphone_attached =
                     outgoing.get(&MediaSource::Microphone).cloned().flatten();
                 let link = live.link.clone();
@@ -1747,8 +1783,8 @@ impl Call {
     }
 
     /// Takes `sections` as what the connection carries: the tracks of the slots and videos
-    /// received are read, the senders of a new screen or camera section get their encodings, and
-    /// a source whose section the server took away (its grant gone) is forgotten.
+    /// received are read, and a source whose section the server took away (its grant gone) is
+    /// forgotten.
     async fn sections_applied(&mut self, sections: Vec<Section>, peer: &Peer) {
         let Some(live) = &mut self.live else {
             return;
@@ -1768,21 +1804,13 @@ impl Call {
         live.sections = sections.clone();
         let mut videos = Vec::new();
         let mut share_audio = Vec::new();
-        let mut tune = Vec::new();
         let mut volumes = Vec::new();
         for section in &sections {
             let Some(&transceiver) = live.transceivers.get(&section.mid) else {
                 continue;
             };
             match &section.content {
-                SectionContent::Sending { source } => {
-                    if matches!(source, MediaSource::Screen | MediaSource::Camera)
-                        && !live.tuned.contains(&section.mid)
-                    {
-                        live.tuned.push(section.mid.clone());
-                        tune.push((transceiver, *source));
-                    }
-                }
+                SectionContent::Sending { .. } => {}
                 SectionContent::AudioSlot { slot } => {
                     let at = usize::from(*slot);
                     while self.state.slots.len() <= at {
@@ -1823,20 +1851,6 @@ impl Call {
                 .any(|s| s.content == SectionContent::Sending { source });
             if !still {
                 self.state.sources.retain(|s| s.source != source);
-            }
-        }
-        for (transceiver, source) in tune {
-            let (max_bitrate, max_framerate) = match source {
-                MediaSource::Screen => SCREEN_ENCODING,
-                _ => CAMERA_ENCODING,
-            };
-            if let Ok(mut parameters) = peer.pc.sender_parameters(transceiver).await {
-                if parameters.encodings.is_empty() {
-                    parameters.encodings.push(SendEncoding::default());
-                }
-                parameters.encodings[0].max_bitrate = Some(max_bitrate);
-                parameters.encodings[0].max_framerate = Some(max_framerate);
-                let _ = peer.pc.set_sender_parameters(transceiver, parameters).await;
             }
         }
         for (mid, user, source) in volumes {
@@ -1922,6 +1936,7 @@ impl Call {
                 user,
                 participants,
                 audio_slots,
+                max_watched_video,
                 resume,
                 ..
             } => {
@@ -1939,6 +1954,7 @@ impl Call {
                 self.state.user = Some(user);
                 self.state.participants = participants.into_iter().map(participant).collect();
                 self.state.audio_slots = audio_slots;
+                self.state.max_watched_video = max_watched_video;
                 self.state.status = CallStatus::Connected;
             }
             // The server would not take the participant back: the grace ran out, or the secret
@@ -1978,6 +1994,36 @@ impl Call {
             self.rejoin(true).await;
         }
     }
+}
+
+/// How a sent video is bounded: a shared screen as one layer allowed up to 25 Mbps at 60 frames
+/// a second, a ceiling the connection's bandwidth estimate brings down, and a camera up to 4 Mbps
+/// at 30, which a 1080p camera fills well. Sound is left to the encoder.
+fn encoding_of(source: MediaSource) -> Option<(u32, f64)> {
+    match source {
+        MediaSource::Screen => Some((25_000_000, 60.0)),
+        MediaSource::Camera => Some((4_000_000, 30.0)),
+        MediaSource::Microphone | MediaSource::ScreenAudio => None,
+    }
+}
+
+/// Bounds what the sender's encoder may spend, as `encoding` says, when it is not so already.
+/// A sender with no encoding yet is left alone: the applied answer gives it one.
+async fn encode(
+    peer: &Peer,
+    transceiver: TransceiverId,
+    (max_bitrate, max_framerate): (u32, f64),
+) -> Result<(), PeerConnectionError> {
+    let mut parameters = peer.pc.sender_parameters(transceiver).await?;
+    let Some(first) = parameters.encodings.first_mut() else {
+        return Ok(());
+    };
+    if first.max_bitrate == Some(max_bitrate) && first.max_framerate == Some(max_framerate) {
+        return Ok(());
+    }
+    first.max_bitrate = Some(max_bitrate);
+    first.max_framerate = Some(max_framerate);
+    peer.pc.set_sender_parameters(transceiver, parameters).await
 }
 
 fn participant(info: ParticipantInfo) -> Participant {

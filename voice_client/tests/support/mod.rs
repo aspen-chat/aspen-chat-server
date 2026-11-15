@@ -16,8 +16,8 @@ use voice_client::api::Credentials;
 use voice_client::call::{Call, Command, Options, Platform};
 use voice_client::peer_connection::{
     Configuration, ConnectionState, DescriptionKind, Direction, MediaKind, PeerConnection,
-    PeerConnectionError, PeerConnectionFactory, PeerConnectionObserver, SenderParameters,
-    SessionDescription, SignalingState, StatsOf, TrackId, TransceiverId,
+    PeerConnectionError, PeerConnectionFactory, PeerConnectionObserver, SendEncoding,
+    SenderParameters, SessionDescription, SignalingState, StatsOf, TrackId, TransceiverId,
 };
 use voice_client::state::{CallObserver, CallState, CallStatus};
 use voice_client::transport::{
@@ -303,6 +303,7 @@ impl FakeServer {
             user,
             participants,
             audio_slots: 16,
+            max_watched_video: 25,
             resume: secret.to_string(),
             offers: Vec::new(),
             links: Vec::new(),
@@ -489,6 +490,7 @@ pub struct FakePeerConnection {
     pub id: usize,
     observer: Arc<dyn PeerConnectionObserver>,
     inner: Mutex<Inner>,
+    parameters: Mutex<HashMap<TransceiverId, SenderParameters>>,
     pub ops: Mutex<Vec<Op>>,
 }
 
@@ -584,7 +586,7 @@ impl PeerConnection for FakePeerConnection {
         _track: Option<TrackId>,
         _direction: Direction,
         _stream_id: Option<String>,
-        _send_encodings: Vec<voice_client::peer_connection::SendEncoding>,
+        _send_encodings: Vec<SendEncoding>,
     ) -> Result<TransceiverId, PeerConnectionError> {
         Err(PeerConnectionError(
             "the client adds no transceivers of its own".to_string(),
@@ -639,14 +641,21 @@ impl PeerConnection for FakePeerConnection {
         Ok(())
     }
 
+    /// One encoding, as a negotiated sender has, with whatever was last set on it.
     async fn sender_parameters(
         &self,
-        _transceiver: TransceiverId,
+        transceiver: TransceiverId,
     ) -> Result<SenderParameters, PeerConnectionError> {
-        Ok(SenderParameters {
-            encodings: Vec::new(),
-            rest: serde_json::Value::Null,
-        })
+        Ok(self
+            .parameters
+            .lock()
+            .unwrap()
+            .get(&transceiver)
+            .cloned()
+            .unwrap_or(SenderParameters {
+                encodings: vec![SendEncoding::default()],
+                rest: serde_json::Value::Null,
+            }))
     }
 
     async fn set_sender_parameters(
@@ -660,6 +669,10 @@ impl PeerConnection for FakePeerConnection {
             first.and_then(|e| e.max_bitrate),
             first.and_then(|e| e.max_framerate),
         ));
+        self.parameters
+            .lock()
+            .unwrap()
+            .insert(transceiver, parameters);
         Ok(())
     }
 
@@ -738,6 +751,7 @@ impl PeerConnectionFactory for FakePeerConnections {
                 closed: false,
                 fail_remote: false,
             }),
+            parameters: Mutex::new(HashMap::new()),
             ops: Mutex::new(Vec::new()),
         });
         created.push(pc.clone());

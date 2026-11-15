@@ -474,8 +474,8 @@ async fn the_microphone_is_sent_once_its_section_is_offered_and_muting_takes_it_
         pc.ops(),
         vec![
             Op::SetRemote("v=0 mids=0,1".to_string()),
-            Op::ReplaceTrack("1".to_string(), Some(mic())),
             Op::SetDirection("1".to_string(), Direction::SendOnly),
+            Op::ReplaceTrack("1".to_string(), Some(mic())),
             Op::CreateAnswer,
             Op::SetLocal("answer mids=0,1".to_string()),
         ]
@@ -888,11 +888,18 @@ async fn a_camera_is_sent_with_its_encodings_and_stopped() {
     settle().await;
     let ops = pc.ops();
     assert!(ops.contains(&Op::ReplaceTrack("2".to_string(), Some(camera.clone()))));
-    assert!(ops.contains(&Op::SetEncoding(
-        "2".to_string(),
-        Some(4_000_000),
-        Some(30.0)
-    )));
+    let (local, encoded) = (
+        ops.iter()
+            .position(|op| matches!(op, Op::SetLocal(_)))
+            .unwrap(),
+        ops.iter()
+            .position(|op| *op == Op::SetEncoding("2".to_string(), Some(4_000_000), Some(30.0)))
+            .expect("the camera's encoding is bounded"),
+    );
+    assert!(
+        local < encoded,
+        "bounded once the answer is applied: {ops:?}"
+    );
     assert!(
         !ops.iter()
             .any(|op| matches!(op, Op::SetEncoding(mid, ..) if mid == "1"))
@@ -1383,6 +1390,74 @@ async fn a_fatal_error_mid_call_fails_it() {
 }
 
 // --- Resuming -------------------------------------------------------------------------------
+
+#[tokio::test(start_paused = true)]
+async fn an_offer_restated_after_a_resume_gets_the_same_answer_and_no_negotiation() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    let pc = w.pcs.latest();
+    a.offer(2, vec![slot("0", 0), sending("1", MediaSource::Microphone)]);
+    settle().await;
+    let answered = a.received();
+    assert!(matches!(
+        answered.as_slice(),
+        [ClientMessage::Answer { revision: 2, .. }]
+    ));
+    pc.ops();
+    // The socket drops before the answer reached the server, which offers revision 2 again.
+    a.close();
+    settle().await;
+    a.received();
+    a.ready(w.session, w.user, Vec::new(), "secret-2");
+    a.offer(2, vec![slot("0", 0), sending("1", MediaSource::Microphone)]);
+    settle().await;
+    assert_eq!(a.received(), answered, "the very same answer frame");
+    assert!(
+        pc.ops().is_empty(),
+        "nothing is asked of the peer connection"
+    );
+    assert_eq!(w.state().status, CallStatus::Connected);
+    // The next revision is negotiated as usual.
+    a.offer(
+        3,
+        vec![
+            slot("0", 0),
+            sending("1", MediaSource::Microphone),
+            slot("2", 1),
+        ],
+    );
+    settle().await;
+    assert!(matches!(
+        a.received().as_slice(),
+        [ClientMessage::Answer { revision: 3, .. }]
+    ));
+    assert!(!pc.ops().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_watch_is_cut_to_the_videos_the_server_gives_sections_for() {
+    let w = World::new(0.5);
+    let (_, a) = w.connected(A).await;
+    assert_eq!(w.state().max_watched_video, 25);
+    let video: Vec<WatchedVideo> = (0..27)
+        .map(|_| WatchedVideo {
+            user: Uuid::now_v7(),
+            source: MediaSource::Camera,
+        })
+        .collect();
+    w.send(Command::SetWatched(video.clone()));
+    settle().await;
+    assert_eq!(
+        a.received(),
+        vec![ClientMessage::Watch {
+            video: video[..25].to_vec()
+        }]
+    );
+    assert_eq!(w.state().watching, video[..25]);
+    w.send(Command::Leave);
+    settle().await;
+    assert_eq!(w.state().max_watched_video, 0);
+}
 
 #[tokio::test(start_paused = true)]
 async fn a_dropped_socket_is_resumed_within_the_grace_with_media_kept() {

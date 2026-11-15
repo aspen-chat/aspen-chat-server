@@ -86,7 +86,8 @@ pub struct AudioSlot {
     pub track: Option<TrackId>,
 }
 
-/// A video the client watches and has a section for: a camera or a shared screen.
+/// A video the client watches and has a section for: a camera or a shared screen. The client's
+/// own share, watched for its preview, is one too.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteVideo {
@@ -95,7 +96,8 @@ pub struct RemoteVideo {
     pub track: TrackId,
 }
 
-/// The sound of a shared screen the client watches.
+/// The sound of a shared screen the client watches. Only others' shares have one: the server
+/// gives no section for the sound of the client's own share, which it hears at its source.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareAudio {
@@ -151,9 +153,12 @@ pub struct CallState {
     pub sources: Vec<LocalSource>,
     /// How many audio slots the server fills at most (`ready`); `slots` grows towards it.
     pub audio_slots: u8,
+    /// The most videos the server gives sections for (`ready`); a `watch` is cut to it.
+    pub max_watched_video: u32,
     pub slots: Vec<AudioSlot>,
-    /// The videos the client asked to show, sent as `watch`; the server gives a section for
-    /// each that exists, as `videos` and `share_audio` then show.
+    /// The videos the client asked to show, sent as `watch`, the first `max_watched_video` of
+    /// them once that is known; the server gives a section for each that exists, as `videos`
+    /// and `share_audio` then show.
     pub watching: Vec<WatchedVideo>,
     pub videos: Vec<RemoteVideo>,
     pub share_audio: Vec<ShareAudio>,
@@ -186,6 +191,7 @@ impl Default for CallState {
             microphone: None,
             sources: Vec::new(),
             audio_slots: 0,
+            max_watched_video: 0,
             slots: Vec::new(),
             watching: Vec::new(),
             videos: Vec::new(),
