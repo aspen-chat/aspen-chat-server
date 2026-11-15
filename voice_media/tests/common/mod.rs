@@ -90,11 +90,21 @@ pub struct Peer {
 
 impl Peer {
     pub fn join(media: &Media, call: CallId, id: u64) -> Self {
+        Self::join_over(media, call, id, false)
+    }
+
+    /// Joins with a client that reaches the server over TCP alone, as one whose network blocks
+    /// UDP does.
+    pub fn join_over_tcp(media: &Media, call: CallId, id: u64) -> Self {
+        Self::join_over(media, call, id, true)
+    }
+
+    fn join_over(media: &Media, call: CallId, id: u64, tcp: bool) -> Self {
         let (events_tx, events) = mpsc::unbounded_channel();
         let (client, commands) = mpsc::unbounded_channel();
         let (received_tx, received) = mpsc::unbounded_channel();
         let user = Uuid::now_v7();
-        tokio::spawn(run_client(commands, received_tx));
+        tokio::spawn(run_client(commands, received_tx, tcp));
         assert!(media.send(
             0,
             Command::Join {
@@ -151,7 +161,7 @@ impl Peer {
                                 let (client, commands) = mpsc::unbounded_channel();
                                 // The helper receives nothing; what reaches it is dropped.
                                 let (received, _) = mpsc::unbounded_channel();
-                                tokio::spawn(run_client(commands, received));
+                                tokio::spawn(run_client(commands, received, false));
                                 client
                             })
                         }
@@ -272,17 +282,68 @@ struct Sending {
     due: Instant,
 }
 
+/// A TCP stream to the server, and what has arrived on it not yet framed.
+struct Framed {
+    stream: tokio::net::TcpStream,
+    peer: SocketAddr,
+    read: Vec<u8>,
+}
+
+/// The whole RFC 4571 packets that arrive next; a closed stream gives none, for ever.
+async fn read_framed(stream: &mut Option<Framed>) -> Vec<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let Some(framed) = stream.as_mut() else {
+        return std::future::pending().await;
+    };
+    let mut buf = [0u8; 4096];
+    loop {
+        let mut packets = Vec::new();
+        while framed.read.len() >= 2 {
+            let size = u16::from_be_bytes([framed.read[0], framed.read[1]]) as usize;
+            if framed.read.len() < 2 + size {
+                break;
+            }
+            packets.push(framed.read[2..2 + size].to_vec());
+            framed.read.drain(..2 + size);
+        }
+        if !packets.is_empty() {
+            return packets;
+        }
+        match framed.stream.read(&mut buf).await {
+            Ok(0) | Err(_) => return std::future::pending().await,
+            Ok(n) => framed.read.extend_from_slice(&buf[..n]),
+        }
+    }
+}
+
 async fn run_client(
     mut commands: mpsc::UnboundedReceiver<ToClient>,
     received: mpsc::UnboundedSender<Received>,
+    tcp: bool,
 ) {
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    // Over TCP: one stream to the server, opened with the first packet for it, and an active
+    // candidate (port 9, as RFC 6544 has it) in place of the UDP one.
+    let mut stream: Option<Framed> = None;
+    // Packets arrive at the candidate str0m knows, whatever port the stream took.
+    let tcp_local: SocketAddr = "127.0.0.1:9".parse().unwrap();
     let local: SocketAddr = socket.local_addr().unwrap();
     let mut rtc = Rtc::builder()
         .set_rtp_mode(true)
         .set_stats_interval(None)
         .build(Instant::now());
-    rtc.add_local_candidate(str0m::Candidate::host(local, "udp").unwrap());
+    if tcp {
+        rtc.add_local_candidate(
+            str0m::Candidate::builder()
+                .tcp()
+                .host(tcp_local)
+                .tcptype(str0m::net::TcpType::Active)
+                .build()
+                .unwrap(),
+        );
+    } else {
+        rtc.add_local_candidate(str0m::Candidate::host(local, "udp").unwrap());
+    }
     let mut sending: Vec<Sending> = Vec::new();
     let filler: Arc<[u8]> = vec![0x5a_u8; 1100].into();
     let mut buf = vec![0u8; 2048];
@@ -290,7 +351,26 @@ async fn run_client(
         let timeout = loop {
             match rtc.poll_output() {
                 Ok(Output::Transmit(t)) => {
-                    let _ = socket.send_to(&t.contents, t.destination).await;
+                    if t.proto == Protocol::Tcp {
+                        if stream.is_none() {
+                            let Ok(connected) = tokio::net::TcpStream::connect(t.destination).await
+                            else {
+                                continue;
+                            };
+                            stream = Some(Framed {
+                                stream: connected,
+                                peer: t.destination,
+                                read: Vec::new(),
+                            });
+                        }
+                        let framed = stream.as_mut().unwrap();
+                        let mut packet = (t.contents.len() as u16).to_be_bytes().to_vec();
+                        packet.extend_from_slice(&t.contents);
+                        use tokio::io::AsyncWriteExt;
+                        let _ = framed.stream.write_all(&packet).await;
+                    } else {
+                        let _ = socket.send_to(&t.contents, t.destination).await;
+                    }
                 }
                 Ok(Output::Timeout(at)) => break at,
                 Ok(Output::Event(RtcEvent::RtpPacket(packet))) => {
@@ -318,6 +398,16 @@ async fn run_client(
         let due = sending.iter().map(|s| s.due).min();
         let wake = due.map_or(timeout, |d| d.min(timeout));
         tokio::select! {
+            packets = read_framed(&mut stream), if stream.is_some() => {
+                for packet in packets {
+                    let peer = stream.as_ref().unwrap().peer;
+                    let input = Input::Receive(Instant::now(), Receive {
+                        proto: Protocol::Tcp, source: peer, destination: tcp_local,
+                        contents: packet.as_slice().try_into().unwrap(),
+                    });
+                    rtc.handle_input(input).unwrap();
+                }
+            }
             read = socket.recv_from(&mut buf) => {
                 let Ok((n, source)) = read else { continue };
                 let input = Input::Receive(Instant::now(), Receive {

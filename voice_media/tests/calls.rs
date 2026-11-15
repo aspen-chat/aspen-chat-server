@@ -595,3 +595,26 @@ async fn an_offer_left_unanswered_fails_its_connection() {
         })
     ));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_without_udp_connects_over_tcp() {
+    let media = media(16);
+    let call = call();
+    let mut ann = Peer::join_over_tcp(&media, call, 1);
+    let mut bob = Peer::join(&media, call, 2);
+    ann.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
+        .await
+        .expect("Ann connects over TCP");
+    bob.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
+        .await
+        .unwrap();
+    let ann_mid = open_microphone(&media, &mut ann).await;
+    let bob_mid = open_microphone(&media, &mut bob).await;
+    ann.send_audio(&ann_mid, Some(-30));
+    bob.send_audio(&bob_mid, Some(-30));
+    ann.settle(&media).await;
+    bob.settle(&media).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(bob.drain().len() > 10, "Bob hears Ann, who sends over TCP");
+    assert!(ann.drain().len() > 10, "Ann hears Bob over TCP");
+}
