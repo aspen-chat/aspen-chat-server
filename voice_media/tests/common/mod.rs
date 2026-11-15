@@ -78,9 +78,12 @@ pub struct Peer {
     pub user: Uuid,
     pub events: mpsc::UnboundedReceiver<Event>,
     client: mpsc::UnboundedSender<ToClient>,
+    /// The game capture helper's client, made with the first capture offer.
+    capture: Option<mpsc::UnboundedSender<ToClient>>,
     pub received: mpsc::UnboundedReceiver<Received>,
-    /// The sections of the latest offer.
+    /// The sections of the latest offer of each connection.
     pub sections: Vec<Section>,
+    pub capture_sections: Vec<Section>,
     pub slots: HashMap<u8, Option<Uuid>>,
     pub log: Vec<Event>,
 }
@@ -106,8 +109,10 @@ impl Peer {
             user,
             events,
             client,
+            capture: None,
             received,
             sections: Vec::new(),
+            capture_sections: Vec::new(),
             slots: HashMap::new(),
             log: Vec::new(),
         }
@@ -135,10 +140,24 @@ impl Peer {
                     sections,
                     ..
                 } => {
-                    assert_eq!(*connection, ConnectionKind::Call);
-                    self.sections = sections.clone();
+                    let client = match connection {
+                        ConnectionKind::Call => {
+                            self.sections = sections.clone();
+                            &self.client
+                        }
+                        ConnectionKind::Capture => {
+                            self.capture_sections = sections.clone();
+                            self.capture.get_or_insert_with(|| {
+                                let (client, commands) = mpsc::unbounded_channel();
+                                // The helper receives nothing; what reaches it is dropped.
+                                let (received, _) = mpsc::unbounded_channel();
+                                tokio::spawn(run_client(commands, received));
+                                client
+                            })
+                        }
+                    };
                     let (reply, answer) = oneshot::channel();
-                    self.client
+                    client
                         .send(ToClient::Offer {
                             sdp: sdp.clone(),
                             reply,
@@ -188,6 +207,22 @@ impl Peer {
                 level,
             })
             .unwrap();
+    }
+
+    /// Sends H.264 on a section of the capture connection, as the game capture helper does.
+    pub fn capture_video(&self, mid: &str) {
+        self.capture
+            .as_ref()
+            .expect("a capture connection")
+            .send(ToClient::Video { mid: mid.into() })
+            .unwrap();
+    }
+
+    pub fn capture_mid_of(&self, content: &SectionContent) -> Option<String> {
+        self.capture_sections
+            .iter()
+            .find(|s| &s.content == content)
+            .map(|s| s.mid.clone())
     }
 
     pub fn send_video(&self, mid: &str) {
@@ -313,6 +348,9 @@ async fn run_client(
                         let _ = reply.send(ssrc);
                     }
                 }
+                // str0m schedules from its last input: a change (an answer given, say) is acted
+                // on once it is given the time.
+                rtc.handle_input(Input::Timeout(Instant::now())).unwrap();
             }
             _ = tokio::time::sleep_until(wake.into()) => {
                 let now = Instant::now();

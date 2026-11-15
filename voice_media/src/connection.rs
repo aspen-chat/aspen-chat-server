@@ -49,6 +49,9 @@ pub struct Connection {
     /// The ICE username fragment clients address this connection by.
     pub ufrag: String,
     pub revision: u64,
+    /// The revision of the last answer applied: a section offered later carries nothing yet,
+    /// since the client cannot take it before it has answered.
+    pub answered: u64,
     pending: Option<SdpPendingOffer>,
     pub offered_at: Option<Instant>,
     pub restart_ice: bool,
@@ -118,6 +121,7 @@ impl Connection {
             timeout: Instant::now(),
             ufrag,
             revision: 0,
+            answered: 0,
             pending: None,
             offered_at: None,
             restart_ice: false,
@@ -256,6 +260,7 @@ impl Connection {
                     .map(|(mid, kind, content)| Sectioned { mid, kind, content }),
             );
         let (offer, pending) = offer?;
+        self.touch(now);
         self.pending = Some(pending);
         self.offered_at = Some(now);
         self.revision += 1;
@@ -324,7 +329,10 @@ impl Connection {
         let pending = self.pending.take().expect("checked above");
         self.offered_at = None;
         match self.guarded(|rtc| rtc.sdp_api().accept_answer(pending, answer)) {
-            Some(Ok(())) => {}
+            Some(Ok(())) => {
+                self.answered = revision;
+                self.touch(Instant::now());
+            }
             Some(Err(e)) => {
                 tracing::warn!("answer: {e}");
                 return Err(Failure::BadAnswer);
@@ -408,5 +416,12 @@ impl Connection {
                 stream.request_keyframe(kind);
             }
         });
+        self.touch(Instant::now());
+    }
+
+    /// Gives str0m the time after a change made through its API, which it schedules from only
+    /// at its next input.
+    fn touch(&mut self, now: Instant) {
+        self.handle_input(Input::Timeout(now));
     }
 }

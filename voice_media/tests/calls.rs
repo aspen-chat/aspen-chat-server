@@ -366,3 +366,232 @@ async fn an_ice_restart_is_offered_and_media_goes_on() {
         "Bob still hears Ann after the restart"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_capture_connection_sends_a_share_its_sender_previews() {
+    let media = media(16);
+    let call = call();
+    let mut ann = Peer::join(&media, call, 1);
+    let mut bob = Peer::join(&media, call, 2);
+    ann.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
+        .await
+        .unwrap();
+    bob.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
+        .await
+        .unwrap();
+
+    send(
+        &media,
+        Command::Send {
+            participant: ann.id,
+            source: MediaSource::Screen,
+            external: true,
+        },
+    );
+    ann.until(&media, WAIT, |e| {
+        matches!(
+            e,
+            Event::Offer {
+                connection: voice_protocol::signal::ConnectionKind::Capture,
+                ..
+            }
+        )
+    })
+    .await
+    .expect("a capture connection is offered");
+    let mid = ann.capture_mid_of(&sending(MediaSource::Screen)).unwrap();
+    // The capture connection offers H.264 alone, which the helper encodes.
+    assert!(ann.log.iter().any(|e| matches!(e,
+        Event::Offer { connection: voice_protocol::signal::ConnectionKind::Capture, sdp, .. }
+            if sdp.contains("H264/90000") && !sdp.contains("VP8/90000"))));
+    ann.until(&media, WAIT, |e| {
+        matches!(
+            e,
+            Event::Connected {
+                connection: voice_protocol::signal::ConnectionKind::Capture,
+                ..
+            }
+        )
+    })
+    .await
+    .expect("the capture connection connects");
+    ann.capture_video(&mid);
+
+    let share = (ann.user, MediaSource::Screen);
+    send(
+        &media,
+        Command::Watch {
+            participant: bob.id,
+            video: vec![share],
+        },
+    );
+    send(
+        &media,
+        Command::Watch {
+            participant: ann.id,
+            video: vec![share],
+        },
+    );
+    bob.until(&media, WAIT, |e| {
+        matches!(e, Event::Offer { revision: 2, .. })
+    })
+    .await
+    .unwrap();
+    ann.until(&media, WAIT, |e| {
+        matches!(
+            e,
+            Event::Offer {
+                connection: voice_protocol::signal::ConnectionKind::Call,
+                revision: 2,
+                ..
+            }
+        )
+    })
+    .await
+    .unwrap();
+    // Watching a screen brings a section for its sound too.
+    assert!(
+        bob.mid_of(&SectionContent::ShareAudio { user: ann.user })
+            .is_some()
+    );
+    bob.settle(&media).await;
+    ann.settle(&media).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let content = SectionContent::Video {
+        user: ann.user,
+        source: MediaSource::Screen,
+    };
+    for peer in [&mut bob, &mut ann] {
+        let video_mid = peer.mid_of(&content).unwrap();
+        let seen: Vec<_> = peer
+            .drain()
+            .into_iter()
+            .filter(|p| p.mid == video_mid)
+            .collect();
+        assert!(seen.len() > 20, "{} packets of the share", seen.len());
+        assert_eq!(seen[0].first_byte & 0x1f, 7, "it starts on a keyframe");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_who_leaves_is_taken_off_everyone_elses_slots_and_video() {
+    let media = media(16);
+    let call = call();
+    let mut ann = Peer::join(&media, call, 1);
+    let mut bob = Peer::join(&media, call, 2);
+    ann.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
+        .await
+        .unwrap();
+    bob.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
+        .await
+        .unwrap();
+    open_microphone(&media, &mut ann).await;
+    send(
+        &media,
+        Command::Send {
+            participant: ann.id,
+            source: MediaSource::Camera,
+            external: false,
+        },
+    );
+    ann.settle(&media).await;
+    send(
+        &media,
+        Command::Watch {
+            participant: bob.id,
+            video: vec![(ann.user, MediaSource::Camera)],
+        },
+    );
+    bob.settle(&media).await;
+    assert!(bob.slots.values().any(|u| *u == Some(ann.user)));
+    let content = SectionContent::Video {
+        user: ann.user,
+        source: MediaSource::Camera,
+    };
+    assert!(bob.mid_of(&content).is_some());
+
+    send(
+        &media,
+        Command::Leave {
+            participant: ann.id,
+        },
+    );
+    bob.until(&media, WAIT, |e| matches!(e, Event::Slots { .. }))
+        .await
+        .expect("Bob's slots change");
+    assert!(bob.slots.values().all(|u| *u != Some(ann.user)));
+    bob.settle(&media).await;
+    assert!(
+        bob.mid_of(&content).is_none(),
+        "Ann's camera is no longer offered to Bob"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deafened_hears_nothing_until_undeafened() {
+    let media = media(16);
+    let call = call();
+    let mut ann = Peer::join(&media, call, 1);
+    let mut bob = Peer::join(&media, call, 2);
+    ann.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
+        .await
+        .unwrap();
+    bob.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
+        .await
+        .unwrap();
+    let mid = open_microphone(&media, &mut ann).await;
+    ann.send_audio(&mid, Some(-30));
+    bob.until(&media, WAIT, |e| matches!(e, Event::Slots { .. }))
+        .await
+        .unwrap();
+    bob.settle(&media).await;
+    send(
+        &media,
+        Command::SetDeafened {
+            participant: bob.id,
+            deafened: true,
+        },
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    bob.drain();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(
+        bob.drain().is_empty(),
+        "a deafened participant hears nothing"
+    );
+    send(
+        &media,
+        Command::SetDeafened {
+            participant: bob.id,
+            deafened: false,
+        },
+    );
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(bob.drain().len() > 10, "undeafened, Bob hears Ann again");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_offer_left_unanswered_fails_its_connection() {
+    let media = media(16);
+    let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+    send(
+        &media,
+        Command::Join {
+            call: call(),
+            participant: voice_media::ParticipantId(1),
+            user: Uuid::now_v7(),
+            events,
+        },
+    );
+    assert!(matches!(received.recv().await, Some(Event::Offer { .. })));
+    let failed = tokio::time::timeout(Duration::from_secs(12), received.recv())
+        .await
+        .expect("a failure within the answer timeout");
+    assert!(matches!(
+        failed,
+        Some(Event::Failed {
+            reason: voice_media::Failure::AnswerTimedOut,
+            ..
+        })
+    ));
+}

@@ -155,6 +155,8 @@ struct Out {
     last_at: Option<Instant>,
     /// Whether the client wants it (`setReceiving`).
     receiving: bool,
+    /// The offer that added it; nothing is sent on it before that offer's answer.
+    revision: u64,
 }
 
 struct Sending {
@@ -715,6 +717,7 @@ impl Thread {
                         last_ts: 0,
                         last_at: None,
                         receiving: true,
+                        revision,
                     });
                 }
             }
@@ -1261,11 +1264,12 @@ impl Thread {
             };
             let deafened = receiver.deafened;
             let target = receiver.conn;
+            let answered = self.conns[target].as_ref().map_or(0, |c| c.answered);
             let Some(out) = receiver.outs.get_mut(&route.mid) else {
                 continue;
             };
             let audio = out.kind == MediaKind::Audio;
-            if !out.receiving || (deafened && audio) {
+            if !out.receiving || (deafened && audio) || out.revision > answered {
                 continue;
             }
             if out.source != Some(key) {
