@@ -35,7 +35,7 @@ pub enum TransportDirection {
 }
 
 /// What a producer carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum MediaSource {
     /// The participant's voice.
@@ -61,11 +61,59 @@ impl MediaSource {
 }
 
 /// The kind of media, as WebRTC names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum MediaKind {
     Audio,
     Video,
+}
+
+/// Which of a participant's peer connections a frame is about: the one every participant holds,
+/// or the one the desktop shell's game capture helper holds for what it sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ConnectionKind {
+    Call,
+    Capture,
+}
+
+/// What one media section of a peer connection carries, so a client can place each track it
+/// receives and attach each it sends. Told with the offer that adds the section, never after.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "carries",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SectionContent {
+    /// The client sends this source on it.
+    Sending { source: MediaSource },
+    /// One of the call's audio slots, which carries whichever microphone `slots` names.
+    AudioSlot { slot: u8 },
+    /// Another participant's video (`screen` or `camera`), or the client's own when it watches a
+    /// share it sends from outside the browser.
+    Video { user: Uuid, source: MediaSource },
+    /// The sound of a shared screen the client watches.
+    ShareAudio { user: Uuid },
+}
+
+/// One media section of an offer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Section {
+    /// The section's `a=mid` in the SDP.
+    pub mid: String,
+    pub kind: MediaKind,
+    #[serde(flatten)]
+    pub content: SectionContent,
+}
+
+/// Which microphone one audio slot carries from now on; `None` leaves it silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotAssignment {
+    pub slot: u8,
+    pub user: Option<Uuid>,
 }
 
 /// One producer of a participant, as told to the others.
