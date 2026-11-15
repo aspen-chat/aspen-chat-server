@@ -28,6 +28,10 @@ export interface StreamReport {
   readonly framesDecoded: number;
   readonly samples: number;
   readonly concealed: number;
+  /** Received audio's `totalAudioEnergy`: how loud what arrived has been, summed over time. */
+  readonly energy: number;
+  /** Received audio's `audioLevel`, the moment's loudness, 0 to 1. */
+  readonly level: number;
   /** The codec as negotiated: its MIME type and format parameters. */
   readonly codec: string;
 }
@@ -222,6 +226,8 @@ async function streams(): Promise<StreamReport[]> {
       framesDecoded: number(entry.framesDecoded),
       samples: number(entry.totalSamplesReceived),
       concealed: number(entry.concealedSamples),
+      energy: number(entry.totalAudioEnergy),
+      level: number(entry.audioLevel),
       codec: codecs.get(String(entry.codecId)) ?? "",
     });
   });

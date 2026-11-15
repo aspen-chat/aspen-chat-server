@@ -8,6 +8,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 class FakeCredentials : Credentials {
     override suspend fun sessionToken(): String? = "secret"
+    override suspend fun renewedSessionToken(rejected: String): String? = null
 }
 
 class FakeHttp : Http {

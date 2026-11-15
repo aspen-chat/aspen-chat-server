@@ -203,7 +203,7 @@ final class MessageFetcher {
                 done(nil)
                 return
             }
-            refresh(account: account) { [self] token in
+            TokenRefresh.refresh(account: account, session: session) { [self] token in
                 guard let token else {
                     done(nil)
                     return
@@ -226,29 +226,6 @@ final class MessageFetcher {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         session.dataTask(with: request) { data, response, _ in
             done((response as? HTTPURLResponse)?.statusCode ?? 0, data)
-        }.resume()
-    }
-
-    private func refresh(account: PushState.Account, done: @escaping (String?) -> Void) {
-        guard let url = URL(string: "\(account.origin)/api/v1/auth/token-refresh") else {
-            done(nil)
-            return
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["refreshToken": account.refreshToken])
-        session.dataTask(with: request) { data, response, _ in
-            guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  let data,
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let token = object["sessionToken"] as? String
-            else {
-                done(nil)
-                return
-            }
-            done(token)
         }.resume()
     }
 

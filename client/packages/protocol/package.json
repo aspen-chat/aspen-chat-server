@@ -15,7 +15,8 @@
     "typecheck": "node node_modules/typescript-7/bin/tsc --noEmit",
     "test": "vitest run",
     "build:calls": "vite build calls",
-    "calls": "tsx calls/drive.ts"
+    "calls": "tsx calls/drive.ts",
+    "calls:second": "tsx calls/second.ts"
   },
   "dependencies": {
     "ajv": "^8.20.0",

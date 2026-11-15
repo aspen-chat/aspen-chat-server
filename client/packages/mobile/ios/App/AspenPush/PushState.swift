@@ -100,6 +100,11 @@ enum PushStateStore {
         return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
     }
 
+    /// Takes the kept state away; nothing kept is no error.
+    static func remove() {
+        SecItemDelete(query() as CFDictionary)
+    }
+
     /// The typed state, when one is kept and reads as version 1.
     static func load() -> PushState? {
         guard let json = loadJSON(),

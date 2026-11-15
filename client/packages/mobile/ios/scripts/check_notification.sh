@@ -17,7 +17,7 @@ out="$(mktemp -d)"
 # Top-level code compiles only in a file named main.swift.
 cp scripts/check_notification.swift "$out/main.swift"
 xcrun swiftc -O -o "$out/check" App/AspenPush/WebPush.swift App/AspenPush/PushState.swift \
-    App/AspenNotificationService/NotificationService.swift "$out/main.swift"
+    App/AspenPush/TokenRefresh.swift App/AspenNotificationService/NotificationService.swift "$out/main.swift"
 if [ "$#" -eq 3 ]; then
     shown="$(cd "$(dirname "$3")" && pwd)/$(basename "$3")"
     "$out/check" "$state" "$payload" "$shown"

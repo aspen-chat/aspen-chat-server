@@ -216,6 +216,10 @@ impl Credentials for Token {
     async fn session_token(&self) -> Option<String> {
         Some("session-token".to_string())
     }
+
+    async fn renewed_session_token(&self, _rejected: String) -> Option<String> {
+        None
+    }
 }
 
 // --- Voice servers --------------------------------------------------------------------------------

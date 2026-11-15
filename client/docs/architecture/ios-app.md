@@ -1,16 +1,19 @@
-# The iOS app's UI tests
+# The iOS app
 
 The iOS project (`packages/mobile/ios`) is kept, as Android's is. CI builds it, and signs it for the
 App Store, as `apple-builds.md` describes. Its UI tests drive the app with real taps and finger
 drags in WebKit, against a real deployment. They check what the browser specs cannot reach: the iOS
 web view itself, the system's keyboard, photo picker, and notifications, links opened from outside
-the app, and the app being suspended and resumed.
+the app, and the app being suspended and resumed. The app also links the mobile call engine and the
+Swift layer under it, which the second half of this page describes.
 
 ## Where it lives
 
 | Part           | Location                                                  |
 | -------------- | --------------------------------------------------------- |
 | UI tests       | `ios/App/AppUITests`                                      |
+| Unit tests     | `ios/App/AppTests`, run in the app's process              |
+| The call layer | `ios/App/App/Call`                                        |
 | Scheme         | `App`                                                     |
 | Wrapper        | `ios/scripts/ui_tests.py`                                 |
 | Relay stand-in | `scripts/push_relay_stand_in.py` at the repository's root |
@@ -109,3 +112,63 @@ then reaches the app as a tap on the extension's notification would.
 | `testSendsAPictureFromThePhotoLibrary`    | Attaches a picture through the system's photo picker, describes it with the description dialog's Save above the keyboard, and sends it                                      |
 
 Only a device shows the extension launched for a push, and its replacement of the placeholder.
+
+## The call engine
+
+The mobile apps' calls run natively, in the call engine (`voice_client/` at the repository's root, a
+Rust crate: `voice_client/src/lib.rs` describes it), which drives the platform's WebRTC, HTTP, and
+WebSockets through interfaces each platform implements. The iOS implementation is
+`ios/App/App/Call`, compiled into the App target with the engine's generated Swift module. Nothing
+in the web view uses it yet: the Capacitor plugin that will command it and show its state, the
+call's sounds, CallKit, the camera, and the choice of route are later pieces.
+
+### What the App target links, and where it comes from
+
+| Piece                                                                                 | Where the project reads it                                                                                 | Made by                                                                                              |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Google's WebRTC, `WebRTC.xcframework`                                                 | `target/webrtc/`, linked and embedded                                                                      | `scripts/webrtc_build.py build` on a Mac, once (`docs/development/webrtc-build.md`)                  |
+| The engine, `libvoice_client.a`                                                       | `target/aarch64-apple-ios-sim/release/` for the simulator, `target/aarch64-apple-ios/release/` for devices | `ios/scripts/call_engine.py` (`cargo rustc --crate-type staticlib` for each target, against its SDK) |
+| Its Swift module: `VoiceClient.swift`, `VoiceClientFFI.h`, `VoiceClientFFI.modulemap` | `ios/VoiceClient/`, gitignored, compiled into the App target                                               | `scripts/voice_client_bindings.py --language swift` (`voice_client/README.md`)                       |
+
+`ios/scripts/call_engine.py` builds the engine for both targets (or `--simulator-only`), writes the
+bindings, and says when the framework is missing. The paths are the project's own build settings
+(library search paths by SDK, `-lvoice_client`, and the module map given to Swift with
+`-fmodule-map-file`), relative to the repository, so cargo must write to its default target
+directory. Both pieces have arm64 slices alone, so simulator builds exclude x86_64
+(`EXCLUDED_ARCHS`), and an Intel Mac cannot build the app. The App and AppTests targets both take
+the module map, since the test imports the app's module, whose interface names the FFI module;
+AppTests links the framework for the same reason and loads the engine's symbols from the app.
+
+### The layer
+
+Each file under `Call/` implements one of the engine's interfaces over the platform, as
+`voice_client/src/bindings.rs` declares them:
+
+| File                       | Implements                                                                   | Over                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CallEngine.swift`         | The assembly                                                                 | Starts an `Engine` for one deployment with the parts below; one WebRTC factory and one track registry for the process                                                                                                                                                                                                                                                                                                                                                                 |
+| `CallSnapshots.swift`      | `CallObserver`                                                               | Keeps the latest `CallState` and calls each listener on the main queue                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `CallHttp.swift`           | `Http`                                                                       | URLSession: no cookies, no redirects followed, every status answered as a response                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `CallSockets.swift`        | `SocketFactory`, `Socket`                                                    | `URLSessionWebSocketTask`, which answers pings itself; `connect` waits for the upgrade, so a refusal is a `TransportError`                                                                                                                                                                                                                                                                                                                                                            |
+| `CallCredentials.swift`    | `Credentials`                                                                | The account at the deployment among those `PushStateStore` keeps (the keychain item the web view writes on sign-in): its session token for each request, renewed through `TokenRefresh` (shared with the notification service extension) and written back when the API server refuses it                                                                                                                                                                                              |
+| `CallTracks.swift`         | The track ids the engine passes around                                       | WebRTC tracks by their own `trackId`: the microphone, and each receiver's track                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `CallPeerConnection.swift` | `PeerConnectionFactory`, `PeerConnection`, `PeerConnectionObserver`'s caller | `RTCPeerConnection`, unified plan, `max-bundle`, RTCP muxed. Transceivers are numbered in the order first seen and told apart by their sender's id, since `transceivers` wraps the native ones anew on every read; a sender's parameters object is kept between `getParameters` and `setParameters`; a receiver's volume is its audio track's source's; a statistics report is written as the W3C array with `id`, `type`, and `timestamp` in milliseconds beside each entry's values |
+| `CallAudio.swift`          | The audio session and the microphone                                         | `RTCAudioSession` in manual mode (`useManualAudio`): the app configures the session for a call (play and record, voice chat, Bluetooth) and, until CallKit owns activation, activates it itself; `activated(_:)` is the seam CallKit's `didActivate` will call. The microphone is a track from WebRTC's audio device module                                                                                                                                                           |
+
+### The proof
+
+`AppTests/CallEngineTests` runs the engine with this layer against a real deployment, in the app's
+process on the simulator, WebRTC on a microphone and speaker in software (`ToneAudioDevice`, an
+`RTCAudioDevice` recording a warble of 440 and 660 Hz and dropping what it plays out), since the
+simulator's own audio unit aborts the process when a test initializes it: it joins a voice channel's
+call, has a second participant brought in from a browser, reads both sides' statistics for the
+other's sound, cuts its socket and watches the engine take its place back with `resume`, and leaves.
+`scripts/check_ios_call.py` at the repository's root runs it end to end from Linux: a deployment of
+its own serving the call page (`client/packages/protocol/calls/`), SSH reverse tunnels so the
+simulator reaches the API server and the voice server at the Mac's own loopback (plain HTTP there,
+as a development build allows; media goes to the voice server's announced address over the network),
+Chromium as the second participant with a tone WAV as its microphone (`calls/second.ts`), and
+`xcodebuild test-without-building` on the Mac, with `--build` first building the engine, the
+bindings, and the app for the simulator there. The test reads its deployment, channel, user, refresh
+token, and the script's helper from the environment (`TEST_RUNNER_ASPEN_CALL_*`; the test's comment
+lists them) and skips without them.

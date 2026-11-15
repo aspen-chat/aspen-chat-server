@@ -22,6 +22,7 @@ final class Locked<T>: @unchecked Sendable {
 
 final class FakeCredentials: Credentials {
     func sessionToken() async -> String? { "secret" }
+    func renewedSessionToken(rejected: String) async -> String? { nil }
 }
 
 final class FakeHttp: Http {

@@ -5,7 +5,7 @@
 //! field the server adds is ignored here, and one it has not got yet takes its default, as the
 //! API changes only by addition.
 
-use crate::transport::{Http, HttpRequest, TransportError};
+use crate::transport::{Http, HttpRequest, HttpResponse, TransportError};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -16,13 +16,19 @@ use uuid::Uuid;
 pub const API_PREFIX: &str = "/api/v1";
 
 /// The session the call acts as. The app layer signs in, refreshes, and keeps the token; the
-/// engine asks for it before each request, so a refreshed token is used from the next one.
-/// The apps implement it directly (`bindings`).
+/// engine asks for it before each request, so a refreshed token is used from the next one, and
+/// asks for a new one when the API server refuses the one it sent. The apps implement it
+/// directly (`bindings`).
 #[uniffi::export(with_foreign)]
 #[async_trait]
 pub trait Credentials: Send + Sync {
     /// The session token to send as `Authorization: Bearer`, or `None` when signed out.
     async fn session_token(&self) -> Option<String>;
+    /// The API server answered `401` to a request sent with `rejected`, which has expired or
+    /// been revoked: a session token got anew from the refresh token, which the platform keeps
+    /// for every later request too, or `None` when it has none to give (signed out, or the
+    /// refresh refused). The request is sent once more with what this gives.
+    async fn renewed_session_token(&self, rejected: String) -> Option<String>;
 }
 
 /// A voice server a join offer names.
@@ -149,22 +155,22 @@ impl Api {
         }
     }
 
+    /// Posts to `path` as the session. A `401` means the token has expired or been revoked
+    /// since it was kept: the request is sent once more with a token renewed from the refresh
+    /// token, when the platform can get one; a second `401`, or none to be had, is answered as
+    /// the server said.
     async fn post<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, ApiError> {
         let token = self
             .credentials
             .session_token()
             .await
             .ok_or(ApiError::SignedOut)?;
-        let request = HttpRequest {
-            method: "POST".to_string(),
-            url: format!("{}{API_PREFIX}{path}", self.base_url),
-            headers: vec![
-                ("Authorization".to_string(), format!("Bearer {token}")),
-                ("Accept".to_string(), "application/json".to_string()),
-            ],
-            body: None,
-        };
-        let response = self.http.request(request).await?;
+        let mut response = self.send(path, &token).await?;
+        if response.status == 401
+            && let Some(renewed) = self.credentials.renewed_session_token(token).await
+        {
+            response = self.send(path, &renewed).await?;
+        }
         if (200..300).contains(&response.status) {
             return serde_json::from_str(&response.body).map_err(|_| ApiError::Unreadable {
                 status: response.status,
@@ -182,49 +188,176 @@ impl Api {
             }),
         }
     }
+
+    async fn send(&self, path: &str, token: &str) -> Result<HttpResponse, TransportError> {
+        self.http
+            .request(HttpRequest {
+                method: "POST".to_string(),
+                url: format!("{}{API_PREFIX}{path}", self.base_url),
+                headers: vec![
+                    ("Authorization".to_string(), format!("Bearer {token}")),
+                    ("Accept".to_string(), "application/json".to_string()),
+                ],
+                body: None,
+            })
+            .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::HttpResponse;
     use std::sync::Mutex;
 
+    /// Answers each request with the next of `answers`, repeating the last.
     struct Answering {
         requests: Mutex<Vec<HttpRequest>>,
-        answer: HttpResponse,
+        answers: Vec<HttpResponse>,
+    }
+
+    impl Answering {
+        fn answer(&self) -> HttpResponse {
+            let served = self.requests.lock().unwrap().len();
+            self.answers[served.min(self.answers.len()) - 1].clone()
+        }
     }
 
     #[async_trait]
     impl Http for Answering {
         async fn request(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
             self.requests.lock().unwrap().push(request);
-            Ok(self.answer.clone())
+            Ok(self.answer())
         }
     }
 
-    struct Token(Option<&'static str>);
+    /// A session token, and the one a renewal gives; every token refused is recorded.
+    struct Token {
+        session: Option<&'static str>,
+        renewed: Option<&'static str>,
+        rejected: Mutex<Vec<String>>,
+    }
+
+    impl Token {
+        fn new(session: Option<&'static str>) -> Self {
+            Self {
+                session,
+                renewed: None,
+                rejected: Mutex::new(Vec::new()),
+            }
+        }
+    }
 
     #[async_trait]
     impl Credentials for Token {
         async fn session_token(&self) -> Option<String> {
-            self.0.map(str::to_string)
+            self.session.map(str::to_string)
+        }
+
+        async fn renewed_session_token(&self, rejected: String) -> Option<String> {
+            self.rejected.lock().unwrap().push(rejected);
+            self.renewed.map(str::to_string)
         }
     }
 
+    const EXPIRED: &str = r#"{"code":"unauthorized","title":"Unauthorized","detail":"Your session has expired.","status":401}"#;
+
     fn answering(answer: HttpResponse, token: Option<&'static str>) -> (Api, Arc<Answering>) {
+        let (api, http, _) = answering_with(vec![answer], Arc::new(Token::new(token)));
+        (api, http)
+    }
+
+    fn answering_with(
+        answers: Vec<HttpResponse>,
+        token: Arc<Token>,
+    ) -> (Api, Arc<Answering>, Arc<Token>) {
         let http = Arc::new(Answering {
             requests: Mutex::new(Vec::new()),
-            answer,
+            answers,
         });
         (
-            Api::new(
-                http.clone(),
-                "https://chat.example.org/",
-                Arc::new(Token(token)),
-            ),
+            Api::new(http.clone(), "https://chat.example.org/", token.clone()),
             http,
+            token,
         )
+    }
+
+    fn ok(body: &str) -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: body.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_token_is_renewed_once_and_the_request_sent_again() {
+        let (api, http, token) = answering_with(
+            vec![
+                HttpResponse {
+                    status: 401,
+                    headers: Vec::new(),
+                    body: EXPIRED.to_string(),
+                },
+                ok(r#"{"failures":1,"disabled":false,"counted":true}"#),
+            ],
+            Arc::new(Token {
+                session: Some("stale"),
+                renewed: Some("fresh"),
+                rejected: Mutex::new(Vec::new()),
+            }),
+        );
+        let outcome = api.report_failure(Uuid::now_v7()).await.unwrap();
+        assert_eq!(outcome.failures, 1);
+        let requests = http.requests.lock().unwrap();
+        let bearers: Vec<&str> = requests
+            .iter()
+            .map(|request| {
+                request
+                    .headers
+                    .iter()
+                    .find(|(name, _)| name == "Authorization")
+                    .map(|(_, value)| value.as_str())
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(bearers, ["Bearer stale", "Bearer fresh"]);
+        assert_eq!(*token.rejected.lock().unwrap(), ["stale"]);
+    }
+
+    #[tokio::test]
+    async fn a_second_refusal_or_no_renewal_is_the_servers_answer() {
+        let expired = || HttpResponse {
+            status: 401,
+            headers: Vec::new(),
+            body: EXPIRED.to_string(),
+        };
+        let (api, http, _) = answering_with(
+            vec![expired()],
+            Arc::new(Token {
+                session: Some("stale"),
+                renewed: Some("fresh"),
+                rejected: Mutex::new(Vec::new()),
+            }),
+        );
+        match api.report_failure(Uuid::now_v7()).await {
+            Err(ApiError::Problem(problem)) => assert_eq!(problem.status, 401),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            http.requests.lock().unwrap().len(),
+            2,
+            "sent once more, no further"
+        );
+        let (api, http, token) =
+            answering_with(vec![expired()], Arc::new(Token::new(Some("stale"))));
+        match api.report_failure(Uuid::now_v7()).await {
+            Err(ApiError::Problem(problem)) => {
+                assert_eq!(problem.detail.as_deref(), Some("Your session has expired."));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(http.requests.lock().unwrap().len(), 1);
+        assert_eq!(*token.rejected.lock().unwrap(), ["stale"]);
     }
 
     #[tokio::test]
@@ -277,7 +410,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        let (signed_out, http_out) = answering(http.answer.clone(), None);
+        let (signed_out, http_out) = answering(http.answer(), None);
         assert_eq!(
             signed_out.report_failure(Uuid::now_v7()).await,
             Err(ApiError::SignedOut)
@@ -345,7 +478,7 @@ mod tests {
         let late = Api::new(
             Arc::new(Late),
             "https://chat.example.org",
-            Arc::new(Token(None)),
+            Arc::new(Token::new(None)),
         );
         assert_eq!(
             late.voice_server_health("https://a.example.org", Duration::from_secs(3))

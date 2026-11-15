@@ -36,6 +36,22 @@
 		A5E000000000000000000128 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000109 /* Localizable.strings */; };
 		A5E000000000000000000176 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000175 /* InfoPlist.strings */; };
 		A5E000000000000000000129 /* AspenNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000110 /* AspenNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A5E000000000000000000221 /* CallEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000201 /* CallEngine.swift */; };
+		A5E000000000000000000222 /* CallSnapshots.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000202 /* CallSnapshots.swift */; };
+		A5E000000000000000000223 /* CallHttp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000203 /* CallHttp.swift */; };
+		A5E000000000000000000224 /* CallSockets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000204 /* CallSockets.swift */; };
+		A5E000000000000000000225 /* CallCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000205 /* CallCredentials.swift */; };
+		A5E000000000000000000226 /* CallTracks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000206 /* CallTracks.swift */; };
+		A5E000000000000000000227 /* CallPeerConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000207 /* CallPeerConnection.swift */; };
+		A5E000000000000000000228 /* CallAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000208 /* CallAudio.swift */; };
+		A5E000000000000000000229 /* TokenRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000209 /* TokenRefresh.swift */; };
+		A5E000000000000000000230 /* TokenRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000209 /* TokenRefresh.swift */; };
+		A5E000000000000000000231 /* VoiceClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000210 /* VoiceClient.swift */; };
+		A5E000000000000000000232 /* WebRTC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000211 /* WebRTC.xcframework */; };
+		A5E000000000000000000233 /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000211 /* WebRTC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A5E000000000000000000234 /* CallEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000212 /* CallEngineTests.swift */; };
+		A5E000000000000000000235 /* WebRTC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000211 /* WebRTC.xcframework */; };
+		A5E000000000000000000236 /* ToneAudioDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000214 /* ToneAudioDevice.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -52,6 +68,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = A5E000000000000000000151;
 			remoteInfo = AspenNotificationService;
+		};
+		A5E000000000000000000265 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 504EC3031FED79650016851F;
+			remoteInfo = App;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -91,6 +114,20 @@
 		A5E000000000000000000173 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/Localizable.strings; sourceTree = "<group>"; };
 		A5E000000000000000000174 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A5E000000000000000000110 /* AspenNotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AspenNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5E000000000000000000201 /* CallEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallEngine.swift; sourceTree = "<group>"; };
+		A5E000000000000000000202 /* CallSnapshots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallSnapshots.swift; sourceTree = "<group>"; };
+		A5E000000000000000000203 /* CallHttp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallHttp.swift; sourceTree = "<group>"; };
+		A5E000000000000000000204 /* CallSockets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallSockets.swift; sourceTree = "<group>"; };
+		A5E000000000000000000205 /* CallCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallCredentials.swift; sourceTree = "<group>"; };
+		A5E000000000000000000206 /* CallTracks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallTracks.swift; sourceTree = "<group>"; };
+		A5E000000000000000000207 /* CallPeerConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallPeerConnection.swift; sourceTree = "<group>"; };
+		A5E000000000000000000208 /* CallAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAudio.swift; sourceTree = "<group>"; };
+		A5E000000000000000000209 /* TokenRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenRefresh.swift; sourceTree = "<group>"; };
+		A5E000000000000000000210 /* VoiceClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VoiceClient.swift; path = ../VoiceClient/VoiceClient.swift; sourceTree = SOURCE_ROOT; };
+		A5E000000000000000000211 /* WebRTC.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = WebRTC.xcframework; path = ../../../../../target/webrtc/WebRTC.xcframework; sourceTree = SOURCE_ROOT; };
+		A5E000000000000000000212 /* CallEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallEngineTests.swift; sourceTree = "<group>"; };
+		A5E000000000000000000214 /* ToneAudioDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToneAudioDevice.swift; sourceTree = "<group>"; };
+		A5E000000000000000000213 /* AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -99,6 +136,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */,
+				A5E000000000000000000232 /* WebRTC.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5E000000000000000000252 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5E000000000000000000235 /* WebRTC.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -126,7 +172,9 @@
 				504EC3061FED79650016851F /* App */,
 				A5E000000000000000000131 /* AspenPush */,
 				A5E000000000000000000132 /* AspenNotificationService */,
+				A5E000000000000000000241 /* AppTests */,
 				A5E000000000000000000021 /* AppUITests */,
+				A5E000000000000000000242 /* Frameworks */,
 				504EC3051FED79650016851F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -135,10 +183,44 @@
 			isa = PBXGroup;
 			children = (
 				504EC3041FED79650016851F /* App.app */,
+				A5E000000000000000000213 /* AppTests.xctest */,
 				A5E000000000000000000014 /* AppUITests.xctest */,
 				A5E000000000000000000110 /* AspenNotificationService.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A5E000000000000000000240 /* Call */ = {
+			isa = PBXGroup;
+			children = (
+				A5E000000000000000000201 /* CallEngine.swift */,
+				A5E000000000000000000202 /* CallSnapshots.swift */,
+				A5E000000000000000000203 /* CallHttp.swift */,
+				A5E000000000000000000204 /* CallSockets.swift */,
+				A5E000000000000000000205 /* CallCredentials.swift */,
+				A5E000000000000000000206 /* CallTracks.swift */,
+				A5E000000000000000000207 /* CallPeerConnection.swift */,
+				A5E000000000000000000208 /* CallAudio.swift */,
+				A5E000000000000000000210 /* VoiceClient.swift */,
+			);
+			path = Call;
+			sourceTree = "<group>";
+		};
+		A5E000000000000000000241 /* AppTests */ = {
+			isa = PBXGroup;
+			children = (
+				A5E000000000000000000212 /* CallEngineTests.swift */,
+				A5E000000000000000000214 /* ToneAudioDevice.swift */,
+			);
+			path = AppTests;
+			sourceTree = "<group>";
+		};
+		A5E000000000000000000242 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A5E000000000000000000211 /* WebRTC.xcframework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		504EC3061FED79650016851F /* App */ = {
@@ -157,6 +239,7 @@
 				A5E000000000000000000087 /* UploadStore.swift */,
 				A5E000000000000000000103 /* AspenPushPlugin.swift */,
 				A5E0000000000000000001F0 /* AspenSecretsPlugin.swift */,
+				A5E000000000000000000240 /* Call */,
 				A5E000000000000000000107 /* App.entitlements */,
 				A5E000000000000000000108 /* Localizable.strings */,
 				A5E000000000000000000175 /* InfoPlist.strings */,
@@ -183,6 +266,7 @@
 			children = (
 				A5E000000000000000000101 /* WebPush.swift */,
 				A5E000000000000000000102 /* PushState.swift */,
+				A5E000000000000000000209 /* TokenRefresh.swift */,
 			);
 			path = AspenPush;
 			sourceTree = "<group>";
@@ -209,6 +293,7 @@
 				504EC3011FED79650016851F /* Frameworks */,
 				504EC3021FED79650016851F /* Resources */,
 				A5E000000000000000000144 /* Embed Foundation Extensions */,
+				A5E000000000000000000250 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -240,6 +325,24 @@
 			productName = AppUITests;
 			productReference = A5E000000000000000000014 /* AppUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		A5E000000000000000000260 /* AppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A5E000000000000000000261 /* Build configuration list for PBXNativeTarget "AppTests" */;
+			buildPhases = (
+				A5E000000000000000000251 /* Sources */,
+				A5E000000000000000000252 /* Frameworks */,
+				A5E000000000000000000253 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A5E000000000000000000264 /* PBXTargetDependency */,
+			);
+			name = AppTests;
+			productName = AppTests;
+			productReference = A5E000000000000000000213 /* AppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 		A5E000000000000000000151 /* AspenNotificationService */ = {
 			isa = PBXNativeTarget;
@@ -276,6 +379,10 @@
 						CreatedOnToolsVersion = 27.0;
 						TestTargetID = 504EC3031FED79650016851F;
 					};
+					A5E000000000000000000260 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 504EC3031FED79650016851F;
+					};
 				};
 			};
 			buildConfigurationList = 504EC2FF1FED79650016851F /* Build configuration list for PBXProject "App" */;
@@ -297,6 +404,7 @@
 			targets = (
 				504EC3031FED79650016851F /* App */,
 				A5E000000000000000000151 /* AspenNotificationService */,
+				A5E000000000000000000260 /* AppTests */,
 				A5E000000000000000000031 /* AppUITests */,
 			);
 		};
@@ -312,6 +420,17 @@
 				A5E000000000000000000129 /* AspenNotificationService.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5E000000000000000000250 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				A5E000000000000000000233 /* WebRTC.xcframework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -333,6 +452,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		A5E000000000000000000053 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5E000000000000000000253 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -368,6 +494,16 @@
 				A5E0000000000000000001F1 /* AspenSecretsPlugin.swift in Sources */,
 				A5E000000000000000000121 /* WebPush.swift in Sources */,
 				A5E000000000000000000122 /* PushState.swift in Sources */,
+				A5E000000000000000000229 /* TokenRefresh.swift in Sources */,
+				A5E000000000000000000221 /* CallEngine.swift in Sources */,
+				A5E000000000000000000222 /* CallSnapshots.swift in Sources */,
+				A5E000000000000000000223 /* CallHttp.swift in Sources */,
+				A5E000000000000000000224 /* CallSockets.swift in Sources */,
+				A5E000000000000000000225 /* CallCredentials.swift in Sources */,
+				A5E000000000000000000226 /* CallTracks.swift in Sources */,
+				A5E000000000000000000227 /* CallPeerConnection.swift in Sources */,
+				A5E000000000000000000228 /* CallAudio.swift in Sources */,
+				A5E000000000000000000231 /* VoiceClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -386,6 +522,16 @@
 				A5E000000000000000000126 /* NotificationService.swift in Sources */,
 				A5E000000000000000000124 /* WebPush.swift in Sources */,
 				A5E000000000000000000125 /* PushState.swift in Sources */,
+				A5E000000000000000000230 /* TokenRefresh.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5E000000000000000000251 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5E000000000000000000234 /* CallEngineTests.swift in Sources */,
+				A5E000000000000000000236 /* ToneAudioDevice.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -401,6 +547,11 @@
 			isa = PBXTargetDependency;
 			target = A5E000000000000000000151 /* AspenNotificationService */;
 			targetProxy = A5E000000000000000000153 /* PBXContainerItemProxy */;
+		};
+		A5E000000000000000000264 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 504EC3031FED79650016851F /* App */;
+			targetProxy = A5E000000000000000000265 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -570,13 +721,26 @@
 				DEVELOPMENT_TEAM = L2GS25U79G;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = App/Info.plist;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/../../../../../target/aarch64-apple-ios/release",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/../../../../../target/aarch64-apple-ios-sim/release",
+				);
 				MARKETING_VERSION = 1.0;
-				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lvoice_client",
+				);
+				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\" -Xcc -fmodule-map-file=$(SRCROOT)/../VoiceClient/VoiceClientFFI.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = com.aspen-chat.client;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -595,12 +759,26 @@
 				DEVELOPMENT_TEAM = L2GS25U79G;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = App/Info.plist;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphoneos*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/../../../../../target/aarch64-apple-ios/release",
+				);
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = (
+					"$(inherited)",
+					"$(SRCROOT)/../../../../../target/aarch64-apple-ios-sim/release",
+				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lvoice_client",
+				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/../VoiceClient/VoiceClientFFI.modulemap";
 				PRODUCT_BUNDLE_IDENTIFIER = com.aspen-chat.client;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
@@ -640,6 +818,57 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = App;
+			};
+			name = Release;
+		};
+		A5E000000000000000000262 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = L2GS25U79G;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/../VoiceClient/VoiceClientFFI.modulemap";
+				PRODUCT_BUNDLE_IDENTIFIER = com.aspen-chat.client.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/App";
+			};
+			name = Debug;
+		};
+		A5E000000000000000000263 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = L2GS25U79G;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -Xcc -fmodule-map-file=$(SRCROOT)/../VoiceClient/VoiceClientFFI.modulemap";
+				PRODUCT_BUNDLE_IDENTIFIER = com.aspen-chat.client.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/App";
 			};
 			name = Release;
 		};
@@ -716,6 +945,15 @@
 			buildConfigurations = (
 				A5E000000000000000000071 /* Debug */,
 				A5E000000000000000000072 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A5E000000000000000000261 /* Build configuration list for PBXNativeTarget "AppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A5E000000000000000000262 /* Debug */,
+				A5E000000000000000000263 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
