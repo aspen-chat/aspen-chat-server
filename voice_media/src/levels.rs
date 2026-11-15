@@ -1,7 +1,7 @@
 //! Audio levels: what decides speaking and fills the audio slots.
 //!
 //! Each audio packet carries its level (RFC 6464, `0` loudest to `127` silence, in -dBov). Over
-//! each `INTERVAL` a source's levels are averaged, as mediasoup's audio level observer does; a
+//! each `INTERVAL` a source's levels are averaged, so one loud packet does not make a speaker; a
 //! source whose average is above `SPEAKING_THRESHOLD_DBOV` is speaking.
 
 use std::time::{Duration, Instant};

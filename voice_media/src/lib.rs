@@ -7,10 +7,10 @@
 //! thread makes the change and offers it (`Event::Offer`), and a connection never has two offers
 //! outstanding, changes made meanwhile waiting for the next.
 //!
-//! What a participant receives is bounded whatever the size of the call: `audio_slots` audio
-//! sections carrying whichever microphones are loudest (`Event::Slots` says whom each carries), and
-//! a video section for each video it watches (at most `max_watched_video`), with a share's sound
-//! beside its picture.
+//! What a participant receives is bounded whatever the size of the call: an audio section for
+//! each other microphone up to `audio_slots` (one at least), carrying whichever are loudest (`Event::Slots` says
+//! whom each carries), and a video section for each video it watches (at most
+//! `max_watched_video`), with a share's sound beside its picture.
 //!
 //! The rooms decide who may do what; this crate only does what they ask, and tells them what
 //! happened (a connection up or failed, a source's first media, speaking).
@@ -62,7 +62,7 @@ pub struct MediaConfig {
 #[derive(Debug)]
 pub enum Command {
     /// Seats a participant in a call on this thread, every participant of a call on one thread,
-    /// and offers its connection: its audio slots, and nothing to send yet.
+    /// and offers its connection: its one audio slot, and nothing to send yet.
     Join {
         call: CallId,
         participant: ParticipantId,

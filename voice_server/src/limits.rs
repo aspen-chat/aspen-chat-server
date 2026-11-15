@@ -297,25 +297,25 @@ mod tests {
     #[test]
     fn the_built_in_limits_compile() {
         let limits = Limits::new(&LimitSettings::built_in().unwrap()).unwrap();
-        assert!(limits.frames.contains_key("createTransport"));
+        assert!(limits.frames.contains_key("answer"));
         assert!(limits.http.contains_key(HEALTH));
     }
 
     #[test]
     fn frames_count_by_type_and_by_any() {
         let limits = Limits::new(&settings(
-            "[frames.produceRtp]\nuser = { requests = 2, per_seconds = 60 }\n[frames.any]\nuser = { requests = 3, per_seconds = 60 }\n",
+            "[frames.send]\nuser = { requests = 2, per_seconds = 60 }\n[frames.any]\nuser = { requests = 3, per_seconds = 60 }\n",
         ))
         .unwrap();
         let alice = caller(1, 10);
-        assert!(limits.check_frame("produceRtp", &alice).is_ok());
-        assert!(limits.check_frame("produceRtp", &alice).is_ok());
-        assert!(limits.check_frame("produceRtp", &alice).is_err());
+        assert!(limits.check_frame("send", &alice).is_ok());
+        assert!(limits.check_frame("send", &alice).is_ok());
+        assert!(limits.check_frame("send", &alice).is_err());
         // The refused frame spent nothing; `any` has one left.
         assert!(limits.check_frame("setState", &alice).is_ok());
         assert!(limits.check_frame("setState", &alice).is_err());
         // Another caller has their own budgets.
-        assert!(limits.check_frame("produceRtp", &caller(2, 10)).is_ok());
+        assert!(limits.check_frame("send", &caller(2, 10)).is_ok());
     }
 
     #[test]
@@ -368,16 +368,14 @@ mod tests {
     fn mistakes_stop_the_server() {
         let err = |overrides: &str| Limits::new(&settings(overrides)).err().unwrap();
         assert!(
-            err("[frames.createTransports]\nuser = { requests = 1, per_seconds = 1 }\n")
-                .contains("none of")
+            err("[frames.sends]\nuser = { requests = 1, per_seconds = 1 }\n").contains("none of")
         );
         assert!(
             err("[http.health]\nuser = { requests = 1, per_seconds = 1 }\n")
                 .contains("not a dimension")
         );
         assert!(
-            err("[frames.produce]\nuser = { requests = 0, per_seconds = 1 }\n")
-                .contains("positive")
+            err("[frames.send]\nuser = { requests = 0, per_seconds = 1 }\n").contains("positive")
         );
         assert!(err("trusted_proxies = [\"somewhere\"]\n").contains("trusted_proxies"));
     }

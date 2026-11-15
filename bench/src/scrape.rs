@@ -241,7 +241,7 @@ pub fn findings(samples: &[Sample]) -> Vec<Finding> {
             for (key, _) in b
                 .values
                 .iter()
-                .filter(|(k, _)| k.starts_with(aspen_metrics::voice::WORKER_CPU))
+                .filter(|(k, _)| k.starts_with(aspen_metrics::voice::MEDIA_THREAD_CPU))
             {
                 if let Some(cpu) = rate(a, b, key)
                     && cpu >= 0.85
@@ -249,7 +249,7 @@ pub fn findings(samples: &[Sample]) -> Vec<Finding> {
                     note(
                         b.t,
                         endpoint,
-                        "a mediasoup worker",
+                        "a media thread",
                         format!("{key} at {cpu:.2} of one CPU"),
                     );
                 }

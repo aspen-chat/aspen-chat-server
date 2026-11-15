@@ -4,7 +4,6 @@
 mod capacity;
 mod config;
 mod limits;
-mod media;
 mod metrics;
 mod outbox;
 mod reporter;
@@ -12,16 +11,12 @@ mod rooms;
 mod signalling;
 mod token_keys;
 mod transfer;
-#[cfg(test)]
-mod webrtc_smoke;
 
 use anyhow::Context;
 use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::get;
 use clap::Parser;
-use mediasoup::prelude::*;
-use mediasoup::worker::{WorkerLogLevel, WorkerLogTag};
 use schemars::schema_for;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
@@ -53,9 +48,9 @@ struct Opt {
 enum Command {
     /// Estimate, conservatively, how many people this machine can hold in calls: reads the
     /// hardware and the media settings, measures what a forwarded stream costs here with a
-    /// short self-test, and prints the `capacity` for its `[[voice.servers]]` entry. The
-    /// self-test runs its own mediasoup worker on loopback, beside a running server if there is
-    /// one, whose load then skews the measurement.
+    /// short self-test, and prints the capacity to register it with
+    /// (`aspen-chat-server voice-servers add --capacity`, or the dashboard). The self-test runs a media thread of its own on loopback, beside a running server if there
+    /// is one, whose load then skews the measurement.
     EstimateCapacity(capacity::EstimateArgs),
 }
 
@@ -68,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
             .with_writer(std::io::stderr)
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_env("ASPEN_LOG")
-                    .unwrap_or_else(|_| "warn,mediasoup=error".into()),
+                    .unwrap_or_else(|_| "warn".into()),
             )
             .init();
         let media = config::load_media_config()
@@ -78,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("ASPEN_LOG")
-                .unwrap_or_else(|_| "info,mediasoup=warn".into()),
+                .unwrap_or_else(|_| "info,str0m=warn".into()),
         )
         .init();
     if opt.gen_signal_schema {
@@ -117,29 +112,6 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    let manager = WorkerManager::new();
-    let mut workers = Vec::new();
-    // A worker that dies takes its calls' media with it and would leave their rooms looking
-    // alive; the server stops instead, telling everyone, so their clients rejoin and whatever
-    // supervises the process starts it again.
-    let worker_died = Arc::new(tokio::sync::Notify::new());
-    for _ in 0..config.workers.max(1) {
-        let mut settings = WorkerSettings::default();
-        settings.log_level = WorkerLogLevel::Warn;
-        settings.log_tags = vec![WorkerLogTag::Info];
-        settings.rtc_port_range = config.rtc.min_port..=config.rtc.max_port;
-        let worker = manager.create_worker(settings).await?;
-        let died = Arc::clone(&worker_died);
-        worker
-            .on_dead(move |exit| {
-                tracing::error!(?exit, "a mediasoup worker died; stopping the voice server");
-                died.notify_one();
-            })
-            .detach();
-        workers.push(worker);
-    }
-    info!(workers = workers.len(), "mediasoup workers started");
-
     if matches!(config.nats_auth()?, config::NatsAuth::Token(_)) {
         tracing::warn!(
             "signing in to NATS with the deployment's token, which lets this server do anything \
@@ -152,12 +124,27 @@ async fn main() -> anyhow::Result<()> {
     aspen_limits::suspension::watch(reporter.client(), limits.suspension().clone(), "voice");
     let token_keys = token_keys::TokenKeys::start(reporter.client(), config.id);
     let media_addresses = config.rtc.media_addresses()?;
+    let ports = config.rtc.media_ports(config.media_threads)?;
+    // A media thread that stops takes its calls' media with it and would leave their rooms
+    // looking alive; the server stops instead, telling everyone, so their clients rejoin and
+    // whatever supervises the process starts it again.
+    let media = voice_media::Media::start(voice_media::MediaConfig {
+        addresses: media_addresses
+            .iter()
+            .map(config::MediaAddress::resolved)
+            .collect::<anyhow::Result<_>>()?,
+        first_port: *ports.start(),
+        threads: config.media_threads.max(1),
+        audio_slots: rooms::AUDIO_SLOTS,
+        max_watched_video: rooms::MAX_WATCHED_VIDEO,
+    })
+    .context("could not start the media threads")?;
     for address in &media_addresses {
         info!(
             ip = %address.ip,
             announced = address.host(),
-            ports = format!("{}-{}", config.rtc.min_port, config.rtc.max_port),
-            "media listening"
+            ports = format!("{}-{}", ports.start(), ports.end()),
+            "media listening, over UDP and TCP"
         );
     }
     let relay = Arc::new(
@@ -167,11 +154,11 @@ async fn main() -> anyhow::Result<()> {
     );
     let rooms = rooms::Rooms::new(
         config.id,
-        workers,
-        media_addresses,
+        media,
         reporter.reports(),
         Arc::clone(&relay),
         &config.rate_limits,
+        rooms::AUDIO_SLOTS,
     );
     {
         let rooms = Arc::clone(&rooms);
@@ -234,7 +221,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let stopped = serve(listeners, app, config.rate_limits.max_connections, async {
         tokio::select! {
-            () = worker_died.notified() => Stopped::WorkerDied,
+            () = rooms.media_stopped() => Stopped::MediaThread,
             () = token_keys.unregistered() => Stopped::Unregistered,
         }
     })
@@ -243,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
     relay.shutdown().await;
     match stopped {
         Stopped::Asked => Ok(()),
-        Stopped::WorkerDied => anyhow::bail!("a mediasoup worker died"),
+        Stopped::MediaThread => anyhow::bail!("a media thread stopped"),
         Stopped::Unregistered => anyhow::bail!(
             "this voice server's id ({}) is not registered with the deployment; set `id` in \
              voice_server.toml to the id `aspen-chat-server voice-servers list` shows for it",
@@ -256,8 +243,8 @@ async fn main() -> anyhow::Result<()> {
 enum Stopped {
     /// The process was told to stop.
     Asked,
-    /// A mediasoup worker died.
-    WorkerDied,
+    /// A media thread stopped.
+    MediaThread,
     /// The API servers said this server's id is not registered.
     Unregistered,
 }

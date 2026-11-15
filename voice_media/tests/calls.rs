@@ -27,13 +27,14 @@ async fn a_microphone_reaches_the_others_on_an_audio_slot() {
     bob.until(&media, WAIT, |e| matches!(e, Event::Connected { .. }))
         .await
         .expect("Bob connects");
-    assert_eq!(
-        bob.sections
+    // Nobody sends a microphone yet: each has the one slot every connection starts with.
+    let slots = |peer: &Peer| {
+        peer.sections
             .iter()
             .filter(|s| matches!(s.content, SectionContent::AudioSlot { .. }))
-            .count(),
-        16
-    );
+            .count()
+    };
+    assert_eq!(slots(&bob), 1);
 
     send(
         &media,
@@ -80,10 +81,16 @@ async fn a_microphone_reaches_the_others_on_an_audio_slot() {
         .find(|(_, user)| **user == Some(ann.user))
         .map(|(slot, _)| *slot)
         .expect("a slot carrying Ann");
+    bob.settle(&media).await;
     let slot_mid = bob
         .mid_of(&SectionContent::AudioSlot { slot })
-        .expect("the slot's section");
-    bob.settle(&media).await;
+        .expect("the slot's section, offered once there was a microphone to carry");
+    assert_eq!(slots(&bob), 1, "one slot for the one other microphone");
+    assert_eq!(
+        slots(&ann),
+        1,
+        "nobody sends one to Ann, so she keeps the one she started with"
+    );
     tokio::time::sleep(Duration::from_millis(500)).await;
     let ann_ssrc = ann.ssrc(&mid).await.expect("Ann's SSRC");
     let heard: Vec<_> = bob
@@ -388,6 +395,14 @@ async fn a_capture_connection_sends_a_share_its_sender_previews() {
             external: true,
         },
     );
+    send(
+        &media,
+        Command::Send {
+            participant: ann.id,
+            source: MediaSource::ScreenAudio,
+            external: true,
+        },
+    );
     ann.until(&media, WAIT, |e| {
         matches!(
             e,
@@ -449,7 +464,7 @@ async fn a_capture_connection_sends_a_share_its_sender_previews() {
     })
     .await
     .unwrap();
-    // Watching a screen brings a section for its sound too.
+    // Watching a screen that sends its sound brings a section for the sound too.
     assert!(
         bob.mid_of(&SectionContent::ShareAudio { user: ann.user })
             .is_some()

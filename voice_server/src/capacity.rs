@@ -4,30 +4,32 @@
 //! It reads the hardware (logical cores and any container CPU quota, memory and any container
 //! limit, and the bandwidth out: `--link-mbps`, else `[rtc] upload_mbps`, else the link speed of
 //! the interface that holds the default route) and the media settings
-//! (`workers`, each of which uses at most one core, and the RTC port range). Then it measures what
-//! one forwarded stream costs on this CPU: a mediasoup worker on loopback forwards synthetic
-//! Opus and H.264 streams, each to five SRTP consumers as in a call of six, for a few seconds,
-//! and the worker thread's CPU time and the allocator's growth are divided by the streams.
-//! Every six consumers share a receiving transport, as the streams one participant receives do.
+//! (`media_threads`, each of which uses at most one core). Then it measures what one forwarded
+//! stream costs on this CPU: a media thread of its own on loopback carries calls of synthetic
+//! participants (`voice_media::peer`), each a full WebRTC connection (ICE, DTLS, SRTP both
+//! ways, RTCP), for a few seconds, and the thread's CPU time and what it allocated are divided
+//! by the streams it forwarded. The participants run in this process too; only the media
+//! thread is counted.
 //!
 //! From a call shape (the size of a call, the share of people sharing a screen, the bitrates)
-//! follows what one participant costs in CPU, memory, bandwidth out, and ports; each resource,
-//! less a safety margin, then holds some number of participants, and the estimate is the
-//! smallest. The calibration counts a received packet as costing as much as a sent one, which
-//! leans towards too little rather than too much.
+//! follows what one participant costs in CPU, memory, and bandwidth out; each resource, less a
+//! safety margin, then holds some number of participants, and the estimate is the smallest.
+//! The calibration counts a received packet as costing as much as a sent one, which leans
+//! towards too little rather than too much.
 
 use crate::config::MediaConfig;
-use crate::media::{h264_parameters, local_tuple, media_codecs};
+use crate::rooms::{AUDIO_SLOTS, MAX_WATCHED_VIDEO};
 use anyhow::{Context, bail};
-use mediasoup::prelude::*;
-use mediasoup::worker::WorkerLogLevel;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
-use std::num::{NonZeroU8, NonZeroU32};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-use tokio::net::UdpSocket;
+use uuid::Uuid;
+use voice_media::peer::{Counters, Peer, PeerOptions, Synthetic};
+use voice_media::{CallId, Command, Event, Media, MediaAddress, ParticipantId};
+use voice_protocol::signal::{MediaSource, SectionContent};
 
 /// What a call is assumed to look like.
 #[derive(clap::Args, Debug, Clone, Serialize)]
@@ -66,42 +68,33 @@ pub struct EstimateArgs {
     pub json: bool,
 }
 
-/// Loopback ports the calibration's transports take: its own range, not the server's, so it runs
-/// beside a running server and needs no more of the RTC range than that has.
-const CALIBRATION_PORTS: std::ops::RangeInclusive<u16> = 20_000..=29_999;
-
 /// Bytes a media packet carries besides its payload: IPv4 (20), UDP (8), RTP (12), and the
-/// SRTP authentication tag (10).
-const PACKET_OVERHEAD: f64 = 50.0;
-/// The largest RTP payload the calibration sends, below a typical path MTU.
-const MAX_PAYLOAD: usize = 1100;
+/// SRTP authentication tag (16, AES-GCM's).
+const PACKET_OVERHEAD: f64 = 56.0;
+const MAX_PAYLOAD: usize = voice_media::peer::MAX_PAYLOAD;
 /// Audio frames a second: Opus in 20 ms frames.
 const AUDIO_FPS: f64 = 50.0;
 /// Frames a second of a shared screen.
 const VIDEO_FPS: f64 = 30.0;
-/// Consumers of each calibration producer: the others in a call of six.
-const FAN_OUT: usize = 5;
-/// Consumers sharing one receiving transport, as the streams a participant in a call of six
-/// receives share theirs.
-const CONSUMERS_PER_RECEIVER: usize = 6;
-/// Memory the process needs before any call: its binary, threads, and workers.
+/// People in each of the calibration's calls of one kind of stream: each one's stream is
+/// forwarded to the five others.
+const CALIBRATION_CALL: usize = 6;
+/// Calls the per-stream calibrations hold: enough streams to measure well, few enough not to
+/// fill a core.
+const CALIBRATION_CALLS: usize = 10;
+/// Memory the process needs before any call: its binary, threads, and buffers.
 const BASE_MEMORY: u64 = 512 * 1024 * 1024;
-/// Ports a participant holds from the RTC range: a transport to send and one to receive, and
-/// for a game capture two more of its own, counted for everyone who shares.
-const PORTS_PER_PARTICIPANT: f64 = 2.0;
-const PORTS_PER_SHARER: f64 = 2.0;
 
 #[derive(Debug, Serialize)]
 pub struct Hardware {
     /// Logical cores the process may use, after any CPU quota.
     pub cores: f64,
-    pub workers: usize,
+    pub media_threads: usize,
     /// Memory the process may use, after any container limit.
     pub memory_bytes: u64,
     pub interface: Option<String>,
     /// Bandwidth out, from `--link-mbps`, `[rtc] upload_mbps`, or the interface's speed.
     pub link_mbps: Option<f64>,
-    pub ports: u32,
 }
 
 /// What one forwarded stream, or one participant in a call, costs here.
@@ -136,7 +129,7 @@ pub struct Estimate {
     pub participant_memory_bytes: f64,
     pub participant_mbps_out: f64,
     pub limits: Vec<Limit>,
-    /// The largest call one worker holds within the margin: a call lives on one worker.
+    /// The largest call one media thread holds within the margin: a call lives on one thread.
     pub largest_call: u64,
     pub capacity: u64,
     pub warnings: Vec<String>,
@@ -158,22 +151,13 @@ pub async fn run(args: EstimateArgs, media: MediaConfig) -> anyhow::Result<()> {
         );
     }
     let seconds = Duration::from_secs(args.calibration_seconds.max(1));
-    let worker = WorkerManager::new()
-        .create_worker({
-            let mut settings = WorkerSettings::default();
-            settings.log_level = WorkerLogLevel::Error;
-            settings.rtc_port_range = CALIBRATION_PORTS;
-            settings
-        })
-        .await
-        .context("could not start a mediasoup worker")?;
-    let audio = calibrate(&worker, Kind::Audio, &args.shape, seconds).await?;
-    let video = calibrate(&worker, Kind::Video, &args.shape, seconds).await?;
-    let calls = calibrate_calls(&worker, &args.shape, seconds).await?;
+    let audio = calibrate(&Load::audio(&args.shape), seconds).await?;
+    let video = calibrate(&Load::video(&args.shape), seconds).await?;
+    let calls = calibrate(&Load::calls(&args.shape), seconds).await?;
     for (name, cost) in [("audio", &audio), ("video", &video), ("call", &calls)] {
         if cost.delivered < 0.95 {
             warnings.push(format!(
-                "only {:.0}% of the calibration's {name} packets arrived; the worker may have been short of CPU, so the estimate may be high",
+                "only {:.0}% of the calibration's {name} packets arrived; the media thread may have been short of CPU, so the estimate may be high",
                 cost.delivered * 100.0
             ));
         }
@@ -196,11 +180,11 @@ pub async fn run(args: EstimateArgs, media: MediaConfig) -> anyhow::Result<()> {
 }
 
 /// Streams one participant receives in a call of `n` with `share` of them sharing: every
-/// other's microphone, and each sharer's picture and sound.
+/// other's microphone up to the audio slots, and each sharer's picture and sound.
 fn streams_received(shape: &CallShape) -> (f64, f64) {
     let others = f64::from(shape.call_size - 1);
     let sharers = others * shape.screen_share;
-    (others + sharers, sharers)
+    (others.min(f64::from(AUDIO_SLOTS)) + sharers, sharers)
 }
 
 /// Bits a second on the wire for one stream of `kbps` sent in `fps` frames.
@@ -233,11 +217,11 @@ fn estimate(
     let participant_mbps_out = audio_streams * wire_mbps(shape.audio_kbps, AUDIO_FPS)
         + video_streams * wire_mbps(shape.screen_kbps, VIDEO_FPS);
 
-    let usable_cores = hardware.cores.min(hardware.workers as f64);
-    if (hardware.workers as f64) < hardware.cores.floor() {
+    let usable_cores = hardware.cores.min(hardware.media_threads as f64);
+    if (hardware.media_threads as f64) < hardware.cores.floor() {
         warnings.push(format!(
-            "`workers` is {} on a machine with {:.0} cores; each worker uses at most one core, so raising it to {:.0} would hold more",
-            hardware.workers, hardware.cores, hardware.cores.floor()
+            "`media_threads` is {} on a machine with {:.0} cores; each thread uses at most one core, so raising it to {:.0} would hold more",
+            hardware.media_threads, hardware.cores, hardware.cores.floor()
         ));
     }
     let per = |budget: f64, cost: f64| -> u64 {
@@ -252,7 +236,7 @@ fn estimate(
             resource: "CPU",
             participants: per(usable_cores * keep, participant_cpu),
             detail: format!(
-                "{usable_cores:.1} cores for workers × {:.0}%, {:.3}% of a core each",
+                "{usable_cores:.1} cores for media threads × {:.0}%, {:.3}% of a core each",
                 keep * 100.0,
                 participant_cpu * 100.0
             ),
@@ -285,15 +269,9 @@ fn estimate(
             "the link speed is unknown, so bandwidth is not counted; set [rtc] upload_mbps to the upload a speed test measures".to_string(),
         ),
     }
-    let ports_each = PORTS_PER_PARTICIPANT + PORTS_PER_SHARER * shape.screen_share;
-    limits.push(Limit {
-        resource: "ports",
-        participants: per(f64::from(hardware.ports), ports_each),
-        detail: format!("{} UDP ports, {ports_each:.1} each", hardware.ports),
-    });
     let capacity = limits.iter().map(|l| l.participants).min().unwrap_or(0);
-    // Everyone in a call adds to the cost of everyone else, so the largest call one worker
-    // holds is where n people each forwarding to n - 1 others fill a core.
+    // Everyone in a call adds to the cost of everyone else, so the largest call one media
+    // thread holds is where n people each forwarding to n - 1 others fill a core.
     let largest_call = (2..=10_000u32)
         .take_while(|&n| {
             let shape = CallShape {
@@ -341,8 +319,8 @@ fn describe(e: &Estimate) -> String {
     let _ = writeln!(out, "Hardware");
     let _ = writeln!(
         out,
-        "  CPU        {:.1} cores, {} workers (each uses at most one core)",
-        h.cores, h.workers
+        "  CPU        {:.1} cores, {} media threads (each uses at most one core)",
+        h.cores, h.media_threads
     );
     let _ = writeln!(out, "  memory     {}", bytes(h.memory_bytes as f64));
     let _ = writeln!(
@@ -352,7 +330,6 @@ fn describe(e: &Estimate) -> String {
         h.link_mbps
             .map_or("speed unknown".to_string(), |m| format!("{m:.0} Mbit/s"))
     );
-    let _ = writeln!(out, "  ports      {} UDP", h.ports);
     let _ = writeln!(out, "Measured here, per forwarded stream");
     for (name, cost) in [("audio", &e.audio_stream), ("video", &e.video_stream)] {
         let _ = writeln!(
@@ -400,7 +377,7 @@ fn describe(e: &Estimate) -> String {
     }
     let _ = writeln!(
         out,
-        "  one call fits on one worker up to about {} people",
+        "  one call fits on one media thread up to about {} people",
         e.largest_call
     );
     for warning in &e.warnings {
@@ -450,11 +427,10 @@ fn inspect(media: &MediaConfig, link_mbps: Option<f64>, warnings: &mut Vec<Strin
     };
     Hardware {
         cores,
-        workers: media.workers.max(1),
+        media_threads: media.media_threads.max(1),
         memory_bytes,
         interface,
         link_mbps,
-        ports: u32::from(media.rtc.max_port.saturating_sub(media.rtc.min_port)) + 1,
     }
 }
 
@@ -502,453 +478,331 @@ fn interface_speed_mbps(interface: &str) -> Option<f64> {
     (speed > 0).then_some(speed as f64)
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Kind {
-    Audio,
-    Video,
+/// One participant of a calibration's calls: what it sends, and which others of its call it
+/// watches.
+struct Planned {
+    sends: Vec<(MediaSource, Synthetic)>,
+    watches: Vec<usize>,
 }
 
-/// Where the calibration's consumers send, and how many media packets have arrived there.
-struct Sink {
-    port: u16,
-    received: Arc<AtomicU64>,
-    drain: tokio::task::JoinHandle<()>,
+/// A calibration: calls of planned participants, and what a result is divided by.
+struct Load {
+    calls: Vec<Vec<Planned>>,
+    /// Forwarded streams, or participants for whole calls.
+    units: usize,
 }
 
-impl Sink {
-    async fn open() -> anyhow::Result<Self> {
-        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await?;
-        let port = socket.local_addr()?.port();
-        let received = Arc::new(AtomicU64::new(0));
-        let drain = tokio::spawn({
-            let received = Arc::clone(&received);
-            async move {
-                let mut buffer = vec![0u8; 2048];
-                while let Ok(n) = socket.recv(&mut buffer).await {
-                    // RTCP (payload types 64..=95 once masked) is not media.
-                    if n > 1 && !(64..=95).contains(&(buffer[1] & 0x7f)) {
-                        received.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            }
-        });
-        Ok(Self {
-            port,
-            received,
-            drain,
-        })
+impl Load {
+    fn voice(shape: &CallShape) -> Synthetic {
+        Synthetic::Audio {
+            kbps: shape.audio_kbps,
+            // Loud, so the levels are read as a call's are.
+            level: Some(-30),
+        }
     }
 
-    fn received(&self) -> u64 {
-        self.received.load(Ordering::Relaxed)
+    fn screen(shape: &CallShape) -> Synthetic {
+        Synthetic::Video {
+            kbps: shape.screen_kbps,
+            fps: VIDEO_FPS,
+        }
     }
-}
 
-impl Drop for Sink {
-    fn drop(&mut self) {
-        self.drain.abort();
-    }
-}
-
-/// The router's capabilities as a receiver states them, as a client's device does.
-fn receiver_capabilities(router: &Router) -> anyhow::Result<RtpCapabilities> {
-    Ok(serde_json::from_value(serde_json::to_value(
-        router.rtp_capabilities(),
-    )?)?)
-}
-
-/// A transport that receives, sending over SRTP to the sink, as a participant's does.
-async fn receiving_transport(router: &Router, sink: &Sink) -> anyhow::Result<PlainTransport> {
-    let transport = router
-        .create_plain_transport({
-            let mut options = PlainTransportOptions::new(loopback());
-            options.rtcp_mux = true;
-            options.comedia = false;
-            options.enable_srtp = true;
-            options.srtp_crypto_suite = SrtpCryptoSuite::AesCm128HmacSha180;
-            options
-        })
-        .await?;
-    let srtp = transport.srtp_parameters();
-    transport
-        .connect(PlainTransportRemoteParameters {
-            ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
-            port: Some(sink.port),
-            rtcp_port: None,
-            srtp_parameters: srtp,
-        })
-        .await?;
-    Ok(transport)
-}
-
-/// A producer of `kind` on a transport of its own, fed by a synthetic stream until `stop`.
-struct Source {
-    _transport: PlainTransport,
-    producer: Producer,
-    sender: tokio::task::JoinHandle<()>,
-}
-
-impl Source {
-    async fn start(
-        router: &Router,
-        kind: Kind,
-        ssrc: u32,
-        shape: &CallShape,
-        stop: &Arc<AtomicBool>,
-    ) -> anyhow::Result<Self> {
-        let transport = router
-            .create_plain_transport({
-                let mut options = PlainTransportOptions::new(loopback());
-                options.rtcp_mux = true;
-                options.comedia = true;
-                options
+    /// Calls of six with everyone's microphone, each forwarded to the five others.
+    fn audio(shape: &CallShape) -> Self {
+        let calls: Vec<Vec<Planned>> = (0..CALIBRATION_CALLS)
+            .map(|_| {
+                (0..CALIBRATION_CALL)
+                    .map(|_| Planned {
+                        sends: vec![(MediaSource::Microphone, Self::voice(shape))],
+                        watches: Vec::new(),
+                    })
+                    .collect()
             })
-            .await?;
-        let media = if kind == Kind::Audio {
-            MediaKind::Audio
-        } else {
-            MediaKind::Video
-        };
-        let producer = transport
-            .produce(ProducerOptions::new(media, producer_parameters(kind, ssrc)))
-            .await?;
-        let (_, port) = local_tuple(&transport);
-        let (frame_bytes, fps) = frame_bytes(kind, shape);
-        let sender = tokio::spawn(send_stream(
-            kind,
-            ssrc,
-            port,
-            frame_bytes,
-            fps,
-            Arc::clone(stop),
-        ));
-        Ok(Self {
-            _transport: transport,
-            producer,
-            sender,
-        })
+            .collect();
+        Self {
+            calls,
+            units: CALIBRATION_CALLS * CALIBRATION_CALL * (CALIBRATION_CALL - 1),
+        }
+    }
+
+    /// Calls of six where one shares a screen, picture alone, and the five others watch it.
+    fn video(shape: &CallShape) -> Self {
+        let calls: Vec<Vec<Planned>> = (0..CALIBRATION_CALLS)
+            .map(|_| {
+                (0..CALIBRATION_CALL)
+                    .map(|index| match index {
+                        0 => Planned {
+                            sends: vec![(MediaSource::Screen, Self::screen(shape))],
+                            watches: Vec::new(),
+                        },
+                        _ => Planned {
+                            sends: Vec::new(),
+                            watches: vec![0],
+                        },
+                    })
+                    .collect()
+            })
+            .collect();
+        Self {
+            calls,
+            units: CALIBRATION_CALLS * (CALIBRATION_CALL - 1),
+        }
+    }
+
+    /// Whole calls of the shape: everyone a microphone, the call's share of them a screen and
+    /// its sound as well, which everyone else watches.
+    fn calls(shape: &CallShape) -> Self {
+        let size = shape.call_size as usize;
+        // Enough people to measure, however large a call.
+        let count = (60 / size).max(1);
+        let calls: Vec<Vec<Planned>> = (0..count)
+            .map(|call| {
+                // Spread the sharers over the calls so their share of everyone is the shape's.
+                let before = (shape.screen_share * (call * size) as f64).floor() as usize;
+                let sharers = ((shape.screen_share * ((call + 1) * size) as f64).floor() as usize
+                    - before)
+                    .min(MAX_WATCHED_VIDEO);
+                (0..size)
+                    .map(|person| {
+                        let mut sends = vec![(MediaSource::Microphone, Self::voice(shape))];
+                        if person < sharers {
+                            sends.push((MediaSource::Screen, Self::screen(shape)));
+                            sends.push((MediaSource::ScreenAudio, Self::voice(shape)));
+                        }
+                        Planned {
+                            sends,
+                            watches: (0..sharers).filter(|s| *s != person).collect(),
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        Self {
+            units: count * size,
+            calls,
+        }
+    }
+
+    /// Media packets a second the participants should receive, all told: each their audio
+    /// slots' worth of others' microphones, and the picture and sound of each share watched.
+    fn expected_packets_per_second(&self) -> f64 {
+        self.calls
+            .iter()
+            .map(|call| {
+                call.iter()
+                    .enumerate()
+                    .map(|(index, planned)| {
+                        let microphones = call
+                            .iter()
+                            .enumerate()
+                            .filter(|(other, p)| {
+                                *other != index
+                                    && p.sends.iter().any(|(s, _)| *s == MediaSource::Microphone)
+                            })
+                            .map(|(_, p)| {
+                                p.sends
+                                    .iter()
+                                    .find(|(s, _)| *s == MediaSource::Microphone)
+                                    .map_or(0.0, |(_, m)| m.packets_per_second())
+                            })
+                            .take(usize::from(AUDIO_SLOTS))
+                            .sum::<f64>();
+                        let watched: f64 = planned
+                            .watches
+                            .iter()
+                            .flat_map(|sharer| &call[*sharer].sends)
+                            .filter(|(s, _)| *s != MediaSource::Microphone)
+                            .map(|(_, m)| m.packets_per_second())
+                            .sum();
+                        microphones + watched
+                    })
+                    .sum::<f64>()
+            })
+            .sum()
     }
 }
 
-/// Bytes a frame of `kind` carries, and frames a second.
-fn frame_bytes(kind: Kind, shape: &CallShape) -> (usize, f64) {
-    let (kbps, fps) = match kind {
-        Kind::Audio => (shape.audio_kbps, AUDIO_FPS),
-        Kind::Video => (shape.screen_kbps, VIDEO_FPS),
-    };
-    (((kbps * 1000.0 / 8.0 / fps) as usize).max(1), fps)
+/// Answers one participant's offers through its peer, and starts sending each source once its
+/// section is offered, until the media thread stops.
+async fn drive(
+    media: Arc<Media>,
+    participant: ParticipantId,
+    mut events: tokio::sync::mpsc::UnboundedReceiver<Event>,
+    peer: Peer,
+    sends: Vec<(MediaSource, Synthetic)>,
+) {
+    let mut started = HashSet::new();
+    while let Some(event) = events.recv().await {
+        let Event::Offer {
+            connection,
+            revision,
+            sdp,
+            sections,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        let Ok(answer) = peer.answer(sdp).await else {
+            return;
+        };
+        media.send(
+            0,
+            Command::Answer {
+                participant,
+                connection,
+                revision,
+                sdp: answer,
+            },
+        );
+        for section in sections {
+            if let SectionContent::Sending { source } = section.content
+                && let Some((_, synthetic)) = sends.iter().find(|(s, _)| *s == source)
+                && started.insert(section.mid.clone())
+            {
+                peer.send(&section.mid, *synthetic);
+            }
+        }
+    }
 }
 
-/// Media packets a second one stream of `kind` carries.
-fn packets_per_second(kind: Kind, shape: &CallShape) -> f64 {
-    let (bytes, fps) = frame_bytes(kind, shape);
-    let keyframe_extra = if kind == Kind::Video { 2.0 } else { 0.0 };
-    bytes.div_ceil(MAX_PAYLOAD) as f64 * fps + keyframe_extra
+/// What the calibration's media thread holds, by its own count.
+async fn thread_allocated(media: &Media) -> u64 {
+    let (reply, census) = tokio::sync::oneshot::channel();
+    if !media.send(0, Command::Census { reply }) {
+        return 0;
+    }
+    census
+        .await
+        .ok()
+        .and_then(|census| census.allocated_bytes)
+        .unwrap_or(0)
 }
 
-/// Lets every consumer start (a video consumer waits for a keyframe), then measures the
-/// workers' CPU, the packets that arrived, and the allocator's growth since `allocated_before`
-/// over `seconds`.
-async fn measure(
-    sink: &Sink,
-    allocated_before: u64,
-    seconds: Duration,
-) -> anyhow::Result<(f64, f64, f64)> {
+/// Carries `load` on a media thread of its own for `seconds`, after letting every connection
+/// open and every video start (it waits for a keyframe), and measures what one unit cost.
+async fn calibrate(load: &Load, seconds: Duration) -> anyhow::Result<Cost> {
+    let media = Arc::new(
+        Media::start(voice_media::MediaConfig {
+            addresses: vec![MediaAddress {
+                ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                announced: None,
+            }],
+            first_port: 0,
+            threads: 1,
+            audio_slots: AUDIO_SLOTS,
+            max_watched_video: MAX_WATCHED_VIDEO,
+        })
+        .context("could not start a media thread for the calibration")?,
+    );
+    let allocated_before = thread_allocated(&media).await;
+    let mut counters: Vec<Arc<Counters>> = Vec::new();
+    let mut next = 1u64;
+    for call in &load.calls {
+        let id = CallId(Uuid::now_v7());
+        let users: Vec<Uuid> = call.iter().map(|_| Uuid::now_v7()).collect();
+        for (index, planned) in call.iter().enumerate() {
+            let participant = ParticipantId(next);
+            next += 1;
+            let (events, received) = tokio::sync::mpsc::unbounded_channel();
+            let peer = Peer::start(PeerOptions::default());
+            counters.push(Arc::clone(&peer.counters));
+            media.send(
+                0,
+                Command::Join {
+                    call: id,
+                    participant,
+                    user: users[index],
+                    events,
+                },
+            );
+            for (source, _) in &planned.sends {
+                media.send(
+                    0,
+                    Command::Send {
+                        participant,
+                        source: *source,
+                        external: false,
+                    },
+                );
+            }
+            if !planned.watches.is_empty() {
+                media.send(
+                    0,
+                    Command::Watch {
+                        participant,
+                        video: planned
+                            .watches
+                            .iter()
+                            .map(|sharer| (users[*sharer], MediaSource::Screen))
+                            .collect(),
+                    },
+                );
+            }
+            tokio::spawn(drive(
+                Arc::clone(&media),
+                participant,
+                received,
+                peer,
+                planned.sends.clone(),
+            ));
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while counters
+        .iter()
+        .any(|c| !c.connected.load(Ordering::Relaxed))
+    {
+        if Instant::now() > deadline {
+            bail!("the calibration's connections did not all connect within 30 seconds");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Every video starts on its source's next keyframe, at most a second away.
     tokio::time::sleep(Duration::from_secs(2)).await;
-    let cpu_before = worker_cpu();
-    let received_before = sink.received();
+    let received = || {
+        counters
+            .iter()
+            .map(|c| c.received.load(Ordering::Relaxed))
+            .sum::<u64>()
+    };
+    let cpu_before = media_thread_cpu();
+    let received_before = received();
     let started = Instant::now();
     tokio::time::sleep(seconds).await;
     let elapsed = started.elapsed().as_secs_f64();
-    let cpu = cores_used(cpu_before, worker_cpu(), elapsed)?;
-    let arrived = (sink.received() - received_before) as f64 / elapsed;
-    let allocated = aspen_metrics::allocated_bytes().unwrap_or(0);
-    Ok((
-        cpu,
-        arrived,
-        allocated.saturating_sub(allocated_before) as f64,
-    ))
+    let cpu = cores_used(cpu_before, media_thread_cpu(), elapsed)?;
+    let arrived = (received() - received_before) as f64 / elapsed;
+    let allocated = thread_allocated(&media)
+        .await
+        .saturating_sub(allocated_before) as f64;
+    let units = load.units.max(1) as f64;
+    Ok(Cost {
+        cpu: cpu / units,
+        memory_bytes: allocated / units,
+        delivered: (arrived / load.expected_packets_per_second().max(1.0)).min(1.0),
+    })
 }
 
-/// The cores the workers used between two readings of `worker_cpu`, `elapsed` seconds apart.
-/// Forwarding the calibration's streams always costs a worker time, so a reading that did not
-/// rise means the workers' threads were not found (`metrics::worker_cpu_seconds`), and an
-/// estimate made from it would count CPU as free.
+/// The cores the media thread used between two readings of `media_thread_cpu`, `elapsed`
+/// seconds apart. Forwarding the calibration's streams always costs the thread time, so a
+/// reading that did not rise means its thread was not found, and an estimate made from it
+/// would count CPU as free.
 fn cores_used(before: f64, after: f64, elapsed: f64) -> anyhow::Result<f64> {
     anyhow::ensure!(
         after > before,
-        "the mediasoup workers' CPU time could not be measured (no thread of this process named \
-         `mediasoup-worker-…` was found under /proc/self/task, or none used any time), so no \
-         capacity can be estimated"
+        "the media thread's CPU time could not be measured (no thread of this process named \
+         `{}…` was found under /proc/self/task, or it used no time), so no capacity can be \
+         estimated",
+        crate::metrics::MEDIA_THREAD_NAME
     );
     Ok((after - before) / elapsed)
 }
 
-/// Forwards synthetic streams of `kind` through a router on `worker` for `seconds` and measures
-/// what one forwarded stream costs.
-async fn calibrate(
-    worker: &Worker,
-    kind: Kind,
-    shape: &CallShape,
-    seconds: Duration,
-) -> anyhow::Result<Cost> {
-    // Enough streams for the worker's time to be measured well, few enough not to fill it.
-    let producers = if kind == Kind::Audio { 60 } else { 10 };
-    let router = worker
-        .create_router(RouterOptions::new(media_codecs()))
-        .await?;
-    let capabilities = receiver_capabilities(&router)?;
-    let sink = Sink::open().await?;
-    let stop = Arc::new(AtomicBool::new(false));
-    let allocated_before = aspen_metrics::allocated_bytes().unwrap_or(0);
-    let mut receivers: Vec<PlainTransport> = Vec::new();
-    let mut consumers = Vec::new();
-    let mut sources = Vec::new();
-    for i in 0..producers {
-        let source = Source::start(&router, kind, 0x4000_0000 | i as u32, shape, &stop).await?;
-        for _ in 0..FAN_OUT {
-            if consumers.len() % CONSUMERS_PER_RECEIVER == 0 {
-                receivers.push(receiving_transport(&router, &sink).await?);
-            }
-            let receiver = receivers.last().expect("a receiver was just made");
-            consumers.push(
-                receiver
-                    .consume(ConsumerOptions::new(
-                        source.producer.id(),
-                        capabilities.clone(),
-                    ))
-                    .await?,
-            );
-        }
-        sources.push(source);
-    }
-    let (cpu, arrived, allocated) = measure(&sink, allocated_before, seconds).await?;
-    stop.store(true, Ordering::Relaxed);
-    for source in &mut sources {
-        let _ = (&mut source.sender).await;
-    }
-    let streams = (producers * FAN_OUT) as f64;
-    let expected = streams * packets_per_second(kind, shape);
-    Ok(Cost {
-        cpu: cpu / streams,
-        memory_bytes: allocated / streams,
-        delivered: (arrived / expected).min(1.0),
-    })
-}
-
-/// What one participant costs in whole calls of the given shape: every call its own router,
-/// every participant a microphone and a receiving transport that consumes everyone else, and
-/// the call's share of them a screen with its sound as well. This counts what the per-stream
-/// figures leave out: each call's router and each participant's transports.
-async fn calibrate_calls(
-    worker: &Worker,
-    shape: &CallShape,
-    seconds: Duration,
-) -> anyhow::Result<Cost> {
-    let size = shape.call_size as usize;
-    // Enough people to measure, however large a call.
-    let calls = (60 / size).max(1);
-    let sink = Sink::open().await?;
-    let stop = Arc::new(AtomicBool::new(false));
-    let allocated_before = aspen_metrics::allocated_bytes().unwrap_or(0);
-    let mut kept = Vec::new();
-    let mut ssrc = 0x5000_0000u32;
-    let mut expected = 0.0;
-    for call in 0..calls {
-        let router = worker
-            .create_router(RouterOptions::new(media_codecs()))
-            .await?;
-        let capabilities = receiver_capabilities(&router)?;
-        // Spread the sharers over the calls so their share of everyone is the shape's.
-        let sharers_before = (shape.screen_share * (call * size) as f64).floor() as usize;
-        let sharers =
-            (shape.screen_share * ((call + 1) * size) as f64).floor() as usize - sharers_before;
-        let mut sources: Vec<(usize, Source)> = Vec::new();
-        for person in 0..size {
-            let mut kinds = vec![Kind::Audio];
-            if person < sharers {
-                kinds.extend([Kind::Video, Kind::Audio]);
-            }
-            for kind in kinds {
-                ssrc += 1;
-                sources.push((
-                    person,
-                    Source::start(&router, kind, ssrc, shape, &stop).await?,
-                ));
-            }
-        }
-        let mut consumers = Vec::new();
-        let mut receivers = Vec::new();
-        for person in 0..size {
-            let receiver = receiving_transport(&router, &sink).await?;
-            for (owner, source) in &sources {
-                if *owner == person {
-                    continue;
-                }
-                let kind = if source.producer.kind() == MediaKind::Audio {
-                    Kind::Audio
-                } else {
-                    Kind::Video
-                };
-                expected += packets_per_second(kind, shape);
-                consumers.push(
-                    receiver
-                        .consume(ConsumerOptions::new(
-                            source.producer.id(),
-                            capabilities.clone(),
-                        ))
-                        .await?,
-                );
-            }
-            receivers.push(receiver);
-        }
-        kept.push((router, sources, receivers, consumers));
-    }
-    let (cpu, arrived, allocated) = measure(&sink, allocated_before, seconds).await?;
-    stop.store(true, Ordering::Relaxed);
-    for (_, sources, _, _) in &mut kept {
-        for (_, source) in sources {
-            let _ = (&mut source.sender).await;
-        }
-    }
-    let participants = (calls * size) as f64;
-    Ok(Cost {
-        cpu: cpu / participants,
-        memory_bytes: allocated / participants,
-        delivered: if expected > 0.0 {
-            (arrived / expected).min(1.0)
-        } else {
-            1.0
-        },
-    })
-}
-
-fn loopback() -> ListenInfo {
-    ListenInfo {
-        protocol: Protocol::Udp,
-        ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-        announced_address: None,
-        expose_internal_ip: false,
-        port: None,
-        port_range: None,
-        flags: None,
-        send_buffer_size: None,
-        recv_buffer_size: None,
-    }
-}
-
-/// A producer of `kind` as the voice server makes them for clients that send RTP themselves.
-fn producer_parameters(kind: Kind, ssrc: u32) -> RtpParameters {
-    let codec = match kind {
-        Kind::Audio => RtpCodecParameters::Audio {
-            mime_type: MimeTypeAudio::Opus,
-            payload_type: 100,
-            clock_rate: NonZeroU32::new(48_000).expect("clock rate"),
-            channels: NonZeroU8::new(2).expect("channels"),
-            parameters: RtpCodecParametersParameters::default(),
-            rtcp_feedback: vec![],
-        },
-        Kind::Video => RtpCodecParameters::Video {
-            mime_type: MimeTypeVideo::H264,
-            payload_type: 96,
-            clock_rate: NonZeroU32::new(90_000).expect("clock rate"),
-            parameters: h264_parameters(),
-            rtcp_feedback: vec![RtcpFeedback::Nack, RtcpFeedback::NackPli],
-        },
-    };
-    RtpParameters {
-        mid: None,
-        msid: None,
-        codecs: vec![codec],
-        header_extensions: vec![],
-        encodings: vec![RtpEncodingParameters {
-            ssrc: Some(ssrc),
-            ..RtpEncodingParameters::default()
-        }],
-        rtcp: RtcpParameters {
-            cname: Some(format!("calibration-{ssrc}")),
-            reduced_size: true,
-        },
-    }
-}
-
-/// Sends one synthetic stream to a producer's transport until `stop`: Opus-sized frames, or
-/// H.264-shaped ones split into packets, with a keyframe every second so every consumer starts.
-async fn send_stream(
-    kind: Kind,
-    ssrc: u32,
-    port: u16,
-    frame_bytes: usize,
-    fps: f64,
-    stop: Arc<AtomicBool>,
-) {
-    let Ok(socket) = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await else {
-        return;
-    };
-    if socket.connect((Ipv4Addr::LOCALHOST, port)).await.is_err() {
-        return;
-    }
-    let (payload_type, clock_rate) = match kind {
-        Kind::Audio => (100u8, 48_000.0),
-        Kind::Video => (96u8, 90_000.0),
-    };
-    let step = (clock_rate / fps) as u32;
-    let mut ticker = tokio::time::interval(Duration::from_secs_f64(1.0 / fps));
-    let (mut sequence, mut timestamp, mut frame) = (0u16, 0u32, 0u64);
-    let filler = vec![0x5a_u8; MAX_PAYLOAD];
-    while !stop.load(Ordering::Relaxed) {
-        ticker.tick().await;
-        let keyframe = kind == Kind::Video && frame.is_multiple_of(fps as u64);
-        if keyframe {
-            // A sequence and a picture parameter set lead every keyframe, as an encoder's do;
-            // the sequence parameter set is what mediasoup recognises a keyframe by.
-            for (nal, size) in [(0x67u8, 16usize), (0x68, 4)] {
-                let mut packet = rtp_header(payload_type, false, sequence, timestamp, ssrc);
-                packet.push(nal);
-                packet.extend_from_slice(&filler[..size - 1]);
-                let _ = socket.send(&packet).await;
-                sequence = sequence.wrapping_add(1);
-            }
-        }
-        let mut left = frame_bytes;
-        while left > 0 {
-            let size = left.min(MAX_PAYLOAD);
-            left -= size;
-            let mut packet = rtp_header(
-                payload_type,
-                kind == Kind::Video && left == 0,
-                sequence,
-                timestamp,
-                ssrc,
-            );
-            packet.push(match kind {
-                Kind::Audio => 0x78,
-                Kind::Video if keyframe => 0x65,
-                Kind::Video => 0x41,
-            });
-            packet.extend_from_slice(&filler[..size - 1]);
-            let _ = socket.send(&packet).await;
-            sequence = sequence.wrapping_add(1);
-        }
-        timestamp = timestamp.wrapping_add(step);
-        frame += 1;
-    }
-}
-
-/// The twelve bytes of an RTP header with no CSRCs or extensions.
-fn rtp_header(payload_type: u8, marker: bool, sequence: u16, timestamp: u32, ssrc: u32) -> Vec<u8> {
-    let mut header = Vec::with_capacity(12 + MAX_PAYLOAD);
-    header.push(0x80);
-    header.push(payload_type | if marker { 0x80 } else { 0 });
-    header.extend_from_slice(&sequence.to_be_bytes());
-    header.extend_from_slice(&timestamp.to_be_bytes());
-    header.extend_from_slice(&ssrc.to_be_bytes());
-    header
-}
-
-/// CPU seconds all mediasoup worker threads of this process have used.
-fn worker_cpu() -> f64 {
-    crate::metrics::worker_cpu_seconds()
+/// CPU seconds the media threads of this process have used.
+fn media_thread_cpu() -> f64 {
+    crate::metrics::media_thread_cpu_seconds()
         .into_iter()
         .map(|(_, seconds)| seconds)
         .sum()
@@ -958,14 +812,13 @@ fn worker_cpu() -> f64 {
 mod tests {
     use super::*;
 
-    fn hardware(cores: f64, workers: usize, link: Option<f64>) -> Hardware {
+    fn hardware(cores: f64, media_threads: usize, link: Option<f64>) -> Hardware {
         Hardware {
             cores,
-            workers,
+            media_threads,
             memory_bytes: 16 * 1024 * 1024 * 1024,
             interface: Some("eth0".into()),
             link_mbps: link,
-            ports: 10_000,
         }
     }
 
@@ -991,6 +844,20 @@ mod tests {
         assert_eq!(cores_used(1.0, 2.0, 4.0).unwrap(), 0.25);
         assert!(cores_used(0.0, 0.0, 4.0).is_err());
         assert!(cores_used(3.0, 3.0, 4.0).is_err());
+    }
+
+    #[test]
+    fn a_participant_receives_no_more_microphones_than_it_has_slots() {
+        let big = CallShape {
+            call_size: 100,
+            screen_share: 0.0,
+            ..shape()
+        };
+        let (audio, _) = streams_received(&big);
+        assert_eq!(audio, f64::from(AUDIO_SLOTS));
+        let calls = Load::calls(&big);
+        let per_person = calls.expected_packets_per_second() / calls.units as f64;
+        assert!((per_person - f64::from(AUDIO_SLOTS) * 50.0).abs() < 1e-9);
     }
 
     #[test]
@@ -1057,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn workers_bound_the_cores_used_and_an_unknown_link_is_noted() {
+    fn media_threads_bound_the_cores_used_and_an_unknown_link_is_noted() {
         let many = estimate(
             hardware(32.0, 32, None),
             shape(),
@@ -1083,9 +950,9 @@ mod tests {
                 .unwrap()
                 .participants
         };
-        // Eight times the workers, eight times the cores: each limit is rounded down.
+        // Eight times the threads, eight times the cores: each limit is rounded down.
         assert!((cpu(&few) * 8..(cpu(&few) + 1) * 8).contains(&cpu(&many)));
-        assert!(few.warnings.iter().any(|w| w.contains("workers")));
+        assert!(few.warnings.iter().any(|w| w.contains("media_threads")));
         assert!(few.warnings.iter().any(|w| w.contains("upload_mbps")));
         assert!(few.limits.iter().all(|l| l.resource != "bandwidth out"));
     }

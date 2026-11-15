@@ -2,17 +2,25 @@
 //! WebSocket at the voice server's `/ws`. `voice_signal_schema.json`, written by the voice
 //! server with `--gen-signal-schema`, describes every frame for the client's code generator.
 //!
-//! The flow: the client sends `identify` with its join token and receives `ready` with the
-//! router's RTP capabilities and who is already in the call. It loads a mediasoup device from
-//! those, sends `setCapabilities`, creates a send and a receive transport, connects them, and
-//! produces its microphone. The server creates a consumer on the client's receive transport for
-//! every producer of everyone else, present and future, announcing each with `newConsumer`;
-//! the client acknowledges with `resumeConsumer` once it has set the consumer up. Everything
-//! mediasoup-shaped (RTP parameters, ICE and DTLS parameters) crosses as opaque JSON that the
-//! mediasoup libraries on each side understand.
+//! The flow: the client sends `identify` with its join token and receives `ready`: who is in
+//! the call, what each sends, how many audio slots it receives, and a secret to resume with.
+//! The server is the only side that offers. It then offers the client's peer connection
+//! (`offer`), and the client answers (`answer`). Whatever the client wants changed is a request
+//! (`send` a source, `watch` video, `restartIce`), which the server makes and offers. A
+//! connection never has two offers outstanding, so neither side handles a collision.
+//!
+//! Every offer names what each of its media sections carries (`sections`): a source the client
+//! sends, an audio slot, or another participant's video or a share's sound. A client receives a
+//! fixed number of audio slots, which the server fills with whoever is loudest and says whom
+//! each carries (`slots`) as it changes; and a section for each video it watches. The desktop
+//! shell's game capture helper holds a peer connection of its own (`ConnectionKind::Capture`),
+//! negotiated the same way through the client.
+//!
+//! A client whose socket closes without `leave` stays in the call for `RESUME_GRACE`, its media
+//! flowing, and takes its place back with `resume` and the secret `ready` gave.
 //!
 //! Files are offered to the call and sent between two participants over a WebRTC data channel
-//! of their own, never through mediasoup. An offer (`offerFile`) stands for the time its sender
+//! of their own, never through the server's media threads. An offer (`offerFile`) stands for the time its sender
 //! chose; each participant who accepts it (`acceptFile`) starts one transfer, in the mode they
 //! chose among those the sender and this server allow. The server answers both people with
 //! `transferStarting`, carrying the ICE servers for that transfer (its STUN, and its TURN relay
@@ -26,15 +34,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-/// Which way media flows on a transport.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum TransportDirection {
-    Send,
-    Recv,
-}
+/// How long a participant whose socket closed without `leave` stays in the call, media
+/// flowing, waiting to be resumed.
+pub const RESUME_GRACE_SECONDS: u64 = 20;
 
-/// What a producer carries.
+/// What a participant sends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum MediaSource {
@@ -116,14 +120,21 @@ pub struct SlotAssignment {
     pub user: Option<Uuid>,
 }
 
-/// One producer of a participant, as told to the others.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// One source a participant sends, as told to the others: only once its media has arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ProducerInfo {
-    pub id: String,
-    pub kind: MediaKind,
+pub struct SourceInfo {
     pub source: MediaSource,
+    /// Paused at the server: a muted microphone.
     pub paused: bool,
+}
+
+/// A video a client shows, and wants a section for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchedVideo {
+    pub user: Uuid,
+    pub source: MediaSource,
 }
 
 /// Someone in the call, as told to a newcomer.
@@ -134,7 +145,7 @@ pub struct ParticipantInfo {
     pub muted: bool,
     pub deafened: bool,
     pub speaking: bool,
-    pub producers: Vec<ProducerInfo>,
+    pub sources: Vec<SourceInfo>,
 }
 
 /// How a transfer travels, as the person receiving it chose.
@@ -252,52 +263,54 @@ pub struct IceServer {
 )]
 #[strum(serialize_all = "camelCase")]
 pub enum ClientMessage {
-    /// Must be the first frame: the join token from the API server.
+    /// Must be the first frame, or `resume`: the join token from the API server.
     Identify {
         token: String,
     },
-    /// The client's device capabilities, once it has loaded them from `ready`. The server
-    /// creates consumers for the client only after this.
-    SetCapabilities {
-        rtp_capabilities: Value,
+    /// In place of `identify`, within `RESUME_GRACE_SECONDS` of the socket closing: takes back
+    /// the participant the secret was given to (`ready`'s `resume`). The server answers with
+    /// `ready`, a new secret in it, and each connection's outstanding offer again, or its
+    /// sections (`sections`) where none is outstanding.
+    Resume {
+        secret: String,
     },
-    CreateTransport {
-        direction: TransportDirection,
+    /// The answer to the offer of `revision` on `connection`.
+    Answer {
+        connection: ConnectionKind,
+        revision: u64,
+        sdp: String,
     },
-    ConnectTransport {
-        transport_id: String,
-        dtls_parameters: Value,
-    },
-    Produce {
-        transport_id: String,
-        kind: MediaKind,
+    /// Asks to send `source`: the server offers a section for it, which the client answers with
+    /// its track. `external` sends it from the game capture helper's connection.
+    Send {
         source: MediaSource,
-        rtp_parameters: Value,
+        #[serde(default)]
+        external: bool,
     },
-    CloseProducer {
-        producer_id: String,
-    },
-    /// A producer fed by RTP the client sends itself rather than through a WebRTC transport:
-    /// the desktop shell's game capture, whose helper encodes H.264 and sends SRTP straight to
-    /// the voice server, and the benchmark's simulated participants. `screen` is H.264;
-    /// `microphone` and `screenAudio` are Opus. The server answers `rtpProduced` with where and
-    /// how to send.
-    ProduceRtp {
+    StopSending {
         source: MediaSource,
     },
-    /// Receive everyone else's media over plain RTP instead of WebRTC, for a client that is not
-    /// a browser (the benchmark's simulated participants). The server creates a plain transport
-    /// (SRTP, RTP and RTCP multiplexed, the client's address learned from the first packet it
-    /// sends), answers `rtpConsuming`, and from then on the participant's consumers, announced
-    /// with `newConsumer` as usual, are on it.
-    ConsumeRtp,
-    /// The client has set the consumer up and wants media on it.
-    ResumeConsumer {
-        consumer_id: String,
+    /// The video the client shows, replacing what it watched before: the server offers a
+    /// section for each (and for a screen's sound), and takes away those no longer named.
+    /// The client's own share is named for its preview.
+    Watch {
+        video: Vec<WatchedVideo>,
     },
-    /// Muting pauses the microphone producer on the server; deafening pauses every consumer.
-    /// A moderator's mute stands over this one: unmuting leaves the microphone paused while it
-    /// does, and the `participantState` that answers says so.
+    /// Stops or resumes one section the client receives, with no renegotiation: video off
+    /// screen, someone muted for this client alone.
+    SetReceiving {
+        mid: String,
+        receiving: bool,
+    },
+    /// Asks for an ICE restart, as after a change of network: the next offer carries new ICE
+    /// credentials.
+    RestartIce {
+        connection: ConnectionKind,
+    },
+    /// Muting pauses the microphone at the server; deafening stops the audio slots and the
+    /// shares' sound sent to the client, not video. A moderator's mute stands over this one:
+    /// unmuting leaves the microphone paused while it does, and the `participantState` that
+    /// answers says so.
     SetState {
         muted: bool,
         deafened: bool,
@@ -355,13 +368,15 @@ impl ClientMessage {
     rename_all_fields = "camelCase"
 )]
 pub enum ServerMessage {
-    /// The reply to `identify`.
+    /// The reply to `identify` and to `resume`.
     Ready {
         session: Uuid,
         user: Uuid,
-        /// The router's RTP capabilities, for loading the client's mediasoup device.
-        router_rtp_capabilities: Value,
         participants: Vec<ParticipantInfo>,
+        /// How many audio slots the client's offers carry.
+        audio_slots: u8,
+        /// The secret to `resume` with, made anew with each `ready`.
+        resume: String,
         /// The offers standing in the call.
         #[serde(default)]
         offers: Vec<FileOffer>,
@@ -371,60 +386,32 @@ pub enum ServerMessage {
         #[serde(default)]
         transfers: TransferPolicy,
     },
-    TransportCreated {
-        direction: TransportDirection,
-        id: String,
-        ice_parameters: Value,
-        ice_candidates: Value,
-        dtls_parameters: Value,
+    /// An offer for one of the client's connections, which it answers with `answer`;
+    /// `sections` names what every section of it carries.
+    Offer {
+        connection: ConnectionKind,
+        revision: u64,
+        sdp: String,
+        sections: Vec<Section>,
     },
-    TransportConnected {
-        transport_id: String,
+    /// What every section of a connection carries, after a `resume`, where no offer is
+    /// outstanding to say so.
+    Sections {
+        connection: ConnectionKind,
+        sections: Vec<Section>,
     },
-    Produced {
-        producer_id: String,
+    /// A source the client asked to send carries media at the server, and is sent on.
+    Sending {
         source: MediaSource,
     },
-    /// The answer to `produceRtp`: an H.264 producer awaiting SRTP at `ip`:`port` (RTP and
-    /// RTCP multiplexed, so RTCP feedback comes back from the same address) with the given
-    /// SSRC and payload type, encrypted both ways with the key. The client's own preview of
-    /// what it sends arrives as a `newConsumer` naming the client itself.
-    RtpProduced {
-        producer_id: String,
-        source: MediaSource,
-        ip: String,
-        port: u16,
-        ssrc: u32,
-        payload_type: u8,
-        srtp_crypto_suite: String,
-        srtp_key_base64: String,
-    },
-    /// Where media for a `consumeRtp` client comes from: the plain transport to send a first
-    /// packet (any SRTCP) to, and the key that decrypts what arrives and encrypts what is sent.
-    RtpConsuming {
-        ip: String,
-        port: u16,
-        srtp_crypto_suite: String,
-        srtp_key_base64: String,
-    },
-    /// A consumer the server created for one of another participant's producers. It starts
-    /// paused; the client answers with `resumeConsumer`.
-    NewConsumer {
-        consumer_id: String,
-        producer_id: String,
+    /// What a participant sends now, whenever it changes.
+    Sources {
         user: Uuid,
-        kind: MediaKind,
-        source: MediaSource,
-        rtp_parameters: Value,
-        producer_paused: bool,
+        sources: Vec<SourceInfo>,
     },
-    ConsumerClosed {
-        consumer_id: String,
-    },
-    /// A producer the client consumes was paused or resumed at its source, such as by a mute.
-    ProducerPaused {
-        producer_id: String,
-        paused: bool,
+    /// Whom the client's audio slots carry from now on, those that changed.
+    Slots {
+        assignments: Vec<SlotAssignment>,
     },
     ParticipantJoined {
         user: Uuid,
@@ -489,8 +476,8 @@ pub enum ServerMessage {
         active: bool,
     },
     /// What the client may now do in the call, which changed since it joined or since the
-    /// last of these. Its producers of a source no longer allowed are already closed, and its
-    /// file offers withdrawn when it may no longer transfer files; it stops sending them.
+    /// last of these. Its sources no longer allowed are already stopped, and its file offers
+    /// withdrawn when it may no longer transfer files; it stops sending them.
     GrantsChanged {
         grants: crate::token::Grants,
     },
@@ -524,6 +511,9 @@ pub enum KickReason {
     /// The user may no longer be in the call: they lost access to its channel, or left or were
     /// removed from where it is.
     AccessLost,
+    /// The client's peer connection failed at the server: an offer went unanswered, an answer
+    /// could not be applied, or it never connected. The client rejoins.
+    ConnectionFailed,
     /// The sign-in the user joined with ended: they signed out there, or ended it from another
     /// device, changed their password, or (for a bot) had its token replaced.
     SignedOut,

@@ -1,51 +1,39 @@
 //! Simulated call participants.
 //!
-//! A simulated participant joins a call the way the reference client does (a join offer from the
-//! API server, a latency probe of every candidate, the signalling socket to the nearest), but
-//! moves its media over plain SRTP rather than WebRTC: it sends its microphone, and its screen
-//! when it shares one, with `produceRtp`, and receives everyone else's with `consumeRtp`. That
-//! exercises what a voice server spends its capacity on (receiving, SRTP decryption,
-//! forwarding to every other participant, encryption, sending) without a browser's ICE and DTLS,
-//! whose cost is paid once per call.
+//! A simulated participant joins a call the way the reference client does: a join offer from the
+//! API server, a latency probe of every candidate, the signalling socket to the nearest, and a
+//! WebRTC connection the server offers and it answers. That connection is a synthetic peer
+//! (`voice_media::peer`), str0m, with the ICE, DTLS, SRTP, and RTCP a browser has, so a voice
+//! server spends on it what it spends on a person. It sends its microphone, and its screen when
+//! it shares one, and watches every screen shared in the call, as the client shows them.
 //!
 //! Microphone packets are Opus-sized every 20 ms at the behaviour's bitrate; a shared screen is
-//! 30 frames a second of H.264-shaped NAL units at its bitrate, a keyframe every two seconds and
-//! whenever the server asks for one. The payloads are filler: the server forwards media without
-//! decoding it.
+//! 30 frames a second of H.264-shaped NAL units at its bitrate, a keyframe every second. The
+//! payloads are filler: the server forwards media without decoding it.
 //!
 //! Measured: `voice:join` (join offer to the voice server's `ready`), `voice:probe` (the health
 //! probes), `voice:jitter` (RFC 3550 interarrival jitter of each received stream, every second),
 //! `voice:rtt` (from the server's receiver reports on what the participant sends), and the counters
-//! `voice_packets_expected` and `voice_packets_received`, whose ratio is the loss.
+//! `voice_packets_expected` and `voice_packets_received`, whose ratio is the loss, and
+//! `voice_bytes_sent`.
 
 use crate::stats::Recorder;
-use base64::Engine;
-use bytes::BytesMut;
 use futures_util::{SinkExt, StreamExt};
-use rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
-use rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
-use rtcp::receiver_report::ReceiverReport;
-use rtcp::sender_report::SenderReport;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::net::UdpSocket;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use voice_protocol::signal::{ClientMessage, MediaSource, ServerMessage};
-use webrtc_srtp::context::Context;
-use webrtc_srtp::protection_profile::ProtectionProfile;
-use webrtc_util::marshal::{Marshal, Unmarshal};
+use voice_media::peer::{Peer, PeerOptions, Received, Synthetic};
+use voice_protocol::signal::{
+    ClientMessage, MediaKind, MediaSource, SectionContent, ServerMessage, WatchedVideo,
+};
 
-const AUDIO_FRAME: Duration = Duration::from_millis(20);
-const VIDEO_FPS: u32 = 30;
-const KEYFRAME_EVERY: Duration = Duration::from_secs(2);
-const MAX_PAYLOAD: usize = 1100;
 const REPORT_EVERY: Duration = Duration::from_secs(1);
+/// The most shares one participant watches, as the voice server allows.
+const MAX_WATCHED: usize = 25;
 
 /// One call to make.
 pub struct CallPlan {
@@ -53,39 +41,6 @@ pub struct CallPlan {
     pub screen: bool,
     pub audio_bitrate: u32,
     pub screen_bitrate: u32,
-}
-
-fn srtp(key_base64: &str) -> Result<Context, String> {
-    let material = base64::engine::general_purpose::STANDARD
-        .decode(key_base64)
-        .map_err(|e| format!("SRTP key is not base64: {e}"))?;
-    if material.len() != 30 {
-        return Err("SRTP keying material must be 30 bytes".into());
-    }
-    Context::new(
-        &material[..16],
-        &material[16..],
-        ProtectionProfile::Aes128CmHmacSha1_80,
-        None,
-        None,
-    )
-    .map_err(|e| format!("SRTP context: {e}"))
-}
-
-/// RTP and RTCP share a port (RFC 5761): RTCP packet types are 192 to 223, which read as
-/// payload types 64 to 95.
-fn is_rtcp(packet: &[u8]) -> bool {
-    packet.len() > 1 && (64..=95).contains(&(packet[1] & 0x7f))
-}
-
-/// The middle 32 bits of the NTP time now, as receiver reports quote it.
-fn ntp_now() -> (u64, u32) {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let ntp = ((now.as_secs() + 2_208_988_800) << 32)
-        | ((u64::from(now.subsec_nanos()) << 32) / 1_000_000_000);
-    (ntp, (ntp >> 16) as u32)
 }
 
 type Signal = futures_util::stream::SplitSink<
@@ -169,172 +124,153 @@ pub async fn run_call(
             }
         }
     });
-    let expect = async |frames: &mut mpsc::UnboundedReceiver<ServerMessage>,
-                        what: &str,
-                        pick: &(dyn Fn(&ServerMessage) -> bool + Sync)|
-           -> Result<ServerMessage, String> {
-        let deadline = Instant::now() + Duration::from_secs(10);
+    send(&mut sink, &ClientMessage::Identify { token }).await?;
+    let ready = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let message = tokio::time::timeout_at(deadline, frames.recv())
-                .await
-                .map_err(|_| format!("no {what} from the voice server"))?
-                .ok_or("the voice server closed the socket")?;
-            if let ServerMessage::Error {
-                detail,
-                fatal: true,
-                ..
-            } = &message
-            {
-                return Err(detail.clone());
-            }
-            if pick(&message) {
-                return Ok(message);
+            match frames.recv().await {
+                Some(ServerMessage::Ready { participants, .. }) => return Ok(participants),
+                Some(ServerMessage::Error {
+                    detail,
+                    fatal: true,
+                    ..
+                }) => return Err(detail),
+                Some(_) => {}
+                None => return Err("the voice server closed the socket".to_string()),
             }
         }
-    };
-    send(&mut sink, &ClientMessage::Identify { token }).await?;
-    let ServerMessage::Ready {
-        router_rtp_capabilities,
-        ..
-    } = expect(&mut frames, "ready", &|m| {
-        matches!(m, ServerMessage::Ready { .. })
     })
-    .await?
-    else {
-        unreachable!()
-    };
+    .await
+    .map_err(|_| "no ready from the voice server".to_string())??;
     recorder.latency("voice:join", started.elapsed());
     recorder.count("voice_calls", 1);
+
+    let mut peer = Peer::start(PeerOptions {
+        detail: true,
+        stats: true,
+        ..PeerOptions::default()
+    });
+    let microphone = Synthetic::Audio {
+        kbps: f64::from(plan.audio_bitrate) / 1000.0,
+        level: Some(-30),
+    };
+    let screen = Synthetic::Video {
+        kbps: f64::from(plan.screen_bitrate) / 1000.0,
+        fps: 30.0,
+    };
     send(
         &mut sink,
-        &ClientMessage::SetCapabilities {
-            rtp_capabilities: router_rtp_capabilities,
+        &ClientMessage::Send {
+            source: MediaSource::Microphone,
+            external: false,
         },
     )
     .await?;
-
-    // Receiving.
-    send(&mut sink, &ClientMessage::ConsumeRtp).await?;
-    let ServerMessage::RtpConsuming {
-        ip,
-        port,
-        srtp_key_base64,
-        ..
-    } = expect(&mut frames, "rtpConsuming", &|m| {
-        matches!(m, ServerMessage::RtpConsuming { .. })
-    })
-    .await?
-    else {
-        unreachable!()
-    };
-    let receive = Arc::new(bind(&ip, port).await?);
-    let clocks: Arc<std::sync::Mutex<HashMap<u32, u32>>> = Arc::default();
-    let receiving = tokio::spawn(receive_media(
-        Arc::clone(&receive),
-        srtp(&srtp_key_base64)?,
-        srtp(&srtp_key_base64)?,
-        Arc::clone(&clocks),
-        recorder.clone(),
-    ));
-
-    // Sending: the microphone, and a screen.
-    let mut senders = Vec::new();
-    for (source, bitrate) in [
-        (MediaSource::Microphone, plan.audio_bitrate),
-        (MediaSource::Screen, plan.screen_bitrate),
-    ] {
-        if source == MediaSource::Screen && !plan.screen {
-            continue;
-        }
-        send(&mut sink, &ClientMessage::ProduceRtp { source }).await?;
-        let ServerMessage::RtpProduced {
-            ip,
-            port,
-            ssrc,
-            payload_type,
-            srtp_key_base64,
-            ..
-        } = expect(
-            &mut frames,
-            "rtpProduced",
-            &|m| matches!(m, ServerMessage::RtpProduced { source: s, .. } if *s == source),
+    if plan.screen {
+        send(
+            &mut sink,
+            &ClientMessage::Send {
+                source: MediaSource::Screen,
+                external: false,
+            },
         )
-        .await?
-        else {
-            unreachable!()
-        };
-        let socket = Arc::new(bind(&ip, port).await?);
-        senders.push(tokio::spawn(send_media(
-            socket,
-            srtp(&srtp_key_base64)?,
-            srtp(&srtp_key_base64)?,
-            ssrc,
-            payload_type,
-            source,
-            bitrate,
-            recorder.clone(),
-        )));
+        .await?;
     }
 
-    // Keep the call going: resume consumers as they are announced, until the time is up.
+    // Who shares a screen, which this participant watches.
+    let mut sharing: Vec<uuid::Uuid> = ready
+        .iter()
+        .filter(|p| p.sources.iter().any(|s| s.source == MediaSource::Screen))
+        .map(|p| p.user)
+        .collect();
+    let watch = |sharing: &[uuid::Uuid]| ClientMessage::Watch {
+        video: sharing
+            .iter()
+            .take(MAX_WATCHED)
+            .map(|user| WatchedVideo {
+                user: *user,
+                source: MediaSource::Screen,
+            })
+            .collect(),
+    };
+    if !sharing.is_empty() {
+        send(&mut sink, &watch(&sharing)).await?;
+    }
+    // What each section received carries, for its clock rate.
+    let mut kinds: HashMap<String, MediaKind> = HashMap::new();
+    let mut started_sending: Vec<String> = Vec::new();
+    let mut streams: HashMap<u32, StreamStats> = HashMap::new();
+    let mut report = tokio::time::interval(REPORT_EVERY);
+    let epoch = Instant::now();
     let end = Instant::now() + Duration::from_secs_f64(plan.seconds);
     loop {
         tokio::select! {
             message = frames.recv() => match message {
-                Some(ServerMessage::NewConsumer { consumer_id, kind, rtp_parameters, .. }) => {
-                    if let Some(ssrc) = rtp_parameters["encodings"][0]["ssrc"].as_u64() {
-                        let rate = if kind == voice_protocol::signal::MediaKind::Audio { 48_000 } else { 90_000 };
-                        clocks.lock().expect("clocks lock").insert(ssrc as u32, rate);
+                Some(ServerMessage::Offer { connection, revision, sdp, sections }) => {
+                    let answer = peer.answer(sdp).await?;
+                    send(&mut sink, &ClientMessage::Answer { connection, revision, sdp: answer }).await?;
+                    for section in sections {
+                        kinds.insert(section.mid.clone(), section.kind);
+                        if let SectionContent::Sending { source } = section.content
+                            && !started_sending.contains(&section.mid)
+                        {
+                            started_sending.push(section.mid.clone());
+                            peer.send(&section.mid, match source {
+                                MediaSource::Screen | MediaSource::Camera => screen,
+                                MediaSource::Microphone | MediaSource::ScreenAudio => microphone,
+                            });
+                        }
                     }
-                    send(&mut sink, &ClientMessage::ResumeConsumer { consumer_id }).await?;
+                }
+                Some(ServerMessage::Sources { user, sources }) => {
+                    let shares = sources.iter().any(|s| s.source == MediaSource::Screen);
+                    let known = sharing.contains(&user);
+                    if shares != known {
+                        if shares {
+                            sharing.push(user);
+                        } else {
+                            sharing.retain(|u| *u != user);
+                        }
+                        send(&mut sink, &watch(&sharing)).await?;
+                    }
                 }
                 Some(ServerMessage::Error { detail, fatal: true, .. }) => return Err(detail),
                 Some(ServerMessage::Kicked { .. }) | None => break,
                 Some(_) => {}
             },
+            _ = report.tick() => {
+                for Received { mid, ssrc, seq, timestamp, at, .. } in peer.drain() {
+                    let rate = match kinds.get(&mid) {
+                        Some(MediaKind::Video) => 90_000,
+                        _ => 48_000,
+                    };
+                    let arrival = (at.duration_since(epoch.into_std()).as_secs_f64() * f64::from(rate)) as i64;
+                    streams.entry(ssrc).or_insert_with(|| StreamStats::new(rate)).packet(seq, timestamp, arrival);
+                }
+                for stats in streams.values_mut() {
+                    stats.report(&recorder);
+                }
+                let rtt = peer.counters.rtt_micros.load(Ordering::Relaxed);
+                if rtt > 0 {
+                    recorder.latency_micros("voice:rtt", rtt);
+                }
+                recorder.count("voice_bytes_sent", peer.counters.sent_bytes.swap(0, Ordering::Relaxed));
+            }
             _ = tokio::time::sleep_until(end) => break,
             _ = stop.changed() => break,
         }
     }
     let _ = send(&mut sink, &ClientMessage::Leave).await;
     let _ = sink.close().await;
-    for sender in senders {
-        sender.abort();
-    }
-    receiving.abort();
     reader.abort();
     Ok(())
 }
 
-struct AbortOnDrop(tokio::task::JoinHandle<()>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-async fn bind(ip: &str, port: u16) -> Result<UdpSocket, String> {
-    let remote: SocketAddr = format!("{ip}:{port}")
-        .parse()
-        .or_else(|_| format!("[{ip}]:{port}").parse())
-        .map_err(|_| format!("{ip}:{port} is not an address"))?;
-    let local = if remote.is_ipv4() {
-        "0.0.0.0:0"
-    } else {
-        "[::]:0"
-    };
-    let socket = UdpSocket::bind(local).await.map_err(|e| e.to_string())?;
-    socket.connect(remote).await.map_err(|e| e.to_string())?;
-    Ok(socket)
-}
-
-/// Per received stream: RFC 3550 sequence and jitter bookkeeping.
-#[derive(Default)]
+/// Per received stream: RFC 3550 jitter, and loss from its sequence numbers, which str0m
+/// gives extended, so they never wrap.
 struct StreamStats {
-    base: Option<u32>,
-    highest: u32,
-    cycles: u32,
+    rate: u32,
+    base: Option<u64>,
+    highest: u64,
     received: u64,
     /// Expected and received at the last report, for per-interval counts.
     reported_expected: u64,
@@ -344,23 +280,22 @@ struct StreamStats {
 }
 
 impl StreamStats {
-    fn packet(&mut self, sequence: u16, timestamp: u32, arrival_units: i64) {
-        let sequence = u32::from(sequence);
-        match self.base {
-            None => {
-                self.base = Some(sequence);
-                self.highest = sequence;
-            }
-            Some(_) => {
-                let highest16 = self.highest & 0xffff;
-                if sequence < highest16 && highest16 - sequence > 0x8000 {
-                    self.cycles += 1 << 16;
-                    self.highest = sequence;
-                } else if sequence > highest16 && sequence - highest16 < 0x8000 {
-                    self.highest = sequence;
-                }
-            }
+    fn new(rate: u32) -> Self {
+        Self {
+            rate,
+            base: None,
+            highest: 0,
+            received: 0,
+            reported_expected: 0,
+            reported_received: 0,
+            transit: None,
+            jitter: 0.0,
         }
+    }
+
+    fn packet(&mut self, sequence: u64, timestamp: u32, arrival_units: i64) {
+        let base = *self.base.get_or_insert(sequence);
+        self.highest = self.highest.max(sequence).max(base);
         self.received += 1;
         // Timestamps are 32-bit and wrap (a forwarding server may start them anywhere), so
         // transit and its change are taken modulo 2^32, as RFC 3550 does.
@@ -373,216 +308,27 @@ impl StreamStats {
     }
 
     fn expected(&self) -> u64 {
-        self.base.map_or(0, |base| {
-            u64::from(self.cycles + self.highest) - u64::from(base) + 1
-        })
+        self.base.map_or(0, |base| self.highest - base + 1)
     }
-}
 
-async fn receive_media(
-    socket: Arc<UdpSocket>,
-    mut rtp_srtp: Context,
-    mut rtcp_srtp: Context,
-    clocks: Arc<std::sync::Mutex<HashMap<u32, u32>>>,
-    recorder: Recorder,
-) {
-    // The server learns where to send from this socket's first packet.
-    let mut hello = tokio::time::interval(REPORT_EVERY);
-    let epoch = Instant::now();
-    let mut streams: HashMap<u32, StreamStats> = HashMap::new();
-    let mut buffer = vec![0u8; 2048];
-    loop {
-        tokio::select! {
-            _ = hello.tick() => {
-                let report = ReceiverReport { ssrc: 0x5a5a_0001, ..Default::default() };
-                if let Ok(raw) = report.marshal()
-                    && let Ok(encrypted) = rtcp_srtp.encrypt_rtcp(&raw)
-                {
-                    let _ = socket.send(&encrypted).await;
-                }
-                for (ssrc, stats) in &mut streams {
-                    let rate = clocks.lock().expect("clocks lock").get(ssrc).copied().unwrap_or(48_000);
-                    if stats.received > 1 {
-                        recorder.latency_micros("voice:jitter", (stats.jitter / f64::from(rate) * 1e6) as u64);
-                    }
-                    let expected = stats.expected();
-                    recorder.count("voice_packets_expected", expected.saturating_sub(stats.reported_expected));
-                    recorder.count("voice_packets_received", stats.received.saturating_sub(stats.reported_received));
-                    stats.reported_expected = expected;
-                    stats.reported_received = stats.received;
-                }
-            }
-            received = socket.recv(&mut buffer) => {
-                let Ok(length) = received else { return };
-                let packet = &buffer[..length];
-                if is_rtcp(packet) {
-                    let _ = rtcp_srtp.decrypt_rtcp(packet);
-                    continue;
-                }
-                let Ok(plain) = rtp_srtp.decrypt_rtp(packet) else {
-                    recorder.count("voice_decrypt_failures", 1);
-                    continue;
-                };
-                let Ok(parsed) = rtp::packet::Packet::unmarshal(&mut plain.clone()) else { continue };
-                let ssrc = parsed.header.ssrc;
-                // Only consumers announced with `newConsumer` carry media; the server's
-                // bandwidth probes (SSRC 1234) and retransmissions do not count.
-                let Some(rate) = clocks.lock().expect("clocks lock").get(&ssrc).copied() else {
-                    continue;
-                };
-                let arrival = (epoch.elapsed().as_secs_f64() * f64::from(rate)) as i64;
-                streams.entry(ssrc).or_default().packet(parsed.header.sequence_number, parsed.header.timestamp, arrival);
-            }
+    fn report(&mut self, recorder: &Recorder) {
+        if self.received > 1 {
+            recorder.latency_micros(
+                "voice:jitter",
+                (self.jitter / f64::from(self.rate) * 1e6) as u64,
+            );
         }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn send_media(
-    socket: Arc<UdpSocket>,
-    mut rtp_srtp: Context,
-    rtcp_srtp: Context,
-    ssrc: u32,
-    payload_type: u8,
-    source: MediaSource,
-    bitrate: u32,
-    recorder: Recorder,
-) {
-    let video = source == MediaSource::Screen;
-    let (period, clock_step) = if video {
-        (Duration::from_secs(1) / VIDEO_FPS, 90_000 / VIDEO_FPS)
-    } else {
-        (AUDIO_FRAME, 960)
-    };
-    let frame_bytes =
-        (u64::from(bitrate) / 8 * period.as_micros() as u64 / 1_000_000).max(20) as usize;
-    let keyframe_wanted = Arc::new(AtomicBool::new(true));
-    let sent_packets = Arc::new(AtomicU32::new(0));
-    // Feedback from the server: receiver reports for the round trip, keyframe requests. The
-    // guard ends it when this sender is aborted, so nothing outlives the call.
-    let _feedback = AbortOnDrop({
-        let socket = Arc::clone(&socket);
-        let keyframe_wanted = Arc::clone(&keyframe_wanted);
-        let recorder = recorder.clone();
-        tokio::spawn(async move {
-            let mut buffer = vec![0u8; 2048];
-            let mut feedback = rtcp_srtp;
-            while let Ok(length) = socket.recv(&mut buffer).await {
-                let Ok(plain) = feedback.decrypt_rtcp(&buffer[..length]) else {
-                    continue;
-                };
-                let Ok(packets) = rtcp::packet::unmarshal(&mut plain.clone()) else {
-                    continue;
-                };
-                for packet in packets {
-                    let any = packet.as_any();
-                    if let Some(rr) = any.downcast_ref::<ReceiverReport>() {
-                        for report in &rr.reports {
-                            if report.last_sender_report == 0 {
-                                continue;
-                            }
-                            let (_, now) = ntp_now();
-                            let rtt = now
-                                .wrapping_sub(report.last_sender_report)
-                                .wrapping_sub(report.delay);
-                            // Middle-32 NTP units are 1/65536 s.
-                            let micros = u64::from(rtt) * 1_000_000 / 65_536;
-                            if micros < 10_000_000 {
-                                recorder.latency_micros("voice:rtt", micros.max(1));
-                            }
-                        }
-                    }
-                    if any.downcast_ref::<PictureLossIndication>().is_some()
-                        || any.downcast_ref::<FullIntraRequest>().is_some()
-                    {
-                        keyframe_wanted.store(true, Ordering::Relaxed);
-                    }
-                }
-            }
-        })
-    });
-    let mut sequence: u16 = 1;
-    let mut timestamp: u32 = 0;
-    let mut ticker = tokio::time::interval(period);
-    let mut last_report = Instant::now();
-    let mut last_keyframe = Instant::now();
-    let mut octets: u32 = 0;
-    let mut frame_filler = BytesMut::zeroed(frame_bytes);
-    frame_filler.fill(0x5a);
-    loop {
-        ticker.tick().await;
-        let chunks: Vec<(u8, usize)> = if video {
-            let keyframe = keyframe_wanted.swap(false, Ordering::Relaxed)
-                || last_keyframe.elapsed() >= KEYFRAME_EVERY;
-            if keyframe {
-                last_keyframe = Instant::now();
-            }
-            // One NAL unit per packet: an IDR slice (type 5) for a keyframe, else a non-IDR
-            // slice (type 1). A keyframe is led by a sequence and a picture parameter set, as
-            // an encoder's is; the sequence parameter set is what mediasoup recognises a
-            // keyframe by, and its consumers forward nothing until they have seen one.
-            let nal = if keyframe { 0x65 } else { 0x41 };
-            let mut left = frame_bytes;
-            let mut chunks = if keyframe {
-                vec![(0x67, 16), (0x68, 4)]
-            } else {
-                Vec::new()
-            };
-            while left > 0 {
-                let size = left.min(MAX_PAYLOAD);
-                chunks.push((nal, size));
-                left -= size;
-            }
-            chunks
-        } else {
-            vec![(0x78, frame_bytes)]
-        };
-        let last = chunks.len() - 1;
-        for (i, (first_byte, size)) in chunks.into_iter().enumerate() {
-            let mut payload = BytesMut::with_capacity(size);
-            payload.extend_from_slice(&[first_byte]);
-            payload.extend_from_slice(&frame_filler[..size.saturating_sub(1)]);
-            let packet = rtp::packet::Packet {
-                header: rtp::header::Header {
-                    version: 2,
-                    marker: video && i == last,
-                    payload_type,
-                    sequence_number: sequence,
-                    timestamp,
-                    ssrc,
-                    ..Default::default()
-                },
-                payload: payload.freeze(),
-            };
-            sequence = sequence.wrapping_add(1);
-            let Ok(raw) = packet.marshal() else { continue };
-            if let Ok(encrypted) = rtp_srtp.encrypt_rtp(&raw)
-                && socket.send(&encrypted).await.is_ok()
-            {
-                sent_packets.fetch_add(1, Ordering::Relaxed);
-                octets = octets.wrapping_add(size as u32);
-                recorder.count("voice_bytes_sent", encrypted.len() as u64);
-            }
-        }
-        timestamp = timestamp.wrapping_add(clock_step);
-        if last_report.elapsed() >= REPORT_EVERY {
-            last_report = Instant::now();
-            let (ntp_time, _) = ntp_now();
-            let report = SenderReport {
-                ssrc,
-                ntp_time,
-                rtp_time: timestamp,
-                packet_count: sent_packets.load(Ordering::Relaxed),
-                octet_count: octets,
-                ..Default::default()
-            };
-            // The sending context keeps its own RTCP index, so it encrypts reports too.
-            if let Ok(raw) = report.marshal()
-                && let Ok(encrypted) = rtp_srtp.encrypt_rtcp(&raw)
-            {
-                let _ = socket.send(&encrypted).await;
-            }
-        }
+        let expected = self.expected();
+        recorder.count(
+            "voice_packets_expected",
+            expected.saturating_sub(self.reported_expected),
+        );
+        recorder.count(
+            "voice_packets_received",
+            self.received.saturating_sub(self.reported_received),
+        );
+        self.reported_expected = expected;
+        self.reported_received = self.received;
     }
 }
 
@@ -591,38 +337,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rtcp_is_told_from_rtp_by_payload_type() {
-        assert!(is_rtcp(&[0x80, 200]));
-        assert!(is_rtcp(&[0x80, 201]));
-        assert!(!is_rtcp(&[0x80, 100]));
-        assert!(!is_rtcp(&[0x80, 96 | 0x80]));
-    }
-
-    #[test]
-    fn loss_and_jitter_follow_rfc_3550() {
-        let mut stats = StreamStats::default();
-        // Packets 10..=19 with 13 and 17 lost, each 960 units apart and arriving on time.
-        for sequence in (10u16..20).filter(|s| *s != 13 && *s != 17) {
-            let ts = u32::from(sequence) * 960;
-            stats.packet(sequence, ts, i64::from(ts) + 5000);
+    fn loss_counts_the_sequence_numbers_that_never_came() {
+        let mut stats = StreamStats::new(48_000);
+        for sequence in [10, 11, 13, 14] {
+            stats.packet(sequence, sequence as u32 * 960, sequence as i64 * 960);
         }
-        assert_eq!(stats.expected(), 10);
-        assert_eq!(stats.received, 8);
-        assert!(stats.jitter < 1.0);
-        // A timestamp wrapping round 2^32 is not jitter.
-        let mut wrap = StreamStats::default();
-        for (i, ts) in [u32::MAX - 959, u32::MAX, 959, 1919]
-            .into_iter()
-            .enumerate()
-        {
-            wrap.packet(i as u16, ts, i as i64 * 960);
-        }
-        assert!(wrap.jitter < 1.0, "{}", wrap.jitter);
-        // Wrapping round the sequence space counts a cycle.
-        let mut wrapping = StreamStats::default();
-        for sequence in [65534u16, 65535, 0, 1] {
-            wrapping.packet(sequence, 0, 0);
-        }
-        assert_eq!(wrapping.expected(), 4);
+        assert_eq!((stats.expected(), stats.received), (5, 4));
+        // Even arrival keeps jitter at nothing.
+        assert_eq!(stats.jitter, 0.0);
     }
 }

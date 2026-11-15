@@ -231,6 +231,35 @@ struct Route {
     mid: Mid,
 }
 
+/// Waits until one of `fds` is ready or `timeout` passes. Connections' timeouts are often less
+/// than a millisecond away: on Linux `ppoll` waits to the nanosecond, and elsewhere `poll` waits
+/// the whole millisecond rather than none, either way never spinning until a timeout is due.
+fn sleep_on(fds: &mut [libc::pollfd], timeout: Duration) {
+    #[cfg(target_os = "linux")]
+    {
+        let timeout = libc::timespec {
+            tv_sec: timeout.as_secs() as libc::time_t,
+            tv_nsec: libc::c_long::from(timeout.subsec_nanos()),
+        };
+        // SAFETY: `fds` is a valid array of `fds.len()` pollfds, and `timeout` a timespec,
+        // both outliving the call.
+        unsafe {
+            libc::ppoll(
+                fds.as_mut_ptr(),
+                fds.len() as libc::nfds_t,
+                &timeout,
+                std::ptr::null(),
+            )
+        };
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let millis = timeout.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32;
+        // SAFETY: `fds` is a valid array of `fds.len()` pollfds that outlives the call.
+        unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, millis) };
+    }
+}
+
 struct Thread {
     config: MediaConfig,
     listeners: Vec<Listener>,
@@ -249,8 +278,9 @@ struct Thread {
     calls: HashMap<CallId, Call>,
     routes: HashMap<SourceKey, Vec<Route>>,
     next_tick: Instant,
-    /// Connections written to since they were last polled.
+    /// Connections written to since they were last polled, each once (`marked`).
     dirty: Vec<usize>,
+    marked: Vec<bool>,
 }
 
 impl Thread {
@@ -278,6 +308,7 @@ impl Thread {
             routes: HashMap::new(),
             next_tick: Instant::now() + INTERVAL,
             dirty: Vec::new(),
+            marked: Vec::new(),
         }
     }
 
@@ -455,7 +486,8 @@ impl Thread {
                 sending: HashMap::new(),
                 watch: Vec::new(),
                 outs: HashMap::new(),
-                slots: vec![None; usize::from(self.config.audio_slots)],
+                // One slot from the start: a connection needs a section to connect at all.
+                slots: vec![None; usize::from(self.config.audio_slots.min(1))],
                 deafened: false,
                 speaking: false,
                 routed: Vec::new(),
@@ -677,7 +709,7 @@ impl Thread {
             }
             return;
         }
-        self.dirty.push(index);
+        self.mark(index);
         // Changes made while the offer waited go out now.
         self.settle(participant);
     }
@@ -691,7 +723,7 @@ impl Thread {
         };
         let mut call = Vec::new();
         let mut capture = Vec::new();
-        for slot in 0..self.config.audio_slots {
+        for slot in 0..p.slots.len() as u8 {
             call.push((MediaKind::Audio, SectionContent::AudioSlot { slot }));
         }
         for source in SOURCES {
@@ -716,7 +748,9 @@ impl Thread {
                 continue;
             }
             call.push((MediaKind::Video, SectionContent::Video { user, source }));
-            if source == MediaSource::Screen {
+            if source == MediaSource::Screen
+                && owner.sending.contains_key(&MediaSource::ScreenAudio)
+            {
                 call.push((MediaKind::Audio, SectionContent::ShareAudio { user }));
             }
         }
@@ -789,7 +823,7 @@ impl Thread {
                 sdp,
                 sections,
             });
-            self.dirty.push(index);
+            self.mark(index);
         }
         self.rebuild_routes(participant);
     }
@@ -844,6 +878,12 @@ impl Thread {
     /// Fills each participant's audio slots: everyone else's microphone while they fit, else the
     /// most recently loud of those not muted. An occupant stays in its slot while it is among
     /// those chosen, so a slot changes speaker only to make room.
+    ///
+    /// A participant has as many slots as there are other microphones, up to `audio_slots`, and
+    /// never fewer than it had or than one: each section costs its connection on every poll whether or not
+    /// it carries anything, so a call of six holds five, and a call only renegotiates while it
+    /// grows towards `audio_slots`. A slot is told of (`Event::Slots`) before the offer that adds
+    /// its section.
     fn assign_slots(&mut self, call: CallId) {
         let Some(members) = self.calls.get(&call).map(|c| c.participants.clone()) else {
             return;
@@ -890,6 +930,10 @@ impl Thread {
                 continue;
             };
             let mut next = p.slots.clone();
+            let grew = next.len() < chosen.len();
+            if grew {
+                next.resize(chosen.len(), None);
+            }
             for occupant in next.iter_mut() {
                 if occupant.is_some_and(|o| !chosen.contains(&o)) {
                     *occupant = None;
@@ -907,8 +951,9 @@ impl Thread {
                 continue;
             }
             let mut assignments = Vec::new();
-            for (slot, (old, new)) in p.slots.iter().zip(&next).enumerate() {
-                if old != new {
+            for (slot, new) in next.iter().enumerate() {
+                let old = p.slots.get(slot).copied().flatten();
+                if old != *new || slot >= p.slots.len() {
                     assignments.push(SlotAssignment {
                         slot: slot as u8,
                         user: new.and_then(|id| users.get(&id).copied()),
@@ -930,7 +975,12 @@ impl Thread {
                 participant: receiver,
                 assignments,
             });
-            self.rebuild_routes(receiver);
+            if grew {
+                // Offers the new slots' sections, and routes to them once answered.
+                self.settle(receiver);
+            } else {
+                self.rebuild_routes(receiver);
+            }
         }
     }
 
@@ -1126,6 +1176,8 @@ impl Thread {
             return false;
         };
         conn.handle_input(input);
+        // str0m is polled after each input: what an input gives (a received packet) is lost if
+        // another input comes before the poll.
         self.process(index);
         true
     }
@@ -1165,7 +1217,7 @@ impl Thread {
             self.queued[index] = None;
             if let Some(conn) = self.conns[index].as_mut() {
                 conn.handle_input(Input::Timeout(now));
-                self.process(index);
+                self.mark(index);
             }
         }
     }
@@ -1179,10 +1231,6 @@ impl Thread {
             .unwrap_or(now + MAX_SLEEP)
             .min(self.next_tick)
             .min(now + MAX_SLEEP);
-        let millis = next
-            .saturating_duration_since(now)
-            .as_millis()
-            .min(i32::MAX as u128) as i32;
         let mut fds = vec![libc::pollfd {
             fd: self.woken.as_raw_fd(),
             events: libc::POLLIN,
@@ -1208,8 +1256,7 @@ impl Thread {
                 revents: 0,
             });
         }
-        // SAFETY: `fds` is a valid array of `fds.len()` pollfds that outlives the call.
-        unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, millis) };
+        sleep_on(&mut fds, next.saturating_duration_since(now));
     }
 
     // --- Connections ------------------------------------------------------------------------
@@ -1279,8 +1326,19 @@ impl Thread {
         }
     }
 
+    /// Notes that connection `index` has something to send, for `flush_dirty`.
+    fn mark(&mut self, index: usize) {
+        if self.marked.len() <= index {
+            self.marked.resize(index + 1, false);
+        }
+        if !std::mem::replace(&mut self.marked[index], true) {
+            self.dirty.push(index);
+        }
+    }
+
     fn flush_dirty(&mut self) {
         while let Some(index) = self.dirty.pop() {
+            self.marked[index] = false;
             self.process(index);
         }
     }
@@ -1399,7 +1457,7 @@ impl Thread {
                 write = write.csrc(&[ssrc]);
             }
             if target_conn.write(route.mid, write) {
-                self.dirty.push(target);
+                self.mark(target);
             }
         }
         if want_keyframe {
@@ -1449,7 +1507,7 @@ impl Thread {
             && let Some(conn) = self.conns[index].as_mut()
         {
             conn.request_keyframe(ssrc, kind);
-            self.dirty.push(index);
+            self.mark(index);
         }
     }
 }

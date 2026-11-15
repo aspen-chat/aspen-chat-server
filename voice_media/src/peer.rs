@@ -84,6 +84,11 @@ pub struct Received {
 pub struct Counters {
     pub connected: AtomicBool,
     pub received: AtomicU64,
+    /// Media bytes written, RTP payloads alone.
+    pub sent_bytes: AtomicU64,
+    /// The latest round-trip time the server's receiver reports gave, in microseconds; zero
+    /// before one has, or without `PeerOptions::stats`.
+    pub rtt_micros: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -92,6 +97,8 @@ pub struct PeerOptions {
     pub tcp: bool,
     /// Hand every packet received to `Peer::received`, not only count it.
     pub detail: bool,
+    /// Read str0m's statistics each second, for the round-trip time (`Counters::rtt_micros`).
+    pub stats: bool,
 }
 
 enum ToPeer {
@@ -246,7 +253,7 @@ async fn run(
     let mut stream: Option<Framed> = None;
     let mut rtc = Rtc::builder()
         .set_rtp_mode(true)
-        .set_stats_interval(None)
+        .set_stats_interval(options.stats.then_some(Duration::from_secs(1)))
         .build(Instant::now());
     let candidate = if options.tcp {
         Candidate::builder()
@@ -298,6 +305,13 @@ async fn run(
                 Ok(Output::Timeout(at)) => break at,
                 Ok(Output::Event(RtcEvent::Connected)) => {
                     counters.connected.store(true, Ordering::Relaxed);
+                }
+                Ok(Output::Event(RtcEvent::MediaEgressStats(stats))) => {
+                    if let Some(rtt) = stats.rtt {
+                        counters
+                            .rtt_micros
+                            .store(rtt.as_micros() as u64, Ordering::Relaxed);
+                    }
                 }
                 Ok(Output::Event(RtcEvent::RtpPacket(packet))) => {
                     counters.received.fetch_add(1, Ordering::Relaxed);
@@ -394,7 +408,8 @@ async fn run(
                 let now = Instant::now();
                 for s in &mut sending {
                     if s.due <= now {
-                        write_frame(&mut rtc, s, now, &filler);
+                        let bytes = write_frame(&mut rtc, s, now, &filler);
+                        counters.sent_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
                     }
                 }
                 if rtc.handle_input(Input::Timeout(now)).is_err() {
@@ -405,7 +420,8 @@ async fn run(
     }
 }
 
-fn write_frame(rtc: &mut Rtc, s: &mut Sending, now: Instant, filler: &Arc<[u8]>) {
+/// Writes the frame `s` is due to send; the payload bytes written.
+fn write_frame(rtc: &mut Rtc, s: &mut Sending, now: Instant, filler: &Arc<[u8]>) -> usize {
     let (codec, clock) = match s.media {
         Synthetic::Audio { .. } => (Codec::Opus, 48_000),
         Synthetic::Video { .. } => (Codec::H264, 90_000),
@@ -422,12 +438,12 @@ fn write_frame(rtc: &mut Rtc, s: &mut Sending, now: Instant, filler: &Arc<[u8]>)
         .find(|p| p.spec().codec == codec && offered.contains(&p.pt()))
         .map(|p| p.pt())
     else {
-        return;
+        return 0;
     };
     let (bytes, fps) = s.media.frame();
     let mut api = rtc.direct_api();
     let Some(tx) = api.stream_tx_by_mid(s.mid, None) else {
-        return;
+        return 0;
     };
     let (video, level) = match s.media {
         Synthetic::Audio { level, .. } => (false, level),
@@ -473,4 +489,5 @@ fn write_frame(rtc: &mut Rtc, s: &mut Sending, now: Instant, filler: &Arc<[u8]>)
     if s.due < now {
         s.due = now;
     }
+    bytes
 }

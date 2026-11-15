@@ -78,8 +78,8 @@ pub struct Grants {
 }
 
 impl Grants {
-    /// Whether they may produce media from `source`.
-    pub fn may_produce(&self, source: crate::signal::MediaSource) -> bool {
+    /// Whether they may send media from `source`.
+    pub fn may_send(&self, source: crate::signal::MediaSource) -> bool {
         use crate::signal::MediaSource;
         match source {
             MediaSource::Microphone => self.speak,
@@ -313,8 +313,8 @@ mod tests {
     fn grants_decide_what_may_be_produced() {
         use crate::signal::MediaSource;
         let claims = claims();
-        assert!(claims.grants().may_produce(MediaSource::Microphone));
-        assert!(!claims.grants().may_produce(MediaSource::Screen));
-        assert!(!claims.grants().may_produce(MediaSource::ScreenAudio));
+        assert!(claims.grants().may_send(MediaSource::Microphone));
+        assert!(!claims.grants().may_send(MediaSource::Screen));
+        assert!(!claims.grants().may_send(MediaSource::ScreenAudio));
     }
 }

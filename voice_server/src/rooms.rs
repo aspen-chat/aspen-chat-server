@@ -1,63 +1,45 @@
-//! Calls as this server carries them. A room is one channel's call: a mediasoup router, an
-//! audio level observer that drives speaking events, and the participants with their
-//! transports, producers, and consumers. Rooms come into being with their first participant
-//! and go with their last, and the API server hears about each step through the reporter.
-//! Files offered in a call, and the transfers between its participants, are the room's too
-//! (`transfers`). Media a client sends or receives as SRTP itself is `plain_rtp`.
+//! Calls as this server carries them. A room is one channel's call: its participants, what each
+//! may do and sends, and its media on one media thread (`voice_media`), which holds every
+//! participant's peer connection and forwards between them. Rooms decide; the media thread does
+//! what they ask and tells them what happened (`media_event`). Rooms come into being with their
+//! first participant and go with their last, and the API server hears about each step through
+//! the reporter. Files offered in a call, and the transfers between its participants, are the
+//! room's too (`transfers`).
 
-mod plain_rtp;
 mod transfers;
 
-use crate::config::MediaAddress;
-use crate::media::{media_codecs, media_kind, webrtc_transport_options, wire_kind};
 use crate::reporter::Reports;
 use crate::transfer::Relay;
-use mediasoup::prelude::*;
-use mediasoup::types::data_structures::{DtlsState, TransportTuple};
-use serde_json::Value;
-use std::collections::{HashMap, HashSet};
-use std::num::NonZeroU16;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use base64::Engine as _;
+use rand::RngExt as _;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 use uuid::Uuid;
+use voice_media::{CallId, Command, Event, Failure, Media, ParticipantId};
 use voice_protocol::control::{ParticipantSnapshot, REPORT_PARTITIONS, VoiceReport, partition};
 use voice_protocol::signal::{
-    KickReason, MediaKind as WireKind, MediaSource, ParticipantInfo, ProducerInfo, ServerMessage,
-    TransportDirection,
+    ConnectionKind, KickReason, MediaSource, ParticipantInfo, RESUME_GRACE_SECONDS, ServerMessage,
+    SourceInfo, WatchedVideo,
 };
 use voice_protocol::token::Grants;
 
-/// Volumes above this, in dBvo, count as speaking.
-const SPEAKING_THRESHOLD_DBVO: i8 = -50;
-/// How often the observer reports volumes; speaking flips at most this often.
-const SPEAKING_INTERVAL_MS: u16 = 300;
-
-/// How long a transport has to connect (its DTLS handshake done, or a plain transport's sender
-/// heard from) before it is closed, so a client cannot hold ports from the media range with
-/// transports it never uses. ICE and DTLS take a few seconds on the worst networks a call works
-/// over.
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long a participant whose socket closed without `leave` stays in the call, waiting to be
+/// resumed (`RESUME_GRACE_SECONDS`).
+const RESUME_GRACE: Duration = Duration::from_secs(RESUME_GRACE_SECONDS);
+/// Audio sections each participant receives, filled with whoever is loudest: past this many
+/// speaking at once nobody follows anyway.
+pub const AUDIO_SLOTS: u8 = 16;
+/// Videos one participant may watch at once.
+pub const MAX_WATCHED_VIDEO: usize = 25;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RoomError {
-    #[error("no such transport")]
-    UnknownTransport,
-    #[error("no such producer")]
-    UnknownProducer,
-    #[error("no such consumer")]
-    UnknownConsumer,
     #[error("the participant is not in the call")]
     NotInCall,
-    #[error("mediasoup could not create the call's router: {0}")]
-    CreateRouter(#[from] mediasoup::worker::CreateRouterError),
-    #[error("mediasoup refused: {0}")]
-    MediaRequest(#[from] mediasoup::worker::RequestError),
-    #[error("mediasoup refused the producer: {0}")]
-    Produce(#[from] ProduceError),
-    #[error("the plain transport has no SRTP parameters")]
-    NoSrtpParameters,
     #[error("{0}")]
     BadParameters(String),
     /// The join token does not grant sending from this source.
@@ -76,13 +58,10 @@ pub enum RoomError {
     /// The call holds as many people as it may.
     #[error("this call is full ({0} people)")]
     CallFull(usize),
-    /// A producer's kind does not match its source (`MediaSource::kind`).
-    #[error("a {of:?} producer carries {expected:?}, not {kind:?}")]
-    WrongKind {
-        of: MediaSource,
-        kind: WireKind,
-        expected: WireKind,
-    },
+    /// A resume whose secret names no participant waiting to be resumed: it was already used,
+    /// or the grace ran out. The client joins again.
+    #[error("there is nothing to resume; join the call again")]
+    NothingToResume,
 }
 
 /// What a join token admits its holder to, as the participant it makes starts out.
@@ -114,11 +93,12 @@ pub use crate::outbox::Outbox;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Connection(u64);
 
-/// The participant one signalling socket made: its call's channel, its user, and its
-/// connection. Every frame from the socket acts through it, and is refused (`NotInCall`) once
-/// that participant is gone, whether removed, replaced from another socket, or in a call that
-/// has since ended and been followed by another, so a socket can never act for someone else's
-/// place in a call, nor for its own once it has lost it.
+/// The participant one signalling socket made, or took back with `resume`: its call's channel,
+/// its user, and its connection. Every frame from the socket acts through it, and is refused
+/// (`NotInCall`) once that participant is gone, whether removed, replaced from another socket,
+/// resumed from another, or in a call that has since ended and been followed by another, so a
+/// socket can never act for someone else's place in a call, nor for its own once it has lost
+/// it.
 #[derive(Clone, Copy, Debug)]
 pub struct Seat {
     pub channel: Uuid,
@@ -147,22 +127,25 @@ fn seated_mut(
         .ok_or(RoomError::NotInCall)
 }
 
+/// A source a participant asked to send.
+#[derive(Clone, Copy, Debug)]
+struct Sending {
+    external: bool,
+    /// Whether its media has arrived at the server, which is when the others are told of it.
+    live: bool,
+}
+
 struct Participant {
     user: Uuid,
     connection: Connection,
+    /// Its place on the call's media thread.
+    media: ParticipantId,
     outbox: Outbox,
-    rtp_capabilities: Option<RtpCapabilities>,
-    send_transport: Option<WebRtcTransport>,
-    recv_transport: Option<ReceiveTransport>,
-    /// The transports an external sender (the desktop shell's game capture) delivers SRTP to,
-    /// by the producer each feeds.
-    rtp_transports: HashMap<ProducerId, PlainTransport>,
-    producers: HashMap<ProducerId, (Producer, MediaSource)>,
-    /// Producers the participant also consumes themself, as a preview of what an external
-    /// sender is delivering on their behalf.
-    own_preview: HashSet<ProducerId>,
-    /// By consumer id: the consumer and whose producer it carries.
-    consumers: HashMap<ConsumerId, (Consumer, Uuid)>,
+    /// The secret its socket may be resumed with, until it is used.
+    resume: String,
+    /// Whether its socket closed without `leave`, so that it waits to be resumed.
+    detached: bool,
+    sending: HashMap<MediaSource, Sending>,
     /// Muted as the participant themself asked.
     muted: bool,
     /// Muted by a moderator (`VoiceCommand::Mute`). Only another such command lifts it: while
@@ -181,7 +164,7 @@ struct Participant {
 }
 
 /// How many calls each user is in on this server, so none can be in more than
-/// `max_seats_per_user` (each takes transports, and so ports from the media range).
+/// `max_seats_per_user`.
 #[derive(Default)]
 struct SeatCounts(Mutex<HashMap<Uuid, usize>>);
 
@@ -227,51 +210,37 @@ impl Drop for Participant {
     }
 }
 
-impl Participant {
-    /// A participant sends at most one producer per source (one microphone, one screen, one
-    /// screen's sound), so one client cannot multiply what everyone else in the call receives;
-    /// replacing one means closing it first.
-    fn ensure_source_free(&self, source: MediaSource) -> Result<(), RoomError> {
-        if self
-            .producers
-            .values()
-            .any(|(_, existing)| *existing == source)
-        {
-            return Err(RoomError::BadParameters(format!(
-                "already producing {source:?}; close that producer first"
-            )));
-        }
-        Ok(())
-    }
+/// A secret to resume a socket with: 256 random bits.
+fn resume_secret() -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(rand::rng().random::<[u8; 32]>())
+}
 
+impl Participant {
     /// Whether their microphone is paused: by their own choice or a moderator's. This is the
     /// mute everyone else, and the API server, is told of.
     fn silenced(&self) -> bool {
         self.muted || self.server_muted
     }
 
-    /// Whether a new producer of `source` may join the participant's, checked under the room's
-    /// lock as it is added: making one awaits mediasoup, and meanwhile their grants may have
-    /// been taken away or another producer of the source added.
-    fn admit(&self, source: MediaSource) -> Result<(), RoomError> {
-        if !self.grants.may_produce(source) {
-            return Err(RoomError::NotPermitted(source));
-        }
-        self.ensure_source_free(source)
-    }
-
-    /// Takes one of the participant's producers out, with what exists only for it: the plain
-    /// transport an external sender feeds it over, and its place among their previews.
-    fn remove_producer(&mut self, id: ProducerId) -> Option<(Producer, MediaSource)> {
-        self.rtp_transports.remove(&id);
-        self.own_preview.remove(&id);
-        self.producers.remove(&id)
-    }
-
     fn sharing_screen(&self) -> bool {
-        self.producers
-            .values()
-            .any(|(_, source)| *source == MediaSource::Screen)
+        self.sending
+            .get(&MediaSource::Screen)
+            .is_some_and(|sending| sending.live)
+    }
+
+    /// What the others are told the participant sends: what has arrived at the server.
+    fn sources(&self) -> Vec<SourceInfo> {
+        let mut sources: Vec<SourceInfo> = self
+            .sending
+            .iter()
+            .filter(|(_, sending)| sending.live)
+            .map(|(source, _)| SourceInfo {
+                source: *source,
+                paused: *source == MediaSource::Microphone && self.silenced(),
+            })
+            .collect();
+        sources.sort_by_key(|info| info.source as u8);
+        sources
     }
 
     fn info(&self) -> ParticipantInfo {
@@ -280,16 +249,7 @@ impl Participant {
             muted: self.silenced(),
             deafened: self.deafened,
             speaking: self.speaking,
-            producers: self
-                .producers
-                .values()
-                .map(|(producer, source)| ProducerInfo {
-                    id: producer.id().to_string(),
-                    kind: wire_kind(producer.kind()),
-                    source: *source,
-                    paused: producer.paused(),
-                })
-                .collect(),
+            sources: self.sources(),
         }
     }
 
@@ -301,10 +261,13 @@ impl Participant {
 pub struct Room {
     pub session: Uuid,
     pub channel: Uuid,
-    router: Router,
-    /// Held for its lifetime: dropping it stops the volume events.
-    _audio_observer: AudioLevelObserver,
+    /// The media thread the call is on.
+    thread: usize,
+    /// Where the media thread tells of this call's participants (`media_event`).
+    events: voice_media::Events,
     participants: Mutex<HashMap<Uuid, Participant>>,
+    /// Whose place on the media thread each `ParticipantId` is.
+    by_media: Mutex<HashMap<ParticipantId, Uuid>>,
     /// Set, under the participants lock, when the last participant leaves. A closed room
     /// takes no one in: whoever arrives next starts the channel's next call. It keeps the
     /// channel's place until its end is reported, so snapshots list it until then.
@@ -312,8 +275,6 @@ pub struct Room {
     /// Becomes true once the room's end has been reported and it has left the channel's place,
     /// so the next call's start is reported after it.
     ended: watch::Sender<bool>,
-    /// Which user each audio producer belongs to, for the volume events.
-    producer_owner: Mutex<HashMap<ProducerId, Uuid>>,
     /// Files offered in the call that may still be accepted, by id.
     offers: Mutex<HashMap<Uuid, transfers::Offer>>,
     /// Transfers under way, by offer and receiver. They outlive their offers.
@@ -341,47 +302,9 @@ enum Entry {
     /// It has closed, and takes no one in.
     Closed,
     Entered {
-        replaced: Option<Replaced>,
+        /// The media place of a participant of the same user it replaced from another socket.
+        replaced: Option<(ParticipantId, bool)>,
     },
-}
-
-/// What a participant replaced from another socket leaves to be closed as a leaving one's is.
-struct Replaced {
-    producers: Vec<Producer>,
-    speaking: bool,
-}
-
-/// Where a participant's consumers are: a WebRTC transport for a browser, or a plain SRTP one
-/// for a client that asked with `consumeRtp`.
-#[derive(Clone)]
-enum ReceiveTransport {
-    WebRtc(WebRtcTransport),
-    Plain(PlainTransport),
-}
-
-impl ReceiveTransport {
-    async fn consume(&self, options: ConsumerOptions) -> Result<Consumer, ConsumeError> {
-        match self {
-            ReceiveTransport::WebRtc(transport) => transport.consume(options).await,
-            ReceiveTransport::Plain(transport) => transport.consume(options).await,
-        }
-    }
-}
-
-/// A transport that must connect within `CONNECT_TIMEOUT`.
-#[derive(Clone, Copy)]
-enum Unconnected {
-    /// A browser's send or receive transport.
-    WebRtc(TransportId),
-    /// A plain receive transport (`consumeRtp`).
-    PlainReceive(TransportId),
-    /// The plain transport feeding an external sender's producer (`produceRtp`).
-    PlainSend(ProducerId),
-}
-
-/// Whether a plain transport has heard from its sender, which is when it learns where to send.
-fn heard_from(transport: &PlainTransport) -> bool {
-    matches!(transport.tuple(), TransportTuple::WithRemote { .. })
 }
 
 /// What a voice server carries at one moment.
@@ -389,68 +312,73 @@ fn heard_from(transport: &PlainTransport) -> bool {
 pub struct Census {
     pub rooms: usize,
     pub participants: usize,
-    pub producers: usize,
-    pub consumers: usize,
-    pub transports: usize,
+    pub connections: usize,
+    pub sections: usize,
 }
 
 /// Every call on this server.
 pub struct Rooms {
     server: Uuid,
-    workers: Vec<Worker>,
-    next_worker: AtomicUsize,
-    /// Where media is received (`RtcConfig::media_addresses`); never empty.
-    media_addresses: Vec<MediaAddress>,
+    media: Media,
     reporter: Reports,
     relay: Arc<Relay>,
     rooms: Mutex<HashMap<Uuid, Arc<Room>>>,
+    /// Which participant each resume secret takes back: its channel and user.
+    resumes: Mutex<HashMap<String, (Uuid, Uuid)>>,
     next_connection: AtomicU64,
+    next_media: AtomicU64,
     seats: Arc<SeatCounts>,
     max_seats_per_user: usize,
     max_participants_per_call: usize,
+    audio_slots: u8,
 }
 
 impl Rooms {
     pub fn new(
         server: Uuid,
-        workers: Vec<Worker>,
-        media_addresses: Vec<MediaAddress>,
+        media: Media,
         reporter: Reports,
         relay: Arc<Relay>,
         limits: &crate::config::LimitSettings,
+        audio_slots: u8,
     ) -> Arc<Self> {
         Arc::new(Self {
             server,
-            workers,
-            next_worker: AtomicUsize::new(0),
-            media_addresses,
+            media,
             reporter,
             relay,
             rooms: Mutex::new(HashMap::new()),
+            resumes: Mutex::new(HashMap::new()),
             next_connection: AtomicU64::new(0),
+            next_media: AtomicU64::new(1),
             seats: Arc::default(),
             max_seats_per_user: limits.max_seats_per_user,
             max_participants_per_call: limits.max_participants_per_call,
+            audio_slots,
         })
     }
 
-    /// Everyone in every call, for the load report.
-    /// How much this server is carrying, for its metrics.
-    pub fn census(&self) -> Census {
-        let rooms = self.rooms.lock().expect("rooms lock");
+    /// Resolves once a media thread has stopped, which stops the server.
+    pub async fn media_stopped(&self) {
+        self.media.stopped().await;
+    }
+
+    /// How much this server is carrying, for its metrics: the rooms here, the rest from each
+    /// media thread.
+    pub async fn census(&self) -> Census {
         let mut census = Census {
-            rooms: rooms.len(),
+            rooms: self.rooms.lock().expect("rooms lock").len(),
             ..Census::default()
         };
-        for room in rooms.values() {
-            let participants = room.participants.lock().expect("room lock");
-            census.participants += participants.len();
-            for participant in participants.values() {
-                census.producers += participant.producers.len();
-                census.consumers += participant.consumers.len();
-                census.transports += usize::from(participant.send_transport.is_some())
-                    + usize::from(participant.recv_transport.is_some())
-                    + participant.rtp_transports.len();
+        for thread in 0..self.media.threads() {
+            let (reply, answer) = tokio::sync::oneshot::channel();
+            if !self.media.send(thread, Command::Census { reply }) {
+                continue;
+            }
+            if let Ok(counted) = answer.await {
+                census.participants += counted.participants;
+                census.connections += counted.connections;
+                census.sections += counted.sections;
             }
         }
         census
@@ -474,6 +402,12 @@ impl Rooms {
             .get(&channel)
             .cloned()
             .ok_or(RoomError::NotInCall)
+    }
+
+    fn media(&self, room: &Room, command: Command) {
+        if !self.media.send(room.thread, command) {
+            warn!("a command for a media thread that has stopped");
+        }
     }
 
     /// Takes `room` out of the channel's place, unless another has already taken it.
@@ -543,11 +477,11 @@ impl Rooms {
     }
 
     /// Puts `user` in `channel`'s call, starting the call if it has none, and replies with
-    /// `ready`. A user already in the call from another socket is replaced. Returns the seat
-    /// the socket's frames act through. Refused when the user is already in
-    /// `max_seats_per_user` other calls here, or the call holds `max_participants_per_call`.
-    /// Every join is reported, a replacement's too, so the API server checks each against what
-    /// its token was issued to.
+    /// `ready`; the media thread then offers their connection. A user already in the call from
+    /// another socket is replaced. Returns the seat the socket's frames act through. Refused
+    /// when the user is already in `max_seats_per_user` other calls here, or the call holds
+    /// `max_participants_per_call`. Every join is reported, a replacement's too, so the API
+    /// server checks each against what its token was issued to.
     pub async fn join(
         self: &Arc<Self>,
         channel: Uuid,
@@ -565,7 +499,7 @@ impl Rooms {
                 .cloned();
             let room = match existing {
                 Some(room) => room,
-                None => self.start_room(channel).await?,
+                None => self.start_room(channel)?,
             };
             let replaced = match self.enter(&room, user, connection, &outbox, admission.clone()) {
                 Ok(Entry::Entered { replaced }) => replaced,
@@ -588,14 +522,16 @@ impl Rooms {
             // its own is caught up in it.
             let was_replaced = replaced.is_some();
             let mut stopped_speaking = false;
-            if let Some(Replaced {
-                producers,
-                speaking,
-            }) = replaced
-            {
-                for producer in producers {
-                    self.drop_producer(&room, producer).await;
-                }
+            if let Some((media, speaking)) = replaced {
+                self.media(&room, Command::Leave { participant: media });
+                room.by_media.lock().expect("media lock").remove(&media);
+                room.broadcast(
+                    &ServerMessage::Sources {
+                        user,
+                        sources: Vec::new(),
+                    },
+                    Some(user),
+                );
                 self.end_everything_of(&room, user).await;
                 stopped_speaking = speaking;
             }
@@ -638,9 +574,9 @@ impl Rooms {
         }
     }
 
-    /// Adds the participant to `room`, replacing any of the same user from another socket, and
-    /// sends them `ready`. The one replaced is told and hung up here; what it had in the call is
-    /// handed back for `join` to close.
+    /// Adds the participant to `room`, replacing any of the same user from another socket,
+    /// sends them `ready`, and seats them on the media thread. The one replaced is told and hung
+    /// up here; its place on the media thread is handed back for `join` to end.
     fn enter(
         &self,
         room: &Room,
@@ -671,17 +607,15 @@ impl Rooms {
                 )
             }
         };
-        let replaced = participants.remove(&user).map(|mut old| {
+        let replaced = participants.remove(&user).map(|old| {
             old.send(ServerMessage::Kicked {
                 reason: KickReason::Replaced,
             });
-            Replaced {
-                producers: std::mem::take(&mut old.producers)
-                    .into_values()
-                    .map(|(producer, _)| producer)
-                    .collect(),
-                speaking: old.speaking,
-            }
+            self.resumes
+                .lock()
+                .expect("resumes lock")
+                .remove(&old.resume);
+            (old.media, old.speaking)
         });
         let others: Vec<ParticipantInfo> = participants.values().map(Participant::info).collect();
         let joined = ServerMessage::ParticipantJoined {
@@ -692,17 +626,20 @@ impl Rooms {
         for other in participants.values() {
             other.send(joined.clone());
         }
+        let media = ParticipantId(self.next_media.fetch_add(1, Ordering::Relaxed));
+        let resume = resume_secret();
+        self.resumes
+            .lock()
+            .expect("resumes lock")
+            .insert(resume.clone(), (room.channel, user));
         let participant = Participant {
             user,
             connection,
+            media,
             outbox: outbox.clone(),
-            rtp_capabilities: None,
-            send_transport: None,
-            recv_transport: None,
-            rtp_transports: HashMap::new(),
-            producers: HashMap::new(),
-            own_preview: HashSet::new(),
-            consumers: HashMap::new(),
+            resume: resume.clone(),
+            detached: false,
+            sending: HashMap::new(),
             muted: false,
             server_muted,
             deafened: false,
@@ -714,92 +651,119 @@ impl Rooms {
         participant.send(ServerMessage::Ready {
             session: room.session,
             user,
-            router_rtp_capabilities: serde_json::to_value(room.router.rtp_capabilities())
-                .expect("capabilities serialize"),
             participants: others,
+            audio_slots: self.audio_slots,
+            resume,
             offers: room.standing_offers(),
             links: room.links(),
             transfers: self.relay.policy(),
         });
         participants.insert(user, participant);
+        room.by_media
+            .lock()
+            .expect("media lock")
+            .insert(media, user);
+        // Under the room's lock, so the offer the media thread makes follows `ready`.
+        self.media(
+            room,
+            Command::Join {
+                call: CallId(room.session),
+                participant: media,
+                user,
+                events: room.events.clone(),
+            },
+        );
         Ok(Entry::Entered { replaced })
     }
 
-    async fn start_room(self: &Arc<Self>, channel: Uuid) -> Result<Arc<Room>, RoomError> {
-        let index = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
-        let worker = &self.workers[index];
-        let router = worker
-            .create_router(RouterOptions::new(media_codecs()))
-            .await?;
-        let audio_observer = router
-            .create_audio_level_observer({
-                let mut options = AudioLevelObserverOptions::default();
-                options.max_entries = NonZeroU16::new(32).expect("non-zero");
-                options.threshold = SPEAKING_THRESHOLD_DBVO;
-                options.interval = SPEAKING_INTERVAL_MS;
-                options
-            })
-            .await?;
+    /// Takes back the participant `secret` was given to, for a socket that closed without
+    /// `leave` within `RESUME_GRACE`: the new socket's outbox takes the old one's place, the
+    /// participant is told the call as `ready` tells it, with a new secret, and each of its
+    /// connections is restated (`Command::Restate`).
+    pub fn resume(&self, secret: &str, outbox: Outbox) -> Result<Seat, RoomError> {
+        let (channel, user) = self
+            .resumes
+            .lock()
+            .expect("resumes lock")
+            .remove(secret)
+            .ok_or(RoomError::NothingToResume)?;
+        let room = self.room(channel).map_err(|_| RoomError::NothingToResume)?;
+        let connection = Connection(self.next_connection.fetch_add(1, Ordering::Relaxed));
+        let mut participants = room.participants.lock().expect("room lock");
+        let others: Vec<ParticipantInfo> = participants
+            .values()
+            .filter(|p| p.user != user)
+            .map(Participant::info)
+            .collect();
+        let participant = participants
+            .get_mut(&user)
+            .filter(|p| p.resume == secret)
+            .ok_or(RoomError::NothingToResume)?;
+        // A socket still open for it (one its client gave up on) is let go.
+        let old = std::mem::replace(&mut participant.outbox, outbox);
+        old.hang_up();
+        participant.connection = connection;
+        participant.detached = false;
+        participant.resume = resume_secret();
+        self.resumes
+            .lock()
+            .expect("resumes lock")
+            .insert(participant.resume.clone(), (channel, user));
+        participant.send(ServerMessage::Ready {
+            session: room.session,
+            user,
+            participants: others,
+            audio_slots: self.audio_slots,
+            resume: participant.resume.clone(),
+            offers: room.standing_offers(),
+            links: room.links(),
+            transfers: self.relay.policy(),
+        });
+        self.media(
+            &room,
+            Command::Restate {
+                participant: participant.media,
+            },
+        );
+        info!(
+            channel = channel.to_string(),
+            user = user.to_string(),
+            "resumed"
+        );
+        Ok(Seat {
+            channel,
+            user,
+            connection,
+        })
+    }
+
+    fn start_room(self: &Arc<Self>, channel: Uuid) -> Result<Arc<Room>, RoomError> {
         let session = Uuid::now_v7();
+        let (events, received) = mpsc::unbounded_channel();
         let room = Arc::new(Room {
             session,
             channel,
-            router,
-            _audio_observer: audio_observer.clone(),
+            thread: self.media.assign(),
+            events,
             participants: Mutex::new(HashMap::new()),
+            by_media: Mutex::new(HashMap::new()),
             closed: AtomicBool::new(false),
             ended: watch::Sender::new(false),
-            producer_owner: Mutex::new(HashMap::new()),
             offers: Mutex::new(HashMap::new()),
             transfers: Mutex::new(HashMap::new()),
         });
         {
             let mut rooms = self.rooms.lock().expect("rooms lock");
-            // Another join started the channel's call while this router was being made: that
-            // one is the call, and this room is dropped unused.
             if let Some(other) = rooms.get(&channel) {
                 return Ok(Arc::clone(other));
             }
             rooms.insert(channel, Arc::clone(&room));
         }
-        // Volume events arrive on mediasoup's own threads; they are handed to a task that
-        // owns the room and reports, so the callbacks stay quick and never block.
-        let (speaking_tx, mut speaking_rx) = mpsc::unbounded_channel::<HashSet<Uuid>>();
-        {
-            let room = Arc::downgrade(&room);
-            let tx = speaking_tx.clone();
-            audio_observer
-                .on_volumes(move |volumes| {
-                    let Some(room) = room.upgrade() else {
-                        return;
-                    };
-                    let owners = room.producer_owner.lock().expect("owner lock");
-                    let loud: HashSet<Uuid> = volumes
-                        .iter()
-                        .filter_map(|v| owners.get(&v.producer.id()).copied())
-                        .collect();
-                    let _ = tx.send(loud);
-                })
-                .detach();
-            let tx = speaking_tx;
-            audio_observer
-                .on_silence(move || {
-                    let _ = tx.send(HashSet::new());
-                })
-                .detach();
-        }
-        {
-            let rooms = Arc::clone(self);
-            let room = Arc::downgrade(&room);
-            tokio::spawn(async move {
-                while let Some(loud) = speaking_rx.recv().await {
-                    let Some(room) = room.upgrade() else {
-                        break;
-                    };
-                    rooms.apply_speaking(&room, &loud).await;
-                }
-            });
-        }
+        tokio::spawn(Self::media_events(
+            Arc::downgrade(self),
+            Arc::downgrade(&room),
+            received,
+        ));
         self.reporter.report(VoiceReport::SessionStarted {
             server: self.server,
             session,
@@ -813,23 +777,190 @@ impl Rooms {
         Ok(room)
     }
 
-    /// Marks as speaking exactly those of `loud` whose microphone is not paused, telling of each
-    /// who started or stopped. `loud` is everyone the audio level observer hears.
-    async fn apply_speaking(&self, room: &Room, loud: &HashSet<Uuid>) {
-        let changes: Vec<(Uuid, bool)> = {
-            let mut participants = room.participants.lock().expect("room lock");
-            let mut changes = Vec::new();
-            for participant in participants.values_mut() {
-                let speaking = loud.contains(&participant.user) && !participant.silenced();
-                if speaking != participant.speaking {
-                    participant.speaking = speaking;
-                    changes.push((participant.user, speaking));
+    /// What the media thread tells of a room's participants, in order, until the room goes.
+    async fn media_events(
+        rooms: Weak<Rooms>,
+        room: Weak<Room>,
+        mut received: mpsc::UnboundedReceiver<Event>,
+    ) {
+        while let Some(event) = received.recv().await {
+            let (Some(rooms), Some(room)) = (rooms.upgrade(), room.upgrade()) else {
+                return;
+            };
+            rooms.media_event(&room, event).await;
+        }
+    }
+
+    async fn media_event(&self, room: &Room, event: Event) {
+        let participant = match &event {
+            Event::Offer { participant, .. }
+            | Event::Sections { participant, .. }
+            | Event::Connected { participant, .. }
+            | Event::Failed { participant, .. }
+            | Event::Live { participant, .. }
+            | Event::Speaking { participant, .. }
+            | Event::Slots { participant, .. } => *participant,
+        };
+        // Events of a participant that has since left or been replaced are let go.
+        let Some(user) = room
+            .by_media
+            .lock()
+            .expect("media lock")
+            .get(&participant)
+            .copied()
+        else {
+            return;
+        };
+        match event {
+            Event::Offer {
+                connection,
+                revision,
+                sdp,
+                sections,
+                ..
+            } => self.send_to(
+                room,
+                user,
+                ServerMessage::Offer {
+                    connection,
+                    revision,
+                    sdp,
+                    sections,
+                },
+            ),
+            Event::Sections {
+                connection,
+                sections,
+                ..
+            } => self.send_to(
+                room,
+                user,
+                ServerMessage::Sections {
+                    connection,
+                    sections,
+                },
+            ),
+            Event::Slots { assignments, .. } => {
+                self.send_to(room, user, ServerMessage::Slots { assignments })
+            }
+            Event::Connected { connection, .. } => {
+                info!(user = user.to_string(), ?connection, "media connected");
+            }
+            Event::Failed {
+                connection, reason, ..
+            } => self.connection_failed(room, user, connection, reason).await,
+            Event::Live { source, .. } => self.source_live(room, user, source),
+            Event::Speaking { speaking, .. } => {
+                let changed = {
+                    let mut participants = room.participants.lock().expect("room lock");
+                    let Some(p) = participants.get_mut(&user) else {
+                        return;
+                    };
+                    let speaking = speaking && !p.silenced();
+                    (p.speaking != speaking).then(|| {
+                        p.speaking = speaking;
+                        speaking
+                    })
+                };
+                if let Some(speaking) = changed {
+                    self.tell_speaking(room, user, speaking);
                 }
             }
-            changes
+        }
+    }
+
+    fn send_to(&self, room: &Room, user: Uuid, message: ServerMessage) {
+        if let Some(participant) = room.participants.lock().expect("room lock").get(&user) {
+            participant.send(message);
+        }
+    }
+
+    /// A source's first media arrived: it is sent on, and the others told, if its sender may
+    /// still send it; otherwise it is stopped, the grant having gone while it was set up.
+    fn source_live(&self, room: &Room, user: Uuid, source: MediaSource) {
+        let (sources, report, refused) = {
+            let mut participants = room.participants.lock().expect("room lock");
+            let Some(p) = participants.get_mut(&user) else {
+                return;
+            };
+            if !p.grants.may_send(source) {
+                p.sending.remove(&source);
+                (None, None, Some(p.media))
+            } else {
+                let Some(sending) = p.sending.get_mut(&source) else {
+                    return;
+                };
+                sending.live = true;
+                p.send(ServerMessage::Sending { source });
+                (
+                    Some(p.sources()),
+                    (source == MediaSource::Screen).then(|| Self::state_report(room, p)),
+                    None,
+                )
+            }
         };
-        for (user, speaking) in changes {
-            self.tell_speaking(room, user, speaking);
+        if let Some(media) = refused {
+            self.media(
+                room,
+                Command::StopSending {
+                    participant: media,
+                    source,
+                },
+            );
+            return;
+        }
+        if let Some(sources) = sources {
+            room.broadcast(&ServerMessage::Sources { user, sources }, None);
+        }
+        if let Some(report) = report {
+            self.reporter.report(report);
+        }
+    }
+
+    /// A participant's connection failed at the media thread. Their call connection failing
+    /// takes them out of the call, and their client rejoins; their capture connection failing
+    /// stops what the game capture helper sends, and they are told.
+    async fn connection_failed(
+        &self,
+        room: &Room,
+        user: Uuid,
+        connection: ConnectionKind,
+        reason: Failure,
+    ) {
+        warn!(
+            user = user.to_string(),
+            ?connection,
+            ?reason,
+            "a peer connection failed"
+        );
+        match connection {
+            ConnectionKind::Call => {
+                self.leave(room.channel, user, None, Some(KickReason::ConnectionFailed))
+                    .await;
+            }
+            ConnectionKind::Capture => {
+                let external: Vec<MediaSource> = {
+                    let participants = room.participants.lock().expect("room lock");
+                    let Some(p) = participants.get(&user) else {
+                        return;
+                    };
+                    p.send(ServerMessage::Error {
+                        detail: "the game capture's connection to the voice server failed"
+                            .to_string(),
+                        fatal: false,
+                        retry_after_seconds: None,
+                        refused: None,
+                    });
+                    p.sending
+                        .iter()
+                        .filter(|(_, s)| s.external)
+                        .map(|(source, _)| *source)
+                        .collect()
+                };
+                for source in external {
+                    self.stop_source(room, user, source);
+                }
+            }
         }
     }
 
@@ -844,455 +975,150 @@ impl Rooms {
         });
     }
 
-    pub async fn set_capabilities(&self, seat: Seat, capabilities: Value) -> Result<(), RoomError> {
+    /// Asks for a section to send `source` on, which the media thread offers. A participant
+    /// sends at most one of each source, so one client cannot multiply what everyone else in
+    /// the call receives; a microphone starts paused while they are muted.
+    pub fn send(&self, seat: Seat, source: MediaSource, external: bool) -> Result<(), RoomError> {
         let room = self.room(seat.channel)?;
-        let capabilities: RtpCapabilities = serde_json::from_value(capabilities)
-            .map_err(|e| RoomError::BadParameters(format!("rtpCapabilities: {e}")))?;
-        {
-            let mut participants = room.participants.lock().expect("room lock");
-            let participant = seated_mut(&mut participants, seat)?;
-            participant.rtp_capabilities = Some(capabilities);
+        let mut participants = room.participants.lock().expect("room lock");
+        let p = seated_mut(&mut participants, seat)?;
+        if !p.grants.may_send(source) {
+            return Err(RoomError::NotPermitted(source));
         }
-        self.ensure_consumers(&room, seat.user).await;
-        Ok(())
-    }
-
-    pub async fn create_transport(
-        self: &Arc<Self>,
-        seat: Seat,
-        direction: TransportDirection,
-    ) -> Result<(), RoomError> {
-        let room = self.room(seat.channel)?;
-        if direction == TransportDirection::Send {
-            // One send transport per participant: a second would hold more ports while the
-            // first lives on in its producers. One closed for not connecting may be replaced.
-            let participants = room.participants.lock().expect("room lock");
-            if seated(&participants, seat)?.send_transport.is_some() {
-                return Err(RoomError::BadParameters(
-                    "the participant already has a send transport".to_string(),
-                ));
-            }
+        if p.sending.contains_key(&source) {
+            return Err(RoomError::BadParameters(format!(
+                "already sending {source:?}; stop it first"
+            )));
         }
-        room.require(seat)?;
-        let options = webrtc_transport_options(&self.media_addresses);
-        let transport = room.router.create_webrtc_transport(options).await?;
-        self.expire_unconnected(&room, seat, Unconnected::WebRtc(transport.id()));
-        let message = ServerMessage::TransportCreated {
-            direction,
-            id: transport.id().to_string(),
-            ice_parameters: serde_json::to_value(transport.ice_parameters()).expect("serializes"),
-            ice_candidates: serde_json::to_value(transport.ice_candidates()).expect("serializes"),
-            dtls_parameters: serde_json::to_value(transport.dtls_parameters()).expect("serializes"),
-        };
-        {
-            let mut participants = room.participants.lock().expect("room lock");
-            let participant = seated_mut(&mut participants, seat)?;
-            match direction {
-                TransportDirection::Send if participant.send_transport.is_some() => {
-                    return Err(RoomError::BadParameters(
-                        "the participant already has a send transport".to_string(),
-                    ));
-                }
-                TransportDirection::Send => participant.send_transport = Some(transport),
-                TransportDirection::Recv => {
-                    participant.recv_transport = Some(ReceiveTransport::WebRtc(transport));
-                }
-            }
-            participant.send(message);
-        }
-        if direction == TransportDirection::Recv {
-            self.ensure_consumers(&room, seat.user).await;
-        }
-        Ok(())
-    }
-
-    /// Closes the transport `pending` names, after `CONNECT_TIMEOUT`, if it has not connected
-    /// by then and is still the participant's.
-    fn expire_unconnected(self: &Arc<Self>, room: &Arc<Room>, seat: Seat, pending: Unconnected) {
-        let rooms = Arc::clone(self);
-        let room = Arc::downgrade(room);
-        tokio::spawn(async move {
-            tokio::time::sleep(CONNECT_TIMEOUT).await;
-            if let Some(room) = room.upgrade() {
-                rooms.close_unconnected(&room, seat, pending).await;
-            }
-        });
-    }
-
-    /// Closes a transport of the participant `seat` made that has not connected, with what it
-    /// carries: a send transport's producers, a receive transport's consumers (a new receive
-    /// transport gets them again), or an external sender's producer. The client is told.
-    async fn close_unconnected(&self, room: &Room, seat: Seat, pending: Unconnected) {
-        let (closing, state) = {
-            let mut participants = room.participants.lock().expect("room lock");
-            let Ok(participant) = seated_mut(&mut participants, seat) else {
-                return;
-            };
-            let mut closing: Vec<ProducerId> = Vec::new();
-            match pending {
-                Unconnected::WebRtc(id) => {
-                    let unconnected = |t: &WebRtcTransport| {
-                        t.id() == id && t.dtls_state() != DtlsState::Connected
-                    };
-                    if participant.send_transport.as_ref().is_some_and(unconnected) {
-                        participant.send_transport = None;
-                        // Every producer not fed over a plain transport is on the send one.
-                        closing = participant
-                            .producers
-                            .keys()
-                            .filter(|producer| !participant.rtp_transports.contains_key(producer))
-                            .copied()
-                            .collect();
-                    } else if matches!(
-                        &participant.recv_transport,
-                        Some(ReceiveTransport::WebRtc(t)) if unconnected(t)
-                    ) {
-                        participant.recv_transport = None;
-                        participant.consumers.clear();
-                    } else {
-                        return;
-                    }
-                }
-                Unconnected::PlainReceive(id) => {
-                    if matches!(
-                        &participant.recv_transport,
-                        Some(ReceiveTransport::Plain(t)) if t.id() == id && !heard_from(t)
-                    ) {
-                        participant.recv_transport = None;
-                        participant.consumers.clear();
-                    } else {
-                        return;
-                    }
-                }
-                Unconnected::PlainSend(producer) => {
-                    if participant
-                        .rtp_transports
-                        .get(&producer)
-                        .is_some_and(|t| !heard_from(t))
-                    {
-                        closing.push(producer);
-                    } else {
-                        return;
-                    }
-                }
-            }
-            let mut screen = false;
-            let closing: Vec<Producer> = closing
-                .into_iter()
-                .filter_map(|id| participant.remove_producer(id))
-                .map(|(producer, source)| {
-                    screen |= source == MediaSource::Screen;
-                    producer
-                })
-                .collect();
-            participant.send(ServerMessage::Error {
-                detail: format!(
-                    "a transport did not connect within {} seconds and was closed",
-                    CONNECT_TIMEOUT.as_secs()
-                ),
-                fatal: false,
-                retry_after_seconds: None,
-                refused: None,
-            });
-            (
-                closing,
-                screen.then(|| Self::state_report(room, participant)),
-            )
-        };
-        for producer in closing {
-            self.drop_producer(room, producer).await;
-        }
-        if let Some(report) = state {
-            self.reporter.report(report);
-        }
-    }
-
-    fn transport(
-        participant: &Participant,
-        transport_id: &str,
-    ) -> Result<WebRtcTransport, RoomError> {
-        let receive = match &participant.recv_transport {
-            Some(ReceiveTransport::WebRtc(transport)) => Some(transport),
-            _ => None,
-        };
-        [participant.send_transport.as_ref(), receive]
-            .into_iter()
-            .flatten()
-            .find(|t| t.id().to_string() == transport_id)
-            .cloned()
-            .ok_or(RoomError::UnknownTransport)
-    }
-
-    pub async fn connect_transport(
-        &self,
-        seat: Seat,
-        transport_id: &str,
-        dtls_parameters: Value,
-    ) -> Result<(), RoomError> {
-        let room = self.room(seat.channel)?;
-        let dtls_parameters: DtlsParameters = serde_json::from_value(dtls_parameters)
-            .map_err(|e| RoomError::BadParameters(format!("dtlsParameters: {e}")))?;
-        let transport = {
-            let participants = room.participants.lock().expect("room lock");
-            Self::transport(seated(&participants, seat)?, transport_id)?
-        };
-        transport
-            .connect(WebRtcTransportRemoteParameters { dtls_parameters })
-            .await?;
-        let participants = room.participants.lock().expect("room lock");
-        if let Ok(participant) = seated(&participants, seat) {
-            participant.send(ServerMessage::TransportConnected {
-                transport_id: transport_id.to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    pub async fn produce(
-        &self,
-        seat: Seat,
-        transport_id: &str,
-        kind: WireKind,
-        source: MediaSource,
-        rtp_parameters: Value,
-    ) -> Result<(), RoomError> {
-        let user = seat.user;
-        if kind != source.kind() {
-            return Err(RoomError::WrongKind {
-                of: source,
-                kind,
-                expected: source.kind(),
-            });
-        }
-        let room = self.room(seat.channel)?;
-        let rtp_parameters: RtpParameters = serde_json::from_value(rtp_parameters)
-            .map_err(|e| RoomError::BadParameters(format!("rtpParameters: {e}")))?;
-        let (transport, muted) = {
-            let participants = room.participants.lock().expect("room lock");
-            let participant = seated(&participants, seat)?;
-            participant.ensure_source_free(source)?;
-            (
-                Self::transport(participant, transport_id)?,
-                participant.silenced(),
-            )
-        };
-        let mut options = ProducerOptions::new(media_kind(kind), rtp_parameters);
-        let paused = muted && source == MediaSource::Microphone;
-        options.paused = paused;
-        let producer = transport.produce(options).await?;
-        Self::observe_audio(&room, &producer, user).await;
-        let producer_id = producer.id();
-        let state = {
-            let mut participants = room.participants.lock().expect("room lock");
-            match seated_mut(&mut participants, seat).and_then(|participant| {
-                participant.admit(source)?;
-                Ok(participant)
-            }) {
-                Ok(participant) => {
-                    participant
-                        .producers
-                        .insert(producer_id, (producer.clone(), source));
-                    participant.send(ServerMessage::Produced {
-                        producer_id: producer_id.to_string(),
-                        source,
-                    });
-                    (source == MediaSource::Screen).then(|| Self::state_report(&room, participant))
-                }
-                Err(e) => {
-                    drop(participants);
-                    Self::refuse_producer(&room, producer);
-                    return Err(e);
-                }
-            }
-        };
-        if source == MediaSource::Microphone {
-            Self::settle_microphone(&room, seat, &producer, paused).await;
-        }
-        drop(producer);
-        if let Some(report) = state {
-            self.reporter.report(report);
-        }
-        let others: Vec<Uuid> = room
-            .participants
-            .lock()
-            .expect("room lock")
-            .keys()
-            .copied()
-            .filter(|other| *other != user)
-            .collect();
-        for other in others {
-            self.ensure_consumers(&room, other).await;
-        }
-        Ok(())
-    }
-
-    /// Gives `user` a consumer for every producer of everyone else they do not consume yet,
-    /// once they have a receive transport and have said what they can play.
-    async fn ensure_consumers(&self, room: &Room, user: Uuid) {
-        let (transport, capabilities, wanted) = {
-            let participants = room.participants.lock().expect("room lock");
-            let Some(participant) = participants.get(&user) else {
-                return;
-            };
-            let (Some(transport), Some(capabilities)) =
-                (&participant.recv_transport, &participant.rtp_capabilities)
-            else {
-                return;
-            };
-            let consumed: HashSet<ProducerId> = participant
-                .consumers
-                .values()
-                .map(|(consumer, _)| consumer.producer_id())
-                .collect();
-            let wanted: Vec<(Uuid, Producer, MediaSource)> = participants
-                .values()
-                .flat_map(|other| {
-                    other
-                        .producers
-                        .values()
-                        .filter(|(producer, _)| {
-                            (other.user != user || other.own_preview.contains(&producer.id()))
-                                && !consumed.contains(&producer.id())
-                        })
-                        .map(|(producer, source)| (other.user, producer.clone(), *source))
-                })
-                .collect();
-            (transport.clone(), capabilities.clone(), wanted)
-        };
-        for (owner, producer, source) in wanted {
-            if !room.router.can_consume(&producer.id(), &capabilities) {
-                continue;
-            }
-            let mut options = ConsumerOptions::new(producer.id(), capabilities.clone());
-            options.paused = true;
-            let consumer = match transport.consume(options).await {
-                Ok(consumer) => consumer,
-                Err(e) => {
-                    warn!(error = e.to_string(), "consumer not created");
-                    continue;
-                }
-            };
-            let message = ServerMessage::NewConsumer {
-                consumer_id: consumer.id().to_string(),
-                producer_id: producer.id().to_string(),
-                user: owner,
-                kind: wire_kind(consumer.kind()),
+        p.sending.insert(
+            source,
+            Sending {
+                external,
+                live: false,
+            },
+        );
+        let media = p.media;
+        let paused = source == MediaSource::Microphone && p.silenced();
+        self.media(
+            &room,
+            Command::Send {
+                participant: media,
                 source,
-                rtp_parameters: serde_json::to_value(consumer.rtp_parameters())
-                    .expect("serializes"),
-                producer_paused: consumer.producer_paused(),
-            };
-            let mut participants = room.participants.lock().expect("room lock");
-            if let Some(participant) = participants.get_mut(&user) {
-                participant
-                    .consumers
-                    .insert(consumer.id(), (consumer, owner));
-                participant.send(message);
-            }
-        }
-    }
-
-    pub async fn resume_consumer(&self, seat: Seat, consumer_id: &str) -> Result<(), RoomError> {
-        let room = self.room(seat.channel)?;
-        let consumer = {
-            let participants = room.participants.lock().expect("room lock");
-            let participant = seated(&participants, seat)?;
-            let consumer = participant
-                .consumers
-                .values()
-                .find(|(consumer, _)| consumer.id().to_string() == consumer_id)
-                .map(|(consumer, _)| consumer.clone())
-                .ok_or(RoomError::UnknownConsumer)?;
-            if participant.deafened && consumer.kind() == MediaKind::Audio {
-                return Ok(());
-            }
-            consumer
-        };
-        consumer.resume().await.map_err(RoomError::from)
-    }
-
-    /// Closes a producer made for a participant who, by the time it was ready, was gone or no
-    /// longer allowed it. No one consumes it yet.
-    fn refuse_producer(room: &Room, producer: Producer) {
-        room.producer_owner
-            .lock()
-            .expect("owner lock")
-            .remove(&producer.id());
-        drop(producer);
-    }
-
-    /// Brings a new microphone, made `paused` or not by the participant's mute as it stood
-    /// before mediasoup made it, in line with their mute as it stands now: a mute, a
-    /// moderator's above all, that arrived meanwhile found no microphone to pause. It checks
-    /// again after each change, since another may have arrived during it.
-    async fn settle_microphone(room: &Room, seat: Seat, producer: &Producer, mut paused: bool) {
-        loop {
-            let silenced = match seated(&room.participants.lock().expect("room lock"), seat) {
-                Ok(participant) => participant.silenced(),
-                Err(_) => return,
-            };
-            if silenced == paused {
-                return;
-            }
-            let result = if silenced {
-                producer.pause().await
-            } else {
-                producer.resume().await
-            };
-            if let Err(e) = result {
-                warn!(error = e.to_string(), "microphone pause state not applied");
-                return;
-            }
-            paused = silenced;
-        }
-    }
-
-    /// Lets the room's audio level observer hear an audio producer, so its owner is reported
-    /// speaking.
-    async fn observe_audio(room: &Room, producer: &Producer, user: Uuid) {
-        if producer.kind() != MediaKind::Audio {
-            return;
-        }
-        room.producer_owner
-            .lock()
-            .expect("owner lock")
-            .insert(producer.id(), user);
-        if let Err(e) = room
-            ._audio_observer
-            .add_producer(RtpObserverAddProducerOptions::new(producer.id()))
-            .await
-        {
-            warn!(
-                error = e.to_string(),
-                "audio producer not observed for speaking"
+                external,
+            },
+        );
+        if paused {
+            self.media(
+                &room,
+                Command::SetSourcePaused {
+                    participant: media,
+                    source,
+                    paused: true,
+                },
             );
         }
+        Ok(())
     }
 
-    pub async fn close_producer(&self, seat: Seat, producer_id: &str) -> Result<(), RoomError> {
+    pub fn stop_sending(&self, seat: Seat, source: MediaSource) -> Result<(), RoomError> {
         let room = self.room(seat.channel)?;
-        let (removed, state) = {
+        room.require(seat)?;
+        self.stop_source(&room, seat.user, source);
+        Ok(())
+    }
+
+    /// Stops what `user` sends of `source`, telling everyone when it was live.
+    fn stop_source(&self, room: &Room, user: Uuid, source: MediaSource) {
+        let (media, live, sources, report) = {
             let mut participants = room.participants.lock().expect("room lock");
-            let participant = seated_mut(&mut participants, seat)?;
-            let id = participant
-                .producers
-                .keys()
-                .find(|id| id.to_string() == producer_id)
-                .copied()
-                .ok_or(RoomError::UnknownProducer)?;
-            let removed = participant.remove_producer(id);
-            let state = removed
-                .as_ref()
-                .is_some_and(|(_, source)| *source == MediaSource::Screen)
-                .then(|| Self::state_report(&room, participant));
-            (removed.map(|(producer, _)| producer), state)
+            let Some(p) = participants.get_mut(&user) else {
+                return;
+            };
+            let Some(sending) = p.sending.remove(&source) else {
+                return;
+            };
+            (
+                p.media,
+                sending.live,
+                p.sources(),
+                (sending.live && source == MediaSource::Screen)
+                    .then(|| Self::state_report(room, p)),
+            )
         };
-        if let Some(producer) = removed {
-            self.drop_producer(&room, producer).await;
+        self.media(
+            room,
+            Command::StopSending {
+                participant: media,
+                source,
+            },
+        );
+        if live {
+            room.broadcast(&ServerMessage::Sources { user, sources }, None);
         }
-        if let Some(report) = state {
+        if let Some(report) = report {
             self.reporter.report(report);
         }
+    }
+
+    /// Hands the participant's answer to the media thread.
+    pub fn answer(
+        &self,
+        seat: Seat,
+        connection: ConnectionKind,
+        revision: u64,
+        sdp: String,
+    ) -> Result<(), RoomError> {
+        let room = self.room(seat.channel)?;
+        let media = seated(&room.participants.lock().expect("room lock"), seat)?.media;
+        self.media(
+            &room,
+            Command::Answer {
+                participant: media,
+                connection,
+                revision,
+                sdp,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn watch(&self, seat: Seat, video: Vec<WatchedVideo>) -> Result<(), RoomError> {
+        let room = self.room(seat.channel)?;
+        let media = seated(&room.participants.lock().expect("room lock"), seat)?.media;
+        self.media(
+            &room,
+            Command::Watch {
+                participant: media,
+                video: video.into_iter().map(|v| (v.user, v.source)).collect(),
+            },
+        );
+        Ok(())
+    }
+
+    pub fn set_receiving(&self, seat: Seat, mid: String, receiving: bool) -> Result<(), RoomError> {
+        let room = self.room(seat.channel)?;
+        let media = seated(&room.participants.lock().expect("room lock"), seat)?.media;
+        self.media(
+            &room,
+            Command::SetReceiving {
+                participant: media,
+                mid,
+                receiving,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn restart_ice(&self, seat: Seat, connection: ConnectionKind) -> Result<(), RoomError> {
+        let room = self.room(seat.channel)?;
+        let media = seated(&room.participants.lock().expect("room lock"), seat)?.media;
+        self.media(
+            &room,
+            Command::RestartIce {
+                participant: media,
+                connection,
+            },
+        );
         Ok(())
     }
 
@@ -1323,11 +1149,11 @@ impl Rooms {
         })
     }
 
-    /// Sets what `user` may do in `room`'s call, as the API server says: their producers of a
-    /// source no longer allowed close, their offers are withdrawn if they may no longer offer
-    /// files, and they are told. Nothing happens when nothing changed.
+    /// Sets what `user` may do in `room`'s call, as the API server says: their sources no
+    /// longer allowed stop, their offers are withdrawn if they may no longer offer files, and
+    /// they are told. Nothing happens when nothing changed.
     async fn set_grants(&self, room: &Arc<Room>, user: Uuid, grants: Grants) {
-        let (closing, state) = {
+        let refused: Vec<MediaSource> = {
             let mut participants = room.participants.lock().expect("room lock");
             let Some(participant) = participants.get_mut(&user) else {
                 return;
@@ -1336,32 +1162,17 @@ impl Rooms {
                 return;
             }
             participant.grants = grants;
-            let refused: Vec<ProducerId> = participant
-                .producers
-                .iter()
-                .filter(|(_, (_, source))| !grants.may_produce(*source))
-                .map(|(id, _)| *id)
-                .collect();
-            let mut closing = Vec::new();
-            let mut screen = false;
-            for id in refused {
-                if let Some((producer, source)) = participant.remove_producer(id) {
-                    screen |= source == MediaSource::Screen;
-                    closing.push(producer);
-                }
-            }
-            participant.send(ServerMessage::GrantsChanged { grants });
-            (
-                closing,
-                screen.then(|| Self::state_report(room, participant)),
-            )
+            participant
+                .sending
+                .keys()
+                .filter(|source| !grants.may_send(**source))
+                .copied()
+                .collect()
         };
-        for producer in closing {
-            self.drop_producer(room, producer).await;
+        for source in refused {
+            self.stop_source(room, user, source);
         }
-        if let Some(report) = state {
-            self.reporter.report(report);
-        }
+        self.send_to(room, user, ServerMessage::GrantsChanged { grants });
         if !grants.transfer_files {
             self.withdraw_offers_of(room.channel, user);
             self.end_transfers_sent_by(room, user).await;
@@ -1380,28 +1191,6 @@ impl Rooms {
         }
     }
 
-    /// Closes a producer and every consumer of it, telling their owners.
-    async fn drop_producer(&self, room: &Room, producer: Producer) {
-        let id = producer.id();
-        room.producer_owner.lock().expect("owner lock").remove(&id);
-        let mut participants = room.participants.lock().expect("room lock");
-        for participant in participants.values_mut() {
-            let gone: Vec<ConsumerId> = participant
-                .consumers
-                .iter()
-                .filter(|(_, (consumer, _))| consumer.producer_id() == id)
-                .map(|(consumer_id, _)| *consumer_id)
-                .collect();
-            for consumer_id in gone {
-                participant.consumers.remove(&consumer_id);
-                participant.send(ServerMessage::ConsumerClosed {
-                    consumer_id: consumer_id.to_string(),
-                });
-            }
-        }
-        drop(producer);
-    }
-
     /// Applies the mute and deafen the participant asked for. A moderator's mute stands over
     /// their own: while it does, unmuting themself leaves their microphone paused.
     pub async fn set_state(
@@ -1415,21 +1204,20 @@ impl Rooms {
             participant.muted = muted;
             participant.deafened = deafened;
         })
-        .await
     }
 
-    /// Makes `change` to `user`'s mute or deafen and carries the result out: their microphones
-    /// paused while they are silenced (`Participant::silenced`), their audio consumers while
-    /// deafened, and everyone, the API server included, told. With a `connection`, only the
-    /// participant that connection made is changed.
-    async fn apply_state(
+    /// Makes `change` to `user`'s mute or deafen and carries the result out: their microphone
+    /// paused at the media thread while they are silenced (`Participant::silenced`), their
+    /// audio stopped while deafened, and everyone, the API server included, told. With a
+    /// `connection`, only the participant that connection made is changed.
+    fn apply_state(
         &self,
         room: &Room,
         user: Uuid,
         connection: Option<Connection>,
         change: impl FnOnce(&mut Participant),
     ) -> Result<(), RoomError> {
-        let (muted, deafened, quieted, microphones, consumers, report) = {
+        let (media, muted, deafened, quieted, sources, report) = {
             let mut participants = room.participants.lock().expect("room lock");
             let participant = participants
                 .get_mut(&user)
@@ -1437,57 +1225,32 @@ impl Rooms {
                 .ok_or(RoomError::NotInCall)?;
             change(participant);
             let (muted, deafened) = (participant.silenced(), participant.deafened);
-            // Someone silenced mid-word stops speaking now, not at the observer's next event.
+            // Someone silenced mid-word stops speaking now, not at the next interval.
             let quieted = muted && std::mem::take(&mut participant.speaking);
-            let microphones: Vec<Producer> = participant
-                .producers
-                .values()
-                .filter(|(_, source)| *source == MediaSource::Microphone)
-                .map(|(producer, _)| producer.clone())
-                .collect();
-            // Deafening silences what is heard; shared screens stay visible.
-            let consumers: Vec<Consumer> = participant
-                .consumers
-                .values()
-                .filter(|(consumer, _)| consumer.kind() == MediaKind::Audio)
-                .map(|(consumer, _)| consumer.clone())
-                .collect();
             (
+                participant.media,
                 muted,
                 deafened,
                 quieted,
-                microphones,
-                consumers,
+                participant.sources(),
                 Self::state_report(room, participant),
             )
         };
-        for producer in &microphones {
-            let result = if muted {
-                producer.pause().await
-            } else {
-                producer.resume().await
-            };
-            if let Err(e) = result {
-                warn!(error = e.to_string(), "microphone pause state not applied");
-            }
-            room.broadcast(
-                &ServerMessage::ProducerPaused {
-                    producer_id: producer.id().to_string(),
-                    paused: muted,
-                },
-                Some(user),
-            );
-        }
-        for consumer in &consumers {
-            let result = if deafened {
-                consumer.pause().await
-            } else {
-                consumer.resume().await
-            };
-            if let Err(e) = result {
-                warn!(error = e.to_string(), "consumer pause state not applied");
-            }
-        }
+        self.media(
+            room,
+            Command::SetSourcePaused {
+                participant: media,
+                source: MediaSource::Microphone,
+                paused: muted,
+            },
+        );
+        self.media(
+            room,
+            Command::SetDeafened {
+                participant: media,
+                deafened,
+            },
+        );
         room.broadcast(
             &ServerMessage::ParticipantState {
                 user,
@@ -1496,6 +1259,7 @@ impl Rooms {
             },
             None,
         );
+        room.broadcast(&ServerMessage::Sources { user, sources }, Some(user));
         self.reporter.report(report);
         if quieted {
             self.tell_speaking(room, user, false);
@@ -1503,10 +1267,38 @@ impl Rooms {
         Ok(())
     }
 
-    /// Takes the participant `seat` made out of their call, as their socket closes.
-    pub async fn leave_seat(&self, seat: Seat) {
-        self.leave(seat.channel, seat.user, Some(seat.connection), None)
-            .await;
+    /// The socket of the participant `seat` made closed. With `leave` they go now; without,
+    /// they stay in the call for `RESUME_GRACE`, media flowing, for the socket to be resumed,
+    /// and go once it has passed.
+    pub async fn socket_closed(self: &Arc<Self>, seat: Seat, left: bool) {
+        if left {
+            self.leave(seat.channel, seat.user, Some(seat.connection), None)
+                .await;
+            return;
+        }
+        let Ok(room) = self.room(seat.channel) else {
+            return;
+        };
+        if let Ok(p) = seated_mut(&mut room.participants.lock().expect("room lock"), seat) {
+            p.detached = true;
+        } else {
+            return;
+        }
+        let rooms = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(RESUME_GRACE).await;
+            let still_detached = room
+                .participants
+                .lock()
+                .expect("room lock")
+                .get(&seat.user)
+                .is_some_and(|p| p.connection == seat.connection && p.detached);
+            if still_detached {
+                rooms
+                    .leave(seat.channel, seat.user, Some(seat.connection), None)
+                    .await;
+            }
+        });
     }
 
     /// Takes `user` out of the call, telling them why if there is a reason, and ends the call
@@ -1522,7 +1314,7 @@ impl Rooms {
         let Ok(room) = self.room(channel) else {
             return;
         };
-        let (producers, empty) = {
+        let (media, empty) = {
             let mut participants = room.participants.lock().expect("room lock");
             if !participants
                 .get(&user)
@@ -1530,25 +1322,24 @@ impl Rooms {
             {
                 return;
             }
-            let Some(mut participant) = participants.remove(&user) else {
+            let Some(participant) = participants.remove(&user) else {
                 return;
             };
             if let Some(reason) = reason {
                 participant.send(ServerMessage::Kicked { reason });
             }
-            let producers: Vec<Producer> = std::mem::take(&mut participant.producers)
-                .into_values()
-                .map(|(producer, _)| producer)
-                .collect();
+            self.resumes
+                .lock()
+                .expect("resumes lock")
+                .remove(&participant.resume);
             let empty = participants.is_empty();
             if empty {
                 room.closed.store(true, Ordering::Relaxed);
             }
-            (producers, empty)
+            (participant.media, empty)
         };
-        for producer in producers {
-            self.drop_producer(&room, producer).await;
-        }
+        room.by_media.lock().expect("media lock").remove(&media);
+        self.media(&room, Command::Leave { participant: media });
         self.end_everything_of(&room, user).await;
         room.broadcast(&ServerMessage::ParticipantLeft { user }, None);
         self.reporter.report(VoiceReport::ParticipantLeft {
@@ -1617,11 +1408,9 @@ impl Rooms {
                     .get(&user)
                     .is_none_or(|participant| participant.server_muted == muted);
                 if !unchanged
-                    && let Err(e) = self
-                        .apply_state(&room, user, None, |participant| {
-                            participant.server_muted = muted;
-                        })
-                        .await
+                    && let Err(e) = self.apply_state(&room, user, None, |participant| {
+                        participant.server_muted = muted;
+                    })
                 {
                     warn!(error = e.to_string(), "mute command not applied");
                 }
@@ -1726,7 +1515,8 @@ mod tests {
     use crate::outbox::{OUTBOX_BYTES, OutboxReader};
     use futures_util::FutureExt;
     use std::net::{IpAddr, Ipv4Addr};
-    use voice_protocol::signal::{OfferEnd, TransferEnd, TransferMode};
+    use voice_media::peer::{Peer, PeerOptions, Synthetic};
+    use voice_protocol::signal::SectionContent;
 
     const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
     const EVERYTHING: Grants = Grants {
@@ -1735,6 +1525,7 @@ mod tests {
         camera: true,
         transfer_files: true,
     };
+    const WAIT: Duration = Duration::from_secs(10);
 
     #[test]
     fn a_user_holds_at_most_their_seats_and_gets_each_back_on_leaving() {
@@ -1750,14 +1541,21 @@ mod tests {
         assert!(counts.0.lock().unwrap().get(&alice).is_none());
     }
 
-    /// Rooms on a mediasoup worker of their own, media and STUN on loopback, and the reports
-    /// they make, which go nowhere else.
+    /// Rooms on a media thread of their own, media and STUN on loopback, and the reports they
+    /// make, which go nowhere else.
     async fn rooms() -> (Arc<Rooms>, mpsc::UnboundedReceiver<VoiceReport>) {
-        let worker = WorkerManager::new()
-            .create_worker(WorkerSettings::default())
-            .await
-            .expect("worker starts");
-        let addresses = vec![MediaAddress {
+        let media = Media::start(voice_media::MediaConfig {
+            addresses: vec![voice_media::MediaAddress {
+                ip: LOOPBACK,
+                announced: None,
+            }],
+            first_port: 0,
+            threads: 1,
+            audio_slots: AUDIO_SLOTS,
+            max_watched_video: MAX_WATCHED_VIDEO,
+        })
+        .expect("media threads start");
+        let addresses = vec![crate::config::MediaAddress {
             ip: LOOPBACK,
             announced: None,
         }];
@@ -1770,20 +1568,23 @@ mod tests {
         let (reports, made) = Reports::new();
         let rooms = Rooms::new(
             Uuid::now_v7(),
-            vec![worker],
-            addresses,
+            media,
             reports,
             Arc::new(relay),
             &LimitSettings::built_in().expect("built-in limits"),
+            AUDIO_SLOTS,
         );
         (rooms, made)
     }
 
-    /// One socket's place in a call, and what the server has sent it.
+    /// One socket's place in a call, what the server has sent it, and a peer that answers its
+    /// offers.
     struct Client {
         seat: Seat,
         outbox: Outbox,
         frames: OutboxReader,
+        peer: Peer,
+        log: Vec<ServerMessage>,
     }
 
     impl Client {
@@ -1802,29 +1603,60 @@ mod tests {
                 seat,
                 outbox,
                 frames,
+                peer: Peer::start(PeerOptions::default()),
+                log: Vec::new(),
             }
         }
 
-        /// Every frame sent to the socket since the last call.
+        /// Every frame sent to the socket since the last call, without waiting.
         fn sent(&mut self) -> Vec<ServerMessage> {
-            std::iter::from_fn(|| self.frames.recv().now_or_never().flatten())
-                .map(|text| serde_json::from_str(&text).expect("a frame"))
-                .collect()
+            let frames: Vec<ServerMessage> =
+                std::iter::from_fn(|| self.frames.recv().now_or_never().flatten())
+                    .map(|text| serde_json::from_str(&text).expect("a frame"))
+                    .collect();
+            self.log.extend(frames.iter().cloned());
+            frames
         }
 
-        /// Starts a producer of `source` fed over a plain transport, and returns its id.
-        async fn produce(&mut self, rooms: &Arc<Rooms>, source: MediaSource) -> String {
-            rooms
-                .produce_rtp(self.seat, source, LOOPBACK)
-                .await
-                .expect("produces");
-            self.sent()
-                .into_iter()
-                .find_map(|frame| match frame {
-                    ServerMessage::RtpProduced { producer_id, .. } => Some(producer_id),
-                    _ => None,
-                })
-                .expect("rtpProduced")
+        /// Reads frames, answering each offer through the peer and sending `send` on the
+        /// sections offered for it, until `want` matches one or `WAIT` passes.
+        async fn until(
+            &mut self,
+            rooms: &Rooms,
+            send: Option<(MediaSource, Synthetic)>,
+            want: impl Fn(&ServerMessage) -> bool,
+        ) -> Option<ServerMessage> {
+            let deadline = tokio::time::Instant::now() + WAIT;
+            loop {
+                let text = tokio::time::timeout_at(deadline, self.frames.recv())
+                    .await
+                    .ok()??;
+                let frame: ServerMessage = serde_json::from_str(&text).expect("a frame");
+                self.log.push(frame.clone());
+                if let ServerMessage::Offer {
+                    connection,
+                    revision,
+                    sdp,
+                    sections,
+                } = &frame
+                {
+                    let answer = self.peer.answer(sdp.clone()).await.expect("an answer");
+                    rooms
+                        .answer(self.seat, *connection, *revision, answer)
+                        .expect("answered");
+                    for section in sections {
+                        if let (SectionContent::Sending { source }, Some((wanted, media))) =
+                            (&section.content, send)
+                            && *source == wanted
+                        {
+                            self.peer.send(&section.mid, media);
+                        }
+                    }
+                }
+                if want(&frame) {
+                    return Some(frame);
+                }
+            }
         }
     }
 
@@ -1832,55 +1664,88 @@ mod tests {
         std::iter::from_fn(|| reports.try_recv().ok()).collect()
     }
 
-    #[tokio::test]
-    async fn a_producer_fed_over_a_plain_transport_takes_it_along_when_it_closes() {
-        let (rooms, _reports) = rooms().await;
-        let (channel, user) = (Uuid::now_v7(), Uuid::now_v7());
-        let mut alice = Client::join(&rooms, channel, user).await;
-        // Sound is not previewed back to its sender, a picture is; either way the transport
-        // goes with the producer.
-        for source in [MediaSource::ScreenAudio, MediaSource::Screen] {
-            let producer = alice.produce(&rooms, source).await;
-            assert_eq!(
-                (rooms.census().producers, rooms.census().transports),
-                (1, 1)
-            );
-            rooms.close_producer(alice.seat, &producer).await.unwrap();
-            assert_eq!(
-                (rooms.census().producers, rooms.census().transports),
-                (0, 0)
-            );
-        }
-        // The same when the grant its source needs is taken away.
-        alice.produce(&rooms, MediaSource::ScreenAudio).await;
-        alice.produce(&rooms, MediaSource::Microphone).await;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_source_is_told_of_once_its_media_arrives_and_stops_with_its_grant() {
+        let (rooms, mut reports) = rooms().await;
+        let channel = Uuid::now_v7();
+        let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+        let mut alice = Client::join(&rooms, channel, a).await;
+        let mut bob = Client::join(&rooms, channel, b).await;
+        rooms
+            .send(alice.seat, MediaSource::Screen, false)
+            .expect("may share");
+        alice
+            .until(
+                &rooms,
+                Some((MediaSource::Screen, Synthetic::SCREEN)),
+                |f| {
+                    matches!(
+                        f,
+                        ServerMessage::Sending {
+                            source: MediaSource::Screen
+                        }
+                    )
+                },
+            )
+            .await
+            .expect("Alice's screen arrives at the server");
+        bob.until(&rooms, None, |f| {
+            matches!(f, ServerMessage::Sources { user, sources } if *user == a && !sources.is_empty())
+        })
+        .await
+        .expect("Bob is told Alice shares her screen");
+        let sharing = |reports: &[VoiceReport], sharing: bool| {
+            reports.iter().any(|r| {
+                matches!(r, VoiceReport::ParticipantState { user, sharing_screen, .. }
+                    if *user == a && *sharing_screen == sharing)
+            })
+        };
+        assert!(sharing(&made(&mut reports), true));
+
+        // The grant taken away, the screen stops, and everyone hears so.
         let room = rooms.room(channel).unwrap();
         let grants = Grants {
             share_screen: false,
             ..EVERYTHING
         };
-        rooms.set_grants(&room, user, grants).await;
-        assert_eq!(
-            (rooms.census().producers, rooms.census().transports),
-            (1, 1)
-        );
+        rooms.set_grants(&room, a, grants).await;
+        bob.until(&rooms, None, |f| {
+            matches!(f, ServerMessage::Sources { user, sources } if *user == a && sources.is_empty())
+        })
+        .await
+        .expect("Bob is told the share stopped");
+        assert!(sharing(&made(&mut reports), false));
+        assert!(matches!(
+            rooms.send(alice.seat, MediaSource::Screen, false),
+            Err(RoomError::NotPermitted(MediaSource::Screen))
+        ));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn muting_one_participant_leaves_the_others_speaking() {
         let (rooms, mut reports) = rooms().await;
         let channel = Uuid::now_v7();
-        let (a, b, c) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
         let mut alice = Client::join(&rooms, channel, a).await;
         let bob = Client::join(&rooms, channel, b).await;
-        let carol = Client::join(&rooms, channel, c).await;
         let room = rooms.room(channel).unwrap();
-        rooms.apply_speaking(&room, &HashSet::from([a, b])).await;
+        let media_of = |user: Uuid| room.participants.lock().unwrap()[&user].media;
+        for (user, media) in [(a, media_of(a)), (b, media_of(b))] {
+            rooms
+                .media_event(
+                    &room,
+                    Event::Speaking {
+                        participant: media,
+                        speaking: true,
+                    },
+                )
+                .await;
+            assert!(room.participants.lock().unwrap()[&user].speaking);
+        }
         alice.sent();
         made(&mut reports);
 
         rooms.set_state(bob.seat, true, false).await.unwrap();
-        rooms.set_state(carol.seat, true, false).await.unwrap();
         let speaking: Vec<(Uuid, bool)> = alice
             .sent()
             .into_iter()
@@ -1898,161 +1763,146 @@ mod tests {
             })
             .collect();
         assert_eq!(reported, [(b, false)]);
-        let participants = room.participants.lock().unwrap();
-        assert!(participants[&a].speaking);
-        assert!(!participants[&b].speaking);
+        // A muted participant the media thread hears is not speaking.
+        rooms
+            .media_event(
+                &room,
+                Event::Speaking {
+                    participant: media_of(b),
+                    speaking: true,
+                },
+            )
+            .await;
+        assert!(room.participants.lock().unwrap()[&a].speaking);
+        assert!(!room.participants.lock().unwrap()[&b].speaking);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_participant_replaced_from_another_socket_leaves_nothing_behind() {
         let (rooms, mut reports) = rooms().await;
         let channel = Uuid::now_v7();
         let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
         let mut desktop = Client::join(&rooms, channel, a).await;
         let mut bob = Client::join(&rooms, channel, b).await;
-        let room = rooms.room(channel).unwrap();
-
-        // The desktop is deafened, speaking, sharing its screen with sound, offering a file,
-        // and sending it to Bob, who consumes everything it produces.
-        rooms.set_state(desktop.seat, false, true).await.unwrap();
-        for source in [
-            MediaSource::Microphone,
-            MediaSource::Screen,
-            MediaSource::ScreenAudio,
-        ] {
-            desktop.produce(&rooms, source).await;
-        }
-        rooms.apply_speaking(&room, &HashSet::from([a])).await;
-        let capabilities = bob
-            .sent()
-            .into_iter()
-            .find_map(|frame| match frame {
-                ServerMessage::Ready {
-                    router_rtp_capabilities,
-                    ..
-                } => Some(router_rtp_capabilities),
-                _ => None,
-            })
-            .expect("ready");
-        rooms.consume_rtp(bob.seat, LOOPBACK).await.unwrap();
         rooms
-            .set_capabilities(bob.seat, capabilities)
-            .await
+            .send(desktop.seat, MediaSource::Microphone, false)
             .unwrap();
-        let mut consumers: Vec<String> = bob
-            .sent()
-            .into_iter()
-            .filter_map(|frame| match frame {
-                ServerMessage::NewConsumer { consumer_id, .. } => Some(consumer_id),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(consumers.len(), 3);
+        desktop
+            .until(
+                &rooms,
+                Some((MediaSource::Microphone, Synthetic::VOICE)),
+                |f| matches!(f, ServerMessage::Sending { .. }),
+            )
+            .await
+            .expect("the desktop's microphone is live");
         let offer = Uuid::now_v7();
         rooms
             .offer_file(desktop.seat, offer, "notes.txt".to_string(), 1, true, 60)
             .await
             .unwrap();
-        rooms
-            .accept_file(bob.seat, offer, TransferMode::DirectPreferred)
-            .await
-            .unwrap();
-        desktop.sent();
         bob.sent();
         made(&mut reports);
 
         let mut phone = Client::join(&rooms, channel, a).await;
 
         // The desktop is told and hung up, and its socket acts for no one.
-        assert_eq!(
-            desktop.sent().last(),
-            Some(&ServerMessage::Kicked {
-                reason: KickReason::Replaced
-            })
-        );
+        assert!(desktop.sent().contains(&ServerMessage::Kicked {
+            reason: KickReason::Replaced
+        }));
         assert!(desktop.outbox.hung_up().now_or_never().is_some());
         assert!(matches!(
             rooms.set_state(desktop.seat, false, false).await,
             Err(RoomError::NotInCall)
         ));
-        rooms.leave_seat(desktop.seat).await;
+        rooms.socket_closed(desktop.seat, true).await;
 
-        // Bob is told of everything that went with it.
+        // Bob is told the desktop's sources and offer went with it.
         let told = bob.sent();
-        let mut closed: Vec<String> = told
-            .iter()
-            .filter_map(|frame| match frame {
-                ServerMessage::ConsumerClosed { consumer_id } => Some(consumer_id.clone()),
-                _ => None,
-            })
-            .collect();
-        closed.sort();
-        consumers.sort();
-        assert_eq!(closed, consumers);
-        for expected in [
-            ServerMessage::FileWithdrawn {
-                offer,
-                reason: OfferEnd::Left,
-            },
-            ServerMessage::TransferEnded {
-                offer,
-                peer: a,
-                reason: TransferEnd::Left,
-            },
-            ServerMessage::Speaking {
-                user: a,
-                speaking: false,
-            },
-        ] {
-            assert!(
-                told.contains(&expected),
-                "{expected:?} missing from {told:?}"
-            );
-        }
-
-        // Nothing of the desktop's is left in the room: the phone holds a bare place in it.
-        assert_eq!(
-            rooms.census(),
-            Census {
-                rooms: 1,
-                participants: 2,
-                producers: 0,
-                consumers: 0,
-                transports: 1,
-            }
-        );
-        assert!(room.producer_owner.lock().unwrap().is_empty());
-        assert!(room.offers.lock().unwrap().is_empty());
-        assert!(room.transfers.lock().unwrap().is_empty());
+        assert!(told.contains(&ServerMessage::Sources {
+            user: a,
+            sources: Vec::new()
+        }));
+        assert!(told.contains(&ServerMessage::FileWithdrawn {
+            offer,
+            reason: voice_protocol::signal::OfferEnd::Left,
+        }));
+        // The phone is a bare place in the call, a connection of its own on the media thread.
         assert!(matches!(
             phone.sent().first(),
             Some(ServerMessage::Ready { user, .. }) if *user == a
         ));
-
-        // The API server hears of the join, and then of the state the phone joined in, which
-        // its record of the desktop does not describe.
+        let room = rooms.room(channel).unwrap();
+        assert!(room.offers.lock().unwrap().is_empty());
+        assert_eq!(room.by_media.lock().unwrap().len(), 2);
+        let census = rooms.census().await;
+        assert_eq!((census.rooms, census.participants), (1, 2));
         let reported = made(&mut reports);
         let joined = reported
             .iter()
-            .position(|report| {
-                matches!(report, VoiceReport::ParticipantJoined { user, .. } if *user == a)
-            })
+            .position(|r| matches!(r, VoiceReport::ParticipantJoined { user, .. } if *user == a))
             .expect("the join is reported");
-        let state = VoiceReport::ParticipantState {
-            session: room.session,
-            channel,
-            user: a,
-            muted: false,
-            deafened: false,
-            sharing_screen: false,
+        assert!(reported[joined..].iter().any(|r| matches!(r,
+            VoiceReport::ParticipantState { user, muted: false, sharing_screen: false, .. } if *user == a)));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_socket_that_closes_without_leaving_is_resumed_once_with_its_secret() {
+        let (rooms, mut reports) = rooms().await;
+        let channel = Uuid::now_v7();
+        let a = Uuid::now_v7();
+        let mut alice = Client::join(&rooms, channel, a).await;
+        alice
+            .until(&rooms, None, |f| matches!(f, ServerMessage::Offer { .. }))
+            .await
+            .expect("Alice is offered her connection");
+        let Some(ServerMessage::Ready { resume, .. }) = alice.log.first().cloned() else {
+            panic!("ready first");
         };
-        let stopped = VoiceReport::Speaking {
-            session: room.session,
-            channel,
-            user: a,
-            speaking: false,
+        made(&mut reports);
+
+        // The socket closes without a word: Alice stays in the call, waiting.
+        rooms.socket_closed(alice.seat, false).await;
+        assert_eq!(rooms.participant_count(), 1);
+        let (outbox, mut frames) = Outbox::new(OUTBOX_BYTES);
+        let seat = rooms.resume(&resume, outbox).expect("resumes");
+        assert!(matches!(
+            rooms.set_state(alice.seat, true, false).await,
+            Err(RoomError::NotInCall)
+        ));
+        rooms
+            .set_state(seat, true, false)
+            .await
+            .expect("the new socket acts for her");
+        let first: ServerMessage = serde_json::from_str(&frames.recv().await.unwrap()).unwrap();
+        let ServerMessage::Ready { resume: again, .. } = first else {
+            panic!("ready on resuming, not {first:?}");
         };
-        assert!(reported[joined..].contains(&state), "{reported:?}");
-        assert!(reported[joined..].contains(&stopped), "{reported:?}");
+        assert_ne!(again, resume, "a new secret each time");
+        // Her connection is restated, from the media thread: its sections, its offer having
+        // been answered.
+        let restated = tokio::time::timeout(WAIT, async {
+            loop {
+                let frame: ServerMessage =
+                    serde_json::from_str(&frames.recv().await.unwrap()).unwrap();
+                if !matches!(frame, ServerMessage::ParticipantState { .. }) {
+                    return frame;
+                }
+            }
+        })
+        .await
+        .expect("a restatement");
+        assert!(
+            matches!(restated, ServerMessage::Sections { .. }),
+            "{restated:?}"
+        );
+        // A secret is good once; nothing about her was reported as leaving or joining.
+        assert!(matches!(
+            rooms.resume(&resume, Outbox::new(OUTBOX_BYTES).0),
+            Err(RoomError::NothingToResume)
+        ));
+        assert!(!made(&mut reports).iter().any(|r| matches!(
+            r,
+            VoiceReport::ParticipantLeft { .. } | VoiceReport::ParticipantJoined { .. }
+        )));
     }
 }

@@ -1,5 +1,5 @@
 //! A voice server with no media: it publishes the reports a real one would, so the API server's
-//! side of the contract can be exercised without mediasoup. Each invocation sends one report,
+//! side of the contract can be exercised without media. Each invocation sends one report,
 //! to the report stream on its subject as the server it names, and waits for the stream to take
 //! it.
 //!

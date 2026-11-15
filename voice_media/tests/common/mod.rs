@@ -56,7 +56,11 @@ impl Peer {
     fn join_over(media: &Media, call: CallId, id: u64, tcp: bool) -> Self {
         let (events_tx, events) = mpsc::unbounded_channel();
         let user = Uuid::now_v7();
-        let client = Client::start(PeerOptions { tcp, detail: true });
+        let client = Client::start(PeerOptions {
+            tcp,
+            detail: true,
+            ..PeerOptions::default()
+        });
         assert!(media.send(
             0,
             Command::Join {
