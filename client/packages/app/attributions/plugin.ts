@@ -11,7 +11,7 @@ import type {
   ComponentId,
   LicenseFile,
 } from "../src/features/about/attributionTypes";
-import { NATIVE_LIBRARIES, PACKAGE_TEXTS, UNSHIPPED_WRAPS, type NativeLibrary } from "./native";
+import { NATIVE_LIBRARIES, PACKAGE_TEXTS, type NativeLibrary } from "./native";
 
 /**
  * Two modules made when the app is built, which the About section and the attributions page
@@ -169,7 +169,6 @@ function collect(strict: boolean): Attributions {
           SERVER_PLATFORMS,
         ),
       ),
-      ...attempt("libraries mediasoup builds", () => mediasoupLibraries()),
     ],
   };
   const texts = new TextTable();
@@ -551,53 +550,6 @@ function native(library: NativeLibrary, version: string | null, bundledIn?: stri
   };
 }
 
-/**
- * The libraries mediasoup's worker builds from its Meson wraps, checked against the wraps of the
- * `mediasoup-sys` the servers lock: every wrap a shipped build compiles is in `native.ts`, at the
- * version it names.
- */
-function mediasoupLibraries(): Found[] {
-  const metadata = cargoMetadata(join(checkout, "Cargo.toml"), SERVER_PLATFORMS);
-  const sys = metadata.packages.filter((p) => p.name === "mediasoup-sys");
-  if (sys.length !== 1 || sys[0] === undefined) {
-    throw new Error(`expected one mediasoup-sys in Cargo.lock, found ${String(sys.length)}`);
-  }
-  const subprojects = join(dirname(sys[0].manifest_path), "subprojects");
-  const listed = NATIVE_LIBRARIES.flatMap((library) =>
-    "wrap" in library.version ? [{ library, version: library.version }] : [],
-  );
-  const wraps = readdirSync(subprojects)
-    .filter((file) => file.endsWith(".wrap"))
-    .map((file) => file.slice(0, -".wrap".length))
-    .filter((wrap) => !UNSHIPPED_WRAPS.includes(wrap));
-  const out: Found[] = [];
-  for (const wrap of wraps) {
-    const entry = listed.find((l) => l.version.wrap === wrap);
-    const directory = /^directory\s*=\s*(.+)$/m
-      .exec(readFileSync(join(subprojects, `${wrap}.wrap`), "utf8"))?.[1]
-      ?.trim();
-    if (entry === undefined) {
-      throw new Error(
-        `mediasoup-sys ${sys[0].version} builds the ${wrap} wrap, which attributions/native.ts does not list`,
-      );
-    }
-    if (directory !== entry.version.directory) {
-      throw new Error(
-        `mediasoup-sys ${sys[0].version} builds ${String(directory)}, but attributions/native.ts lists ${entry.version.directory}; update its entry and its texts`,
-      );
-    }
-    out.push(native(entry.library, entry.version.version));
-  }
-  for (const { version } of listed) {
-    if (!wraps.includes(version.wrap)) {
-      throw new Error(
-        `attributions/native.ts lists the ${version.wrap} wrap, which mediasoup-sys ${sys[0].version} no longer has`,
-      );
-    }
-  }
-  return out;
-}
-
 /** What the Windows desktop app ships from OBS Studio's release, at the version it fetches. */
 function obsLibraries(): Found[] {
   const script = readFileSync(
@@ -605,19 +557,14 @@ function obsLibraries(): Found[] {
     "utf8",
   );
   const fetched = /^const OBS_VERSION = "([^"]+)";$/m.exec(script)?.[1];
-  return NATIVE_LIBRARIES.flatMap((library) => {
-    if (!("obs" in library.version)) {
-      return [];
-    }
+  return NATIVE_LIBRARIES.map((library) => {
     if (library.version.obs !== fetched) {
       throw new Error(
         `fetch-libobs.mjs fetches OBS Studio ${String(fetched)}, but attributions/native.ts lists ${library.name} from ${library.version.obs}; check what that release ships and update it`,
       );
     }
-    return [
-      library.version.bundled
-        ? native(library, null, `OBS Studio ${library.version.obs}`)
-        : native(library, library.version.obs),
-    ];
+    return library.version.bundled
+      ? native(library, null, `OBS Studio ${library.version.obs}`)
+      : native(library, library.version.obs);
   });
 }

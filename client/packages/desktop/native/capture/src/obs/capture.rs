@@ -385,15 +385,13 @@ pub fn start_capture(options: StartOptions) -> Result<&'static str> {
         .clamp(MIN_BITRATE_KBPS, 100_000);
     let bitrate = i64::from(bitrate_kbps);
     let sender = RtpSender::start(
-        &options.rtp,
         StreamKind::Video,
         Arc::new(EncoderFeedback),
         MIN_BITRATE_KBPS,
         bitrate_kbps,
     )?;
     let audio_sender = match &options.audio {
-        Some(audio) => Some(RtpSender::start(
-            &audio.rtp,
+        Some(_) => Some(RtpSender::start(
             StreamKind::Audio,
             Arc::new(EncoderFeedback),
             MIN_BITRATE_KBPS,
@@ -607,7 +605,6 @@ pub fn start_audio_capture(options: AudioStart) -> Result<()> {
     let serial = SESSIONS_STARTED.fetch_add(1, Ordering::SeqCst);
     let output_name = cstring(&format!("aspen-output-{serial}"))?;
     let sender = RtpSender::start(
-        &options.audio.rtp,
         StreamKind::Audio,
         Arc::new(EncoderFeedback),
         MIN_BITRATE_KBPS,

@@ -365,6 +365,8 @@ export {
   PING_TIMEOUT_MS,
   READY_TIMEOUT_MS,
   REJOIN_DELAY_MAX_MS,
+  RESUME_ATTEMPTS,
+  RESUME_DELAY_MAX_MS,
   VoiceCall,
   type AudioSource,
   type CameraFailure,
@@ -376,15 +378,14 @@ export {
 } from "./voice";
 export { rankCandidates, signallingUrl, type RankedCandidate } from "./voiceCandidates";
 export type {
+  CallConnection,
+  CallTransceiver,
+  CaptureOffer,
   ExternalAudio,
+  ExternalSender,
   ExternalShare,
-  ExternalTargets,
-  RtpTarget,
   ScreenCapture,
-  TransportParams,
-  VoiceDevice,
   VoiceMedia,
-  VoiceTransport,
 } from "./voiceMedia";
 export {
   DEFAULT_OFFER_SECONDS,

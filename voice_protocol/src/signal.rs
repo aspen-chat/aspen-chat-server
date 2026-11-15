@@ -3,16 +3,17 @@
 //! server with `--gen-signal-schema`, describes every frame for the client's code generator.
 //!
 //! The flow: the client sends `identify` with its join token and receives `ready`: who is in
-//! the call, what each sends, how many audio slots it receives, and a secret to resume with.
+//! the call, what each sends, the most audio slots it receives, and a secret to resume with.
 //! The server is the only side that offers. It then offers the client's peer connection
 //! (`offer`), and the client answers (`answer`). Whatever the client wants changed is a request
 //! (`send` a source, `watch` video, `restartIce`), which the server makes and offers. A
 //! connection never has two offers outstanding, so neither side handles a collision.
 //!
 //! Every offer names what each of its media sections carries (`sections`): a source the client
-//! sends, an audio slot, or another participant's video or a share's sound. A client receives a
-//! fixed number of audio slots, which the server fills with whoever is loudest and says whom
-//! each carries (`slots`) as it changes; and a section for each video it watches. The desktop
+//! sends, an audio slot, or another participant's video or a share's sound. A client receives an
+//! audio slot for each other microphone up to a fixed number, which the server fills with whoever
+//! is loudest and says whom each carries (`slots`) as it changes; and a section for each video it
+//! watches. The desktop
 //! shell's game capture helper holds a peer connection of its own (`ConnectionKind::Capture`),
 //! negotiated the same way through the client.
 //!
@@ -20,9 +21,9 @@
 //! flowing, and takes its place back with `resume` and the secret `ready` gave.
 //!
 //! Files are offered to the call and sent between two participants over a WebRTC data channel
-//! of their own, never through the server's media threads. An offer (`offerFile`) stands for the time its sender
-//! chose; each participant who accepts it (`acceptFile`) starts one transfer, in the mode they
-//! chose among those the sender and this server allow. The server answers both people with
+//! of their own, never through the server's media threads. An offer (`offerFile`) stands for the
+//! time its sender chose; each participant who accepts it (`acceptFile`) starts one transfer, in
+//! the mode they chose among those the sender and this server allow. The server answers both people with
 //! `transferStarting`, carrying the ICE servers for that transfer (its STUN, and its TURN relay
 //! with credentials for this transfer alone), passes the peer connection's offer, answer, and
 //! candidates between them (`transferSignal`), and ends the transfer when either side ends it
@@ -373,8 +374,11 @@ pub enum ServerMessage {
         session: Uuid,
         user: Uuid,
         participants: Vec<ParticipantInfo>,
-        /// How many audio slots the client's offers carry.
+        /// The most audio slots the client's offers carry: one from the start, and one more for
+        /// each other microphone in the call, up to this, never fewer than before.
         audio_slots: u8,
+        /// The most videos a `watch` is given sections for; those past it are left out.
+        max_watched_video: u32,
         /// The secret to `resume` with, made anew with each `ready`.
         resume: String,
         /// The offers standing in the call.

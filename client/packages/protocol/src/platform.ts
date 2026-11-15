@@ -17,7 +17,7 @@ export function lazyBrowserMedia(): VoiceMedia {
     return real;
   };
   return {
-    createDevice: async () => (await media()).createDevice(),
+    createConnection: async () => (await media()).createConnection(),
     getMicrophone: async (choice, gain) => (await media()).getMicrophone(choice, gain),
     getCamera: async (choice) => (await media()).getCamera(choice),
     setOutput: async (choice) => (await media()).setOutput(choice),
@@ -26,10 +26,8 @@ export function lazyBrowserMedia(): VoiceMedia {
     setInputVolume: (gain) => {
       real?.setInputVolume(gain);
     },
-    setVolume: (consumerId, gain) => {
-      if (real !== null) {
-        real.setVolume(consumerId, gain);
-      }
+    setVolume: (id, gain) => {
+      real?.setVolume(id, gain);
     },
     play: (id, track) => {
       real?.play(id, track);

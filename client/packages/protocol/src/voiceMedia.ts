@@ -1,49 +1,45 @@
 /**
- * What a voice call needs from the platform's media: the mediasoup device and its transports,
- * capture and playback (`VoiceMedia`), and the shares and sounds produced outside the browser
- * that the call hands RTP targets to. `browserMedia.ts` implements `VoiceMedia` for a browser,
- * and tests pass a fake.
+ * What a voice call needs from the platform's media: the call's peer connection, capture and
+ * playback (`VoiceMedia`), and the shares and sounds sent from outside the browser, which answer
+ * the voice server's offers of a connection of their own. `browserMedia.ts` implements
+ * `VoiceMedia` for a browser, and tests pass a fake.
  */
 
+import type { Section } from "./generated/voiceSignal";
 import type { DeviceChoice } from "./preferences";
 
-/** Where and how an external sender delivers SRTP for a producer the voice server made for it. */
-export interface RtpTarget {
-  readonly ip: string;
-  readonly port: number;
-  readonly ssrc: number;
-  readonly payloadType: number;
-  readonly srtpCryptoSuite: string;
-  readonly srtpKeyBase64: string;
-}
-
-/** Where an external share sends: the picture, and the sound when the share carries any. */
-export interface ExternalTargets {
-  readonly video: RtpTarget;
-  readonly audio: RtpTarget | null;
+/** An offer of the capture connection, the one a sender outside the browser holds. */
+export interface CaptureOffer {
+  readonly revision: number;
+  readonly sdp: string;
+  /** What each media section carries: one `sending` section per source the sender sends. */
+  readonly sections: readonly Section[];
 }
 
 /**
- * A share produced outside the browser, such as the desktop shell's game capture: the call
- * asks the voice server for an RTP producer per stream, then `start` sends to them until
- * `stop`. `audio` says whether the share brings sound of its own, which needs a producer too.
+ * A sender outside the browser, such as the desktop shell's capture helper, holding the capture
+ * connection to the voice server: the call passes it every offer of that connection, the first
+ * starting it, and sends the voice server its answers, until `stop`.
  */
-export interface ExternalShare {
+export interface ExternalSender {
+  answer(offer: CaptureOffer): Promise<string>;
+  stop(): void;
+}
+
+/**
+ * A share sent from outside the browser, such as the desktop shell's game capture: its picture,
+ * and its own sound when `audio` says it brings any.
+ */
+export interface ExternalShare extends ExternalSender {
   readonly audio: boolean;
-  start(targets: ExternalTargets): Promise<void>;
-  stop(): void;
 }
 
 /**
- * Sound for a browser screen share that comes from outside the browser, such as one
- * application's audio captured by the desktop shell: the call asks the voice server for an RTP
- * producer, then `start` sends to it until `stop`. It stands in for any sound the browser
- * captured with the picture.
+ * Sound for a browser screen share sent from outside the browser, such as one application's
+ * audio captured by the desktop shell. It stands in for any sound the browser captured with the
+ * picture.
  */
-export interface ExternalAudio {
-  start(target: RtpTarget): Promise<void>;
-  stop(): void;
-}
+export type ExternalAudio = ExternalSender;
 
 /** What `getDisplayMedia` gave: the picture, and the sound that came with it when the browser offered any. */
 export interface ScreenCapture {
@@ -51,71 +47,38 @@ export interface ScreenCapture {
   readonly audio: MediaStreamTrack | null;
 }
 
-/** A transport as mediasoup-client models it, narrowed to what the call needs. */
-export interface VoiceTransport {
-  /** The ICE and DTLS state: `new`, `connecting`, `connected`, `disconnected`, `failed`, or `closed`. */
-  readonly connectionState: string;
-  on(event: "connectionstatechange", handler: (state: string) => void): unknown;
-  on(
-    event: "connect",
-    handler: (
-      params: { dtlsParameters: unknown },
-      callback: () => void,
-      errback: (error: Error) => void,
-    ) => void,
-  ): unknown;
-  on(
-    event: "produce",
-    handler: (
-      params: { kind: string; rtpParameters: unknown; appData: Record<string, unknown> },
-      callback: (result: { id: string }) => void,
-      errback: (error: Error) => void,
-    ) => void,
-  ): unknown;
-  produce(options: {
-    track: MediaStreamTrack;
-    appData: Record<string, unknown>;
-    /** Whether closing the producer, or its transport, stops the track; true by default. */
-    stopTracks?: boolean;
-    encodings?: { maxBitrate?: number; maxFramerate?: number }[];
-    codecOptions?: {
-      opusStereo?: boolean;
-      opusDtx?: boolean;
-      opusMaxAverageBitrate?: number;
-      videoGoogleStartBitrate?: number;
-    };
-  }): Promise<{
-    id: string;
-    close(): void;
-    replaceTrack(options: { track: MediaStreamTrack }): Promise<void>;
-  }>;
-  consume(options: {
-    id: string;
-    producerId: string;
-    kind: "audio" | "video";
-    rtpParameters: unknown;
-  }): Promise<{ id: string; track: MediaStreamTrack; close(): void }>;
+/** A transceiver of the call's peer connection, narrowed to what the call needs. */
+export interface CallTransceiver {
+  readonly mid: string | null;
+  direction: RTCRtpTransceiverDirection;
+  readonly sender: {
+    readonly track: MediaStreamTrack | null;
+    replaceTrack(track: MediaStreamTrack | null): Promise<void>;
+    getParameters(): RTCRtpSendParameters;
+    setParameters(parameters: RTCRtpSendParameters): Promise<void>;
+  };
+  readonly receiver: { readonly track: MediaStreamTrack };
+}
+
+/**
+ * The call's peer connection, narrowed to what the call needs. The voice server makes every
+ * offer, so the call only ever answers.
+ */
+export interface CallConnection {
+  /** `new`, `connecting`, `connected`, `disconnected`, `failed`, or `closed`. */
+  readonly connectionState: RTCPeerConnectionState;
+  readonly localDescription: { readonly sdp: string } | null;
+  setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void>;
+  createAnswer(): Promise<RTCSessionDescriptionInit>;
+  setLocalDescription(description: RTCSessionDescriptionInit): Promise<void>;
+  getTransceivers(): CallTransceiver[];
+  addEventListener(type: "connectionstatechange", listener: () => void): void;
   close(): void;
 }
 
-/** A mediasoup-client device, narrowed to what the call needs. */
-export interface VoiceDevice {
-  load(options: { routerRtpCapabilities: unknown }): Promise<void>;
-  readonly rtpCapabilities: unknown;
-  createSendTransport(params: TransportParams): VoiceTransport;
-  createRecvTransport(params: TransportParams): VoiceTransport;
-}
-
-export interface TransportParams {
-  id: string;
-  iceParameters: unknown;
-  iceCandidates: unknown;
-  dtlsParameters: unknown;
-}
-
-/** What the call needs from the browser: media capture, the mediasoup device, and playback. */
+/** What the call needs from the browser: its peer connection, media capture, and playback. */
 export interface VoiceMedia {
-  createDevice(): Promise<VoiceDevice>;
+  createConnection(): Promise<CallConnection>;
   /**
    * Opens the microphone the choice names, or the system's default, sent at `gain` (as
    * `setInputVolume` takes it) until `setInputVolume` changes it.
@@ -129,9 +92,9 @@ export interface VoiceMedia {
   setOutput(choice: DeviceChoice): Promise<void>;
   /** Asks the user for a screen, window, or tab to share; rejects when they decline. */
   getScreen(): Promise<ScreenCapture>;
-  /** Plays a remote track; called once per consumer. */
-  play(consumerId: string, track: MediaStreamTrack): void;
-  stop(consumerId: string): void;
-  /** Scales what a playing consumer is heard at: 1 is as sent, 0 silent, up to 2. */
-  setVolume(consumerId: string, gain: number): void;
+  /** Plays a received audio track under `id`, which `stop` and `setVolume` name it by. */
+  play(id: string, track: MediaStreamTrack): void;
+  stop(id: string): void;
+  /** Scales what a playing track is heard at: 1 is as sent, 0 silent, up to 2. */
+  setVolume(id: string, gain: number): void;
 }

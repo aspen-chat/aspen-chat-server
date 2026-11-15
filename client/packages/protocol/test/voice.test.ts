@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AspenClient,
+  CONNECT_TIMEOUT_MS,
   CallSetupError,
   CameraError,
   DEAD_SERVER_RETRY_MS,
@@ -8,15 +9,17 @@ import {
   MemorySessionStore,
   READY_TIMEOUT_MS,
   REJOIN_DELAY_MAX_MS,
+  RESUME_ATTEMPTS,
   VoiceCall,
   rankCandidates,
   signallingUrl,
+  type CallConnection,
+  type CallTransceiver,
   type CameraFailure,
-  type VoiceDevice,
+  type CaptureOffer,
   type VoiceMedia,
-  type VoiceTransport,
 } from "../src";
-import type { ClientMessage } from "../src/generated/voiceSignal";
+import type { ClientMessage, MediaSource, Section } from "../src/generated/voiceSignal";
 
 const baseUrl = "https://api.example.org";
 const channel = "0190f0a0-0000-7000-8000-000000000020";
@@ -51,207 +54,234 @@ function liveSession() {
   };
 }
 
-/** A voice server's socket: answers the signalling flow, or refuses, per its host. */
+/** Lets every frame and step queued so far run: each server frame is a task of its own. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 12; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
+/**
+ * A fake offer's SDP: the mids of its sections, which `FakeConnection` makes a transceiver for
+ * each of, as a browser does for a real offer's.
+ */
+function sdpOf(sections: readonly Section[]): string {
+  return `mids:${sections.map((s) => s.mid).join(",")}`;
+}
+
+/**
+ * A voice server's socket: answers the signalling flow as the server does, or refuses, per its
+ * host. It offers the call connection after `ready`, and again after each `send`, `stopSending`,
+ * and `watch`, each offer naming every section.
+ */
 class FakeSocket {
   static instances: FakeSocket[] = [];
   /**
-   * Per host: answers everything (`ready`), refuses the token, never answers `identify`
-   * (`silent`), turns `identify` away for coming too fast (`throttledIdentify`), refuses
-   * transports for coming too fast (`throttled`), or never answers them (`noTransport`).
+   * Per host: answers everything (`ready`), refuses the token or the resume secret (`refuse`),
+   * never answers `identify` (`silent`), turns `identify` away for coming too fast
+   * (`throttledIdentify`), or refuses every `send` for coming too fast (`throttledSend`).
    */
   static behaviour = new Map<
     string,
-    "ready" | "refuse" | "silent" | "throttledIdentify" | "throttled" | "noTransport"
+    "ready" | "refuse" | "silent" | "throttledIdentify" | "throttledSend"
   >();
+  /** Hosts whose sockets fail to open, as a server gone or a network away does. */
+  static unreachable = new Set<string>();
+  static secrets = 0;
   readonly sent: ClientMessage[] = [];
-  /** Every frame each way in order, `>` for the client's and `<` for the server's. */
-  readonly log: string[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((m: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
   readonly OPEN = 1;
+  revisions = { call: 0, capture: 0 };
+  /** The call connection's sections, those the client sends and those it watches apart. */
+  sending: Section[] = [{ mid: "0", kind: "audio", carries: "audioSlot", slot: 0 }];
+  watched: Section[] = [];
+  capture: Section[] = [];
+  #mids = 1;
   constructor(readonly url: string) {
     FakeSocket.instances.push(this);
-    queueMicrotask(() => this.onopen?.());
+    setTimeout(() => {
+      if (FakeSocket.unreachable.has(this.#host())) {
+        this.onerror?.();
+      } else {
+        this.onopen?.();
+      }
+    }, 0);
+  }
+  #host(): string {
+    return new URL(this.url).hostname.split(".")[0] ?? "";
   }
   get readyState() {
     return this.closed ? 3 : this.OPEN;
   }
+  /** Delivers a frame from the server, in a task of its own as a browser's socket does. */
   frame(frame: { type: string } & Record<string, unknown>) {
-    this.log.push(`<${frame.type}`);
-    this.onmessage?.({ data: JSON.stringify(frame) });
+    // Written as it is sent, as a server's frame is: what changes afterwards is not in it.
+    const data = JSON.stringify(frame);
+    setTimeout(() => {
+      if (!this.closed) {
+        this.onmessage?.({ data });
+      }
+    }, 0);
+  }
+  /** The call connection's sections as its next offer names them. */
+  sections(): Section[] {
+    return [...this.sending, ...this.watched];
+  }
+  offer(connection: "call" | "capture" = "call") {
+    this.revisions[connection] += 1;
+    const sections = connection === "call" ? this.sections() : this.capture;
+    this.frame({
+      type: "offer",
+      connection,
+      revision: this.revisions[connection],
+      sdp: sdpOf(sections),
+      sections,
+    });
+  }
+  #ready() {
+    FakeSocket.secrets += 1;
+    this.frame({
+      type: "ready",
+      session,
+      user: me,
+      participants: [],
+      audioSlots: 16,
+      maxWatchedVideo: 25,
+      resume: `secret-${String(FakeSocket.secrets)}`,
+    });
+  }
+  #mid(): string {
+    const mid = String(this.#mids);
+    this.#mids += 1;
+    return mid;
   }
   send(data: string) {
     const frame = JSON.parse(data) as ClientMessage;
     this.sent.push(frame);
-    this.log.push(`>${frame.type}`);
-    const host = new URL(this.url).hostname.split(".")[0] ?? "";
-    const mode = FakeSocket.behaviour.get(host) ?? "ready";
-    queueMicrotask(() => {
-      switch (frame.type) {
-        case "identify":
-          if (mode === "refuse") {
-            this.frame({
-              type: "error",
-              detail: "the token's signature does not match",
-              fatal: true,
-            });
-          } else if (mode === "throttledIdentify") {
-            this.frame({
-              type: "error",
-              detail: "too many identify frames; try again in 7s",
-              fatal: true,
-              retryAfterSeconds: 7,
-            });
-          } else if (mode !== "silent") {
-            this.frame({
-              type: "ready",
-              session,
-              user: me,
-              routerRtpCapabilities: { codecs: [] },
-              participants: [],
-            });
-          }
-          break;
-        case "createTransport":
-          if (mode === "noTransport") {
-            break;
-          }
-          if (mode === "throttled") {
-            this.frame({
-              type: "error",
-              detail: "too many createTransport frames; try again in 5s",
-              fatal: false,
-              retryAfterSeconds: 5,
-            });
-            break;
-          }
+    const mode = FakeSocket.behaviour.get(this.#host()) ?? "ready";
+    switch (frame.type) {
+      case "identify":
+        if (mode === "refuse") {
           this.frame({
-            type: "transportCreated",
-            direction: frame.direction,
-            id: `t-${frame.direction}`,
-            iceParameters: {},
-            iceCandidates: [],
-            dtlsParameters: {},
+            type: "error",
+            detail: "the token's signature does not match",
+            fatal: true,
           });
-          break;
-        case "connectTransport":
-          this.frame({ type: "transportConnected", transportId: frame.transportId });
-          break;
-        case "produce":
-          this.frame({ type: "produced", producerId: `p-${frame.source}`, source: frame.source });
-          break;
-        case "produceRtp":
+        } else if (mode === "throttledIdentify") {
           this.frame({
-            type: "rtpProduced",
-            producerId: `rtp-${frame.source}`,
-            source: frame.source,
-            ip: "192.0.2.10",
-            port: 40000,
-            ssrc: 1234,
-            payloadType: 96,
-            srtpCryptoSuite: "AES_CM_128_HMAC_SHA1_80",
-            srtpKeyBase64: "a2V5",
+            type: "error",
+            detail: "too many identify frames; try again in 7s",
+            fatal: true,
+            retryAfterSeconds: 7,
           });
+        } else if (mode !== "silent") {
+          this.#ready();
+          this.offer();
+        }
+        break;
+      case "resume": {
+        if (mode === "refuse" || mode === "silent") {
+          this.frame({ type: "error", detail: "no such call to resume", fatal: true });
           break;
-        default:
-          break;
+        }
+        // The call's connection goes on at the server: its sections and revisions carry over,
+        // and its last offer is restated, as one whose answer was lost with the socket is.
+        const previous = FakeSocket.instances
+          .filter((s) => s !== this && s.url === this.url)
+          .at(-1);
+        if (previous !== undefined) {
+          this.revisions = { ...previous.revisions };
+          this.sending = previous.sending;
+          this.watched = previous.watched;
+          this.capture = previous.capture;
+          this.#mids = previous.#mids;
+        }
+        this.#ready();
+        const sections = this.sections();
+        this.frame({
+          type: "offer",
+          connection: "call",
+          revision: this.revisions.call,
+          sdp: "restated",
+          sections,
+        });
+        break;
       }
-    });
+      case "send": {
+        if (mode === "throttledSend") {
+          this.frame({
+            type: "error",
+            detail: "too many send frames; try again in 5s",
+            fatal: false,
+            retryAfterSeconds: 5,
+            refused: "send",
+          });
+          break;
+        }
+        const kind = frame.source === "screen" || frame.source === "camera" ? "video" : "audio";
+        const section: Section = {
+          mid: this.#mid(),
+          kind,
+          carries: "sending",
+          source: frame.source,
+        };
+        if (frame.external === true) {
+          this.capture.push(section);
+          this.offer("capture");
+        } else {
+          this.sending.push(section);
+          this.offer();
+        }
+        this.frame({ type: "sending", source: frame.source });
+        break;
+      }
+      case "stopSending": {
+        const other = (s: Section) => !(s.carries === "sending" && s.source === frame.source);
+        this.sending = this.sending.filter(other);
+        this.capture = this.capture.filter(other);
+        this.offer();
+        break;
+      }
+      case "watch":
+        this.watched = frame.video.map(({ user, source }) => ({
+          mid: this.#mid(),
+          kind: "video",
+          carries: "video",
+          user,
+          source,
+        }));
+        this.offer();
+        break;
+      default:
+        break;
+    }
   }
   close() {
     this.closed = true;
     this.onclose?.();
   }
-}
-
-class FakeTransport implements VoiceTransport {
-  handlers = new Map<string, ((...args: never[]) => void)[]>();
-  closed = false;
-  produced: string[] = [];
-  closedProducers: string[] = [];
-  replaced: MediaStreamTrack[] = [];
-  consumed: string[] = [];
-  connectionState = "new";
-  /** Whether ICE succeeds once the microphone is produced. */
-  constructor(readonly mediaReachable = true) {}
-  on(event: string, handler: (...args: never[]) => void) {
-    this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
-    return this;
-  }
-  #handler(event: string) {
-    return this.handlers.get(event)?.[0];
-  }
-  setConnectionState(state: string) {
-    this.connectionState = state;
-    for (const handler of this.handlers.get("connectionstatechange") ?? []) {
-      (handler as (s: string) => void)(state);
-    }
-  }
-  readonly codecOptions: Record<string, unknown>[] = [];
-  async produce(options: {
-    track: MediaStreamTrack;
-    appData: Record<string, unknown>;
-    codecOptions?: Record<string, unknown>;
-  }) {
-    if (options.codecOptions !== undefined) {
-      this.codecOptions.push({ source: options.appData.source, ...options.codecOptions });
-    }
-    const connect = this.#handler("connect") as
-      | ((p: { dtlsParameters: unknown }, cb: () => void, eb: (e: Error) => void) => void)
-      | undefined;
-    await new Promise<void>((resolve, reject) =>
-      connect?.({ dtlsParameters: {} }, resolve, reject),
-    );
-    const produce = this.#handler("produce") as
-      | ((
-          p: { kind: string; rtpParameters: unknown; appData: Record<string, unknown> },
-          cb: (r: { id: string }) => void,
-          eb: (e: Error) => void,
-        ) => void)
-      | undefined;
-    const id = await new Promise<string>((resolve, reject) =>
-      produce?.(
-        { kind: options.track.kind, rtpParameters: {}, appData: options.appData },
-        (r) => {
-          resolve(r.id);
-        },
-        reject,
-      ),
-    );
-    this.produced.push(id);
-    queueMicrotask(() => {
-      this.setConnectionState(this.mediaReachable ? "connected" : "failed");
-    });
-    return {
-      id,
-      close: () => {
-        this.closedProducers.push(id);
-      },
-      replaceTrack: (replacement: { track: MediaStreamTrack }) => {
-        this.replaced.push(replacement.track);
-        return Promise.resolve();
-      },
-    };
-  }
-  consume(options: { id: string }) {
-    this.consumed.push(options.id);
-    return Promise.resolve({
-      id: options.id,
-      track: { stop: () => undefined } as unknown as MediaStreamTrack,
-      close: () => undefined,
-    });
-  }
-  close() {
+  /** The socket closes from the server's side, as a network change or a proxy does. */
+  drop() {
     this.closed = true;
+    this.onclose?.();
+  }
+  /** The answers the client sent, by connection. */
+  answers(connection: "call" | "capture" = "call") {
+    return this.sent.filter(
+      (f): f is Extract<ClientMessage, { type: "answer" }> =>
+        f.type === "answer" && f.connection === connection,
+    );
   }
 }
 
-/** A media track with the two things the call uses: stopping it, and hearing it end. */
+/** A media track with the things the call uses: stopping it, enabling it, and hearing it end. */
 class FakeTrack {
   stopped = false;
+  enabled = true;
   contentHint = "";
   #listeners: (() => void)[] = [];
   constructor(readonly kind: "audio" | "video") {}
@@ -268,16 +298,121 @@ class FakeTrack {
   }
 }
 
-function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = "ok") {
-  const transports: FakeTransport[] = [];
+class FakeTransceiver implements CallTransceiver {
+  direction: RTCRtpTransceiverDirection = "recvonly";
+  /** Every track the sender was given, in order, `null` for none. */
+  readonly replaced: (MediaStreamTrack | null)[] = [];
+  readonly encodings: RTCRtpEncodingParameters[] = [{}];
+  readonly receiver = { track: new FakeTrack("audio") as unknown as MediaStreamTrack };
+  readonly sender = {
+    track: null as MediaStreamTrack | null,
+    replaceTrack: (track: MediaStreamTrack | null) => {
+      this.sender.track = track;
+      this.replaced.push(track);
+      return Promise.resolve();
+    },
+    getParameters: () =>
+      ({ encodings: this.encodings.map((e) => ({ ...e })) }) as unknown as RTCRtpSendParameters,
+    setParameters: (parameters: RTCRtpSendParameters) => {
+      this.encodings.splice(0, this.encodings.length, ...parameters.encodings);
+      return Promise.resolve();
+    },
+  };
+  constructor(readonly mid: string) {}
+}
+
+/**
+ * A peer connection that makes a transceiver for each mid an offer names, answers, and
+ * connects once it has answered, unless it was made unreachable.
+ */
+class FakeConnection implements CallConnection {
+  connectionState: RTCPeerConnectionState = "new";
+  localDescription: { sdp: string } | null = null;
+  readonly transceivers: FakeTransceiver[] = [];
+  readonly offers: string[] = [];
+  closed = false;
+  /** What `setRemoteDescription` fails with, as a browser that cannot apply an offer does. */
+  failure: Error | null = null;
+  #listeners: (() => void)[] = [];
+  #remote = "";
+  constructor(readonly reachable: boolean) {}
+  setRemoteDescription(description: RTCSessionDescriptionInit) {
+    if (this.failure !== null) {
+      return Promise.reject(this.failure);
+    }
+    const sdp = description.sdp ?? "";
+    this.offers.push(sdp);
+    this.#remote = sdp;
+    for (const mid of sdp.replace("mids:", "").split(",").filter(Boolean)) {
+      if (!this.transceivers.some((t) => t.mid === mid)) {
+        this.transceivers.push(new FakeTransceiver(mid));
+      }
+    }
+    return Promise.resolve();
+  }
+  createAnswer() {
+    return Promise.resolve({ type: "answer" as const, sdp: `answer to ${this.#remote}` });
+  }
+  setLocalDescription(description: RTCSessionDescriptionInit) {
+    this.localDescription = { sdp: description.sdp ?? "" };
+    if (this.connectionState === "new") {
+      setTimeout(() => {
+        this.setState(this.reachable ? "connected" : "failed");
+      }, 0);
+    }
+    return Promise.resolve();
+  }
+  getTransceivers() {
+    return this.transceivers;
+  }
+  transceiver(mid: string) {
+    return this.transceivers.find((t) => t.mid === mid);
+  }
+  addEventListener(_type: "connectionstatechange", listener: () => void) {
+    this.#listeners.push(listener);
+  }
+  setState(state: RTCPeerConnectionState) {
+    this.connectionState = state;
+    for (const listener of this.#listeners) {
+      listener();
+    }
+  }
+  close() {
+    this.closed = true;
+    this.connectionState = "closed";
+  }
+}
+
+/** An external sender that answers each capture offer, or fails to. */
+function fakeSender(audio: boolean | null, failure: Error | null = null) {
+  const offers: CaptureOffer[] = [];
+  let stopped = 0;
+  const sender = {
+    answer: (offer: CaptureOffer) => {
+      offers.push(offer);
+      return failure === null
+        ? Promise.resolve(`capture answer ${String(offer.revision)}`)
+        : Promise.reject(failure);
+    },
+    stop: () => {
+      stopped += 1;
+    },
+    ...(audio === null ? {} : { audio }),
+  };
+  return {
+    sender,
+    offers,
+    stopped: () => stopped,
+  };
+}
+
+function fakeMedia(unreachableConnections = 0, microphone: "ok" | "denied" = "ok") {
+  const connections: FakeConnection[] = [];
   const screens: { video: FakeTrack; audio: FakeTrack }[] = [];
   const microphones: (string | null)[] = [];
   const microphoneTracks: FakeTrack[] = [];
-  /**
-   * How many times a device was loaded with a router's capabilities, and what loading fails
-   * with, when the browser cannot do what the router needs.
-   */
-  const loads: { count: number; failure: Error | null } = { count: 0, failure: null };
+  /** What making a connection fails with, when the browser cannot do WebRTC. */
+  const setup: { failure: Error | null } = { failure: null };
   const outputs: (string | null)[] = [];
   const volumes: string[] = [];
   /** The gain each microphone opened at, then each change `setInputVolume` made. */
@@ -287,28 +422,17 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
   const cameraTracks: { track: FakeTrack; besideOpen: boolean }[] = [];
   /** Failures the next camera openings meet, in order; an empty queue opens one. */
   const cameraFailures: CameraFailure[] = [];
-  let sendTransports = 0;
   const played: string[] = [];
-  const device: VoiceDevice = {
-    load: () => {
-      loads.count += 1;
-      return loads.failure === null ? Promise.resolve() : Promise.reject(loads.failure);
-    },
-    rtpCapabilities: { codecs: [] },
-    createSendTransport: () => {
-      sendTransports += 1;
-      const t = new FakeTransport(sendTransports > unreachableSendTransports);
-      transports.push(t);
-      return t;
-    },
-    createRecvTransport: () => {
-      const t = new FakeTransport();
-      transports.push(t);
-      return t;
-    },
-  };
+  const stopped: string[] = [];
   const media: VoiceMedia = {
-    createDevice: () => Promise.resolve(device),
+    createConnection: () => {
+      if (setup.failure !== null) {
+        return Promise.reject(setup.failure);
+      }
+      const connection = new FakeConnection(connections.length >= unreachableConnections);
+      connections.push(connection);
+      return Promise.resolve(connection);
+    },
     getMicrophone: (choice, gain) => {
       microphones.push(choice === "default" ? null : choice.id);
       inputVolumes.push(`open=${String(gain)}`);
@@ -333,8 +457,8 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
       outputs.push(choice === "default" ? null : choice.id);
       return Promise.resolve();
     },
-    setVolume: (consumerId, gain) => {
-      volumes.push(`${consumerId}=${String(gain)}`);
+    setVolume: (id, gain) => {
+      volumes.push(`${id}=${String(gain)}`);
     },
     setInputVolume: (gain) => {
       inputVolumes.push(`set=${String(gain)}`);
@@ -349,16 +473,19 @@ function fakeMedia(unreachableSendTransports = 0, microphone: "ok" | "denied" = 
     play: (id) => {
       played.push(id);
     },
-    stop: () => undefined,
+    stop: (id) => {
+      stopped.push(id);
+    },
   };
   return {
     media,
-    transports,
+    connections,
     played,
+    stopped,
     screens,
     microphones,
     microphoneTracks,
-    loads,
+    setup,
     outputs,
     volumes,
     inputVolumes,
@@ -372,15 +499,17 @@ function makeCall(options: {
   candidates: (keyof typeof servers)[];
   latency: Record<string, number>;
   existing?: boolean;
-  unreachableSendTransports?: number;
+  unreachableConnections?: number;
   microphone?: "ok" | "denied";
   userVolume?: (userId: string, source: "microphone" | "screenAudio") => number;
-  /** What the join offer grants; both by default. */
+  /** What the join offer grants; all of them by default. */
   speak?: boolean;
   shareScreen?: boolean;
   useCamera?: boolean;
 }) {
   FakeSocket.instances = [];
+  FakeSocket.unreachable = new Set();
+  FakeSocket.secrets = 0;
   const calls: string[] = [];
   const timers: { fn: () => void; delay: number }[] = [];
   const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -431,24 +560,10 @@ function makeCall(options: {
   const store = new MemorySessionStore();
   store.save(liveSession());
   const client = new AspenClient({ baseUrl, sessionStore: store, fetch });
-  const {
-    media,
-    transports,
-    played,
-    screens,
-    microphones,
-    microphoneTracks,
-    loads,
-    outputs,
-    volumes,
-    inputVolumes,
-    cameras,
-    cameraTracks,
-    cameraFailures,
-  } = fakeMedia(options.unreachableSendTransports ?? 0, options.microphone ?? "ok");
+  const fake = fakeMedia(options.unreachableConnections ?? 0, options.microphone ?? "ok");
   const call = new VoiceCall({
     client,
-    media,
+    media: fake.media,
     fetch,
     WebSocket: FakeSocket as unknown as typeof WebSocket,
     setTimeout: ((fn: () => void, delay: number) => {
@@ -458,55 +573,54 @@ function makeCall(options: {
     random: () => 0.5,
     ...(options.userVolume === undefined ? {} : { userVolume: options.userVolume }),
   });
-  return {
-    call,
-    calls,
-    transports,
-    played,
-    screens,
-    microphones,
-    microphoneTracks,
-    loads,
-    outputs,
-    volumes,
-    inputVolumes,
-    cameras,
-    cameraTracks,
-    cameraFailures,
-    timers,
+  /** The connection of the call now, and the transceiver sending `source` on it. */
+  const connection = () => fake.connections.at(-1);
+  const sendingOn = (source: MediaSource, socket = FakeSocket.instances.at(-1)) => {
+    const section = socket?.sections().find((s) => s.carries === "sending" && s.source === source);
+    return section === undefined ? undefined : connection()?.transceiver(section.mid);
   };
+  return { call, calls, timers, connection, sendingOn, ...fake };
+}
+
+/** The types of the frames a socket sent, leaving out answers, which follow every offer. */
+function requests(socket: FakeSocket | undefined): string[] {
+  return (socket?.sent ?? []).filter((f) => f.type !== "answer").map((f) => f.type);
 }
 
 describe("VoiceCall", () => {
-  it("orders candidates by latency and joins the nearest, producing the microphone", async () => {
+  it("orders candidates by latency, joins the nearest, and sends the microphone", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, calls, transports } = makeCall({
+    const { call, calls, connection, sendingOn, microphoneTracks } = makeCall({
       candidates: ["far", "near"],
       latency: { far: 80, near: 5 },
     });
     const states: string[] = [];
     call.subscribe(() => states.push(call.state.status));
     await call.join(channel);
+    await settle();
     expect(call.state).toMatchObject({ status: "connected", channelId: channel, session });
     expect(calls.filter((c) => c.includes("/health")).length).toBe(2);
     expect(FakeSocket.instances.map((s) => new URL(s.url).host)).toEqual(["near.example.org"]);
-    expect(FakeSocket.instances[0]?.sent.map((f) => f.type)).toEqual([
-      "identify",
-      "setCapabilities",
-      "createTransport",
-      "createTransport",
-      "connectTransport",
-      "produce",
-      "setState",
-    ]);
-    expect(transports[0]?.produced).toEqual(["p-microphone"]);
+    const socket = FakeSocket.instances[0];
+    expect(requests(socket)).toEqual(["identify", "send", "setState"]);
+    expect(socket?.sent.find((f) => f.type === "send")).toEqual({
+      type: "send",
+      source: "microphone",
+    });
+    // Each offer is answered with its own revision, in order.
+    expect(socket?.answers().map((a) => a.revision)).toEqual([1, 2]);
+    expect(connection()?.offers).toEqual(["mids:0", "mids:0,1"]);
+    // The section the server offers for the microphone sends it.
+    const microphone = sendingOn("microphone");
+    expect(microphone?.direction).toBe("sendonly");
+    expect(microphone?.sender.track).toBe(microphoneTracks[0]);
     expect(states).toContain("joining");
     expect(calls.some((c) => c.includes("/failures"))).toBe(false);
   });
 
   it("joins to listen without opening the microphone when the channel does not allow speaking", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, transports } = makeCall({
+    const { call } = makeCall({
       candidates: ["near"],
       latency: { near: 1 },
       speak: false,
@@ -515,8 +629,7 @@ describe("VoiceCall", () => {
     });
     await call.join(channel);
     expect(call.state).toMatchObject({ status: "connected", canSpeak: false, canShare: false });
-    expect(transports[0]?.produced).toEqual([]);
-    expect(FakeSocket.instances[0]?.sent.some((f) => f.type === "produce")).toBe(false);
+    expect(FakeSocket.instances[0]?.sent.some((f) => f.type === "send")).toBe(false);
     const prepared = { video: new FakeTrack("video"), audio: null };
     await call.startScreenShare({
       prepared: prepared as unknown as { video: MediaStreamTrack; audio: null },
@@ -527,7 +640,7 @@ describe("VoiceCall", () => {
 
   it("reports a server that refuses and falls through to the next", async () => {
     FakeSocket.behaviour = new Map([["dead", "refuse"]]);
-    const { call, calls } = makeCall({
+    const { call, calls, connections } = makeCall({
       candidates: ["dead", "far"],
       latency: { dead: 1, far: 50 },
     });
@@ -540,14 +653,15 @@ describe("VoiceCall", () => {
     expect(calls.filter((c) => c.includes("/failures"))).toEqual([
       `POST api.example.org/api/v1/voice-servers/${servers.dead.id}/failures`,
     ]);
+    expect(connections[0]?.closed).toBe(true);
   });
 
   it("treats media that never connects as the server's failure and tries the next", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, calls, transports } = makeCall({
+    const { call, calls, connections } = makeCall({
       candidates: ["near", "far"],
       latency: { near: 1, far: 30 },
-      unreachableSendTransports: 1,
+      unreachableConnections: 1,
     });
     await call.join(channel);
     expect(call.state.status).toBe("connected");
@@ -558,15 +672,31 @@ describe("VoiceCall", () => {
     expect(calls.filter((c) => c.includes("/failures"))).toEqual([
       `POST api.example.org/api/v1/voice-servers/${servers.near.id}/failures`,
     ]);
-    expect(transports[0]?.closed).toBe(true);
-    expect(transports[2]?.connectionState).toBe("connected");
+    expect(connections[0]?.closed).toBe(true);
+    expect(connections[1]?.connectionState).toBe("connected");
   });
 
-  it("rejoins when media fails mid-call", async () => {
+  it("asks for an ICE restart when media fails mid-call, rejoining when it does not recover", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, transports, timers } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    const { call, connection, timers } = makeCall({ candidates: ["near"], latency: { near: 1 } });
     await call.join(channel);
-    transports[0]?.setConnectionState("failed");
+    const socket = FakeSocket.instances[0];
+    connection()?.setState("failed");
+    expect(socket?.sent.at(-1)).toEqual({ type: "restartIce", connection: "call" });
+    expect(call.state.status).toBe("connected");
+    // Failing again while the restart is awaited asks for nothing more.
+    connection()?.setState("failed");
+    expect(socket?.sent.filter((f) => f.type === "restartIce")).toHaveLength(1);
+    // Connected again in time, the wait passes harmlessly.
+    const wait = timers.at(-1);
+    expect(wait?.delay).toBe(CONNECT_TIMEOUT_MS);
+    connection()?.setState("connected");
+    wait?.fn();
+    expect(call.state.status).toBe("connected");
+    // Failing again and staying failed rejoins from scratch.
+    connection()?.setState("failed");
+    expect(socket?.sent.filter((f) => f.type === "restartIce")).toHaveLength(2);
+    timers.at(-1)?.fn();
     expect(call.state.status).toBe("rejoining");
     expect(timers.at(-1)?.delay).toBe(REJOIN_DELAY_MAX_MS / 2);
   });
@@ -589,31 +719,13 @@ describe("VoiceCall", () => {
     expect(calls.some((c) => c.includes("/failures") || c.includes("/health"))).toBe(false);
   });
 
-  it("fails a join the voice server turns away for coming too fast, blaming no server", async () => {
-    FakeSocket.behaviour = new Map([["near", "throttled"]]);
-    const { call, calls } = makeCall({
-      candidates: ["near", "far"],
-      latency: { near: 1, far: 30 },
-    });
-    await expect(call.join(channel)).rejects.toThrow("too many createTransport frames");
-    expect(call.state).toMatchObject({
-      status: "failed",
-      channelId: channel,
-      errorKind: "refused",
-      retryAfterSeconds: 5,
-    });
-    // Another server would refuse the user no differently, and this one did nothing wrong.
-    expect(FakeSocket.instances.map((s) => new URL(s.url).host)).toEqual(["near.example.org"]);
-    expect(calls.some((c) => c.includes("/failures"))).toBe(false);
-  });
-
   it("fails a join this device cannot set up, blaming and trying no server for it", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, calls, loads } = makeCall({
+    const { call, calls, setup } = makeCall({
       candidates: ["near", "far"],
       latency: { near: 1, far: 30 },
     });
-    loads.failure = new Error("WebRTC is not supported");
+    setup.failure = new Error("WebRTC is not supported");
     await expect(call.join(channel)).rejects.toBeInstanceOf(CallSetupError);
     expect(call.state).toMatchObject({
       status: "failed",
@@ -621,12 +733,30 @@ describe("VoiceCall", () => {
       errorKind: "device",
       error: "WebRTC is not supported",
     });
-    // The browser would load no better for another server.
-    expect(FakeSocket.instances.map((s) => new URL(s.url).host)).toEqual(["near.example.org"]);
+    // The browser would do no better for another server.
+    expect(FakeSocket.instances).toHaveLength(0);
     expect(calls.some((c) => c.includes("/failures"))).toBe(false);
   });
 
-  it("treats being turned away at identify for coming too fast as a refusal too", async () => {
+  it("fails a join whose offer this device cannot apply, blaming and trying no server for it", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, calls, media } = makeCall({
+      candidates: ["near", "far"],
+      latency: { near: 1, far: 30 },
+    });
+    const create = media.createConnection.bind(media);
+    media.createConnection = async () => {
+      const connection = (await create()) as FakeConnection;
+      connection.failure = new Error("no codec in common");
+      return connection;
+    };
+    await expect(call.join(channel)).rejects.toBeInstanceOf(CallSetupError);
+    expect(call.state).toMatchObject({ errorKind: "device", error: "no codec in common" });
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(calls.some((c) => c.includes("/failures"))).toBe(false);
+  });
+
+  it("treats being turned away at identify for coming too fast as a refusal, blaming no server", async () => {
     FakeSocket.behaviour = new Map([["near", "throttledIdentify"]]);
     const { call, calls } = makeCall({
       candidates: ["near", "far"],
@@ -634,20 +764,20 @@ describe("VoiceCall", () => {
     });
     await expect(call.join(channel)).rejects.toThrow("too many identify frames");
     expect(call.state).toMatchObject({ errorKind: "refused", retryAfterSeconds: 7 });
+    // Another server would refuse the user no differently, and this one did nothing wrong.
     expect(FakeSocket.instances).toHaveLength(1);
     expect(calls.some((c) => c.includes("/failures"))).toBe(false);
   });
 
-  it("gives up on a request the voice server never answers and tries the next server", async () => {
-    FakeSocket.behaviour = new Map([["near", "noTransport"]]);
+  it("gives up on a server that never answers identify and tries the next", async () => {
+    FakeSocket.behaviour = new Map([["near", "silent"]]);
     const { call, calls, timers } = makeCall({
       candidates: ["near", "far"],
       latency: { near: 1, far: 30 },
     });
     const joined = call.join(channel);
-    // Once the transports have been asked for, the wait for them runs out.
     await vi.waitFor(() => {
-      expect(FakeSocket.instances[0]?.sent.some((f) => f.type === "createTransport")).toBe(true);
+      expect(FakeSocket.instances[0]?.sent.some((f) => f.type === "identify")).toBe(true);
     });
     for (const timer of timers.filter((t) => t.delay === READY_TIMEOUT_MS)) {
       timer.fn();
@@ -692,35 +822,42 @@ describe("VoiceCall", () => {
     expect(FakeSocket.instances).toEqual([]);
   });
 
-  it("plays consumers the server announces and stops them when told", async () => {
+  it("plays each audio slot and share's sound, attributing slots as the server says", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, played, transports } = makeCall({
+    const { call, played, stopped, volumes, connection } = makeCall({
       candidates: ["near"],
       latency: { near: 1 },
       existing: true,
+      userVolume: (user, source) => (user === "u2" && source === "microphone" ? 1.5 : 1),
     });
     await call.join(channel);
+    await settle();
     const socket = FakeSocket.instances[0];
-    socket?.frame({
-      type: "newConsumer",
-      consumerId: "c1",
-      producerId: "p9",
-      user: "u2",
-      kind: "audio",
-      source: "microphone",
-      rtpParameters: {},
-      producerPaused: false,
-    });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(played).toEqual(["c1"]);
-    expect(transports[1]?.consumed).toEqual(["c1"]);
-    expect(socket?.sent.at(-1)).toEqual({ type: "resumeConsumer", consumerId: "c1" });
-    socket?.frame({ type: "consumerClosed", consumerId: "c1" });
+    // The slot every connection starts with plays from the first, silent until it carries someone.
+    expect(played).toEqual(["0"]);
+    expect(volumes).toEqual(["0=1"]);
+    socket?.frame({ type: "slots", assignments: [{ slot: 0, user: "u2" }] });
+    await settle();
+    expect(volumes.at(-1)).toBe("0=1.5");
+    // A second slot and a share's sound, offered as the call grows.
+    socket?.sending.push({ mid: "s1", kind: "audio", carries: "audioSlot", slot: 1 });
+    socket?.watched.push({ mid: "s2", kind: "audio", carries: "shareAudio", user: "u3" });
+    socket?.offer();
+    await settle();
+    expect(played).toEqual(["0", "s1", "s2"]);
+    expect(connection()?.transceiver("s2")).toBeDefined();
+    // The share's sound goes when its section does.
+    socket?.watched.splice(0);
+    socket?.offer();
+    await settle();
+    expect(stopped).toEqual(["s2"]);
     call.setMuted(true);
     expect(socket?.sent.at(-1)).toEqual({ type: "setState", muted: true, deafened: false });
     call.leave();
     expect(call.state.status).toBe("idle");
     expect(socket?.closed).toBe(true);
+    expect(connection()?.closed).toBe(true);
+    expect(stopped).toEqual(["s2", "0", "s1"]);
   });
 
   it("rejoins after a random delay when the server is lost, but not when idle", async () => {
@@ -733,8 +870,7 @@ describe("VoiceCall", () => {
     const pause = timers.at(-1);
     expect(pause?.delay).toBe(REJOIN_DELAY_MAX_MS / 2);
     pause?.fn();
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await settle();
     expect(call.state.status).toBe("connected");
     expect(FakeSocket.instances).toHaveLength(2);
     call.onSessionEnded({ id: session, channel, reason: "idle" });
@@ -745,53 +881,65 @@ describe("VoiceCall", () => {
     expect(REJOIN_DELAY_MAX_MS).toBe(1000);
   });
 
-  it("sends the camera when turned on, shows others' cameras apart from screens, and stops", async () => {
+  it("sends the camera when turned on, watches others' video only while it is shown, and stops", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, transports, cameras } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    const { call, cameras, cameraTracks, sendingOn } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+    });
     await call.join(channel);
     const socket = FakeSocket.instances[0];
     expect(call.state.canCamera).toBe(true);
     await call.startCamera();
+    await settle();
     expect(cameras).toEqual([null]);
     expect(call.state.localCamera).not.toBeNull();
-    expect(
-      socket?.sent.filter((f) => f.type === "produce").map((f) => `${f.kind}:${f.source}`),
-    ).toEqual(["audio:microphone", "video:camera"]);
-    expect(transports[0]?.codecOptions).toEqual([
-      { source: "camera", videoGoogleStartBitrate: 10_000 },
+    expect(socket?.sent.filter((f) => f.type === "send").map((f) => f.source)).toEqual([
+      "microphone",
+      "camera",
     ]);
+    // The camera's sender is bounded once its section is answered.
+    const camera = sendingOn("camera");
+    expect(camera?.sender.track).toBe(cameraTracks[0]?.track);
+    expect(camera?.encodings).toEqual([{ maxBitrate: 4_000_000, maxFramerate: 30 }]);
     // A second start while it is on opens nothing.
     await call.startCamera();
     expect(cameras).toHaveLength(1);
-    // Another participant's camera is theirs to show, and never a shared screen.
-    socket?.frame({
-      type: "newConsumer",
-      consumerId: "c1",
-      producerId: "p-c1",
-      user: "u2",
-      kind: "video",
-      source: "camera",
-      rtpParameters: {},
-      producerPaused: false,
+    // Another participant's camera is watched only while something shows video.
+    socket?.frame({ type: "sources", user: "u2", sources: [{ source: "camera", paused: false }] });
+    await settle();
+    expect(socket?.sent.some((f) => f.type === "watch")).toBe(false);
+    const hide = call.showVideo();
+    await settle();
+    expect(socket?.sent.filter((f) => f.type === "watch").at(-1)).toEqual({
+      type: "watch",
+      video: [{ user: "u2", source: "camera" }],
     });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(call.state.cameras.map((c) => [c.user, c.consumerId])).toEqual([["u2", "c1"]]);
+    // It is theirs to show, and never a shared screen.
+    expect(call.state.cameras.map((c) => c.user)).toEqual(["u2"]);
     expect(call.state.screens).toEqual([]);
-    socket?.frame({ type: "consumerClosed", consumerId: "c1" });
+    hide();
+    await settle();
+    expect(socket?.sent.filter((f) => f.type === "watch").at(-1)).toEqual({
+      type: "watch",
+      video: [],
+    });
     expect(call.state.cameras).toEqual([]);
     call.stopCamera();
     expect(call.state.localCamera).toBeNull();
-    expect(transports[0]?.closedProducers).toContain("p-camera");
+    expect(socket?.sent.at(-1)).toEqual({ type: "stopSending", source: "camera" });
+    expect(camera?.replaced.at(-1)).toBeNull();
   });
 
   it("keeps the camera on as it moves to another, letting the one in use go first", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, transports, cameras, cameraTracks, cameraFailures } = makeCall({
+    const { call, cameras, cameraTracks, cameraFailures, sendingOn } = makeCall({
       candidates: ["near"],
       latency: { near: 1 },
     });
     await call.join(channel);
     await call.startCamera();
+    await settle();
     const front = cameraTracks[0]?.track;
     await call.setAudioDevices({
       input: "default",
@@ -803,7 +951,9 @@ describe("VoiceCall", () => {
     expect(front?.stopped).toBe(true);
     expect(cameraTracks.map((c) => c.besideOpen)).toEqual([false, false]);
     expect(call.state.localCamera).toBe(back);
-    expect(transports[0]?.closedProducers).not.toContain("p-camera");
+    // The same section sends the new camera, with nothing renegotiated.
+    expect(sendingOn("camera")?.sender.track).toBe(back);
+    expect(FakeSocket.instances[0]?.sent.filter((f) => f.type === "stopSending")).toEqual([]);
     // The camera it moved from ending, as iOS ends it, leaves the camera on; the one in use
     // ending turns it off.
     front?.end();
@@ -857,6 +1007,18 @@ describe("VoiceCall", () => {
     expect(call.state.cameraError).toBeNull();
   });
 
+  it("turns the camera off as unsent when the voice server refuses to receive it", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, cameraTracks } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    await settle();
+    FakeSocket.behaviour.set("near", "throttledSend");
+    await call.startCamera();
+    await settle();
+    expect(call.state).toMatchObject({ localCamera: null, cameraError: "unsent" });
+    expect(cameraTracks[0]?.track.stopped).toBe(true);
+  });
+
   it("offers no camera where the channel does not allow one", async () => {
     FakeSocket.behaviour = new Map();
     const { call, cameras } = makeCall({
@@ -872,56 +1034,48 @@ describe("VoiceCall", () => {
 
   it("shares a screen with its sound, shows others' screens, and stops when the capture ends", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, transports, screens, played } = makeCall({
+    const { call, screens, played, sendingOn } = makeCall({
       candidates: ["near"],
       latency: { near: 1 },
     });
     await call.join(channel);
     const socket = FakeSocket.instances[0];
     await call.startScreenShare();
+    await settle();
     expect(call.state.sharingScreen).toBe(true);
     expect(call.state.localScreen).toBe(screens[0]?.video);
-    const produced = socket?.sent.filter((f) => f.type === "produce");
-    expect(produced?.map((f) => `${f.kind}:${f.source}`)).toEqual([
-      "audio:microphone",
-      "video:screen",
-      "audio:screenAudio",
+    expect(socket?.sent.filter((f) => f.type === "send")).toEqual([
+      { type: "send", source: "microphone" },
+      { type: "send", source: "screen" },
+      { type: "send", source: "screenAudio" },
     ]);
-    // the picture starts at a high bitrate rather than climbing to it, the screen's sound goes
-    // out in stereo at a music bitrate, and the microphone keeps the defaults
-    expect(transports[0]?.codecOptions).toEqual([
-      { source: "screen", videoGoogleStartBitrate: 10_000 },
-      { source: "screenAudio", opusStereo: true, opusDtx: false, opusMaxAverageBitrate: 128_000 },
-    ]);
+    // The picture may spend up to its ceiling; the server's offer says the rest (a high start,
+    // the sound in stereo at a music bitrate), and the sound's sender is left as it is.
+    expect(sendingOn("screen")?.encodings).toEqual([{ maxBitrate: 25_000_000, maxFramerate: 60 }]);
+    expect(sendingOn("screen")?.sender.track).toBe(screens[0]?.video);
+    expect(sendingOn("screenAudio")?.encodings).toEqual([{}]);
+    expect(sendingOn("screenAudio")?.sender.track).toBe(screens[0]?.audio);
     expect(screens[0]?.video.contentHint).toBe("");
     // a second start while sharing is a no-op
     await call.startScreenShare();
     expect(screens).toHaveLength(1);
-    // another participant's screen arrives as a video consumer, shown rather than played
-    socket?.frame({
-      type: "newConsumer",
-      consumerId: "v1",
-      producerId: "p9",
-      user: "u2",
-      kind: "video",
-      source: "screen",
-      rtpParameters: {},
-      producerPaused: false,
-    });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(call.state.screens.map((s) => [s.user, s.consumerId])).toEqual([["u2", "v1"]]);
-    expect(played).toEqual([]);
-    expect(transports[1]?.consumed).toEqual(["v1"]);
-    socket?.frame({ type: "consumerClosed", consumerId: "v1" });
+    // another participant's screen, watched while shown, is shown rather than played
+    call.showVideo();
+    socket?.frame({ type: "sources", user: "u2", sources: [{ source: "screen", paused: false }] });
+    await settle();
+    expect(call.state.screens.map((s) => s.user)).toEqual(["u2"]);
+    expect(played).toEqual(["0"]);
+    socket?.frame({ type: "participantLeft", user: "u2" });
+    await settle();
     expect(call.state.screens).toEqual([]);
     // the user stops the capture from the browser's own control
     screens[0]?.video.end();
     expect(call.state.sharingScreen).toBe(false);
     expect(call.state.localScreen).toBeNull();
-    expect(transports[0]?.closedProducers).toEqual(["p-screen", "p-screenAudio"]);
-    expect(socket?.sent.filter((f) => f.type === "closeProducer").map((f) => f.producerId)).toEqual(
-      ["p-screen", "p-screenAudio"],
-    );
+    expect(socket?.sent.filter((f) => f.type === "stopSending").map((f) => f.source)).toEqual([
+      "screen",
+      "screenAudio",
+    ]);
     expect(screens[0]?.video.stopped && screens[0].audio.stopped).toBe(true);
     // sharing again, then leaving, releases the capture
     await call.startScreenShare();
@@ -946,135 +1100,104 @@ describe("VoiceCall", () => {
     });
     expect(screens).toHaveLength(0);
     expect(call.state.localScreen).toBe(prepared.video);
-    const produced = FakeSocket.instances[0]?.sent.filter((f) => f.type === "produce");
-    expect(produced?.map((f) => f.source)).toEqual(["microphone", "screen"]);
+    const sends = FakeSocket.instances[0]?.sent.filter((f) => f.type === "send");
+    expect(sends?.map((f) => f.source)).toEqual(["microphone", "screen"]);
     call.stopScreenShare();
     expect(prepared.video.stopped).toBe(true);
   });
 
   it("shares the browser's picture with sound from outside the browser in its place", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, transports, screens } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    const { call, screens } = makeCall({ candidates: ["near"], latency: { near: 1 } });
     await call.join(channel);
     const socket = FakeSocket.instances[0];
-    const started: unknown[] = [];
-    let stopped = 0;
-    const audio = {
-      start: (target: unknown) => {
-        started.push(target);
-        return Promise.resolve();
-      },
-      stop: () => {
-        stopped += 1;
-      },
-    };
-    await call.startScreenShare({ audio, contentHint: "motion" });
+    const audio = fakeSender(null);
+    await call.startScreenShare({ audio: audio.sender, contentHint: "motion" });
     expect(screens[0]?.video.contentHint).toBe("motion");
-    // the picture is the browser's; its own sound is dropped for the external one
-    expect(
-      socket?.sent.filter((f) => f.type === "produce").map((f) => `${f.kind}:${f.source}`),
-    ).toEqual(["audio:microphone", "video:screen"]);
-    expect(screens[0]?.audio.stopped).toBe(true);
-    expect(socket?.sent.filter((f) => f.type === "produceRtp")).toEqual([
-      { type: "produceRtp", source: "screenAudio" },
+    // the picture is the browser's; its own sound is dropped for the external one, which holds
+    // the capture connection and answers its offer
+    expect(socket?.sent.filter((f) => f.type === "send")).toEqual([
+      { type: "send", source: "microphone" },
+      { type: "send", source: "screen" },
+      { type: "send", source: "screenAudio", external: true },
     ]);
-    expect(started).toEqual([
-      {
-        ip: "192.0.2.10",
-        port: 40000,
-        ssrc: 1234,
-        payloadType: 96,
-        srtpCryptoSuite: "AES_CM_128_HMAC_SHA1_80",
-        srtpKeyBase64: "a2V5",
-      },
+    expect(screens[0]?.audio.stopped).toBe(true);
+    expect(audio.offers.map((o) => o.sections.map((s) => s.carries))).toEqual([["sending"]]);
+    expect(socket?.answers("capture")).toEqual([
+      { type: "answer", connection: "capture", revision: 1, sdp: "capture answer 1" },
     ]);
     expect(call.state).toMatchObject({ sharingScreen: true, localScreen: screens[0]?.video });
     // an external share cannot start alongside it
-    const external = { audio: false, start: () => Promise.resolve(), stop: () => undefined };
-    await call.startExternalScreenShare(external);
-    expect(socket?.sent.filter((f) => f.type === "produceRtp")).toHaveLength(1);
+    const external = fakeSender(false);
+    await call.startExternalScreenShare(external.sender as never);
+    expect(external.offers).toEqual([]);
     // stopping ends both the capture and the external sound
     call.stopScreenShare();
-    expect(stopped).toBe(1);
-    expect(transports[0]?.closedProducers).toEqual(["p-screen"]);
-    expect(socket?.sent.filter((f) => f.type === "closeProducer").map((f) => f.producerId)).toEqual(
-      ["rtp-screenAudio", "p-screen"],
-    );
+    expect(audio.stopped()).toBe(1);
+    expect(socket?.sent.filter((f) => f.type === "stopSending").map((f) => f.source)).toEqual([
+      "screen",
+      "screenAudio",
+    ]);
     expect(call.state).toMatchObject({ sharingScreen: false, localScreen: null });
     // sound that cannot start ends the share it was part of
-    const failing = { start: () => Promise.reject(new Error("no route")), stop: () => undefined };
-    await expect(call.startScreenShare({ audio: failing })).rejects.toThrow("no route");
+    const failing = fakeSender(null, new Error("no route"));
+    await expect(call.startScreenShare({ audio: failing.sender })).rejects.toThrow("no route");
     expect(call.state.sharingScreen).toBe(false);
     expect(screens[1]?.video.stopped).toBe(true);
   });
 
-  it("shares an external sender through RTP producers and previews it from the server", async () => {
+  it("shares an external sender on the capture connection and previews it from the server", async () => {
     FakeSocket.behaviour = new Map();
     const { call, played } = makeCall({ candidates: ["near"], latency: { near: 1 } });
     await call.join(channel);
     const socket = FakeSocket.instances[0];
-    const started: unknown[] = [];
-    let stopped = 0;
-    const share = {
-      audio: true,
-      start: (targets: unknown) => {
-        started.push(targets);
-        return Promise.resolve();
-      },
-      stop: () => {
-        stopped += 1;
-      },
-    };
-    await call.startExternalScreenShare(share);
-    expect(socket?.sent.slice(-2)).toEqual([
-      { type: "produceRtp", source: "screen" },
-      { type: "produceRtp", source: "screenAudio" },
+    const share = fakeSender(true);
+    call.showVideo();
+    await call.startExternalScreenShare(share.sender as never);
+    await settle();
+    expect(socket?.sent.filter((f) => f.type === "send").slice(-2)).toEqual([
+      { type: "send", source: "screen", external: true },
+      { type: "send", source: "screenAudio", external: true },
     ]);
-    const target = {
-      ip: "192.0.2.10",
-      port: 40000,
-      ssrc: 1234,
-      payloadType: 96,
-      srtpCryptoSuite: "AES_CM_128_HMAC_SHA1_80",
-      srtpKeyBase64: "a2V5",
-    };
-    expect(started).toEqual([{ video: target, audio: target }]);
-    expect(call.state).toMatchObject({ sharingScreen: true, localScreen: null });
-    // the preview is a consumer of the call's own producer
-    socket?.frame({
-      type: "newConsumer",
-      consumerId: "self1",
-      producerId: "rtp-screen",
-      user: me,
-      kind: "video",
-      source: "screen",
-      rtpParameters: {},
-      producerPaused: false,
+    // the sender answers the capture connection's offers, its first naming the picture, its
+    // second the sound too
+    expect(
+      share.offers.map((o) => o.sections.map((s) => s.carries === "sending" && s.source)),
+    ).toEqual([["screen"], ["screen", "screenAudio"]]);
+    expect(socket?.answers("capture").map((a) => a.revision)).toEqual([1, 2]);
+    // the preview is the call's own share, watched back from the server, and is no one's screen
+    expect(socket?.sent.filter((f) => f.type === "watch").at(-1)).toEqual({
+      type: "watch",
+      video: [{ user: me, source: "screen" }],
     });
-    await new Promise((r) => setTimeout(r, 0));
+    expect(call.state.sharingScreen).toBe(true);
     expect(call.state.localScreen).not.toBeNull();
     expect(call.state.screens).toEqual([]);
-    expect(played).toEqual([]);
+    expect(played).toEqual(["0"]);
     // a second external share while one runs is a no-op
-    await call.startExternalScreenShare(share);
-    expect(started).toHaveLength(1);
-    call.stopScreenShare();
-    expect(stopped).toBe(1);
-    expect(socket?.sent.slice(-2)).toEqual([
-      { type: "closeProducer", producerId: "rtp-screen" },
-      { type: "closeProducer", producerId: "rtp-screenAudio" },
-    ]);
+    await call.startExternalScreenShare(share.sender as never);
+    expect(share.offers).toHaveLength(2);
+    // the server ending the share (its capture connection failed) ends it here too
+    socket?.frame({ type: "sources", user: me, sources: [{ source: "screen", paused: false }] });
+    socket?.frame({ type: "sources", user: me, sources: [] });
+    await settle();
+    expect(share.stopped()).toBe(1);
     expect(call.state).toMatchObject({ sharingScreen: false, localScreen: null });
-    // a share whose sender cannot start is closed again; one without audio asks for one producer
-    const failing = {
-      audio: false,
-      start: () => Promise.reject(new Error("no route")),
-      stop: () => undefined,
-    };
-    await expect(call.startExternalScreenShare(failing)).rejects.toThrow("no route");
+    expect(socket?.sent.filter((f) => f.type === "watch").at(-1)).toEqual({
+      type: "watch",
+      video: [],
+    });
+    // a share whose sender cannot start is stopped, and its start rejects
+    const failing = fakeSender(false, new Error("no route"));
+    await expect(call.startExternalScreenShare(failing.sender as never)).rejects.toThrow(
+      "no route",
+    );
     expect(call.state.sharingScreen).toBe(false);
-    expect(socket?.sent.at(-1)).toEqual({ type: "closeProducer", producerId: "rtp-screen" });
-    expect(socket?.sent.filter((f) => f.type === "produceRtp")).toHaveLength(3);
+    expect(failing.stopped()).toBe(1);
+    expect(socket?.sent.slice(-2)).toEqual([
+      { type: "stopSending", source: "screen" },
+      { type: "watch", video: [] },
+    ]);
   });
 
   it("takes a moderator's mute as its own state and a kick as a reason to tell the user", async () => {
@@ -1083,6 +1206,7 @@ describe("VoiceCall", () => {
     await call.join(channel);
     const socket = FakeSocket.instances[0];
     socket?.frame({ type: "participantState", user: me, muted: true, deafened: false });
+    await settle();
     expect(call.state.muted).toBe(true);
     // The community's mute, as its event tells, until a moderator lifts it.
     expect(call.state.serverMuted).toBe(false);
@@ -1091,18 +1215,25 @@ describe("VoiceCall", () => {
     call.setServerMuted(false);
     expect(call.state.serverMuted).toBe(false);
     socket?.frame({ type: "participantState", user: "someone-else", muted: false, deafened: true });
+    await settle();
     expect(call.state).toMatchObject({ muted: true, deafened: false });
     socket?.frame({ type: "kicked", reason: "replaced" });
+    await settle();
     expect(call.state).toMatchObject({ status: "idle", endedReason: null });
     await call.join(channel);
-    socket?.frame({ type: "kicked", reason: "kicked" });
     FakeSocket.instances[1]?.frame({ type: "kicked", reason: "kicked" });
+    await settle();
     expect(call.state).toMatchObject({ status: "idle", endedReason: "kicked" });
     call.acknowledgeEnd();
-    await call.join(channel);
-    FakeSocket.instances[2]?.frame({ type: "kicked", reason: "serverStopping" });
-    expect(call.state.status).toBe("rejoining");
-    expect(timers.at(-1)?.delay).toBe(REJOIN_DELAY_MAX_MS / 2);
+    // A server going down, or one that never had this client's media, is rejoined.
+    for (const reason of ["serverStopping", "connectionFailed"]) {
+      await call.join(channel);
+      FakeSocket.instances.at(-1)?.frame({ type: "kicked", reason });
+      await settle();
+      expect(call.state.status).toBe("rejoining");
+      expect(timers.at(-1)?.delay).toBe(REJOIN_DELAY_MAX_MS / 2);
+      call.leave();
+    }
   });
 
   it("mutes at once but shows itself unmuted only once the server says so", async () => {
@@ -1110,17 +1241,17 @@ describe("VoiceCall", () => {
     const { call, microphoneTracks } = makeCall({ candidates: ["near"], latency: { near: 1 } });
     await call.join(channel);
     const socket = FakeSocket.instances[0];
-    const track = microphoneTracks[0] as unknown as { enabled: boolean };
-    expect(track.enabled).toBe(true);
+    const track = microphoneTracks[0];
+    expect(track?.enabled).toBe(true);
     call.setMuted(true);
     expect(call.state.muted).toBe(true);
-    expect(track.enabled).toBe(false);
+    expect(track?.enabled).toBe(false);
     expect(socket?.sent.at(-1)).toEqual({ type: "setState", muted: true, deafened: false });
     // Unmuting waits for the server's word, and a refusal leaves the user muted and told why.
     call.setMuted(false);
     expect(socket?.sent.at(-1)).toEqual({ type: "setState", muted: false, deafened: false });
     expect(call.state.muted).toBe(true);
-    expect(track.enabled).toBe(false);
+    expect(track?.enabled).toBe(false);
     socket?.frame({
       type: "error",
       detail: "too many setState frames; try again in 4s",
@@ -1128,6 +1259,7 @@ describe("VoiceCall", () => {
       retryAfterSeconds: 4,
       refused: "setState",
     });
+    await settle();
     expect(call.state).toMatchObject({ muted: true, stateRefused: { retryAfterSeconds: 4 } });
     // Deafening meanwhile does not ask again for the refused unmute.
     call.setDeafened(true);
@@ -1136,20 +1268,23 @@ describe("VoiceCall", () => {
     call.setMuted(false);
     // The answer to the deafen, sent before the unmute, keeps the user muted.
     socket?.frame({ type: "participantState", user: me, muted: true, deafened: true });
+    await settle();
     expect(call.state.muted).toBe(true);
     socket?.frame({ type: "participantState", user: me, muted: false, deafened: true });
+    await settle();
     expect(call.state).toMatchObject({ muted: false, deafened: true });
-    expect(track.enabled).toBe(true);
+    expect(track?.enabled).toBe(true);
     // A late answer to an earlier unmute never shows the user audible after they muted.
     call.setMuted(true);
     socket?.frame({ type: "participantState", user: me, muted: false, deafened: true });
+    await settle();
     expect(call.state.muted).toBe(true);
-    expect(track.enabled).toBe(false);
+    expect(track?.enabled).toBe(false);
   });
 
   it("captures the preferred microphone, swaps it mid-call, and moves playback to the preferred speaker", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, transports, microphones, outputs } = makeCall({
+    const { call, microphones, microphoneTracks, outputs, sendingOn } = makeCall({
       candidates: ["near"],
       latency: { near: 1 },
     });
@@ -1159,14 +1294,17 @@ describe("VoiceCall", () => {
     await call.setAudioDevices({ input: micA, output: spkA });
     expect(outputs).toEqual(["spk-a"]);
     await call.join(channel);
+    await settle();
     expect(microphones).toEqual(["mic-a"]);
     await call.setAudioDevices({ input: micB, output: spkA });
     expect(microphones).toEqual(["mic-a", "mic-b"]);
-    expect(transports[0]?.replaced).toHaveLength(1);
+    // The section the microphone is sent on takes the new one, the old one closed.
+    expect(sendingOn("microphone")?.sender.track).toBe(microphoneTracks[1]);
+    expect(microphoneTracks[0]?.stopped).toBe(true);
     expect(outputs).toEqual(["spk-a"]);
     await call.setAudioDevices({ input: micB, output: "default" });
     expect(outputs).toEqual(["spk-a", null]);
-    expect(transports[0]?.replaced).toHaveLength(1);
+    expect(microphones).toHaveLength(2);
     call.leave();
     await call.setAudioDevices({ input: { id: "mic-c", label: "C" }, output: "default" });
     expect(microphones).toEqual(["mic-a", "mic-b"]);
@@ -1182,27 +1320,24 @@ describe("VoiceCall", () => {
     expect(inputVolumes).toEqual(["set=1.5", "open=1.5", "set=0.5", "open=0.5"]);
   });
 
-  it("moves to another call keeping the microphone and the loaded device", async () => {
+  it("moves to another call keeping the microphone", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, transports, microphones, microphoneTracks, loads } = makeCall({
+    const { call, connections, microphones, microphoneTracks, sendingOn } = makeCall({
       candidates: ["near"],
       latency: { near: 1 },
     });
     await call.join(channel);
     await call.join(otherChannel);
+    await settle();
     expect(call.state).toMatchObject({ status: "connected", channelId: otherChannel });
-    const [first, second] = FakeSocket.instances;
+    const [first] = FakeSocket.instances;
     expect(first?.sent.at(-1)?.type).toBe("leave");
     expect(first?.closed).toBe(true);
-    expect(transports.slice(0, 2).every((t) => t.closed)).toBe(true);
+    expect(connections[0]?.closed).toBe(true);
     // One microphone, opened once and still open, now sent into the second call.
     expect(microphones).toHaveLength(1);
     expect(microphoneTracks[0]?.stopped).toBe(false);
-    expect(transports[2]?.produced).toEqual(["p-microphone"]);
-    expect(loads.count).toBe(1);
-    // Both transports are asked for before either answer arrives.
-    const log = second?.log ?? [];
-    expect(log.lastIndexOf(">createTransport")).toBeLessThan(log.indexOf("<transportCreated"));
+    expect(sendingOn("microphone")?.sender.track).toBe(microphoneTracks[0]);
     call.leave();
     expect(microphoneTracks[0]?.stopped).toBe(true);
   });
@@ -1230,7 +1365,7 @@ describe("VoiceCall", () => {
     expect(call.state.status).toBe("connected");
   });
 
-  it("applies each user's volume to their audio, present and future", async () => {
+  it("applies each user's volume to the slot that carries them, as it changes hands", async () => {
     FakeSocket.behaviour = new Map();
     const { call, volumes } = makeCall({
       candidates: ["near"],
@@ -1238,27 +1373,21 @@ describe("VoiceCall", () => {
       userVolume: (userId) => (userId === "quiet" ? 1.5 : 1),
     });
     await call.join(channel);
+    await settle();
     const socket = FakeSocket.instances[0];
-    const arrive = (consumerId: string, user: string) => {
-      socket?.frame({
-        type: "newConsumer",
-        consumerId,
-        producerId: `p-${consumerId}`,
-        user,
-        kind: "audio",
-        source: "microphone",
-        rtpParameters: {},
-        producerPaused: false,
-      });
-    };
-    arrive("a1", "quiet");
-    arrive("a2", "loud");
-    await new Promise((r) => setTimeout(r, 0));
-    expect(volumes).toEqual(["a1=1.5"]);
-    call.setUserVolume("loud", 0.25);
-    expect(volumes).toEqual(["a1=1.5", "a2=0.25"]);
+    socket?.frame({ type: "slots", assignments: [{ slot: 0, user: "quiet" }] });
+    await settle();
+    expect(volumes).toEqual(["0=1", "0=1.5"]);
+    call.setUserVolume("quiet", 0.25);
+    expect(volumes.at(-1)).toBe("0=0.25");
+    // The slot moving to someone else takes their volume, and the first's no longer reaches it.
+    socket?.frame({ type: "slots", assignments: [{ slot: 0, user: "loud" }] });
+    await settle();
+    expect(volumes.at(-1)).toBe("0=1");
+    const before = volumes.length;
+    call.setUserVolume("quiet", 2);
     call.setUserVolume("nobody", 2);
-    expect(volumes).toHaveLength(2);
+    expect(volumes).toHaveLength(before);
   });
 
   it("sets a person's stream apart from their voice", async () => {
@@ -1269,31 +1398,20 @@ describe("VoiceCall", () => {
       userVolume: (_user, source) => (source === "screenAudio" ? 0.5 : 1.5),
     });
     await call.join(channel);
+    await settle();
     const socket = FakeSocket.instances[0];
-    for (const [consumerId, source] of [
-      ["voice", "microphone"],
-      ["stream", "screenAudio"],
-    ] as const) {
-      socket?.frame({
-        type: "newConsumer",
-        consumerId,
-        producerId: `p-${consumerId}`,
-        user: "sharer",
-        kind: "audio",
-        source,
-        rtpParameters: {},
-        producerPaused: false,
-      });
-    }
-    await new Promise((r) => setTimeout(r, 0));
-    expect(volumes).toEqual(["voice=1.5", "stream=0.5"]);
+    socket?.frame({ type: "slots", assignments: [{ slot: 0, user: "sharer" }] });
+    socket?.watched.push({ mid: "s9", kind: "audio", carries: "shareAudio", user: "sharer" });
+    socket?.offer();
+    await settle();
+    expect(volumes).toEqual(["0=1", "0=1.5", "s9=0.5"]);
     // Their stream's volume leaves their voice alone, and theirs leaves the stream alone.
     call.setUserVolume("sharer", 0, "screenAudio");
     call.setUserVolume("sharer", 1.25);
-    expect(volumes).toEqual(["voice=1.5", "stream=0.5", "stream=0", "voice=1.25"]);
+    expect(volumes.slice(3)).toEqual(["s9=0", "0=1.25"]);
   });
 
-  it("sets every consumer's gain again when who is silenced changes", async () => {
+  it("sets every received sound's gain again when who is silenced changes", async () => {
     FakeSocket.behaviour = new Map();
     let silenced = new Set<string>();
     const { call, volumes } = makeCall({
@@ -1302,25 +1420,22 @@ describe("VoiceCall", () => {
       userVolume: (userId) => (silenced.has(userId) ? 0 : 1),
     });
     await call.join(channel);
-    for (const [consumerId, user] of [
-      ["a1", "blocked-elsewhere"],
-      ["a2", "friend"],
-    ] as const) {
-      FakeSocket.instances[0]?.frame({
-        type: "newConsumer",
-        consumerId,
-        producerId: `p-${consumerId}`,
-        user,
-        kind: "audio",
-        source: "microphone",
-        rtpParameters: {},
-        producerPaused: false,
-      });
-    }
-    await new Promise((r) => setTimeout(r, 0));
+    await settle();
+    const socket = FakeSocket.instances[0];
+    socket?.sending.push({ mid: "s1", kind: "audio", carries: "audioSlot", slot: 1 });
+    socket?.offer();
+    socket?.frame({
+      type: "slots",
+      assignments: [
+        { slot: 0, user: "blocked-elsewhere" },
+        { slot: 1, user: "friend" },
+      ],
+    });
+    await settle();
     silenced = new Set(["blocked-elsewhere"]);
+    volumes.splice(0);
     call.refreshVolumes();
-    expect(volumes).toEqual(["a1=0", "a2=1"]);
+    expect(volumes).toEqual(["0=0", "s1=1"]);
   });
 
   it("ranks unreachable servers last and builds signalling URLs", () => {
@@ -1337,6 +1452,78 @@ describe("VoiceCall", () => {
   });
 });
 
+describe("VoiceCall resuming", () => {
+  it("takes its place back on a socket that closed, keeping its connection and media", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, connections, timers, played } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+    });
+    await call.join(channel);
+    await settle();
+    const first = FakeSocket.instances[0];
+    call.showVideo();
+    call.setMuted(true);
+    await settle();
+    first?.drop();
+    expect(call.state.status).toBe("connected");
+    // Muting while away reaches the server once the call is back.
+    call.setDeafened(true);
+    timers.at(-1)?.fn();
+    await settle();
+    const second = FakeSocket.instances[1];
+    expect(second?.url).toBe(first?.url);
+    expect(second?.sent[0]).toEqual({ type: "resume", secret: "secret-1" });
+    expect(requests(second)).toEqual(["resume", "watch", "setState"]);
+    expect(second?.sent.filter((f) => f.type === "setState")).toEqual([
+      { type: "setState", muted: true, deafened: true },
+    ]);
+    // The server restating an offer already answered is answered again, never applied twice.
+    expect(connections).toHaveLength(1);
+    expect(connections[0]?.offers).not.toContain("restated");
+    expect(second?.answers()[0]?.revision).toBe(first?.answers().at(-1)?.revision);
+    expect(played).toEqual(["0"]);
+    expect(call.state.status).toBe("connected");
+    // A second drop resumes with the secret the resume gave.
+    second?.drop();
+    timers.at(-1)?.fn();
+    await settle();
+    expect(FakeSocket.instances[2]?.sent[0]).toEqual({ type: "resume", secret: "secret-2" });
+  });
+
+  it("rejoins once the server refuses the secret", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, timers, calls } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    FakeSocket.behaviour.set("near", "refuse");
+    FakeSocket.instances[0]?.drop();
+    timers.at(-1)?.fn();
+    await settle();
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(call.state.status).toBe("rejoining");
+    FakeSocket.behaviour.set("near", "ready");
+    timers.at(-1)?.fn();
+    await settle();
+    expect(call.state.status).toBe("connected");
+    expect(calls.filter((c) => c.endsWith("/voice/join"))).toHaveLength(2);
+  });
+
+  it("tries again while the server cannot be reached, then rejoins", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, timers } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    FakeSocket.unreachable.add("near");
+    FakeSocket.instances[0]?.drop();
+    for (let attempt = 0; attempt < RESUME_ATTEMPTS; attempt += 1) {
+      timers.at(-1)?.fn();
+      await settle();
+      expect(call.state.status).toBe(attempt < RESUME_ATTEMPTS - 1 ? "connected" : "rejoining");
+    }
+    expect(FakeSocket.instances).toHaveLength(1 + RESUME_ATTEMPTS);
+    expect(FakeSocket.instances.slice(1).every((s) => s.sent.length === 0)).toBe(true);
+  });
+});
+
 describe("VoiceCall after its server goes silent", () => {
   const joins = (calls: string[]) => calls.filter((c) => c.endsWith("/voice/join")).length;
 
@@ -1345,14 +1532,15 @@ describe("VoiceCall after its server goes silent", () => {
     const { call, calls, timers } = makeCall({ candidates: ["near"], latency: { near: 1 } });
     await call.join(channel);
     expect(joins(calls)).toBe(1);
-    // The socket closes without a word; the API server, not yet knowing, offers the same server.
+    // The socket closes without a word and will not resume; the API server, not yet knowing,
+    // offers the same server.
     FakeSocket.behaviour.set("near", "refuse");
-    FakeSocket.instances[0]?.onclose?.();
+    FakeSocket.instances[0]?.drop();
+    timers.at(-1)?.fn();
+    await settle();
     expect(call.state.status).toBe("rejoining");
     timers.at(-1)?.fn();
-    for (let i = 0; i < 6; i += 1) {
-      await new Promise((r) => setTimeout(r, 0));
-    }
+    await settle();
     expect(joins(calls)).toBe(2);
     expect(call.state.status).toBe("rejoining");
     const wait = timers.at(-1);
@@ -1360,9 +1548,7 @@ describe("VoiceCall after its server goes silent", () => {
     // By then the server has gone unreported for as long and the offer names a living one.
     FakeSocket.behaviour.set("near", "ready");
     wait?.fn();
-    for (let i = 0; i < 6; i += 1) {
-      await new Promise((r) => setTimeout(r, 0));
-    }
+    await settle();
     expect(joins(calls)).toBe(3);
     expect(call.state.status).toBe("connected");
     expect(DEAD_SERVER_RETRY_MS).toBe(60_000);
@@ -1373,16 +1559,14 @@ describe("VoiceCall after its server goes silent", () => {
     const { call, calls, timers } = makeCall({ candidates: ["near"], latency: { near: 1 } });
     await call.join(channel);
     FakeSocket.behaviour.set("near", "refuse");
-    FakeSocket.instances[0]?.onclose?.();
+    FakeSocket.instances[0]?.drop();
     timers.at(-1)?.fn();
-    for (let i = 0; i < 6; i += 1) {
-      await new Promise((r) => setTimeout(r, 0));
-    }
+    await settle();
+    timers.at(-1)?.fn();
+    await settle();
     expect(call.state.status).toBe("rejoining");
     timers.at(-1)?.fn();
-    for (let i = 0; i < 6; i += 1) {
-      await new Promise((r) => setTimeout(r, 0));
-    }
+    await settle();
     expect(call.state.status).toBe("failed");
     expect(call.state.errorKind).toBe("server");
     expect(joins(calls)).toBe(3);
@@ -1393,9 +1577,7 @@ describe("VoiceCall after its server goes silent", () => {
     FakeSocket.behaviour.set("near", "refuse");
     call.onSessionEnded({ id: session, channel, reason: "serverLost" });
     timers.at(-1)?.fn();
-    for (let i = 0; i < 6; i += 1) {
-      await new Promise((r) => setTimeout(r, 0));
-    }
+    await settle();
     expect(call.state.status).toBe("failed");
   });
 

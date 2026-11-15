@@ -10,14 +10,10 @@ import {
   type GameCaptureBridge,
 } from "./gameCapture";
 
-const target = {
-  ip: "192.0.2.10",
-  port: 40000,
-  ssrc: 7,
-  payloadType: 96,
-  srtpCryptoSuite: "AES_CM_128_HMAC_SHA1_80",
-  srtpKeyBase64: "a2V5",
-};
+/** The voice server's offers of the capture connection, by revision. */
+function offer(revision: number) {
+  return { revision, sdp: `offer ${String(revision)}`, sections: [] };
+}
 
 /** A bridge that records what it is asked to do and lets a test end the capture. */
 function recordingBridge(fail?: Error) {
@@ -26,16 +22,19 @@ function recordingBridge(fail?: Error) {
   const bridge: GameCaptureBridge = {
     kinds: () => Promise.resolve({ kinds: [], applicationAudio: null, testMedia: null }),
     start: (options) => {
-      const audio =
-        options.audio === undefined
-          ? "none"
-          : `${options.audio.kind}@${String(options.audio.rtp.port)}`;
-      calls.push(`start ${options.kind} ${String(options.rtp.port)} audio=${audio}`);
-      return fail === undefined ? Promise.resolve() : Promise.reject(fail);
+      const audio = options.audio === undefined ? "none" : options.audio.kind;
+      calls.push(`start ${options.kind} (${options.offer}) audio=${audio}`);
+      return fail === undefined
+        ? Promise.resolve(`answer to ${options.offer}`)
+        : Promise.reject(fail);
     },
-    startAudio: (audio) => {
-      calls.push(`startAudio ${audio.kind} ${audio.settings ?? ""} ${String(audio.rtp.port)}`);
-      return fail === undefined ? Promise.resolve() : Promise.reject(fail);
+    startAudio: ({ audio, offer: sdp }) => {
+      calls.push(`startAudio ${audio.kind} ${audio.settings ?? ""} (${sdp})`);
+      return fail === undefined ? Promise.resolve(`answer to ${sdp}`) : Promise.reject(fail);
+    },
+    answer: (sdp) => {
+      calls.push(`answer (${sdp})`);
+      return Promise.resolve(`answer to ${sdp}`);
     },
     stop: () => {
       calls.push("stop");
@@ -97,9 +96,7 @@ describe("captureChoice", () => {
 });
 
 describe("gameCaptureShare", () => {
-  const targets = { video: target, audio: { ...target, port: 40001, payloadType: 100 } };
-
-  it("starts the helper at the producers' targets and stops it, watching for its death meanwhile", async () => {
+  it("starts the helper with the first offer, answers the next through it, and stops it, watching for its death meanwhile", async () => {
     const { bridge, calls, ended } = recordingBridge();
     let endings = 0;
     const share = gameCaptureShare(
@@ -111,12 +108,13 @@ describe("gameCaptureShare", () => {
       },
     );
     expect(share.audio).toBe(true);
-    await share.start(targets);
-    expect(calls).toEqual(["start color_source 40000 audio=@40001"]);
+    expect(await share.answer(offer(1))).toBe("answer to offer 1");
+    expect(await share.answer(offer(2))).toBe("answer to offer 2");
+    expect(calls).toEqual(["start color_source (offer 1) audio=", "answer (offer 2)"]);
     ended.listener?.();
     expect(endings).toBe(1);
     share.stop();
-    expect(calls).toEqual(["start color_source 40000 audio=@40001", "stop"]);
+    expect(calls.at(-1)).toBe("stop");
     expect(ended.listener).toBeNull();
   });
 
@@ -129,8 +127,8 @@ describe("gameCaptureShare", () => {
       () => undefined,
     );
     expect(declined.audio).toBe(false);
-    await expect(declined.start({ video: target, audio: null })).rejects.toThrow("no such source");
-    expect(calls).toEqual(["start nope 40000 audio=none"]);
+    await expect(declined.answer(offer(1))).rejects.toThrow("no such source");
+    expect(calls).toEqual(["start nope (offer 1) audio=none"]);
     expect(ended.listener).toBeNull();
   });
 });
@@ -139,15 +137,15 @@ describe("applicationAudioShare", () => {
   const kind = { kind: "aspen_pipewire_app_audio", property: "", targets: [] };
   const doom = { name: "doom.exe", pid: 20, settings: { application: "doom.exe", pid: 20 } };
 
-  it("captures the chosen application's sound alone at the producer's target", async () => {
+  it("captures the chosen application's sound alone on the connection the first offer offers", async () => {
     const { bridge, calls, ended } = recordingBridge();
     let endings = 0;
     const audio = applicationAudioShare(bridge, kind, doom, () => {
       endings += 1;
     });
-    await audio.start({ ...target, port: 40001, payloadType: 100 });
+    expect(await audio.answer(offer(1))).toBe("answer to offer 1");
     expect(calls).toEqual([
-      'startAudio aspen_pipewire_app_audio {"application":"doom.exe","pid":20} 40001',
+      'startAudio aspen_pipewire_app_audio {"application":"doom.exe","pid":20} (offer 1)',
     ]);
     ended.listener?.();
     expect(endings).toBe(1);
@@ -159,7 +157,7 @@ describe("applicationAudioShare", () => {
   it("stops watching the helper when it refuses", async () => {
     const { bridge, ended } = recordingBridge(new Error("PipeWire did not answer"));
     const audio = applicationAudioShare(bridge, kind, doom, () => undefined);
-    await expect(audio.start(target)).rejects.toThrow("PipeWire did not answer");
+    await expect(audio.answer(offer(1))).rejects.toThrow("PipeWire did not answer");
     expect(ended.listener).toBeNull();
   });
 });

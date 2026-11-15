@@ -1,14 +1,13 @@
 /**
- * The browser's side of a voice call: the microphone through `getUserMedia`, mediasoup-client's
- * `Device` for the WebRTC transports, and playback through hidden `<audio>` elements, one per
- * consumer, appended to the document so autoplay policy sees a playing element per track.
+ * The browser's side of a voice call: the microphone through `getUserMedia`, an
+ * `RTCPeerConnection` for the call, and playback through hidden `<audio>` elements, one per
+ * received track, appended to the document so autoplay policy sees a playing element per track.
  */
 
-import { Device } from "mediasoup-client";
 import { DEFAULT_DEVICE, type DeviceChoice, resolveDevice } from "./preferences";
 import { soundsEnded } from "./soundActivity";
 import { CameraError } from "./voice";
-import type { ScreenCapture, VoiceDevice, VoiceMedia } from "./voiceMedia";
+import type { CallConnection, ScreenCapture, VoiceMedia } from "./voiceMedia";
 
 /**
  * The longest a stopped microphone is kept open, capturing for nothing, while the app's sounds
@@ -50,7 +49,7 @@ const SCREEN_QUALITY: MediaTrackConstraints = {
 };
 
 /**
- * One playing consumer: the element that plays it and, when the browser has Web Audio, the
+ * One playing track: the element that plays it and, when the browser has Web Audio, the
  * gain node that scales it. Web Audio is used because an element's own volume stops at 1 and
  * a quiet person needs more.
  */
@@ -70,7 +69,7 @@ interface Player {
 export function browserVoiceMedia(): VoiceMedia {
   const players = new Map<string, Player>();
   /**
-   * The context the microphone and every consumer play through, open only while one of them
+   * The context the microphone and every received track play through, open only while one of them
    * uses it (`closeWhenUnused`), so each call opens its own. One left open between calls breaks
    * Web Audio on iOS: once the app has gone to the background with nothing playing (the phone
    * locked between calls), WebKit stops running every audio context of the page, new ones too,
@@ -147,9 +146,11 @@ export function browserVoiceMedia(): VoiceMedia {
     }
   };
   return {
-    createDevice(): Promise<VoiceDevice> {
-      // The mediasoup-client types are the same shapes narrowed by `VoiceDevice`.
-      return Promise.resolve(new Device() as unknown as VoiceDevice);
+    createConnection(): Promise<CallConnection> {
+      // The voice server offers every media section on one transport, and multiplexes RTCP.
+      return Promise.resolve(
+        new RTCPeerConnection({ bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" }),
+      );
     },
     async getMicrophone(choice: DeviceChoice, gain: number): Promise<MediaStreamTrack> {
       const deviceId = await deviceIdFor(choice, "audioinput");
@@ -246,10 +247,10 @@ export function browserVoiceMedia(): VoiceMedia {
       await video.applyConstraints(SCREEN_QUALITY).catch(() => undefined);
       return { video, audio: stream.getAudioTracks()[0] ?? null };
     },
-    play(consumerId: string, track: MediaStreamTrack): void {
+    play(id: string, track: MediaStreamTrack): void {
       const audio = document.createElement("audio");
       audio.autoplay = true;
-      audio.dataset.voiceConsumer = consumerId;
+      audio.dataset.voiceTrack = id;
       audio.style.display = "none";
       const stream = new MediaStream([track]);
       const player: Player = { audio, pull: null, source: null, gain: null, destination: null };
@@ -270,13 +271,13 @@ export function browserVoiceMedia(): VoiceMedia {
         audio.srcObject = stream;
       }
       document.body.append(audio);
-      players.set(consumerId, player);
+      players.set(id, player);
       void route(audio)
         .then(() => audio.play())
         .catch(() => undefined);
     },
-    stop(consumerId: string): void {
-      const player = players.get(consumerId);
+    stop(id: string): void {
+      const player = players.get(id);
       if (player !== undefined) {
         player.source?.disconnect();
         player.gain?.disconnect();
@@ -285,12 +286,12 @@ export function browserVoiceMedia(): VoiceMedia {
         if (player.pull !== null) {
           player.pull.srcObject = null;
         }
-        players.delete(consumerId);
+        players.delete(id);
         closeWhenUnused();
       }
     },
-    setVolume(consumerId: string, gain: number): void {
-      const player = players.get(consumerId);
+    setVolume(id: string, gain: number): void {
+      const player = players.get(id);
       if (player === undefined) {
         return;
       }

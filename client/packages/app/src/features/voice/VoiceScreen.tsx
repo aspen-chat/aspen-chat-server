@@ -11,7 +11,7 @@ import {
   SpeakerSlashIcon,
 } from "@phosphor-icons/react";
 import { useParams } from "@tanstack/react-router";
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "react-aria-components";
 import {
   useBlocked,
@@ -121,6 +121,8 @@ export function CallStage({
   const voice = useChannelVoice(channel.id);
   const wizard = useIdWizard();
   const inThisCall = call.status === "connected" && call.channelId === channel.id;
+  // The call receives video only while a stage of it shows the tiles.
+  useEffect(() => (inThisCall ? sync.voice.showVideo() : undefined), [sync, inThisCall]);
   const mayJoin = useChannelCan(channel.id, "joinVoice");
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const tiles = useRef<HTMLDivElement>(null);
@@ -159,7 +161,7 @@ export function CallStage({
         ...call.screens
           .filter((screen) => !silenced.has(screen.user))
           .map((screen) => ({
-            id: screen.consumerId,
+            id: screen.id,
             user: screen.user,
             track: screen.track,
           })),

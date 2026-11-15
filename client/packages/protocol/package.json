@@ -13,15 +13,17 @@
     "codegen": "tsx scripts/codegen.ts",
     "build": "node node_modules/typescript-7/bin/tsc --noEmit",
     "typecheck": "node node_modules/typescript-7/bin/tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:calls": "vite build calls",
+    "calls": "tsx calls/drive.ts"
   },
   "dependencies": {
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
-    "mediasoup-client": "^3.24.5",
     "openapi-fetch": "^0.17.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@types/node": "^26.6.4",
     "json-schema-to-typescript": "^16.0.0",
     "openapi-typescript": "^7.13.0",

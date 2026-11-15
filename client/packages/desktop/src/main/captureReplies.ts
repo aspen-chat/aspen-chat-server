@@ -16,8 +16,11 @@ export type Reply =
       /** Whether the helper can capture a picture at all (a build with libobs). */
       pictures: boolean;
     }
-  /** `encoder` is the libobs encoder a started picture goes through; a start alone carries it. */
-  | { type: "done"; id: number; encoder?: string }
+  /**
+   * `encoder` is the libobs encoder a started picture goes through, which a start alone carries;
+   * `answer` the capture connection's answer, which a start and an `answer` carry.
+   */
+  | { type: "done"; id: number; encoder?: string; answer?: string }
   | { type: "failed"; id: number; reason: string };
 
 /**

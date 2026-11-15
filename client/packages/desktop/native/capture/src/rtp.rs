@@ -1,51 +1,28 @@
-//! The SRTP sender: encoded frames in (H.264 NAL units or Opus packets, one sender per stream),
-//! SRTP to the voice server's plain transport out, with the RTCP that comes back acted on. The voice server (mediasoup) learns where to send RTCP from
-//! the first packet it receives, so RTP and RTCP share this one socket.
+//! The capture connection: a WebRTC peer (str0m) of the voice server's own, holding the
+//! connection the server offers for what this helper sends, and the senders that hand it encoded
+//! frames (H.264 NAL units or Opus packets, one sender per stream).
 //!
-//! What the RTCP does: a NACK resends the packets it names from a buffer of recent ones; a
-//! receiver estimate (REMB) becomes the encoder's bitrate, within the limits the capture was
-//! started with; picture loss and intra requests are counted and otherwise left to the short
-//! keyframe interval, since libobs has no way to force a keyframe on demand.
+//! The renderer passes the server's offers through the shell (`connect` for the first,
+//! `renegotiate` for each after, an ICE restart among them) and the answers back; the helper
+//! then reaches the server itself, by ICE and DTLS over UDP from one socket on the interface its
+//! route to the server takes. str0m packetizes the frames, answers NACKs from what it sent,
+//! writes the sender reports, and estimates the bandwidth from the server's transport-wide
+//! feedback; that estimate becomes the video encoder's bitrate, within the limits the capture
+//! was started with. Keyframe requests are counted and otherwise left to the short keyframe
+//! interval, since libobs has no way to force a keyframe on demand.
 
-use bytes::Bytes;
-use rtcp::packet::Packet as RtcpPacket;
-use rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
-use rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
-use rtcp::payload_feedbacks::receiver_estimated_maximum_bitrate::ReceiverEstimatedMaximumBitrate;
-use rtcp::sender_report::SenderReport;
-use rtcp::transport_feedbacks::transport_layer_nack::TransportLayerNack;
-use rtp::codecs::h264::H264Payloader;
-use rtp::codecs::opus::OpusPayloader;
-use rtp::packetizer::{Packetizer, new_packetizer};
-use rtp::sequence::new_random_sequencer;
-use serde::Deserialize;
-use std::collections::VecDeque;
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use webrtc_srtp::context::Context;
-use webrtc_srtp::protection_profile::ProtectionProfile;
-use webrtc_util::marshal::Marshal;
+use std::time::{Duration, Instant};
+use str0m::bwe::{Bitrate, BweKind};
+use str0m::change::SdpOffer;
+use str0m::format::Codec;
+use str0m::media::{Direction, Frequency, MediaKind, MediaTime, Mid};
+use str0m::net::{Protocol, Receive};
+use str0m::{Candidate, Event, Input, Output, Rtc};
 
-/// Where and how to send, as the voice server answered `produceRtp`.
-#[derive(Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct RtpTarget {
-    pub ip: IpAddr,
-    pub port: u16,
-    pub ssrc: u32,
-    pub payload_type: u8,
-    pub srtp_crypto_suite: String,
-    pub srtp_key_base64: String,
-}
-
-/// Largest RTP payload; well under a typical MTU with the SRTP tag and headers added.
-const MTU: usize = 1200;
-/// RTP header extension id for `abs-send-time`, which the voice server uses for its receiver
-/// bandwidth estimate; it matches what the producer's parameters declare.
-const ABS_SEND_TIME_ID: u8 = 4;
-/// What a sender carries, which decides its payloader and clock.
+/// What a sender carries, which decides its codec, its section, and its clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamKind {
     /// H.264 in Annex B NAL units, a 90 kHz clock.
@@ -55,269 +32,396 @@ pub enum StreamKind {
 }
 
 impl StreamKind {
-    fn clock_rate(self) -> u32 {
+    fn clock_rate(self) -> Frequency {
         match self {
-            StreamKind::Video => 90_000,
-            StreamKind::Audio => 48_000,
+            StreamKind::Video => Frequency::NINETY_KHZ,
+            StreamKind::Audio => Frequency::FORTY_EIGHT_KHZ,
+        }
+    }
+
+    fn media_kind(self) -> MediaKind {
+        match self {
+            StreamKind::Video => MediaKind::Video,
+            StreamKind::Audio => MediaKind::Audio,
+        }
+    }
+
+    fn codec(self) -> Codec {
+        match self {
+            StreamKind::Video => Codec::H264,
+            StreamKind::Audio => Codec::Opus,
         }
     }
 }
-/// How many recent packets are kept for retransmission.
-const RETRANSMIT_BUFFER: usize = 2048;
-const SENDER_REPORT_INTERVAL: Duration = Duration::from_secs(1);
-/// How often at most the encoder bitrate follows the receiver's estimate.
-const BITRATE_UPDATE_INTERVAL: Duration = Duration::from_millis(1500);
 
-/// A change the RTCP asked for, applied by the capture on its own thread.
+/// A change the bandwidth estimate asks for, applied by the capture on its own thread.
 pub trait Feedback: Send + Sync {
     fn set_bitrate_kbps(&self, kbps: u32);
 }
 
-struct Sending {
+/// What the estimate starts at, before the server's feedback says more: a share's picture is
+/// sharp from its first seconds, and the estimate comes down within a second where it must.
+const INITIAL_BITRATE_KBPS: u64 = 6_000;
+/// How often at most the encoder bitrate follows the estimate.
+const BITRATE_UPDATE_INTERVAL: Duration = Duration::from_millis(1500);
+/// The longest the network thread waits for a packet before str0m's timers are run again.
+const MAX_WAIT: Duration = Duration::from_millis(50);
+/// Large enough for any datagram str0m or the server sends.
+const DATAGRAM: usize = 2048;
+
+/// Whom the estimate steers: the video encoder, within its limits.
+struct Steering {
+    feedback: Arc<dyn Feedback>,
+    min_kbps: u32,
+    max_kbps: u32,
+    last: Option<Instant>,
+}
+
+struct State {
+    rtc: Rtc,
+    /// The mids of the latest offer's sections, which the senders choose theirs among.
+    mids: Vec<Mid>,
+    steering: Option<Steering>,
+}
+
+/// One capture's connection to the voice server.
+pub struct Connection {
+    state: Mutex<State>,
     socket: UdpSocket,
-    srtp: Context,
-    packetizer: Box<dyn Packetizer + Send + Sync>,
-    last_pts_us: Option<f64>,
-    recent: VecDeque<(u16, Bytes)>,
-    last_rtp_timestamp: u32,
+    local: SocketAddr,
+    stopped: AtomicBool,
+    keyframes_wanted: AtomicU64,
 }
 
+/// The capture's connection while one runs; one capture runs at a time.
+static CURRENT: Mutex<Option<Arc<Connection>>> = Mutex::new(None);
+
+/// The voice server's UDP candidates in an offer, highest priority first as it lists them.
+fn udp_candidates(sdp: &str) -> Vec<SocketAddr> {
+    sdp.lines()
+        .filter_map(|line| line.trim().strip_prefix("a=candidate:"))
+        .filter_map(|candidate| Candidate::from_sdp_string(&format!("candidate:{candidate}")).ok())
+        .filter(|candidate| candidate.proto() == Protocol::Udp)
+        .map(|candidate| candidate.addr())
+        .collect()
+}
+
+/// The mids of an offer's media sections, in its order.
+fn mids(sdp: &str) -> Vec<Mid> {
+    sdp.lines()
+        .filter_map(|line| line.trim().strip_prefix("a=mid:"))
+        .map(Mid::from)
+        .collect()
+}
+
+/// The address of this machine's interface that the route to `remote` leaves by: what a
+/// connected UDP socket is bound to, which sends nothing.
+fn route_to(remote: SocketAddr) -> std::io::Result<IpAddr> {
+    let unspecified: IpAddr = if remote.is_ipv4() {
+        Ipv4Addr::UNSPECIFIED.into()
+    } else {
+        Ipv6Addr::UNSPECIFIED.into()
+    };
+    let probe = UdpSocket::bind((unspecified, 0))?;
+    probe.connect(remote)?;
+    Ok(probe.local_addr()?.ip())
+}
+
+/// Answers the first offer of a capture's connection, ending any connection before it, and
+/// starts reaching the server.
+pub fn connect(offer: &str) -> Result<String, String> {
+    close();
+    let parsed = SdpOffer::from_sdp_string(offer).map_err(|e| format!("the offer: {e}"))?;
+    let (ip, remote) = udp_candidates(offer)
+        .into_iter()
+        .find_map(|remote| route_to(remote).ok().map(|ip| (ip, remote)))
+        .ok_or("the voice server offered no UDP address this machine can reach")?;
+    let socket = UdpSocket::bind((ip, 0)).map_err(|e| format!("UDP socket on {ip}: {e}"))?;
+    let local = socket
+        .local_addr()
+        .map_err(|e| format!("UDP socket: {e}"))?;
+    socket
+        .set_read_timeout(Some(MAX_WAIT))
+        .map_err(|e| format!("UDP socket: {e}"))?;
+    // str0m's DTLS and SRTP in Rust alone; installing it again does nothing.
+    str0m::crypto::from_feature_flags().install_process_default();
+    let mut rtc = Rtc::builder()
+        .clear_codecs()
+        .enable_h264(true)
+        .enable_opus(true, false)
+        .enable_bwe(Some(Bitrate::kbps(INITIAL_BITRATE_KBPS)))
+        .set_stats_interval(None)
+        .build(Instant::now());
+    let candidate = Candidate::host(local, "udp").map_err(|e| format!("candidate: {e}"))?;
+    rtc.add_local_candidate(candidate);
+    let answer = rtc
+        .sdp_api()
+        .accept_offer(parsed)
+        .map_err(|e| format!("the offer cannot be answered: {e}"))?
+        .to_sdp_string();
+    let connection = Arc::new(Connection {
+        state: Mutex::new(State {
+            rtc,
+            mids: mids(offer),
+            steering: None,
+        }),
+        socket,
+        local,
+        stopped: AtomicBool::new(false),
+        keyframes_wanted: AtomicU64::new(0),
+    });
+    connection.touch();
+    let network = Arc::clone(&connection);
+    std::thread::Builder::new()
+        .name("aspen-rtc".into())
+        .spawn(move || network.run())
+        .map_err(|e| format!("network thread: {e}"))?;
+    eprintln!("aspen-capture: reaching the voice server at {remote} from {local}");
+    *CURRENT.lock().expect("connection lock") = Some(connection);
+    Ok(answer)
+}
+
+/// Answers a later offer of the running capture's connection: a section added or taken away,
+/// or an ICE restart.
+pub fn renegotiate(offer: &str) -> Result<String, String> {
+    let connection = CURRENT
+        .lock()
+        .expect("connection lock")
+        .clone()
+        .ok_or("no capture is running")?;
+    let parsed = SdpOffer::from_sdp_string(offer).map_err(|e| format!("the offer: {e}"))?;
+    let answer = {
+        let mut state = connection.state.lock().expect("state lock");
+        let answer = state
+            .rtc
+            .sdp_api()
+            .accept_offer(parsed)
+            .map_err(|e| format!("the offer cannot be answered: {e}"))?
+            .to_sdp_string();
+        state.mids = mids(offer);
+        answer
+    };
+    connection.touch();
+    Ok(answer)
+}
+
+/// Ends the capture's connection, if one runs.
+pub fn close() {
+    let taken = CURRENT.lock().expect("connection lock").take();
+    if let Some(connection) = taken {
+        connection.stopped.store(true, Ordering::SeqCst);
+        connection
+            .state
+            .lock()
+            .expect("state lock")
+            .rtc
+            .disconnect();
+        let wanted = connection.keyframes_wanted.load(Ordering::Relaxed);
+        if wanted > 0 {
+            eprintln!("aspen-capture: the voice server asked for {wanted} keyframes");
+        }
+    }
+}
+
+impl Connection {
+    /// Lets str0m act on whatever was just asked of it, and sends what that gives: str0m
+    /// schedules from its last input, so a change made through its API waits until the next.
+    fn touch(&self) {
+        let mut state = self.state.lock().expect("state lock");
+        if state
+            .rtc
+            .handle_input(Input::Timeout(Instant::now()))
+            .is_ok()
+        {
+            self.drain(&mut state);
+        }
+    }
+
+    /// Polls str0m until it waits, sending each transmission and handling each event; returns
+    /// when it next needs time.
+    fn drain(&self, state: &mut State) -> Option<Instant> {
+        loop {
+            match state.rtc.poll_output() {
+                Ok(Output::Timeout(at)) => return Some(at),
+                Ok(Output::Transmit(transmit)) => {
+                    let _ = self
+                        .socket
+                        .send_to(&transmit.contents, transmit.destination);
+                }
+                Ok(Output::Event(event)) => self.event(state, event),
+                Err(error) => {
+                    eprintln!("aspen-capture: the connection failed: {error}");
+                    self.stopped.store(true, Ordering::SeqCst);
+                    return None;
+                }
+            }
+        }
+    }
+
+    fn event(&self, state: &mut State, event: Event) {
+        match event {
+            Event::Connected => eprintln!("aspen-capture: connected to the voice server"),
+            Event::KeyframeRequest(_) => {
+                self.keyframes_wanted.fetch_add(1, Ordering::Relaxed);
+            }
+            Event::EgressBitrateEstimate(BweKind::Twcc { estimate, .. }) => {
+                let Some(steering) = state.steering.as_mut() else {
+                    return;
+                };
+                if steering
+                    .last
+                    .is_some_and(|last| last.elapsed() < BITRATE_UPDATE_INTERVAL)
+                {
+                    return;
+                }
+                let kbps = u32::try_from(estimate.as_u64() / 1000).unwrap_or(u32::MAX);
+                steering
+                    .feedback
+                    .set_bitrate_kbps(kbps.clamp(steering.min_kbps, steering.max_kbps));
+                steering.last = Some(Instant::now());
+            }
+            _ => {}
+        }
+    }
+
+    /// The network thread: hands str0m each datagram, and its timers their time, until the
+    /// capture ends or the connection dies.
+    fn run(self: Arc<Self>) {
+        let mut buffer = vec![0u8; DATAGRAM];
+        while !self.stopped.load(Ordering::SeqCst) {
+            match self.socket.recv_from(&mut buffer) {
+                Ok((length, source)) => {
+                    let mut state = self.state.lock().expect("state lock");
+                    let Ok(contents) = buffer[..length].try_into() else {
+                        continue;
+                    };
+                    let input = Input::Receive(
+                        Instant::now(),
+                        Receive {
+                            proto: Protocol::Udp,
+                            source,
+                            destination: self.local,
+                            contents,
+                        },
+                    );
+                    // str0m is polled after each input: what an input gives is lost if another
+                    // comes before the poll.
+                    if state.rtc.handle_input(input).is_ok() {
+                        self.drain(&mut state);
+                    }
+                }
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(error) => {
+                    eprintln!("aspen-capture: the capture's socket failed: {error}");
+                    break;
+                }
+            }
+            let mut state = self.state.lock().expect("state lock");
+            if !state.rtc.is_alive() {
+                eprintln!("aspen-capture: the connection to the voice server ended");
+                break;
+            }
+            if state
+                .rtc
+                .handle_input(Input::Timeout(Instant::now()))
+                .is_ok()
+            {
+                self.drain(&mut state);
+            }
+        }
+    }
+}
+
+/// One stream of the capture, sent on the section of the capture connection that carries its
+/// kind. The section is looked up with every frame, so a stream whose section the server offers
+/// later (a game's sound after its picture) starts as soon as it is answered, and a frame with
+/// no section yet, or before the connection is up, is dropped.
 pub struct RtpSender {
-    sending: Mutex<Sending>,
+    connection: Arc<Connection>,
     kind: StreamKind,
-    ssrc: u32,
-    packets_sent: AtomicU64,
-    bytes_sent: AtomicU64,
-    pub keyframes_wanted: AtomicU64,
-    stopped: Arc<AtomicBool>,
-}
-
-fn srtp_context(target: &RtpTarget) -> Result<Context, String> {
-    if target.srtp_crypto_suite != "AES_CM_128_HMAC_SHA1_80" {
-        return Err(format!(
-            "unsupported SRTP crypto suite {}",
-            target.srtp_crypto_suite
-        ));
-    }
-    use base64::Engine;
-    let material = base64::engine::general_purpose::STANDARD
-        .decode(&target.srtp_key_base64)
-        .map_err(|e| format!("SRTP key is not base64: {e}"))?;
-    if material.len() != 30 {
-        return Err("SRTP keying material must be 30 bytes for AES_CM_128_HMAC_SHA1_80".into());
-    }
-    Context::new(
-        &material[..16],
-        &material[16..],
-        ProtectionProfile::Aes128CmHmacSha1_80,
-        None,
-        None,
-    )
-    .map_err(|e| format!("SRTP context: {e}"))
+    /// The presentation time of the first frame, which the RTP clock counts from.
+    first_pts_us: Mutex<Option<f64>>,
 }
 
 impl RtpSender {
-    /// Opens the socket and starts the RTCP listener; returns the sender to hand packets to.
+    /// A sender of `kind` on the running capture's connection; a video sender's encoder
+    /// bitrate follows the estimate through `feedback`, from `min_kbps` to `max_kbps`.
     pub fn start(
-        target: &RtpTarget,
         kind: StreamKind,
         feedback: Arc<dyn Feedback>,
         min_kbps: u32,
         max_kbps: u32,
     ) -> Result<Arc<Self>, String> {
-        let bind: SocketAddr = if target.ip.is_ipv4() {
-            "0.0.0.0:0".parse().expect("address")
-        } else {
-            "[::]:0".parse().expect("address")
-        };
-        let socket = UdpSocket::bind(bind).map_err(|e| format!("UDP socket: {e}"))?;
-        socket
-            .connect((target.ip, target.port))
-            .map_err(|e| format!("UDP connect to {}:{}: {e}", target.ip, target.port))?;
-        let receiver = socket.try_clone().map_err(|e| format!("UDP socket: {e}"))?;
-        let payloader: Box<dyn rtp::packetizer::Payloader + Send + Sync> = match kind {
-            StreamKind::Video => Box::new(H264Payloader::default()),
-            StreamKind::Audio => Box::new(OpusPayloader),
-        };
-        let mut packetizer = new_packetizer(
-            MTU,
-            target.payload_type,
-            target.ssrc,
-            payloader,
-            Box::new(new_random_sequencer()),
-            kind.clock_rate(),
-        );
+        let connection = CURRENT
+            .lock()
+            .expect("connection lock")
+            .clone()
+            .ok_or("the capture's connection has not been answered")?;
         if kind == StreamKind::Video {
-            packetizer.enable_abs_send_time(ABS_SEND_TIME_ID);
+            let mut state = connection.state.lock().expect("state lock");
+            state.steering = Some(Steering {
+                feedback,
+                min_kbps,
+                max_kbps,
+                last: None,
+            });
+            state.rtc.bwe().set_bitrate(
+                Bitrate::kbps(u64::from(min_kbps)),
+                Bitrate::kbps(u64::from(max_kbps)),
+            );
         }
-        let sender = Arc::new(Self {
-            sending: Mutex::new(Sending {
-                socket,
-                srtp: srtp_context(target)?,
-                packetizer: Box::new(packetizer),
-                last_pts_us: None,
-                recent: VecDeque::with_capacity(RETRANSMIT_BUFFER),
-                last_rtp_timestamp: 0,
-            }),
+        connection.touch();
+        Ok(Arc::new(Self {
+            connection,
             kind,
-            ssrc: target.ssrc,
-            packets_sent: AtomicU64::new(0),
-            bytes_sent: AtomicU64::new(0),
-            keyframes_wanted: AtomicU64::new(0),
-            stopped: Arc::new(AtomicBool::new(false)),
-        });
-        let mut rtcp_srtp = srtp_context(target)?;
-        let listener = Arc::clone(&sender);
-        std::thread::Builder::new()
-            .name("aspen-rtcp".into())
-            .spawn(move || {
-                let mut buffer = vec![0u8; 2048];
-                let mut last_report = Instant::now();
-                let mut last_bitrate_update = Instant::now() - BITRATE_UPDATE_INTERVAL;
-                receiver
-                    .set_read_timeout(Some(Duration::from_millis(250)))
-                    .expect("socket timeout");
-                while !listener.stopped.load(Ordering::SeqCst) {
-                    if last_report.elapsed() >= SENDER_REPORT_INTERVAL {
-                        listener.send_sender_report(&mut rtcp_srtp);
-                        last_report = Instant::now();
-                    }
-                    let length = match receiver.recv(&mut buffer) {
-                        Ok(length) => length,
-                        Err(e)
-                            if e.kind() == std::io::ErrorKind::WouldBlock
-                                || e.kind() == std::io::ErrorKind::TimedOut =>
-                        {
-                            continue;
-                        }
-                        Err(_) => break,
-                    };
-                    let Ok(plain) = rtcp_srtp.decrypt_rtcp(&buffer[..length]) else {
-                        continue;
-                    };
-                    let mut raw = plain;
-                    let Ok(packets) = rtcp::packet::unmarshal(&mut raw) else {
-                        continue;
-                    };
-                    for packet in packets {
-                        listener.handle_rtcp(
-                            packet.as_ref(),
-                            &feedback,
-                            min_kbps,
-                            max_kbps,
-                            &mut last_bitrate_update,
-                        );
-                    }
-                }
-            })
-            .map_err(|e| format!("RTCP thread: {e}"))?;
-        Ok(sender)
+            first_pts_us: Mutex::new(None),
+        }))
     }
 
     /// Sends one encoded frame: Annex B NAL units, with the parameter sets in front of
-    /// keyframes, at the presentation time libobs stamped it with.
+    /// keyframes, or an Opus packet, at the presentation time it was stamped with.
     pub fn send_frame(&self, data: &[u8], pts_us: f64) {
-        let mut sending = self.sending.lock().expect("sending lock");
-        let samples = match sending.last_pts_us {
-            None => 0,
-            Some(previous) => {
-                ((pts_us - previous).max(0.0) * f64::from(self.kind.clock_rate()) / 1e6) as u32
-            }
+        let since_first = {
+            let mut first = self.first_pts_us.lock().expect("pts lock");
+            pts_us - *first.get_or_insert(pts_us)
         };
-        sending.last_pts_us = Some(pts_us);
-        let payload = Bytes::copy_from_slice(data);
-        let packets = match sending.packetizer.packetize(&payload, samples) {
-            Ok(packets) => packets,
-            Err(_) => return,
-        };
-        for packet in packets {
-            sending.last_rtp_timestamp = packet.header.timestamp;
-            let Ok(raw) = packet.marshal() else { continue };
-            let Ok(encrypted) = sending.srtp.encrypt_rtp(&raw) else {
-                continue;
-            };
-            if sending.socket.send(&encrypted).is_ok() {
-                self.packets_sent.fetch_add(1, Ordering::Relaxed);
-                self.bytes_sent
-                    .fetch_add(raw.len() as u64, Ordering::Relaxed);
-            }
-            if sending.recent.len() == RETRANSMIT_BUFFER {
-                sending.recent.pop_front();
-            }
-            sending
-                .recent
-                .push_back((packet.header.sequence_number, encrypted));
+        let rate = self.kind.clock_rate();
+        let samples = (since_first.max(0.0) * f64::from(rate.get()) / 1e6) as u64;
+        let connection = &self.connection;
+        if connection.stopped.load(Ordering::SeqCst) {
+            return;
         }
-    }
-
-    fn handle_rtcp(
-        &self,
-        packet: &(dyn RtcpPacket + Send + Sync),
-        feedback: &Arc<dyn Feedback>,
-        min_kbps: u32,
-        max_kbps: u32,
-        last_bitrate_update: &mut Instant,
-    ) {
-        let any = packet.as_any();
-        if let Some(nack) = any.downcast_ref::<TransportLayerNack>() {
-            if nack.media_ssrc != self.ssrc {
-                return;
-            }
-            let wanted: Vec<u16> = nack
-                .nacks
-                .iter()
-                .flat_map(|pair| pair.packet_list())
-                .collect();
-            let sending = self.sending.lock().expect("sending lock");
-            for (sequence, encrypted) in &sending.recent {
-                if wanted.contains(sequence) {
-                    let _ = sending.socket.send(encrypted);
-                }
-            }
-        } else if let Some(remb) = any.downcast_ref::<ReceiverEstimatedMaximumBitrate>() {
-            // The estimate steers the video encoder; audio runs at its set rate.
-            if self.kind == StreamKind::Video
-                && last_bitrate_update.elapsed() >= BITRATE_UPDATE_INTERVAL
-            {
-                let kbps = ((remb.bitrate / 1000.0) as u32).clamp(min_kbps, max_kbps);
-                feedback.set_bitrate_kbps(kbps);
-                *last_bitrate_update = Instant::now();
-            }
-        } else if any.downcast_ref::<PictureLossIndication>().is_some()
-            || any.downcast_ref::<FullIntraRequest>().is_some()
-        {
-            self.keyframes_wanted.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    fn send_sender_report(&self, srtp: &mut Context) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
-        // NTP: seconds since 1900 in the high word, fraction in the low word.
-        let ntp_time = ((now.as_secs() + 2_208_988_800) << 32)
-            | ((u64::from(now.subsec_nanos()) << 32) / 1_000_000_000);
-        let (rtp_time, socket) = {
-            let sending = self.sending.lock().expect("sending lock");
-            (sending.last_rtp_timestamp, sending.socket.try_clone().ok())
-        };
-        let report = SenderReport {
-            ssrc: self.ssrc,
-            ntp_time,
-            rtp_time,
-            packet_count: self.packets_sent.load(Ordering::Relaxed) as u32,
-            octet_count: self.bytes_sent.load(Ordering::Relaxed) as u32,
-            ..Default::default()
-        };
-        let (Ok(raw), Some(socket)) = (report.marshal(), socket) else {
+        let mut state = connection.state.lock().expect("state lock");
+        let State { rtc, mids, .. } = &mut *state;
+        let Some(mid) = mids.iter().copied().find(|&mid| {
+            rtc.media(mid).is_some_and(|media| {
+                media.kind() == self.kind.media_kind() && media.direction() == Direction::SendOnly
+            })
+        }) else {
             return;
         };
-        if let Ok(encrypted) = srtp.encrypt_rtcp(&raw) {
-            let _ = socket.send(&encrypted);
+        let Some(writer) = rtc.writer(mid) else {
+            return;
+        };
+        let Some(pt) = writer
+            .payload_params()
+            .find(|params| params.spec().codec == self.kind.codec())
+            .map(|params| params.pt())
+        else {
+            return;
+        };
+        let time = MediaTime::new(samples, rate);
+        if writer.write(pt, Instant::now(), time, data).is_ok() {
+            connection.drain(&mut state);
         }
     }
 
+    /// Stops steering the encoder; the connection itself ends with the capture (`close`).
     pub fn stop(&self) {
-        self.stopped.store(true, Ordering::SeqCst);
+        if self.kind == StreamKind::Video {
+            self.connection.state.lock().expect("state lock").steering = None;
+        }
     }
 }

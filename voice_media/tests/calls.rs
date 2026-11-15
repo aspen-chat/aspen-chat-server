@@ -469,6 +469,11 @@ async fn a_capture_connection_sends_a_share_its_sender_previews() {
         bob.mid_of(&SectionContent::ShareAudio { user: ann.user })
             .is_some()
     );
+    // Its sender previews the picture alone, never hearing its own sound back.
+    assert!(
+        ann.mid_of(&SectionContent::ShareAudio { user: ann.user })
+            .is_none()
+    );
     bob.settle(&media).await;
     ann.settle(&media).await;
     tokio::time::sleep(Duration::from_millis(1500)).await;

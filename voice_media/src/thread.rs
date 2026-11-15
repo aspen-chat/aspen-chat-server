@@ -748,7 +748,10 @@ impl Thread {
                 continue;
             }
             call.push((MediaKind::Video, SectionContent::Video { user, source }));
+            // A sharer watching its own share (the preview of one sent from outside the
+            // browser) is not sent its sound back.
             if source == MediaSource::Screen
+                && user != p.user
                 && owner.sending.contains_key(&MediaSource::ScreenAudio)
             {
                 call.push((MediaKind::Audio, SectionContent::ShareAudio { user }));

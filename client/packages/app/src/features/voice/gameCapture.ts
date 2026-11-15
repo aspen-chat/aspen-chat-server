@@ -1,12 +1,13 @@
-import type { ExternalAudio, ExternalShare, ExternalTargets, RtpTarget } from "@aspen/protocol";
+import type { CaptureOffer, ExternalAudio, ExternalShare } from "@aspen/protocol";
 
 /**
  * Game capture on the desktop shell. The Electron main process runs the libobs helper (see
  * `packages/desktop/native/capture`), which captures a game or window, encodes it to
- * H.264, and sends it as SRTP straight to the voice server; the renderer only asks for the
- * producer and tells the helper where to send. On Linux the helper captures one application's
- * sound only, and the picture is the browser's own screen share. Nothing here exists in a
- * browser: `gameCaptureBridge()` is `null` there.
+ * H.264, and sends it straight to the voice server over a WebRTC connection of its own, the
+ * capture connection; the renderer only passes the voice server's offers of that connection to
+ * the helper and its answers back. On Linux the helper captures one application's sound only,
+ * and the picture is the browser's own screen share. Nothing here exists in a browser:
+ * `gameCaptureBridge()` is `null` there.
  */
 
 export interface CaptureTarget {
@@ -57,7 +58,6 @@ export interface CaptureCatalogue {
 export interface AudioCaptureStart {
   readonly kind: string;
   readonly settings?: string;
-  readonly rtp: RtpTarget;
   readonly bitrateKbps?: number;
 }
 
@@ -68,16 +68,24 @@ export interface CaptureStart {
   readonly height?: number;
   readonly fps?: number;
   readonly bitrateKbps?: number;
-  readonly rtp: RtpTarget;
+  /** The voice server's first offer of the capture connection. */
+  readonly offer: string;
+  /** The application's sound, sent on the same connection. */
   readonly audio?: AudioCaptureStart;
 }
 
 /** The preload bridge's game capture surface. */
 export interface GameCaptureBridge {
   kinds(): Promise<CaptureCatalogue>;
-  start(options: CaptureStart): Promise<void>;
+  /** Starts a capture; resolves to the capture connection's answer to the first offer. */
+  start(options: CaptureStart): Promise<string>;
   /** Captures one application's sound alone. */
-  startAudio(audio: AudioCaptureStart): Promise<void>;
+  startAudio(options: {
+    readonly audio: AudioCaptureStart;
+    readonly offer: string;
+  }): Promise<string>;
+  /** Answers a later offer of the running capture's connection. */
+  answer(offer: string): Promise<string>;
   stop(): Promise<void>;
   /** The capture ended without being asked to: the helper process died. */
   onEnded(listener: () => void): () => void;
@@ -179,42 +187,27 @@ export function testPattern(testMedia: string): CaptureChoice {
 }
 
 /**
- * A game capture as an external share for `VoiceCall.startExternalScreenShare`: the call
- * obtains the RTP producer and hands its target to `start`, which starts the helper sending;
- * `stop` ends the capture. `onEnded` is called when the helper dies mid-share, so the caller
- * can end the share.
+ * A sender outside the browser through the helper: the first offer of the capture connection
+ * starts the capture with `start`, each later one is answered by the running capture, and
+ * `stop` ends it. `onEnded` is called when the helper dies mid-share, so the caller can end the
+ * share.
  */
-export function gameCaptureShare(
+function helperSender(
   bridge: GameCaptureBridge,
-  choice: CaptureChoice,
-  withAudio: boolean,
+  start: (offer: string) => Promise<string>,
   onEnded: () => void,
-): ExternalShare {
+): ExternalAudio {
   let unsubscribe: (() => void) | null = null;
-  const audio = withAudio ? choice.audio : null;
+  let started = false;
   return {
-    audio: audio !== null,
-    async start(targets: ExternalTargets) {
+    async answer(offer: CaptureOffer) {
+      if (started) {
+        return bridge.answer(offer.sdp);
+      }
+      started = true;
       unsubscribe = bridge.onEnded(onEnded);
       try {
-        await bridge.start({
-          kind: choice.kind,
-          settings: JSON.stringify(choice.settings),
-          width: 1920,
-          height: 1080,
-          fps: 60,
-          bitrateKbps: 12000,
-          rtp: targets.video,
-          ...(audio === null || targets.audio === null
-            ? {}
-            : {
-                audio: {
-                  kind: audio.kind,
-                  settings: JSON.stringify(audio.settings),
-                  rtp: targets.audio,
-                },
-              }),
-        });
+        return await start(offer.sdp);
       } catch (error) {
         unsubscribe();
         unsubscribe = null;
@@ -230,10 +223,39 @@ export function gameCaptureShare(
 }
 
 /**
+ * A game capture as an external share for `VoiceCall.startExternalScreenShare`, with the
+ * application's sound when `withAudio` and the choice has a source for it.
+ */
+export function gameCaptureShare(
+  bridge: GameCaptureBridge,
+  choice: CaptureChoice,
+  withAudio: boolean,
+  onEnded: () => void,
+): ExternalShare {
+  const audio = withAudio ? choice.audio : null;
+  const sender = helperSender(
+    bridge,
+    (offer) =>
+      bridge.start({
+        kind: choice.kind,
+        settings: JSON.stringify(choice.settings),
+        width: 1920,
+        height: 1080,
+        fps: 60,
+        bitrateKbps: 12000,
+        offer,
+        ...(audio === null
+          ? {}
+          : { audio: { kind: audio.kind, settings: JSON.stringify(audio.settings) } }),
+      }),
+    onEnded,
+  );
+  return { ...sender, audio: audio !== null };
+}
+
+/**
  * One application's sound, captured by the helper, as the external audio of a browser screen
- * share (`VoiceCall.startScreenShare({ audio })`): the call obtains the RTP producer and hands
- * its target to `start`; `stop` ends the capture. `onEnded` is called when the helper dies
- * mid-share, so the caller can end the share.
+ * share (`VoiceCall.startScreenShare({ audio })`).
  */
 export function applicationAudioShare(
   bridge: GameCaptureBridge,
@@ -241,26 +263,13 @@ export function applicationAudioShare(
   application: AudioTarget,
   onEnded: () => void,
 ): ExternalAudio {
-  let unsubscribe: (() => void) | null = null;
-  return {
-    async start(target: RtpTarget) {
-      unsubscribe = bridge.onEnded(onEnded);
-      try {
-        await bridge.startAudio({
-          kind: kind.kind,
-          settings: JSON.stringify(application.settings),
-          rtp: target,
-        });
-      } catch (error) {
-        unsubscribe();
-        unsubscribe = null;
-        throw error;
-      }
-    },
-    stop() {
-      unsubscribe?.();
-      unsubscribe = null;
-      void bridge.stop();
-    },
-  };
+  return helperSender(
+    bridge,
+    (offer) =>
+      bridge.startAudio({
+        audio: { kind: kind.kind, settings: JSON.stringify(application.settings) },
+        offer,
+      }),
+    onEnded,
+  );
 }
