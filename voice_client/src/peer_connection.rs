@@ -185,9 +185,12 @@ pub trait PeerConnection: Send + Sync {
         stream_id: Option<String>,
         send_encodings: Vec<SendEncoding>,
     ) -> Result<TransceiverId, PeerConnectionError>;
-    /// The transceiver's mid, `None` until a local description gave it one.
+    /// The transceiver's mid, `None` until a description gave it one.
     fn transceiver_mid(&self, transceiver: TransceiverId) -> Option<String>;
-    /// The transceiver with this mid: one a remote offer made, found after the local answer.
+    /// The transceiver with this mid. A remote offer's new sections make their transceivers as
+    /// `set_remote_description` applies it, with the offer's mids, so the engine finds each
+    /// between applying the offer and making the answer: a track and direction set then shape
+    /// the answer, where ones set after it would need another negotiation.
     fn transceiver_by_mid(&self, mid: &str) -> Option<TransceiverId>;
     async fn set_direction(
         &self,
@@ -215,6 +218,14 @@ pub trait PeerConnection: Send + Sync {
     ) -> Result<(), PeerConnectionError>;
     /// The track the transceiver's receiver plays or draws, which the platform owns.
     fn receiver_track(&self, transceiver: TransceiverId) -> Option<TrackId>;
+    /// How loud the transceiver's received audio plays, 0 to 10 as WebRTC's audio tracks take
+    /// it (`RTCAudioTrack.source.volume`, `AudioTrack.setVolume`), 1 as received. Per-person
+    /// volume and mute-for-me are applied here, to the slot or share sound that carries them.
+    async fn set_receiver_volume(
+        &self,
+        transceiver: TransceiverId,
+        volume: f64,
+    ) -> Result<(), PeerConnectionError>;
     async fn set_configuration(
         &self,
         configuration: Configuration,
