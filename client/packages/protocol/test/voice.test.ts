@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AspenClient,
-  CONNECT_TIMEOUT_MS,
   CallSetupError,
   CameraError,
   DEAD_SERVER_RETRY_MS,
+  ICE_RECOVERY_LIMIT_MS,
+  ICE_RESTART_INTERVAL_MS,
   InsecureAddressError,
   MemorySessionStore,
   READY_TIMEOUT_MS,
@@ -88,6 +89,8 @@ class FakeSocket {
   /** Hosts whose sockets fail to open, as a server gone or a network away does. */
   static unreachable = new Set<string>();
   static secrets = 0;
+  /** Who `ready` says is in the call. */
+  static readyParticipants: unknown[] = [];
   readonly sent: ClientMessage[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((m: { data: string }) => void) | null = null;
@@ -148,7 +151,7 @@ class FakeSocket {
       type: "ready",
       session,
       user: me,
-      participants: [],
+      participants: FakeSocket.readyParticipants,
       audioSlots: 16,
       maxWatchedVideo: 25,
       resume: `secret-${String(FakeSocket.secrets)}`,
@@ -504,6 +507,8 @@ function makeCall(options: {
   unreachableConnections?: number;
   microphone?: "ok" | "denied";
   userVolume?: (userId: string, source: "microphone" | "screenAudio") => number;
+  /** The clock the call reads; the real one by default. */
+  now?: () => number;
   /** What the join offer grants; all of them by default. */
   speak?: boolean;
   shareScreen?: boolean;
@@ -573,6 +578,7 @@ function makeCall(options: {
       return 0;
     }) as unknown as typeof setTimeout,
     random: () => 0.5,
+    ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.userVolume === undefined ? {} : { userVolume: options.userVolume }),
   });
   /** The connection of the call now, and the transceiver sending `source` on it. */
@@ -678,29 +684,73 @@ describe("VoiceCall", () => {
     expect(connections[1]?.connectionState).toBe("connected");
   });
 
-  it("asks for an ICE restart when media fails mid-call, rejoining when it does not recover", async () => {
+  it("asks for ICE restarts while media is lost mid-call, rejoining when it does not come back", async () => {
     FakeSocket.behaviour = new Map();
-    const { call, connection, timers } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    let time = 0;
+    const { call, connection, timers } = makeCall({
+      candidates: ["near"],
+      latency: { near: 1 },
+      now: () => time,
+    });
     await call.join(channel);
     const socket = FakeSocket.instances[0];
+    const restarts = () => socket?.sent.filter((f) => f.type === "restartIce").length;
+    // Failed: a restart at once, and another each interval while it stays lost.
     connection()?.setState("failed");
     expect(socket?.sent.at(-1)).toEqual({ type: "restartIce", connection: "call" });
     expect(call.state.status).toBe("connected");
-    // Failing again while the restart is awaited asks for nothing more.
     connection()?.setState("failed");
-    expect(socket?.sent.filter((f) => f.type === "restartIce")).toHaveLength(1);
-    // Connected again in time, the wait passes harmlessly.
-    const wait = timers.at(-1);
-    expect(wait?.delay).toBe(CONNECT_TIMEOUT_MS);
+    expect(restarts()).toBe(1);
+    expect(timers.at(-1)?.delay).toBe(ICE_RESTART_INTERVAL_MS);
+    time += ICE_RESTART_INTERVAL_MS;
+    timers.at(-1)?.fn();
+    expect(restarts()).toBe(2);
+    // Connected again, the next interval asks for nothing.
     connection()?.setState("connected");
-    wait?.fn();
-    expect(call.state.status).toBe("connected");
-    // Failing again and staying failed rejoins from scratch.
-    connection()?.setState("failed");
-    expect(socket?.sent.filter((f) => f.type === "restartIce")).toHaveLength(2);
+    time += ICE_RESTART_INTERVAL_MS;
+    timers.at(-1)?.fn();
+    expect(restarts()).toBe(2);
+    // Disconnected first waits an interval, in which it may come back alone.
+    connection()?.setState("disconnected");
+    expect(restarts()).toBe(2);
+    time += ICE_RESTART_INTERVAL_MS;
+    timers.at(-1)?.fn();
+    expect(restarts()).toBe(3);
+    // Lost for the whole limit, the call is rejoined from scratch.
+    time += ICE_RECOVERY_LIMIT_MS;
     timers.at(-1)?.fn();
     expect(call.state.status).toBe("rejoining");
     expect(timers.at(-1)?.delay).toBe(REJOIN_DELAY_MAX_MS / 2);
+  });
+
+  it("watches what is already shown after rejoining", async () => {
+    FakeSocket.behaviour = new Map();
+    const { call, timers } = makeCall({ candidates: ["near"], latency: { near: 1 } });
+    await call.join(channel);
+    call.showVideo();
+    call.onSessionEnded({ id: session, channel, reason: "serverLost" });
+    timers.at(-1)?.fn();
+    await settle();
+    expect(call.state.status).toBe("connected");
+    // The rejoined call's `ready` names a camera that is already on, and no `sources` follows.
+    const again = FakeSocket.instances[1];
+    expect(again?.sent.filter((f) => f.type === "watch")).toEqual([]);
+    call.leave();
+    const camera = [{ source: "camera", paused: false }];
+    FakeSocket.readyParticipants = [
+      { user: "u2", muted: false, deafened: false, speaking: false, sources: camera },
+    ];
+    await call.join(channel);
+    call.showVideo();
+    await settle();
+    call.onSessionEnded({ id: session, channel, reason: "serverLost" });
+    timers.at(-1)?.fn();
+    await settle();
+    expect(FakeSocket.instances.at(-1)?.sent.filter((f) => f.type === "watch")).toEqual([
+      { type: "watch", video: [{ user: "u2", source: "camera" }] },
+    ]);
+    expect(call.state.cameras.map((c) => c.user)).toEqual(["u2"]);
+    FakeSocket.readyParticipants = [];
   });
 
   it("a refused microphone fails the join without touching or blaming any server", async () => {

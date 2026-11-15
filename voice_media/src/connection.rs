@@ -252,12 +252,11 @@ impl Connection {
             for mid in &extra {
                 change.stop_media(*mid);
             }
-            if restart {
-                change.ice_restart(true);
-            }
-            (added, change.apply())
+            // The fragment a restart's checks name; str0m takes it up with the answer.
+            let restarted = restart.then(|| change.ice_restart(true).ufrag);
+            (added, restarted, change.apply())
         })?;
-        let (added, offer) = applied;
+        let (added, restarted, offer) = applied;
         self.sections.retain(|s| !extra.contains(&s.mid));
         self.sections
             .extend(
@@ -270,9 +269,7 @@ impl Connection {
         self.pending = Some(pending);
         self.offered_at = Some(now);
         self.revision += 1;
-        if restart
-            && let Some(ufrag) = self.guarded(|rtc| rtc.direct_api().local_ice_credentials().ufrag)
-        {
+        if let Some(ufrag) = restarted {
             self.ufrag = ufrag;
         }
         let edits = self.format_edits();
@@ -429,5 +426,46 @@ impl Connection {
     /// at its next input.
     fn touch(&mut self, now: Instant) {
         self.handle_input(Input::Timeout(now));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use str0m::change::SdpOffer;
+    use str0m::{Candidate, Rtc};
+
+    /// The `a=ice-ufrag` an SDP names.
+    fn ufrag_of(sdp: &str) -> String {
+        sdp.lines()
+            .find_map(|line| line.strip_prefix("a=ice-ufrag:"))
+            .expect("an ICE fragment")
+            .trim()
+            .to_string()
+    }
+
+    /// A browser that restarts ICE checks from a port of its new generation, so its checks are
+    /// found by fragment alone: the connection must be known by the one its latest offer names.
+    #[test]
+    fn a_restart_is_known_by_the_fragment_its_offer_names() {
+        str0m::crypto::from_feature_flags().install_process_default();
+        let candidate = Candidate::host("127.0.0.1:40000".parse().unwrap(), "udp").unwrap();
+        let mut connection = Connection::new(ParticipantId(1), ConnectionKind::Call, &[candidate]);
+        let mut client = Rtc::builder().build(Instant::now());
+        let slot = [(MediaKind::Audio, SectionContent::AudioSlot { slot: 0 })];
+        let (revision, first) = connection.negotiate(&slot, Instant::now()).unwrap();
+        assert_eq!(connection.ufrag, ufrag_of(&first));
+        let answer = client
+            .sdp_api()
+            .accept_offer(SdpOffer::from_sdp_string(&first).unwrap())
+            .unwrap();
+        connection
+            .accept_answer(revision, &answer.to_sdp_string())
+            .unwrap();
+
+        connection.restart_ice = true;
+        let (_, restarted) = connection.negotiate(&slot, Instant::now()).unwrap();
+        assert_ne!(ufrag_of(&restarted), ufrag_of(&first));
+        assert_eq!(connection.ufrag, ufrag_of(&restarted));
     }
 }

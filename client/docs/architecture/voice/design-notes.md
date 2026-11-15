@@ -27,9 +27,11 @@ See [joining and leaving](joining.md).
   call for twenty seconds. A rejoin would close the connection and negotiate a new one, a gap in
   everything the user sends and hears. The attempts wait random, growing times, so a server's whole
   call does not come back at one moment.
-- **A failed connection first asks for an ICE restart.** A network change the server did not see
-  recovers with new ICE credentials on the same connection; only one still down after
-  `CONNECT_TIMEOUT_MS` is rejoined.
+- **A lost connection keeps asking for ICE restarts.** A network change recovers with new ICE
+  credentials on the same connection. A restart tried while the network is still away fails in its
+  turn, and a browser never checks a failed generation again, so a connection asks once for each
+  `ICE_RESTART_INTERVAL_MS` it stays lost, and the one asked for after the network returns is what
+  reconnects. Only one still lost after `ICE_RECOVERY_LIMIT_MS` is rejoined.
 
 ## Media
 

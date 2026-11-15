@@ -56,8 +56,9 @@ The server is the only side that offers. Whatever the client wants changed is a 
   the connection.
 - Nothing is sent on a section before the answer to the offer that added it.
 - When ICE on a connection goes disconnected (a client that moved network), the server offers an ICE
-  restart. A client asks for one with `restartIce`. Either way the next offer carries new ICE
-  credentials.
+  restart. A client asks for one with `restartIce`, again while it stays lost. Either way the next
+  offer carries new ICE credentials, and the connection is found by the new username fragment from
+  then on: a browser checks a new generation from ports of its own, which no route knows yet.
 
 ### A connection failing
 

@@ -62,6 +62,13 @@ type Ready = Extract<ServerMessage, { type: "ready" }>;
 
 /** How long the peer connection has to connect once the server has accepted the call. */
 export const CONNECT_TIMEOUT_MS = 15_000;
+/**
+ * How often a connection lost mid-call asks for an ICE restart, and how long it may stay lost
+ * before the call is rejoined. Eight restarts in half a minute stay within the voice server's
+ * limit on `restartIce`.
+ */
+export const ICE_RESTART_INTERVAL_MS = 4_000;
+export const ICE_RECOVERY_LIMIT_MS = 30_000;
 /** How long a candidate has to answer a latency ping. */
 export const PING_TIMEOUT_MS = 3_000;
 /** How long a candidate has to answer `identify` or `resume` with `ready`. */
@@ -1413,6 +1420,9 @@ export class VoiceCall {
       signal.onFrame = (f) => {
         this.#onFrame(f);
       };
+      // What is shown already (a call rejoined, or another joined from the call screen) is
+      // watched from what `ready` says is sent.
+      this.#updateWatch();
     } catch (error) {
       signal.close();
       throw error;
@@ -1444,10 +1454,13 @@ export class VoiceCall {
   }
 
   /**
-   * Follows the connection mid-call. One that fails is offered new ICE credentials on request,
-   * which recovers a network change the server did not see as a disconnection (it offers a
-   * restart on its own when it does); one still not connected `CONNECT_TIMEOUT_MS` later is
-   * rejoined from scratch rather than left silent.
+   * Follows the connection mid-call. One that is disconnected or has failed asks for new ICE
+   * credentials every `ICE_RESTART_INTERVAL_MS` until it connects: a restart tried while the
+   * network is still away fails in its turn, and a browser never checks a failed generation
+   * again, so the one asked for after the network returns is what reconnects. One that fails at
+   * once asks at once; one disconnected first waits an interval, since a network that returns
+   * quickly brings the connection back without one. One still not connected
+   * `ICE_RECOVERY_LIMIT_MS` after it went is rejoined from scratch rather than left silent.
    */
   #connectionChanged(connection: CallConnection): void {
     if (connection !== this.#connection || this.#state.status !== "connected") {
@@ -1458,21 +1471,32 @@ export class VoiceCall {
       this.#restarting = false;
       return;
     }
-    if (state !== "failed" || this.#restarting) {
+    if ((state !== "failed" && state !== "disconnected") || this.#restarting) {
       return;
     }
     this.#restarting = true;
-    this.#send({ type: "restartIce", connection: "call" });
     const generation = this.#generation;
-    this.#setTimeout(() => {
-      if (
-        generation === this.#generation &&
-        this.#connection === connection &&
-        connection.connectionState !== "connected"
-      ) {
-        this.#rejoin();
+    const lost = this.#now();
+    const unchanged = () =>
+      generation === this.#generation &&
+      this.#connection === connection &&
+      connection.connectionState !== "connected";
+    const retry = () => {
+      if (!unchanged()) {
+        return;
       }
-    }, CONNECT_TIMEOUT_MS);
+      if (this.#now() - lost >= ICE_RECOVERY_LIMIT_MS) {
+        this.#rejoin();
+        return;
+      }
+      this.#send({ type: "restartIce", connection: "call" });
+      this.#setTimeout(retry, ICE_RESTART_INTERVAL_MS);
+    };
+    if (state === "failed") {
+      retry();
+    } else {
+      this.#setTimeout(retry, ICE_RESTART_INTERVAL_MS);
+    }
   }
 
   /** Answers an offer of the call connection, after every offer before it. */

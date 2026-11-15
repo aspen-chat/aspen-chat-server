@@ -49,10 +49,13 @@ with `errorKind: "device"`, and no server is reported.
 
 ## When the connection fails
 
-- A peer connection that goes `failed` mid-call asks for an ICE restart (`restartIce`), which the
-  server answers with an offer of new ICE credentials. One still not connected `CONNECT_TIMEOUT_MS`
-  later is rejoined. The server offers a restart of its own when it sees ICE disconnect, which
-  recovers a network change before the browser gives up on it.
+- A peer connection that goes `failed` mid-call asks for an ICE restart (`restartIce`) at once, and
+  one `disconnected` after `ICE_RESTART_INTERVAL_MS` (four seconds), unless it came back alone; the
+  server answers each with an offer of new ICE credentials. It asks again every interval while it
+  stays lost, since a restart tried while the network is still away fails, and is rejoined once it
+  has been lost for `ICE_RECOVERY_LIMIT_MS` (30 seconds). The server offers a restart of its own
+  when it sees ICE disconnect.
+- A call rejoined, or joined while the call screen shows, watches the video `ready` says is sent.
 - An offer the browser cannot apply mid-call rejoins.
 - A `kicked` frame with `connectionFailed` (the server never heard this client's media, or lost it)
   rejoins.
