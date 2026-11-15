@@ -2,6 +2,8 @@
 //! platform implements these over its own stack (URLSession on iOS, OkHttp on Android), so TLS
 //! trust, proxies, and the move between Wi-Fi and cellular are the operating system's, and the
 //! engine runs no TLS of its own. The engine opens nothing itself; a test stands in for both.
+//! Swift and Kotlin implement them through `bindings`, which carries headers as records rather
+//! than pairs; `Received` crosses as it is.
 
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -40,7 +42,7 @@ pub trait Http: Send + Sync {
 }
 
 /// What a socket gave the engine next.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum Received {
     Text(String),
     /// The socket is closed, by either side, and gives nothing more.

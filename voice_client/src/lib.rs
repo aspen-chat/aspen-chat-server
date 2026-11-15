@@ -17,11 +17,16 @@
 //!   and each `kicked` reason.
 //! - `signalling`: typed frames over a `Socket`, and the signalling address of a voice server.
 //! - `api`: the REST calls a call makes.
+//! - `bindings`: the engine as Swift and Kotlin reach it, through UniFFI: what crosses as it
+//!   is, what is mirrored at the boundary, and the `Engine` object the apps hold.
 //!
 //! File transfers, rings, sounds, CallKit, and Telecom are not here: the signalling's file
 //! frames are left alone for the transfers piece, and `state::CallState` is what the rest read.
 
+uniffi::setup_scaffolding!();
+
 pub mod api;
+pub mod bindings;
 pub mod call;
 pub mod engine;
 pub mod peer_connection;

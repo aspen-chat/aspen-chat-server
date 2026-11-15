@@ -18,3 +18,6 @@ packages/protocol/src/generated/
 packages/app/src/generated/
 # The Android and iOS projects are kept, with their permissions, signing team, and push code;
 # each ignores its own build output and copied web assets.
+# Written by scripts/voice_client_bindings.py from the call engine (voice_client/README.md).
+packages/mobile/ios/VoiceClient/
+packages/mobile/android/app/src/main/java/com/aspen_chat/client/voice/

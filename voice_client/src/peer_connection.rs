@@ -2,13 +2,15 @@
 //! engine, and no more. The iOS layer implements it over `RTCPeerConnection` and the Android layer
 //! over `org.webrtc.PeerConnection`; media (tracks, frames, devices) stays on their side, named
 //! here by opaque ids. Everything that reaches the network goes through this interface, so a test
-//! can stand in for the platform and replay what a real one answered.
+//! can stand in for the platform and replay what a real one answered. The enums and records
+//! here cross to Swift and Kotlin as they are, and `PeerConnectionObserver` is the trait the
+//! engine implements and hands to them; the rest of the interface crosses through `bindings`.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "lowercase")]
 pub enum MediaKind {
     Audio,
@@ -24,7 +26,7 @@ pub struct TrackId(pub String);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransceiverId(pub u32);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "lowercase")]
 pub enum DescriptionKind {
     Offer,
@@ -34,7 +36,7 @@ pub enum DescriptionKind {
     Rollback,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 pub struct SessionDescription {
     #[serde(rename = "type")]
     pub kind: DescriptionKind,
@@ -44,7 +46,7 @@ pub struct SessionDescription {
 }
 
 /// Where the offer-answer exchange stands, as `RTCSignalingState` names it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "kebab-case")]
 pub enum SignalingState {
     Stable,
@@ -55,7 +57,7 @@ pub enum SignalingState {
     Closed,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "lowercase")]
 pub enum Direction {
     SendRecv,
@@ -66,7 +68,7 @@ pub enum Direction {
 
 /// One encoding a sender is asked for, as `RTCRtpEncodingParameters` has it. The engine asks for
 /// one encoding per producer.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct SendEncoding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -96,7 +98,7 @@ pub struct SenderParameters {
     pub rest: serde_json::Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct IceServer {
     pub urls: Vec<String>,
@@ -108,7 +110,7 @@ pub struct IceServer {
 
 /// How a peer connection is made: always unified plan, one ICE and DTLS association for every
 /// section (`max-bundle`), RTCP multiplexed, as mediasoup requires of a client.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct Configuration {
     pub ice_servers: Vec<IceServer>,
@@ -117,7 +119,7 @@ pub struct Configuration {
     pub ice_transport_policy: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "lowercase")]
 pub enum ConnectionState {
     New,
@@ -129,7 +131,7 @@ pub enum ConnectionState {
 }
 
 /// Whose statistics are asked for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]
 pub enum StatsOf {
     Connection,
@@ -143,6 +145,7 @@ pub enum StatsOf {
 pub struct PeerConnectionError(pub String);
 
 /// What the engine hears of a peer connection without asking.
+#[uniffi::export(with_foreign)]
 pub trait PeerConnectionObserver: Send + Sync {
     fn connection_state_changed(&self, state: ConnectionState);
 }

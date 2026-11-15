@@ -1,0 +1,10 @@
+# How the Swift module and the Kotlin package are written; `README.md` says how to write them.
+
+[bindings.swift]
+module_name = "VoiceClient"
+generate_immutable_records = true
+
+[bindings.kotlin]
+package_name = "com.aspen_chat.client.voice"
+cdylib_name = "voice_client"
+generate_immutable_records = true

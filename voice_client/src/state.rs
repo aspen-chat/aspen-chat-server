@@ -1,7 +1,8 @@
 //! What the interface layer reads of a call: one whole snapshot on every change, numbered, with
 //! tracks as the platform's ids. It is what the web client's `VoiceCallState` carries where that
 //! still applies, and what the new signalling adds: who is in the call, which audio slot carries
-//! whom, and which videos are watched.
+//! whom, and which videos are watched. Its parts cross to Swift and Kotlin as they are
+//! (`uniffi::Enum`, `uniffi::Record`); the snapshot itself crosses as `bindings::CallState`.
 
 use crate::peer_connection::TrackId;
 use serde::{Deserialize, Serialize};
@@ -9,7 +10,7 @@ use uuid::Uuid;
 use voice_protocol::signal::{MediaSource, SourceInfo, WatchedVideo};
 use voice_protocol::token::Grants;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]
 pub enum CallStatus {
     Idle,
@@ -22,7 +23,7 @@ pub enum CallStatus {
 }
 
 /// What failed when `status` is `Failed`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorKind {
     /// The API server refused the join offer (`error` is the Problem's text).
@@ -39,7 +40,7 @@ pub enum ErrorKind {
 }
 
 /// Why the call ended without the user asking, until `acknowledge_end`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]
 pub enum EndedReason {
     /// A moderator removed the user.
@@ -52,7 +53,7 @@ pub enum EndedReason {
 
 /// Why the API server ended a call, as its `voiceSessionEnded` event says
 /// (`aspen_wire::VoiceSessionEndReason`, which the app layer hands on).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionEndReason {
     Empty,
@@ -62,7 +63,7 @@ pub enum SessionEndReason {
 }
 
 /// Someone else in the call.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct Participant {
     pub user: Uuid,
@@ -74,7 +75,7 @@ pub struct Participant {
 }
 
 /// One of the audio sections the client receives, and whose microphone it carries now.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioSlot {
     pub slot: u8,
@@ -86,7 +87,7 @@ pub struct AudioSlot {
 }
 
 /// A video the client watches and has a section for: a camera or a shared screen.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteVideo {
     pub user: Uuid,
@@ -95,7 +96,7 @@ pub struct RemoteVideo {
 }
 
 /// The sound of a shared screen the client watches.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareAudio {
     pub user: Uuid,
@@ -103,7 +104,7 @@ pub struct ShareAudio {
 }
 
 /// Something this client sends, or has asked to.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSource {
     pub source: MediaSource,
@@ -114,7 +115,7 @@ pub struct LocalSource {
 }
 
 /// A request the voice server would not honour.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 #[serde(rename_all = "camelCase")]
 pub struct Refusal {
     pub detail: String,

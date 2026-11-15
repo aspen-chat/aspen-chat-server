@@ -5,11 +5,25 @@ edition = "2024"
 license = "MPL-2.0"
 description = "A client's side of a call without a browser: the mobile apps' call engine, which drives the platform's WebRTC through an interface each platform implements."
 
+[lib]
+# `cdylib` is what the Android app loads, `staticlib` what the iOS app links, and `lib` what the
+# workspace's tests and the bindings generator read.
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+required-features = ["bindgen"]
+
+[features]
+# The bindings generator (`src/bin/uniffi-bindgen.rs`), which the apps' builds never need.
+bindgen = ["uniffi/cli"]
+
 [dependencies]
 async-trait = "0.1"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 thiserror = "2.0.18"
 tokio = { version = "1.44.2", features = ["macros", "rt", "sync", "time"] }
+uniffi = "0.32.2"
 uuid = { version = "1.16.0", features = ["serde", "v7"] }
 voice_protocol = { version = "0.1.0", path = "../voice_protocol" }

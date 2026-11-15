@@ -1,5 +1,13 @@
 [toolchain]
 channel = "1.99.1"
 profile = "default"
-# The example plugins (`plugins/`) are WebAssembly components, which the permissions check builds.
-targets = ["wasm32-wasip2"]
+# The example plugins (`plugins/`) are WebAssembly components, which the permissions check builds;
+# the call engine (`voice_client/`) is built for the iOS app, its simulator, the Android app, and
+# its emulator.
+targets = [
+  "wasm32-wasip2",
+  "aarch64-apple-ios",
+  "aarch64-apple-ios-sim",
+  "aarch64-linux-android",
+  "x86_64-linux-android",
+]

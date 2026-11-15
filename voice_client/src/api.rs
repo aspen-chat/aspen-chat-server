@@ -17,6 +17,8 @@ pub const API_PREFIX: &str = "/api/v1";
 
 /// The session the call acts as. The app layer signs in, refreshes, and keeps the token; the
 /// engine asks for it before each request, so a refreshed token is used from the next one.
+/// The apps implement it directly (`bindings`).
+#[uniffi::export(with_foreign)]
 #[async_trait]
 pub trait Credentials: Send + Sync {
     /// The session token to send as `Authorization: Bearer`, or `None` when signed out.

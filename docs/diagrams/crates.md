@@ -128,8 +128,8 @@ flowchart TB
 - `voice_client` is the call engine the mobile apps run natively, shared by both: it drives each
   platform's WebRTC, HTTP, and WebSockets through interfaces the iOS and Android layers implement,
   and speaks `voice_protocol`'s signalling frames to the voice server, which is why it depends on
-  that crate alone. No crate depends on it yet; it is not a binary of the workspace but a library
-  the apps link.
+  that crate alone. No crate depends on it yet; it is a library the apps link through its Swift and
+  Kotlin bindings (its one binary, behind the `bindgen` feature, generates those).
 - `aspen-migrate` needs the database connection, and `aspen_search_text` for the migration that
   found the words of every message written before `search_text` existed, at the version the server
   finds them with; its migrations are its own (`migrate/src/migrations/`), and `aspen_schema` is
