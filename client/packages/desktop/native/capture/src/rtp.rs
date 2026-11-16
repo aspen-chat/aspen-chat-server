@@ -399,12 +399,22 @@ impl RtpSender {
         let connection = &self.connection;
         let captured = {
             let mut epoch = connection.epoch.lock().expect("epoch lock");
-            let (first_pts, first_at) = *epoch.get_or_insert((pts_us, Instant::now()));
+            let now = Instant::now();
+            let (first_pts, first_at) = *epoch.get_or_insert((pts_us, now));
             let offset = Duration::from_secs_f64((pts_us - first_pts).abs() / 1e6);
-            if pts_us >= first_pts {
+            let captured = if pts_us >= first_pts {
                 first_at + offset
             } else {
                 first_at.checked_sub(offset).unwrap_or(first_at)
+            };
+            // A frame the encoders gave up sooner after its capture than any before moves the
+            // anchor to it: str0m's sender reports give no RTP time for a stream whose last
+            // packet is stamped with a time not yet come.
+            if captured > now {
+                *epoch = Some((pts_us, now));
+                now
+            } else {
+                captured
             }
         };
         if connection.stopped.load(Ordering::SeqCst) {

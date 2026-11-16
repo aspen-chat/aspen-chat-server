@@ -382,6 +382,9 @@ impl Connection {
                 changed.push(*mid);
             }
         }
+        // A restarted section may send on new streams of str0m's (one moved into another stream
+        // does), which take the resend setting on their first write.
+        self.resending.retain(|mid| !changed.contains(mid));
         self.restarted = changed;
         let (offer, pending) = offer?;
         self.touch(now);
@@ -653,10 +656,13 @@ mod tests {
     #[test]
     fn a_new_occupant_moves_its_slot_into_their_stream() {
         let (mut connection, mut client) = connection();
-        offer(&mut connection, &mut client, &[slot(Some("ann-camera"))]);
+        let first = offer(&mut connection, &mut client, &[slot(Some("ann-camera"))]);
         let sdp = offer(&mut connection, &mut client, &[slot(Some("bob-camera"))]);
         assert!(sdp.contains("a=msid:bob-camera "), "{sdp}");
         assert_eq!(sdp.matches("\nm=").count(), 1);
+        // On a new SSRC, which a browser makes a new receive stream for, synchronised with the
+        // stream it is now in: one it has had stays synchronised with the stream it was in.
+        assert_ne!(ssrc_of(&first), ssrc_of(&sdp));
         assert_eq!(connection.restarted.len(), 1);
         // The same occupant again, or none named, offers nothing.
         assert!(
@@ -669,6 +675,15 @@ mod tests {
                 .negotiate(&[slot(None)], Instant::now())
                 .is_none()
         );
+    }
+
+    /// The first `a=ssrc` an SDP names.
+    fn ssrc_of(sdp: &str) -> String {
+        sdp.lines()
+            .find_map(|line| line.strip_prefix("a=ssrc:"))
+            .and_then(|rest| rest.split(' ').next())
+            .expect("an SSRC")
+            .to_string()
     }
 
     /// The `a=ice-ufrag` an SDP names.

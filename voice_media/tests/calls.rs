@@ -217,6 +217,44 @@ async fn video_reaches_a_watcher_and_starts_on_a_keyframe() {
     bob.drain();
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(bob.drain().iter().all(|p| p.mid != video_mid));
+
+    // Watched again, the section it left takes it up on the same SSRC, numbered on from where
+    // it stopped: a receiver's SRTP drops numbers below those it has had as replays.
+    let last = seen.last().unwrap();
+    send(
+        &media,
+        Command::Watch {
+            participant: bob.id,
+            video: vec![(ann.user, MediaSource::Camera)],
+        },
+    );
+    bob.until(&media, WAIT, |e| {
+        matches!(e, Event::Offer { revision: 4, .. })
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        bob.mid_of(&SectionContent::Video {
+            user: ann.user,
+            source: MediaSource::Camera,
+        }),
+        Some(video_mid.clone())
+    );
+    bob.settle(&media).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let again: Vec<_> = bob
+        .drain()
+        .into_iter()
+        .filter(|p| p.mid == video_mid)
+        .collect();
+    assert!(again.len() > 20, "Bob saw {} packets", again.len());
+    assert_eq!(again[0].ssrc, last.ssrc);
+    assert!(
+        again[0].seq > last.seq,
+        "{} after {}",
+        again[0].seq,
+        last.seq
+    );
 }
 
 /// Starts a participant's microphone and returns the section it sends on.
@@ -241,7 +279,7 @@ async fn open_microphone(media: &voice_media::Media, peer: &mut Peer) -> String 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_slot_moves_to_who_speaks_and_its_numbering_runs_on() {
+async fn a_slot_moves_to_who_speaks_on_a_stream_of_theirs() {
     // One slot, two microphones: Bob's first, then Cat's once she speaks and he does not.
     let media = media(1);
     let call = call();
@@ -309,23 +347,21 @@ async fn a_slot_moves_to_who_speaks_and_its_numbering_runs_on() {
         .expect("Cat heard on the slot");
     assert!(switch > 0 && heard[..switch].iter().all(|p| p.csrc == vec![bob_ssrc]));
     assert!(heard[switch..].iter().all(|p| p.csrc == vec![cat_ssrc]));
-    // One stream to the client: its SSRC, sequence numbers, and timestamps run on across the
-    // change of speaker.
-    assert!(heard.iter().all(|p| p.ssrc == heard[0].ssrc));
-    for pair in heard.windows(2) {
-        assert_eq!(
-            pair[1].seq,
-            pair[0].seq + 1,
-            "no gap or repeat in the numbering"
-        );
+    // Each speaker on an SSRC of their own, which a browser makes a receive stream for in the
+    // speaker's stream, numbered without a gap or repeat.
+    let (bobs, cats) = heard.split_at(switch);
+    assert!(bobs.iter().all(|p| p.ssrc == bobs[0].ssrc));
+    assert!(cats.iter().all(|p| p.ssrc == cats[0].ssrc));
+    assert_ne!(bobs[0].ssrc, cats[0].ssrc, "a new SSRC for the new speaker");
+    for stretch in [bobs, cats] {
+        for pair in stretch.windows(2) {
+            assert_eq!(
+                pair[1].seq,
+                pair[0].seq + 1,
+                "no gap or repeat in the numbering"
+            );
+        }
     }
-    let (before, after) = (&heard[switch - 1], &heard[switch]);
-    let gap = after.timestamp.wrapping_sub(before.timestamp);
-    let elapsed = after.at.duration_since(before.at).as_micros() as u32 * 48 / 1000;
-    assert!(
-        gap > 0 && gap < elapsed + 48_000 / 10,
-        "the timestamp moves on by the time between"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

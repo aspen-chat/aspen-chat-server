@@ -11,7 +11,7 @@
 
 import { chromium, firefox, type Browser, type BrowserType, type Page } from "@playwright/test";
 import type { Session } from "../src";
-import type { CallReport, StreamReport } from "./page";
+import type { CallReport, StreamReport, SyncReport } from "./page";
 
 interface Arguments {
   readonly base: string;
@@ -44,6 +44,17 @@ const BROWSERS: Record<"chromium" | "firefox", { type: BrowserType; launch: obje
     },
   },
 };
+
+/**
+ * Sync is checked by holding a stream's picture back by `SYNC_DELAY_MS` at the receiver, which
+ * a browser synchronising its sound with it matches by holding the sound back too, until they
+ * play within `SYNC_TOLERANCE_MS` of each other: the edge of what people notice as lip sync
+ * (ITU-R BT.1359 puts it at 45 ms of sound ahead). A browser first estimates sync on the sender
+ * reports, which come every few seconds, and then closes the gap tens of milliseconds a second.
+ */
+const SYNC_DELAY_MS = 400;
+const SYNC_TOLERANCE_MS = 45;
+const SYNC_SECONDS = 45;
 
 const args = JSON.parse(process.env.ASPEN_CALL_CHECK ?? "{}") as Arguments;
 let failures = 0;
@@ -109,6 +120,43 @@ function received(report: CallReport, kind: string): StreamReport[] {
 
 function sent(report: CallReport, kind: string): StreamReport[] {
   return report.streams.filter((s) => s.direction === "outbound" && s.kind === kind);
+}
+
+function sync(page: Page, stream: string): Promise<SyncReport> {
+  return page.evaluate(
+    async ([s, delay, tolerance, seconds]) => {
+      const reported = await window.aspenCall?.sync(s, delay, tolerance, seconds);
+      if (reported === undefined) {
+        throw new Error("no call");
+      }
+      return reported;
+    },
+    [stream, SYNC_DELAY_MS, SYNC_TOLERANCE_MS, SYNC_SECONDS] as const,
+  );
+}
+
+function inStep(report: SyncReport): boolean {
+  const last = report.offsets.at(-1);
+  return last !== null && last !== undefined && Math.abs(last) <= SYNC_TOLERANCE_MS;
+}
+
+/** What a sync report says, short enough to print: the sections and the last offsets seen. */
+function syncDetail(report: SyncReport) {
+  const measured = report.offsets.filter((offset) => offset !== null);
+  return { ...report, offsets: measured.slice(-8), measured: measured.length };
+}
+
+/**
+ * The frames a received video stream decoded since `before`: all it counts where it has counted
+ * fewer than then, since a browser may count a section that resumes from zero (Firefox does).
+ */
+function framesSince(stream: StreamReport, before: CallReport): number {
+  const earlier = received(before, "video").find((b) => b.mid === stream.mid);
+  const from =
+    earlier === undefined || earlier.framesDecoded > stream.framesDecoded
+      ? 0
+      : earlier.framesDecoded;
+  return stream.framesDecoded - from;
 }
 
 /** Received audio between two reports: what arrived, and how much of it was made up. */
@@ -187,6 +235,9 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
       received(camera, "video").some((s) => s.framesDecoded > 30),
       received(camera, "video"),
     );
+    const cameraStream = `${args.ann.userId}-camera`;
+    const lipSync = await sync(bob, cameraStream);
+    check("Bob hears Ann's voice in step with her camera", inStep(lipSync), syncDetail(lipSync));
 
     // A shared screen, with the sender's encoder bounded and the server's start bitrate offered.
     await ann.evaluate(async () => {
@@ -215,6 +266,69 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
         "her screen's sound goes out in stereo without DTX",
         shareSound.codec.includes("usedtx=0"),
         shareSound,
+      );
+    }
+
+    const shareStream = `${args.ann.userId}-share`;
+    const shareSync = await sync(bob, shareStream);
+    if (shareSync.audioMid !== null) {
+      check("and her screen's sound in step with it", inStep(shareSync), syncDetail(shareSync));
+    }
+
+    // Sections no longer wanted go idle and are taken over by what is wanted next: a camera and
+    // a screen stopped and started again play on sections the call already has, numbered on
+    // from where they stopped (a browser drops numbers it has had as replays), and in step.
+    await ann.evaluate(() => {
+      window.aspenCall?.stopCamera();
+    });
+    await until(bob, (r) => !r.cameras.includes(args.ann.userId));
+    await ann.evaluate(() => {
+      window.aspenCall?.stopScreenShare();
+    });
+    await until(bob, (r) => !r.screens.includes(args.ann.userId));
+    const idle = await report(bob);
+    await ann.evaluate(async () => {
+      await window.aspenCall?.startScreenShare();
+      await window.aspenCall?.startCamera();
+    });
+    const decoding = (r: CallReport, before: CallReport) =>
+      received(r, "video").filter((s) => framesSince(s, before) > 10).length >= 2;
+    const again = await until(
+      bob,
+      (r) =>
+        r.cameras.includes(args.ann.userId) &&
+        r.screens.includes(args.ann.userId) &&
+        decoding(r, idle),
+    );
+    await sleep(2000);
+    const still = await report(bob);
+    check(
+      "a camera and a screen started again play on the sections they left",
+      decoding(again, idle) &&
+        decoding(still, again) &&
+        again.sections.length === idle.sections.length,
+      {
+        before: { sections: idle.sections, video: received(idle, "video") },
+        after: {
+          sections: again.sections,
+          answered: again.answered,
+          video: received(again, "video"),
+        },
+        ann: await report(ann).then((r) => ({ sections: r.sections, video: sent(r, "video") })),
+      },
+    );
+    const lipSyncAgain = await sync(bob, cameraStream);
+    check(
+      "and her voice is in step with her camera on its new section",
+      inStep(lipSyncAgain),
+      syncDetail(lipSyncAgain),
+    );
+    const shareSyncAgain = await sync(bob, shareStream);
+    if (shareSyncAgain.audioMid !== null) {
+      check(
+        "and her screen's sound with her screen",
+        inStep(shareSyncAgain),
+        syncDetail(shareSyncAgain),
       );
     }
 

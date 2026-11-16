@@ -3900,7 +3900,7 @@ dependencies = [
 [[package]]
 name = "is"
 version = "0.12.0"
-source = "git+https://github.com/Xaeroxe/str0m?rev=f2ce59520cc17ca2db4bf4f308a207e22e3ac172#f2ce59520cc17ca2db4bf4f308a207e22e3ac172"
+source = "git+https://github.com/Xaeroxe/str0m?rev=d0a0c47cb8152b96fb111cb1a7174bc4d3354cf8#d0a0c47cb8152b96fb111cb1a7174bc4d3354cf8"
 dependencies = [
  "crc",
  "serde",
@@ -6607,7 +6607,7 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 [[package]]
 name = "str0m"
 version = "0.25.0"
-source = "git+https://github.com/Xaeroxe/str0m?rev=f2ce59520cc17ca2db4bf4f308a207e22e3ac172#f2ce59520cc17ca2db4bf4f308a207e22e3ac172"
+source = "git+https://github.com/Xaeroxe/str0m?rev=d0a0c47cb8152b96fb111cb1a7174bc4d3354cf8#d0a0c47cb8152b96fb111cb1a7174bc4d3354cf8"
 dependencies = [
  "arrayvec",
  "base64ct",
@@ -6627,7 +6627,7 @@ dependencies = [
 [[package]]
 name = "str0m-aws-lc-rs"
 version = "0.7.0"
-source = "git+https://github.com/Xaeroxe/str0m?rev=f2ce59520cc17ca2db4bf4f308a207e22e3ac172#f2ce59520cc17ca2db4bf4f308a207e22e3ac172"
+source = "git+https://github.com/Xaeroxe/str0m?rev=d0a0c47cb8152b96fb111cb1a7174bc4d3354cf8#d0a0c47cb8152b96fb111cb1a7174bc4d3354cf8"
 dependencies = [
  "aws-lc-rs",
  "dimpl",
@@ -6638,7 +6638,7 @@ dependencies = [
 [[package]]
 name = "str0m-proto"
 version = "0.8.0"
-source = "git+https://github.com/Xaeroxe/str0m?rev=f2ce59520cc17ca2db4bf4f308a207e22e3ac172#f2ce59520cc17ca2db4bf4f308a207e22e3ac172"
+source = "git+https://github.com/Xaeroxe/str0m?rev=d0a0c47cb8152b96fb111cb1a7174bc4d3354cf8#d0a0c47cb8152b96fb111cb1a7174bc4d3354cf8"
 dependencies = [
  "base64ct",
  "dimpl",

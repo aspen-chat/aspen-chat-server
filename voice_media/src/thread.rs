@@ -196,6 +196,11 @@ struct Out {
     revision: u64,
     /// Audio for it that came while that offer was unanswered, sent on with the answer.
     held: VecDeque<Forwarded>,
+    /// Its section is idle: nothing is routed to it, and it keeps its numbering for whatever
+    /// takes the section over, on the same SSRC unless that moves it into another stream. A
+    /// receiver's SRTP refuses numbers below those it has had on an SSRC as replays, so a
+    /// section numbered from the start again would be dropped until it caught up.
+    idle: bool,
 }
 
 struct Sending {
@@ -315,10 +320,10 @@ enum Sent {
 }
 
 /// When the sender captured `packet`, on this server's clock: the time its latest sender report
-/// gives, carried forward by the RTP time since, mapped onto the server's clock by `clock`, the
-/// sender's first report and when it arrived. Every stream of one sender keeps its timing against
-/// the others this way, whatever the network or the sender's encoders add to one of them, so a
-/// receiver synchronizes them. Before the sender's first report, when it arrived stands in.
+/// gives, carried forward by the RTP time since, mapped onto the server's clock by `clock`
+/// (`on_server_clock`). Every stream of one sender keeps its timing against the others this way,
+/// whatever the network or the sender's encoders add to one of them, so a receiver synchronizes
+/// them. Before the stream's first report, when it arrived stands in.
 fn sender_time(
     clock: &mut Option<(SystemTime, Instant)>,
     packet: &RtpPacket,
@@ -338,11 +343,32 @@ fn sender_time(
     } else {
         info.ntp_time - since
     };
-    let (first, arrived) = *clock.get_or_insert((sent, packet.timestamp));
-    match sent.duration_since(first) {
-        Ok(later) => arrived + later,
-        Err(earlier) => arrived.checked_sub(earlier.duration()).unwrap_or(arrived),
+    on_server_clock(clock, sent, packet.timestamp)
+}
+
+/// `sent`, a time on the sender's clock, on this server's: `clock` pairs a time of the sender's
+/// with the moment it arrived, the soonest any packet has arrived after it was sent, so no packet
+/// is placed after its arrival. str0m's sender reports carry a stream forward from its last
+/// packet's time to the report's, and a time not yet come gives them no RTP time at all, which
+/// a receiver cannot synchronize by. A packet sooner than any before moves the pairing earlier,
+/// for every stream of the sender alike.
+fn on_server_clock(
+    clock: &mut Option<(SystemTime, Instant)>,
+    sent: SystemTime,
+    arrived: Instant,
+) -> Instant {
+    let (first, first_arrived) = *clock.get_or_insert((sent, arrived));
+    let mapped = match sent.duration_since(first) {
+        Ok(later) => first_arrived + later,
+        Err(earlier) => first_arrived
+            .checked_sub(earlier.duration())
+            .unwrap_or(first_arrived),
+    };
+    if mapped > arrived {
+        *clock = Some((sent, arrived));
+        return arrived;
     }
+    mapped
 }
 
 /// Writes `forwarded` on section `mid` of `conn`, numbered for that section: rebased onto where
@@ -989,13 +1015,27 @@ impl Thread {
                 .filter(|s| !s.idle)
                 .map(|s| (s.mid, s.kind, s.content.clone()))
                 .collect();
+            let idle: Vec<Mid> = connection
+                .sections
+                .iter()
+                .filter(|s| s.idle)
+                .map(|s| s.mid)
+                .collect();
             let restarted = connection.restarted.clone();
             let Some(p) = self.participants.get_mut(&participant) else {
                 return;
             };
             if kind == ConnectionKind::Call {
-                p.outs
-                    .retain(|mid, _| offered.iter().any(|(m, _, _)| m == mid));
+                p.outs.retain(|mid, _| {
+                    idle.contains(mid) || offered.iter().any(|(m, _, _)| m == mid)
+                });
+                for (mid, out) in &mut p.outs {
+                    if idle.contains(mid) {
+                        out.idle = true;
+                        out.source = None;
+                        out.held.clear();
+                    }
+                }
                 for (mid, kind, content) in offered {
                     if matches!(content, SectionContent::Sending { .. }) {
                         continue;
@@ -1014,12 +1054,14 @@ impl Thread {
                         receiving: true,
                         revision,
                         held: VecDeque::new(),
+                        idle: false,
                     });
                     if restarted.contains(&mid) {
                         out.content = content;
                         out.source = None;
                         out.revision = revision;
                         out.held.clear();
+                        out.idle = false;
                     }
                 }
             }
@@ -1051,7 +1093,7 @@ impl Thread {
         let members = self.calls.get(&p.call);
         let owner = |user: &Uuid| members.and_then(|c| c.by_user.get(user)).copied();
         let mut routed = Vec::new();
-        for (mid, out) in &p.outs {
+        for (mid, out) in p.outs.iter().filter(|(_, out)| !out.idle) {
             let source = match &out.content {
                 SectionContent::AudioSlot { slot } => p
                     .slots
@@ -1723,5 +1765,39 @@ impl Thread {
             conn.request_keyframe(ssrc, kind);
             self.mark(index);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A packet sooner than the first places every later time of the sender's earlier, and none
+    /// is placed after it arrived.
+    #[test]
+    fn a_senders_time_is_never_placed_after_it_arrived() {
+        let ms = Duration::from_millis;
+        let (sent, arrived) = (SystemTime::now(), Instant::now());
+        let mut clock = None;
+        // The first after 50 ms on the way, the next after 20: it stands at its arrival.
+        assert_eq!(
+            on_server_clock(&mut clock, sent, arrived + ms(50)),
+            arrived + ms(50)
+        );
+        assert_eq!(
+            on_server_clock(&mut clock, sent + ms(100), arrived + ms(120)),
+            arrived + ms(120)
+        );
+        // A slower one, 80 ms on the way, keeps the 20 ms pairing: its capture, 20 ms after
+        // the last's, falls 20 ms after the last's arrival, before its own.
+        assert_eq!(
+            on_server_clock(&mut clock, sent + ms(120), arrived + ms(200)),
+            arrived + ms(140)
+        );
+        // From before the first: carried back from the pairing.
+        assert_eq!(
+            on_server_clock(&mut clock, sent, arrived + ms(500)),
+            arrived + ms(20)
+        );
     }
 }

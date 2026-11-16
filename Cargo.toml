@@ -13,7 +13,8 @@ exclude = [
 default-members = ["server"]
 
 # str0m with `SdpApi::set_stream_id`, which the voice server's media threads need to move a reused
-# section into its new sender's stream, so receivers keep a person's voice and video in sync. Pinned
+# section into its new sender's stream, on new SSRCs (a browser groups what it synchronizes by the
+# receive streams it makes for SSRCs), so receivers keep a person's voice and video in sync. Pinned
 # by commit; replaced by the release that includes it once str0m publishes one.
 [patch.crates-io]
-str0m = { git = "https://github.com/Xaeroxe/str0m", rev = "f2ce59520cc17ca2db4bf4f308a207e22e3ac172" }
+str0m = { git = "https://github.com/Xaeroxe/str0m", rev = "d0a0c47cb8152b96fb111cb1a7174bc4d3354cf8" }
