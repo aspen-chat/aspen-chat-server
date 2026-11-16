@@ -57,6 +57,7 @@ import argparse
 import json
 import math
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -347,7 +348,9 @@ class Ios:
                           and "' failed" not in text and " error: " not in text)
             # Each test's own line says what it saw; a test that ran without one did not do its work.
             ran = all(f"{line}:" in text for line in ("call-engine-test", "call-plugin-test"))
-            if not passed or not ran or "skipped" in text:
+            # Only the trailing test skips itself here (outside `--record-trailing`).
+            skipped = re.findall(r"Test Case '-\[AppTests\.\w+ (\w+)\]' skipped", text)
+            if not passed or not ran or any(name != IOS_TRAILING_TEST.rsplit("/", 1)[1] for name in skipped):
                 raise Failed(f"the tests did not pass (exit {code}); see {log}")
         finally:
             tunnel.terminate()
@@ -415,14 +418,19 @@ class Emulator:
 
 
 def tests_passed(results: Path, expected: int) -> bool:
-    """Whether the JUnit reports under `results` say exactly `expected` tests ran, none failing,
-    erroring, or skipped."""
+    """Whether the JUnit reports under `results` say exactly `expected` tests ran, none failing
+    or erroring, and none skipped but the trailing test, which skips itself outside
+    `--record-trailing`."""
     counts = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
+    skipped: list[str] = []
     for path in results.rglob("*.xml"):
         suite = ElementTree.parse(path).getroot()
         for name in counts:
             counts[name] += int(suite.get(name, "0"))
-    return counts["tests"] == expected and counts["failures"] == 0 and counts["errors"] == 0 and counts["skipped"] == 0
+        skipped.extend(case.get("name", "") for case in suite.iter("testcase") if case.find("skipped") is not None)
+    ran = counts["tests"] - counts["skipped"]
+    return (ran == expected and counts["failures"] == 0 and counts["errors"] == 0
+            and all(name == ANDROID_TRAILING_TEST.split("#")[1] for name in skipped))
 
 
 class Android:

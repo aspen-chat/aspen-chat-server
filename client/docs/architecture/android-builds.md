@@ -262,9 +262,10 @@ development build allows; media goes to the voice server's announced address ove
 Chromium as the second participant with a tone WAV as its microphone and its fake camera
 (`calls/second.ts`, which the script's helper drives: showing video, the camera on and off, and a
 frame of someone's camera sampled), and `gradlew connectedDebugAndroidTest` on these two tests
-alone, judging their JUnit reports (two tests, none failed, erred, or skipped) and that each printed
-its own line, with `ANDROID_SERIAL` set to the emulator's serial so a phone plugged in beside it is
-never touched. With `--avd` it starts the emulator headless, recording the machine's microphone
+alone, judging their JUnit reports (two tests run, none failed or erred, and none skipped but the
+trailing test, which skips itself outside `--record-trailing`) and that each printed its own line,
+with `ANDROID_SERIAL` set to the emulator's serial so a phone plugged in beside it is never touched.
+With `--avd` it starts the emulator headless, recording the machine's microphone
 (`-allow-host-audio`, without which the emulator records silence); the emulator's PulseAudio backend
 does not start against PipeWire's server (``Could not init `pa' audio driver``), so there its
 microphone is silent and the test checks the browser hears silence. The test reads its deployment,

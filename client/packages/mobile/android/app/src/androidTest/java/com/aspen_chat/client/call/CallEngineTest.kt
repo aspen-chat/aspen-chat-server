@@ -273,9 +273,13 @@ class CallEngineTest {
             val joined = sounds.played.first { it.cue == SoundCue.CALL_JOINED }
             assertTrue("the player plays as the cue is given", joined.playing)
             assertEquals("nothing before the connection, and the joining once", listOf(SoundCue.CALL_JOINED), sounds.played.map { it.cue })
-            val voicePlayers = joined.players.filter { it.contains("USAGE_VOICE_COMMUNICATION") }
-            assertTrue("the system lists the sound as a voice communication player of this process:\n${joined.players}", voicePlayers.isNotEmpty())
-            assertTrue("and as started:\n$voicePlayers", voicePlayers.any { it.contains("started") })
+            // The sound's own player, told apart from WebRTC's voice track (an `AudioTrack` of
+            // speech on the same usage) by its kind and content type.
+            val voicePlayers = joined.players.filter {
+                it.contains("android.media.MediaPlayer") && it.contains("USAGE_VOICE_COMMUNICATION") && it.contains("CONTENT_TYPE_SONIFICATION")
+            }
+            assertTrue("the system lists the sound as a MediaPlayer of this process playing a voice communication:\n${joined.players}", voicePlayers.isNotEmpty())
+            assertTrue("and as started:\n$voicePlayers", voicePlayers.any { it.contains("state:started") })
             untilTelecom("the system call is active", 20, call) { it == CallTelecom.Phase.ACTIVE }
             val callId = call.telecom.callId ?: throw AssertionError("Telecom gave the call no id")
             val telecomActive = telecomLines(callId)
