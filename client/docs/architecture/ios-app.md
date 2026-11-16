@@ -435,11 +435,11 @@ and taller than wide); the camera is moved to the other synthetic camera with th
 flows on across the resume; and the camera is stopped before the leave. The picture in picture is
 started on the browser's camera where the system supports one, and the simulator's does not, which
 the log line says. Through it all it watches the call's sounds (`CallSounds.listen`): the joining is
-played as the engine connects and again as the browser joins, the leaving as the call is left, no
-loss is said of the resume within the grace, and each is a player playing as the cue is given, on
-the session the test activated as CallKit would (play and record, voice chat), which the log line
-names too; the players are in software (`SoftwareSoundPlayer`, Sounds above), each having read its
-bundled recording, since the simulator's audio server starts no output for a test process.
+played as the engine connects and again as the browser joins, the leaving as the call is left, the
+cut socket is said lost and, with the resume, back, and each is a player playing as the cue is
+given, on the session the test activated as CallKit would (play and record, voice chat), which the
+log line names too; the players are in software (`SoftwareSoundPlayer`, Sounds above), each having
+read its bundled recording, since the simulator's audio server starts no output for a test process.
 `AppTests/CallRoutesTests` reads the simulator's routes (its loudspeaker in use, a receiver listed
 for the iPhone idiom), the kind of each port type, and the proximity rule, and holds and resets a
 choice. `AppTests/AspenCallPluginTests` drives the bridge itself: the app under test is the app,

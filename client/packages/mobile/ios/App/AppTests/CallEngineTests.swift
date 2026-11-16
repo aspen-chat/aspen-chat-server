@@ -424,11 +424,13 @@ final class CallEngineTests: XCTestCase {
         XCTAssertEqual(call.snapshots.latest, call.engine.state(), "the observer saw the latest snapshot")
         let revisions = seen.revisions
         XCTAssertTrue(zip(revisions, revisions.dropFirst()).allSatisfy { $1 == $0 + 1 }, "revisions count up by one: \(revisions)")
-        // Leaving is the leaving sound, on the session the test still holds active.
+        // Leaving is the leaving sound, on the session the test still holds active; the cut
+        // socket was said lost and, with the resume, back, as the web's call says of its own
+        // rejoining.
         try await untilTrue("the leaving is played", seconds: 10) { sounds.played.contains { $0.cue == .callLeft } }
         let played = sounds.played
         XCTAssertTrue(played.allSatisfy { $0.playing && $0.category == .playAndRecord && $0.mode == .voiceChat }, "every sound played on the call's session: \(played)")
-        XCTAssertFalse(played.contains { $0.cue == .disconnected || $0.cue == .reconnected }, "a resume within the grace is no loss: \(played.map(\.cue))")
+        XCTAssertEqual(played.map(\.cue), [.callJoined, .callJoined, .disconnected, .reconnected, .callLeft])
         print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); \(video); \(pictureInPicture); resumed on socket 2 with session \(session ?? "?") with video flowing on; camera off; the signalling socket negotiated \(sockets.latestExtensions); left; the sounds \(played.map { String(describing: $0.cue) }) each played into a player in software on the active session (\(joined.category.rawValue), \(joined.mode.rawValue)), the simulator's audio server starting no output for a test process")
     }
 

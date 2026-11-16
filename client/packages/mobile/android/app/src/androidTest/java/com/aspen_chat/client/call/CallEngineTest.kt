@@ -493,12 +493,16 @@ class CallEngineTest {
             assertNull(call.routes.currentKind)
             val telecomAfter = telecomLines(callId)
             assertTrue("Telecom no longer holds the call $callId:\n$telecomAfter", telecomAfter.none { it.contains("ACTIVE") || it.contains("DIALING") })
-            // Leaving is the leaving sound, and a resume within the grace was no loss.
+            // Leaving is the leaving sound; the cut socket was said lost and, with the resume,
+            // back, as the web's call says of its own rejoining.
             awaitTrue("the leaving is played", 10) { sounds.played.any { it.cue == SoundCue.CALL_LEFT } }
             soundsListening.cancel()
             val played = sounds.played
             assertTrue("every sound's player played as it was given: $played", played.all { it.playing })
-            assertTrue("a resume within the grace is no loss: ${played.map { it.cue }}", played.none { it.cue == SoundCue.DISCONNECTED || it.cue == SoundCue.RECONNECTED })
+            assertEquals(
+                listOf(SoundCue.CALL_JOINED, SoundCue.CALL_JOINED, SoundCue.DISCONNECTED, SoundCue.RECONNECTED, SoundCue.CALL_LEFT),
+                played.map { it.cue },
+            )
             println("call-engine-test: left; Telecom's call ended, the service and its notification are down, routes empty, audio mode $modeBefore again")
             println("call-engine-test: the sounds ${played.map { it.cue }} each played by a MediaPlayer as a voice communication (${voicePlayers.first().trim()})")
             println(
