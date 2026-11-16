@@ -368,7 +368,9 @@ or what an operator must open, route, or back up updates it in the same commit.
    move, a category deleted, a removal, a ban, a sign-out, a password change, an operator command)
    and watches every place someone on either side could notice: REST reads, an open event stream, a
    call on the voice server, attachments. Each feature that grants or shows something adds its
-   scenario here (see the revocation checklist under Standards and Expectations).
+   scenario here (see the revocation checklist under Standards and Expectations). `--only` runs the
+   scenarios it names, and `--shard K/N` every N-th from the K-th, each on a deployment of its own,
+   so N machines run the whole at once, as CI does.
 
    Check that the NATS streams are sized to their settings and to the memory NATS has:
 
@@ -477,29 +479,33 @@ it is the way it is.
 `cargo clippy -- -D warnings`, and the workspace tests on x86-64; the example plugins' format,
 lints, tests, and builds for `wasm32-wasip2` (`plugins/word_filter`, `plugins/forum`,
 `plugins/calendar`, and `plugins/blackjack`, each a workspace of its own), whose copies of
-`views/bridge.js` must be the same; the API, event, and signalling schemas, written by the two
-servers in a job of their own that the client, Android, Windows, macOS, iOS, and Flatpak jobs wait
-for rather than the workspace's tests; the client's format (`pnpm format:check`), typecheck, lint,
-and tests, with its browser tests on Chromium (a desktop and a phone) split across three runners;
-the Android app's build, its unit tests, and its device tests on an emulator, the debug APK kept as
-an artifact (`client/docs/architecture/android-builds.md`); the desktop app's Flatpak, built with
-`package:flatpak`, installed, and its capture helper asked what it can capture inside the sandbox;
-on macOS, the capture helper's lints and tests, the iOS app built for the simulator with the
-extension's Web Push check, and on a pull request an unsigned dmg, while `main` builds signed dmgs,
-sent to Apple's notary service without waiting, and an App Store build for TestFlight from the
-`apple-signing` environment (`client/docs/architecture/apple-builds.md`);
+`views/bridge.js` must be the same; the debug servers, built once in a job of their own (`servers`),
+which writes the API, event, and signalling schemas the client, Android, Windows, macOS, iOS, and
+Flatpak jobs wait for, and which every job that runs those servers unpacks
+(`.github/actions/debug-servers`) rather than building them again; the client's format
+(`pnpm format:check`), typecheck, lint, and tests, with its browser tests on Chromium (a desktop and
+a phone) split across six runners; the Android app's build, its unit tests, and its device tests on
+an emulator, the debug APK kept as an artifact (`client/docs/architecture/android-builds.md`); the
+desktop app's Flatpak, built with `package:flatpak`, installed, and its capture helper asked what it
+can capture inside the sandbox; on macOS, the capture helper's lints and tests, the iOS app built
+for the simulator with the extension's Web Push check, and on a pull request an unsigned dmg, while
+`main` builds signed dmgs, sent to Apple's notary service without waiting, and an App Store build
+for TestFlight from the `apple-signing` environment (`client/docs/architecture/apple-builds.md`);
 `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the
-debug build; both AWS configurations' `tofu test`, `scripts/check_media_prefixes.py` (every list of
-the public media prefixes against the server's, `media_store::PublicPrefix`), and
+debug servers; both AWS configurations' `tofu test`, `scripts/check_media_prefixes.py` (every list
+of the public media prefixes against the server's, `media_store::PublicPrefix`), and
 `scripts/check_box.py` against images built in the job; an ARM build in a `debian:bookworm`
-container on GitHub's arm64 runner (tests included); the baseline build script on x86-64 for both
-architectures; and `scripts/smoke_servers.py` against all three builds, the ARM ones on an arm64
-runner, each kept as an artifact; `scripts/check_permissions.py`, `scripts/check_nats_memory.py`,
-`scripts/check_mana.py`, and `scripts/check_calls.py` run in the x86-64 job against its debug build,
-the first building and installing the example plugins, the last calling between Chromium and Firefox
-through Playwright. Every job runs the toolchain `rust-toolchain.toml` pins, which lists the
-`wasm32-wasip2` target the example plugins need, so rustup installs both wherever the repository is
-built. Clippy warnings fail the build.
+container on GitHub's arm64 runner, and the workspace's tests in another; the baseline build script
+on x86-64 for both architectures; and `scripts/smoke_servers.py` against all three builds, the ARM
+ones on an arm64 runner, each kept as an artifact; `scripts/check_permissions.py`,
+`scripts/check_nats_memory.py`, `scripts/check_mana.py`, and `scripts/check_calls.py` run against
+the debug servers, each on a runner of its own, the first split across three (`--shard`) and
+building and installing the example plugins, the last calling between Chromium and Firefox through
+Playwright. Lints, tests, and checks run on runners of their own, so a run takes about as long as
+its longest job, and Rust caches are saved from `main` alone: the repository's caches share 10 GB,
+and every pull request reads `main`'s. Every job runs the toolchain `rust-toolchain.toml` pins,
+which lists the `wasm32-wasip2` target the example plugins need, so rustup installs both wherever
+the repository is built. Clippy warnings fail the build.
 
 The version of every action a workflow uses (`uses: actions/checkout@v7`), and of anything else a
 workflow pins (a runner image, a Node.js or Java release), is looked up when it is written or

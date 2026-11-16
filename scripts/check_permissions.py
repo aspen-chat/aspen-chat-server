@@ -4250,15 +4250,27 @@ SCENARIOS = [private_channels, granting_and_revoking, edits_after_send, moves_an
              profiles_reach_dm_partners, scheduled_messages, speculative_sends]
 
 
+def shard(text: str) -> tuple[int, int]:
+    """`K/N`, the K-th of N parts, counted from 1."""
+    part, slash, parts = text.partition("/")
+    if not (slash and part.isdecimal() and parts.isdecimal() and 1 <= int(part) <= int(parts)):
+        raise argparse.ArgumentTypeError(f"{text!r} is not K/N with 1 <= K <= N")
+    return int(part), int(parts)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check that changes to access reach everything already open.")
     parser.add_argument("--bin", type=Path, required=True, help="the directory holding the binaries")
     parser.add_argument("--start-services", action="store_true", help="docker compose up the services first")
     parser.add_argument("--only", help="the scenarios to run, comma separated by name; every one when absent")
+    parser.add_argument("--shard", type=shard, default=(1, 1), metavar="K/N",
+                        help="run the K-th of N parts of the scenarios (every N-th from the K-th), for runs "
+                             "on N machines at once; the whole when absent")
     args = parser.parse_args()
     only = None if args.only is None else {name.strip() for name in args.only.split(",")}
     if only is not None and (unknown := only - {scenario.__name__ for scenario in SCENARIOS}):
         parser.error(f"--only names no scenario: {', '.join(sorted(unknown))}")
+    part, parts = args.shard
     if shutil.which("docker") is None:
         sys.exit("permissions: docker is required")
     if args.start_services:
@@ -4273,6 +4285,10 @@ def main() -> None:
             run = format(int(time.time() * 1000) % 36**6, "x")
             for index, scenario in enumerate(SCENARIOS):
                 if only is not None and scenario.__name__ not in only:
+                    continue
+                # Taken in turn rather than in runs, so each part holds a fair share of the long
+                # scenarios, which lie together.
+                if index % parts != part - 1:
                     continue
                 # Each starts from a community and accounts of its own, so one that fails, or stops
                 # on a request refused, leaves the rest fair.

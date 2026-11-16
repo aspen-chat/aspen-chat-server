@@ -1,0 +1,18 @@
+# The debug servers the CI workflow's `servers` job built, unpacked into `target/debug` where the
+# check scripts look for them by default, with the libraries they link.
+name: Debug servers
+description: Unpacks the servers-debug artifact into target/debug.
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: servers-debug
+    - name: Unpack, and the libraries they link
+      shell: bash
+      run: |
+        mkdir -p target/debug
+        tar -C target/debug --zstd -xf servers-debug.tar.zst
+        rm servers-debug.tar.zst
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libssl3t64 libpq5
