@@ -130,7 +130,10 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         }
     }
 
-    private let provider: CXProvider
+    /// Internal so that a test can perform the system's actions on the delegate as CallKit
+    /// delivers them: the simulator's CallKit ends an incoming call on its own, so an answer
+    /// requested of it may find the call gone.
+    let provider: CXProvider
     private let controller = CXCallController()
     private let lock = NSLock()
     private var current: Current?
@@ -510,7 +513,14 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
     /// Answers the incoming call: the ring's deployment's engine joins the DM's call, which ends
     /// the ring at the deployment, as a call the system now holds. The audio session is
     /// configured before the action is fulfilled, as for a start, so the system activates it as a
-    /// call's; a call of another engine the system held is left first.
+    /// call's; a call of another engine the system held is left first. No interface commands the
+    /// engine at a ring answered from the lock screen, so the microphone is asked for here, as
+    /// the web view's join asks (`CallEngine.askForMicrophone`): the engine refuses to join a
+    /// call that lets the user speak without one. The action is fulfilled before the system's
+    /// answer for the microphone: the answer comes at once when the system was asked before, and
+    /// otherwise when the app is next in front, which may be past the time the system allows an
+    /// action. The engine joins when the answer comes, and a denial fails the join (`errorKind`
+    /// `microphone`), which ends the system's call as `failed`.
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         guard let incoming, incoming.uuid == action.callUUID else {
             action.fail()
@@ -549,12 +559,20 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
             }
             self.stateChanged(state, of: made)
         }
-        engine.engine.join(channel: incoming.ring.channel)
         action.fulfill()
         update {
             $0.call = made.uuid
             $0.incoming = nil
             $0.refusal = nil
+        }
+        engine.askForMicrophone { [weak self] in
+            // The call the answer made may be gone by the time the system answers (the system
+            // ended it, or a start on another engine left it); then there is nothing to join.
+            // Its channel is `made`'s, which a move the page asked meanwhile has updated.
+            guard let self, self.current === made else {
+                return
+            }
+            engine.engine.join(channel: made.channel)
         }
     }
 

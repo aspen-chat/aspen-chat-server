@@ -76,6 +76,16 @@ final class CallAudio {
         sounds.sessionActivated()
     }
 
+    /// Asks the system for the microphone, which it does once per install; later asks answer at
+    /// once. `answer` is called on a queue of the system's choosing.
+    static func requestMicrophone(_ answer: @escaping (Bool) -> Void) {
+        if #available(iOS 17.0, *) {
+            AVAudioApplication.requestRecordPermission(completionHandler: answer)
+        } else {
+            AVAudioSession.sharedInstance().requestRecordPermission(answer)
+        }
+    }
+
     /// The microphone as a track for the engine (`Engine.setMicrophone`), opened on the first
     /// call and kept until `closeMicrophone`. Capture starts when it is sent on an active
     /// session.

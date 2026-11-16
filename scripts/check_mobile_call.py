@@ -10,7 +10,9 @@ Chromium here with a tone as its microphone, each side's statistics show the oth
 socket is cut and resumed, and the call is left; and the web view's bridge to it
 (`AspenCallPluginTests`, `AspenCallPluginTest`), in which the app's own page drives the `AspenCall`
 plugin through the Capacitor bridge, joins the same channel, and reads the engine's snapshots and
-routes as they reach it. Each platform reaches the API server and the voice server at its own
+routes as they reach it; and, on iOS, the rings' (`CallRingsTests`, against a stand-in deployment
+of their own), in which a call push is reported to CallKit and its answer joins the engine with the
+microphone. Each platform reaches the API server and the voice server at its own
 loopback, `http://127.0.0.1`, which the engine takes in plain text as a debuggable build does, and
 media goes straight to the voice server's announced address over the network.
 
@@ -109,7 +111,7 @@ ANDROID_TEST_LINES = {
 }
 DEVICE_CAPTURES = ["/data/local/tmp/aspen-ring-dark.png", "/data/local/tmp/aspen-ring-lock-screen.png",
                    "/data/local/tmp/aspen-ring-answered-locked.png"]
-IOS_TESTS = ["AppTests/CallEngineTests", "AppTests/AspenCallPluginTests"]
+IOS_TESTS = ["AppTests/CallEngineTests", "AppTests/AspenCallPluginTests", "AppTests/CallRingsTests"]
 ANDROID_TRAILING_TEST = "com.aspen_chat.client.call.AspenCallPluginTest#pictureFollowsAMovingHole"
 IOS_TRAILING_TEST = "AppTests/AspenCallPluginTests/testPictureFollowsAMovingHole"
 
@@ -357,7 +359,7 @@ def launched(derived: str, variables: dict[str, str]) -> str:
             f"xcrun simctl privacy booted grant microphone {BUNDLE} && "
             f"xcrun simctl privacy booted grant camera {BUNDLE} && "
             f"{exports} xcrun simctl launch --console-pty booted {BUNDLE} 2>&1 "
-            "| grep -E --line-buffered 'Test Case|Test Suite|call-engine-test|call-routes-test|call-plugin-test|error|failed|skipped'")
+            "| grep -E --line-buffered 'Test Case|Test Suite|call-engine-test|call-routes-test|call-plugin-test|call-rings-test|error|failed|skipped'")
 
 
 class Ios:
@@ -425,7 +427,7 @@ class Ios:
                 only = " ".join(f"-only-testing:{test}" for test in IOS_TESTS)
                 code = ssh(self.mac,
                            f"cd {self.project} && {environment} {self.xcodebuild} test-without-building {only} 2>&1 "
-                           "| grep -E 'Test Case|Test Suite|call-engine-test|call-routes-test|call-plugin-test|error:|failed|skipped|TEST' ; exit ${pipestatus[1]}",
+                           "| grep -E 'Test Case|Test Suite|call-engine-test|call-routes-test|call-plugin-test|call-rings-test|error:|failed|skipped|TEST' ; exit ${pipestatus[1]}",
                            timeout=900, log=log)
                 text = log.read_text()
                 passed = code == 0 and "** TEST EXECUTE SUCCEEDED **" in text
@@ -435,7 +437,7 @@ class Ios:
                 passed = (all(f"Test Suite '{test.split('/')[1]}' passed" in text for test in IOS_TESTS)
                           and "' failed" not in text and " error: " not in text)
             # Each test's own line says what it saw; a test that ran without one did not do its work.
-            ran = all(f"{line}:" in text for line in ("call-engine-test", "call-plugin-test"))
+            ran = all(f"{line}:" in text for line in ("call-engine-test", "call-plugin-test", "call-rings-test"))
             # Only the trailing test skips itself here (outside `--record-trailing`).
             skipped = re.findall(r"Test Case '-\[AppTests\.\w+ (\w+)\]' skipped", text)
             if not passed or not ran or any(name != IOS_TRAILING_TEST.rsplit("/", 1)[1] for name in skipped):

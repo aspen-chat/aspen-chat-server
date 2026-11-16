@@ -1,4 +1,3 @@
-import AVFoundation
 import Capacitor
 import Foundation
 
@@ -13,9 +12,10 @@ import Foundation
 /// `routes` events, and the call's video: the cameras (`CallCamera`), the holes the page reports
 /// for the pictures (`setTiles`, laid out by `CallVideo`), each picture's shape back as a `shape`
 /// event, and the system's picture in picture as `pip` events. Joining asks the system for the
-/// microphone first: granted, the microphone is opened and given to the engine; refused, the
-/// engine is given none and fails the join itself where the channel lets the user speak
-/// (`errorKind` `microphone`), as the web's call does when the browser refuses it. `startCamera`
+/// microphone first (`CallEngine.askForMicrophone`, which an incoming call's answer goes through
+/// too): granted, the microphone is opened and given to the engine; refused, the engine is given
+/// none and fails the join itself where the channel lets the user speak (`errorKind`
+/// `microphone`), as the web's call does when the browser refuses it. `startCamera`
 /// asks for the camera the same way and rejects with the code `denied`, `none`, or `failed`
 /// (`CallCameraFailure`) when none opens. The join itself, leaving, and muting go through
 /// `CallEngine` and so the system's call (`CallSystem`). Everything runs on the main queue, where
@@ -147,27 +147,12 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         let name = call.getString("name")
-        Self.requestMicrophone { granted in
-            DispatchQueue.main.async {
-                let engine = self.engine(at: origin)
-                if granted {
-                    engine.engine.setMicrophone(track: engine.audio.openMicrophone())
-                } else {
-                    engine.audio.closeMicrophone()
-                    engine.engine.setMicrophone(track: nil)
-                }
+        DispatchQueue.main.async {
+            let engine = self.engine(at: origin)
+            engine.askForMicrophone {
                 engine.join(channel: channel, name: name)
                 call.resolve()
             }
-        }
-    }
-
-    /// Asks the system for the microphone, which it does once per install; later asks answer at once.
-    private static func requestMicrophone(_ answer: @escaping (Bool) -> Void) {
-        if #available(iOS 17.0, *) {
-            AVAudioApplication.requestRecordPermission(completionHandler: answer)
-        } else {
-            AVAudioSession.sharedInstance().requestRecordPermission(answer)
         }
     }
 

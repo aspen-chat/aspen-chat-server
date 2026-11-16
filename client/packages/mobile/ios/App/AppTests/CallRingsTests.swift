@@ -7,9 +7,11 @@ import XCTest
 /// A `call` push handled as PushKit would hand it over, on the simulator: encrypted to a key the
 /// test writes into the kept push state as the web view would, read and reported to CallKit as an
 /// incoming call before the handler returns, ended by the ring's clock when nothing can be
-/// watched, and, when it cannot be read, reported and ended at once. The simulator's CallKit takes
-/// incoming calls, so `CXCallObserver` shows what the system was told. A real VoIP push, the lock
-/// screen's ring, and answering from it are device checks (`ios-app.md`, Rings).
+/// watched, and, when it cannot be read, reported and ended at once; and the answer action
+/// performed on the provider's delegate as CallKit would deliver it, which joins the ring's
+/// channel on the deployment's engine with the microphone. The simulator's CallKit takes incoming
+/// calls, so `CXCallObserver` shows what the system was told. A real VoIP push, the lock screen's
+/// ring, and answering from it are device checks (`ios-app.md`, Rings).
 final class CallRingsTests: XCTestCase {
     private var keptPushState: String?
 
@@ -272,6 +274,83 @@ final class CallRingsTests: XCTestCase {
         case .answeredElsewhere, .declined, .callEnded, .signedOut:
             XCTFail("the ring ended for a reason a deployment that serves nothing cannot give: \(String(describing: CallSystem.shared.latest.ringEnd))")
         }
+    }
+
+    /// Keeps every snapshot of an engine, on the main queue.
+    private final class Snapshots {
+        var seen: [CallState] = []
+        var onChange: (() -> Void)?
+
+        func add(_ state: CallState) {
+            seen.append(state)
+            onChange?()
+        }
+
+        /// Waits for a snapshot `matching` within `seconds`, and answers the first that does.
+        func wait(_ test: XCTestCase, seconds: TimeInterval, _ matching: @escaping (CallState) -> Bool) throws -> CallState {
+            if let found = seen.first(where: matching) {
+                return found
+            }
+            let found = test.expectation(description: "the engine published a snapshot as expected")
+            onChange = { [self] in
+                if seen.contains(where: matching) {
+                    found.fulfill()
+                    onChange = nil
+                }
+            }
+            test.wait(for: [found], timeout: seconds)
+            return try XCTUnwrap(seen.first(where: matching))
+        }
+    }
+
+    @MainActor
+    func testAnsweringJoinsTheRingsChannelWithTheMicrophone() throws {
+        // The simulator's CallKit ends an incoming call on its own within a second or two, so
+        // the answer is performed on the provider's delegate as CallKit delivers one, rather than
+        // requested of the system, which may have ended the call by then. The stand-in
+        // deployment answers the join's first request with 404, so the join fails and the
+        // system's call ends with it; the joining snapshot before that shows what the answer
+        // gave the engine.
+        let deployment = try Deployment()
+        let origin = "http://127.0.0.1:\(deployment.port)"
+        let phone = Phone()
+        try phone.keep(origin: origin)
+        // The engine the answer makes runs on an audio device in software, as every engine made
+        // on the simulator must (`CallEngineTests`).
+        CallEngine.peerConnections = CallPeerConnections(tracks: CallEngine.tracks, audioDevice: ToneAudioDevice())
+        let channel = UUID().uuidString.lowercased()
+        let pointer: [String: Any] = [
+            "v": 1, "kind": "call", "channel": channel,
+            "session": UUID().uuidString.lowercased(), "caller": UUID().uuidString.lowercased(),
+            "callerName": "Alice", "until": ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)),
+        ]
+        let calls = Calls()
+        CallRings.shared.handle(payload: phone.payload(ciphertext: try phone.encrypt(JSONSerialization.data(withJSONObject: pointer))), mustReport: true)
+        let ringing = try XCTUnwrap(CallSystem.shared.latest.incoming, "the call is reported before the handler returns")
+        XCTAssertNil(CallEngines.shared.existing(origin), "no engine runs for a ring that is only ringing")
+
+        let snapshots = Snapshots()
+        let engine = CallEngines.shared.forOrigin(origin)
+        let listening = engine.snapshots.listen { snapshots.add($0) }
+        defer { listening.cancel() }
+        XCTAssertNil(engine.engine.state().microphone)
+        let system = CallSystem.shared
+        system.provider(system.provider, perform: CXAnswerCallAction(call: ringing))
+        XCTAssertNil(system.latest.incoming, "answered, the call no longer rings")
+        XCTAssertEqual(system.latest.call, ringing, "the system's call is the answered one")
+        XCTAssertNil(system.latest.refusal)
+
+        let joining = try snapshots.wait(self, seconds: 10) { $0.status == .joining }
+        let microphone = try XCTUnwrap(joining.microphone, "the answer gave the engine the microphone before the join")
+        XCTAssertEqual(microphone, engine.audio.openMicrophone(), "the microphone is the engine's own, kept open")
+        XCTAssertEqual(joining.channel, channel, "the ring's channel is joined")
+        let join = "POST /api/v1/channels/\(channel)/voice/join"
+        deployment.wait(self, seconds: 5) { $0.hasPrefix(join) && $0.contains("Authorization: Bearer session") }
+        let failed = try snapshots.wait(self, seconds: 10) { $0.status == .failed }
+        calls.wait(self, seconds: 10) { uuid, _, _, ended in uuid == ringing && ended }
+        print("call-rings-test: answered; the engine joined \(channel) with microphone \(microphone) as its joining snapshot (revision \(joining.revision)) shows, asked the deployment to join, and failed with \(String(describing: failed.errorKind)) at its 404, on which the system's call ended; status \(system.latest)")
+        XCTAssertNil(system.latest.call, "the system's call ended with the engine's failure")
+        XCTAssertNotEqual(failed.errorKind, .microphone, "the join did not fail for want of a microphone")
     }
 
     @MainActor

@@ -52,9 +52,29 @@ final class CallEngine: @unchecked Sendable {
         )
     }
 
+    /// Gives the engine the microphone as the system answers for it, before a join: the one way
+    /// a join is given its microphone, whether the web view asks for the join (`AspenCallPlugin`)
+    /// or an incoming call is answered (`CallSystem`). Granted, the microphone is opened
+    /// (`CallAudio.openMicrophone`) and set on the engine; refused, the engine is given none and
+    /// fails the join itself where the channel lets the user speak (`errorKind` `microphone`).
+    /// `then` runs on the main queue once the engine has its answer. Call on the main queue.
+    func askForMicrophone(then: @escaping () -> Void) {
+        CallAudio.requestMicrophone { granted in
+            DispatchQueue.main.async {
+                if granted {
+                    self.engine.setMicrophone(track: self.audio.openMicrophone())
+                } else {
+                    self.audio.closeMicrophone()
+                    self.engine.setMicrophone(track: nil)
+                }
+                then()
+            }
+        }
+    }
+
     /// Joins `channel`'s call as a call the system knows of, shown there as `name`: the system
     /// starts it, the audio session is configured for it, and the engine joins in the start
-    /// action. Call on the main queue.
+    /// action. Call on the main queue, after `askForMicrophone`.
     func join(channel: String, name: String? = nil) {
         CallSystem.shared.start(engine: self, channel: channel, name: name)
     }
