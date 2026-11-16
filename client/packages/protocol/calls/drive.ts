@@ -187,6 +187,13 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
       ann: annJoined,
       bob: bobJoined,
     });
+    // Offers are large and repeat themselves, so signalling is compressed wherever a browser
+    // offers to (RFC 7692), which every browser does.
+    check(
+      "both signal over compressed sockets",
+      [annJoined, bobJoined].every((r) => r.signalling?.startsWith("permessage-deflate") === true),
+      { ann: annJoined.signalling, bob: bobJoined.signalling },
+    );
 
     // Each hears the other's microphone on an audio slot, decoded with little made up.
     const [annBefore, bobBefore] = await Promise.all([report(ann), report(bob)]);

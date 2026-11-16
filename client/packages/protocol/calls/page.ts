@@ -51,6 +51,8 @@ export interface CallReport {
   readonly sections: readonly SectionReport[];
   /** The media sections of the browser's own answer, as it last applied one. */
   readonly answered: readonly SectionReport[];
+  /** The extensions the latest signalling socket negotiated (`WebSocket.extensions`). */
+  readonly signalling: string | null;
   readonly streams: readonly StreamReport[];
 }
 
@@ -100,6 +102,15 @@ media.createConnection = async () => {
   return connection;
 };
 let call: VoiceCall | null = null;
+
+/** The call's signalling sockets, the latest last, so a report can say what each negotiated. */
+const sockets: WebSocket[] = [];
+class RecordedSocket extends WebSocket {
+  constructor(url: string | URL, protocols?: string | string[]) {
+    super(url, protocols);
+    sockets.push(this);
+  }
+}
 
 function number(value: unknown): number {
   return typeof value === "number" ? value : 0;
@@ -182,7 +193,7 @@ window.aspenCall = {
     const sessionStore = new MemorySessionStore();
     sessionStore.save(session);
     const client = new AspenClient({ baseUrl: location.origin, sessionStore });
-    call = new VoiceCall({ client, media });
+    call = new VoiceCall({ client, media, WebSocket: RecordedSocket });
     await call.join(channel);
   },
   async startCamera() {
@@ -304,6 +315,7 @@ window.aspenCall = {
       screens: state?.screens.map((screen) => screen.user) ?? [],
       sharing: state?.sharingScreen ?? false,
       sections: remoteSections(),
+      signalling: sockets.at(-1)?.extensions ?? null,
       answered: sectionsOf(
         connection instanceof RTCPeerConnection ? connection.currentLocalDescription : null,
       ),

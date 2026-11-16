@@ -151,6 +151,12 @@ thread, so forwarding never crosses threads.
 
 - The rooms queue frames without waiting on the socket. The outbox counts bytes since frames differ
   in size.
+- Frames are compressed with permessage-deflate (RFC 7692, `yawc`) where the client offers it, which
+  every browser does: an offer deflates to about a ninth. Neither side keeps deflate state between
+  messages, a socket borrows what it compresses with from one pool for the server (`DeflatePool`,
+  one per logical CPU), and frames under 256 bytes go as they are (`COMPRESS_FROM_BYTES` in
+  `voice_server/src/signalling.rs`). `max_message_bytes` bounds a message after it is inflated as
+  well as before.
 - `transferSignal`'s burst of sixty keeps one sender's frames well inside another's outbox.
 - A participant whose socket closes without `leave`, closed by either side, stays in the call for
   the resume grace (see [Resuming](signalling.md#resuming)).

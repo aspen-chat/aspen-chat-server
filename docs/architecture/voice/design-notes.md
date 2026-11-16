@@ -271,7 +271,15 @@ Why the voice pieces are shaped as they are. The how is in the [voice pages](ind
   (`voice_media/tests/slot_churn.rs`), three speaking at once with a new one every two seconds cost
   each listener 22 offers a minute of 16 KB each, about 48 kbit/s of signalling; twenty speaking at
   once, four changing each second, cost 66 a minute, the most one outstanding offer at a time
-  allows, about 140 kbit/s. An offer deflates to about a ninth of its size.
+  allows, about 140 kbit/s. An offer deflates to about a ninth of its size, so signalling is
+  compressed (below).
+- **Signalling is compressed, by the WebSocket rather than in the frames.** permessage-deflate is
+  negotiated by every browser and web view on its own, so no client and no frame changes, and the
+  realistic call above costs a listener about 5 kbit/s. Neither axum's WebSocket nor tungstenite has
+  it, so the voice server's signalling uses `yawc`. No context is kept between messages: each offer
+  compresses about as well alone (it repeats itself section to section), and a socket then holds a
+  few kilobytes rather than the few hundred a deflate state of its own would take, across thousands
+  of sockets.
 - **A muted microphone gives up its slot at once.** It sends nothing, so holding a slot would keep
   someone who speaks out of the slots.
 - **Video only as watched, up to 25.** A client says what it shows, and the server sends only that,

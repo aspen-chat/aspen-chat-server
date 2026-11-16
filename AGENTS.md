@@ -54,7 +54,7 @@ explicit direction.
   OpenSSL: media threads, each holding the WebRTC connections of the calls given to it on one UDP
   and one TCP port, that forward each participant's packets to the others as they are; see Voice. It
   is the fork `[patch.crates-io]` names, whose `SdpApi::set_stream_id` moves a section into another
-  stream, until str0m releases it
+  stream, until str0m releases it. Its signalling WebSocket is `yawc`, for permessage-deflate
 - **File transfers:** WebRTC data channels between clients, with STUN and a TURN relay in the voice
   server (`turn`, from webrtc-rs)
 - **Plugins:** `wasmtime` running WebAssembly components (`spec/plugin.wit`), with `wasmtime-wasi`

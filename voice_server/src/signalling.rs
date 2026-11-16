@@ -8,7 +8,6 @@
 use crate::limits::{Caller, HEALTH, Limits, PendingSocket, SIGNALLING};
 use crate::outbox::{OUTBOX_BYTES, Outbox};
 use crate::rooms::{RoomError, Rooms};
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, MatchedPath, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::middleware::Next;
@@ -22,6 +21,9 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 use voice_protocol::signal::{ClientMessage, ServerMessage};
 use voice_protocol::token::{JoinClaims, TokenError, key_of, verify, verify_shared};
+use yawc::close::CloseCode;
+use yawc::frame::{Frame, OpCode};
+use yawc::{DeflatePool, HttpWebSocket, IncomingUpgrade, Options};
 
 /// The paths of this server's two routes: the router serves them and `limit_http` finds each
 /// one's limits by them.
@@ -37,6 +39,9 @@ const PING_INTERVAL: Duration = Duration::from_secs(30);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a closing socket is given to write what is queued for it before it is dropped.
 const CLOSE_GRACE: Duration = Duration::from_secs(5);
+/// Frames shorter than this go uncompressed: deflate rarely shrinks a few dozen bytes, and a
+/// socket that only ever sends small frames never takes a compressor.
+const COMPRESS_FROM_BYTES: usize = 256;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -47,6 +52,26 @@ pub struct AppState {
     pub rooms: Arc<Rooms>,
     pub limits: Arc<Limits>,
     pub used_tokens: Arc<UsedTokens>,
+    /// The deflate state every socket borrows a message at a time (`socket_options`).
+    pub deflate: DeflatePool,
+}
+
+/// How each signalling socket is set up. Frames are compressed (permessage-deflate), which a
+/// browser negotiates on its own: an offer is about a kilobyte per section and repeats most of
+/// it section to section, so it deflates to about a ninth, and a call whose slots change speaker
+/// sends one to each listener every few seconds. Neither side keeps deflate state between
+/// messages, and what a socket compresses with is borrowed from `pool` for one message, so an
+/// idle socket costs a few kilobytes rather than the few hundred its own deflate state would;
+/// each offer is compressed whole, which loses little against one compressed after the last.
+pub fn socket_options(max_message_bytes: usize, pool: &DeflatePool) -> Options {
+    Options::default()
+        .with_low_latency_compression()
+        .server_no_context_takeover()
+        .client_no_context_takeover()
+        .with_deflate_pool(pool.clone())
+        .with_compression_threshold(COMPRESS_FROM_BYTES)
+        .with_limits(max_message_bytes, max_message_bytes)
+        .with_utf8()
 }
 
 /// The join tokens this server has accepted that have not yet expired, by nonce. A token
@@ -122,17 +147,24 @@ pub async fn upgrade(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    ws: WebSocketUpgrade,
+    ws: IncomingUpgrade,
 ) -> Response {
     let ip = client_ip(&state, peer, &headers);
     let Some(pending) = state.limits.pending_socket(ip) else {
         crate::metrics::http_refused(SIGNALLING);
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
-    let max = state.limits.max_message_bytes;
-    ws.max_message_size(max)
-        .max_frame_size(max)
-        .on_upgrade(move |socket| handle(socket, state, ip, pending))
+    let options = socket_options(state.limits.max_message_bytes, &state.deflate);
+    let Ok((response, upgraded)) = ws.upgrade(options) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    tokio::spawn(async move {
+        match upgraded.await {
+            Ok(socket) => handle(socket, state, ip, pending).await,
+            Err(e) => info!(error = %e, "a signalling socket's upgrade did not complete"),
+        }
+    });
+    response.into_response()
 }
 
 fn now() -> i64 {
@@ -157,7 +189,7 @@ async fn close(outbox: Outbox, mut writer: tokio::task::JoinHandle<()>) {
     }
 }
 
-async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: PendingSocket) {
+async fn handle(socket: HttpWebSocket, state: AppState, ip: IpAddr, pending: PendingSocket) {
     let (mut sink, mut stream) = socket.split();
     let (outbox, mut inbox) = Outbox::new(OUTBOX_BYTES);
     // Frames for the client are written by their own task so room work never waits on a
@@ -166,17 +198,19 @@ async fn handle(socket: WebSocket, state: AppState, ip: IpAddr, pending: Pending
         let mut ping =
             tokio::time::interval_at(tokio::time::Instant::now() + PING_INTERVAL, PING_INTERVAL);
         loop {
-            let message = tokio::select! {
+            let frame = tokio::select! {
                 text = inbox.recv() => match text {
-                    Some(text) => Message::Text(text),
+                    Some(text) => Frame::text(text),
                     None => break,
                 },
-                _ = ping.tick() => Message::Ping(Default::default()),
+                _ = ping.tick() => Frame::ping(Vec::new()),
             };
-            if sink.send(message).await.is_err() {
+            if sink.send(frame).await.is_err() {
                 break;
             }
         }
+        // Closing the sink ends the stream alone, so the close frame goes first.
+        let _ = sink.send(Frame::close(CloseCode::Normal, "")).await;
         let _ = sink.close().await;
     });
 
@@ -493,25 +527,28 @@ fn read_frame(text: &str) -> Option<Received> {
     }
 }
 
-/// What the client sent next, or `None` once the socket is closed, sends something that is not
-/// a JSON object, or goes `IDLE_TIMEOUT` without sending anything.
-async fn next_frame(stream: &mut futures_util::stream::SplitStream<WebSocket>) -> Option<Received> {
+/// What the client sent next, or `None` once the socket is closed or fails, sends something that
+/// is not a JSON object, or goes `IDLE_TIMEOUT` without sending anything. yawc answers pings
+/// itself, and reassembles fragmented messages before they come here.
+async fn next_frame(
+    stream: &mut futures_util::stream::SplitStream<HttpWebSocket>,
+) -> Option<Received> {
     loop {
         let Ok(next) = tokio::time::timeout(IDLE_TIMEOUT, stream.next()).await else {
             info!("a signalling socket went silent");
             return None;
         };
-        match next? {
-            Ok(Message::Text(text)) => {
-                let received = read_frame(&text);
+        let frame = next?;
+        match frame.opcode() {
+            OpCode::Text => {
+                let received = read_frame(frame.as_str());
                 if received.is_none() {
                     warn!("a client sent text that is not a JSON object");
                 }
                 return received;
             }
-            Ok(Message::Binary(_)) => return None,
-            Ok(Message::Close(_)) | Err(_) => return None,
-            Ok(Message::Ping(_) | Message::Pong(_)) => {}
+            OpCode::Binary | OpCode::Close => return None,
+            OpCode::Ping | OpCode::Pong | OpCode::Continuation => {}
         }
     }
 }

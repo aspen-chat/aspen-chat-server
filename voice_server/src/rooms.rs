@@ -1638,7 +1638,7 @@ mod tests {
         fn sent(&mut self) -> Vec<ServerMessage> {
             let frames: Vec<ServerMessage> =
                 std::iter::from_fn(|| self.frames.recv().now_or_never().flatten())
-                    .map(|text| serde_json::from_str(&text).expect("a frame"))
+                    .map(|text| serde_json::from_slice(&text).expect("a frame"))
                     .collect();
             self.log.extend(frames.iter().cloned());
             frames
@@ -1657,7 +1657,7 @@ mod tests {
                 let text = tokio::time::timeout_at(deadline, self.frames.recv())
                     .await
                     .ok()??;
-                let frame: ServerMessage = serde_json::from_str(&text).expect("a frame");
+                let frame: ServerMessage = serde_json::from_slice(&text).expect("a frame");
                 self.log.push(frame.clone());
                 if let ServerMessage::Offer {
                     connection,
@@ -1899,7 +1899,7 @@ mod tests {
             .set_state(seat, true, false)
             .await
             .expect("the new socket acts for her");
-        let first: ServerMessage = serde_json::from_str(&frames.recv().await.unwrap()).unwrap();
+        let first: ServerMessage = serde_json::from_slice(&frames.recv().await.unwrap()).unwrap();
         let ServerMessage::Ready { resume: again, .. } = first else {
             panic!("ready on resuming, not {first:?}");
         };
@@ -1909,7 +1909,7 @@ mod tests {
         let restated = tokio::time::timeout(WAIT, async {
             loop {
                 let frame: ServerMessage =
-                    serde_json::from_str(&frames.recv().await.unwrap()).unwrap();
+                    serde_json::from_slice(&frames.recv().await.unwrap()).unwrap();
                 if !matches!(frame, ServerMessage::ParticipantState { .. }) {
                     return frame;
                 }

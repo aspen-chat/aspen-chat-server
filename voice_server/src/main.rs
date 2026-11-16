@@ -191,6 +191,10 @@ async fn main() -> anyhow::Result<()> {
         rooms: Arc::clone(&rooms),
         limits,
         used_tokens: Arc::default(),
+        // Sized for the messages compressed at one moment, about one per runtime thread.
+        deflate: yawc::DeflatePool::new(
+            std::thread::available_parallelism().map_or(4, std::num::NonZero::get),
+        ),
     };
     // The health check is what clients measure latency against, from any origin. The limits
     // run inside the CORS layer, so a refusal still reaches the page that asked.
