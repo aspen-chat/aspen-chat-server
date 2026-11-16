@@ -3,8 +3,11 @@
 # (`scripts/check_permissions.py`), and calls are made between real browsers through a real
 # voice server (`scripts/check_calls.py`); the servers write the schemas the client is generated from;
 # the client is formatted, typechecks, lints, and passes its tests, its browser tests split
-# across six runners; the desktop app is packaged for Windows, macOS, and as a Flatpak, and
-# the Android and iOS apps are built, the Android APK kept, `main`'s builds for Windows, macOS,
+# across six runners; the desktop app is packaged for Windows, macOS, and as a Flatpak; Google's
+# WebRTC is built from source for each phone platform (or taken from the cache of the last build at
+# the pinned milestone), the call engine is built on it for every target and its bindings checked,
+# and the Android and iOS apps are built with the engine in, the Android APK kept, the engine
+# proved in a call on the Android emulator, `main`'s builds for Windows, macOS,
 # and the App Store signed, the dmgs sent for notarization; two deployments federate and wake
 # a stand-in phone over real TLS; the images are built and each server started in its own, and
 # the AWS configuration passes its plan tests; the servers are built for 64-bit ARM two ways,
@@ -788,14 +791,82 @@ jobs:
             client/packages/desktop/release/*.dmg
             client/packages/desktop/release/submissions.json
 
-  # The app and its UI tests built for the simulator, unsigned, and the extension's Web Push
-  # decryption checked against RFC 8291's example. The UI tests themselves need a deployment
-  # (`client/docs/architecture/ios-app.md`), which these runners cannot hold.
-  ios:
-    name: iOS — simulator build and Web Push check
-    needs: servers
+  # Google's WebRTC for the Android app, built from source at the milestone `scripts/webrtc_build.py`
+  # pins (`docs/development/webrtc-build.md`). The archive is cached by that milestone and the
+  # script's own text, so only a change to either builds again, and kept as an artifact for the
+  # Android jobs either way. The checkout (40 GB without history, beside 1.4 GB of depot_tools and
+  # 2 GB of build output) is never cached: it goes on the runner's temp disk, `/mnt`, which has
+  # about 66 GB free, where the root disk has about 20 GB.
+  webrtc-android:
+    name: WebRTC (Android) — build at the pinned milestone
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+      - name: The pinned milestone
+        id: pin
+        run: echo "branch=$(python3 -c 'import sys; sys.path.insert(0, "scripts"); import webrtc_build; print(webrtc_build.WEBRTC_BRANCH)')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        id: cache
+        with:
+          path: target/webrtc/libwebrtc.aar
+          key: webrtc-android-${{ steps.pin.outputs.branch }}-${{ hashFiles('scripts/webrtc_build.py') }}
+      - name: Build it, with the checkout on the temp disk
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          df -h / /mnt
+          free_gib="$(df --output=avail -BG /mnt | tail -n 1 | tr -dc 0-9)"
+          [ "$free_gib" -ge 50 ] || { echo "/mnt has ${free_gib} GiB free; the WebRTC checkout needs about 45 GiB"; exit 1; }
+          sudo mkdir -p /mnt/webrtc-build
+          sudo chown "$(id -u):$(id -g)" /mnt/webrtc-build
+          python3 scripts/webrtc_build.py --root /mnt/webrtc-build build
+          df -h /mnt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: webrtc-android
+          path: target/webrtc/libwebrtc.aar
+
+  # The same for the iOS app, on a Mac: both arm64 slices, at three jobs for the runner's 7 GB
+  # (`docs/development/webrtc-build.md` has the figures). The framework is a directory, so it
+  # travels as a tar to keep its files' modes, which an artifact does not.
+  webrtc-ios:
+    name: WebRTC (iOS) — build at the pinned milestone
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+      - name: The pinned milestone
+        id: pin
+        run: echo "branch=$(python3 -c 'import sys; sys.path.insert(0, "scripts"); import webrtc_build; print(webrtc_build.WEBRTC_BRANCH)')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        id: cache
+        with:
+          path: target/webrtc/WebRTC.xcframework
+          key: webrtc-ios-${{ steps.pin.outputs.branch }}-${{ hashFiles('scripts/webrtc_build.py') }}
+      - name: Build it
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          df -h "$HOME"
+          python3 scripts/webrtc_build.py --root "$HOME/webrtc-build" build --jobs 3
+          df -h "$HOME"
+      - run: tar -C target/webrtc -czf webrtc-ios.tar.gz WebRTC.xcframework
+      - uses: actions/upload-artifact@v7
+        with:
+          name: webrtc-ios
+          path: webrtc-ios.tar.gz
+
+  # The call engine built for the simulator and for devices on the WebRTC framework, its Swift
+  # bindings checked against the engine built for the Mac, and the app and its UI tests built for
+  # the simulator, unsigned, with the engine in, and the extension's Web Push decryption checked
+  # against RFC 8291's example. The UI tests themselves need a deployment
+  # (`client/docs/architecture/ios-app.md`), which these runners cannot hold, and the engine's call
+  # on the simulator (`scripts/check_mobile_call.py --platform ios`) needs Docker beside it, which
+  # they lack too; both are run from a development machine.
+  ios:
+    name: iOS — call engine, simulator build, and Web Push check
+    needs: [servers, webrtc-ios]
+    runs-on: macos-26
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: client
@@ -807,6 +878,13 @@ jobs:
         with:
           name: schemas
           path: .
+      - uses: actions/download-artifact@v8
+        with:
+          name: webrtc-ios
+          path: .
+      - name: Unpack the WebRTC framework where the project reads it
+        run: mkdir -p target/webrtc && tar -C target/webrtc -xzf webrtc-ios.tar.gz
+        working-directory: .
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: client/package.json
@@ -816,9 +894,18 @@ jobs:
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
       # The Open Source Attributions list is made from `cargo metadata` when the app is built
-      # (`client/packages/app/attributions/plugin.ts`).
-      - name: Rust (the toolchain rust-toolchain.toml pins)
+      # (`client/packages/app/attributions/plugin.ts`), and the engine is built for its targets.
+      - name: Rust (the toolchain rust-toolchain.toml pins, with its targets)
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ios-engine
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: The call engine for the simulator and for devices, and its Swift bindings
+        run: python3 packages/mobile/ios/scripts/call_engine.py
+      - name: The Swift bindings talk to the engine
+        run: voice_client/bindings-check/swift.sh
+        working-directory: .
       - run: pnpm install --frozen-lockfile
       - run: pnpm codegen
       - name: Build the web shell and copy it into the iOS project
@@ -841,10 +928,10 @@ jobs:
   ios-testflight:
     name: iOS — App Store build for TestFlight
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: ios
+    needs: [ios, webrtc-ios]
     environment: apple-signing
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 75
     defaults:
       run:
         working-directory: client
@@ -856,6 +943,13 @@ jobs:
         with:
           name: schemas
           path: .
+      - uses: actions/download-artifact@v8
+        with:
+          name: webrtc-ios
+          path: .
+      - name: Unpack the WebRTC framework where the project reads it
+        run: mkdir -p target/webrtc && tar -C target/webrtc -xzf webrtc-ios.tar.gz
+        working-directory: .
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: client/package.json
@@ -864,8 +958,15 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
-      - name: Rust (the toolchain rust-toolchain.toml pins)
+      - name: Rust (the toolchain rust-toolchain.toml pins, with its targets)
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ios-engine
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The archive links the device slice; the script builds the simulator's beside it.
+      - name: The call engine and its Swift bindings
+        run: python3 packages/mobile/ios/scripts/call_engine.py
       - run: pnpm install --frozen-lockfile
       - run: pnpm codegen
       - name: Build the web shell and copy it into the iOS project
@@ -1046,11 +1147,14 @@ jobs:
           node src/release/publishFlatpak.ts announce --bundle "release/flatpak/Aspen-$VERSION.flatpak" \
             --work "$RUNNER_TEMP/flatpak" --timestamp "$(git log -1 --format=%cI)"
 
+  # The call engine built for every ABI the app ships on the WebRTC archive, its Kotlin bindings
+  # checked on the JVM against the engine built for the runner, and the app built with the engine
+  # in: its unit tests, the APK, and its device tests on an emulator.
   android:
-    name: Android — build, unit, and device tests, and the APK
-    needs: servers
+    name: Android — call engine, build, unit and device tests, and the APK
+    needs: [servers, webrtc-android]
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: client
@@ -1062,6 +1166,10 @@ jobs:
         with:
           name: schemas
           path: .
+      - uses: actions/download-artifact@v8
+        with:
+          name: webrtc-android
+          path: target/webrtc
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: client/package.json
@@ -1070,15 +1178,25 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
-      # Capacitor 8's Android build wants JDK 21; the runner already has the Android SDK.
+      # Capacitor 8's Android build wants JDK 21; the runner already has the Android SDK, its NDK
+      # (which `call_engine.py` finds through the runner's `ANDROID_NDK_HOME`), and `kotlinc`.
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 21
       # The Open Source Attributions list is made from `cargo metadata` when the app is built
-      # or served (`client/packages/app/attributions/plugin.ts`).
-      - name: Rust (the toolchain rust-toolchain.toml pins)
+      # or served (`client/packages/app/attributions/plugin.ts`), and the engine is built for its targets.
+      - name: Rust (the toolchain rust-toolchain.toml pins, with its targets)
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: android-engine
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: The call engine for every ABI, and its Kotlin bindings
+        run: python3 packages/mobile/android/scripts/call_engine.py
+      - name: The Kotlin bindings talk to the engine
+        run: voice_client/bindings-check/kotlin.sh
+        working-directory: .
       - run: pnpm install --frozen-lockfile
       - run: pnpm codegen
       - name: Build the web shell and copy it into the Android project
@@ -1091,6 +1209,15 @@ jobs:
         env:
           ASPEN_BUILD_NUMBER: ${{ github.run_number }}
           ASPEN_BUILD_COMMIT: ${{ github.sha }}
+      # The APK packages the engine and WebRTC for the three ABIs; a build that left the layer out
+      # says so in Gradle's output and nowhere else, so it is checked here.
+      - name: The APK carries the call engine
+        working-directory: client/packages/mobile/android
+        run: |
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            unzip -l app/build/outputs/apk/debug/app-debug.apk "lib/$abi/libvoice_client.so" "lib/$abi/libjingle_peerconnection_so.so" \
+              | grep -c "lib/$abi/" | grep -qx 2 || { echo "the APK lacks the call engine or WebRTC for $abi"; exit 1; }
+          done
       # Kept before the device tests run, so a failing emulator still leaves the APK to install.
       - uses: actions/upload-artifact@v7
         with:
@@ -1113,6 +1240,80 @@ jobs:
           disable-animations: true
           working-directory: client/packages/mobile/android
           script: ./gradlew --console=plain :app:connectedDebugAndroidTest
+
+  # The call engine with the whole Android platform under it, in a call against a deployment of
+  # its own, run on the `servers` job's debug servers: `CallEngineTest` on the emulator joins a
+  # voice channel, is heard by and hears Chromium as the second participant, survives its socket
+  # being cut, and leaves (`scripts/check_mobile_call.py`). The emulator has no audio here, so the
+  # test checks the browser hears its silence. The iOS half needs Docker beside the simulator,
+  # which the macOS runners lack; it is run from a development machine
+  # (`client/docs/architecture/ios-app.md`).
+  android-call:
+    name: Android — the call engine in a call on an emulator
+    needs: [servers, webrtc-android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/debug-servers
+      - uses: actions/download-artifact@v8
+        with:
+          name: schemas
+          path: .
+      - uses: actions/download-artifact@v8
+        with:
+          name: webrtc-android
+          path: target/webrtc
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: client/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Rust (the toolchain rust-toolchain.toml pins, with its targets)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: android-call
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: The call engine for the emulator, and its Kotlin bindings
+        run: python3 client/packages/mobile/android/scripts/call_engine.py --emulator-only
+      # The Gradle build that runs the test needs the web shell in the project, and the check
+      # builds the call page from the client's call code and drives Chromium as the second participant.
+      - name: The client's dependencies, the web shell, and Chromium
+        run: |
+          (cd client && pnpm install --frozen-lockfile && pnpm codegen)
+          (cd client && pnpm --filter @aspen/app build:shell)
+          (cd client/packages/mobile && npx cap sync android)
+          pnpm --dir client --filter @aspen/app exec playwright install --with-deps chromium
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: A call from the emulator, against a deployment of its own
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: python3 scripts/check_mobile_call.py --platform android --bin target/debug --start-services
+      - name: The check's logs
+        if: failure()
+        run: |
+          for log in target/mobile-call/test.log target/mobile-call/logcat.txt; do
+            [ -f "$log" ] && { echo "== $log"; tail -n 200 "$log"; }
+          done
+          grep -h "call-engine-test" target/mobile-call/logcat.txt 2>/dev/null | tail -n 100 || true
 
   federation-and-push:
     name: Federation and push — two deployments over TLS

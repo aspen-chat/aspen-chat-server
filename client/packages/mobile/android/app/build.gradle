@@ -13,8 +13,8 @@ def buildNumber = System.getenv('ASPEN_BUILD_NUMBER')
 // outside Gradle and read from the repository's `target/` (client/docs/architecture/android-builds.md,
 // The call engine): `scripts/call_engine.py` beside this project builds the engine for each ABI
 // and writes its Kotlin bindings, and `scripts/webrtc_build.py build` at the root builds WebRTC
-// once. A checkout without them (CI's android job) builds the app without the call layer, which
-// nothing in the web view uses yet.
+// once. A checkout without them builds the app without the call layer, which nothing in the web
+// view uses yet; CI's Android jobs build both first, and check that the APK carries the layer.
 def repositoryRoot = rootProject.file('../../../..')
 def webrtcAar = new File(repositoryRoot, 'target/webrtc/libwebrtc.aar')
 def engineBindings = file('src/main/java/com/aspen_chat/client/voice/voice_client.kt')

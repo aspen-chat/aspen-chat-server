@@ -523,13 +523,24 @@ copies of `views/bridge.js` must be the same; the debug servers, built once in a
 macOS, iOS, and Flatpak jobs wait for, and which every job that runs those servers unpacks
 (`.github/actions/debug-servers`) rather than building them again; the client's format
 (`pnpm format:check`), typecheck, lint, and tests, with its browser tests on Chromium (a desktop and
-a phone) split across six runners; the Android app's build, its unit tests, and its device tests on
-an emulator, the debug APK kept as an artifact (`client/docs/architecture/android-builds.md`); the
-desktop app's Flatpak, built with `package:flatpak`, installed, and its capture helper asked what it
-can capture inside the sandbox; on macOS, the capture helper's lints and tests, the iOS app built
-for the simulator with the extension's Web Push check, and on a pull request an unsigned dmg, while
-`main` builds signed dmgs, sent to Apple's notary service without waiting, and an App Store build
-for TestFlight from the `apple-signing` environment (`client/docs/architecture/apple-builds.md`);
+a phone) split across six runners; Google's WebRTC built from source for Android on `ubuntu-24.04`
+and for iOS on `macos-26` by `scripts/webrtc_build.py` at the milestone it pins, in a job per
+platform (`webrtc-android`, `webrtc-ios`) that the Android and iOS jobs wait for, the archive and
+the framework cached by that milestone and the script's text and kept as artifacts
+(`docs/development/webrtc-build.md`); the call engine (`voice_client/`) built on them for every
+target the apps ship by the two `call_engine.py` scripts, its Kotlin bindings checked on the JVM
+(`voice_client/bindings-check/kotlin.sh`) and its Swift bindings on the Mac (`swift.sh`); the
+Android app's build with the engine in, its unit tests, the APK checked to carry the engine and
+WebRTC for each ABI and kept as an artifact, and its device tests on an emulator
+(`client/docs/architecture/android-builds.md`); the engine proved in a call on an emulator against a
+deployment of its own, run on the debug servers (`scripts/check_mobile_call.py --platform android`,
+in `android-call`), while the iOS half of that check needs Docker beside the simulator and is run
+from a development machine; the desktop app's Flatpak, built with `package:flatpak`, installed, and
+its capture helper asked what it can capture inside the sandbox; on macOS, the capture helper's
+lints and tests, the iOS app built for the simulator with the engine in and the extension's Web Push
+check, and on a pull request an unsigned dmg, while `main` builds signed dmgs, sent to Apple's
+notary service without waiting, and an App Store build for TestFlight from the `apple-signing`
+environment (`client/docs/architecture/apple-builds.md`);
 `scripts/dev_federation.py up --start-services`, `check`, and `scripts/dev_push.py` against the
 debug servers; the AWS configuration's `tofu test` and `scripts/check_media_prefixes.py` (every list
 of the public media prefixes against the server's, `media_store::PublicPrefix`); both images built,

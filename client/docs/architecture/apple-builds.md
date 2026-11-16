@@ -20,11 +20,12 @@ Apple accepts them, and the iOS app for the App Store, which can be sent to Test
 | ---------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `desktop-macos`        | every run | The capture helper's clippy and tests on macOS. On a pull request, also unsigned dmgs, kept as an artifact                                                                                                                                                                                                                               |
 | `desktop-macos-signed` | `main`    | Apps and dmgs signed, then checked: each app's architecture, a universal capture helper, the identity, the hardened runtime and a timestamp on the app and the capture helper, and the identity and a timestamp on each dmg. The dmgs are then sent to the notary service and kept, with their submissions, as `desktop-macos-unstapled` |
-| `ios`                  | every run | The app and its UI tests built for the simulator, unsigned, and `check_webpush.sh`                                                                                                                                                                                                                                                       |
-| `ios-testflight`       | `main`    | An App Store build, sent to App Store Connect while `TESTFLIGHT_UPLOAD` is `true`; otherwise its `.ipa` is kept as an artifact                                                                                                                                                                                                           |
+| `ios`                  | every run | The call engine built for the simulator and for devices on the WebRTC framework from `webrtc-ios` (`docs/development/webrtc-build.md`), its Swift bindings checked (`voice_client/bindings-check/swift.sh`), the app and its UI tests built for the simulator with the engine in, unsigned, and `check_webpush.sh`                       |
+| `ios-testflight`       | `main`    | The engine built again on that framework, then an App Store build, sent to App Store Connect while `TESTFLIGHT_UPLOAD` is `true`; otherwise its `.ipa` is kept as an artifact                                                                                                                                                            |
 
-The UI tests themselves are not run: they need a whole deployment (`ios-app.md`), and these runners
-have no Docker to run one in.
+The UI tests themselves are not run, nor the call engine's call on the simulator
+(`scripts/check_mobile_call.py --platform ios`): both need a whole deployment (`ios-app.md`), and
+these runners have no Docker to run one in.
 
 There are two dmgs, `Aspen-<version>-arm64.dmg` for Apple Silicon and `Aspen-<version>-x64.dmg` for
 Intel, both built on the Apple Silicon runner. **Why not one universal app:** every download would

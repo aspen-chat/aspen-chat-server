@@ -287,4 +287,7 @@ announced address over the network), Chromium as the second participant with a t
 microphone (`calls/second.ts`), and `xcodebuild test-without-building` on the Mac, with `--build`
 first building the engine, the bindings, and the app for the simulator there. The test reads its
 deployment, channel, user, refresh token, and the script's helper from the environment
-(`TEST_RUNNER_ASPEN_CALL_*`; the test's comment lists them) and skips without them.
+(`TEST_RUNNER_ASPEN_CALL_*`; the test's comment lists them) and skips without them. CI runs the
+Android half of this check (`android-builds.md`) and not this one: the deployment runs in Docker,
+which GitHub's macOS runners lack, so the simulator's call is checked from a development machine
+with a Mac beside it.

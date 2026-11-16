@@ -3,8 +3,11 @@
 CI's `android` job in `.github/workflows/ci.yml` builds the Android app, runs its JVM tests and its
 device tests on an emulator, and keeps the APK it built as the artifact `android-apk-debug` on every
 pull request and every push to `main`, for 14 days. The app also packages the mobile call engine and
-the Kotlin layer under it, which the second half of this page describes; CI's job builds without
-them, since it has no WebRTC library.
+the Kotlin layer under it, which the second half of this page describes: the job builds the engine
+for every ABI on the WebRTC archive the `webrtc-android` job built or took from its cache
+(`docs/development/webrtc-build.md`), checks its Kotlin bindings on the JVM
+(`voice_client/bindings-check/kotlin.sh`), and checks that the APK carries the engine and WebRTC for
+each ABI; a second job, `android-call`, runs the engine's call on an emulator (The call engine).
 
 ## The APK
 
@@ -64,9 +67,9 @@ call ringing the phone are later pieces.
 `android/scripts/call_engine.py` builds the engine for the three targets (or `--emulator-only`) and
 writes the bindings, and says when the WebRTC library is missing. The app is Java with this Kotlin
 beside it, so `build.gradle` applies the Kotlin plugin, compiling to the same JVM target as the
-Java. When the WebRTC library or the bindings are absent, as in CI's job, `app/build.gradle` leaves
-the `call/` and `voice/` sources out of the build and says so, and the app builds as it did without
-them.
+Java. When the WebRTC library or the bindings are absent, as on a machine that has built neither,
+`app/build.gradle` leaves the `call/` and `voice/` sources out of the build and says so, and the app
+builds as it did without them.
 
 ### The layer
 
@@ -190,9 +193,15 @@ participant with a tone WAV as its microphone (`calls/second.ts`), and
 `gradlew connectedDebugAndroidTest` on this test alone. With `--avd` it starts the emulator
 headless, recording the machine's microphone (`-allow-host-audio`, without which the emulator
 records silence); the emulator's PulseAudio backend does not start against PipeWire's server
-(`Could not init \`pa' audio
-driver`), so there its microphone is silent and the test checks the browser hears silence. The test reads its deployment, channel, user, refresh token, and the script's helper from the instrumentation's arguments (`-Pandroid.testInstrumentationRunnerArguments.ASPEN_CALL_*`; the test's comment lists them) and is skipped without them, so CI's `connectedDebugAndroidTest`
-runs it as a skip.
+(``Could not init `pa' audio driver``), so there its microphone is silent and the test checks the
+browser hears silence. The test reads its deployment, channel, user, refresh token, and the script's
+helper from the instrumentation's arguments
+(`-Pandroid.testInstrumentationRunnerArguments.ASPEN_CALL_*`; the test's comment lists them) and is
+skipped without them, so the `android` job's `connectedDebugAndroidTest` runs it as a skip. CI's
+`android-call` job runs the check itself: it builds the servers, the engine for the emulator, and
+the web shell, and runs `check_mobile_call.py --start-services` inside the emulator action's step,
+against the emulator it started (no `--avd`), whose audio is off, so there too the test checks the
+browser hears silence.
 
 ### What only a phone can show
 

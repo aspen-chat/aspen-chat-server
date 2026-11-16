@@ -29,6 +29,25 @@ takes up to 1.5 GB while it compiles, so a machine with 8 GB builds at 3: on an 
 slices build in about 17 minutes that way, with free memory at the floor but swap left as it was. A
 16 GB machine needs no cap.
 
+## In continuous integration
+
+`.github/workflows/ci.yml` builds both artifacts in a job per platform, `webrtc-android` on
+`ubuntu-24.04` and `webrtc-ios` on `macos-26`, which the Android and iOS jobs wait for and take them
+from as the artifacts `webrtc-android` (`libwebrtc.aar`) and `webrtc-ios` (`WebRTC.xcframework` as
+`webrtc-ios.tar.gz`, since an artifact keeps no file modes). Each is cached with `actions/cache`
+under `target/webrtc/`, keyed `webrtc-<platform>-<WEBRTC_BRANCH>-<hash of this script>`, so a run
+builds only when the pin or the script has changed since the last build on `main` or that branch, or
+when GitHub has evicted the cache (one unused for seven days), and a cache hit takes seconds. The
+checkout is never cached, and never fits the 10 GB a repository's caches share:
+
+| Platform | Runner                                                    | The checkout                                                                                                                                 | The build                                                                         |
+| -------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Android  | 4 cores, 16 GB, root disk ~20 GB free, `/mnt` ~66 GB free | 40 GB without history, 1.4 GB of `depot_tools`, 2 GB of output: on `/mnt` (`--root /mnt/webrtc-build`), after a check that it has 50 GB free | 4.7 minutes on 32 cores here; the runner's four are allowed 150 for the whole job |
+| iOS      | 3 cores (M1), 7 GB, ~170 GB free                          | About 30 GB, in `~/webrtc-build`                                                                                                             | `--jobs 3`, as on an 8 GB M1 (about 17 minutes); 150 for the job                  |
+
+A pull request that moves the pin builds on its own runners and its cache stays with its branch; the
+first run on `main` after it merges builds once more and every run after takes the cache.
+
 ## Moving the pin
 
 A milestone is a `branch-heads/N` branch of Google's repository, N being the Chromium branch of that
