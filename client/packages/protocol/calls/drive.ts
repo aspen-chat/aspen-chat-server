@@ -56,6 +56,11 @@ const SYNC_DELAY_MS = 400;
 const SYNC_TOLERANCE_MS = 45;
 const SYNC_SECONDS = 45;
 
+/** How long each person's hearing of the other is measured for. */
+const HEARING_MS = 4000;
+/** Opus decodes at 48 kHz whatever was captured, and a browser counts samples per channel. */
+const OPUS_SAMPLES_PER_MS = 48;
+
 const args = JSON.parse(process.env.ASPEN_CALL_CHECK ?? "{}") as Arguments;
 let failures = 0;
 
@@ -207,14 +212,16 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
     );
 
     // Each hears the other's microphone on an audio slot, decoded with little made up, measured
-    // over four seconds from when sound first arrives at both, which can be a second or more
-    // after both connect on a busy machine; how long it took is in the detail.
+    // over `HEARING_MS` from when sound first arrives at both, which can be a second or more
+    // after both connect on a busy machine; how long it took is in the detail. What was heard is
+    // judged by the samples played, not by packets, whose length the sender chooses: Chromium
+    // sends 20 ms of sound in each on one machine and 40 ms on a CI runner.
     const hearing = (r: CallReport) => received(r, "audio").some((s) => s.packets > 0);
     const waited = Date.now();
     await Promise.all([until(ann, hearing), until(bob, hearing)]);
     const startedAfterMs = Date.now() - waited;
     const [annBefore, bobBefore] = await Promise.all([report(ann), report(bob)]);
-    await sleep(4000);
+    await sleep(HEARING_MS);
     const [annAfter, bobAfter] = await Promise.all([report(ann), report(bob)]);
     const loudness = (page: Page) => page.evaluate(() => window.aspenCall?.loudness() ?? 0);
     const [annLoudness, bobLoudness] = await Promise.all([loudness(ann), loudness(bob)]);
@@ -226,8 +233,8 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
       const sound = { ...heard(before, after), peak, startedAfterMs };
       check(
         who,
-        sound.packets > 150 &&
-          sound.samples > 0 &&
+        sound.packets > 0 &&
+          sound.samples > (OPUS_SAMPLES_PER_MS * HEARING_MS * 9) / 10 &&
           sound.concealed < sound.samples * 0.1 &&
           sound.peak > 0.01,
         sound,
