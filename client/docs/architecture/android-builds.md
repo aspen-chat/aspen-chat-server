@@ -241,24 +241,46 @@ seconds a service started by a push has:
    devices stop ringing too, and Telecom's call is disconnected `REJECTED`.
 
 What only a phone can show, since the emulator receives no FCM message and shows its lock screen to
-no one:
+no one. `CallDeviceTest` (The proof below) checks what a phone attached by USB can, and did on a
+Pixel 8a (Android 17, build CP4A.261105.040.A1) on 2026-11-16, on this branch at the commit that
+added it; what it could not is marked with why:
 
 - [ ] A real FCM message from the relay, marked as a call, wakes the app from not running, in Doze,
       and the incoming call's notification is up within five seconds, ringing with the system's
-      ringtone, full screen over the lock screen.
+      ringtone, full screen over the lock screen. Verified in part on the Pixel, with the pointer
+      fed to the push handler in the instrumented process (the debug APK carries no
+      `google-services.json` and the relay sends to no test phone): the notification was posted in
+      120 ms with the screen dark and locked and in 106 ms under Doze forced on, and the lock
+      screen, once lit, showed the call (`target/mobile-call/aspen-ring-lock-screen.png`). Found and
+      not yet fixed: with the screen dark the full-screen intent did not turn it on (it stayed
+      `Dozing` three seconds into the ring, in the run no one touched the phone), since
+      `MainActivity`, which the intent opens, neither turns the screen on nor shows over the
+      keyguard, and the whole app must not; an incoming call screen of its own with
+      `setTurnScreenOn` and `setShowWhenLocked` is the interface piece that would. Not verified by
+      ear whether it rang (the phone was in Do Not Disturb), nor the wake of a process that is not
+      running, which only a real push to a phone with the relay's credentials shows.
 - [ ] Answer from the lock screen joins the DM's call with audio both ways; Decline ends the ring on
       every other device; a ring answered or declined on another device takes the notification down
-      with Telecom's matching cause in the call log.
+      with Telecom's matching cause in the call log. Verified on the Pixel: the notification's
+      Answer joined the ring's channel through the engine, Telecom holding the call active and the
+      ongoing call's notification in the incoming one's place (what flows once a call is joined is
+      `CallEngineTest`'s, which passed on the same phone); the phone's end key and the
+      notification's Decline each ended the ring, with `DELETE .../rings/@me` sent to the
+      deployment; a ring declined elsewhere is `CallRingsTest`, which passed on the Pixel too. Not
+      verified: the cause in the phone's call log, which a self-managed call does not reach.
 - [ ] The ring ends by itself at thirty seconds when no one answers, and when the caller hangs up.
-- [ ] A Bluetooth headset's button answers and declines through Telecom.
+      Not verified on the Pixel: the test ends every ring sooner.
+- [ ] A Bluetooth headset's button answers and declines through Telecom. No headset was at hand.
 - [ ] Android 8 to 13 (the `ConnectionService` path): the incoming call appears in the phone's own
-      call screen.
+      call screen. The Pixel runs Android 17.
 - [ ] Android 14 and later: `NotificationManager.canUseFullScreenIntent()` is true after installing
       from the store, whose review decides it for an app that is not a phone or alarm app; if it is
       not, the notification still rings and heads up, and the app must ask for the permission in its
-      settings.
+      settings. True on the Pixel for the debug APK installed by `adb`; a store install is not
+      verifiable here.
 - [ ] A phone whose clock runs a minute ahead of the deployment's still rings for the whole ring
-      (the watch gives the deployment's clock the say once `ready` arrives).
+      (the watch gives the deployment's clock the say once `ready` arrives). Not verified: the
+      Pixel's clock is the network's, and the test does not move it.
 
 ### The proof
 
@@ -326,21 +348,48 @@ the emulator reaches the API server, the voice server, and the script's helper a
 (plain HTTP there, as a development build allows; media goes to the voice server's announced address
 over the network), Chromium as the second participant with a tone WAV as its microphone and its fake
 camera (`calls/second.ts`, which the script's helper drives: showing video, the camera on and off,
-and a frame of someone's camera sampled), and `gradlew connectedDebugAndroidTest` on these two tests
-alone, judging their JUnit reports (two tests run, none failed or erred, and none skipped but the
+and a frame of someone's camera sampled), and `gradlew connectedDebugAndroidTest` on these tests
+alone, judging their JUnit reports (every class ran, none failed or erred, and none skipped but the
 trailing test, which skips itself outside `--record-trailing`) and that each printed its own line,
-with `ANDROID_SERIAL` set to the emulator's serial so a phone plugged in beside it is never touched.
+with every `adb` and Gradle command pinned to the device's serial (`ANDROID_SERIAL`), so whatever
+else is attached, a phone beside the emulator or an emulator beside the phone, is never touched.
 With `--avd` it starts the emulator headless, recording the machine's microphone
 (`-allow-host-audio`, without which the emulator records silence); the emulator's PulseAudio backend
 does not start against PipeWire's server (``Could not init `pa' audio driver``), so there its
-microphone is silent and the test checks the browser hears silence. The test reads its deployment,
-channel, user, refresh token, and the script's helper from the instrumentation's arguments
-(`-Pandroid.testInstrumentationRunnerArguments.ASPEN_CALL_*`; the test's comment lists them) and is
-skipped without them, so the `android` job's `connectedDebugAndroidTest` runs it as a skip. CI's
-`android-call` job runs the check itself: it builds the servers, the engine for the emulator, and
-the web shell, and runs `check_mobile_call.py --start-services` inside the emulator action's step,
-against the emulator it started (no `--avd`), whose audio is off, so there too the test checks the
-browser hears silence.
+microphone is silent. What the browser is to hear of the device's microphone is the script's to say
+(`ASPEN_CALL_MICROPHONE`, from its `--microphone`): `silent` on an emulator, where the test checks
+the device's own source measured silence and the browser heard silence; `live` on a phone, whose
+microphone hears the room, where the test checks that the browser received and decoded the phone's
+packets and reports the level it heard, whatever a room sounds like. With `--device <serial>` the
+check runs on a phone attached by USB instead (`adb reverse` works on one as on the emulator, and
+media reaches the voice server's announced address over the network the phone shares with the
+machine): an emulator's serial is refused (`emulator-<port>`, or `ro.kernel.qemu` set), `--build`
+builds the engine for the phone's ABI (`call_engine.py --abi arm64-v8a`), and `CallDeviceTest` runs
+after the engine's and the bridge's tests: what only a phone can show, read from the system itself
+through the instrumentation's shell. In a call with the browser, it selects the earpiece and then
+the loudspeaker and reads `dumpsys audio`'s active communication device and `dumpsys power`'s
+proximity wake lock after each, reads the service's foreground types and the `CallStyle`
+notification from `dumpsys activity services` and `dumpsys notification`, turns the screen off
+(`input keyevent KEYCODE_SLEEP`) for three minutes and forces Doze (`dumpsys deviceidle force-idle`)
+for thirty seconds, checking every half minute that the call is connected and packets reach both
+sides, and leaves. Then it feeds the push handler a `call` pointer, as `CallRingsTest` does, with
+the screen dark and locked, and records whether the full-screen intent woke the screen and captures
+it (`aspen-ring-dark.png` in `target/mobile-call/`, which the script pulls), rings again with the
+screen lit and captures that too, answers through the notification's Answer (found by its
+`PendingIntent`, never its wording, `CallService.answerIntent`), which must have the engine
+connected in the ring's channel and Telecom holding the call active, declines through the phone's
+end key (`KEYCODE_ENDCALL`, Telecom's own disconnect of a ringing call) and through the
+notification's Decline, and rings once more under Doze. It gives the phone back as it found it: Doze
+unforced, the screen awake, the push state as it was. The tests read their deployment, channel,
+user, refresh token, and the script's helper from the instrumentation's arguments
+(`-Pandroid.testInstrumentationRunnerArguments.ASPEN_CALL_*`; `CallEngineTest`'s comment lists them)
+and are skipped without them, so the `android` job's `connectedDebugAndroidTest` runs them as skips;
+`CallTestSupport` holds what the tests share (the arguments, waiting on the engine and Telecom, the
+system's word through the instrumentation's shell, the browser's statistics, and the push keys and
+encryption `CallRingsTest` and `CallDeviceTest` feed the push handler with). CI's `android-call` job
+runs the check itself: it builds the servers, the engine for the emulator, and the web shell, and
+runs `check_mobile_call.py --start-services` inside the emulator action's step, against the emulator
+it started (no `--avd`), whose audio is off, so there too the test checks the browser hears silence.
 
 ### Video
 
@@ -414,49 +463,84 @@ phone's own frame rate, is on the checklist.
 ### What only a phone can show
 
 The emulator offers one route, its loudspeaker (`hasEarpiece` is false there), and has no other
-call, so these are checked by hand on a device, with the call engine's test or with the app once the
-interface commands the engine:
+call, so these are checked on a device: `CallDeviceTest` reads what a phone attached by USB can show
+from the system itself, and did on a Pixel 8a (Android 17, build CP4A.261105.040.A1) on 2026-11-16,
+on this branch at the commit that added it; the rest take a hand, a headset, a SIM, or another
+Android, and are marked with why:
 
 - [ ] The earpiece: the call plays at the ear, the screen turns off as the phone is raised to it and
       comes back as it is lowered, and the Speaker route turns the screen back on; the app's Speaker
-      button does the same through the plugin.
+      button does the same through the plugin. Verified on the Pixel as far as the system tells:
+      Telecom lists `EARPIECE(Earpiece)` and `SPEAKER(Speaker)`, selecting each makes it the audio
+      system's active communication device (`dumpsys audio`), the proximity wake lock `aspen:call`
+      is held at the earpiece and released at the loudspeaker (`dumpsys power`), and the mode is the
+      communication mode. Not verified: the screen going dark at the ear itself, which takes a hand
+      over the sensor, and the app's own button.
 - [ ] A join with `RECORD_AUDIO` refused fails with `errorKind` `microphone` in the call bar (the
       permission's prompt is Capacitor's; the emulator's test grants it beforehand), and one in a
-      channel without Speak joins to listen.
+      channel without Speak joins to listen. Not verified: both take the app's page, with a hand on
+      the prompt.
 - [ ] A Bluetooth headset: it is listed as `BLUETOOTH` with its name, a call joined with it
       connected starts on it, connecting it during a call moves the call to it, disconnecting it
-      moves the call back, and with `BLUETOOTH_CONNECT` granted Telecom names every headset.
+      moves the call back, and with `BLUETOOTH_CONNECT` granted Telecom names every headset. No
+      headset was at hand.
 - [ ] A wired or USB headset: listed as `WIRED_HEADSET`, taken on connection, given up on removal.
+      None at hand, and the USB port carries `adb`.
 - [ ] A phone call interrupting ours: the ring holds the call (`onSetInactive`, the user shown on
       hold to the others, who hear nothing of them, and hearing nothing themself), hanging the phone
       call up or declining it resumes ours (`onSetActive`) with the user's own mute and deafen
       standing, and ending ours from the phone's call screen or a watch leaves the engine's call.
+      The Pixel has no SIM, and no second phone was at hand; the hold itself, asked through the
+      engine as Telecom asks it, is `CallEngineTest`'s.
 - [ ] A navigation prompt or an alarm over the call: what Telecom's audio focus does with it, and
-      whether the call is held or plays on beside it.
+      whether the call is held or plays on beside it. Not verified.
 - [ ] The call's sounds (`CallSounds`): the joining is heard as the call connects and as someone
       else joins, the leaving as someone leaves and as the user leaves, a share starting, and the
       call lost and back (cut the network for a few seconds), each on the earpiece, on the
       loudspeaker, and on a headset, with the app in the foreground, in the background, and the
       screen off, at the call's volume beside the voices; and none while a phone call holds ours.
+      Not verified: takes an ear, a hand, and a headset.
 - [ ] The notification: Hang up leaves the call, a tap opens the app, and on Android 14 and later
       the call outlives the app in the background and the screen off for an hour, with the battery
-      use the system attributes to it recorded.
+      use the system attributes to it recorded. Verified on the Pixel: the service runs in the
+      foreground as a phone call and the microphone (`types=0x84` in `dumpsys activity services`)
+      with its `CallStyle` notification (`dumpsys notification`), and the call stayed connected with
+      media both ways through three minutes of the screen off and thirty seconds of Doze forced on
+      (`dumpsys deviceidle force-idle`, which this phone allows while charging), and leaving took
+      the service, the notification, and the wake lock down. Not verified: Hang up and the tap, an
+      hour, and the battery figure; and the test's process is instrumented, which keeps it alive
+      itself, so what the system does to the app's own process over an hour is still the app's to
+      show.
 - [ ] Android 8 to 13 (the `ConnectionService` path): the call appears in the phone's call screen,
-      the same holds and resumes, and the foreground service alone keeps the process alive.
+      the same holds and resumes, and the foreground service alone keeps the process alive. The
+      Pixel runs Android 17.
 - [ ] The camera: the front camera's preview is mirrored and upright however the phone is held, the
       back camera's is not mirrored, the flip moves between them with the picture pausing only for
-      the camera's own start, and the other side sees the picture upright through a turn.
+      the camera's own start, and the other side sees the picture upright through a turn. Not
+      verified: takes a hand to hold and turn the phone.
 - [ ] The camera in the background: with the app behind another, or in the picture-in-picture
       window, the camera stays on under the service's `camera` type and the others keep seeing it.
+      Not verified.
 - [ ] The picture in picture: leaving the app (home, recents) while someone's camera or screen shows
       enters the mode on the focused screen (else the first camera of someone else), the page shows
       that picture alone in the window, the window's shape is the picture's, and opening the app
       again leaves the mode; on a phone before Android 12 the plugin enters it from
-      `onUserLeaveHint`.
+      `onUserLeaveHint`. Not verified: takes a hand on the home button.
 - [ ] Rotation: a full-screen picture turns with the phone without a flash of the old layout, and
-      the paged tiles lay out again behind their holes after a turn.
+      the paged tiles lay out again behind their holes after a turn. Not verified: takes a hand to
+      turn the phone.
 - [ ] Trailing by eye: while paging between tiles and while a transition moves one, the surface view
       follows its hole; frame-step a screen recording (`adb shell screenrecord`) and judge how far
-      it trails and whether the paged grid hides it.
+      it trails and whether the paged grid hides it. Not verified by eye on a device; the emulator's
+      measurement is under Video.
 - [ ] A phone without an earpiece (a tablet): `hasEarpiece` is false and the routes are the
-      loudspeaker and whatever is connected.
+      loudspeaker and whatever is connected. No tablet at hand.
+- [ ] The app's cold start from the launcher after installing the APK: the web shell loads and the
+      plugin that commands the engine is available. Not verifiable on the Pixel by USB: it is locked
+      with a credential the test does not have, so an activity started with `am start` stays behind
+      the lock screen.
+
+What the Pixel found, fixed on the same day: a ring answered joined with no microphone, which the
+engine refuses when the call lets the user speak (`CallTelecom.answer` opens one, and the call's end
+closes it), and the `idle` snapshot the microphone's setting publishes before the join read as the
+answered call's end, disconnecting it from Telecom as it was joining (`SystemCall.joined`).

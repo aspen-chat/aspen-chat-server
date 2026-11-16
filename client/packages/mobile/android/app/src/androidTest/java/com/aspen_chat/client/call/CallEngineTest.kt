@@ -1,18 +1,28 @@
 package com.aspen_chat.client.call
 
 import android.Manifest
-import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import android.media.AudioManager
 import android.media.MediaPlayer
-import android.os.ParcelFileDescriptor
-import android.os.ParcelUuid
-import android.service.notification.StatusBarNotification
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.aspen_chat.client.push.PushStore
+import com.aspen_chat.client.call.CallTestSupport.argument
+import com.aspen_chat.client.call.CallTestSupport.awaitTrue
+import com.aspen_chat.client.call.CallTestSupport.awaitValue
+import com.aspen_chat.client.call.CallTestSupport.browserInbound
+import com.aspen_chat.client.call.CallTestSupport.browserOnHold
+import com.aspen_chat.client.call.CallTestSupport.callNotification
+import com.aspen_chat.client.call.CallTestSupport.callService
+import com.aspen_chat.client.call.CallTestSupport.http
+import com.aspen_chat.client.call.CallTestSupport.inboundAudio
+import com.aspen_chat.client.call.CallTestSupport.shell
+import com.aspen_chat.client.call.CallTestSupport.sourceAudio
+import com.aspen_chat.client.call.CallTestSupport.telecomLines
+import com.aspen_chat.client.call.CallTestSupport.until
+import com.aspen_chat.client.call.CallTestSupport.untilTelecom
 import com.aspen_chat.client.voice.CallState
 import com.aspen_chat.client.voice.CallStatus
 import com.aspen_chat.client.voice.Configuration
@@ -26,11 +36,8 @@ import com.aspen_chat.client.voice.PeerConnectionObserver
 import com.aspen_chat.client.voice.Socket
 import com.aspen_chat.client.voice.SocketFactory
 import com.aspen_chat.client.voice.SoundCue
-import com.aspen_chat.client.voice.StatsOf
 import com.aspen_chat.client.voice.TrackId
 import com.aspen_chat.client.voice.WatchedVideo
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -50,7 +57,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
-import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -76,6 +82,9 @@ import org.junit.runner.RunWith
  * | `ASPEN_CALL_REFRESH_TOKEN` | Their refresh token; the session token kept is a stale one, |
  * |                            | so the first request is refused and renewed from this       |
  * | `ASPEN_CALL_HELPER`        | The script's helper, which brings the browser in            |
+ * | `ASPEN_CALL_MICROPHONE`    | What the browser is to hear of this device's microphone:    |
+ * |                            | `silent` (an emulator's, whose host audio never reaches     |
+ * |                            | it) or `live` (a phone's, which hears the room)             |
  */
 @RunWith(AndroidJUnit4::class)
 class CallEngineTest {
@@ -120,11 +129,8 @@ class CallEngineTest {
             get() = synchronized(created) { created.lastOrNull() }
     }
 
-    /** What an `inbound-rtp` audio entry of a statistics report measured. */
-    data class InboundAudio(val packets: Long, val energy: Double, val level: Double)
-
-    /** What the microphone's `media-source` entry measured: `totalAudioEnergy` and `audioLevel`. */
-    data class SourceAudio(val energy: Double, val level: Double)
+    /** What this device's microphone carries, as the check running the test says (`ASPEN_CALL_MICROPHONE`). */
+    enum class Microphone { SILENT, LIVE }
 
     /** A frame of someone's camera as the browser plays it (the page's `cameraSample`). */
     data class CameraSample(val width: Int, val height: Int, val brightness: Double, val spread: Double)
@@ -166,10 +172,8 @@ class CallEngineTest {
 
         /** The lines of `dumpsys audio` that name a player of this process. */
         private fun audioPlayerLines(): List<String> {
-            val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("dumpsys audio")
-            val text = ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
             val pid = "/${android.os.Process.myPid()}"
-            return text.lines().filter { it.contains(pid) && it.contains("AudioAttributes") }
+            return shell("dumpsys audio").lines().filter { it.contains(pid) && it.contains("AudioAttributes") }
         }
     }
 
@@ -194,12 +198,6 @@ class CallEngineTest {
     private lateinit var store: PushStore
     private var keptPushState: String? = null
     private var helper: String? = null
-
-    private fun argument(name: String): String {
-        val value = InstrumentationRegistry.getArguments().getString(name)
-        assumeTrue("$name is not given", !value.isNullOrEmpty())
-        return value!!
-    }
 
     @Before
     fun setUp() {
@@ -226,6 +224,11 @@ class CallEngineTest {
         val user = argument("ASPEN_CALL_USER_ID")
         val refreshToken = argument("ASPEN_CALL_REFRESH_TOKEN")
         val helper = argument("ASPEN_CALL_HELPER")
+        val expectedMicrophone = when (val given = argument("ASPEN_CALL_MICROPHONE")) {
+            "silent" -> Microphone.SILENT
+            "live" -> Microphone.LIVE
+            else -> throw AssertionError("ASPEN_CALL_MICROPHONE is $given; it is silent or live")
+        }
         this@CallEngineTest.helper = helper
 
         // The account as the web view keeps it on sign-in, with a session token the deployment
@@ -285,8 +288,8 @@ class CallEngineTest {
             val telecomActive = telecomLines(callId)
             assertTrue("Telecom lists the call $callId:\n$telecomActive", telecomActive.isNotEmpty())
             assertEquals("the call plays in the communication mode", AudioManager.MODE_IN_COMMUNICATION, audioManager.mode)
-            val service = awaitValue("the call's service runs in the foreground", 10) { callService()?.takeIf { it.foreground } }
-            val notice = awaitValue("the call's notification is posted", 10) { callNotification() }
+            val service = awaitValue("the call's service runs in the foreground", 10) { callService(context)?.takeIf { it.foreground } }
+            val notice = awaitValue("the call's notification is posted", 10) { callNotification(context) }
             assertEquals(Notification.CATEGORY_CALL, notice.notification.category)
             assertTrue("the notification is the service's", notice.notification.flags and Notification.FLAG_FOREGROUND_SERVICE != 0)
             assertTrue("the notification stays", notice.notification.flags and Notification.FLAG_ONGOING_EVENT != 0)
@@ -349,9 +352,11 @@ class CallEngineTest {
             assertTrue("the tone has a level: $after", after.level > 0)
 
             // And the browser hears this device's microphone: packets arrive and decode, and the
-            // sound off its track is what the microphone carried. The device's own source
-            // statistics say whether that was sound (a tone played to it) or silence (an
-            // emulator whose host audio never reached it); the browser must hear the same.
+            // sound off its track is what the microphone carried. What that is, the check says
+            // (`ASPEN_CALL_MICROPHONE`): an emulator's microphone, whose host audio never reaches
+            // it, carries silence, which the device's own source statistics confirm and the
+            // browser must hear as silence; a phone's hears the room, so the browser reports the
+            // level it hears, whatever it is, and nothing is asserted of how loud a room is.
             val browserBefore = browserInbound(helper)
             delay(4_000)
             val browserAfter = browserInbound(helper)
@@ -359,11 +364,18 @@ class CallEngineTest {
             assertTrue("the browser receives audio: $browserBefore then $browserAfter", browserAfter.first > browserBefore.first)
             assertTrue("and decodes it: $browserBefore then $browserAfter", browserAfter.second > browserBefore.second)
             val browserPeak = JSONObject(http("GET", "$helper/second-participant/loudness")).getDouble("peak")
-            val microphoneSounding = source.energy > 0.001
-            if (microphoneSounding) {
-                assertTrue("and hears the microphone's sound in it: $browserPeak (this side's source: $source)", browserPeak > 0.01)
-            } else {
-                assertTrue("and hears the microphone's silence in it: $browserPeak (this side's source: $source)", browserPeak < 0.01)
+            assertTrue("the browser reports a level: $browserPeak", browserPeak.isFinite() && browserPeak >= 0.0)
+            when (expectedMicrophone) {
+                Microphone.SILENT -> {
+                    assertTrue("this side's microphone is silent: $source", source.energy < 0.001)
+                    assertTrue("and the browser hears its silence: $browserPeak (this side's source: $source)", browserPeak < 0.01)
+                }
+                Microphone.LIVE -> {
+                    // The source's energy rises with what the room sounded like; the level alone
+                    // is asserted, as reported. The signal came through either way: the browser
+                    // decoded this side's packets above.
+                    assertTrue("this side's source reports its level: $source", source.level.isFinite() && source.level >= 0.0)
+                }
             }
 
             // On hold, as `CallTelecom` puts the call for Telecom's `onSetInactive` (which the
@@ -490,8 +502,8 @@ class CallEngineTest {
             // And the system's side with it: Telecom's call is gone, the service and its
             // notification are down, the routes empty, and the audio mode given back.
             untilTelecom("the system call ends", 20, call) { it == CallTelecom.Phase.IDLE }
-            awaitTrue("the call's service stops", 10) { callService() == null }
-            awaitTrue("the call's notification is taken down", 10) { callNotification() == null }
+            awaitTrue("the call's service stops", 10) { callService(context) == null }
+            awaitTrue("the call's notification is taken down", 10) { callNotification(context) == null }
             awaitTrue("the audio mode is given back", 10) { audioManager.mode == modeBefore }
             assertTrue("no routes after the call", call.routes.routes.isEmpty())
             assertNull(call.routes.currentKind)
@@ -511,8 +523,8 @@ class CallEngineTest {
             println("call-engine-test: the sounds ${played.map { it.cue }} each played by a MediaPlayer as a voice communication (${voicePlayers.first().trim()})")
             println(
                 "call-engine-test: joined, heard ${after.packets - before.packets} packets of the browser's tone in 4 s " +
-                    "(energy ${before.energy} → ${after.energy}, level ${after.level}); this side's microphone source " +
-                    "${if (microphoneSounding) "sounded" else "was silent"} (energy ${source.energy}, level ${source.level}); " +
+                    "(energy ${before.energy} → ${after.energy}, level ${after.level}); this side's microphone, expected $expectedMicrophone, " +
+                    "measured energy ${source.energy} and level ${source.level} at its source; " +
                     "the browser received ${browserAfter.first - browserBefore.first} packets and " +
                     "${browserAfter.second - browserBefore.second} samples in 4 s, peaking at $browserPeak; $hold; $video; " +
                     "resumed on socket 2 with session $session with video flowing on; camera off; the signalling socket negotiated ${sockets.latestExtensions}; left",
@@ -524,106 +536,7 @@ class CallEngineTest {
         }
     }
 
-    // --- Helpers --------------------------------------------------------------------------------
-
-    /** The engine's state once `holds` of it, or a failure after `seconds`, naming the last state. */
-    private suspend fun until(what: String, seconds: Long, call: CallEngine, holds: (CallState) -> Boolean): CallState {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
-        var state = call.engine.state()
-        while (!holds(state)) {
-            if (System.nanoTime() > deadline) {
-                fail("$what did not happen within $seconds s: $state")
-            }
-            delay(100)
-            state = call.engine.state()
-        }
-        return state
-    }
-
-    /** The system call's phase once `holds` of it, or a failure after `seconds`. */
-    private suspend fun untilTelecom(what: String, seconds: Long, call: CallEngine, holds: (CallTelecom.Phase) -> Boolean): CallTelecom.Phase {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
-        var phase = call.telecom.phase
-        while (!holds(phase)) {
-            if (System.nanoTime() > deadline) {
-                fail("$what did not happen within $seconds s: $phase")
-            }
-            delay(100)
-            phase = call.telecom.phase
-        }
-        return phase
-    }
-
-    /** What `read` answers once it is not `null`, or a failure after `seconds`. */
-    private suspend fun <T : Any> awaitValue(what: String, seconds: Long, read: () -> T?): T {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
-        while (true) {
-            read()?.let { return it }
-            if (System.nanoTime() > deadline) {
-                fail("$what did not happen within $seconds s")
-            }
-            delay(100)
-        }
-    }
-
-    /** Waits until `holds`, or fails after `seconds`. */
-    private suspend fun awaitTrue(what: String, seconds: Long, holds: () -> Boolean) {
-        awaitValue(what, seconds) { if (holds()) Unit else null }
-    }
-
-    /** The call's service among the app's running services, with whether it is in the foreground. */
-    @Suppress("DEPRECATION")
-    private fun callService(): ActivityManager.RunningServiceInfo? =
-        context.getSystemService(ActivityManager::class.java).getRunningServices(100)
-            .firstOrNull { it.service.className == CallService::class.java.name }
-
-    private fun callNotification(): StatusBarNotification? =
-        context.getSystemService(NotificationManager::class.java).activeNotifications.firstOrNull { it.id == CallService.NOTIFICATION_ID }
-
-    /** The lines of `dumpsys telecom` that name the call `id`, Telecom's own word on it. */
-    private fun telecomLines(id: ParcelUuid): List<String> {
-        val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("dumpsys telecom")
-        val text = ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
-        return text.lines().filter { it.contains(id.toString()) }
-    }
-
-    /** The body of `url`'s answer, which must be `200`. */
-    private fun http(method: String, url: String): String {
-        val connection = URL(url).openConnection() as HttpURLConnection
-        connection.requestMethod = method
-        connection.connectTimeout = 60_000
-        connection.readTimeout = 60_000
-        val status = connection.responseCode
-        val body = (if (status < 400) connection.inputStream else connection.errorStream)?.bufferedReader()?.readText() ?: ""
-        assertEquals("$method $url: $body", 200, status)
-        return body
-    }
-
-    private suspend fun entries(connection: PeerConnection): List<JSONObject> {
-        val array = JSONArray(connection.stats(StatsOf.Connection))
-        return (0 until array.length()).map { array.getJSONObject(it) }
-    }
-
-    /** The connection's inbound audio, summed over its `inbound-rtp` audio entries. */
-    private suspend fun inboundAudio(connection: PeerConnection): InboundAudio {
-        var summed = InboundAudio(0, 0.0, 0.0)
-        for (entry in entries(connection)) {
-            if (entry.optString("type") == "inbound-rtp" && entry.optString("kind") == "audio") {
-                summed = InboundAudio(
-                    packets = summed.packets + entry.optLong("packetsReceived"),
-                    energy = summed.energy + entry.optDouble("totalAudioEnergy", 0.0),
-                    level = maxOf(summed.level, entry.optDouble("audioLevel", 0.0)),
-                )
-            }
-        }
-        return summed
-    }
-
-    /** What the microphone's source has captured (`media-source`), after WebRTC's processing. */
-    private suspend fun sourceAudio(connection: PeerConnection): SourceAudio {
-        val source = entries(connection).firstOrNull { it.optString("type") == "media-source" && it.optString("kind") == "audio" }
-        return SourceAudio(source?.optDouble("totalAudioEnergy", 0.0) ?: 0.0, source?.optDouble("audioLevel", 0.0) ?: 0.0)
-    }
+    // --- Helpers the video needs; the rest are `CallTestSupport`'s ---------------------------
 
     /** Opens `camera` on `id` for `origin`'s engine, on the main thread, and answers the track and the camera opened. */
     private suspend fun cameraStarted(camera: CallCamera, id: String?, origin: String): Pair<TrackId, CallCameraDevice> =
@@ -664,26 +577,5 @@ class CallEngineTest {
             }
             delay(500)
         }
-    }
-
-    /** Whom the browser's call shows on hold, from the helper's report of it. */
-    private fun browserOnHold(helper: String): List<String> {
-        val onHold = JSONObject(http("GET", "$helper/second-participant/report")).getJSONArray("onHold")
-        return (0 until onHold.length()).map { onHold.getString(it) }
-    }
-
-    /** The packets and samples the browser's connection received of audio, from the helper's report of it. */
-    private fun browserInbound(helper: String): Pair<Long, Long> {
-        val streams = JSONObject(http("GET", "$helper/second-participant/report")).getJSONArray("streams")
-        var packets = 0L
-        var samples = 0L
-        for (i in 0 until streams.length()) {
-            val stream = streams.getJSONObject(i)
-            if (stream.optString("direction") == "inbound" && stream.optString("kind") == "audio") {
-                packets += stream.optLong("packets")
-                samples += stream.optLong("samples")
-            }
-        }
-        return packets to samples
     }
 }

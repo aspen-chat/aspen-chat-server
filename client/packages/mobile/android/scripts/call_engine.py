@@ -3,11 +3,13 @@
 emulator and for every ARM device, and its Kotlin bindings, where the Gradle build reads them
 (`client/docs/architecture/android-builds.md`, The call engine).
 
-    client/packages/mobile/android/scripts/call_engine.py [--emulator-only]
+    client/packages/mobile/android/scripts/call_engine.py [--emulator-only | --abi <abi>...]
 
 The engine's shared library is built with cargo for `x86_64-linux-android`, `aarch64-linux-android`,
 and `armv7-linux-androideabi` (which `rust-toolchain.toml` lists, so rustup installs them) with the
-NDK's clang, into `target/<triple>/release/`, from where `app/build.gradle` lays it out by ABI, and
+NDK's clang, into `target/<triple>/release/`, from where `app/build.gradle` lays it out by ABI
+(`--abi` names the ABIs to build for, `arm64-v8a` for a phone attached by USB; `--emulator-only` is
+`--abi x86_64`), and
 `scripts/voice_client_bindings.py` writes the Kotlin package into the app's
 `java/com/aspen_chat/client/voice/`. The WebRTC library the app links, `target/webrtc/libwebrtc.aar`,
 is built once with `scripts/webrtc_build.py build` (`docs/development/webrtc-build.md`); this says
@@ -23,12 +25,17 @@ from pathlib import Path
 
 ANDROID = Path(__file__).resolve().parent.parent
 REPO = ANDROID.parents[3]
-# The cargo target and the NDK's triple of each ABI the app ships (`x86_64`, `arm64-v8a`,
-# `armeabi-v7a`), so every phone runs the same call path.
+# The cargo target and the NDK's triple of each ABI the app ships, so every phone runs the same
+# call path; `app/build.gradle` reads the same ABI from each target's directory.
 TARGETS = {
     "x86_64-linux-android": "x86_64-linux-android",
     "aarch64-linux-android": "aarch64-linux-android",
     "armv7-linux-androideabi": "armv7a-linux-androideabi",
+}
+ABIS = {
+    "x86_64": "x86_64-linux-android",
+    "arm64-v8a": "aarch64-linux-android",
+    "armeabi-v7a": "armv7-linux-androideabi",
 }
 # What the app's `minSdkVersion` is, which names the NDK's clang for each target.
 MIN_SDK = 26
@@ -48,14 +55,22 @@ def ndk() -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--emulator-only", action="store_true", help="build the engine for the x86_64 emulator alone")
+    which = parser.add_mutually_exclusive_group()
+    which.add_argument("--emulator-only", action="store_true", help="build the engine for the x86_64 emulator alone")
+    which.add_argument("--abi", action="append", choices=sorted(ABIS), metavar="ABI",
+                       help=f"build for this ABI alone, repeatable ({', '.join(sorted(ABIS))}); every ABI when not given")
     args = parser.parse_args()
     if not WEBRTC.exists():
         sys.exit(f"call_engine.py: {WEBRTC} is missing; build it with scripts/webrtc_build.py build")
     tools = ndk() / "toolchains" / "llvm" / "prebuilt" / "linux-x86_64" / "bin"
     if not tools.exists():
         sys.exit(f"call_engine.py: {tools} is missing; the engine is built for Android on x86-64 Linux")
-    targets = ["x86_64-linux-android"] if args.emulator_only else list(TARGETS)
+    if args.emulator_only:
+        targets = [ABIS["x86_64"]]
+    elif args.abi:
+        targets = [ABIS[abi] for abi in dict.fromkeys(args.abi)]
+    else:
+        targets = list(TARGETS)
     for target in targets:
         print(f"call_engine.py: building voice_client for {target}", flush=True)
         # Cargo links with the NDK's clang for the target and the app's lowest Android, and any C

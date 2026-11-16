@@ -138,14 +138,6 @@ class CallService : Service() {
             )
             channel.enableVibration(true)
             manager.createNotificationChannel(channel)
-            val action = { name: String, request: Int ->
-                PendingIntent.getService(
-                    context,
-                    request,
-                    Intent(context, CallService::class.java).setAction(name),
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                )
-            }
             val builder = NotificationCompat.Builder(context, RING_CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_aspen)
                 .setColor(0xFF047857.toInt())
@@ -154,8 +146,8 @@ class CallService : Service() {
                 .setStyle(
                     NotificationCompat.CallStyle.forIncomingCall(
                         Person.Builder().setName(name).setImportant(true).build(),
-                        action(ACTION_DECLINE, 1),
-                        action(ACTION_ANSWER, 2),
+                        declineIntent(context),
+                        answerIntent(context),
                     ),
                 )
                 .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -170,6 +162,22 @@ class CallService : Service() {
             }
             manager.notify(NOTIFICATION_ID, builder.build())
         }
+
+        /**
+         * The incoming call's Answer and Decline, as the notification carries them. The system
+         * gives one `PendingIntent` for each request code and intent, so a test that builds
+         * either again finds the notification's action by equality, never by its wording.
+         */
+        internal fun answerIntent(context: Context): PendingIntent = ringAction(context, ACTION_ANSWER, 2)
+
+        internal fun declineIntent(context: Context): PendingIntent = ringAction(context, ACTION_DECLINE, 1)
+
+        private fun ringAction(context: Context, name: String, request: Int): PendingIntent = PendingIntent.getService(
+            context,
+            request,
+            Intent(context, CallService::class.java).setAction(name),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
 
         /** Takes the incoming call's notification down, whatever ended the ring. */
         fun cancelIncoming(context: Context) {

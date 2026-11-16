@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Check the mobile call engine with a phone's platform under it, on the iOS simulator of a Mac or
-the Android emulator here, against built servers here.
+"""Check the mobile call engine with a phone's platform under it, on the iOS simulator of a Mac, the
+Android emulator here, or an Android phone attached here by USB, against built servers here.
 
 Runs a deployment of its own (`stack.py`), whose web client is the call page of the client's own
 call code (`client/packages/protocol/calls/`), and runs the platform's tests of the engine against
@@ -16,7 +16,8 @@ media goes straight to the voice server's announced address over the network.
 
     scripts/check_mobile_call.py --platform ios --bin target/debug [--build] [--mac aspen-mac]
         [--worktree '~/aspen-native-calls'] [--derived '~/aspen-derived-native-calls']
-    scripts/check_mobile_call.py --platform android --bin target/debug [--build] [--avd aspen-test]
+    scripts/check_mobile_call.py --platform android --bin target/debug [--build]
+        [--avd aspen-test | --device <serial>] [--microphone silent|live]
 
 iOS: the simulator shares the Mac's network, so the Mac's loopback is tunnelled back here over SSH.
 `--build` first builds the engine for the simulator and its bindings on the Mac
@@ -28,18 +29,29 @@ XCTest's bundle injection, for a Mac whose `xcodebuild` cannot see simulators (a
 CoreSimulator was never installed, which takes an administrator); its `--build` builds for the
 generic simulator destination for the same reason.
 
-Android: the emulator reaches this machine's loopback through `adb reverse`. With `--avd` the
-emulator is started here, headless, recording this machine's microphone (`-allow-host-audio`,
-without which it records silence); without it, the one emulator `adb` sees is used. Only an
-emulator is ever driven: `adb` and Gradle are given its serial (`ANDROID_SERIAL`), so a phone
-plugged in beside it is left alone, and the check refuses to run with no emulator or several. What the
-emulator's microphone carries decides what the test expects the browser to hear: its sound, or its
-silence, which is what an emulator whose host audio never reaches it carries, as here, where the
-emulator's PulseAudio backend fails to start against PipeWire's server ("Could not init `pa'
-audio driver" in `target/mobile-call/emulator.log`). `--build` first builds the engine for the
-emulator and its bindings (`client/packages/mobile/android/scripts/call_engine.py`); the Gradle
-build then runs the test (`connectedDebugAndroidTest`), which needs the web shell copied in
-(`npx cap sync android` in `client/packages/mobile`) and `target/webrtc/libwebrtc.aar`.
+Android: the emulator or phone reaches this machine's loopback through `adb reverse`, which a USB
+device takes as an emulator does; media goes to the voice server's announced address, which a
+phone reaches over the network it shares with this machine. With `--avd` the emulator is started
+here, headless, recording this machine's microphone (`-allow-host-audio`, without which it
+records silence), and refused while another emulator is running; with `--device` the phone `adb`
+lists under that serial is used, and an emulator is refused (its serial is `emulator-<port>`, and
+`ro.kernel.qemu` is set on it); without either, the one emulator `adb` sees is used, and a phone
+attached alone is refused until it is given as `--device`. Whichever it is, every `adb` and Gradle
+command is pinned to it (`ANDROID_SERIAL`), so whatever else is attached, a phone beside the
+emulator or an emulator beside the phone, is left alone.
+
+What the tests expect the browser to hear is `--microphone`: `silent` on an emulator, since one
+whose host audio never reaches it carries silence, as here, where the emulator's PulseAudio backend
+fails to start against PipeWire's server ("Could not init `pa' audio driver" in
+`target/mobile-call/emulator.log`), and the test checks the browser hears silence of it; `live` on
+a phone, whose microphone hears the room, where the test checks that the browser receives and
+decodes the phone's packets and reports the level it hears, whatever it is, since what a room
+sounds like is no test's to assert. `--build` first builds the engine for the emulator (`--avd`
+or neither) or for the phone's ABI (`--device`) and its bindings
+(`client/packages/mobile/android/scripts/call_engine.py`); the Gradle build then runs the tests
+(`connectedDebugAndroidTest`), on a phone `CallDeviceTest` too, what only a phone can show, which
+needs the web shell copied in (`npx cap sync android` in `client/packages/mobile`) and
+`target/webrtc/libwebrtc.aar`.
 
 `--record-trailing` records instead of checking: it runs the one test that moves a hole across the
 screen with the camera drawn in it (`testPictureFollowsAMovingHole`, `pictureFollowsAMovingHole`)
@@ -85,10 +97,20 @@ BUNDLE = "com.aspen-chat.client"
 PACKAGE = "com.aspen_chat.client"
 MAC_PATH = "export PATH=/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
 ANDROID_TESTS = ["com.aspen_chat.client.call.CallEngineTest", "com.aspen_chat.client.call.AspenCallPluginTest"]
+# What only a phone can show, run on `--device` after the two above; it captures the lock screen
+# while a call rings there.
+ANDROID_DEVICE_TEST = "com.aspen_chat.client.call.CallDeviceTest"
+# The line each Android test prints once it has done its work, by which a run is judged to have
+# done it; a test that passed without one did nothing.
+ANDROID_TEST_LINES = {
+    ANDROID_TESTS[0]: "call-engine-test",
+    ANDROID_TESTS[1]: "call-plugin-test",
+    ANDROID_DEVICE_TEST: "call-device-test",
+}
+DEVICE_CAPTURES = ["/data/local/tmp/aspen-ring-dark.png", "/data/local/tmp/aspen-ring-lock-screen.png"]
 IOS_TESTS = ["AppTests/CallEngineTests", "AppTests/AspenCallPluginTests"]
 ANDROID_TRAILING_TEST = "com.aspen_chat.client.call.AspenCallPluginTest#pictureFollowsAMovingHole"
 IOS_TRAILING_TEST = "AppTests/AspenCallPluginTests/testPictureFollowsAMovingHole"
-
 
 
 def say(message: str) -> None:
@@ -364,21 +386,31 @@ def sdk() -> Path:
 
 
 def adb(*args: str, serial: str | None = None, timeout: float = 60) -> str:
-    """Runs `adb`, against the device `serial` names when given."""
-    target = [] if serial is None else ["-s", serial]
-    done = subprocess.run([str(sdk() / "platform-tools" / "adb"), *target, *args], capture_output=True, text=True,
-                          timeout=timeout)
+    """`adb`'s output, pinned to the device `serial` when given, else to the one device attached."""
+    pinned = ["-s", serial] if serial else []
+    done = subprocess.run([str(sdk() / "platform-tools" / "adb"), *pinned, *args], capture_output=True, text=True, timeout=timeout)
     return done.stdout.strip()
+
+
+def attached() -> dict[str, str]:
+    """The devices `adb` lists, serial to state (`device`, `offline`, `unauthorized`)."""
+    devices = {}
+    for line in adb("devices").splitlines()[1:]:
+        parts = line.split("\t")
+        if len(parts) == 2:
+            devices[parts[0]] = parts[1]
+    return devices
+
+
+def is_emulator(serial: str) -> bool:
+    """Whether the attached device is an emulator: `adb` names one `emulator-<console port>`, and
+    the emulated kernel sets `ro.kernel.qemu`, which no phone's does."""
+    return serial.startswith("emulator-") or adb("shell", "getprop", "ro.kernel.qemu", serial=serial) == "1"
 
 
 def emulators() -> list[str]:
     """The serials of the emulators `adb` sees, booted or not; a phone's serial is never one."""
-    serials = []
-    for line in adb("devices").splitlines()[1:]:
-        parts = line.split("\t")
-        if len(parts) == 2 and parts[0].startswith("emulator-") and parts[1] in ("device", "offline"):
-            serials.append(parts[0])
-    return serials
+    return [serial for serial, state in attached().items() if serial.startswith("emulator-") and state in ("device", "offline")]
 
 
 class Emulator:
@@ -417,33 +449,30 @@ class Emulator:
             self.process = None
 
 
-def tests_passed(results: Path, expected: int) -> bool:
-    """Whether the JUnit reports under `results` say exactly `expected` tests ran, none failing
-    or erroring, and none skipped but the trailing test, which skips itself outside
-    `--record-trailing`."""
-    counts = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0}
-    skipped: list[str] = []
-    for path in results.rglob("*.xml"):
-        suite = ElementTree.parse(path).getroot()
-        for name in counts:
-            counts[name] += int(suite.get(name, "0"))
-        skipped.extend(case.get("name", "") for case in suite.iter("testcase") if case.find("skipped") is not None)
-    ran = counts["tests"] - counts["skipped"]
-    return (ran == expected and counts["failures"] == 0 and counts["errors"] == 0
-            and all(name == ANDROID_TRAILING_TEST.split("#")[1] for name in skipped))
-
-
 class Android:
-    """The tests on the emulator, through Gradle."""
+    """The tests on the emulator, or on the phone `--device` names, through Gradle."""
 
     def __init__(self, args: argparse.Namespace):
+        if args.avd and args.device:
+            raise Failed("--avd starts an emulator and --device names a phone; give one")
         self.emulator = Emulator(args.avd) if args.avd else None
+        self.device: str | None = args.device
+        # What the tests expect the browser to hear of this side's microphone: a phone's hears
+        # the room, an emulator's here carries silence.
+        self.microphone = args.microphone or ("live" if args.device else "silent")
         self.env = {**os.environ, "ANDROID_HOME": str(sdk())}
         java_home = os.environ.get("JAVA_HOME")
         if java_home is None:
             jdks = sorted((Path.home() / ".local" / "share" / "jdks").glob("jdk-21*"))
             if jdks:
                 self.env["JAVA_HOME"] = str(jdks[-1])
+        if self.device:
+            state = attached().get(self.device)
+            if state != "device":
+                raise Failed(f"no phone {self.device} is attached and ready (adb says {state or 'nothing'}); "
+                             f"attached: {', '.join(attached()) or 'none'}")
+            if is_emulator(self.device):
+                raise Failed(f"{self.device} is an emulator; --device is for a phone (give --avd, or neither, for an emulator)")
 
     def gradle(self, *args: str, log: Path, timeout: float = 1800) -> int:
         with subprocess.Popen(["./gradlew", "--console=plain", *args], cwd=ANDROID, env=self.env,
@@ -460,25 +489,42 @@ class Android:
                 return -1
 
     def build(self) -> None:
-        say("building the engine for the emulator and its bindings")
-        subprocess.run([sys.executable, str(ANDROID / "scripts" / "call_engine.py"), "--emulator-only"], cwd=REPO, check=True)
+        if self.device:
+            abi = adb("shell", "getprop", "ro.product.cpu.abi", serial=self.device)
+            say(f"building the engine for the phone's {abi} and its bindings")
+            subprocess.run([sys.executable, str(ANDROID / "scripts" / "call_engine.py"), "--abi", abi], cwd=REPO, check=True)
+        else:
+            say("building the engine for the emulator and its bindings")
+            subprocess.run([sys.executable, str(ANDROID / "scripts" / "call_engine.py"), "--emulator-only"], cwd=REPO, check=True)
 
     def serial(self) -> str:
-        """The emulator to drive, started here with `--avd`; a phone plugged in is never touched."""
+        """The device to drive: the emulator started here with `--avd`, the phone `--device` names,
+        or the one emulator running. Everything after is pinned to it (`ANDROID_SERIAL`, which
+        Gradle's `connected*` tasks and every `adb` under them take the device from), so whatever
+        else is attached is never touched."""
         if self.emulator is not None:
             self.emulator.start()
-            return self.emulator.serial
-        running = emulators()
-        if len(running) != 1:
-            raise Failed(f"one running emulator is needed, found {running or 'none'}; start one, or give --avd")
-        return running[0]
+            serial = self.emulator.serial
+        elif self.device:
+            serial = self.device
+        else:
+            running = emulators()
+            if len(running) != 1:
+                phones = [serial for serial, state in attached().items() if state == "device" and serial not in running]
+                hint = f"; {', '.join(phones)} is a phone: give it as --device" if phones else ""
+                raise Failed(f"one running emulator is needed, found {running or 'none'}{hint}; start one, or give --avd")
+            serial = running[0]
+        self.env["ANDROID_SERIAL"] = serial
+        say(f"driving {self.where(serial)}")
+        return serial
+
+    def where(self, serial: str) -> str:
+        return f"the phone {serial}" if self.device else f"the emulator {serial}"
 
     def record_trailing(self, variables: dict[str, str]) -> Path:
-        """Runs the trailing test alone, with the emulator's screen recorded around it, and pulls
-        the recording here."""
+        """Runs the trailing test alone, with the device's screen recorded around it, and pulls the
+        recording here."""
         serial = self.serial()
-        self.env["ANDROID_SERIAL"] = serial
-        say(f"driving the emulator {serial}")
         remote = "/sdcard/aspen-trailing.mp4"
         recorder = None
         try:
@@ -486,7 +532,7 @@ class Android:
             recorder = subprocess.Popen([str(sdk() / "platform-tools" / "adb"), "-s", serial, "shell", "screenrecord",
                                          "--time-limit", "120", remote], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(2)
-            say("recording the emulator while the hole moves")
+            say(f"recording {self.where(serial)} while the hole moves")
             arguments = [f"-Pandroid.testInstrumentationRunnerArguments.{name}={value}"
                          for name, value in {**variables, "ASPEN_CALL_TRAILING": "1"}.items()]
             code = self.gradle(":app:connectedDebugAndroidTest",
@@ -509,35 +555,78 @@ class Android:
 
     def run(self, variables: dict[str, str]) -> None:
         serial = self.serial()
-        # Everything from here drives that emulator alone: a phone plugged in is never touched.
-        self.env["ANDROID_SERIAL"] = serial
-        say(f"driving the emulator {serial}")
+        classes = [*ANDROID_TESTS, ANDROID_DEVICE_TEST] if self.device else ANDROID_TESTS
+        # The device's log is followed for the run's length into `logcat.txt`: a phone's log is
+        # busy enough that a dump at the end would have lost the tests' first lines.
+        adb("logcat", "-c", serial=serial)
+        logcat_file = open(WORK / "logcat.txt", "w")
+        logcat = subprocess.Popen([str(sdk() / "platform-tools" / "adb"), "-s", serial, "logcat"],
+                                  stdout=logcat_file, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         try:
             for port in (PORTS.api, PORTS.voice, HELPER_PORT):
                 adb("reverse", f"tcp:{port}", f"tcp:{port}", serial=serial)
-            adb("logcat", "-c", serial=serial)
-            say(f"running {', '.join(test.rsplit('.', 1)[1] for test in ANDROID_TESTS)} on the emulator through Gradle")
+            say(f"running {', '.join(name.rsplit('.', 1)[1] for name in classes)} on {self.where(serial)} through Gradle, "
+                f"expecting its microphone {self.microphone}")
             log = WORK / "test.log"
+            variables = {**variables, "ASPEN_CALL_MICROPHONE": self.microphone}
             arguments = [f"-Pandroid.testInstrumentationRunnerArguments.{name}={value}" for name, value in variables.items()]
-            code = self.gradle(":app:connectedDebugAndroidTest",
-                               f"-Pandroid.testInstrumentationRunnerArguments.class={','.join(ANDROID_TESTS)}",
+            code = self.gradle(":app:connectedDebugAndroidTest", f"-Pandroid.testInstrumentationRunnerArguments.class={','.join(classes)}",
                                *arguments, log=log)
-            logcat = adb("logcat", "-d", serial=serial, timeout=120)
-            (WORK / "logcat.txt").write_text(logcat)
-            printed = [line for line in logcat.splitlines() if "call-engine-test" in line or "call-plugin-test" in line]
+            logcat.terminate()
+            logcat.wait(timeout=30)
+            logcat_file.close()
+            lines = [ANDROID_TEST_LINES[name] for name in classes]
+            printed = [line for line in (WORK / "logcat.txt").read_text(errors="replace").splitlines()
+                       if any(f"{prefix}:" in line for prefix in lines)]
             for line in printed:
                 print(line, flush=True)
+            for capture in DEVICE_CAPTURES if self.device else []:
+                adb("pull", capture, str(WORK / Path(capture).name), serial=serial)
+                adb("shell", "rm", "-f", capture, serial=serial)
             results = ANDROID / "app" / "build" / "outputs" / "androidTest-results" / "connected"
-            ran = results.exists() and tests_passed(results, len(ANDROID_TESTS))
-            # Each test's own line says what it saw; a test that ran without one did not do its work.
-            told = all(any(f"{line}:" in printed_line for printed_line in printed) for line in ("call-engine-test", "call-plugin-test"))
-            if code != 0 or not ran or not told:
+            # Each test's own line says what it saw; a test that passed without one did not do its work.
+            told = all(any(f"{prefix}:" in line for line in printed) for prefix in lines)
+            if code != 0 or not passed(results, classes) or not told:
                 raise Failed(f"the tests did not pass (exit {code}); see {log} and {results}")
         finally:
+            if logcat.poll() is None:
+                logcat.kill()
+            logcat_file.close()
             for port in (PORTS.api, PORTS.voice, HELPER_PORT):
                 adb("reverse", "--remove", f"tcp:{port}", serial=serial)
             if self.emulator is not None:
                 self.emulator.stop()
+
+
+def passed(results: Path, classes: list[str]) -> bool:
+    """Whether Gradle's reports under `results` say every class of `classes` ran at least one test
+    and none failed, erred, or was skipped, but for the trailing test, which skips itself outside
+    `--record-trailing`. Gradle writes one suite per device, named for the first class, so each
+    test is judged by its own `classname`."""
+    trailing_class, trailing_test = ANDROID_TRAILING_TEST.split("#")
+    outcomes: dict[str, list[tuple[str, str]]] = {}
+    for path in results.rglob("*.xml") if results.exists() else []:
+        for case in ElementTree.parse(path).iter("testcase"):
+            if case.find("failure") is not None or case.find("error") is not None:
+                outcome = "failed"
+            elif case.find("skipped") is not None:
+                outcome = "skipped"
+            else:
+                outcome = "passed"
+            outcomes.setdefault(case.get("classname", ""), []).append((case.get("name", ""), outcome))
+    ok = True
+    for name in classes:
+        cases = outcomes.get(name, [])
+        if not cases:
+            say(f"{name} did not run")
+            ok = False
+        for test, outcome in cases:
+            if outcome == "skipped" and name == trailing_class and test == trailing_test:
+                continue
+            if outcome != "passed":
+                say(f"{name}.{test} {outcome}")
+                ok = False
+    return ok
 
 
 # --- The check --------------------------------------------------------------------------------------
@@ -560,6 +649,10 @@ def main() -> None:
                      help="how the test is run on the simulator (see the module's doc)")
     android = parser.add_argument_group("android")
     android.add_argument("--avd", help="start this emulator here, headless")
+    android.add_argument("--device", metavar="SERIAL", help="run on the phone attached under this serial (`adb devices`)")
+    android.add_argument("--microphone", choices=["silent", "live"],
+                         help="what the browser is to hear of the device's microphone: silence, or the room, "
+                              "whatever it sounds like (live with --device, silent otherwise)")
     args = parser.parse_args()
     if shutil.which("docker") is None:
         sys.exit("mobile-call: docker is required")

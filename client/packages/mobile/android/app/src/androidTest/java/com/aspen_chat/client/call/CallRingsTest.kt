@@ -9,33 +9,19 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.aspen_chat.client.push.PushHandler
 import com.aspen_chat.client.push.PushStore
-import com.aspen_chat.client.push.WebPush
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStream
-import java.math.BigInteger
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
-import java.security.KeyFactory
-import java.security.KeyPairGenerator
 import java.security.MessageDigest
-import java.security.SecureRandom
-import java.security.interfaces.ECPrivateKey
-import java.security.interfaces.ECPublicKey
-import java.security.spec.ECGenParameterSpec
-import java.security.spec.ECPublicKeySpec
 import java.time.Instant
 import java.util.Base64
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
-import javax.crypto.Cipher
-import javax.crypto.KeyAgreement
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
-import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -61,8 +47,7 @@ class CallRingsTest {
     private lateinit var notifications: NotificationManager
     private lateinit var server: ServerSocket
     private lateinit var origin: String
-    private lateinit var phonePublic: ByteArray
-    private lateinit var auth: ByteArray
+    private lateinit var pushes: CallTestSupport.Pushes
 
     /** The event stream connections the stand-in deployment took, each with what it was sent. */
     private val identified = LinkedBlockingQueue<Stream>()
@@ -97,29 +82,8 @@ class CallRingsTest {
         origin = "http://127.0.0.1:${server.localPort}"
         Thread { serve() }.apply { isDaemon = true }.start()
 
-        val generator = KeyPairGenerator.getInstance("EC")
-        generator.initialize(ECGenParameterSpec("secp256r1"))
-        val phone = generator.generateKeyPair()
-        phonePublic = point(phone.public as ECPublicKey)
-        auth = ByteArray(16).also { SecureRandom().nextBytes(it) }
-        val privateKey = JSONObject()
-            .put("kty", "EC")
-            .put("crv", "P-256")
-            .put("d", b64(unsigned((phone.private as ECPrivateKey).s)))
-        val account = JSONObject()
-            .put("subscription", SUBSCRIPTION)
-            .put("origin", origin)
-            .put("userId", USER)
-            .put("refreshToken", "refresh")
-            .put("sessionToken", "session")
-            .put("keys", JSONObject().put("privateKey", privateKey).put("publicKey", b64(phonePublic)).put("auth", b64(auth)))
-            .put("applicationServerKey", "key")
-            .put("deploymentSubscription", "dep")
-        val state = JSONObject()
-            .put("version", 1)
-            .put("device", JSONObject.NULL)
-            .put("accounts", JSONArray().put(account))
-        PushStore(context).save(state.toString())
+        pushes = CallTestSupport.Pushes()
+        PushStore(context).save(CallTestSupport.pushState(origin, SUBSCRIPTION, USER, "refresh", pushes))
     }
 
     @After
@@ -141,7 +105,7 @@ class CallRingsTest {
             .put("callerName", "Alice")
             .put("until", Instant.now().plusSeconds(30).toString())
         val handled = System.nanoTime()
-        PushHandler(context).handle(SUBSCRIPTION, encrypt(pointer))
+        PushHandler(context).handle(SUBSCRIPTION, pushes.encrypt(pointer))
 
         val shown = waitFor("the incoming call's notification", 5_000) { incomingNotification() }
         val afterMillis = (System.nanoTime() - handled) / 1_000_000
@@ -162,7 +126,7 @@ class CallRingsTest {
         // The ring watch identifies on the deployment's event stream with the account's session.
         val stream = identified.poll(10, TimeUnit.SECONDS)
         assertNotNull("the ring watch opened the event stream", stream)
-        assertEquals("session", stream!!.identify.getString("sessionToken"))
+        assertEquals("stale-session-token", stream!!.identify.getString("sessionToken"))
         stream.send(
             JSONObject()
                 .put("type", "ready")
@@ -193,11 +157,11 @@ class CallRingsTest {
     @Test
     fun aPushThatCannotBeReadRingsNothing() {
         val garbage = Base64.getUrlDecoder().decode(
-            encrypt(JSONObject().put("v", 1).put("kind", "call").put("channel", "c").put("session", "s").put("until", "x")),
+            pushes.encrypt(JSONObject().put("v", 1).put("kind", "call").put("channel", "c").put("session", "s").put("until", "x")),
         )
         garbage[garbage.size - 1] = (garbage[garbage.size - 1].toInt() xor 1).toByte()
-        PushHandler(context).handle(SUBSCRIPTION, b64(garbage))
-        PushHandler(context).handle("someone-else", encrypt(JSONObject().put("v", 1).put("kind", "call")))
+        PushHandler(context).handle(SUBSCRIPTION, CallTestSupport.Pushes.b64(garbage))
+        PushHandler(context).handle("someone-else", pushes.encrypt(JSONObject().put("v", 1).put("kind", "call")))
         Thread.sleep(1_000)
         assertNull(incomingNotification())
         assertTrue(identified.isEmpty())
@@ -219,29 +183,6 @@ class CallRingsTest {
 
     private fun event(sequence: Int, event: JSONObject): JSONObject =
         JSONObject().put("type", "event").put("sequence", sequence).put("event", event)
-
-    /** The pointer, encrypted to the phone as a deployment does (RFC 8291), base64url. */
-    private fun encrypt(pointer: JSONObject): String {
-        val generator = KeyPairGenerator.getInstance("EC")
-        generator.initialize(ECGenParameterSpec("secp256r1"))
-        val sender = generator.generateKeyPair()
-        val senderPublic = point(sender.public as ECPublicKey)
-        val agreement = KeyAgreement.getInstance("ECDH")
-        agreement.init(sender.private)
-        agreement.doPhase(
-            KeyFactory.getInstance("EC").generatePublic(ECPublicKeySpec(WebPush.point(phonePublic), WebPush.p256())),
-            true,
-        )
-        val secret = agreement.generateSecret()
-        val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
-        val ikm = WebPush.hkdf(auth, secret, "WebPush: info\u0000".toByteArray(StandardCharsets.US_ASCII) + phonePublic + senderPublic, 32)
-        val cek = WebPush.hkdf(salt, ikm, "Content-Encoding: aes128gcm\u0000".toByteArray(StandardCharsets.US_ASCII), 16)
-        val nonce = WebPush.hkdf(salt, ikm, "Content-Encoding: nonce\u0000".toByteArray(StandardCharsets.US_ASCII), 12)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(cek, "AES"), GCMParameterSpec(128, nonce))
-        val record = cipher.doFinal(pointer.toString().toByteArray(StandardCharsets.UTF_8) + byteArrayOf(2))
-        return b64(salt + byteArrayOf(0, 0, 16, 0, 65) + senderPublic + record)
-    }
 
     /**
      * The stand-in deployment: its event stream alone, as a WebSocket server of the standard
@@ -340,18 +281,5 @@ class CallRingsTest {
         const val SUBSCRIPTION = "0190f0a0-0000-7000-8000-00000000bbbb"
         const val USER = "0190f0a0-0000-7000-8000-000000000001"
         const val CALLER = "0190f0a0-0000-7000-8000-000000000002"
-
-        fun point(key: ECPublicKey): ByteArray = byteArrayOf(4) + unsigned(key.w.affineX) + unsigned(key.w.affineY)
-
-        /** A coordinate or scalar as exactly 32 bytes. */
-        fun unsigned(value: BigInteger): ByteArray {
-            val raw = value.toByteArray()
-            val out = ByteArray(32)
-            val copy = minOf(raw.size, 32)
-            System.arraycopy(raw, raw.size - copy, out, 32 - copy, copy)
-            return out
-        }
-
-        fun b64(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
     }
 }

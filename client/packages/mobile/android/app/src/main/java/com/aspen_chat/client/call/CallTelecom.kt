@@ -95,6 +95,15 @@ class CallTelecom(
         var watch: RingWatch? = null
         /** Whether the incoming call was answered here, so the engine's join is this call's. */
         var answered = false
+        /** Whether answering opened the microphone, which the call's end then closes. */
+        var openedMicrophone = false
+        /**
+         * Whether the engine has been in this call: from the start for a call made from the
+         * engine's own snapshot, and for an answered ring from its first snapshot in the call.
+         * Until then an `idle` snapshot is not the call's end but the engine's state as it was
+         * (the microphone given at answering publishes one before the join).
+         */
+        var joined = incoming == null
         /** The collection of Telecom's mute state, for the call's length. */
         var following: Job? = null
         var finished = false
@@ -116,8 +125,14 @@ class CallTelecom(
             call == null -> {}
             // A ring stands apart from the engine's state until it is answered here.
             call.phase == Phase.RINGING -> {}
-            state.status == CallStatus.CONNECTED -> connected(call, state)
-            state.status == CallStatus.IDLE || state.status == CallStatus.FAILED -> end(call, state, causeOf(state))
+            state.status.inCall -> {
+                call.joined = true
+                if (state.status == CallStatus.CONNECTED) {
+                    connected(call, state)
+                }
+            }
+            // `IDLE` or `FAILED`: the call's end once the engine has been in it.
+            call.joined -> end(call, state, causeOf(state))
         }
     }
 
@@ -184,7 +199,9 @@ class CallTelecom(
      * The ring is answered here, by the notification or by Telecom itself (a headset's button,
      * which has made the call active already): the engine joins the DM's call, which ends the
      * ring at the deployment, and the call goes on as an active call of Telecom's, with the
-     * ongoing call's notification in place of the incoming one.
+     * ongoing call's notification in place of the incoming one. No interface commands the engine
+     * at a ring answered from the lock screen, so the microphone is opened here: the engine
+     * refuses to join a call that lets the user speak without one.
      */
     private fun answer(call: SystemCall, byTelecom: Boolean) {
         val ring = call.incoming ?: return
@@ -197,17 +214,24 @@ class CallTelecom(
         // Answering is what makes the call active; the engine's connection need not ask again.
         call.activeAsked = true
         audio.configureForCall()
+        if (engine.state().microphone == null) {
+            engine.setMicrophone(audio.openMicrophone())
+            call.openedMicrophone = true
+        }
         CallService.start(context, displayName, call.video) { engine.leave() }
-        if (!byTelecom) {
-            call.control?.let { control -> scope.launch { answerOn(control) } }
+        if (byTelecom) {
+            call.phase = Phase.ACTIVE
+        } else {
+            call.control?.let { control -> scope.launch { answerOn(call, control) } }
         }
         engine.join(ring.channel)
     }
 
-    private suspend fun answerOn(control: CallControlScope) {
-        val result = control.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL)
-        if (result is CallControlResult.Error) {
-            Log.w(TAG, "Telecom would not answer the call: error ${result.errorCode}")
+    /** Answers the call in Telecom, which makes it active there; the phase follows once it has. */
+    private suspend fun answerOn(call: SystemCall, control: CallControlScope) {
+        when (val result = control.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL)) {
+            is CallControlResult.Success -> if (call.phase == Phase.DIALING) call.phase = Phase.ACTIVE
+            is CallControlResult.Error -> Log.w(TAG, "Telecom would not answer the call: error ${result.errorCode}")
         }
     }
 
@@ -321,7 +345,7 @@ class CallTelecom(
         if (endWanted != null) {
             disconnect(call, endWanted)
         } else if (call.answered) {
-            scope.launch { answerOn(control) }
+            scope.launch { answerOn(call, control) }
         } else if (call.activeAsked) {
             setActive(call)
         }
@@ -438,6 +462,10 @@ class CallTelecom(
         call.following?.cancel()
         routes.detach()
         CallService.stop(context)
+        if (call.openedMicrophone) {
+            engine.setMicrophone(null)
+            audio.closeMicrophone()
+        }
         audio.release()
         if (this.call === call) {
             this.call = null
