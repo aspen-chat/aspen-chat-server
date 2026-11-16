@@ -4,15 +4,17 @@ import android.os.Handler
 import android.os.Looper
 import com.aspen_chat.client.voice.CallObserver
 import com.aspen_chat.client.voice.CallState
+import com.aspen_chat.client.voice.SoundCue
 
 /**
  * Every snapshot the call engine publishes (its `CallObserver`), kept for whoever asks what the
  * call is now and handed to each listener on the main thread, where the interface reads it: as
  * the record, and as the JSON the engine writes beside it (`listenJson`, `latestJson`), which
- * `AspenCallPlugin` hands the web view untouched. The engine calls `stateChanged` on its own
- * thread and waits for it to return, so nothing here blocks or reaches back into the engine.
+ * `AspenCallPlugin` hands the web view untouched; and each of the call's sounds the engine cues
+ * (`playSound`), handed to `CallSounds` to play. The engine calls both on its own thread and
+ * waits for them to return, so nothing here blocks or reaches back into the engine.
  */
-class CallSnapshots : CallObserver {
+class CallSnapshots(private val sounds: CallSounds) : CallObserver {
     fun interface Listener {
         fun changed(state: CallState)
     }
@@ -45,6 +47,10 @@ class CallSnapshots : CallObserver {
     /** The latest snapshot's JSON, or `null` before the engine published one. */
     val latestJson: String?
         get() = synchronized(lock) { currentJson }
+
+    override fun playSound(cue: SoundCue) {
+        sounds.play(cue)
+    }
 
     override fun stateChanged(state: CallState, json: String) {
         val (told, toldJson) = synchronized(lock) {

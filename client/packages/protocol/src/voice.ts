@@ -482,6 +482,21 @@ export interface Call {
   readonly hasInputVolume: boolean;
   /** How loud the user's microphone is sent: a gain, 1 as captured. Only where `hasInputVolume`. */
   setInputVolume(gain: number): void;
+  /**
+   * Whether the call plays its own sounds (joining, leaving, shares, transfers, losing and
+   * regaining it) through the audio path it runs on. The mobile apps' native calls do, in the
+   * call engine, so they are heard on the receiver, loudspeaker, or headset the call uses and
+   * with the app in the background; `watchCallSounds` then plays none for the call. A browser's
+   * call plays none itself.
+   */
+  readonly playsOwnSounds: boolean;
+  /**
+   * Whether `setAudioDevices` can choose the microphone and the speaker by device id. A
+   * browser's call can; the mobile apps' native calls send the phone's one microphone and play
+   * where the phone's routes say (`AspenCall.setRoute`), and reject a choice by id, so the
+   * device selects are not shown for them.
+   */
+  readonly hasAudioDeviceChoice: boolean;
   /** Sets every received sound's gain again from `userVolume`, after what it answers has changed. */
   refreshVolumes(): void;
   /** How loud `userId`'s voice, or with `source` `screenAudio` the sound of their share, is heard. */
@@ -1086,6 +1101,12 @@ export class VoiceCall implements Call {
   }
 
   readonly hasInputVolume: boolean = true;
+
+  /** The browser plays no sound of its own for the call: `watchCallSounds` plays them. */
+  readonly playsOwnSounds: boolean = false;
+
+  /** The browser's call opens the microphone and plays through the speaker `setAudioDevices` names. */
+  readonly hasAudioDeviceChoice: boolean = true;
 
   /**
    * How loud the user's microphone is sent, from their preference: a gain, 1 as captured.

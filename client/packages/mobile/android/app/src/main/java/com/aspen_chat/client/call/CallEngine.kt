@@ -11,7 +11,8 @@ import com.aspen_chat.client.voice.SocketFactory
  * The call engine (`voice_client`, reached through its generated `com.aspen_chat.client.voice`
  * package) with this device's platform under it, for one deployment: HTTP and WebSockets over
  * OkHttp, peer connections over WebRTC, the session from the account kept for push, the audio
- * mode and microphone, and the system's side of each call (`telecom`: the call in Telecom, the
+ * mode and microphone, the call's sounds (`sounds`, played as the engine cues them), and the
+ * system's side of each call (`telecom`: the call in Telecom, the
  * service that keeps the process alive, and `routes`, where it plays), which follows the
  * engine's snapshots. The engine's methods are the call's commands and `snapshots` is what it
  * reports; `AspenCallPlugin` commands it for the web view, and the process's `video` draws its
@@ -34,7 +35,8 @@ class CallEngine(
     sockets: SocketFactory = CallSockets(),
     peerConnections: PeerConnectionFactory? = null,
 ) : AutoCloseable {
-    val snapshots = CallSnapshots()
+    val sounds = CallSounds(context)
+    val snapshots = CallSnapshots(sounds)
     val credentials = CallCredentials(context, origin)
     val audio = CallAudio(context, media.factory, tracks)
     val routes = CallRoutes(context)
@@ -49,6 +51,7 @@ class CallEngine(
         // Leaving the call first lets Telecom's call end as the user's own leaving.
         engine.close()
         telecom.close()
+        sounds.release()
     }
 
     companion object {

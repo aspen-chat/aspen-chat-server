@@ -1464,6 +1464,8 @@ describe("VoiceCall", () => {
     FakeSocket.behaviour = new Map();
     const { call, inputVolumes } = makeCall({ candidates: ["near"], latency: { near: 1 } });
     expect(call.hasInputVolume).toBe(true);
+    expect(call.hasAudioDeviceChoice).toBe(true);
+    expect(call.playsOwnSounds).toBe(false);
     call.setInputVolume(1.5);
     await call.join(channel);
     call.setInputVolume(0.5);

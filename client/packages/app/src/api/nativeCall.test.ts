@@ -871,6 +871,13 @@ describe("nativeCall", () => {
       expect(calls.filter((c) => c.method !== "state")).toEqual([]);
     });
 
+    it("plays its own sounds, and chooses no microphone or speaker by id", async () => {
+      const { call: made } = call();
+      await settle();
+      expect(made.playsOwnSounds).toBe(true);
+      expect(made.hasAudioDeviceChoice).toBe(false);
+    });
+
     it("has no input volume, and refuses a gain on the microphone", async () => {
       const { call: made } = call();
       await settle();

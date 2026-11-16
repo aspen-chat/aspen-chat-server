@@ -12,13 +12,14 @@ import { ArrowsClockwiseIcon, CaretUpIcon, SpeakerHighIcon } from "@phosphor-ico
 import type { ReactNode } from "react";
 import { Button, Dialog, DialogTrigger, Popover, ToggleButton } from "react-aria-components";
 import { usePreference, useSync, useVoiceCall } from "@/api/hooks";
-import { choosesSpeakerphone, usePhoneOutputs } from "@/api/audioRoute";
+import { usePhoneOutputs } from "@/api/audioRoute";
 import { isMobilePlatform } from "@/features/layout/platform";
 import { Tooltip } from "@/features/layout/Tooltip";
 import { type CameraDevice } from "@/features/settings/audioDevices";
 import { AccessNotice, DeviceSelect } from "@/features/settings/DeviceSelect";
 import { useAudioDevices } from "@/features/settings/useAudioDevices";
 import { callBarButtonClass } from "@/features/voice/callBarButton";
+import { listsMicrophones, listsSpeakers } from "@/features/voice/deviceControls";
 import { VolumeSlider } from "@/features/voice/VolumeSlider";
 import { useMessages } from "@/i18n/context";
 
@@ -66,8 +67,9 @@ export function WithDeviceArrow({
 }
 
 /**
- * The microphone the call sends and how loud. On a phone or tablet with one microphone there is
- * nothing to choose, and only the volume shows, where the call applies one.
+ * The microphone the call sends and how loud. The microphone is chosen only where the call takes
+ * one by id and there is a choice to make (`listsMicrophones`), and the volume shows where the
+ * call applies one.
  */
 export function InputDevices() {
   const m = useMessages();
@@ -78,10 +80,13 @@ export function InputDevices() {
     call.status === "connected" && call.canSpeak,
   );
   const gain = usePreference(INPUT_VOLUME);
+  const lists = listsMicrophones(sync.voice, isMobilePlatform(), devices.inputs.length);
   return (
     <>
-      <AccessNotice kind="microphone" access={access.microphone} onAllow={requestAccess} />
-      {(!isMobilePlatform() || devices.inputs.length > 1) && (
+      {sync.voice.hasAudioDeviceChoice && (
+        <AccessNotice kind="microphone" access={access.microphone} onAllow={requestAccess} />
+      )}
+      {lists && (
         <DeviceSelect
           label={m.settings.microphone}
           definition={AUDIO_INPUT}
@@ -103,9 +108,10 @@ export function InputDevices() {
 }
 
 /**
- * Where the call plays and how loud. On a phone or tablet the speaker is chosen only where there
- * are several and the browser can choose, and not at all where the bar's Speaker button chooses
- * between a phone's receiver and loudspeaker; a computer shows the choice as Settings does.
+ * Where the call plays and how loud. The speaker is chosen only where the call takes one by id
+ * and there is a choice to make (`listsSpeakers`): on a computer as Settings does, on a phone or
+ * tablet only where the browser can choose among several and the bar's Speaker button does not
+ * choose between the receiver and loudspeaker instead.
  */
 export function OutputDevices() {
   const m = useMessages();
@@ -114,9 +120,14 @@ export function OutputDevices() {
   const { devices } = useAudioDevices(call.status === "connected" && call.canSpeak);
   const phone = usePhoneOutputs();
   const gain = usePreference(OUTPUT_VOLUME);
-  const mobile = isMobilePlatform();
   const choosable = canChooseOutput();
-  const lists = !mobile || (!choosesSpeakerphone(phone) && choosable && devices.outputs.length > 1);
+  const lists = listsSpeakers(
+    sync.voice,
+    isMobilePlatform(),
+    phone,
+    choosable,
+    devices.outputs.length,
+  );
   return (
     <>
       {lists && (

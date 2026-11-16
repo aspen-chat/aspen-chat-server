@@ -3,8 +3,9 @@ import Foundation
 /// Every snapshot the call engine publishes (its `CallObserver`), kept for whoever asks what the
 /// call is now and handed to each listener on the main queue, where the interface reads it: as
 /// the record, and as the JSON the engine writes beside it (`listenJSON`, `latestJSON`), which
-/// `AspenCallPlugin` hands the web view untouched. The engine calls `stateChanged` on its own
-/// thread and waits for it to return, so nothing here blocks or reaches back into the engine.
+/// `AspenCallPlugin` hands the web view untouched; and each of the call's sounds the engine cues
+/// (`playSound`), handed to `CallSounds` to play. The engine calls both on its own thread and
+/// waits for them to return, so nothing here blocks or reaches back into the engine.
 final class CallSnapshots: CallObserver, @unchecked Sendable {
     typealias Listener = (CallState) -> Void
     typealias JSONListener = (String) -> Void
@@ -27,10 +28,19 @@ final class CallSnapshots: CallObserver, @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    private let sounds: CallSounds
     private var current: CallState?
     private var currentJSON: String?
     private var listeners: [UUID: Listener] = [:]
     private var jsonListeners: [UUID: JSONListener] = [:]
+
+    init(sounds: CallSounds) {
+        self.sounds = sounds
+    }
+
+    func playSound(cue: SoundCue) {
+        sounds.play(cue)
+    }
 
     /// The latest snapshot, or `nil` before the engine published one.
     var latest: CallState? {

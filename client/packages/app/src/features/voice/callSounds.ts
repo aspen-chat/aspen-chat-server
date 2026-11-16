@@ -9,12 +9,15 @@ import type { Sound } from "@/features/notifications/sounds";
 
 /** What `watchCallSounds` reads of a deployment's sync. */
 export interface CallSoundSource {
-  readonly voice: Pick<AspenSync["voice"], "state" | "subscribe">;
+  readonly voice: Pick<AspenSync["voice"], "state" | "subscribe" | "playsOwnSounds">;
   readonly store: Pick<AspenSync["store"], "subscribe" | "channelVoice" | "me">;
 }
 
 /**
- * Plays the call's sounds on one deployment until the function it answers is called:
+ * Plays the call's sounds on one deployment until the function it answers is called, unless the
+ * call plays its own (`Call.playsOwnSounds`: the mobile apps' native calls, whose engine derives
+ * the same cues and plays them through the call's audio session), when nothing is watched and
+ * nothing played:
  *
  * - `callJoined` when the user's call connects, and when someone else joins it;
  * - `callLeft` when the user leaves (or another of their clients takes the call over), and when
@@ -34,6 +37,9 @@ export interface CallSoundSource {
  * finds it, silently.
  */
 export function watchCallSounds(sync: CallSoundSource, play: (sound: Sound) => void): () => void {
+  if (sync.voice.playsOwnSounds) {
+    return () => undefined;
+  }
   let state = sync.voice.state;
   let present = new Set<string>();
   let sharing = new Set<string>();

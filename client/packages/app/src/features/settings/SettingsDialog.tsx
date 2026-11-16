@@ -148,13 +148,17 @@ function AudioSection() {
       <h3 id="settings-audio" className="text-lg font-semibold text-ink-muted">
         {m.settings.audio}
       </h3>
-      <AccessNotice kind="microphone" access={access.microphone} onAllow={requestAccess} />
-      <DeviceSelect
-        label={m.settings.microphone}
-        definition={AUDIO_INPUT}
-        devices={devices.inputs}
-        defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
-      />
+      {sync.voice.hasAudioDeviceChoice && (
+        <>
+          <AccessNotice kind="microphone" access={access.microphone} onAllow={requestAccess} />
+          <DeviceSelect
+            label={m.settings.microphone}
+            definition={AUDIO_INPUT}
+            devices={devices.inputs}
+            defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
+          />
+        </>
+      )}
       {sync.voice.hasInputVolume && (
         <VolumeSlider
           label={m.voice.inputVolume}
@@ -164,14 +168,16 @@ function AudioSection() {
           }}
         />
       )}
-      <DeviceSelect
-        label={m.settings.speaker}
-        definition={AUDIO_OUTPUT}
-        devices={outputs ? devices.outputs : []}
-        defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
-        disabled={!outputs}
-        hint={outputs ? undefined : m.settings.outputUnsupported}
-      />
+      {sync.voice.hasAudioDeviceChoice && (
+        <DeviceSelect
+          label={m.settings.speaker}
+          definition={AUDIO_OUTPUT}
+          devices={outputs ? devices.outputs : []}
+          defaults={[{ id: DEFAULT_DEVICE, label: m.settings.systemDefault }]}
+          disabled={!outputs}
+          hint={outputs ? undefined : m.settings.outputUnsupported}
+        />
+      )}
       <VolumeSlider
         label={m.voice.outputVolume}
         gain={outputVolume}

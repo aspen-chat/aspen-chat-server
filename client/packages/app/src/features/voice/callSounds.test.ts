@@ -12,7 +12,7 @@ import type { Sound } from "@/features/notifications/sounds";
 import { watchCallSounds, type CallSoundSource } from "./callSounds";
 
 /** A deployment with a call and a store just big enough for `watchCallSounds`. */
-function fakeSync() {
+function fakeSync(playsOwnSounds = false) {
   let state = {
     status: "idle",
     channelId: null,
@@ -27,6 +27,7 @@ function fakeSync() {
   const sharers = new Set<string>();
   const sync: CallSoundSource = {
     voice: {
+      playsOwnSounds,
       get state() {
         return state;
       },
@@ -80,8 +81,8 @@ function fakeSync() {
   };
 }
 
-function watched() {
-  const fake = fakeSync();
+function watched(playsOwnSounds = false) {
+  const fake = fakeSync(playsOwnSounds);
   const played: Sound[] = [];
   const stop = watchCallSounds(fake.sync, (sound) => played.push(sound));
   return { ...fake, played, stop };
@@ -217,6 +218,19 @@ describe("watchCallSounds", () => {
     call.setParticipants("c", ["a"]);
     call.setCall({ status: "idle", channelId: null });
     expect(call.played).toEqual(["callJoined"]);
+  });
+
+  it("plays nothing for a call that plays its own sounds", () => {
+    const call = watched(true);
+    call.setCall({ status: "connected", channelId: "c" });
+    call.setParticipants("c", ["a"], ["a"]);
+    call.setCall({ status: "rejoining" });
+    call.setCall({ status: "connected" });
+    call.setCall({ sharingScreen: true });
+    call.setFiles({ transfers: [transfer("o", "a", "sender", "completed")] });
+    call.setCall({ status: "idle", channelId: null, endedReason: "kicked" });
+    expect(call.played).toEqual([]);
+    call.stop();
   });
 });
 

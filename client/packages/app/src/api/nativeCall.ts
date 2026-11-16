@@ -181,10 +181,11 @@ export function nativeCalls(): boolean {
 /**
  * Something a native call cannot do: screen sharing from the phone and file transfers, which
  * come in later stages (`docs/architecture/voice/native-calls.md`) and whose controls are hidden
- * by `canShare` and `canTransfer`, which a native call keeps false; a microphone other than the
- * phone's own, which the routes stand in for; and a gain on the microphone, which neither
- * phone's audio device module applies, so `hasInputVolume` is false and the slider that would
- * ask is not shown.
+ * by `canShare` and `canTransfer`, which a native call keeps false; a microphone or speaker
+ * chosen by id, which the routes stand in for, so `hasAudioDeviceChoice` is false and the
+ * selects that would ask are not shown; and a gain on the microphone, which neither phone's
+ * audio device module applies, so `hasInputVolume` is false and the slider that would ask is
+ * not shown.
  */
 export class NativeCallUnavailableError extends Error {
   constructor(what: string) {
@@ -447,7 +448,9 @@ export function onPageWake(listener: () => void): void {
  * (`watchedOf`), again whenever that changes, and none when nothing shows them.
  *
  * Screen sharing from the phone and file transfers reject with `NativeCallUnavailableError`,
- * and the grants that would show their controls stay false.
+ * and the grants that would show their controls stay false. The call's sounds are the engine's
+ * (`playsOwnSounds`), and the microphone and speaker are the phone's and its routes'
+ * (`hasAudioDeviceChoice` is false).
  */
 export class NativeCall implements Call {
   readonly #origin: string;
@@ -793,6 +796,20 @@ export class NativeCall implements Call {
   setInputVolume(_gain: number): void {
     throw new NativeCallUnavailableError("A gain on the microphone");
   }
+
+  /**
+   * The engine plays the call's sounds itself (`voice_client::sounds`), through the call's own
+   * audio session, so they follow the call's route and play in the background; the page plays
+   * none for this call.
+   */
+  readonly playsOwnSounds = true;
+
+  /**
+   * The phone's one microphone is sent and the routes (`AspenCall.setRoute`) are where the call
+   * plays, so there is no microphone or speaker to choose by id, and `setAudioDevices` rejects
+   * one.
+   */
+  readonly hasAudioDeviceChoice = false;
 
   refreshVolumes(): void {
     this.#told.clear();

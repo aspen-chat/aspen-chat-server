@@ -31,6 +31,23 @@ tasks.register('copyCallEngine', Copy) {
     into layout.buildDirectory.dir('callEngine/jniLibs')
 }
 
+// The call's sounds (`call/CallSounds.kt`) are the web client's recordings of the Aspen Sound
+// Effects Pack, read from the app package so the two never differ, laid out as raw resources
+// under the names Android allows (`call-joined.wav` as `call_joined`). The pack's chime is the
+// page's own sound, which the call layer never plays.
+def soundPack = new File(repositoryRoot, 'client/packages/app/src/features/notifications/sounds/aspen-sound-effects-pack')
+
+tasks.register('copyCallSounds', Sync) {
+    description = "Lays the call's sounds out as raw resources for the call layer."
+    onlyIf { callLayer }
+    from(soundPack) {
+        include '*.wav'
+        exclude 'chime.wav'
+    }
+    rename { name -> name.replace('-', '_') }
+    into layout.buildDirectory.dir('callSounds/res/raw')
+}
+
 android {
     namespace = "com.aspen_chat.client"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -56,6 +73,7 @@ android {
     sourceSets {
         main {
             jniLibs.srcDirs += layout.buildDirectory.dir('callEngine/jniLibs')
+            res.srcDirs += layout.buildDirectory.dir('callSounds/res')
         }
     }
 }
@@ -78,7 +96,7 @@ kotlin {
     }
 }
 
-preBuild.dependsOn copyCallEngine
+preBuild.dependsOn copyCallEngine, copyCallSounds
 
 if (!callLayer) {
     logger.warn("The call layer is left out: ${webrtcAar} or ${engineBindings} is missing. " +

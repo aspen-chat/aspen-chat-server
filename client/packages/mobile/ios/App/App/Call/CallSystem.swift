@@ -461,7 +461,7 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         guard let current else {
             return
         }
-        RTCAudioSession.sharedInstance().isAudioEnabled = false
+        current.engine.audio.interrupted()
         update { $0.interrupted = true }
         applyHold(current)
     }
@@ -476,7 +476,7 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         }
         let active = latest.audioActive
         if active, shouldResume {
-            RTCAudioSession.sharedInstance().isAudioEnabled = true
+            current.engine.audio.resumed()
         }
         update { $0.interrupted = false }
         applyHold(current)
