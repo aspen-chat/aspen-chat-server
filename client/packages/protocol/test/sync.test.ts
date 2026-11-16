@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { positionBefore } from "../src/sync";
 import {
   AspenClient,
@@ -211,6 +211,20 @@ function liveSession(): Session {
   };
 }
 
+/**
+ * Every sync a test made, stopped once it ends: a bootstrap a test leaves in flight would
+ * otherwise open its socket during the next test, ahead of that test's own in
+ * `FakeSocket.instances`.
+ */
+const made = new Set<AspenSync>();
+
+afterEach(() => {
+  for (const sync of made) {
+    sync.stop();
+  }
+  made.clear();
+});
+
 function makeSync(
   routes: Record<string, Route>,
   now = () => 0,
@@ -237,6 +251,7 @@ function makeSync(
     random: () => 0,
     ...extra,
   });
+  made.add(sync);
   return { sync, calls };
 }
 

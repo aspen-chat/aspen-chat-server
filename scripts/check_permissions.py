@@ -4016,7 +4016,7 @@ def speculative_sends(world: World, check: Checks) -> None:
         return status, json.loads(text)
 
     def waiting(token: str = member["token"]) -> list[dict]:
-        return stack.api("GET", "/users/@me/held-messages", token=token)
+        return stack.api("GET", "/users/@me/held-messages", token=token)["data"]
 
     def said() -> list[str]:
         read = stack.api("GET", f"/channels/{place}/messages?limit=50", token=owner["token"])
@@ -4134,7 +4134,7 @@ def speculative_sends(world: World, check: Checks) -> None:
         return when.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def scheduled(token: str = member["token"]) -> list[dict]:
-        return stack.api("GET", "/users/@me/scheduled-messages", token=token)
+        return stack.api("GET", "/users/@me/scheduled-messages", token=token)["data"]
 
     def told_scheduled(stream: EventStream) -> list[dict]:
         return [e["scheduled"] for e in of(stream.gather(1.0), "scheduledMessageChanged")]
