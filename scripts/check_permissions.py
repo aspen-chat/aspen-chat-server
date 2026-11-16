@@ -2697,6 +2697,15 @@ def word_filter() -> Path:
     return example("word_filter")
 
 
+def start_plugin(world: World, manifest: Path, plugin: str) -> None:
+    """Installs and turns on `plugin`, and waits for it to run. Each scenario that uses a plugin
+    starts it itself, since `--shard` and `--only` may run it without the scenarios before it;
+    installing one already installed upgrades it to the same version, keeping its settings."""
+    world.stack.command("plugins", "install", str(manifest), "--yes")
+    world.stack.command("plugins", "enable", plugin)
+    running(world, plugin)
+
+
 def running(world: World, plugin: str) -> None:
     """Waits for the chat server to run `plugin`, which it does once it has compiled its
     component: a while on a debug build, and longer for a larger plugin."""
@@ -2707,9 +2716,7 @@ def running(world: World, plugin: str) -> None:
 def plugins(world: World, check: Checks) -> None:
     say("a plugin's notes, events, routes, settings, and account")
     stack = world.stack
-    stack.command("plugins", "install", str(word_filter()), "--yes")
-    stack.command("plugins", "enable", WORD_FILTER_ID)
-    running(world, WORD_FILTER_ID)
+    start_plugin(world, word_filter(), WORD_FILTER_ID)
     watched = world.channel("plugin-watched")
     world.stream.gather(0.5)
     turned_on = world.as_owner("PUT", f"/communities/{world.community}/plugins/{WORD_FILTER_ID}",
@@ -2781,11 +2788,7 @@ def plugins(world: World, check: Checks) -> None:
 def profile_annotations(world: World, check: Checks) -> None:
     say("a plugin's annotation of a person is shown only where the plugin runs, to those who share it")
     stack, member = world.stack, world.member
-    if psql(f"SELECT count(*) FROM plugin WHERE id = '{WORD_FILTER_ID}'", stack.database) != "1":
-        check("the word filter is installed, to annotate with", False, "the plugins scenario installs it")
-        return
-    stack.command("plugins", "enable", WORD_FILTER_ID)
-    running(world, WORD_FILTER_ID)
+    start_plugin(world, word_filter(), WORD_FILTER_ID)
     # No example plugin annotates people, so the row is written as a plugin's would be.
     psql("INSERT INTO user_annotation (id, plugin, \"user\", kind, severity, label) "
          f"VALUES (gen_random_uuid(), '{WORD_FILTER_ID}', '{member['id']}', 'checked', 'info', "
@@ -2817,9 +2820,7 @@ def profile_annotations(world: World, check: Checks) -> None:
 def calendar_channels(world: World, check: Checks) -> None:
     say("a plugin's channel, its notices, its cards, and a private URL")
     stack = world.stack
-    stack.command("plugins", "install", str(example("calendar")), "--yes")
-    stack.command("plugins", "enable", CALENDAR_ID)
-    running(world, CALENDAR_ID)
+    start_plugin(world, example("calendar"), CALENDAR_ID)
     announce = world.channel("announcements")
     world.as_owner("PUT", f"/communities/{world.community}/plugins/{CALENDAR_ID}",
                    {"settings": {"announceChannel": announce}, "grant": ["viewChannel", "sendMessages"]})
@@ -3071,9 +3072,7 @@ def blackjack_tables(world: World, check: Checks) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     stack, member = world.stack, world.member
-    stack.command("plugins", "install", str(example("blackjack")), "--yes")
-    stack.command("plugins", "enable", BLACKJACK_ID)
-    running(world, BLACKJACK_ID)
+    start_plugin(world, example("blackjack"), BLACKJACK_ID)
     world.as_owner("PUT", f"/communities/{world.community}/plugins/{BLACKJACK_ID}", {"settings": {}})
     table = world.as_owner("POST", "/channels", {
         "name": "blackjack", "ty": "plugin", "pluginType": f"{BLACKJACK_ID}:table",
@@ -3497,8 +3496,7 @@ def emoji_deletions(world: World, check: Checks) -> None:
 def plugin_removal(world: World, check: Checks) -> None:
     say("a removed plugin stops at once, and its account, timers, and storage go by jobs")
     stack, member = world.stack, world.member
-    stack.command("plugins", "enable", CALENDAR_ID)
-    running(world, CALENDAR_ID)
+    start_plugin(world, example("calendar"), CALENDAR_ID)
     world.as_owner("PUT", f"/communities/{world.community}/plugins/{CALENDAR_ID}",
                    {"settings": {}, "grant": ["viewChannel", "sendMessages"]})
     principal = next(p["principal"] for p in stack.api("GET", "/plugins", token=member["token"])["data"]
