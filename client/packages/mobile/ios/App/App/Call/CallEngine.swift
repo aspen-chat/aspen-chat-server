@@ -10,8 +10,9 @@ import Foundation
 /// `snapshots` is what it reports. `AspenCallPlugin` commands it for the web view, and
 /// `CallVideo` draws its video tracks.
 final class CallEngine: @unchecked Sendable {
-    /// Every track on the device, one WebRTC factory for the process, the one audio session's
-    /// routes, the camera, and where video is drawn, however many deployments' engines run.
+    /// Every track on the device, one WebRTC factory for the process (and the share's beside
+    /// it), the one audio session's routes, the camera, the share, and where video is drawn,
+    /// however many deployments' engines run.
     static let tracks = CallTracks()
     /// Replaced by a test on the simulator, whose own audio unit aborts the process when
     /// initialized, with a factory on an audio device in software, before the first engine is
@@ -20,6 +21,7 @@ final class CallEngine: @unchecked Sendable {
     static let routes = CallRoutes()
     static let video = CallVideo(tracks: tracks)
     static let camera = CallCamera(factory: peerConnections.factory, tracks: tracks)
+    static let screen = CallScreen(media: { peerConnections }, tracks: tracks)
 
     let engine: Engine
     let snapshots: CallSnapshots

@@ -6,9 +6,17 @@ import WebRTC
 /// which captures the microphone and plays every received track through the shared audio
 /// session (`CallAudio`). A test gives an `RTCAudioDevice` of its own instead, a microphone and
 /// speaker in software, where the simulator's audio unit cannot be initialized.
+///
+/// A WebRTC factory has one audio capture for every connection it makes, so the call's capture
+/// connection, which carries a share and its sound (`CallScreen`), is made from a second factory,
+/// `captureFactory`, whose audio device is the share's sound (`ShareAudioDevice`) and which makes
+/// the share's tracks; it shares the codecs and is made on the first share.
 final class CallPeerConnections: PeerConnectionFactory, @unchecked Sendable {
     let factory: RTCPeerConnectionFactory
     let tracks: CallTracks
+    let shareAudio = ShareAudioDevice()
+    private let lock = NSLock()
+    private var capture: RTCPeerConnectionFactory?
 
     init(tracks: CallTracks, audioDevice: RTCAudioDevice? = nil) {
         RTCInitializeSSL()
@@ -20,9 +28,32 @@ final class CallPeerConnections: PeerConnectionFactory, @unchecked Sendable {
         self.tracks = tracks
     }
 
-    func create(configuration: Configuration, observer: PeerConnectionObserver) async throws -> CreatedPeerConnection {
+    /// The share's factory, whose audio capture is `shareAudio`.
+    var captureFactory: RTCPeerConnectionFactory {
+        lock.lock()
+        defer { lock.unlock() }
+        if let capture {
+            return capture
+        }
+        let made = RTCPeerConnectionFactory(
+            encoderFactory: RTCDefaultVideoEncoderFactory(),
+            decoderFactory: RTCDefaultVideoDecoderFactory(),
+            audioDevice: shareAudio
+        )
+        capture = made
+        return made
+    }
+
+    func create(kind: PeerConnectionKind, configuration: Configuration, observer: PeerConnectionObserver) async throws
+        -> CreatedPeerConnection
+    {
         let delegate = CallPeerConnectionDelegate(observer: observer)
-        guard let connection = factory.peerConnection(
+        let from: RTCPeerConnectionFactory
+        switch kind {
+        case .call, .transfer: from = factory
+        case .capture: from = captureFactory
+        }
+        guard let connection = from.peerConnection(
             with: CallPeerConnection.configuration(configuration),
             constraints: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil),
             delegate: delegate

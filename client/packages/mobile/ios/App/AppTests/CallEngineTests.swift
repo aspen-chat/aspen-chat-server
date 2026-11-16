@@ -132,8 +132,10 @@ final class CallEngineTests: XCTestCase {
             self.real = real
         }
 
-        func create(configuration: Configuration, observer: PeerConnectionObserver) async throws -> CreatedPeerConnection {
-            let made = try await real.create(configuration: configuration, observer: observer)
+        func create(kind: PeerConnectionKind, configuration: Configuration, observer: PeerConnectionObserver) async throws
+            -> CreatedPeerConnection
+        {
+            let made = try await real.create(kind: kind, configuration: configuration, observer: observer)
             lock.held { created.append(made.connection) }
             return made
         }

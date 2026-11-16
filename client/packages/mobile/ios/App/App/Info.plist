@@ -38,10 +38,13 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<!-- A call goes on with the app in the background: its audio, and the system's call
-	     integration (CallKit, and PushKit's VoIP pushes for rings). -->
+	     integration (CallKit, and PushKit's VoIP pushes for rings); and a screen shared through
+	     ScreenCaptureKit (iOS 27 and later, Call/CallScreen.swift) goes on capturing there, which
+	     the system stops without this mode (SCStreamErrorMissingBackgroundMode). -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>screen-capture</string>
 		<string>voip</string>
 	</array>
 	<key>UIApplicationSceneManifest</key>

@@ -1,0 +1,2 @@
+/* The system's alert when the broadcast was started from Control Center with no Aspen call sharing. */
+"broadcastNotInCall" = "Start sharing from a call in Aspen.";

@@ -19,9 +19,13 @@ import Foundation
 /// none and fails the join itself where the channel lets the user speak (`errorKind`
 /// `microphone`), as the web's call does when the browser refuses it. `startCamera`
 /// asks for the camera the same way and rejects with the code `denied`, `none`, or `failed`
-/// (`CallCameraFailure`) when none opens. The join itself, leaving, and muting go through
-/// `CallEngine` and so the system's call (`CallSystem`). Everything runs on the main queue, where
-/// the engine's assembly, the routes, the camera, and the video live.
+/// (`CallCameraFailure`) when none opens. `startScreenShare` asks the system for the screen
+/// through its own picker (`CallScreen`), resolving at once: the share's tracks go to the engine
+/// as its external `screen` and `screenAudio` once the capture runs, which the snapshots then
+/// show, and a share that does not come of it, or ends, is a `share` event with why
+/// (`CallScreenFailure`, or none for the user's own stop). The join itself, leaving, and muting
+/// go through `CallEngine` and so the system's call (`CallSystem`). Everything runs on the main
+/// queue, where the engine's assembly, the routes, the camera, the share, and the video live.
 @objc(AspenCallPlugin)
 public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "AspenCallPlugin"
@@ -52,6 +56,9 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "switchCamera", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopCamera", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearCameraError", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "startScreenShare", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopScreenShare", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearShareError", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setWatched", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setTiles", returnType: CAPPluginReturnPromise),
     ]
@@ -109,8 +116,9 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
             following.snapshots = engine.snapshots.listenJSON { [weak self] json in
                 self?.notifyListeners("state", data: Self.published(json, origin: origin))
             }
-            following.camera = engine.snapshots.listen { state in
+            following.camera = engine.snapshots.listen { [weak self] state in
                 Self.cameraFollows(state, origin: origin)
+                self?.shareFollows(state, origin: origin)
             }
             followed[origin] = following
         }
@@ -128,6 +136,23 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         let refused = state.sourceRefused?.source == .camera
         if ended || refused {
             camera.stop()
+        }
+    }
+
+    /// The share is on only while its engine sends it: the call ending, or the voice server
+    /// refusing the share, stops the capture, and the page hears why as a `share` event.
+    private func shareFollows(_ state: CallState, origin: String) {
+        let screen = CallEngine.screen
+        guard screen.isActive, screen.origin == origin else {
+            return
+        }
+        let ended = state.status == .idle || state.status == .failed
+        let refused = state.sourceRefused?.source == .screen || state.sourceRefused?.source == .screenAudio
+        if ended || refused {
+            screen.stop()
+            if refused {
+                notifyListeners("share", data: Self.shareData(origin: origin, failure: nil))
+            }
         }
     }
 
@@ -457,6 +482,62 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         withEngine(call) { engine in
             engine.engine.clearSourceRefusal()
         }
+    }
+
+    // MARK: Sharing
+
+    /// Asks the system for the screen (`CallScreen`), with the app's audio when `audio`, and
+    /// resolves at once: the system's picker is the user's, and what comes of it reaches the page
+    /// through the snapshots (the share's sources) or a `share` event (why none came). A share
+    /// already asked for is left as it is.
+    @objc func startScreenShare(_ call: CAPPluginCall) {
+        guard let origin = origin(of: call) else {
+            return
+        }
+        let audio = call.getBool("audio") ?? true
+        DispatchQueue.main.async {
+            let screen = CallEngine.screen
+            if screen.isActive {
+                call.resolve()
+                return
+            }
+            let engine = self.engine(at: origin)
+            screen.start(
+                origin: origin, audio: audio,
+                onStarted: { video, audio in
+                    engine.engine.startExternalSource(source: .screen, track: video)
+                    if let audio {
+                        engine.engine.startExternalSource(source: .screenAudio, track: audio)
+                    }
+                },
+                onEnded: { [weak self] failure in
+                    engine.engine.stopSource(source: .screen)
+                    engine.engine.stopSource(source: .screenAudio)
+                    self?.notifyListeners("share", data: Self.shareData(origin: origin, failure: failure))
+                })
+            call.resolve()
+        }
+    }
+
+    /// Ends the share, asked for or on.
+    @objc func stopScreenShare(_ call: CAPPluginCall) {
+        withEngine(call) { engine in
+            engine.engine.stopSource(source: .screen)
+            engine.engine.stopSource(source: .screenAudio)
+            CallEngine.screen.stop()
+        }
+    }
+
+    /// Dismisses the voice server's refusal of a source.
+    @objc func clearShareError(_ call: CAPPluginCall) {
+        withEngine(call) { engine in
+            engine.engine.clearSourceRefusal()
+        }
+    }
+
+    /// A share's end as the page reads it (`ShareEnded` in `nativeCall.ts`).
+    static func shareData(origin: String, failure: CallScreenFailure?) -> JSObject {
+        ["origin": origin, "failure": failure?.rawValue ?? NSNull()]
     }
 
     /// Asks the engine to watch `video`, each a user's screen or camera.

@@ -62,6 +62,13 @@
 		A5E000000000000000000291 /* CallCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000281 /* CallCamera.swift */; };
 		A5E000000000000000000294 /* CallSounds.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000284 /* CallSounds.swift */; };
 		A5E000000000000000000295 /* aspen-sound-effects-pack in Resources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000285 /* aspen-sound-effects-pack */; };
+		A5E0000000000000000002B4 /* CallScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E0000000000000000002B2 /* CallScreen.swift */; };
+		A5E0000000000000000002B5 /* ShareAudioDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E0000000000000000002B3 /* ShareAudioDevice.swift */; };
+		A5E0000000000000000002D4 /* BroadcastChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E0000000000000000002C4 /* BroadcastChannel.swift */; };
+		A5E0000000000000000002D5 /* BroadcastChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E0000000000000000002C4 /* BroadcastChannel.swift */; };
+		A5E0000000000000000002D6 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E0000000000000000002C5 /* SampleHandler.swift */; };
+		A5E000000000000000000297 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000288 /* Localizable.strings */; };
+		A5E000000000000000000298 /* AspenBroadcast.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000289 /* AspenBroadcast.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A5E000000000000000000292 /* RootViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000282 /* RootViewController.swift */; };
 		A5E000000000000000000293 /* SyntheticVideoCapturer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000283 /* SyntheticVideoCapturer.swift */; };
 		A5E000000000000000000321 /* CallEngines.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000301 /* CallEngines.swift */; };
@@ -91,6 +98,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 504EC3031FED79650016851F;
 			remoteInfo = App;
+		};
+		A5E0000000000000000002A1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A5E0000000000000000002A0;
+			remoteInfo = AspenBroadcast;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -153,6 +167,15 @@
 		A5E000000000000000000281 /* CallCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallCamera.swift; sourceTree = "<group>"; };
 		A5E000000000000000000284 /* CallSounds.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallSounds.swift; sourceTree = "<group>"; };
 		A5E000000000000000000285 /* aspen-sound-effects-pack */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "aspen-sound-effects-pack"; path = "../../../../../app/src/features/notifications/sounds/aspen-sound-effects-pack"; sourceTree = "<group>"; };
+		A5E0000000000000000002B2 /* CallScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallScreen.swift; sourceTree = "<group>"; };
+		A5E0000000000000000002B3 /* ShareAudioDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareAudioDevice.swift; sourceTree = "<group>"; };
+		A5E0000000000000000002C4 /* BroadcastChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastChannel.swift; sourceTree = "<group>"; };
+		A5E0000000000000000002C5 /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
+		A5E0000000000000000002C6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A5E000000000000000000287 /* AspenBroadcast.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AspenBroadcast.entitlements; sourceTree = "<group>"; };
+		A5E00000000000000000028A /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A5E00000000000000000028B /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/Localizable.strings; sourceTree = "<group>"; };
+		A5E000000000000000000289 /* AspenBroadcast.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AspenBroadcast.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A5E000000000000000000282 /* RootViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootViewController.swift; sourceTree = "<group>"; };
 		A5E000000000000000000283 /* SyntheticVideoCapturer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticVideoCapturer.swift; sourceTree = "<group>"; };
 		A5E000000000000000000286 /* SoftwareSoundPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoftwareSoundPlayer.swift; sourceTree = "<group>"; };
@@ -194,6 +217,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A5E0000000000000000002A3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -204,6 +234,7 @@
 				504EC3061FED79650016851F /* App */,
 				A5E000000000000000000131 /* AspenPush */,
 				A5E000000000000000000132 /* AspenNotificationService */,
+				A5E0000000000000000002A6 /* AspenBroadcast */,
 				A5E000000000000000000241 /* AppTests */,
 				A5E000000000000000000021 /* AppUITests */,
 				A5E000000000000000000242 /* Frameworks */,
@@ -218,6 +249,7 @@
 				A5E000000000000000000213 /* AppTests.xctest */,
 				A5E000000000000000000014 /* AppUITests.xctest */,
 				A5E000000000000000000110 /* AspenNotificationService.appex */,
+				A5E000000000000000000289 /* AspenBroadcast.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -244,6 +276,9 @@
 				A5E000000000000000000281 /* CallCamera.swift */,
 				A5E000000000000000000284 /* CallSounds.swift */,
 				A5E000000000000000000285 /* aspen-sound-effects-pack */,
+				A5E0000000000000000002B2 /* CallScreen.swift */,
+				A5E0000000000000000002B3 /* ShareAudioDevice.swift */,
+				A5E0000000000000000002C4 /* BroadcastChannel.swift */,
 			);
 			path = Call;
 			sourceTree = "<group>";
@@ -330,6 +365,17 @@
 			path = AspenNotificationService;
 			sourceTree = "<group>";
 		};
+		A5E0000000000000000002A6 /* AspenBroadcast */ = {
+			isa = PBXGroup;
+			children = (
+				A5E0000000000000000002C5 /* SampleHandler.swift */,
+				A5E0000000000000000002C6 /* Info.plist */,
+				A5E000000000000000000287 /* AspenBroadcast.entitlements */,
+				A5E000000000000000000288 /* Localizable.strings */,
+			);
+			path = AspenBroadcast;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -347,6 +393,7 @@
 			);
 			dependencies = (
 				A5E000000000000000000152 /* PBXTargetDependency */,
+				A5E0000000000000000002A5 /* PBXTargetDependency */,
 			);
 			name = App;
 			packageProductDependencies = (
@@ -409,6 +456,23 @@
 			productReference = A5E000000000000000000110 /* AspenNotificationService.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		A5E0000000000000000002A0 /* AspenBroadcast */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A5E0000000000000000002A7 /* Build configuration list for PBXNativeTarget "AspenBroadcast" */;
+			buildPhases = (
+				A5E0000000000000000002A2 /* Sources */,
+				A5E0000000000000000002A3 /* Frameworks */,
+				A5E0000000000000000002A4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AspenBroadcast;
+			productName = AspenBroadcast;
+			productReference = A5E000000000000000000289 /* AspenBroadcast.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -452,6 +516,7 @@
 			targets = (
 				504EC3031FED79650016851F /* App */,
 				A5E000000000000000000151 /* AspenNotificationService */,
+				A5E0000000000000000002A0 /* AspenBroadcast */,
 				A5E000000000000000000260 /* AppTests */,
 				A5E000000000000000000031 /* AppUITests */,
 			);
@@ -466,6 +531,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				A5E000000000000000000129 /* AspenNotificationService.appex in Embed Foundation Extensions */,
+				A5E000000000000000000298 /* AspenBroadcast.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -522,6 +588,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A5E0000000000000000002A4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5E000000000000000000297 /* Localizable.strings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -562,6 +636,9 @@
 				A5E000000000000000000290 /* CallVideo.swift in Sources */,
 				A5E000000000000000000291 /* CallCamera.swift in Sources */,
 				A5E000000000000000000294 /* CallSounds.swift in Sources */,
+				A5E0000000000000000002B4 /* CallScreen.swift in Sources */,
+				A5E0000000000000000002B5 /* ShareAudioDevice.swift in Sources */,
+				A5E0000000000000000002D4 /* BroadcastChannel.swift in Sources */,
 				A5E000000000000000000292 /* RootViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -582,6 +659,15 @@
 				A5E000000000000000000124 /* WebPush.swift in Sources */,
 				A5E000000000000000000125 /* PushState.swift in Sources */,
 				A5E000000000000000000230 /* TokenRefresh.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5E0000000000000000002A2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5E0000000000000000002D6 /* SampleHandler.swift in Sources */,
+				A5E0000000000000000002D5 /* BroadcastChannel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -616,6 +702,11 @@
 			isa = PBXTargetDependency;
 			target = 504EC3031FED79650016851F /* App */;
 			targetProxy = A5E000000000000000000265 /* PBXContainerItemProxy */;
+		};
+		A5E0000000000000000002A5 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A5E0000000000000000002A0 /* AspenBroadcast */;
+			targetProxy = A5E0000000000000000002A1 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -660,6 +751,15 @@
 				A5E000000000000000000174 /* es */,
 			);
 			name = InfoPlist.strings;
+			sourceTree = "<group>";
+		};
+		A5E000000000000000000288 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A5E00000000000000000028A /* en */,
+				A5E00000000000000000028B /* es */,
+			);
+			name = Localizable.strings;
 			sourceTree = "<group>";
 		};
 /* End PBXVariantGroup section */
@@ -983,6 +1083,55 @@
 			};
 			name = Release;
 		};
+		A5E0000000000000000002A8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = AspenBroadcast/AspenBroadcast.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = L2GS25U79G;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				INFOPLIST_FILE = AspenBroadcast/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.aspen-chat.client.broadcast;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A5E0000000000000000002A9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = AspenBroadcast/AspenBroadcast.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = L2GS25U79G;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				INFOPLIST_FILE = AspenBroadcast/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.aspen-chat.client.broadcast;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1027,6 +1176,15 @@
 			buildConfigurations = (
 				A5E000000000000000000162 /* Debug */,
 				A5E000000000000000000163 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A5E0000000000000000002A7 /* Build configuration list for PBXNativeTarget "AspenBroadcast" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A5E0000000000000000002A8 /* Debug */,
+				A5E0000000000000000002A9 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
