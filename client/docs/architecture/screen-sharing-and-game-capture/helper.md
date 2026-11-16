@@ -110,6 +110,11 @@ server's offers like any WebRTC client, in str0m's frame mode.
   with no section yet, or before the connection is up, is dropped, so a stream whose section comes
   in a later offer starts as soon as that offer is answered.
 - **str0m answers NACKs** from what it sent, and writes the sender reports.
+- **Every frame is stamped with when it was captured,** on one clock all the capture's streams share
+  (`epoch` in `rtp.rs`): the instant its presentation time comes to, from a frame's presentation
+  time and the instant it was sent. A frame sent sooner after its capture than any before becomes
+  that pairing, so no stamp is in the future. The sender reports follow the stamps, so a viewer
+  plays the game's picture and sound in sync, however long each encoder takes.
 - **Bandwidth estimation is on**, from the voice server's transport-wide feedback, starting at 6
   Mbps. Its estimate becomes the video encoder's bitrate (`Feedback`), at most every 1.5 seconds,
   between 500 kbps and the bitrate the capture was started with.

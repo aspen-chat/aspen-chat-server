@@ -54,7 +54,16 @@ The server is the only side that offers. Whatever the client wants changed is a 
   (given twice, or late) is let be, and the outstanding offer still stands.
 - An offer unanswered for `ANSWER_TIMEOUT` (ten seconds), or an answer that cannot be applied, fails
   the connection.
-- Nothing is sent on a section before the answer to the offer that added it.
+- Each section names the stream it belongs to (its `a=msid`). A person's audio slot and camera are
+  in `{user}-camera`, a screen and its sound in `{user}-share`, and a browser plays the audio and
+  video of one stream in sync.
+- A section no longer wanted goes inactive and stays, idle, until the next want of the same kind and
+  direction takes it over, so a connection holds no more sections than it has needed at once, and an
+  offer does not grow as people watch and stop watching.
+- A section taken over into another stream is sent on new SSRCs. A section taken over in its own
+  stream keeps its SSRCs, and its sequence numbers run on from where it went idle.
+- Nothing is sent on a section before the answer to the offer that gave it its content and stream,
+  so a client knows whose media a section carries before any arrives.
 - When ICE on a connection goes disconnected (a client that moved network), the server offers an ICE
   restart. A client asks for one with `restartIce`, again while it stays lost. Either way the next
   offer carries new ICE credentials, and the connection is found by the new username fragment from
@@ -129,11 +138,15 @@ What a client receives is bounded whatever the size of the call, so an offer's s
   most recently loud, then who joined first. A muted microphone, which sends nothing, ranks last and
   gives up its slot at once. An occupant stays in its slot while it is among those chosen, so a slot
   changes speaker only to make room.
+- Nobody the client silenced (`silence`) is given one of its slots.
 - `slots` tells the client whom each slot now carries, those that changed, and is sent before the
-  offer that adds a new slot's section. The client plays a slot at the volume it gives that person.
-- A slot keeps one SSRC throughout. Its sequence numbers and timestamps are rebased at a new
-  speaker's first packet, so they run on unbroken across a switch, and each packet carries the
-  speaker's SSRC as its CSRC for clients that read contributing sources.
+  offer that moves a slot into its new occupant's stream. The client plays a slot at the volume it
+  gives that person.
+- A slot is in its occupant's `{user}-camera` stream, so their voice plays in sync with their
+  camera. A new occupant moves it there by offer, on new SSRCs. Nothing of theirs is sent on the
+  slot until that offer is answered; what they said meanwhile is held, up to a second
+  (`HELD_AUDIO_PACKETS`), and follows the answer at once.
+- Each packet carries the speaker's SSRC as its CSRC for clients that read contributing sources.
 
 ### Video by watching
 
@@ -151,11 +164,30 @@ What a client receives is bounded whatever the size of the call, so an offer's s
   off screen, someone muted for this client alone. A resumed video section waits for a keyframe
   again.
 
+### Silencing
+
+- `silence {voices, shares}` names the people this client plays at nothing: their voice, and their
+  share's sound. Each list replaces the one before, and is cut at the call's
+  `max_participants_per_call`.
+- Those in `voices` take none of the client's audio slots, so someone set to nothing never holds a
+  slot that another speaker could use. Those in `shares` are offered no `shareAudio` section.
+- The client sends it whenever the list changes, as people come and go and as it sets volumes, and
+  again after each `identify`, since a new participant starts with none.
+- It is rate limited per user (`[rate_limits.frames.silence]` in `voice_server/src/limits.toml`).
+
 ## Forwarding
 
 - Packets are forwarded as they arrive (str0m's RTP mode), never decoded. Each section a client
   receives has its own SSRC, with sequence numbers and timestamps rebased whenever the source it
   carries starts over (a new slot occupant, a source paused and resumed, a section resumed).
+- Each packet is written with when its sender captured it: the time the sender's latest sender
+  report gives, carried forward by the RTP time since, placed on the server's clock by one pairing
+  per participant of a sender time and its arrival (`on_server_clock` in
+  `voice_media/src/thread.rs`). The pairing is the soonest any packet has arrived after its sending,
+  so no packet is placed after its arrival. The server's sender reports to each receiver follow
+  those times, so a receiver synchronizes a person's streams by them, whatever the network and the
+  sender's encoders add to each. Before a stream's first sender report, its packets' arrival stands
+  in.
 - Payload types are mapped to the receiving connection's own.
 - NACK and retransmission are per leg, video only. A retransmission from before a source began on a
   section is dropped. A sending stream resends from its last three seconds, up to 1,024 packets, and
@@ -295,6 +327,7 @@ A panic inside one connection's str0m calls is caught instead, and fails that co
 | `stopSending {source}`                                                     | Ends one                                                                         |
 | `watch {video: [{user, source}]}`                                          | The video the client shows, replacing what it watched                            |
 | `setReceiving {mid, receiving}`                                            | Stops or resumes one received section, with no renegotiation                     |
+| `silence {voices, shares}`                                                 | The people this client plays at nothing, replacing the lists before              |
 | `restartIce {connection}`                                                  | Asks for an ICE restart in the next offer                                        |
 | `setState {muted, deafened}`                                               | The participant's own mute and deafen                                            |
 | `offerFile`, `withdrawFile`, `acceptFile`, `transferSignal`, `endTransfer` | See [File transfers](../file-transfers.md)                                       |

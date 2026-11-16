@@ -264,10 +264,10 @@ Why the voice pieces are shaped as they are. The how is in the [voice pages](ind
 - **`slots` says whom each slot carries, and clients attribute by it.** libwebrtc's C++ API has
   contributing sources, but neither its Android nor its iOS layer exposes them. The packets carry
   the speaker's SSRC as their CSRC all the same, for clients that read it.
-- **A slot keeps one SSRC, its numbering running on across a switch.** A receiver's jitter buffer
-  and decoder take the new speaker as a continuation: switching in Chromium and Firefox concealed at
-  most 17 ms of audio, with no loss. libwebrtc on the phones following a switch is not yet
-  confirmed.
+- **A slot changes occupant by offer, into the occupant's stream.** Their voice must play in sync
+  with their camera (see [Sync and silencing](#sync-and-silencing)), which a browser does only for
+  tracks of one stream; the cost is a renegotiation per change of speaker, which happens only once
+  more microphones are in the call than slots.
 - **A muted microphone gives up its slot at once.** It sends nothing, so holding a slot would keep
   someone who speaks out of the slots.
 - **Video only as watched, up to 25.** A client says what it shows, and the server sends only that,
@@ -276,6 +276,57 @@ Why the voice pieces are shaped as they are. The how is in the [voice pages](ind
 - **Bandwidth estimation is off on the server.** With one encoding per source, nothing would act on
   an estimate, and in the evaluation it cost 20 to 40% more CPU. Senders' own estimates work from
   the transport-wide feedback the server returns.
+
+## Sync and silencing
+
+Sync is a correctness requirement: a person's voice with their camera, and a share's picture with
+its sound, play in step wherever the media carries what synchronizing them needs.
+
+- **A browser synchronizes only tracks of one stream, so each section names its stream.** A person's
+  slot and camera are in `{user}-camera`, a share's picture and sound in `{user}-share`. The two
+  pairs are apart because a game capture's picture and sound come from the desktop helper on a
+  connection and clock of their own, not with the camera.
+  ([Signalling](signalling.md#offers-and-answers))
+- **A section moved into another stream is sent on new SSRCs.** libwebrtc (Chromium, and the engine
+  Firefox and the phones use) puts a receive stream into a sync group when it makes it for an SSRC,
+  and makes none for an SSRC it already has: in Chromium, a track whose `msid` alone changed never
+  synchronized, and the same change on a new SSRC synchronized within seconds. str0m had no way to
+  move a section into another stream, so the voice server builds on a fork of it whose
+  `SdpApi::set_stream_id` does both, pinned in the workspace's `Cargo.toml` until str0m releases it.
+- **Sections no longer wanted are kept idle and taken over, never stopped and added.** str0m does
+  not recycle a stopped m-line, so every stop and add would leave about a kilobyte in every later
+  offer for the rest of the call. An idle section keeps its numbering: a receiver's SRTP drops
+  numbers below those it has had on an SSRC as replays, and a section taken over in its own stream
+  that numbered from one again went unseen in Chromium and Firefox for as long as the numbering took
+  to catch up, tens of seconds into a call.
+- **Each packet is sent with its sender's capture time, on the server's clock.** The server's sender
+  reports give each stream's RTP time at a wallclock, and a receiver synchronizes two streams by
+  those. Taking the time a packet arrived would put the network's and the sender's encoders'
+  differing delays between a person's audio and video; taking the sender's own reports keeps the
+  timing the sender captured with.
+- **The sender's clock is paired with the soonest arrival seen, not the first.** str0m's reports
+  carry a stream forward from its last packet's wallclock to the report's, and a wallclock not yet
+  come gives the report no RTP time at all. Pairing on the first report's arrival placed every
+  quicker packet in the future, and Chromium then either made no estimate or settled tens of seconds
+  off.
+- **A new slot occupant's audio is held until the answer, up to a second.** The slot carries the old
+  speaker until the client knows it moved, and dropping what the new one says meanwhile would cut
+  the start of what they say; a second covers an answer's round trip on the worst networks a call
+  works over.
+- **The desktop helper stamps every track it sends on one capture clock.** Its game picture and
+  sound are encoded on threads of their own; stamping each frame with the instant it is sent would
+  put each encoder's delay between them.
+- **The call check measures sync rather than assuming it.** It holds a stream's picture 400 ms back
+  at the receiver (`jitterBufferTarget`) and requires the browser to bring the sound within 45 ms,
+  read from both tracks' `estimatedPlayoutTimestamp`, which a browser reports only for tracks it
+  synchronizes: unsynchronized tracks leave no estimate, or one 400 ms apart. 45 ms of sound ahead
+  is where ITU-R BT.1359 puts the edge of what people notice. A browser makes its first estimate
+  once sender reports have come, a few seconds in, and closes the gap by about 30 ms a second
+  (Chromium and Firefox alike), so the check allows 45 seconds.
+- **Someone a listener plays at nothing takes none of their slots.** Slots go to the loudest, and
+  without the listener's volumes the server would fill one with a person the listener never hears,
+  leaving a voice they would hear out. The list goes to the server rather than each volume, since
+  the server needs only whether a voice is heard, and the client's levels between stay its own.
 
 ## Media
 

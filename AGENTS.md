@@ -52,7 +52,9 @@ explicit direction.
 - **Voice media:** `str0m` in the voice server's `voice_media` crate (`voice_media/`), in its RTP
   mode and as an ICE-lite peer, with DTLS and SRTP through `aws-lc-rs`, so the voice server links no
   OpenSSL: media threads, each holding the WebRTC connections of the calls given to it on one UDP
-  and one TCP port, that forward each participant's packets to the others as they are; see Voice
+  and one TCP port, that forward each participant's packets to the others as they are; see Voice. It
+  is the fork `[patch.crates-io]` names, whose `SdpApi::set_stream_id` moves a section into another
+  stream, until str0m releases it
 - **File transfers:** WebRTC data channels between clients, with STUN and a TURN relay in the voice
   server (`turn`, from webrtc-rs)
 - **Plugins:** `wasmtime` running WebAssembly components (`spec/plugin.wit`), with `wasmtime-wasi`

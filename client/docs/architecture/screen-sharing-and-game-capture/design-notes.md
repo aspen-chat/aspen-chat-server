@@ -18,6 +18,12 @@ See [the capture helper](helper.md).
 - **The helper is a str0m peer in frame mode.** str0m packetizes H.264 and Opus, answers NACKs, and
   writes sender reports, which the helper would otherwise write itself; its `rust-crypto` feature
   keeps DTLS and SRTP free of C on every platform the helper builds for.
+- **Frames are stamped with their capture time, not the instant they are sent.** The picture and the
+  sound are encoded on threads of their own, at delays of their own, and a viewer synchronizes the
+  two by the sender reports' times, so stamping each frame as it is sent would put the difference
+  between the encoders' delays between picture and sound. str0m's reports give no RTP time for a
+  stream whose last frame is stamped in the future, so the clock is paired with the quickest frame
+  seen rather than the first.
 - **Its bandwidth estimate steers the encoder.** The voice server estimates no bandwidth for what it
   receives, so the sender's own estimate, from the server's transport-wide feedback, is what brings
   a game's bitrate down on a narrow uplink, as a browser's does for a browser share.

@@ -68,8 +68,15 @@ the `VoiceMedia` interface (`voiceMedia.ts`). It is loaded lazily (`lazyBrowserM
 - **Audio slots.** The connection carries one audio slot section for each other microphone in the
   call, up to `ready`'s `audioSlots` (16). It never loses a slot during the call, and has at least
   one. The voice server fills them with whoever is loudest, a muted microphone last, and says whom
-  each carries in a `slots` frame, sent before the offer that adds a slot's section (`#slots`). A
-  slot that changes speaker keeps its section and its track.
+  each carries in a `slots` frame, sent before the offer that moves a slot into its new speaker's
+  stream (`#slots`). A slot that changes speaker keeps its section and its track, and nothing of the
+  new speaker arrives on it before the client has answered that offer.
+- **Each section is in the stream it plays in sync with.** A person's audio slot and camera are in
+  one stream, a screen and its sound in another, as each offer's SDP says (`a=msid`), and the
+  browser synchronizes the audio and video of each. A section an offer stops is kept by the server
+  and may come back in a later offer carrying someone or something else, in another stream; the call
+  reads what every section carries from each offer afresh, and a sound section carrying the same
+  person keeps playing with only its gain set again.
 - **A share's sound** comes in a `shareAudio` section of its own while its screen is watched
   (below), never to the sharer themself.
 - Each audio slot and share's sound plays by its mid through `VoiceMedia.play` once its section is

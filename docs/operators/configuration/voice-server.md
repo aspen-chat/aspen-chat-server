@@ -131,6 +131,7 @@ Other limits:
   closed. Each media thread holds at most 4096 TCP connections.
 - Signalling frames are limited by type, per account, and some per address or per call: `identify`,
   `resume` (per address, since it comes before anyone is known), `answer`, `send`, `stopSending`,
-  `watch`, `setReceiving`, `restartIce`, `setState` (only one that unmutes or undeafens counts), and
-  the file transfer frames, with a limit on every frame together (`any`). `limits.toml` gives each.
+  `watch`, `silence`, `setReceiving`, `restartIce`, `setState` (only one that unmutes or undeafens
+  counts), and the file transfer frames, with a limit on every frame together (`any`). `limits.toml`
+  gives each.
 - A load test from a few addresses suspends the limits (`limits suspend`).

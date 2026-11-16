@@ -33,7 +33,8 @@ Who is in each channel's call is store state:
 
 ## Per-person volume and muting
 
-Volume and muting here are for this user alone. Nothing the server or the other person can see.
+Volume and muting here are for this user alone, and the other person never sees them. The voice
+server learns only whom this user plays at nothing.
 
 | Control             | Device preference                                        | `AspenSync` setter | Applied as              | To sound      |
 | ------------------- | -------------------------------------------------------- | ------------------ | ----------------------- | ------------- |
@@ -48,6 +49,13 @@ latest `slots` frame says the slot carries. A slot changes speaker as the server
 whoever is loudest (see [media](media.md#receiving)), so its gain is set again on every `slots`
 frame (`refreshVolumes`); a slot that carries no one plays at 1. `setUserVolume` sets the slot
 carrying that person now.
+
+Whoever plays at nothing, their voice or their share's sound (blocked, muted for this user, or
+turned all the way down), is named to the voice server in a `silence` frame (`#updateSilence`),
+whenever that list changes: as people join and leave, as volumes are set, and after each `identify`.
+The server then gives them none of this client's slots and offers none of their share's sound, so a
+voice this user would hear is never kept out of a slot by one they would not, and none of a silenced
+voice plays in the moment before a slot's gain follows its new occupant.
 
 The call's own volume (`OUTPUT_VOLUME`, from the deafen arrow or Settings) scales every person's
 voice and stream on top of their own volume: `AspenSync` multiplies the two, and sets every sound's
