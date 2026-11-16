@@ -3,7 +3,9 @@ import UIKit
 import WebKit
 
 /// The app's web view, with the app's own plugins registered beside those Capacitor finds in its
-/// packages.
+/// packages. It is a child of `RootViewController`, which holds the call's video beneath it, so
+/// the web view is transparent: the page paints its own ground and leaves holes where the call's
+/// pictures go (`CallVideo`).
 ///
 /// The web view ends where the keyboard begins, as a browser's page does on Android: the page
 /// lays itself out above the keyboard (the message box sits on it, and `window.innerHeight` says
@@ -25,7 +27,11 @@ class MainViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(AspenUploadsPlugin())
         bridge?.registerPluginInstance(AspenMediaPlugin())
         bridge?.registerPluginInstance(AspenCallPlugin())
+        view.backgroundColor = .clear
         if let webView {
+            webView.isOpaque = false
+            webView.backgroundColor = .clear
+            webView.scrollView.backgroundColor = .clear
             for name in [
                 UIResponder.keyboardWillShowNotification, UIResponder.keyboardWillHideNotification,
                 UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardDidChangeFrameNotification,
@@ -39,7 +45,7 @@ class MainViewController: CAPBridgeViewController {
         Self.hideFormAccessoryBar()
     }
 
-    /// The window lays its root view out across itself again (when turned, say); the web view
+    /// The root lays its children out across the window again (when turned, say); the web view
     /// keeps clear of the keyboard through it.
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()

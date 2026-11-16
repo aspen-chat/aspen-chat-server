@@ -56,6 +56,10 @@
 		A5E000000000000000000239 /* CallRoutesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000217 /* CallRoutesTests.swift */; };
 		A5E000000000000000000243 /* AspenCallPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000218 /* AspenCallPlugin.swift */; };
 		A5E000000000000000000244 /* AspenCallPluginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000219 /* AspenCallPluginTests.swift */; };
+		A5E000000000000000000290 /* CallVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000280 /* CallVideo.swift */; };
+		A5E000000000000000000291 /* CallCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000281 /* CallCamera.swift */; };
+		A5E000000000000000000292 /* RootViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000282 /* RootViewController.swift */; };
+		A5E000000000000000000293 /* SyntheticVideoCapturer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000283 /* SyntheticVideoCapturer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -135,6 +139,10 @@
 		A5E000000000000000000217 /* CallRoutesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRoutesTests.swift; sourceTree = "<group>"; };
 		A5E000000000000000000218 /* AspenCallPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenCallPlugin.swift; sourceTree = "<group>"; };
 		A5E000000000000000000219 /* AspenCallPluginTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenCallPluginTests.swift; sourceTree = "<group>"; };
+		A5E000000000000000000280 /* CallVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallVideo.swift; sourceTree = "<group>"; };
+		A5E000000000000000000281 /* CallCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallCamera.swift; sourceTree = "<group>"; };
+		A5E000000000000000000282 /* RootViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootViewController.swift; sourceTree = "<group>"; };
+		A5E000000000000000000283 /* SyntheticVideoCapturer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticVideoCapturer.swift; sourceTree = "<group>"; };
 		A5E000000000000000000213 /* AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -213,6 +221,8 @@
 				A5E000000000000000000216 /* CallRoutes.swift */,
 				A5E000000000000000000218 /* AspenCallPlugin.swift */,
 				A5E000000000000000000210 /* VoiceClient.swift */,
+				A5E000000000000000000280 /* CallVideo.swift */,
+				A5E000000000000000000281 /* CallCamera.swift */,
 			);
 			path = Call;
 			sourceTree = "<group>";
@@ -224,6 +234,7 @@
 				A5E000000000000000000214 /* ToneAudioDevice.swift */,
 				A5E000000000000000000217 /* CallRoutesTests.swift */,
 				A5E000000000000000000219 /* AspenCallPluginTests.swift */,
+				A5E000000000000000000283 /* SyntheticVideoCapturer.swift */,
 			);
 			path = AppTests;
 			sourceTree = "<group>";
@@ -243,6 +254,7 @@
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				A5E000000000000000000011 /* MainViewController.swift */,
+				A5E000000000000000000282 /* RootViewController.swift */,
 				A5E000000000000000000012 /* AspenFilesPlugin.swift */,
 				A5E000000000000000000015 /* AspenAgePlugin.swift */,
 				A5E000000000000000000089 /* AspenMediaPlugin.swift */,
@@ -518,6 +530,9 @@
 				A5E000000000000000000238 /* CallRoutes.swift in Sources */,
 				A5E000000000000000000243 /* AspenCallPlugin.swift in Sources */,
 				A5E000000000000000000231 /* VoiceClient.swift in Sources */,
+				A5E000000000000000000290 /* CallVideo.swift in Sources */,
+				A5E000000000000000000291 /* CallCamera.swift in Sources */,
+				A5E000000000000000000292 /* RootViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -548,6 +563,7 @@
 				A5E000000000000000000236 /* ToneAudioDevice.swift in Sources */,
 				A5E000000000000000000239 /* CallRoutesTests.swift in Sources */,
 				A5E000000000000000000244 /* AspenCallPluginTests.swift in Sources */,
+				A5E000000000000000000293 /* SyntheticVideoCapturer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

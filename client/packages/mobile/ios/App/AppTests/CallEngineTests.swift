@@ -1,13 +1,18 @@
 import AVFoundation
 import CallKit
+import UIKit
 import XCTest
 @testable import App
 
 /// The call engine with this device's whole platform under it, against a real deployment: it
 /// joins a voice channel's call through the system (CallKit) as far as the simulator's CallKit
 /// takes an outgoing call, then, driven directly, joins, is heard by and hears a second
-/// participant in a browser, mutes and unmutes, holds the call and releases it, takes its
-/// socket back after the socket is cut, and leaves.
+/// participant in a browser, mutes and unmutes, holds the call and releases it, watches the
+/// browser's camera and draws it (`CallVideo`, a renderer counting frames and reporting the
+/// picture's shape where the page would put its hole, and the picture in picture started on
+/// it), sends a camera of its own (in software, `SyntheticVideoCapturer`) that the browser
+/// decodes and sees a picture in, moves it to the other camera, takes its socket back after the
+/// socket is cut with video flowing on, and leaves.
 /// `scripts/check_mobile_call.py` at the repository's root runs the deployment, the browser, and
 /// this test, and gives it what it reads from the environment (passed on by `xcodebuild test`
 /// with a `TEST_RUNNER_` prefix); without them it skips.
@@ -271,6 +276,90 @@ final class CallEngineTests: XCTestCase {
         XCTAssertGreaterThan(releasedLater.packets, released.packets + 50, "released, the sound comes back: \(released) then \(releasedLater)")
         let hold = "held (the browser listed \(user) on hold; \(heldPhoneLater.packets - heldPhone.packets) packets reached the phone and \(heldBrowserLater.packets - heldBrowser.packets) the browser in 2 s) and released (\(releasedLater.packets - released.packets) packets in 2 s)"
 
+        // Video both ways. The browser shows video and turns its camera on (Chromium's fake camera,
+        // a moving pattern); the engine is asked to watch it, gets a section for it, and its track
+        // is drawn by a renderer where the page would put the hole (`CallVideo.apply`), which
+        // counts frames and reports the picture's shape; the renderer's layer lies where the hole
+        // is. The frames arrive upright: the sender turns them, no orientation extension being
+        // negotiated.
+        _ = try await post(helper.appendingPathComponent("second-participant/show-video"))
+        _ = try await post(helper.appendingPathComponent("second-participant/camera/start"))
+        call.engine.setWatched(video: [WatchedVideo(user: bob, source: .camera)])
+        let watching = try await until("the browser's camera is received", seconds: 30, call) {
+            $0.videos.contains { $0.user == bob && $0.source == .camera }
+        }
+        let remoteSurface = try XCTUnwrap(watching.videos.first { $0.user == bob && $0.source == .camera }).track
+        let remoteBox = CGRect(x: 10, y: 20, width: 160, height: 120)
+        let remoteTile = CallVideoTile(
+            tile: "remote", surface: remoteSurface, rect: remoteBox, visible: true, mirrored: false, cover: true,
+            fullScreen: false, pictureInPicture: true)
+        await MainActor.run { CallEngine.video.apply([remoteTile]) }
+        let remoteRendererMade = await MainActor.run { CallEngine.video.renderers["remote"] }
+        let remoteRenderer = try XCTUnwrap(remoteRendererMade)
+        try await untilTrue("the browser's camera is drawn", seconds: 20) { remoteRenderer.framesRendered >= 5 }
+        let remoteShape = try XCTUnwrap(remoteRenderer.lastShape)
+        XCTAssertGreaterThan(remoteShape.width, 0)
+        XCTAssertGreaterThan(remoteShape.height, 0)
+        XCTAssertEqual(remoteShape.rotation, 0, "received frames arrive upright")
+        let remoteDrawnAt = await MainActor.run { CallEngine.video.frame(ofTile: "remote") }
+        XCTAssertEqual(remoteDrawnAt, remoteBox, "the picture lies where the page put its hole")
+
+        // The system's picture in picture, on the renderer the page marked for it: possible once
+        // the layer draws, started, and the engine told as it starts and stops. The simulator's
+        // AVKit supports none, so there this is the device checklist's.
+        let pip = CallEngine.video.pictureInPicture
+        let pipSeen = Flags()
+        let pipListening = await MainActor.run { CallEngine.video.listenPictureInPicture { pipSeen.add($0) } }
+        defer { pipListening.cancel() }
+        let pictureInPicture: String
+        if CallPictureInPicture.isSupported {
+            try await untilMain("the picture in picture is possible", seconds: 10) { pip.isPossible }
+            await MainActor.run { pip.start() }
+            try await untilMain("the system shows the picture in picture", seconds: 15) { pipSeen.values.last == true && pip.isActive }
+            await MainActor.run { pip.stop() }
+            try await untilMain("the picture in picture ends", seconds: 15) { pipSeen.values.last == false && !pip.isActive }
+            pictureInPicture = "the picture in picture started on the browser's camera and stopped (\(pipSeen.values))"
+        } else {
+            pictureInPicture = "the system here supports no picture in picture (AVPictureInPictureController.isPictureInPictureSupported is false on the simulator), so starting one is the device's to show"
+        }
+
+        // The phone's camera, in software on the simulator (`SyntheticVideoCapturer`, 320 by 240
+        // frames carried with a phone's upright rotation of 90 degrees), opened as the engine's
+        // camera source: the preview is drawn upright (240 by 320; the track's source turns the
+        // frames itself once the encoder wants them turned, so the preview sees them turned or
+        // turns them), and the browser decodes the frames, upright, and sees a picture in them
+        // rather than black.
+        let camera = CallCamera(factory: media.factory, tracks: CallEngine.tracks)
+        camera.makeCapturer = { SyntheticVideoCapturer() }
+        let opened = try await cameraStarted(camera, device: nil, origin: api)
+        XCTAssertEqual(opened.device, SyntheticVideoCapturer.front)
+        call.engine.startSource(source: .camera, track: opened.track)
+        _ = try await until("the camera is live at the server", seconds: 20, call) {
+            $0.sources.contains { $0.source == .camera && $0.live }
+        }
+        let selfBox = CGRect(x: 200, y: 300, width: 90, height: 120)
+        let selfTile = CallVideoTile(
+            tile: "self", surface: opened.track, rect: selfBox, visible: true, mirrored: true, cover: true,
+            fullScreen: false, pictureInPicture: false)
+        await MainActor.run { CallEngine.video.apply([remoteTile, selfTile]) }
+        let selfRendererMade = await MainActor.run { CallEngine.video.renderers["self"] }
+        let selfRenderer = try XCTUnwrap(selfRendererMade)
+        try await untilTrue("the preview is drawn", seconds: 15) { selfRenderer.framesRendered >= 5 }
+        let selfShape = try XCTUnwrap(selfRenderer.lastShape)
+        XCTAssertEqual(selfShape.surface, opened.track)
+        XCTAssertEqual([selfShape.width, selfShape.height], [240, 320], "upright: \(selfShape)")
+        let selfDrawnAt = await MainActor.run { CallEngine.video.frame(ofTile: "self") }
+        XCTAssertEqual(selfDrawnAt, selfBox, "the turned, mirrored preview still lies in its hole")
+        try await untilReported("the browser decodes the camera", seconds: 20) { try await self.browserVideoFrames() > 10 }
+        let sample = try await untilSample("the browser sees a picture in it", seconds: 20, of: user)
+        XCTAssertGreaterThan(sample.brightness, 40, "not black: \(sample)")
+        XCTAssertLessThan(sample.width, sample.height, "upright, as the phone holds it: \(sample)")
+        // Moved to the other camera: the same track, so the engine's sender needs nothing.
+        let moved = try await cameraStarted(camera, device: SyntheticVideoCapturer.back.id, origin: api)
+        XCTAssertEqual(moved.device, SyntheticVideoCapturer.back)
+        XCTAssertEqual(moved.track, opened.track)
+        let video = "watched the browser's camera (\(remoteRenderer.framesRendered) frames drawn, \(remoteShape.width)×\(remoteShape.height)) in its hole \(remoteBox); sent a camera the browser decoded (\(try await browserVideoFrames()) frames, a frame of brightness \(Int(sample.brightness)) at \(sample.width)×\(sample.height)) with its preview \(selfShape.width)×\(selfShape.height) (rotation \(selfShape.rotation)°) in \(selfBox); moved it to \(moved.device.id)"
+
         // The socket cut: the engine takes its place back with `resume` on a new socket, media
         // flowing meanwhile on the same peer connection.
         let session = connected.session
@@ -284,9 +373,21 @@ final class CallEngineTests: XCTestCase {
         XCTAssertEqual(peerConnections.created.count, connectionsBefore + 1, "the same peer connection")
         XCTAssertTrue(resumed.slots.contains { $0.user == bob }, "the slots stand")
         let afterResume = try await inboundAudio(connection)
+        let framesAfterResume = remoteRenderer.framesRendered
         try await Task.sleep(nanoseconds: 2_000_000_000)
         let later = try await inboundAudio(connection)
         XCTAssertGreaterThan(later.packets, afterResume.packets, "media flows on: \(afterResume) then \(later)")
+        XCTAssertGreaterThan(remoteRenderer.framesRendered, framesAfterResume, "video flows on")
+        XCTAssertTrue(resumed.videos.contains { $0.track == remoteSurface }, "the video watched stands")
+
+        // The camera off: its source leaves the state and the capture stops.
+        call.engine.stopSource(source: .camera)
+        await MainActor.run { camera.stop() }
+        _ = try await until("the camera is gone from the sources", seconds: 10, call) {
+            !$0.sources.contains { $0.source == .camera }
+        }
+        XCTAssertFalse(camera.isOn)
+        await MainActor.run { CallEngine.video.apply([]) }
 
         // Leaving ends everything: the state is idle and the connection closed. `leave` goes
         // through the system when it holds the call; here it holds none, so the engine's own.
@@ -299,7 +400,7 @@ final class CallEngineTests: XCTestCase {
         XCTAssertEqual(call.snapshots.latest, call.engine.state(), "the observer saw the latest snapshot")
         let revisions = seen.revisions
         XCTAssertTrue(zip(revisions, revisions.dropFirst()).allSatisfy { $1 == $0 + 1 }, "revisions count up by one: \(revisions)")
-        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); resumed on socket 2 with session \(session ?? "?"); the signalling socket negotiated \(sockets.latestExtensions); left")
+        print("call-engine-test: \(viaSystem); then, driven directly, joined and heard \(after.packets - before.packets) packets of the browser's tone in 4 s (energy \(before.energy) → \(after.energy), level \(after.level)); this side's microphone source stood at energy \(source.energy), level \(source.level); the browser received \(browserAfter.packets - browserBefore.packets) packets and \(browserAfter.samples - browserBefore.samples) samples in 4 s, peaking at \(browserPeak); muted and unmuted; \(hold); \(video); \(pictureInPicture); resumed on socket 2 with session \(session ?? "?") with video flowing on; camera off; the signalling socket negotiated \(sockets.latestExtensions); left")
     }
 
     // MARK: Helpers
@@ -331,6 +432,22 @@ final class CallEngineTests: XCTestCase {
             lock.lock()
             defer { lock.unlock() }
             return snapshots.map(\.revision)
+        }
+    }
+
+    /// Booleans a listener reported, in order.
+    final class Flags: @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorded: [Bool] = []
+
+        func add(_ value: Bool) {
+            lock.held { recorded.append(value) }
+        }
+
+        var values: [Bool] {
+            lock.lock()
+            defer { lock.unlock() }
+            return recorded
         }
     }
 
@@ -384,6 +501,18 @@ final class CallEngineTests: XCTestCase {
         guard await waiting(seconds: seconds, for: holds) else {
             XCTFail("\(what) did not happen within \(seconds) s")
             throw Stopped()
+        }
+    }
+
+    /// Waits until `holds`, read on the main queue, or fails after `seconds`.
+    private func untilMain(_ what: String, seconds: Double, holds: @escaping @MainActor () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(seconds)
+        while await !MainActor.run(body: holds) {
+            if Date() > deadline {
+                XCTFail("\(what) did not happen within \(seconds) s")
+                throw Stopped()
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
         }
     }
 
@@ -469,6 +598,59 @@ final class CallEngineTests: XCTestCase {
     private func browserOnHold() async throws -> [String] {
         let report = try await get(helper.appendingPathComponent("second-participant/report"))
         return try XCTUnwrap(report["onHold"] as? [String])
+    }
+
+    /// Opens `camera` on `device` for `origin`'s engine, on the main queue, and answers the track
+    /// and the camera opened.
+    private func cameraStarted(
+        _ camera: CallCamera, device: String?, origin: String
+    ) async throws -> (track: TrackId, device: CallCameraDevice) {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.main.async {
+                camera.start(device: device, origin: origin) { result in
+                    switch result {
+                    case .success(let opened): continuation.resume(returning: opened)
+                    case .failure(let failure): continuation.resume(throwing: failure)
+                    }
+                }
+            }
+        }
+    }
+
+    /// How many video frames the browser's connection has decoded, summed over its inbound video.
+    private func browserVideoFrames() async throws -> Int {
+        let report = try await get(helper.appendingPathComponent("second-participant/report"))
+        let streams = try XCTUnwrap(report["streams"] as? [[String: Any]])
+        return streams
+            .filter { $0["direction"] as? String == "inbound" && $0["kind"] as? String == "video" }
+            .reduce(0) { $0 + (($1["framesDecoded"] as? NSNumber)?.intValue ?? 0) }
+    }
+
+    /// A frame of `user`'s camera as the browser plays it (the page's `cameraSample`).
+    struct CameraSample {
+        let width: Int
+        let height: Int
+        let brightness: Double
+    }
+
+    /// A sample of `user`'s camera from the browser, waiting up to `seconds` for a frame.
+    private func untilSample(_ what: String, seconds: Double, of user: String) async throws -> CameraSample {
+        let deadline = Date().addingTimeInterval(seconds)
+        while true {
+            var request = URLRequest(url: helper.appendingPathComponent("second-participant/camera-sample"))
+            request.url = URL(string: "\(request.url!.absoluteString)?user=\(user)")
+            let (data, _) = try await URLSession.shared.data(for: request)
+            if let sample = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let width = (sample["width"] as? NSNumber)?.intValue, let height = (sample["height"] as? NSNumber)?.intValue,
+               let brightness = (sample["brightness"] as? NSNumber)?.doubleValue, width > 0 {
+                return CameraSample(width: width, height: height, brightness: brightness)
+            }
+            if Date() > deadline {
+                XCTFail("\(what) did not happen within \(seconds) s")
+                throw Stopped()
+            }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
     }
 
     /// The loudest sample the browser's audio slots carried over a second, off their tracks (the

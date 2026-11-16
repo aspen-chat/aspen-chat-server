@@ -5,15 +5,19 @@ import Foundation
 /// peer connections over WebRTC, the session from the account kept for push, and the audio
 /// session and microphone. Joining, leaving, and muting go through the system (`CallSystem`,
 /// CallKit), which holds one call for the process and activates the call's audio; the engine's
-/// other methods are called directly and `snapshots` is what it reports. The interface that
-/// commands it, and what plays and draws its tracks, are later pieces, so nothing holds one of
-/// these yet.
+/// other methods are called directly and `snapshots` is what it reports. `AspenCallPlugin`
+/// commands it for the web view, and `CallVideo` draws its video tracks.
 final class CallEngine: @unchecked Sendable {
-    /// Every track on the device, one WebRTC factory for the process, and the one audio
-    /// session's routes, however many deployments' engines run.
+    /// Every track on the device, one WebRTC factory for the process, the one audio session's
+    /// routes, the camera, and where video is drawn, however many deployments' engines run.
     static let tracks = CallTracks()
-    static let peerConnections = CallPeerConnections(tracks: tracks)
+    /// Replaced by a test on the simulator, whose own audio unit aborts the process when
+    /// initialized, with a factory on an audio device in software, before the first engine is
+    /// made; every engine made with no `media` of its own takes it, and so does the camera.
+    static var peerConnections = CallPeerConnections(tracks: tracks)
     static let routes = CallRoutes()
+    static let video = CallVideo(tracks: tracks)
+    static let camera = CallCamera(factory: peerConnections.factory, tracks: tracks)
 
     let engine: Engine
     let snapshots: CallSnapshots

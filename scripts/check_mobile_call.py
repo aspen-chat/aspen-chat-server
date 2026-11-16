@@ -41,6 +41,12 @@ emulator and its bindings (`client/packages/mobile/android/scripts/call_engine.p
 build then runs the test (`connectedDebugAndroidTest`), which needs the web shell copied in
 (`npx cap sync android` in `client/packages/mobile`) and `target/webrtc/libwebrtc.aar`.
 
+`--record-trailing` records instead of checking: it runs the one test that moves a hole across the
+screen with the camera drawn in it (`testPictureFollowsAMovingHole`, `pictureFollowsAMovingHole`)
+while the simulator's or emulator's screen is recorded, and leaves the recording as
+`target/mobile-call/trailing-<platform>.mp4` for `scripts/measure_video_trailing.py`, which says
+how far the native picture trails the page's box in each frame.
+
 Both need the client's dependencies installed here and Playwright's Chromium.
 """
 
@@ -60,6 +66,7 @@ import wave
 import xml.etree.ElementTree as ElementTree
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from check_calls import build_page, PAGE, PROTOCOL, person
 from stack import Failed, Ports, Stack, clean_env, start_services, wait_for, wait_for_services
@@ -77,6 +84,8 @@ PACKAGE = "com.aspen_chat.client"
 MAC_PATH = "export PATH=/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
 ANDROID_TESTS = ["com.aspen_chat.client.call.CallEngineTest", "com.aspen_chat.client.call.AspenCallPluginTest"]
 IOS_TESTS = ["AppTests/CallEngineTests", "AppTests/AspenCallPluginTests"]
+ANDROID_TRAILING_TEST = "com.aspen_chat.client.call.AspenCallPluginTest#pictureFollowsAMovingHole"
+IOS_TRAILING_TEST = "AppTests/AspenCallPluginTests/testPictureFollowsAMovingHole"
 
 
 
@@ -146,7 +155,10 @@ def helper(second: Second, bob: str) -> ThreadingHTTPServer:
     """Answers the test on loopback: `POST /second-participant` brings Bob in and names him,
     `GET /second-participant/report` is his page's report, `GET /second-participant/loudness` the
     loudest sample his audio slots carried over a second (`{"peak": …}`),
-    `POST /second-participant/leave`."""
+    `POST /second-participant/show-video` has his page show others' video,
+    `POST /second-participant/camera/start` and `/camera/stop` turn his fake camera on and off,
+    `GET /second-participant/camera-sample?user=<id>` is a frame of that user's camera as his page
+    plays it (`CameraSample`, or `null`), and `POST /second-participant/leave`."""
 
     class Handler(BaseHTTPRequestHandler):
         def answer(self, status: int, body: str) -> None:
@@ -165,6 +177,12 @@ def helper(second: Second, bob: str) -> ThreadingHTTPServer:
                 elif self.path == "/second-participant/leave":
                     second.leave()
                     self.answer(200, "{}")
+                elif self.path == "/second-participant/show-video":
+                    self.answer(200 if second.ask("show") == "ok" else 500, "{}")
+                elif self.path == "/second-participant/camera/start":
+                    self.answer(200 if second.ask("camera on") == "ok" else 500, "{}")
+                elif self.path == "/second-participant/camera/stop":
+                    self.answer(200 if second.ask("camera off") == "ok" else 500, "{}")
                 else:
                     self.answer(404, "{}")
             except Failed as failure:
@@ -172,10 +190,14 @@ def helper(second: Second, bob: str) -> ThreadingHTTPServer:
 
         def do_GET(self) -> None:  # noqa: N802
             try:
-                if self.path == "/second-participant/report":
+                parsed = urlparse(self.path)
+                if parsed.path == "/second-participant/report":
                     self.answer(200, second.ask("report"))
-                elif self.path == "/second-participant/loudness":
+                elif parsed.path == "/second-participant/loudness":
                     self.answer(200, json.dumps({"peak": float(second.ask("loudness"))}))
+                elif parsed.path == "/second-participant/camera-sample":
+                    user = parse_qs(parsed.query).get("user", [""])[0]
+                    self.answer(200, second.ask(f"sample {user}"))
                 else:
                     self.answer(404, "{}")
             except Failed as failure:
@@ -243,6 +265,7 @@ def launched(derived: str, variables: dict[str, str]) -> str:
     ])
     return (f"xcrun simctl terminate booted {BUNDLE} 2>/dev/null; xcrun simctl install booted {app} && "
             f"xcrun simctl privacy booted grant microphone {BUNDLE} && "
+            f"xcrun simctl privacy booted grant camera {BUNDLE} && "
             f"{exports} xcrun simctl launch --console-pty booted {BUNDLE} 2>&1 "
             "| grep -E --line-buffered 'Test Case|Test Suite|call-engine-test|call-routes-test|call-plugin-test|error|failed|skipped'")
 
@@ -275,10 +298,40 @@ class Ios:
                log=WORK / "build.log") != 0:
             raise Failed(f"the app did not build; see {WORK / 'build.log'}")
 
+    def record_trailing(self, variables: dict[str, str]) -> Path:
+        """Runs the trailing test alone, with the simulator's screen recorded around it, and brings
+        the recording here."""
+        if self.runner != "xcodebuild":
+            raise Failed("--record-trailing runs through xcodebuild")
+        tunnel = tunnels(self.mac)
+        try:
+            ssh_output(self.mac, f"xcrun simctl privacy booted grant camera {BUNDLE}")
+            remote = "/tmp/aspen-trailing-ios.mp4"
+            # The recorder ends, and writes the file out, on an interrupt; it runs on the Mac's own
+            # shell so the signal reaches it rather than the ssh session.
+            ssh_output(self.mac, f"rm -f {remote}; nohup xcrun simctl io booted recordVideo --codec h264 --force {remote} "
+                                 f">/tmp/aspen-trailing-ios.log 2>&1 & echo $! > /tmp/aspen-trailing-ios.pid")
+            time.sleep(2)
+            say("recording the simulator while the hole moves")
+            environment = " ".join(f"TEST_RUNNER_{name}='{value}'" for name, value in {**variables, "ASPEN_CALL_TRAILING": "1"}.items())
+            code = ssh(self.mac,
+                       f"cd {self.project} && {environment} {self.xcodebuild} test-without-building -only-testing:{IOS_TRAILING_TEST} 2>&1 "
+                       "| grep -E 'Test Case|call-plugin-test|error:|TEST' ; exit ${pipestatus[1]}",
+                       timeout=600, log=WORK / "trailing-test.log")
+            ssh_output(self.mac, "kill -INT $(cat /tmp/aspen-trailing-ios.pid); sleep 3")
+            if code != 0 or "recorded the picture" not in (WORK / "trailing-test.log").read_text():
+                raise Failed(f"the trailing test did not run (exit {code}); see {WORK / 'trailing-test.log'}")
+            recording = WORK / "trailing-ios.mp4"
+            subprocess.run(["scp", "-q", f"{self.mac}:{remote}", str(recording)], check=True)
+            return recording
+        finally:
+            tunnel.terminate()
+
     def run(self, variables: dict[str, str]) -> None:
         tunnel = tunnels(self.mac)
         try:
             ssh_output(self.mac, f"xcrun simctl privacy booted grant microphone {BUNDLE}")
+            ssh_output(self.mac, f"xcrun simctl privacy booted grant camera {BUNDLE}")
             say(f"running {', '.join(test.split('/')[1] for test in IOS_TESTS)} on the simulator through {self.runner}")
             log = WORK / "test.log"
             if self.runner == "xcodebuild":
@@ -405,15 +458,56 @@ class Android:
         say("building the engine for the emulator and its bindings")
         subprocess.run([sys.executable, str(ANDROID / "scripts" / "call_engine.py"), "--emulator-only"], cwd=REPO, check=True)
 
-    def run(self, variables: dict[str, str]) -> None:
+    def serial(self) -> str:
+        """The emulator to drive, started here with `--avd`; a phone plugged in is never touched."""
         if self.emulator is not None:
             self.emulator.start()
-            serial = self.emulator.serial
-        else:
-            running = emulators()
-            if len(running) != 1:
-                raise Failed(f"one running emulator is needed, found {running or 'none'}; start one, or give --avd")
-            serial = running[0]
+            return self.emulator.serial
+        running = emulators()
+        if len(running) != 1:
+            raise Failed(f"one running emulator is needed, found {running or 'none'}; start one, or give --avd")
+        return running[0]
+
+    def record_trailing(self, variables: dict[str, str]) -> Path:
+        """Runs the trailing test alone, with the emulator's screen recorded around it, and pulls
+        the recording here."""
+        serial = self.serial()
+        self.env["ANDROID_SERIAL"] = serial
+        say(f"driving the emulator {serial}")
+        remote = "/sdcard/aspen-trailing.mp4"
+        recorder = None
+        try:
+            for port in (PORTS.api, PORTS.voice, HELPER_PORT):
+                adb("reverse", f"tcp:{port}", f"tcp:{port}", serial=serial)
+            adb("shell", "rm", "-f", remote, serial=serial)
+            recorder = subprocess.Popen([str(sdk() / "platform-tools" / "adb"), "-s", serial, "shell", "screenrecord",
+                                         "--time-limit", "120", remote], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(2)
+            say("recording the emulator while the hole moves")
+            arguments = [f"-Pandroid.testInstrumentationRunnerArguments.{name}={value}"
+                         for name, value in {**variables, "ASPEN_CALL_TRAILING": "1"}.items()]
+            code = self.gradle(":app:connectedDebugAndroidTest",
+                               f"-Pandroid.testInstrumentationRunnerArguments.class={ANDROID_TRAILING_TEST}",
+                               *arguments, log=WORK / "trailing-test.log")
+            adb("shell", "pkill", "-INT", "screenrecord", serial=serial)
+            recorder.wait(timeout=30)
+            recorder = None
+            logcat = adb("logcat", "-d", serial=serial, timeout=120)
+            if code != 0 or "recorded the picture" not in logcat:
+                raise Failed(f"the trailing test did not run (exit {code}); see {WORK / 'trailing-test.log'}")
+            recording = WORK / "trailing-android.mp4"
+            adb("pull", remote, str(recording), serial=serial, timeout=120)
+            return recording
+        finally:
+            if recorder is not None:
+                recorder.kill()
+            for port in (PORTS.api, PORTS.voice, HELPER_PORT):
+                adb("reverse", "--remove", f"tcp:{port}", serial=serial)
+            if self.emulator is not None:
+                self.emulator.stop()
+
+    def run(self, variables: dict[str, str]) -> None:
+        serial = self.serial()
         # Everything from here drives that emulator alone: a phone plugged in is never touched.
         self.env["ANDROID_SERIAL"] = serial
         say(f"driving the emulator {serial}")
@@ -454,6 +548,8 @@ def main() -> None:
     parser.add_argument("--bin", type=Path, required=True, help="the directory holding the binaries")
     parser.add_argument("--build", action="store_true", help="build the engine, its bindings, and (on iOS) the app and tests first")
     parser.add_argument("--start-services", action="store_true", help="docker compose up the services first")
+    parser.add_argument("--record-trailing", action="store_true",
+                        help="record the screen while a hole moves instead of running the checks (see the module's doc)")
     ios = parser.add_argument_group("ios")
     ios.add_argument("--mac", default="aspen-mac", help="the Mac, as ssh names it")
     ios.add_argument("--worktree", default="~/aspen-native-calls", help="this repository's worktree on the Mac")
@@ -494,14 +590,19 @@ def main() -> None:
                      lambda: stack.status("POST", f"/channels/{channel}/voice/join", {}, ann["sessionToken"]) == 200, 90)
             second = Second(stack.base, channel, bob, tone_path)
             server = helper(second, bob["userId"])
+            variables = {
+                "ASPEN_CALL_API": stack.base,
+                "ASPEN_CALL_CHANNEL": channel,
+                "ASPEN_CALL_USER_ID": ann["userId"],
+                "ASPEN_CALL_REFRESH_TOKEN": ann["refreshToken"],
+                "ASPEN_CALL_HELPER": f"http://127.0.0.1:{HELPER_PORT}",
+            }
             try:
-                platform.run({
-                    "ASPEN_CALL_API": stack.base,
-                    "ASPEN_CALL_CHANNEL": channel,
-                    "ASPEN_CALL_USER_ID": ann["userId"],
-                    "ASPEN_CALL_REFRESH_TOKEN": ann["refreshToken"],
-                    "ASPEN_CALL_HELPER": f"http://127.0.0.1:{HELPER_PORT}",
-                })
+                if args.record_trailing:
+                    recording = platform.record_trailing(variables)
+                    say(f"recorded {recording}; measure it with scripts/measure_video_trailing.py")
+                else:
+                    platform.run(variables)
             finally:
                 second.leave()
                 server.shutdown()

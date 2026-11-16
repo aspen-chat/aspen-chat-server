@@ -4,7 +4,10 @@
  * simulator or emulator). Joins the call with a WAV played as the microphone, prints `connected` once the
  * call is on, then answers each line read: `report` prints the page's `CallReport` as one line
  * of JSON, `loudness` the loudest sample its audio slots carried over a second (the page's
- * `loudness`, since the browser's own level statistics read zero), and `leave` leaves and exits.
+ * `loudness`, since the browser's own level statistics read zero), `show` starts showing others'
+ * video (`showVideo`), `camera on` and `camera off` turn Chromium's fake camera on and off,
+ * `sample <user>` prints a `CameraSample` of that user's camera as the page plays it (or `null`),
+ * each printing `ok` or the JSON, and `leave` leaves and exits.
  *
  * ASPEN_CALL_SECOND='{"base": …, "channel": …, "session": <session>, "tone": "tone.wav"}' tsx calls/second.ts
  */
@@ -75,6 +78,26 @@ for await (const line of lines) {
     console.log(JSON.stringify(await report()));
   } else if (line.trim() === "loudness") {
     console.log(JSON.stringify(await page.evaluate(() => window.aspenCall?.loudness() ?? 0)));
+  } else if (line.trim() === "show") {
+    await page.evaluate(() => {
+      window.aspenCall?.showVideo();
+    });
+    console.log("ok");
+  } else if (line.trim() === "camera on") {
+    await page.evaluate(() => window.aspenCall?.startCamera());
+    console.log("ok");
+  } else if (line.trim() === "camera off") {
+    await page.evaluate(() => {
+      window.aspenCall?.stopCamera();
+    });
+    console.log("ok");
+  } else if (line.startsWith("sample ")) {
+    const user = line.slice("sample ".length).trim();
+    console.log(
+      JSON.stringify(
+        await page.evaluate((who) => window.aspenCall?.cameraSample(who) ?? null, user),
+      ),
+    );
   } else if (line.trim() === "leave") {
     break;
   }

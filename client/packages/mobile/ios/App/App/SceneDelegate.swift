@@ -8,9 +8,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         window = UIWindow(windowScene: windowScene)
-        // The scene builds the window itself rather than from the storyboard, so the web view
-        // controller is made here: the app's own, which registers the app's plugins.
-        window?.rootViewController = MainViewController()
+        // The scene builds the window itself rather than from the storyboard, so the root is made
+        // here: the app's own, with the web view controller, which registers the app's plugins,
+        // over the call's video.
+        window?.rootViewController = RootViewController()
         window?.makeKeyAndVisible()
 
         SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)

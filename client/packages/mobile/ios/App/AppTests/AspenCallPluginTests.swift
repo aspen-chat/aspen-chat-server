@@ -10,22 +10,32 @@ import XCTest
 /// loudspeaker and the receiver and reads the session's route, joins a channel's call against a
 /// real deployment and watches the engine's snapshots reach the page (as far as the simulator's
 /// CallKit takes a call: the start action joins, and its daemon ends the call, which the page
-/// sees too), mutes outside a call, and reports whether the page's Web Audio runs while the
-/// call's audio session is active. `scripts/check_mobile_call.py` runs it with `CallEngineTests`
-/// and gives it the same environment; without it, the join is skipped.
+/// sees too), mutes outside a call, reports whether the page's Web Audio runs while the call's
+/// audio session is active, and then, the engine the plugin made joined directly (the simulator's
+/// CallKit holds no call), drives the video from the page: lists the cameras, turns the camera
+/// on (in software, `SyntheticVideoCapturer`) and sees its source in the snapshots, reports a
+/// hole for the preview and hears its shape back, moves to the other camera, watches a second
+/// participant's camera from a browser and hears its shape, has the system's picture in picture
+/// started on it and hears `pip`, has malformed video commands refused by name, and turns the
+/// camera off. `scripts/check_mobile_call.py` runs it with `CallEngineTests` and gives it the
+/// same environment; without it, the join is skipped.
 final class AspenCallPluginTests: XCTestCase {
     private var keptPushState: String?
     private var webView: WKWebView!
+    private var bridgeViewController: MainViewController!
+    private var helper: URL?
 
     /// What the page recorded under `window.__aspenCallTest`: the plugin's events, each `state`
     /// one read as the engine's JSON with its origin beside, and each command's outcome by name.
     private static let recorder = """
     (() => {
       const plugin = window.Capacitor.registerPlugin("AspenCall");
-      const record = { states: [], routes: [], results: {} };
+      const record = { states: [], routes: [], shapes: [], pips: [], results: {} };
       window.__aspenCallTest = record;
       plugin.addListener("state", (published) => record.states.push({ ...JSON.parse(published.state), origin: published.origin }));
       plugin.addListener("routes", (routes) => record.routes.push(routes));
+      plugin.addListener("shape", (shape) => record.shapes.push(shape));
+      plugin.addListener("pip", (pip) => record.pips.push(pip));
       window.__aspenCallRun = (id, method, options) => {
         void plugin[method](options).then(
           (value) => { record.results[id] = { ok: value === undefined ? null : value }; },
@@ -39,15 +49,21 @@ final class AspenCallPluginTests: XCTestCase {
     override func setUp() async throws {
         try await super.setUp()
         continueAfterFailure = false
-        webView = try await MainActor.run {
+        // The simulator's own audio unit aborts the process when initialized, so the engines the
+        // plugin makes run on an audio device in software, and the camera on a capturer in
+        // software, the simulator having none.
+        CallEngine.peerConnections = CallPeerConnections(tracks: CallEngine.tracks, audioDevice: ToneAudioDevice())
+        CallEngine.camera.makeCapturer = { SyntheticVideoCapturer() }
+        (webView, bridgeViewController) = try await MainActor.run {
             let windows = UIApplication.shared.connectedScenes
                 .compactMap { $0 as? UIWindowScene }
                 .flatMap(\.windows)
-            guard let root = windows.first(where: \.isKeyWindow)?.rootViewController ?? windows.first?.rootViewController,
+            guard let root = windows.first(where: \.isKeyWindow)?.rootViewController as? RootViewController
+                    ?? windows.first?.rootViewController as? RootViewController,
                   let webView = Self.webView(under: root.view) else {
                 throw XCTSkip("the app's web view is not up")
             }
-            return webView
+            return (webView, root.web)
         }
         // The page's Capacitor is up once the shell's script has run.
         try await untilTrue("the page's Capacitor is up", seconds: 30) {
@@ -62,6 +78,13 @@ final class AspenCallPluginTests: XCTestCase {
             _ = PushStateStore.save(json: keptPushState)
         } else {
             PushStateStore.remove()
+        }
+        if let helper {
+            var request = URLRequest(url: helper.appendingPathComponent("second-participant/leave"))
+            request.httpMethod = "POST"
+            let done = expectation(description: "the browser is told to leave")
+            URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
+            wait(for: [done], timeout: 10)
         }
         super.tearDown()
     }
@@ -200,8 +223,195 @@ final class AspenCallPluginTests: XCTestCase {
         let fresh = try await run("state", ["origin": origin])
         let freshState = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try XCTUnwrap(fresh["state"] as? String).utf8)) as? [String: Any])
         XCTAssertEqual(freshState["revision"] as? Int, revisions.last, "a fresh read is the latest published")
-        print("call-plugin-test: the page read the idle snapshot and the routes \(listed.map { "\($0["kind"] ?? "")\($0["inUse"] as? Bool == true ? " (in use)" : "")" }); chose the loudspeaker (route \(onLoudspeaker)) and the receiver (route \(onReceiver), the simulator having no receiver port); muted and unmuted outside the call; web audio with the call's session active: \(audioReport); joined \(channel) through the system, the page hearing \(revisions.count) snapshots in order (\(revisions.first ?? 0)…\(revisions.last ?? 0)), joining then \(after["status"] as? String ?? "?")")
+
+        // Video through the bridge. The simulator's CallKit holds no call, so the engine the
+        // plugin made for the page is joined directly, as the engine's own proof does, the test
+        // standing in for `didActivate`; the page then drives the camera, the holes, and the
+        // watching, and hears the shapes and the picture in picture back.
+        guard let helperAddress = ProcessInfo.processInfo.environment["ASPEN_CALL_HELPER"], !helperAddress.isEmpty else {
+            throw XCTSkip("ASPEN_CALL_HELPER is not set")
+        }
+        let helper = try XCTUnwrap(URL(string: helperAddress))
+        self.helper = helper
+        let pluginFound = await MainActor.run { bridgeViewController.bridge?.plugin(withName: "AspenCall") as? AspenCallPlugin }
+        let plugin = try XCTUnwrap(pluginFound)
+        let engine = await MainActor.run { plugin.engine(at: origin) }
+        try engine.audio.configureForCall()
+        engine.audio.activated(session)
+        defer { engine.audio.deactivated(session) }
+        engine.engine.setMicrophone(track: engine.audio.openMicrophone())
+        let directFrom = try await states().count
+        engine.engine.join(channel: channel)
+        defer { engine.engine.leave() }
+        let connected = try await untilState("the direct join connects", seconds: 40) { snapshot in
+            snapshot["status"] as? String == "connected" && (snapshot["revision"] as? Int ?? 0) > (revisions.last ?? 0)
+        }
+        XCTAssertEqual((connected["grants"] as? [String: Any])?["camera"] as? Bool, true, "the channel lets the user use a camera")
+
+        // The cameras, as the system (here the capturer in software) lists them, each facing a way.
+        let listedCameras = try await run("cameras", [:])
+        let cameras = try XCTUnwrap(listedCameras["cameras"] as? [[String: Any]])
+        XCTAssertEqual(cameras.map { $0["id"] as? String }, [SyntheticVideoCapturer.front.id, SyntheticVideoCapturer.back.id])
+        XCTAssertEqual(cameras.map { $0["facing"] as? String }, ["front", "back"])
+
+        // The camera on from the page: the plugin opens the default (front) camera and the engine
+        // sends it, which the snapshot shows as a source; the page then reports a hole for its
+        // preview, mirrored, and hears the picture's shape back, upright: the capturer's 320 by 240
+        // frames at 90 degrees, which the track's source turns itself once the encoder wants them
+        // turned (no orientation extension being negotiated), so the preview is 240 by 320 either
+        // way; the preview's layer lies in the hole.
+        let opened = try await run("startCamera", ["origin": origin, "device": NSNull()])
+        XCTAssertEqual(opened["device"] as? String, SyntheticVideoCapturer.front.id)
+        XCTAssertEqual(opened["facing"] as? String, "front")
+        let sendingCamera = try await untilState("the camera is a source", seconds: 20) { snapshot in
+            ((snapshot["sources"] as? [[String: Any]]) ?? []).contains { $0["source"] as? String == "camera" && $0["live"] as? Bool == true }
+        }
+        let selfSurface = try XCTUnwrap(((sendingCamera["sources"] as? [[String: Any]]) ?? []).first { $0["source"] as? String == "camera" }?["track"] as? String)
+        let selfBox: [String: Any] = ["x": 8, "y": 16, "width": 120, "height": 160]
+        let selfTile: [String: Any] = [
+            "tile": "self", "surface": selfSurface, "rect": selfBox, "visible": true, "mirrored": true, "cover": true,
+            "fullScreen": false, "pictureInPicture": false,
+        ]
+        _ = try await run("setTiles", ["tiles": [selfTile]])
+        let selfShape = try await untilShape("the preview's shape reaches the page", seconds: 15) { $0["surface"] as? String == selfSurface }
+        XCTAssertEqual(selfShape["width"] as? Int, 240)
+        XCTAssertEqual(selfShape["height"] as? Int, 320)
+        let selfDrawnAt = await MainActor.run { CallEngine.video.frame(ofTile: "self") }
+        XCTAssertEqual(selfDrawnAt, CGRect(x: 8, y: 16, width: 120, height: 160))
+        let switched = try await run("switchCamera", ["origin": origin, "device": SyntheticVideoCapturer.back.id])
+        XCTAssertEqual(switched["device"] as? String, SyntheticVideoCapturer.back.id)
+        XCTAssertEqual(switched["facing"] as? String, "back")
+
+        // A second participant from a browser, showing video and sending Chromium's fake camera:
+        // the page asks the engine to watch it, the snapshot shows the video's track, the page
+        // reports a hole for it marked for the picture in picture, hears its shape, and hears the
+        // system start and stop the picture in picture on it.
+        let second = try await post(helper.appendingPathComponent("second-participant"))
+        let bob = try XCTUnwrap(second["user"] as? String)
+        _ = try await post(helper.appendingPathComponent("second-participant/show-video"))
+        _ = try await post(helper.appendingPathComponent("second-participant/camera/start"))
+        _ = try await run("setWatched", ["origin": origin, "video": [["user": bob, "source": "camera"]]])
+        let watching = try await untilState("the browser's camera is received", seconds: 30) { snapshot in
+            ((snapshot["videos"] as? [[String: Any]]) ?? []).contains { $0["user"] as? String == bob && $0["source"] as? String == "camera" }
+        }
+        let remoteSurface = try XCTUnwrap(((watching["videos"] as? [[String: Any]]) ?? []).first { $0["user"] as? String == bob }?["track"] as? String)
+        let remoteTile: [String: Any] = [
+            "tile": "remote", "surface": remoteSurface, "rect": ["x": 0, "y": 200, "width": 320, "height": 240], "visible": true,
+            "mirrored": false, "cover": false, "fullScreen": false, "pictureInPicture": true,
+        ]
+        _ = try await run("setTiles", ["tiles": [selfTile, remoteTile]])
+        let remoteShape = try await untilShape("the browser's camera's shape reaches the page", seconds: 20) { $0["surface"] as? String == remoteSurface }
+        XCTAssertGreaterThan(remoteShape["width"] as? Int ?? 0, 0)
+        XCTAssertEqual(remoteShape["rotation"] as? Int, 0)
+        // The picture in picture needs a device: the simulator's AVKit says it is not supported.
+        let pip = CallEngine.video.pictureInPicture
+        let pictureInPicture: String
+        if CallPictureInPicture.isSupported {
+            try await untilTrue("the picture in picture is possible", seconds: 10) { await MainActor.run { pip.isPossible } }
+            await MainActor.run { pip.start() }
+            _ = try await untilPip("the page hears the picture in picture start", seconds: 15) { $0["active"] as? Bool == true }
+            await MainActor.run { pip.stop() }
+            _ = try await untilPip("the page hears the picture in picture stop", seconds: 15) { $0["active"] as? Bool == false }
+            pictureInPicture = "heard the picture in picture start and stop"
+        } else {
+            pictureInPicture = "the system here supports no picture in picture (the simulator), so that is the device's to show"
+        }
+        try await untilTrue("the browser decodes the camera", seconds: 20) {
+            (try? await self.browserVideoFrames(helper)) ?? 0 > 10
+        }
+
+        // Malformed video commands are refused by name.
+        let badWatch = try await run("setWatched", ["origin": origin, "video": [["user": bob, "source": "microphone"]]], expectingError: true)
+        XCTAssertTrue(badWatch.contains("source"), badWatch)
+        let badTile = try await run("setTiles", ["tiles": [["tile": "t", "surface": "s"]]], expectingError: true)
+        XCTAssertTrue(badTile.contains("rect"), badTile)
+
+        // The camera off from the page: the source leaves the snapshot and the capture stops.
+        _ = try await run("stopCamera", ["origin": origin])
+        _ = try await untilState("the camera leaves the sources", seconds: 15) { snapshot in
+            (snapshot["revision"] as? Int ?? 0) > (sendingCamera["revision"] as? Int ?? 0)
+                && !((snapshot["sources"] as? [[String: Any]]) ?? []).contains { $0["source"] as? String == "camera" }
+        }
+        XCTAssertFalse(CallEngine.camera.isOn)
+        _ = try await run("setTiles", ["tiles": []])
+        _ = try await run("leave", ["origin": origin])
+        _ = try await untilState("the leave reaches the page", seconds: 15) { snapshot in
+            (snapshot["revision"] as? Int ?? 0) > (watching["revision"] as? Int ?? 0) && snapshot["status"] as? String == "idle"
+        }
+        let direct = try await states().dropFirst(directFrom).compactMap { $0["revision"] as? Int }
+        XCTAssertEqual(direct, direct.sorted(), "snapshots arrive in revision order: \(direct)")
+        print("call-plugin-test: the page read the idle snapshot and the routes \(listed.map { "\($0["kind"] ?? "")\($0["inUse"] as? Bool == true ? " (in use)" : "")" }); chose the loudspeaker (route \(onLoudspeaker)) and the receiver (route \(onReceiver), the simulator having no receiver port); muted and unmuted outside the call; web audio with the call's session active: \(audioReport); joined \(channel) through the system, the page hearing \(revisions.count) snapshots in order (\(revisions.first ?? 0)…\(revisions.last ?? 0)), joining then \(after["status"] as? String ?? "?"); then, the engine joined directly, listed \(cameras.count) cameras, turned the camera on (\(opened["device"] as? String ?? "?"), facing \(opened["facing"] as? String ?? "?")), heard its preview's shape \(selfShape["width"] ?? 0)×\(selfShape["height"] ?? 0) for a hole at \(selfDrawnAt.map { "\($0)" } ?? "?"), moved to \(switched["device"] as? String ?? "?"), watched \(bob)'s camera (shape \(remoteShape["width"] ?? 0)×\(remoteShape["height"] ?? 0)), \(pictureInPicture), had bad video commands refused, turned the camera off, and left")
     }
+
+    /// How far the native picture trails the page while a hole moves, for judging by eye: the page
+    /// hides its own content, draws a red-bordered box, and moves it across the screen and back,
+    /// three passes of 200 points in 800 ms each (about four points a frame), reporting the box's
+    /// inside as a hole every animation frame as the app's `nativeVideo.ts` does, with the camera
+    /// (in software) drawn in it; `scripts/check_mobile_call.py --record-trailing` records the
+    /// simulator's screen around it, and the recording is frame-stepped (`ios-app.md`, Video).
+    /// Runs only with `ASPEN_CALL_TRAILING` set, since it is a recording, not a check.
+    func testPictureFollowsAMovingHole() async throws {
+        guard ProcessInfo.processInfo.environment["ASPEN_CALL_TRAILING"] == "1" else {
+            throw XCTSkip("ASPEN_CALL_TRAILING is not set")
+        }
+        let camera = CallEngine.camera
+        let surface: TrackId = try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.main.async {
+                camera.start(device: nil, origin: "trailing") { result in
+                    switch result {
+                    case .success(let opened): continuation.resume(returning: opened.track)
+                    case .failure(let failure): continuation.resume(throwing: failure)
+                    }
+                }
+            }
+        }
+        defer { DispatchQueue.main.async { camera.stop() } }
+        let script = Self.trailingScript.replacingOccurrences(of: "SURFACE", with: quoted(surface))
+        let done = try await evaluateAsync("return await " + script)
+        XCTAssertEqual(done as? String, "done")
+        await MainActor.run { CallEngine.video.apply([]) }
+        print("call-plugin-test: recorded the picture following a moving hole")
+    }
+
+    private static let trailingScript = """
+
+    (async () => {
+      const plugin = window.Capacitor.registerPlugin("AspenCall");
+      const root = document.getElementById("root");
+      if (root) root.style.display = "none";
+      for (const node of [document.documentElement, document.body]) node.style.background = "transparent";
+      const box = document.createElement("div");
+      box.id = "aspen-trailing";
+      Object.assign(box.style, { position: "fixed", top: "300px", left: "20px", width: "160px", height: "120px", boxSizing: "border-box", border: "2px solid #ff0000", zIndex: "99999", pointerEvents: "none" });
+      document.body.append(box);
+      const report = () => {
+        const r = box.getBoundingClientRect();
+        void plugin.setTiles({ tiles: [{ tile: "trailing", surface: SURFACE, rect: { x: r.left + 2, y: r.top + 2, width: r.width - 4, height: r.height - 4 }, visible: true, mirrored: false, cover: true, fullScreen: false, pictureInPicture: false }] });
+      };
+      report();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      // Three passes across 200 px, each 800 ms, about four pixels a frame at sixty frames a second.
+      const start = performance.now();
+      const passes = 3, pass = 800;
+      await new Promise((resolve) => {
+        const step = (now) => {
+          const t = Math.min(passes, (now - start) / pass);
+          const within = t - Math.floor(t);
+          const forward = Math.floor(t) % 2 === 0;
+          box.style.left = `${20 + 200 * (forward ? within : 1 - within)}px`;
+          report();
+          if (t < passes) requestAnimationFrame(step); else resolve();
+        };
+        requestAnimationFrame(step);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      box.remove();
+      if (root) root.style.display = "";
+      for (const node of [document.documentElement, document.body]) node.style.background = "";
+      await plugin.setTiles({ tiles: [] });
+      return "done";
+    })()
+    """
 
     // MARK: Helpers
 
@@ -311,6 +521,51 @@ final class AspenCallPluginTests: XCTestCase {
 
     private func latestRoutes() async throws -> [String: Any]? {
         try await evaluate("window.__aspenCallTest.routes.at(-1) ?? null") as? [String: Any]
+    }
+
+    /// The first `shape` event the page recorded of which `holds`, waiting for it up to `seconds`.
+    private func untilShape(_ what: String, seconds: Double, holds: @escaping ([String: Any]) -> Bool) async throws -> [String: Any] {
+        try await untilRecorded(what, in: "shapes", seconds: seconds, holds: holds)
+    }
+
+    /// The first `pip` event the page recorded of which `holds`, waiting for it up to `seconds`.
+    private func untilPip(_ what: String, seconds: Double, holds: @escaping ([String: Any]) -> Bool) async throws -> [String: Any] {
+        try await untilRecorded(what, in: "pips", seconds: seconds, holds: holds)
+    }
+
+    private func untilRecorded(_ what: String, in list: String, seconds: Double, holds: @escaping ([String: Any]) -> Bool) async throws -> [String: Any] {
+        let deadline = Date().addingTimeInterval(seconds)
+        while true {
+            let evaluated = try await evaluate("window.__aspenCallTest.\(list)")
+            let recorded = try XCTUnwrap(evaluated as? [[String: Any]])
+            if let found = recorded.first(where: holds) {
+                return found
+            }
+            if Date() > deadline {
+                XCTFail("\(what) did not happen within \(seconds) s: \(recorded)")
+                throw Stopped()
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
+    private func post(_ url: URL) async throws -> [String: Any] {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 60
+        let (data, response) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200, String(decoding: data, as: UTF8.self))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    /// How many video frames the browser's connection has decoded, from the helper's report of it.
+    private func browserVideoFrames(_ helper: URL) async throws -> Int {
+        let (data, _) = try await URLSession.shared.data(from: helper.appendingPathComponent("second-participant/report"))
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let streams = try XCTUnwrap(report["streams"] as? [[String: Any]])
+        return streams
+            .filter { $0["direction"] as? String == "inbound" && $0["kind"] as? String == "video" }
+            .reduce(0) { $0 + (($1["framesDecoded"] as? NSNumber)?.intValue ?? 0) }
     }
 
     /// The first snapshot the page recorded of which `holds`, waiting for it up to `seconds`.

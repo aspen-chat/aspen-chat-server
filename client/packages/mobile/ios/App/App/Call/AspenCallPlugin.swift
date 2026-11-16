@@ -7,13 +7,17 @@ import Foundation
 /// page names by its origin, made on first use and kept for the process, whose snapshots are
 /// published to the page as `state` events and answered afresh by `state`, each the JSON the
 /// engine writes of its state (`call_bridge_schema.json`), handed on untouched beside the
-/// deployment's origin, and the one set of routes the device's call plays through, published as
-/// `routes` events. Joining asks the system
-/// for the microphone first: granted, the microphone is opened and given to the engine; refused,
-/// the engine is given none and fails the join itself where the channel lets the user speak
-/// (`errorKind` `microphone`), as the web's call does when the browser refuses it. The join
-/// itself, leaving, and muting go through `CallEngine` and so the system's call (`CallSystem`).
-/// Everything runs on the main queue, where the engine's assembly and the routes live.
+/// deployment's origin, the one set of routes the device's call plays through, published as
+/// `routes` events, and the call's video: the cameras (`CallCamera`), the holes the page reports
+/// for the pictures (`setTiles`, laid out by `CallVideo`), each picture's shape back as a `shape`
+/// event, and the system's picture in picture as `pip` events. Joining asks the system for the
+/// microphone first: granted, the microphone is opened and given to the engine; refused, the
+/// engine is given none and fails the join itself where the channel lets the user speak
+/// (`errorKind` `microphone`), as the web's call does when the browser refuses it. `startCamera`
+/// asks for the camera the same way and rejects with the code `denied`, `none`, or `failed`
+/// (`CallCameraFailure`) when none opens. The join itself, leaving, and muting go through
+/// `CallEngine` and so the system's call (`CallSystem`). Everything runs on the main queue, where
+/// the engine's assembly, the routes, the camera, and the video live.
 @objc(AspenCallPlugin)
 public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "AspenCallPlugin"
@@ -33,12 +37,20 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "routes", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setRoute", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearRoute", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "cameras", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "startCamera", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "switchCamera", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopCamera", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearCameraError", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setWatched", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setTiles", returnType: CAPPluginReturnPromise),
     ]
 
-    /// One deployment's engine and the subscription that publishes its snapshots.
+    /// One deployment's engine and the subscriptions that publish its snapshots and follow them.
     private final class Held {
         let engine: CallEngine
         var snapshots: CallSnapshots.Subscription?
+        var camera: CallSnapshots.Subscription?
 
         init(engine: CallEngine) {
             self.engine = engine
@@ -48,11 +60,19 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
     /// Engines by the deployment's origin as `CallCredentials` keys accounts, without a trailing slash.
     private var engines: [String: Held] = [:]
     private var routes: CallRoutes.Subscription?
+    private var shapes: CallVideo.Subscription?
+    private var pictureInPicture: CallVideo.Subscription?
 
     override public func load() {
         DispatchQueue.main.async {
             self.routes = CallEngine.routes.listen { [weak self] snapshot in
                 self?.notifyListeners("routes", data: Self.routesData(snapshot))
+            }
+            self.shapes = CallEngine.video.listenShapes { [weak self] shape in
+                self?.notifyListeners("shape", data: Self.shapeData(shape))
+            }
+            self.pictureInPicture = CallEngine.video.listenPictureInPicture { [weak self] active in
+                self?.notifyListeners("pip", data: ["active": active])
             }
         }
     }
@@ -75,8 +95,8 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
     /// The deployment's engine, made on first use. Call on the main queue. A debuggable build
     /// lets the engine reach a development deployment's voice servers over plain HTTP at this
     /// machine's own addresses, as the web client's development build does; a release build
-    /// never does.
-    private func engine(at origin: String) -> CallEngine {
+    /// never does. Internal so the bridge's proof can drive the engine the page's commands reach.
+    func engine(at origin: String) -> CallEngine {
         if let held = engines[origin] {
             return held.engine
         }
@@ -85,8 +105,25 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         held.snapshots = made.snapshots.listenJSON { [weak self] json in
             self?.notifyListeners("state", data: Self.published(json, origin: origin))
         }
+        held.camera = made.snapshots.listen { state in
+            Self.cameraFollows(state, origin: origin)
+        }
         engines[origin] = held
         return made
+    }
+
+    /// The camera is on only while its engine sends it: the call ending, or the voice server
+    /// refusing the camera, stops the capture, so the light goes off with the picture.
+    private static func cameraFollows(_ state: CallState, origin: String) {
+        let camera = CallEngine.camera
+        guard camera.isOn, camera.origin == origin else {
+            return
+        }
+        let ended = state.status == .idle || state.status == .failed
+        let refused = state.sourceRefused?.source == .camera
+        if ended || refused {
+            camera.stop()
+        }
     }
 
     private static var debuggable: Bool {
@@ -254,6 +291,174 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         withEngine(call) { engine in
             engine.engine.clearStateRefusal()
         }
+    }
+
+    // MARK: Video
+
+    /// The phone's cameras, each with its facing as the system says; the user is asked for the
+    /// camera as one opens, not here.
+    @objc func cameras(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            call.resolve(["cameras": CallEngine.camera.devices.map(Self.cameraData)])
+        }
+    }
+
+    /// Opens the camera `device` names (the phone's default for `null`) and gives the engine its
+    /// track to send, once the system has answered for the camera; resolves with the camera
+    /// opened and its facing (`OpenedCamera` in `nativeCall.ts`), or rejects with the code
+    /// `denied`, `none`, or `failed`.
+    @objc func startCamera(_ call: CAPPluginCall) {
+        guard let origin = origin(of: call) else {
+            return
+        }
+        let device = call.getString("device")
+        CallCamera.requestAccess { granted in
+            DispatchQueue.main.async {
+                guard granted else {
+                    call.reject("the camera is not allowed", CallCameraFailure.denied.rawValue)
+                    return
+                }
+                let engine = self.engine(at: origin)
+                CallEngine.camera.start(device: device, origin: origin) { result in
+                    switch result {
+                    case .success(let opened):
+                        engine.engine.startSource(source: .camera, track: opened.track)
+                        call.resolve(Self.openedData(opened.device))
+                    case .failure(let failure):
+                        call.reject(Self.cameraFailureText(failure), failure.rawValue)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Moves a camera that is on to the one `device` names, the track and the engine's sender
+    /// unchanged; resolves with the camera opened and its facing.
+    @objc func switchCamera(_ call: CAPPluginCall) {
+        guard let origin = origin(of: call) else {
+            return
+        }
+        let device = call.getString("device")
+        DispatchQueue.main.async {
+            guard CallEngine.camera.isOn else {
+                call.reject("the camera is off", CallCameraFailure.failed.rawValue)
+                return
+            }
+            CallEngine.camera.start(device: device, origin: origin) { result in
+                switch result {
+                case .success(let opened):
+                    call.resolve(Self.openedData(opened.device))
+                case .failure(let failure):
+                    call.reject(Self.cameraFailureText(failure), failure.rawValue)
+                }
+            }
+        }
+    }
+
+    /// Stops sending the camera and turns it off.
+    @objc func stopCamera(_ call: CAPPluginCall) {
+        withEngine(call) { engine in
+            engine.engine.stopSource(source: .camera)
+            CallEngine.camera.stop()
+        }
+    }
+
+    /// Dismisses the voice server's refusal of a source.
+    @objc func clearCameraError(_ call: CAPPluginCall) {
+        withEngine(call) { engine in
+            engine.engine.clearSourceRefusal()
+        }
+    }
+
+    /// Asks the engine to watch `video`, each a user's screen or camera.
+    @objc func setWatched(_ call: CAPPluginCall) {
+        guard let listed = call.getArray("video") else {
+            call.reject("video is required")
+            return
+        }
+        var video: [WatchedVideo] = []
+        for entry in listed {
+            guard let entry = entry as? [String: Any], let user = entry["user"] as? String, !user.isEmpty,
+                  let source = Self.videoSource(entry["source"] as? String) else {
+                call.reject("each video names a user and a source, screen or camera")
+                return
+            }
+            video.append(WatchedVideo(user: user, source: source))
+        }
+        withEngine(call) { engine in
+            engine.engine.setWatched(video: video)
+        }
+    }
+
+    /// The two pictures a participant sends, as the page names them.
+    private static func videoSource(_ name: String?) -> MediaSource? {
+        switch name {
+        case "screen": return .screen
+        case "camera": return .camera
+        default: return nil
+        }
+    }
+
+    /// Where the page's holes are (`TileReport` in `nativeCall.ts`): the pictures are laid out
+    /// there, in the web view's points, which the page's CSS pixels are.
+    @objc func setTiles(_ call: CAPPluginCall) {
+        guard let listed = call.getArray("tiles") else {
+            call.reject("tiles is required")
+            return
+        }
+        var tiles: [CallVideoTile] = []
+        for entry in listed {
+            guard let entry = entry as? [String: Any], let tile = Self.tile(entry) else {
+                call.reject("each tile names its tile, surface, rect, and how it is drawn")
+                return
+            }
+            tiles.append(tile)
+        }
+        DispatchQueue.main.async {
+            CallEngine.video.apply(tiles)
+            call.resolve()
+        }
+    }
+
+    static func tile(_ entry: [String: Any]) -> CallVideoTile? {
+        guard let tile = entry["tile"] as? String, !tile.isEmpty,
+              let surface = entry["surface"] as? String, !surface.isEmpty,
+              let rect = entry["rect"] as? [String: Any],
+              let x = (rect["x"] as? NSNumber)?.doubleValue, let y = (rect["y"] as? NSNumber)?.doubleValue,
+              let width = (rect["width"] as? NSNumber)?.doubleValue, let height = (rect["height"] as? NSNumber)?.doubleValue,
+              let visible = entry["visible"] as? Bool, let mirrored = entry["mirrored"] as? Bool,
+              let cover = entry["cover"] as? Bool, let fullScreen = entry["fullScreen"] as? Bool,
+              let pictureInPicture = entry["pictureInPicture"] as? Bool,
+              x.isFinite, y.isFinite, width.isFinite, height.isFinite, width >= 0, height >= 0
+        else {
+            return nil
+        }
+        return CallVideoTile(
+            tile: tile, surface: surface, rect: CGRect(x: x, y: y, width: width, height: height), visible: visible,
+            mirrored: mirrored, cover: cover, fullScreen: fullScreen, pictureInPicture: pictureInPicture)
+    }
+
+    /// `CallCameraDevice` as the page reads it (`PhoneCamera` in `nativeCall.ts`).
+    static func cameraData(_ device: CallCameraDevice) -> JSObject {
+        ["id": device.id, "label": device.label ?? NSNull(), "facing": device.facing?.rawValue ?? NSNull()]
+    }
+
+    /// The camera opened as the page reads it (`OpenedCamera` in `nativeCall.ts`).
+    static func openedData(_ device: CallCameraDevice) -> JSObject {
+        ["device": device.id, "facing": device.facing?.rawValue ?? NSNull()]
+    }
+
+    static func cameraFailureText(_ failure: CallCameraFailure) -> String {
+        switch failure {
+        case .denied: return "the camera is not allowed"
+        case .none: return "the phone has no such camera"
+        case .failed: return "the camera would not start"
+        }
+    }
+
+    /// `CallVideoShape` as the page reads it (`PictureShape` in `nativeCall.ts`).
+    static func shapeData(_ shape: CallVideoShape) -> JSObject {
+        ["surface": shape.surface, "width": shape.width, "height": shape.height, "rotation": shape.rotation]
     }
 
     // MARK: State
