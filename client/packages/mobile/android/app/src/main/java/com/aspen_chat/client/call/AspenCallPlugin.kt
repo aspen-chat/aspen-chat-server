@@ -3,7 +3,6 @@ package com.aspen_chat.client.call
 import android.Manifest
 import android.app.PictureInPictureParams
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
@@ -31,10 +30,12 @@ import org.json.JSONObject
 
 /**
  * The web view's way to the call engine (`AspenCall` in the app's `src/api/nativeCall.ts`, which
- * iOS's plugin of the same name answers too): a `CallEngine` for each deployment the page names by
- * its origin, made on first use and kept for the process, whose snapshots are published to the
- * page as `state` events and answered afresh by `state`, each the JSON the engine writes of its
- * state (`call_bridge_schema.json`), handed on untouched beside the deployment's origin, the
+ * iOS's plugin of the same name answers too): the engine of each deployment the page names by its
+ * origin, from `CallEngines`, the process's one engine per deployment, which a DM's call ringing
+ * the phone drives too, so a ring answered from the lock screen is the call the page then shows;
+ * its snapshots are published to the page as `state` events and answered afresh by `state`, each
+ * the JSON the engine writes of its state (`call_bridge_schema.json`), handed on untouched beside
+ * the deployment's origin, the
  * routes of the call Telecom holds, published as `routes` events, and the call's video: the
  * cameras (`CallCamera`), the holes the page reports for the pictures (`setTiles`, laid out by
  * `CallVideo` in the activity's `video_container` behind the web view, attached as the plugin
@@ -59,16 +60,16 @@ import org.json.JSONObject
     ],
 )
 class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
-    /** One deployment's engine and the subscriptions that publish its snapshots and routes and follow them. */
-    private class Held(val engine: CallEngine) {
+    /** The subscriptions that publish one deployment's engine's snapshots and routes and follow them. */
+    private class Followed {
         var snapshots: CallSnapshots.Subscription? = null
         var routes: CallRoutes.Subscription? = null
         var camera: CallSnapshots.Subscription? = null
     }
 
     private val main = Handler(Looper.getMainLooper())
-    /** Engines by the deployment's origin as `CallCredentials` keys accounts, without a trailing slash. Main thread. */
-    private val engines = HashMap<String, Held>()
+    /** The engines the page has named, by the deployment's origin without a trailing slash, each followed from its first naming. Main thread. */
+    private val followed = HashMap<String, Followed>()
     private var shapes: CallVideo.Subscription? = null
 
     /**
@@ -105,20 +106,20 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
     }
 
     /**
-     * The deployment's engine, made on first use. Main thread. A debuggable build lets the engine
-     * reach a development deployment's voice servers over plain HTTP at this device's own
-     * addresses, as the web client's development build does; a release build never does.
+     * The deployment's engine (`CallEngines.forOrigin`), followed for the page from the first time
+     * the page names its origin: its snapshots go to the page as `state` events, its routes as
+     * `routes` events, and the camera follows its call. Main thread.
      */
     private fun engineAt(origin: String): CallEngine {
-        engines[origin]?.let { return it.engine }
-        val debuggable = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
-        val made = CallEngine(context, origin, loopbackPlainText = debuggable)
-        val held = Held(made)
-        held.snapshots = made.snapshots.listenJson { json -> notifyListeners("state", published(json, origin)) }
-        held.routes = made.routes.listen { notifyListeners("routes", routesData()) }
-        held.camera = made.snapshots.listen { state -> cameraFollows(state, origin) }
-        engines[origin] = held
-        return made
+        val engine = CallEngines.forOrigin(context, origin)
+        if (origin !in followed) {
+            val following = Followed()
+            following.snapshots = engine.snapshots.listenJson { json -> notifyListeners("state", published(json, origin)) }
+            following.routes = engine.routes.listen { notifyListeners("routes", routesData()) }
+            following.camera = engine.snapshots.listen { state -> cameraFollows(state, origin) }
+            followed[origin] = following
+        }
+        return engine
     }
 
     /**
@@ -457,15 +458,16 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
 
     /**
      * Plays the call through the first route of `kind`, held for the call: asked of every
-     * deployment's engine, since the one in a call is the one Telecom lists routes for, and an
-     * engine not yet in one keeps the wish for when it is.
+     * deployment's engine the process has made, since the one in a call is the one Telecom lists
+     * routes for, and an engine not yet in one keeps the wish for when it is.
      */
     @PluginMethod
     fun setRoute(call: PluginCall) {
         val kind = routeKind(call.getString("kind")) ?: return call.reject("kind must be a route kind")
         main.post {
-            val listed = engines.values.any { it.engine.routes.routes.isNotEmpty() }
-            val taken = engines.values.map { it.engine.routes.select(kind) }
+            val engines = CallEngines.all()
+            val listed = engines.any { it.routes.routes.isNotEmpty() }
+            val taken = engines.map { it.routes.select(kind) }
             if (listed && taken.none { it }) {
                 call.reject("the device has no route of the kind ${call.getString("kind")}")
             } else {
@@ -478,8 +480,8 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
     @PluginMethod
     fun clearRoute(call: PluginCall) {
         main.post {
-            for (held in engines.values) {
-                held.engine.routes.clear()
+            for (engine in CallEngines.all()) {
+                engine.routes.clear()
             }
             call.resolve()
         }
@@ -491,7 +493,8 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
      * and the kind chosen. Main thread.
      */
     private fun routesData(): JSObject {
-        val inCall = engines.values.map { it.engine.routes }.firstOrNull { it.routes.isNotEmpty() }
+        val engines = CallEngines.all()
+        val inCall = engines.map { it.routes }.firstOrNull { it.routes.isNotEmpty() }
         val routes = JSArray()
         for (route in inCall?.routes ?: emptyList()) {
             routes.put(
@@ -501,7 +504,7 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
                     .put("inUse", route.current),
             )
         }
-        val chosen = (inCall ?: engines.values.firstOrNull()?.engine?.routes)?.chosen
+        val chosen = (inCall ?: engines.firstOrNull()?.routes)?.chosen
         return JSObject()
             .put("routes", routes)
             .put("hasReceiver", CallRoutes.hasEarpiece(context))

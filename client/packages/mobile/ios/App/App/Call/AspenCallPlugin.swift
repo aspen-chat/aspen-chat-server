@@ -3,11 +3,13 @@ import Capacitor
 import Foundation
 
 /// The web view's way to the call engine (`AspenCall` in the app's `src/api/nativeCall.ts`,
-/// which Android's plugin of the same name answers too): a `CallEngine` for each deployment the
-/// page names by its origin, made on first use and kept for the process, whose snapshots are
-/// published to the page as `state` events and answered afresh by `state`, each the JSON the
-/// engine writes of its state (`call_bridge_schema.json`), handed on untouched beside the
-/// deployment's origin, the one set of routes the device's call plays through, published as
+/// which Android's plugin of the same name answers too): the engine of each deployment the page
+/// names by its origin, from `CallEngines`, the process's one engine per deployment, which a DM's
+/// call ringing the phone drives too, so a ring answered from the lock screen is the call the page
+/// then shows; its snapshots are published to the page as `state` events and answered afresh by
+/// `state`, each the JSON the engine writes of its state (`call_bridge_schema.json`), handed on
+/// untouched beside the deployment's origin, the one set of routes the device's call plays
+/// through, published as
 /// `routes` events, and the call's video: the cameras (`CallCamera`), the holes the page reports
 /// for the pictures (`setTiles`, laid out by `CallVideo`), each picture's shape back as a `shape`
 /// event, and the system's picture in picture as `pip` events. Joining asks the system for the
@@ -46,19 +48,15 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "setTiles", returnType: CAPPluginReturnPromise),
     ]
 
-    /// One deployment's engine and the subscriptions that publish its snapshots and follow them.
-    private final class Held {
-        let engine: CallEngine
+    /// The subscriptions that publish one deployment's engine's snapshots and follow them.
+    private final class Followed {
         var snapshots: CallSnapshots.Subscription?
         var camera: CallSnapshots.Subscription?
-
-        init(engine: CallEngine) {
-            self.engine = engine
-        }
     }
 
-    /// Engines by the deployment's origin as `CallCredentials` keys accounts, without a trailing slash.
-    private var engines: [String: Held] = [:]
+    /// The engines the page has named, by the deployment's origin without a trailing slash, each
+    /// followed from its first naming.
+    private var followed: [String: Followed] = [:]
     private var routes: CallRoutes.Subscription?
     private var shapes: CallVideo.Subscription?
     private var pictureInPicture: CallVideo.Subscription?
@@ -92,24 +90,23 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         return String(trimmed)
     }
 
-    /// The deployment's engine, made on first use. Call on the main queue. A debuggable build
-    /// lets the engine reach a development deployment's voice servers over plain HTTP at this
-    /// machine's own addresses, as the web client's development build does; a release build
-    /// never does. Internal so the bridge's proof can drive the engine the page's commands reach.
+    /// The deployment's engine (`CallEngines.shared.forOrigin`), followed for the page from the
+    /// first time the page names its origin: its snapshots go to the page as `state` events, and
+    /// the camera follows its call. Call on the main queue. Internal so the bridge's proof can
+    /// drive the engine the page's commands reach.
     func engine(at origin: String) -> CallEngine {
-        if let held = engines[origin] {
-            return held.engine
+        let engine = CallEngines.shared.forOrigin(origin)
+        if followed[origin] == nil {
+            let following = Followed()
+            following.snapshots = engine.snapshots.listenJSON { [weak self] json in
+                self?.notifyListeners("state", data: Self.published(json, origin: origin))
+            }
+            following.camera = engine.snapshots.listen { state in
+                Self.cameraFollows(state, origin: origin)
+            }
+            followed[origin] = following
         }
-        let made = CallEngine(origin: origin, loopbackPlainText: Self.debuggable)
-        let held = Held(engine: made)
-        held.snapshots = made.snapshots.listenJSON { [weak self] json in
-            self?.notifyListeners("state", data: Self.published(json, origin: origin))
-        }
-        held.camera = made.snapshots.listen { state in
-            Self.cameraFollows(state, origin: origin)
-        }
-        engines[origin] = held
-        return made
+        return engine
     }
 
     /// The camera is on only while its engine sends it: the call ending, or the voice server
@@ -124,14 +121,6 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         if ended || refused {
             camera.stop()
         }
-    }
-
-    private static var debuggable: Bool {
-        #if DEBUG
-            return true
-        #else
-            return false
-        #endif
     }
 
     /// Runs `body` with the call's engine on the main queue, resolving the call after it.

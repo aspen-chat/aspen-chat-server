@@ -33,5 +33,9 @@ object CallEngines {
     @Synchronized
     fun existing(origin: String): CallEngine? = engines[trimmed(origin)]
 
+    /** Every engine made so far, in no order; at most one of them is in a call, the one Telecom holds. */
+    @Synchronized
+    fun all(): List<CallEngine> = engines.values.toList()
+
     fun trimmed(origin: String): String = origin.trimEnd('/')
 }
