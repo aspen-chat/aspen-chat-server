@@ -26,6 +26,7 @@ use crate::peer_connection::{
     TrackId, TransceiverId,
 };
 use crate::signalling::{Incoming, Signalling, signalling_url};
+use crate::sounds::Sounds;
 use crate::state::{
     AudioSlot, CallObserver, CallState, CallStatus, EndedReason, ErrorKind, LocalSource,
     Participant, Refusal, RemoteVideo, SessionEndReason, ShareAudio, SourceRefusal,
@@ -396,6 +397,8 @@ pub struct Call {
     internal_rx: Option<mpsc::UnboundedReceiver<Internal>>,
     state: CallState,
     published: CallState,
+    /// What the call's sounds are derived from, between one published snapshot and the next.
+    sounds: Sounds,
     /// Counts up with every join, rejoin, leave, and end, so the result of work started before
     /// is let go.
     generation: u64,
@@ -435,6 +438,7 @@ impl Call {
             internal_rx: Some(internal_rx),
             state: CallState::default(),
             published: CallState::default(),
+            sounds: Sounds::default(),
             generation: 0,
             step: 0,
             next_id: 0,
@@ -475,8 +479,11 @@ impl Call {
         self.state.revision = self.published.revision;
         if self.state != self.published {
             self.state.revision += 1;
-            self.published = self.state.clone();
+            let before = std::mem::replace(&mut self.published, self.state.clone());
             self.observer.state_changed(&self.published);
+            for cue in self.sounds.cues(&before, &self.published) {
+                self.observer.play_sound(cue);
+            }
         }
     }
 

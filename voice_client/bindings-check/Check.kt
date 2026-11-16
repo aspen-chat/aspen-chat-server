@@ -38,10 +38,16 @@ class Snapshots : CallObserver {
     val seen = CopyOnWriteArrayList<CallState>()
     /** The JSON beside each snapshot, which the apps hand their web views. */
     val json = CopyOnWriteArrayList<String>()
+    /** The call's sounds as the engine cues them; a join the API server refuses cues none. */
+    val sounds = CopyOnWriteArrayList<SoundCue>()
 
     override fun stateChanged(state: CallState, json: String) {
         seen.add(state)
         this.json.add(json)
+    }
+
+    override fun playSound(cue: SoundCue) {
+        sounds.add(cue)
     }
 }
 
@@ -75,6 +81,8 @@ fun main() {
     check(snapshots.seen.zipWithNext().all { (before, after) -> after.revision == before.revision + 1uL }) {
         "revisions count up by one: ${snapshots.seen.map { it.revision }}"
     }
+    check(snapshots.sounds.isEmpty()) { "a refused join cues no sound: ${snapshots.sounds}" }
+    check(SoundCue.values().size == 7) { "every cue crosses: ${SoundCue.values().toList()}" }
     engine.close()
     println("ok: ${snapshots.seen.size} snapshots, the last revision ${state.revision}, status ${state.status}")
 }

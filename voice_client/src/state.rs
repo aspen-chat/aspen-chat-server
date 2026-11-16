@@ -8,6 +8,7 @@
 //! client's code generator: camelCase names, as every schema the client is generated from.
 
 use crate::peer_connection::TrackId;
+use crate::sounds::SoundCue;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -227,7 +228,10 @@ impl Default for CallState {
     }
 }
 
-/// Reads each snapshot as the call changes. Called on the engine's thread; keep it short.
+/// Reads each snapshot as the call changes, and plays each of the call's sounds as the change
+/// cues it (`sounds`), after the snapshot it follows from. Called on the engine's thread; keep
+/// it short.
 pub trait CallObserver: Send + Sync {
     fn state_changed(&self, state: &CallState);
+    fn play_sound(&self, cue: SoundCue);
 }

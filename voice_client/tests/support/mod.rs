@@ -19,6 +19,7 @@ use voice_client::peer_connection::{
     PeerConnectionError, PeerConnectionFactory, PeerConnectionObserver, SendEncoding,
     SenderParameters, SessionDescription, SignalingState, StatsOf, TrackId, TransceiverId,
 };
+use voice_client::sounds::SoundCue;
 use voice_client::state::{CallObserver, CallState, CallStatus};
 use voice_client::transport::{
     Http, HttpRequest, HttpResponse, Received, Socket, SocketFactory, TransportError,
@@ -765,12 +766,17 @@ impl PeerConnectionFactory for FakePeerConnections {
 
 // --- The observer and the world ---------------------------------------------------------------------
 
+/// Every snapshot published, and every sound cued, each in order.
 #[derive(Default)]
-pub struct Snapshots(pub Mutex<Vec<CallState>>);
+pub struct Snapshots(pub Mutex<Vec<CallState>>, pub Mutex<Vec<SoundCue>>);
 
 impl CallObserver for Snapshots {
     fn state_changed(&self, state: &CallState) {
         self.0.lock().unwrap().push(state.clone());
+    }
+
+    fn play_sound(&self, cue: SoundCue) {
+        self.1.lock().unwrap().push(cue);
     }
 }
 
@@ -837,6 +843,11 @@ impl World {
 
     pub fn microphone() -> TrackId {
         TrackId(MICROPHONE.to_string())
+    }
+
+    /// Every sound cued since the last call.
+    pub fn sounds(&self) -> Vec<SoundCue> {
+        std::mem::take(&mut *self.snapshots.1.lock().unwrap())
     }
 
     /// Gives the microphone and joins `channel`, letting the offer be asked for and the

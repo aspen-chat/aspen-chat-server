@@ -54,10 +54,16 @@ final class Snapshots: CallObserver {
     let seen = Locked<[CallState]>([])
     /// The JSON beside each snapshot, which the apps hand their web views.
     let json = Locked<[String]>([])
+    /// The call's sounds as the engine cues them; a join the API server refuses cues none.
+    let sounds = Locked<[SoundCue]>([])
 
     func stateChanged(state: CallState, json: String) {
         seen.with { $0.append(state) }
         self.json.with { $0.append(json) }
+    }
+
+    func playSound(cue: SoundCue) {
+        sounds.with { $0.append(cue) }
     }
 }
 
@@ -91,6 +97,8 @@ func run() async throws -> String {
     let seen = snapshots.seen.with { $0 }
     precondition(seen.last == state, "the observer saw the latest snapshot")
     precondition(zip(seen, seen.dropFirst()).allSatisfy { $1.revision == $0.revision + 1 }, "revisions count up by one")
+    precondition(snapshots.sounds.with { $0 }.isEmpty, "a refused join cues no sound")
+    precondition(SoundCue.allCases.count == 7, "every cue crosses: \(SoundCue.allCases)")
     // `engine` is released on return, which leaves the call and waits for the engine's thread.
     return "ok: \(seen.count) snapshots, the last revision \(state.revision), status \(state.status)"
 }

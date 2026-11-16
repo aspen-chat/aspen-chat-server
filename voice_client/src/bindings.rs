@@ -35,6 +35,7 @@ use crate::peer_connection::{
     self, Configuration, ConnectionState, Direction, MediaKind, PeerConnectionObserver,
     SendEncoding, SessionDescription, SignalingState, StatsOf, TrackId, TransceiverId,
 };
+use crate::sounds::SoundCue;
 use crate::state::{self, CallState, SessionEndReason};
 use crate::transport::{self, Received};
 use async_trait::async_trait;
@@ -93,10 +94,13 @@ pub struct Grants {
 }
 
 /// Reads each snapshot as the call changes, as the record and as the same snapshot's JSON, for
-/// the app's web view. Called on the engine's thread; keep it short.
+/// the app's web view, and plays each of the call's sounds as a change cues it
+/// (`sounds::SoundCue`), after the snapshot it follows from, through the call's own audio path.
+/// Called on the engine's thread; keep it short.
 #[uniffi::export(with_foreign)]
 pub trait CallObserver: Send + Sync {
     fn state_changed(&self, state: CallState, json: String);
+    fn play_sound(&self, cue: SoundCue);
 }
 
 struct ForeignObserver(Arc<dyn CallObserver>);
@@ -104,6 +108,10 @@ struct ForeignObserver(Arc<dyn CallObserver>);
 impl state::CallObserver for ForeignObserver {
     fn state_changed(&self, state: &state::CallState) {
         self.0.state_changed(state.clone(), state_json(state));
+    }
+
+    fn play_sound(&self, cue: SoundCue) {
+        self.0.play_sound(cue);
     }
 }
 

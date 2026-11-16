@@ -6,6 +6,7 @@
 
 use crate::call::{Call, Command, Options, Platform};
 use crate::peer_connection::TrackId;
+use crate::sounds::SoundCue;
 use crate::state::{CallObserver, CallState, SessionEndReason};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -22,6 +23,10 @@ impl CallObserver for Keeping {
     fn state_changed(&self, state: &CallState) {
         *self.latest.lock().expect("state lock") = state.clone();
         self.observer.state_changed(state);
+    }
+
+    fn play_sound(&self, cue: SoundCue) {
+        self.observer.play_sound(cue);
     }
 }
 
