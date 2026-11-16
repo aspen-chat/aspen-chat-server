@@ -197,6 +197,17 @@ See [Device credentials](device-credentials.md).
   server checks a solution with two hashes, so made-up solutions cost it nothing. A memory-hard
   puzzle would narrow what a GPU gains, but every check of a solution would then cost the server as
   much as one try costs the client.
+- **Solved across every core.** The number of tries a puzzle takes is geometrically distributed: a
+  million on average at twenty bits, but often two or three. On one core that is a second on a
+  desktop and several on a phone, in front of the sign-in screen. Workers searching side by side cut
+  both the mean and the spread by their number. Each takes a contiguous range rather than every
+  _n_th nonce, so a worker is told its task once and the solver it runs is the one the page's thread
+  runs; with 2^50 or more nonces in each range, none comes near its end. At eight workers the
+  hashing alone takes under a tenth of a second on a desktop, and each more costs a module load and
+  its memory.
+- **A failed worker leaves the rest at work.** A worker can fail to start (a content security
+  policy, memory) or die. The others' ranges hold answers as surely as its did, so the solve waits
+  on them, and falls back to the page's thread only once none is left.
 - **Challenges and credentials are stateless.** Every API server checks them with the shared key and
   asks no one, so presenting a credential adds no lookup to a request. Only a challenge's use is
   remembered, until it expires, so that one solution earns one credential.

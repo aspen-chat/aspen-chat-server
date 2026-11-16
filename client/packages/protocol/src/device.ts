@@ -225,6 +225,30 @@ export function solvePuzzleRange(
   return null;
 }
 
+/** The nonces from `from`, inclusive, to `to`, exclusive: what one of several solvers searches. */
+export interface NonceRange {
+  from: number;
+  to: number;
+}
+
+/**
+ * Splits the nonces from 0 to `Number.MAX_SAFE_INTEGER` (every nonce a JavaScript number holds
+ * exactly, and the server reads any `u64`) into `parts` contiguous ranges that do not overlap and
+ * leave none out, for that many solvers to search side by side. Each is at least 2^50 nonces long
+ * for any `parts` up to 8, far more than any puzzle up to `MAX_PUZZLE_BITS` needs, so a solver
+ * reaching the end of its range has in practice met an answer long before.
+ */
+export function puzzleRanges(parts: number): NonceRange[] {
+  if (!Number.isInteger(parts) || parts < 1) {
+    throw new RangeError(`cannot split the nonces into ${String(parts)} ranges`);
+  }
+  const span = Math.floor(Number.MAX_SAFE_INTEGER / parts);
+  return Array.from({ length: parts }, (_, part) => ({
+    from: part * span,
+    to: part === parts - 1 ? Number.MAX_SAFE_INTEGER : (part + 1) * span,
+  }));
+}
+
 /** How many nonces `solvePuzzle` tries between letting other work run. */
 const SLICE = 1 << 15;
 

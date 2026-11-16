@@ -24,11 +24,13 @@ own.
 
 - `AspenClient` earns one when a server answers `deviceCredentialRequired`, then sends the request
   again. Requests refused together share one earning.
-- Earning one means solving a puzzle of about a million SHA-256 hashes, a second or two on a phone.
-  `solveInWorker` runs it in a worker so the screen does not freeze, and on the page's thread, a
-  slice at a time, where workers cannot run.
+- Earning one means solving a puzzle of about a million SHA-256 hashes, seconds on a phone.
+  `solveInWorkers` runs it across workers, one per core up to eight, each searching its own range of
+  nonces, so the screen does not freeze and the cores share the work; it runs on the page's thread,
+  a slice at a time, where workers cannot run or every one of them failed. See
+  [Device credentials](../../../docs/architecture/sign-in-and-security/device-credentials.md).
 - A deployment cannot make it work without end. A puzzle harder than `MAX_PUZZLE_BITS` (28) is not
-  started, and one not solved in `PUZZLE_TIME_LIMIT_MS` (a minute) is stopped, ending the worker.
+  started, and one not solved in `PUZZLE_TIME_LIMIT_MS` (a minute) is stopped, ending the workers.
   The requests waiting on it then fail with `DevicePuzzleRefusedError`, as if the deployment could
   not be reached, so the earning always settles.
 - The first request a new install makes waits for it: the welcome's read of `GET /deployment`, or
