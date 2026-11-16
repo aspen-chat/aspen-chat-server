@@ -130,6 +130,30 @@ pub struct SourceInfo {
     pub paused: bool,
 }
 
+/// What a participant may do in a call besides listen and watch: their channel permissions
+/// Speak, Share screen, Use camera, and Transfer files. A join token carries them as they stood
+/// when it was issued (`token::JoinClaims`), and the API server sends them again whenever they
+/// change, which the client hears as `GrantsChanged`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Grants {
+    pub speak: bool,
+    pub share_screen: bool,
+    pub camera: bool,
+    pub transfer_files: bool,
+}
+
+impl Grants {
+    /// Whether they may send media from `source`.
+    pub fn may_send(&self, source: MediaSource) -> bool {
+        match source {
+            MediaSource::Microphone => self.speak,
+            MediaSource::Screen | MediaSource::ScreenAudio => self.share_screen,
+            MediaSource::Camera => self.camera,
+        }
+    }
+}
+
 /// A video a client shows, and wants a section for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -503,7 +527,7 @@ pub enum ServerMessage {
     /// last of these. Its sources no longer allowed are already stopped, and its file offers
     /// withdrawn when it may no longer transfer files; it stops sending them.
     GrantsChanged {
-        grants: crate::token::Grants,
+        grants: Grants,
     },
     /// A request could not be honoured; the connection stays open unless `fatal`.
     Error {

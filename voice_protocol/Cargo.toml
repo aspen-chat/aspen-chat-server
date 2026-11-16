@@ -5,18 +5,29 @@ edition = "2024"
 license = "MPL-2.0"
 description = "What the API server and the voice servers agree on: the join token and the control messages they exchange over NATS."
 
+[features]
+default = ["control", "token"]
+# The reports and commands the servers exchange over NATS.
+control = ["dep:aspen_limits"]
+# The join token: signing it, and checking it against a key or a shared secret.
+token = ["dep:base64", "dep:hmac", "dep:aws-lc-rs", "dep:sha2"]
+
 [dependencies]
-aspen_limits = { version = "0.1.0", path = "../limits" }
-base64 = "0.22.1"
-hmac = "0.12.1"
-aws-lc-rs = "1.13"
+aspen_limits = { version = "0.1.0", path = "../limits", optional = true }
+base64 = { version = "0.22.1", optional = true }
+hmac = { version = "0.12.1", optional = true }
+aws-lc-rs = { version = "1.13", optional = true }
 schemars = { version = "1.2.1", features = ["uuid1"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
-sha2 = "0.10.9"
+sha2 = { version = "0.10.9", optional = true }
 strum = { version = "0.28.0", features = ["derive"] }
 thiserror = "2.0.18"
 uuid = { version = "1.16.0", features = ["serde", "v7"] }
+
+[[example]]
+name = "fake_voice_server"
+required-features = ["control", "token"]
 
 [dev-dependencies]
 async-nats = { version = "0.50.0", features = ["aws-lc-rs", "jetstream", "server_2_10", "server_2_11"], default-features = false }

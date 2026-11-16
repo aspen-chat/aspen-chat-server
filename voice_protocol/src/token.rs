@@ -63,31 +63,8 @@ impl JoinClaims {
     }
 }
 
-/// What a participant may do in a call besides listen and watch: their channel permissions
-/// Speak, Share screen, Use camera, and Transfer files. A join token carries them as they stood
-/// when it was issued, and the API server sends them again whenever they change.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "camelCase")]
-pub struct Grants {
-    pub speak: bool,
-    pub share_screen: bool,
-    pub camera: bool,
-    pub transfer_files: bool,
-}
-
-impl Grants {
-    /// Whether they may send media from `source`.
-    pub fn may_send(&self, source: crate::signal::MediaSource) -> bool {
-        use crate::signal::MediaSource;
-        match source {
-            MediaSource::Microphone => self.speak,
-            MediaSource::Screen | MediaSource::ScreenAudio => self.share_screen,
-            MediaSource::Camera => self.camera,
-        }
-    }
-}
+/// The grants a token carries are the ones the client is told of (`signal::GrantsChanged`).
+pub use crate::signal::Grants;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TokenError {

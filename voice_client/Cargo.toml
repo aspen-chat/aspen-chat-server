@@ -26,4 +26,8 @@ thiserror = "2.0.18"
 tokio = { version = "1.44.2", features = ["macros", "rt", "sync", "time"] }
 uniffi = "0.32.2"
 uuid = { version = "1.16.0", features = ["serde", "v7"] }
-voice_protocol = { version = "0.1.0", path = "../voice_protocol" }
+voice_protocol = { version = "0.1.0", path = "../voice_protocol", default-features = false }
+
+[dev-dependencies]
+# The scenarios run on a paused clock (`start_paused`, `tokio::time::advance`).
+tokio = { version = "1.44.2", features = ["test-util"] }
