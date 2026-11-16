@@ -206,7 +206,13 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
       { ann: annJoined.signalling, bob: bobJoined.signalling },
     );
 
-    // Each hears the other's microphone on an audio slot, decoded with little made up.
+    // Each hears the other's microphone on an audio slot, decoded with little made up, measured
+    // over four seconds from when sound first arrives at both, which can be a second or more
+    // after both connect on a busy machine; how long it took is in the detail.
+    const hearing = (r: CallReport) => received(r, "audio").some((s) => s.packets > 0);
+    const waited = Date.now();
+    await Promise.all([until(ann, hearing), until(bob, hearing)]);
+    const startedAfterMs = Date.now() - waited;
     const [annBefore, bobBefore] = await Promise.all([report(ann), report(bob)]);
     await sleep(4000);
     const [annAfter, bobAfter] = await Promise.all([report(ann), report(bob)]);
@@ -217,7 +223,7 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
       ["Ann hears Bob", annBefore, annAfter, annLoudness],
       ["Bob hears Ann", bobBefore, bobAfter, bobLoudness],
     ] as const) {
-      const sound = { ...heard(before, after), peak };
+      const sound = { ...heard(before, after), peak, startedAfterMs };
       check(
         who,
         sound.packets > 150 &&
@@ -332,6 +338,7 @@ async function scenario(bobBrowser: "chromium" | "firefox"): Promise<void> {
           answered: again.answered,
           video: received(again, "video"),
         },
+        twoSecondsLater: received(still, "video"),
         ann: await report(ann).then((r) => ({ sections: r.sections, video: sent(r, "video") })),
       },
     );
