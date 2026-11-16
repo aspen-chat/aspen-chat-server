@@ -151,6 +151,30 @@ test.describe("login", () => {
     expect(authorizationSeen.every((h) => h === "Bearer s")).toBe(true);
   });
 
+  test("signs out from the home of someone in no community", async ({ page }) => {
+    await page.route("**/api/v1/auth/login", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: signedIn(),
+      }),
+    );
+    const logouts: unknown[] = [];
+    await page.route("**/api/v1/auth/logout", (route) => {
+      logouts.push(route.request().postDataJSON());
+      return route.fulfill({ status: 204 });
+    });
+    await stubSignedInBackend(page, "kate");
+    await page.goto("/");
+    await page.getByLabel("Username").fill("kate");
+    await page.getByLabel("Password").fill("hunter22");
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "No communities yet" })).toBeVisible();
+    await page.getByRole("button", { name: "Sign out" }).click();
+    await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+    expect(logouts).toEqual([{ refreshToken: "r" }]);
+  });
+
   test("finishes a two-factor sign-in with an authenticator code", async ({ page }) => {
     await page.route("**/api/v1/auth/login", (route) =>
       route.fulfill({
