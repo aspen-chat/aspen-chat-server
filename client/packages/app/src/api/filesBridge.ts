@@ -1,17 +1,23 @@
-import type { FileSink } from "@aspen/protocol";
+import type { FileSink, PickedFile } from "@aspen/protocol";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
 /**
- * The mobile apps' native side of receiving files (`AspenFilesPlugin`, in each): the system's
- * picker chooses where a file goes before it arrives, offering the name it was sent with, and
- * the transfer writes to it by id as it comes. Writes cross the bridge as base64, gathered into
- * pieces of about `PIECE_BYTES` so that the bridge is crossed rarely.
+ * The mobile apps' native side of the files a call sends and receives (`AspenFilesPlugin`, in
+ * each). Receiving: the system's picker chooses where a file goes before it arrives, offering
+ * the name it was sent with, and the file is written to it by id as it comes, by the page
+ * (`write`, in base64, gathered into pieces of about `PIECE_BYTES` so that the bridge is crossed
+ * rarely) or by the native call's engine, which is given the same id (`FileSink.destination`).
+ * Offering: the system's picker chooses a file to offer (`pick`), which the native side holds by
+ * a reference of its own for the engine to read, until `release`; the file's bytes never cross
+ * the bridge.
  */
 interface AspenFilesPlugin {
   create(options: { name: string; mimeType?: string }): Promise<{ id: string | null }>;
   write(options: { id: string; data: string }): Promise<void>;
   close(options: { id: string }): Promise<void>;
   abort(options: { id: string }): Promise<void>;
+  pick(): Promise<{ reference: string; name: string; size: number } | { reference: null }>;
+  release(options: { reference: string }): Promise<void>;
 }
 
 const AspenFiles = registerPlugin<AspenFilesPlugin>("AspenFiles");
@@ -39,7 +45,28 @@ function base64Of(blob: Blob): Promise<string> {
   });
 }
 
-/** Asks where to save `name` through the system picker; `null` when the user backed out. */
+/**
+ * Asks for a file to offer through the system's picker, which the native side then holds by
+ * `reference` for a native call's engine to read; `null` when the user backed out. A picked file
+ * not offered is let go with `nativeReleaseFile`; one offered is let go by the engine.
+ */
+export async function nativePickFile(): Promise<PickedFile | null> {
+  const picked = await AspenFiles.pick();
+  if (picked.reference === null) {
+    return null;
+  }
+  return { reference: picked.reference, name: picked.name, size: picked.size };
+}
+
+/** Lets the native side let go of a picked file that was not offered. */
+export function nativeReleaseFile(reference: string): Promise<void> {
+  return AspenFiles.release({ reference });
+}
+
+/**
+ * Asks where to save `name` through the system picker; `null` when the user backed out. The
+ * sink names the place by `destination`, so a native call's engine can write to it instead.
+ */
 export async function nativeChooseDestination(name: string): Promise<FileSink | null> {
   const { id } = await AspenFiles.create({ name });
   if (id === null) {
@@ -57,6 +84,7 @@ export async function nativeChooseDestination(name: string): Promise<FileSink | 
     await AspenFiles.write({ id, data: await base64Of(piece) });
   };
   return {
+    destination: id,
     async write(chunk) {
       held.push(chunk);
       heldBytes += chunk.byteLength;

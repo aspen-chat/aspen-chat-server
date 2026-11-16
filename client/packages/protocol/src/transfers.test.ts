@@ -297,6 +297,7 @@ describe("FileTransfers", () => {
       { id: OFFER, from: SENDER, name: "notes.bin", size: 200_000, allowDirect: true, own: false },
     ]);
     expect(sender.state.offers[0]?.own).toBe(true);
+    expect(sender.state.failure).toBeNull();
 
     receiver.accept(OFFER, "directPreferred");
     await settle();

@@ -1,5 +1,11 @@
-import type { OfferState, TransferState } from "@aspen/protocol";
-import { ArrowDownIcon, ArrowUpIcon, FileArrowUpIcon, FolderOpenIcon } from "@phosphor-icons/react";
+import type { FileFailure, OfferState, TransferState } from "@aspen/protocol";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  FileArrowUpIcon,
+  FolderOpenIcon,
+  WarningCircleIcon,
+} from "@phosphor-icons/react";
 import { useState } from "react";
 import {
   Button,
@@ -35,9 +41,11 @@ const smallButtonClass = secondaryButtonClass + " px-2 py-1 text-xs";
 
 /**
  * The files of the call the user is in: offering one, what others offer them (not those they
- * blocked), their own offers with the time each has left, and their transfers with progress, a
- * way to cancel each, and, once a file has arrived, a way to save it. `titled` heads it with its
- * own title, which a dialog holding it gives instead.
+ * blocked), their own offers with the time each has left, their transfers with progress, a way
+ * to cancel each, and, once a file has arrived, a way to save it, and a file command that failed
+ * before any transfer came of it (a native call's engine could not open the file or the place,
+ * or the voice server refused it), until dismissed. `titled` heads it with its own title, which a
+ * dialog holding it gives instead.
  */
 export function FilesPanel({ titled = true }: { titled?: boolean }) {
   const m = useMessages();
@@ -48,7 +56,10 @@ export function FilesPanel({ titled = true }: { titled?: boolean }) {
   const { incoming, now } = useIncomingOffers();
   const own = files.offers.filter((offer) => offer.own && offer.expiresAt > now);
   const accepting = incoming.find((offer) => offer.id === receiving);
-  if (!hasFiles(call.canTransfer, incoming.length, files.transfers.length)) {
+  if (
+    !hasFiles(call.canTransfer, incoming.length, files.transfers.length) &&
+    files.failure === null
+  ) {
     return null;
   }
   return (
@@ -75,6 +86,7 @@ export function FilesPanel({ titled = true }: { titled?: boolean }) {
           </Button>
         )}
       </div>
+      {files.failure !== null && <Failure failure={files.failure} />}
       {incoming.length === 0 && own.length === 0 && files.transfers.length === 0 && (
         <p className="text-sm text-ink-muted">{m.files.nothing}</p>
       )}
@@ -139,6 +151,31 @@ function OfferList({ label, children }: { label: string; children: React.ReactNo
 }
 
 const rowClass = "flex items-center gap-3 rounded-md bg-surface-raised px-3 py-2 text-sm";
+
+/** A file command that failed before any transfer came of it, with the reason, until dismissed. */
+function Failure({ failure }: { failure: FileFailure }) {
+  const m = useMessages();
+  const sync = useSync();
+  return (
+    <div role="alert" className={rowClass + " text-danger"}>
+      <WarningCircleIcon size={16} aria-hidden="true" className="shrink-0" />
+      <span className="min-w-0 flex-1">
+        {format(failure.command === "offer" ? m.files.offerFailed : m.files.receiveFailed, {
+          name: failure.name,
+          detail: failure.detail,
+        })}
+      </span>
+      <Button
+        onPress={() => {
+          sync.voice.dismissFileFailure();
+        }}
+        className={smallButtonClass}
+      >
+        {m.files.dismissFailure}
+      </Button>
+    </div>
+  );
+}
 
 function IncomingOffer({
   offer,

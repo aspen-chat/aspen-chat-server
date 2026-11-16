@@ -46,19 +46,132 @@ final class CallPeerConnectionDelegate: NSObject, RTCPeerConnectionDelegate {
         observer.connectionStateChanged(state: CallPeerConnection.connectionState(newState))
     }
 
+    /// A candidate of this connection's own, for the other side of a transfer; the call's own
+    /// connection has none the engine reads.
+    func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+        observer.iceCandidate(candidate: IceCandidate(
+            candidate: candidate.sdp,
+            sdpMid: candidate.sdpMid,
+            sdpMLineIndex: UInt16(clamping: candidate.sdpMLineIndex),
+            usernameFragment: nil
+        ))
+    }
+
+    /// The other side opened a data channel, a transfer's: the engine's observer reads it from
+    /// here on. The channel keeps its delegate weakly, so the wrapper, which the engine holds, is
+    /// the delegate.
+    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
+        let channel = CallDataChannel(dataChannel)
+        channel.attach(observer.dataChannelOpened(channel: channel))
+    }
+
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
+}
+
+/// One data channel as the engine drives it (`DataChannel`), over `RTCDataChannel`, and its
+/// delegate, forwarding to the engine's observer from WebRTC's thread. WebRTC tells of each
+/// change of the buffered amount with the amount before it, so the low mark is read here: the
+/// observer hears `bufferedAmountLow` when the amount falls to the threshold or below from
+/// above. The engine holds this object for the channel's life, which is why it, and not the
+/// weakly held delegate, can be the delegate.
+final class CallDataChannel: NSObject, DataChannel, RTCDataChannelDelegate, @unchecked Sendable {
+    private let channel: RTCDataChannel
+    private let lock = NSLock()
+    private var observer: DataChannelObserver?
+    private var threshold: UInt64 = 0
+
+    init(_ channel: RTCDataChannel) {
+        self.channel = channel
+        super.init()
+    }
+
+    /// Reads the channel from here on, as `observer`.
+    func attach(_ observer: DataChannelObserver) {
+        lock.lock()
+        self.observer = observer
+        lock.unlock()
+        channel.delegate = self
+    }
+
+    private var attached: DataChannelObserver? {
+        lock.lock()
+        defer { lock.unlock() }
+        return observer
+    }
+
+    static func state(_ state: RTCDataChannelState) -> DataChannelState {
+        switch state {
+        case .connecting: return .connecting
+        case .open: return .open
+        case .closing: return .closing
+        case .closed: return .closed
+        @unknown default: return .closed
+        }
+    }
+
+    func sendBinary(data: Data) throws {
+        guard channel.sendData(RTCDataBuffer(data: data, isBinary: true)) else {
+            throw PeerConnectionError.Failed(detail: "the data channel refused the message")
+        }
+    }
+
+    func sendText(text: String) throws {
+        guard channel.sendData(RTCDataBuffer(data: Data(text.utf8), isBinary: false)) else {
+            throw PeerConnectionError.Failed(detail: "the data channel refused the message")
+        }
+    }
+
+    func bufferedAmount() -> UInt64 {
+        channel.bufferedAmount
+    }
+
+    func setBufferedAmountLowThreshold(bytes: UInt64) {
+        lock.lock()
+        threshold = bytes
+        lock.unlock()
+    }
+
+    func state() -> DataChannelState {
+        Self.state(channel.readyState)
+    }
+
+    func closeDataChannel() {
+        channel.close()
+    }
+
+    func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
+        attached?.stateChanged(state: Self.state(dataChannel.readyState))
+    }
+
+    func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
+        guard let observer = attached else { return }
+        if buffer.isBinary {
+            observer.binary(data: buffer.data)
+        } else {
+            observer.text(text: String(decoding: buffer.data, as: UTF8.self))
+        }
+    }
+
+    func dataChannel(_ dataChannel: RTCDataChannel, didChangeBufferedAmount amount: UInt64) {
+        lock.lock()
+        let threshold = self.threshold
+        lock.unlock()
+        // `amount` is what was buffered before the change.
+        if amount > threshold && dataChannel.bufferedAmount <= threshold {
+            attached?.bufferedAmountLow()
+        }
+    }
 }
 
 /// One peer connection as the engine drives it (`PeerConnection`), each method the W3C operation
-/// of its name over `RTCPeerConnection`. Where the two differ:
+/// of its name over `RTCPeerConnection`; a transfer's connection has its data channel
+/// (`CallDataChannel`) and trickles its candidates through the delegate. Where the two differ:
 ///
 /// - `RTCPeerConnection.transceivers` wraps the native transceivers anew on every read, so a
 ///   transceiver is told apart by its sender's id, which WebRTC keeps for its life, and numbered
@@ -292,6 +405,29 @@ final class CallPeerConnection: PeerConnection, @unchecked Sendable {
             connection.setRemoteDescription(sdp, completionHandler: done)
         }
         locked { learn() }
+    }
+
+    func addIceCandidate(candidate: IceCandidate) async throws {
+        let added = RTCIceCandidate(
+            sdp: candidate.candidate,
+            sdpMLineIndex: Int32(clamping: candidate.sdpMLineIndex ?? 0),
+            sdpMid: candidate.sdpMid
+        )
+        try await Self.finished { done in
+            connection.add(added, completionHandler: done)
+        }
+    }
+
+    /// Ordered and reliable, which `RTCDataChannelConfiguration` is unless told otherwise.
+    func createDataChannel(label: String, observer: DataChannelObserver) async throws -> CreatedDataChannel {
+        let configuration = RTCDataChannelConfiguration()
+        configuration.isOrdered = true
+        guard let made = connection.dataChannel(forLabel: label, configuration: configuration) else {
+            throw PeerConnectionError.Failed(detail: "the data channel could not be opened")
+        }
+        let channel = CallDataChannel(made)
+        channel.attach(observer)
+        return CreatedDataChannel(channel: channel)
     }
 
     func localDescription() -> SessionDescription? {

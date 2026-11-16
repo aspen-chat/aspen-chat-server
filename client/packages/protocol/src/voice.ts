@@ -39,6 +39,7 @@ import {
   FileTransfers,
   type FilesState,
   NO_FILES,
+  type PickedFile,
   type TransferMode,
 } from "./transfers";
 import { Signal, VoiceServerError } from "./signalSocket";
@@ -433,8 +434,16 @@ export interface Call {
   acknowledgeEnd(): void;
   /** Shows other participants' video until the function returned is called. */
   showVideo(): () => void;
-  /** Offers a file to everyone else in the call for `validForSeconds`; the offer's id. */
-  offerFile(file: Blob, name: string, allowDirect: boolean, validForSeconds: number): string;
+  /**
+   * Offers a file to everyone else in the call for `validForSeconds`; the offer's id. A browser's
+   * call takes a `Blob`, a native call a `PickedFile` its platform holds; each refuses the other.
+   */
+  offerFile(
+    file: Blob | PickedFile,
+    name: string,
+    allowDirect: boolean,
+    validForSeconds: number,
+  ): string;
   /** Takes back one of the user's offers; transfers already started go on. */
   withdrawOffer(offer: string): void;
   /** Accepts an offer in the transfer mode the user acknowledged, writing it to `sink` when given. */
@@ -443,6 +452,8 @@ export interface Call {
   cancelTransfer(offer: string, peer: string): void;
   /** Forgets a finished transfer, and any file it received. */
   dismissTransfer(offer: string, peer: string): void;
+  /** Clears `files.failure` once the user has seen it. */
+  dismissFileFailure(): void;
   setMuted(muted: boolean): void;
   setDeafened(deafened: boolean): void;
   /** Puts the call on hold, or takes it off, as `VoiceCallState.held` describes. */
@@ -717,7 +728,15 @@ export class VoiceCall implements Call {
    * starts sending on its own, whether or not the user is watching. `allowDirect` lets
    * receivers connect directly, which could expose this device's address to them.
    */
-  offerFile(file: Blob, name: string, allowDirect: boolean, validForSeconds: number): string {
+  offerFile(
+    file: Blob | PickedFile,
+    name: string,
+    allowDirect: boolean,
+    validForSeconds: number,
+  ): string {
+    if (!(file instanceof Blob)) {
+      throw new Error("a browser's call sends a Blob; a PickedFile is a native call's");
+    }
     return this.#files.offer(file, name, allowDirect, validForSeconds);
   }
 
@@ -742,6 +761,11 @@ export class VoiceCall implements Call {
   /** Forgets a finished transfer, and any file it received. */
   dismissTransfer(offer: string, peer: string): void {
     this.#files.dismiss(offer, peer);
+  }
+
+  /** A browser's offers and acceptances cannot fail before a transfer, so there is never one to clear. */
+  dismissFileFailure(): void {
+    // `files.failure` is always `null` here.
   }
 
   setMuted(muted: boolean): void {

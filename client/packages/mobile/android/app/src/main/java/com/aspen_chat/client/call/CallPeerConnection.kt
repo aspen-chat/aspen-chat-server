@@ -3,9 +3,13 @@ package com.aspen_chat.client.call
 import android.content.Context
 import com.aspen_chat.client.voice.Configuration
 import com.aspen_chat.client.voice.ConnectionState
+import com.aspen_chat.client.voice.CreatedDataChannel
 import com.aspen_chat.client.voice.CreatedPeerConnection
+import com.aspen_chat.client.voice.DataChannelObserver
+import com.aspen_chat.client.voice.DataChannelState
 import com.aspen_chat.client.voice.DescriptionKind
 import com.aspen_chat.client.voice.Direction
+import com.aspen_chat.client.voice.IceCandidate
 import com.aspen_chat.client.voice.MediaKind
 import com.aspen_chat.client.voice.PeerConnection
 import com.aspen_chat.client.voice.PeerConnectionException
@@ -18,6 +22,10 @@ import com.aspen_chat.client.voice.SignalingState
 import com.aspen_chat.client.voice.StatsOf
 import com.aspen_chat.client.voice.TrackId
 import com.aspen_chat.client.voice.TransceiverId
+import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
@@ -25,11 +33,9 @@ import kotlin.math.roundToInt
 import org.json.JSONArray
 import org.json.JSONObject
 import org.webrtc.AudioTrack
-import org.webrtc.DataChannel
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
-import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
 import org.webrtc.MediaStreamTrack
@@ -40,6 +46,8 @@ import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
 import org.webrtc.audio.AudioDeviceModule
 import org.webrtc.audio.JavaAudioDeviceModule
+import org.webrtc.DataChannel as WebRtcDataChannel
+import org.webrtc.IceCandidate as WebRtcIceCandidate
 import org.webrtc.PeerConnection as WebRtcPeerConnection
 import org.webrtc.PeerConnectionFactory as WebRtcPeerConnectionFactory
 import org.webrtc.SessionDescription as WebRtcSessionDescription
@@ -110,21 +118,132 @@ class CallPeerConnectionObserver(private val observer: PeerConnectionObserver) :
         observer.connectionStateChanged(CallPeerConnection.connectionState(newState))
     }
 
+    /** A candidate of this connection's own, for the other side of a transfer. */
+    override fun onIceCandidate(candidate: WebRtcIceCandidate) {
+        observer.iceCandidate(
+            IceCandidate(candidate.sdp, candidate.sdpMid, candidate.sdpMLineIndex.toUShort(), null),
+        )
+    }
+
+    /** The other side opened a data channel, a transfer's: the engine's observer reads it from here on. */
+    override fun onDataChannel(dataChannel: WebRtcDataChannel) {
+        val channel = CallDataChannel(dataChannel)
+        channel.attach(observer.dataChannelOpened(channel))
+    }
+
     override fun onSignalingChange(newState: WebRtcPeerConnection.SignalingState) {}
     override fun onIceConnectionChange(newState: WebRtcPeerConnection.IceConnectionState) {}
     override fun onIceConnectionReceivingChange(receiving: Boolean) {}
     override fun onIceGatheringChange(newState: WebRtcPeerConnection.IceGatheringState) {}
-    override fun onIceCandidate(candidate: IceCandidate) {}
-    override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
+    override fun onIceCandidatesRemoved(candidates: Array<out WebRtcIceCandidate>) {}
     override fun onAddStream(stream: MediaStream) {}
     override fun onRemoveStream(stream: MediaStream) {}
-    override fun onDataChannel(dataChannel: DataChannel) {}
     override fun onRenegotiationNeeded() {}
 }
 
 /**
+ * One data channel as the engine drives it (`DataChannel`), over `org.webrtc.DataChannel`, and
+ * its observer, forwarding to the engine's from WebRTC's signalling thread. WebRTC tells of each
+ * change of the buffered amount with the amount before it, so the low mark is read here: the
+ * engine hears `bufferedAmountLow` when the amount falls to the threshold or below from above. A
+ * message's buffer is WebRTC's own and good only within `onMessage`, so its bytes are copied.
+ * Closing disposes the channel, freeing its native side; `state` answers `CLOSED` from then on
+ * and sending refuses. No lock is held while WebRTC is called: each of its methods runs on its
+ * signalling thread and waits for it, and that thread calls the observer, so a lock held across
+ * one would deadlock against a callback taking it. What is shared is atomic instead.
+ */
+class CallDataChannel(private val channel: WebRtcDataChannel) : com.aspen_chat.client.voice.DataChannel, WebRtcDataChannel.Observer {
+    private val observer = AtomicReference<DataChannelObserver?>(null)
+    private val threshold = AtomicLong(0)
+    private val closed = AtomicBoolean(false)
+
+    /** Reads the channel from here on, as `observer`. */
+    fun attach(observer: DataChannelObserver) {
+        this.observer.set(observer)
+        channel.registerObserver(this)
+    }
+
+    override fun sendBinary(data: ByteArray) {
+        send(WebRtcDataChannel.Buffer(ByteBuffer.wrap(data), true))
+    }
+
+    override fun sendText(text: String) {
+        send(WebRtcDataChannel.Buffer(ByteBuffer.wrap(text.toByteArray(Charsets.UTF_8)), false))
+    }
+
+    private fun send(buffer: WebRtcDataChannel.Buffer) {
+        // A disposed channel refuses with `IllegalStateException`, which is a refusal too.
+        val sent = !closed.get() && try { channel.send(buffer) } catch (disposed: IllegalStateException) { false }
+        if (!sent) {
+            throw PeerConnectionException.Failed("the data channel refused the message")
+        }
+    }
+
+    override fun bufferedAmount(): ULong =
+        if (closed.get()) 0uL else try { channel.bufferedAmount().toULong() } catch (disposed: IllegalStateException) { 0uL }
+
+    override fun setBufferedAmountLowThreshold(bytes: ULong) {
+        threshold.set(bytes.toLong())
+    }
+
+    override fun state(): DataChannelState =
+        if (closed.get()) DataChannelState.CLOSED else try { state(channel.state()) } catch (disposed: IllegalStateException) { DataChannelState.CLOSED }
+
+    /**
+     * Closes once: the observer is taken off first, which waits for a callback under way, so no
+     * callback runs on a disposed channel.
+     */
+    override fun closeDataChannel() {
+        if (!closed.compareAndSet(false, true)) {
+            return
+        }
+        channel.unregisterObserver()
+        channel.close()
+        channel.dispose()
+    }
+
+    override fun onBufferedAmountChange(previousAmount: Long) {
+        if (closed.get()) {
+            return
+        }
+        val threshold = threshold.get().toULong()
+        if (previousAmount.toULong() > threshold && channel.bufferedAmount().toULong() <= threshold) {
+            observer.get()?.bufferedAmountLow()
+        }
+    }
+
+    override fun onStateChange() {
+        if (closed.get()) {
+            return
+        }
+        observer.get()?.stateChanged(state(channel.state()))
+    }
+
+    override fun onMessage(buffer: WebRtcDataChannel.Buffer) {
+        val bytes = ByteArray(buffer.data.remaining())
+        buffer.data.get(bytes)
+        val observer = observer.get() ?: return
+        if (buffer.binary) {
+            observer.binary(bytes)
+        } else {
+            observer.text(String(bytes, Charsets.UTF_8))
+        }
+    }
+
+    companion object {
+        fun state(state: WebRtcDataChannel.State): DataChannelState = when (state) {
+            WebRtcDataChannel.State.CONNECTING -> DataChannelState.CONNECTING
+            WebRtcDataChannel.State.OPEN -> DataChannelState.OPEN
+            WebRtcDataChannel.State.CLOSING -> DataChannelState.CLOSING
+            WebRtcDataChannel.State.CLOSED -> DataChannelState.CLOSED
+        }
+    }
+}
+
+/**
  * One peer connection as the engine drives it (`PeerConnection`), each method the W3C operation
- * of its name over `org.webrtc.PeerConnection`. Where the two differ:
+ * of its name over `org.webrtc.PeerConnection`; a transfer's connection has its data channel
+ * (`CallDataChannel`) and trickles its candidates through the observer. Where the two differ:
  *
  * - `getTransceivers()` makes new Java wrappers of the native transceivers on every call and
  *   disposes those it made before, their senders, receivers, and the receivers' tracks with
@@ -351,6 +470,27 @@ class CallPeerConnection(
         val sdp = WebRtcSessionDescription(sdpType(description.kind), description.sdp)
         finished { observer -> connection.setRemoteDescription(observer, sdp) }
         withTransceivers {}
+    }
+
+    override suspend fun addIceCandidate(candidate: IceCandidate) {
+        val added = WebRtcIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex?.toInt() ?: 0, candidate.candidate)
+        val taken = synchronized(lock) { !closed && connection.addIceCandidate(added) }
+        if (!taken) {
+            throw PeerConnectionException.Failed("the candidate was refused")
+        }
+    }
+
+    /** Ordered and reliable, which `DataChannel.Init` is unless told otherwise. */
+    override suspend fun createDataChannel(label: String, observer: DataChannelObserver): CreatedDataChannel {
+        val made = synchronized(lock) {
+            if (closed) {
+                throw PeerConnectionException.Failed("the connection is closed")
+            }
+            connection.createDataChannel(label, WebRtcDataChannel.Init().apply { ordered = true })
+        } ?: throw PeerConnectionException.Failed("the data channel could not be opened")
+        val channel = CallDataChannel(made)
+        channel.attach(observer)
+        return CreatedDataChannel(channel)
     }
 
     override fun localDescription(): SessionDescription? {

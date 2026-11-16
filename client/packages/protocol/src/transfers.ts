@@ -95,11 +95,39 @@ export interface TransferState {
 /**
  * Where a receiver writes a file as it arrives, chosen before the transfer began: a browser's
  * `FileSystemWritableFileStream` fits. `close` keeps what was written; `abort` discards it.
+ * A sink the mobile apps' native side opened names itself by `destination`, the reference the
+ * platform gave the page, which a native call's engine writes to in place of the page.
  */
 export interface FileSink {
   write(chunk: ArrayBuffer): Promise<void>;
   close(): Promise<void>;
   abort(): Promise<void>;
+  readonly destination?: string;
+}
+
+/**
+ * A file the mobile apps' native side holds for a native call's engine to read, by the
+ * reference the platform gave the page (`filesBridge.ts`), with the name and size the picker
+ * read; browsers offer a `Blob` instead.
+ */
+export interface PickedFile {
+  readonly reference: string;
+  readonly name: string;
+  readonly size: number;
+}
+
+/**
+ * A file command that failed before any transfer came of it, which only a native call's engine
+ * can: the picked file or the chosen place could not be opened, or the voice server refused the
+ * offer or the acceptance. Cleared by the next file command, or by `dismissFileFailure`.
+ */
+export interface FileFailure {
+  readonly command: "offer" | "accept";
+  readonly offer: string;
+  /** The file's name, for the panel to name it by. */
+  readonly name: string;
+  /** Why, in the platform's or the voice server's words. */
+  readonly detail: string;
 }
 
 export interface FilesState {
@@ -111,9 +139,17 @@ export interface FilesState {
   readonly links: readonly TransferLink[];
   /** The megabits a second every relayed transfer on this voice server shares; `null` when it does not relay. */
   readonly relayMbps: number | null;
+  /** The file command that failed, until the next; always `null` in a browser, whose offers and acceptances cannot fail here. */
+  readonly failure: FileFailure | null;
 }
 
-export const NO_FILES: FilesState = { offers: [], transfers: [], links: [], relayMbps: null };
+export const NO_FILES: FilesState = {
+  offers: [],
+  transfers: [],
+  links: [],
+  relayMbps: null,
+  failure: null,
+};
 
 /** What the transfers need from the browser, narrowed so they run and are tested without one. */
 export type PeerConnectionFactory = (configuration: RTCConfiguration) => RTCPeerConnection;
@@ -706,6 +742,7 @@ export class FileTransfers {
       ],
       links: this.#links,
       relayMbps: this.#relayMbps,
+      failure: null,
     };
     this.#onChange();
   }

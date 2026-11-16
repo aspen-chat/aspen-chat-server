@@ -607,7 +607,10 @@
     "notPermittedSelf": "It stopped because you can no longer send files in this call.",
     "notPermittedPeer": "It stopped because {handle} can no longer send files in this call.",
     "linksLabel": "Transfers under way",
-    "link": "{sender} is sending a file to {receiver}"
+    "link": "{sender} is sending a file to {receiver}",
+    "offerFailed": "{name} couldn't be offered: {detail}",
+    "receiveFailed": "{name} couldn't be received: {detail}",
+    "dismissFailure": "Dismiss"
   },
   "voice": {
     "listeningOnly": "You can listen here but not speak",

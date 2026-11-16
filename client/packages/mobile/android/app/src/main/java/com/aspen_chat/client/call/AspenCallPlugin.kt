@@ -16,6 +16,7 @@ import com.aspen_chat.client.voice.CallState
 import com.aspen_chat.client.voice.CallStatus
 import com.aspen_chat.client.voice.MediaSource
 import com.aspen_chat.client.voice.SessionEndReason
+import com.aspen_chat.client.voice.TransferMode
 import com.aspen_chat.client.voice.WatchedVideo
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
@@ -40,7 +41,9 @@ import org.json.JSONObject
  * cameras (`CallCamera`), the holes the page reports for the pictures (`setTiles`, laid out by
  * `CallVideo` in the activity's `video_container` behind the web view, attached as the plugin
  * loads), each picture's shape back as a `shape` event, and the activity's picture-in-picture
- * mode as `pip` events (`CallPictureInPictureHost`, which `MainActivity` calls). Joining asks for
+ * mode as `pip` events (`CallPictureInPictureHost`, which `MainActivity` calls). The call's files
+ * go to the engine by the references the `AspenFiles` plugin's pickers put in `FileRegistry`
+ * (`offerFile`, `acceptOffer`), so no file's bytes cross the bridge. Joining asks for
  * `RECORD_AUDIO` first: granted, the microphone is opened and given to the engine; refused, the
  * engine is given none and fails the join itself where the channel lets the user speak
  * (`errorKind` `microphone`), as the web's call does when the browser refuses it. `startCamera`
@@ -251,6 +254,93 @@ class AspenCallPlugin : Plugin(), CallPictureInPictureHost {
     @PluginMethod
     fun clearStateRefusal(call: PluginCall) {
         withEngine(call) { engine -> engine.engine.clearStateRefusal() }
+    }
+
+    // --- Files ------------------------------------------------------------------------------------
+
+    /**
+     * Offers the file the `AspenFiles` plugin's picker chose, which `FileRegistry` holds by
+     * `reference`, under the id the page chose; the engine opens it for its size, and one it
+     * cannot open is the snapshot's `files.failure`.
+     */
+    @PluginMethod
+    fun offerFile(call: PluginCall) {
+        val offer = call.getString("offer")
+        val reference = call.getString("reference")
+        val name = call.getString("name")
+        if (offer.isNullOrEmpty() || reference.isNullOrEmpty() || name.isNullOrEmpty()) {
+            return call.reject("offer, reference, and name are required")
+        }
+        val allowDirect = call.getBoolean("allowDirect") ?: return call.reject("allowDirect is required")
+        val validForSeconds = call.getInt("validForSeconds")
+        if (validForSeconds == null || validForSeconds < 0) {
+            return call.reject("validForSeconds must be a whole number from 0")
+        }
+        withEngine(call) { engine ->
+            engine.engine.offerFile(offer, reference, name, allowDirect, validForSeconds.toUInt())
+        }
+    }
+
+    @PluginMethod
+    fun withdrawOffer(call: PluginCall) {
+        val offer = call.getString("offer")
+        if (offer.isNullOrEmpty()) {
+            return call.reject("offer is required")
+        }
+        withEngine(call) { engine -> engine.engine.withdrawOffer(offer) }
+    }
+
+    /**
+     * Accepts an offer into the place the `AspenFiles` plugin's save picker opened, which
+     * `FileRegistry` holds by `destination`; the engine writes the file there as it arrives.
+     */
+    @PluginMethod
+    fun acceptOffer(call: PluginCall) {
+        val offer = call.getString("offer")
+        if (offer.isNullOrEmpty()) {
+            return call.reject("offer is required")
+        }
+        val mode = transferMode(call.getString("mode")) ?: return call.reject("mode must be directPreferred or relayOnly")
+        val destination = call.getString("destination")
+        if (destination.isNullOrEmpty()) {
+            return call.reject("destination is required")
+        }
+        withEngine(call) { engine -> engine.engine.acceptOffer(offer, mode, destination) }
+    }
+
+    @PluginMethod
+    fun cancelTransfer(call: PluginCall) {
+        val (offer, peer) = transferOf(call) ?: return
+        withEngine(call) { engine -> engine.engine.cancelTransfer(offer, peer) }
+    }
+
+    @PluginMethod
+    fun dismissTransfer(call: PluginCall) {
+        val (offer, peer) = transferOf(call) ?: return
+        withEngine(call) { engine -> engine.engine.dismissTransfer(offer, peer) }
+    }
+
+    @PluginMethod
+    fun clearFileFailure(call: PluginCall) {
+        withEngine(call) { engine -> engine.engine.clearFileFailure() }
+    }
+
+    /** The transfer the call names, by its offer and its other side, or `null` with the call rejected. */
+    private fun transferOf(call: PluginCall): Pair<String, String>? {
+        val offer = call.getString("offer")
+        val peer = call.getString("peer")
+        if (offer.isNullOrEmpty() || peer.isNullOrEmpty()) {
+            call.reject("offer and peer are required")
+            return null
+        }
+        return Pair(offer, peer)
+    }
+
+    /** The two ways a receiver takes a file, as the page names them. */
+    private fun transferMode(name: String?): TransferMode? = when (name) {
+        "directPreferred" -> TransferMode.DIRECT_PREFERRED
+        "relayOnly" -> TransferMode.RELAY_ONLY
+        else -> null
     }
 
     // --- Video ------------------------------------------------------------------------------------

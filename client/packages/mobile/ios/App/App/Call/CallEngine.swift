@@ -2,12 +2,13 @@ import Foundation
 
 /// The call engine (`voice_client`, reached through its generated `VoiceClient` module) with
 /// this device's platform under it, for one deployment: HTTP and WebSockets over URLSession,
-/// peer connections over WebRTC, the session from the account kept for push, and the audio
-/// session, the microphone, and the call's sounds (`CallAudio`). Joining, leaving, and muting go
-/// through the system (`CallSystem`, CallKit), which holds one call for the process and
-/// activates the call's audio; the engine's
-/// other methods are called directly and `snapshots` is what it reports. `AspenCallPlugin`
-/// commands it for the web view, and `CallVideo` draws its video tracks.
+/// peer connections over WebRTC, the files its transfers read and write (`CallFiles`, over what
+/// the `AspenFiles` plugin's pickers chose), the session from the account kept for push, and the
+/// audio session, the microphone, and the call's sounds (`CallAudio`). Joining, leaving, and
+/// muting go through the system (`CallSystem`, CallKit), which holds one call for the process
+/// and activates the call's audio; the engine's other methods are called directly and
+/// `snapshots` is what it reports. `AspenCallPlugin` commands it for the web view, and
+/// `CallVideo` draws its video tracks.
 final class CallEngine: @unchecked Sendable {
     /// Every track on the device, one WebRTC factory for the process, the one audio session's
     /// routes, the camera, and where video is drawn, however many deployments' engines run.
@@ -46,7 +47,9 @@ final class CallEngine: @unchecked Sendable {
         self.credentials = credentials
         self.audio = CallAudio(factory: media.factory, tracks: Self.tracks, sounds: sounds)
         self.engine = Engine.start(
-            platform: Platform(http: CallHttp(), sockets: sockets, peerConnections: peerConnections ?? media),
+            platform: Platform(
+                http: CallHttp(), sockets: sockets, peerConnections: peerConnections ?? media, files: CallFiles()
+            ),
             options: Options(apiUrl: origin, credentials: credentials, loopbackPlainText: loopbackPlainText),
             observer: snapshots
         )

@@ -8,12 +8,18 @@ import {
   type EngineCallState,
   type ExternalAudio,
   type ExternalShare,
+  type FileFailure,
   type FileSink,
+  type FilesState,
   IDLE_CALL_STATE,
-  NO_FILES,
+  type OfferState,
+  type PickedFile,
   type RemoteScreen,
   type ScreenCapture,
   type TransferMode,
+  type TransferRoute,
+  type TransferState,
+  type TransferStatus,
   type VideoFacing,
   type VideoSource,
   type VoiceCallListener,
@@ -23,6 +29,7 @@ import {
   type VoiceSessionEndReason,
   type WatchedVideo,
   compareIds,
+  plainFileName,
 } from "@aspen/protocol";
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
@@ -142,6 +149,24 @@ export interface AspenCallPlugin {
   }): Promise<void>;
   acknowledgeEnd(options: { origin: string }): Promise<void>;
   clearStateRefusal(options: { origin: string }): Promise<void>;
+  offerFile(options: {
+    origin: string;
+    offer: string;
+    reference: string;
+    name: string;
+    allowDirect: boolean;
+    validForSeconds: number;
+  }): Promise<void>;
+  withdrawOffer(options: { origin: string; offer: string }): Promise<void>;
+  acceptOffer(options: {
+    origin: string;
+    offer: string;
+    mode: TransferMode;
+    destination: string;
+  }): Promise<void>;
+  cancelTransfer(options: { origin: string; offer: string; peer: string }): Promise<void>;
+  dismissTransfer(options: { origin: string; offer: string; peer: string }): Promise<void>;
+  clearFileFailure(options: { origin: string }): Promise<void>;
   state(options: { origin: string }): Promise<PublishedState>;
   routes(): Promise<PhoneRoutes>;
   setRoute(options: { kind: RouteKind }): Promise<void>;
@@ -179,17 +204,18 @@ export function nativeCalls(): boolean {
 }
 
 /**
- * Something a native call cannot do: screen sharing from the phone and file transfers, which
- * come in later stages (`docs/architecture/voice/native-calls.md`) and whose controls are hidden
- * by `canShare` and `canTransfer`, which a native call keeps false; a microphone or speaker
- * chosen by id, which the routes stand in for, so `hasAudioDeviceChoice` is false and the
- * selects that would ask are not shown; and a gain on the microphone, which neither phone's
- * audio device module applies, so `hasInputVolume` is false and the slider that would ask is
- * not shown.
+ * Something a native call cannot do: screen sharing from the phone, which comes in a later
+ * stage (`docs/architecture/voice/native-calls.md`) and whose controls are hidden by `canShare`,
+ * which a native call keeps false; a microphone or speaker chosen by id, which the routes stand
+ * in for, so `hasAudioDeviceChoice` is false and the selects that would ask are not shown; a
+ * gain on the microphone, which neither phone's audio device module applies, so
+ * `hasInputVolume` is false and the slider that would ask is not shown; or a browser's way of
+ * doing something the platform does otherwise (a `Blob` to offer, a file received into memory),
+ * which the page never asks of a native call.
  */
 export class NativeCallUnavailableError extends Error {
   constructor(what: string) {
-    super(`${what} is not part of this build's native calls yet`);
+    super(`${what} is not part of a native call`);
     this.name = "NativeCallUnavailableError";
   }
 }
@@ -265,6 +291,104 @@ function endedReasonOf(reason: EngineCallState["endedReason"]): VoiceCallState["
   }
 }
 
+type EngineTransfer = EngineCallState["files"]["transfers"][number];
+
+function transferStatusOf(status: EngineTransfer["status"]): TransferStatus {
+  switch (status) {
+    case "connecting":
+    case "moving":
+    case "completed":
+    case "cancelled":
+    case "failed":
+    case "left":
+    case "notPermitted":
+      return status;
+    default:
+      throw new NativeCallProtocolError("transfer status", status satisfies never);
+  }
+}
+
+function routeOf(route: EngineTransfer["route"]): TransferRoute | null {
+  switch (route) {
+    case null:
+    case undefined:
+      return null;
+    case "direct":
+    case "relayed":
+      return route;
+    default:
+      throw new NativeCallProtocolError("transfer route", route satisfies never);
+  }
+}
+
+function endedByOf(endedBy: EngineTransfer["endedBy"]): TransferState["endedBy"] {
+  switch (endedBy) {
+    case null:
+    case undefined:
+      return null;
+    case "self":
+    case "peer":
+      return endedBy;
+    default:
+      throw new NativeCallProtocolError("ended by", endedBy satisfies never);
+  }
+}
+
+function failureOf(failure: EngineCallState["files"]["failure"]): FileFailure | null {
+  if (failure === null || failure === undefined) {
+    return null;
+  }
+  switch (failure.command) {
+    case "offer":
+    case "accept":
+      return {
+        command: failure.command,
+        offer: failure.offer,
+        name: plainFileName(failure.name),
+        detail: failure.detail,
+      };
+    default:
+      throw new NativeCallProtocolError("file command", failure.command satisfies never);
+  }
+}
+
+/**
+ * The call's files as the app reads them, from the engine's: each offer's name as shown and
+ * saved (`plainFileName`), its expiry as the engine stamped it on this device's clock, and each
+ * transfer's progress and outcome; a received file is always written where its receiver chose,
+ * so none is held for the page and every receiver's transfer is `toDisk`.
+ */
+export function filesOf(files: EngineCallState["files"]): FilesState {
+  return {
+    offers: files.offers.map((offer): OfferState => ({
+      id: offer.id,
+      from: offer.from,
+      name: plainFileName(offer.name),
+      size: offer.size,
+      allowDirect: offer.allowDirect,
+      expiresAt: offer.expiresAtMs,
+      own: offer.own,
+    })),
+    transfers: files.transfers.map((transfer): TransferState => ({
+      offer: transfer.offer,
+      peer: transfer.peer,
+      role: transfer.role,
+      mode: transfer.mode,
+      name: plainFileName(transfer.name),
+      size: transfer.size,
+      bytes: transfer.bytes,
+      status: transferStatusOf(transfer.status),
+      route: routeOf(transfer.route),
+      endedBy: endedByOf(transfer.endedBy),
+      file: null,
+      toDisk: transfer.role === "receiver",
+    })),
+    links: files.links,
+    relayMbps: files.relayMbps ?? null,
+    failure: failureOf(files.failure),
+  };
+}
+
 /**
  * What the page knows of the call's video that the engine does not: which way the camera it
  * opened faces (the plugin says as it opens it; the engine carries no facing), and why the
@@ -310,8 +434,8 @@ function sent(snapshot: EngineCallState, source: "screen" | "camera"): string | 
  * its video (`LocalVideo`). The camera's picture, the others' cameras and screens, and the
  * preview of a share are the surfaces the phone draws; the grant to use the camera is the
  * engine's; `cameraError` is the phone's refusal to open one, or the voice server's to take it
- * (`unsent`). Files and screen sharing from the phone are later stages, so those fields are the
- * idle state's.
+ * (`unsent`); the files are the engine's (`filesOf`). Screen sharing from the phone is a later
+ * stage, so its fields are the idle state's.
  */
 export function stateOf(
   snapshot: EngineCallState,
@@ -336,8 +460,8 @@ export function stateOf(
     canSpeak: snapshot.grants.speak,
     canShare: false,
     canCamera: snapshot.grants.camera,
-    canTransfer: false,
-    files: NO_FILES,
+    canTransfer: snapshot.grants.transferFiles,
+    files: filesOf(snapshot.files),
     sharingScreen: screen !== null,
     localScreen: screen === null ? null : nativeSource(screen, null),
     screens: remoteVideos(snapshot, "screen"),
@@ -441,16 +565,19 @@ export function onPageWake(listener: () => void): void {
  * hears each snapshot as it is published and asks for the current one as it wakes, since a page
  * the system froze missed those meanwhile. The browser's media is never touched: the microphone
  * and the camera are the engine's, opened by the plugin, and every picture is a surface the
- * phone draws (`VideoSource` of the `native` kind) behind the page (`nativeVideo.tsx`).
+ * phone draws (`VideoSource` of the `native` kind) behind the page (`nativeVideo.tsx`). Files
+ * are the engine's too: a file to offer is one the platform picked and holds (`PickedFile`,
+ * through `filesBridge`), a file received goes into a place the platform opened
+ * (`FileSink.destination`), and the bytes of neither cross the bridge.
  *
  * What the page shows is what is watched: `showVideo` counts the places showing video, and
  * while there are any the engine is asked to watch every screen and camera the others send
  * (`watchedOf`), again whenever that changes, and none when nothing shows them.
  *
- * Screen sharing from the phone and file transfers reject with `NativeCallUnavailableError`,
- * and the grants that would show their controls stay false. The call's sounds are the engine's
- * (`playsOwnSounds`), and the microphone and speaker are the phone's and its routes'
- * (`hasAudioDeviceChoice` is false).
+ * Screen sharing from the phone rejects with `NativeCallUnavailableError`, and the grant that
+ * would show its controls stays false. The call's sounds are the engine's (`playsOwnSounds`),
+ * and the microphone and speaker are the phone's and its routes' (`hasAudioDeviceChoice` is
+ * false).
  */
 export class NativeCall implements Call {
   readonly #origin: string;
@@ -669,24 +796,64 @@ export class NativeCall implements Call {
     };
   }
 
-  offerFile(_file: Blob, _name: string, _allowDirect: boolean, _validForSeconds: number): string {
-    throw new NativeCallUnavailableError("Offering a file");
+  /**
+   * Offers a file the platform picked (`nativePickFile`), under an id chosen here, as
+   * `VoiceCall.offerFile` chooses its own: the engine opens it for its size and sends the offer,
+   * and a file it cannot open is `files.failure`. A `Blob` is a browser's, which the engine has
+   * no way to read.
+   */
+  offerFile(
+    file: Blob | PickedFile,
+    name: string,
+    allowDirect: boolean,
+    validForSeconds: number,
+  ): string {
+    if (file instanceof Blob) {
+      throw new NativeCallUnavailableError("Offering a browser's file");
+    }
+    const offer = crypto.randomUUID();
+    this.#command(
+      AspenCall.offerFile({
+        origin: this.#origin,
+        offer,
+        reference: file.reference,
+        name,
+        allowDirect,
+        validForSeconds,
+      }),
+    );
+    return offer;
   }
 
-  withdrawOffer(_offer: string): void {
-    throw new NativeCallUnavailableError("Withdrawing a file offer");
+  withdrawOffer(offer: string): void {
+    this.#command(AspenCall.withdrawOffer({ origin: this.#origin, offer }));
   }
 
-  acceptOffer(_offer: string, _mode: TransferMode, _sink?: FileSink): void {
-    throw new NativeCallUnavailableError("Accepting a file offer");
+  /**
+   * Accepts an offer into the place `sink` names (`FileSink.destination`, which
+   * `nativeChooseDestination` opened), where the engine writes the file as it arrives. A file
+   * cannot be held for the page instead, so an acceptance with no place chosen is reported and
+   * leaves the offer standing.
+   */
+  acceptOffer(offer: string, mode: TransferMode, sink?: FileSink): void {
+    const destination = sink?.destination;
+    if (destination === undefined) {
+      this.#report(new NativeCallUnavailableError("Receiving a file with no place chosen for it"));
+      return;
+    }
+    this.#command(AspenCall.acceptOffer({ origin: this.#origin, offer, mode, destination }));
   }
 
-  cancelTransfer(_offer: string, _peer: string): void {
-    throw new NativeCallUnavailableError("Cancelling a file transfer");
+  cancelTransfer(offer: string, peer: string): void {
+    this.#command(AspenCall.cancelTransfer({ origin: this.#origin, offer, peer }));
   }
 
-  dismissTransfer(_offer: string, _peer: string): void {
-    throw new NativeCallUnavailableError("Dismissing a file transfer");
+  dismissTransfer(offer: string, peer: string): void {
+    this.#command(AspenCall.dismissTransfer({ origin: this.#origin, offer, peer }));
+  }
+
+  dismissFileFailure(): void {
+    this.#command(AspenCall.clearFileFailure({ origin: this.#origin }));
   }
 
   setMuted(muted: boolean): void {

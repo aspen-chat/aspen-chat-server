@@ -1,6 +1,6 @@
-import type { OfferState, TransferMode } from "@aspen/protocol";
+import type { OfferState, PickedFile, TransferMode } from "@aspen/protocol";
 import { CaretDownIcon, FileIcon } from "@phosphor-icons/react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
   Button,
   Dialog,
@@ -18,7 +18,9 @@ import {
   SelectValue,
 } from "react-aria-components";
 import { useLocale } from "react-aria-components";
+import { nativePickFile, nativeReleaseFile } from "@/api/filesBridge";
 import { useSync, useUser } from "@/api/hooks";
+import { nativeCalls } from "@/api/nativeCall";
 import {
   fieldClass,
   labelClass,
@@ -45,6 +47,7 @@ import {
   VALIDITY_CHOICES,
   type Validity,
 } from "@/features/voice/files";
+import { toast } from "@/features/layout/toast";
 import { useMessages } from "@/i18n/context";
 import { format } from "@/i18n/messages";
 
@@ -85,7 +88,10 @@ function useLimit(relayMbps: number | null): string {
  * Offering a file to the call: the file, how long the offer stands, and how people who accept
  * may receive it, which the sender must choose: directly (which could expose their address) or
  * through the relay only. The relay choice is unavailable, and says so, on a server that does
- * not relay.
+ * not relay. In a browser the file is the picker's `File`; in a mobile app, whose call runs in
+ * the native call engine, it is one the system's picker chose and the native side holds by
+ * reference (`nativePickFile`), since its bytes never cross to the page. A picked file the dialog
+ * closes without offering is let go.
  */
 export function OfferFileDialog({
   onClose,
@@ -98,9 +104,30 @@ export function OfferFileDialog({
   const sync = useSync();
   const { locale } = useLocale();
   const limit = useLimit(relayMbps);
-  const [file, setFile] = useState<File | null>(null);
+  const [file, setFile] = useState<File | PickedFile | null>(null);
   const [validity, setValidity] = useState<Validity>(DEFAULT_VALIDITY);
   const [how, setHow] = useState<"direct" | "relay" | null>(null);
+  const native = nativeCalls();
+  // The picked file not yet offered, released when the dialog goes without offering it.
+  const unoffered = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      const reference = unoffered.current;
+      if (reference !== null) {
+        void nativeReleaseFile(reference);
+      }
+    },
+    [],
+  );
+  const pick = (chosen: File | PickedFile) => {
+    const previous = unoffered.current;
+    if (previous !== null && previous !== ("reference" in chosen ? chosen.reference : null)) {
+      void nativeReleaseFile(previous);
+    }
+    unoffered.current = "reference" in chosen ? chosen.reference : null;
+    setFile(chosen);
+  };
+  const chooseLabel = file === null ? m.files.chooseFile : m.files.changeFile;
   return (
     <ModalOverlay
       isOpen
@@ -117,18 +144,41 @@ export function OfferFileDialog({
           <DialogHeading>{m.files.offerHeading}</DialogHeading>
           <p className="text-sm text-ink-muted">{m.files.offerHint}</p>
           <div className="flex items-center gap-3">
-            <FileTrigger
-              onSelect={(files) => {
-                const chosen = files?.[0];
-                if (chosen !== undefined) {
-                  setFile(chosen);
-                }
-              }}
-            >
-              <Button className={outlineButtonClass}>
-                {file === null ? m.files.chooseFile : m.files.changeFile}
+            {native ? (
+              <Button
+                className={outlineButtonClass}
+                onPress={() => {
+                  void nativePickFile().then(
+                    (picked) => {
+                      if (picked !== null) {
+                        pick(picked);
+                      }
+                    },
+                    (error: unknown) => {
+                      toast(
+                        format(m.files.offerFailed, {
+                          name: m.files.noFile,
+                          detail: error instanceof Error ? error.message : String(error),
+                        }),
+                      );
+                    },
+                  );
+                }}
+              >
+                {chooseLabel}
               </Button>
-            </FileTrigger>
+            ) : (
+              <FileTrigger
+                onSelect={(files) => {
+                  const chosen = files?.[0];
+                  if (chosen !== undefined) {
+                    pick(chosen);
+                  }
+                }}
+              >
+                <Button className={outlineButtonClass}>{chooseLabel}</Button>
+              </FileTrigger>
+            )}
             <span className="flex min-w-0 items-center gap-1 text-sm">
               {file === null ? (
                 <span className="text-ink-muted">{m.files.noFile}</span>
@@ -201,6 +251,8 @@ export function OfferFileDialog({
                   return;
                 }
                 sync.voice.offerFile(file, file.name, how === "direct", Number(validity));
+                // Offered: the engine holds the file from here.
+                unoffered.current = null;
                 onClose();
               }}
               className={primaryButtonClass}
@@ -306,8 +358,19 @@ export function ReceiveFileDialog({
                       onClose();
                     }
                   },
-                  () => {
-                    // Where the file cannot be opened, it is held and saved at the end instead.
+                  (error: unknown) => {
+                    // In a browser, a file whose place cannot be opened is held and saved at
+                    // the end instead. A native call writes only into a place the platform
+                    // opened, so there the offer is left standing and the reason said.
+                    if (nativeCalls()) {
+                      toast(
+                        format(m.files.receiveFailed, {
+                          name: offer.name,
+                          detail: error instanceof Error ? error.message : String(error),
+                        }),
+                      );
+                      return;
+                    }
                     sync.voice.acceptOffer(offer.id, mode);
                     onClose();
                   },

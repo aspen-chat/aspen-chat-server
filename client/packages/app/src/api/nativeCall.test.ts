@@ -72,6 +72,7 @@ const {
 } = await import("./nativeCall");
 
 const { CameraError, DEFAULT_DEVICE, IDLE_CALL_STATE, NO_FILES } = await import("@aspen/protocol");
+const { filesOf } = await import("./nativeCall");
 
 const ORIGIN = "https://chat.example";
 const CHANNEL = "0190f0a0-0000-7000-8000-000000000011";
@@ -107,6 +108,29 @@ function engineState(patch: Record<string, unknown> = {}): EngineCallState {
     stateRefused: null,
     sourceRefused: null,
     endedReason: null,
+    files: { offers: [], transfers: [], links: [], relayMbps: null, failure: null },
+    ...patch,
+  };
+}
+
+const OFFER = "0190f0a0-0000-7000-8000-0000000000f1";
+
+/** A transfer as the engine's snapshot carries one, with `patch` laid over it. */
+function engineTransfer(
+  patch: Record<string, unknown> = {},
+): EngineCallState["files"]["transfers"][number] {
+  return {
+    offer: OFFER,
+    peer: BOB,
+    role: "sender",
+    mode: "directPreferred",
+    name: "notes.bin",
+    size: 10,
+    bytes: 4,
+    status: "moving",
+    route: "direct",
+    endedBy: null,
+    failure: null,
     ...patch,
   };
 }
@@ -227,7 +251,7 @@ describe("nativeCall", () => {
       expect(state.canSpeak).toBe(true);
     });
 
-    it("shows the camera's grant, and keeps sharing and transfers off", () => {
+    it("shows the camera's and the files' grants, and keeps sharing off", () => {
       const state = stateOf(
         engineState({
           grants: { speak: true, shareScreen: true, camera: true, transferFiles: true },
@@ -235,8 +259,9 @@ describe("nativeCall", () => {
       );
       expect(state.canCamera).toBe(true);
       expect(state.canShare).toBe(false);
-      expect(state.canTransfer).toBe(false);
-      expect(state.files).toBe(NO_FILES);
+      expect(state.canTransfer).toBe(true);
+      expect(state.files).toEqual(NO_FILES);
+      expect(stateOf(engineState()).canTransfer).toBe(false);
       expect(state.sharingScreen).toBe(false);
       expect(state.localScreen).toBeNull();
       expect(state.localCamera).toBeNull();
@@ -363,6 +388,164 @@ describe("nativeCall", () => {
         expect(stateOf(engineState({ endedReason })).endedReason).toBe(endedReason);
       }
       expect(() => stateOf(engineState({ endedReason: "bored" }))).toThrow(NativeCallProtocolError);
+    });
+  });
+
+  describe("filesOf", () => {
+    it("maps offers with their names as shown and their expiry on this device's clock", () => {
+      const files = filesOf({
+        offers: [
+          {
+            id: OFFER,
+            from: BOB,
+            name: "gpj.\u202eexe",
+            size: 200,
+            allowDirect: true,
+            expiresAtMs: 1_700_000_000_000,
+            own: false,
+          },
+        ],
+        transfers: [],
+        links: [{ sender: BOB, receiver: CAROL }],
+        relayMbps: 50,
+        failure: null,
+      });
+      expect(files.offers).toEqual([
+        {
+          id: OFFER,
+          from: BOB,
+          name: "gpj.exe",
+          size: 200,
+          allowDirect: true,
+          expiresAt: 1_700_000_000_000,
+          own: false,
+        },
+      ]);
+      expect(files.links).toEqual([{ sender: BOB, receiver: CAROL }]);
+      expect(files.relayMbps).toBe(50);
+      expect(files.failure).toBeNull();
+    });
+
+    it("maps each transfer, written to disk on the receiving side and never held", () => {
+      const files = filesOf({
+        offers: [],
+        transfers: [
+          engineTransfer(),
+          engineTransfer({
+            role: "receiver",
+            mode: "relayOnly",
+            status: "completed",
+            route: "relayed",
+            endedBy: "self",
+            bytes: 10,
+          }),
+          engineTransfer({ status: "cancelled", route: null, endedBy: "peer" }),
+        ],
+        links: [],
+        relayMbps: null,
+        failure: null,
+      });
+      expect(files.transfers).toEqual([
+        {
+          offer: OFFER,
+          peer: BOB,
+          role: "sender",
+          mode: "directPreferred",
+          name: "notes.bin",
+          size: 10,
+          bytes: 4,
+          status: "moving",
+          route: "direct",
+          endedBy: null,
+          file: null,
+          toDisk: false,
+        },
+        {
+          offer: OFFER,
+          peer: BOB,
+          role: "receiver",
+          mode: "relayOnly",
+          name: "notes.bin",
+          size: 10,
+          bytes: 10,
+          status: "completed",
+          route: "relayed",
+          endedBy: "self",
+          file: null,
+          toDisk: true,
+        },
+        {
+          offer: OFFER,
+          peer: BOB,
+          role: "sender",
+          mode: "directPreferred",
+          name: "notes.bin",
+          size: 10,
+          bytes: 4,
+          status: "cancelled",
+          route: null,
+          endedBy: "peer",
+          file: null,
+          toDisk: false,
+        },
+      ]);
+      expect(files.relayMbps).toBeNull();
+    });
+
+    it("carries each transfer status and ending by name", () => {
+      for (const status of [
+        "connecting",
+        "moving",
+        "completed",
+        "cancelled",
+        "failed",
+        "left",
+        "notPermitted",
+      ] as const) {
+        expect(
+          filesOf({
+            offers: [],
+            transfers: [engineTransfer({ status })],
+            links: [],
+            relayMbps: null,
+          }).transfers[0]?.status,
+        ).toBe(status);
+      }
+    });
+
+    it("carries the file command that failed, and refuses what it does not know", () => {
+      const failed = filesOf({
+        offers: [],
+        transfers: [],
+        links: [],
+        relayMbps: null,
+        failure: { command: "accept", offer: OFFER, name: "a\u0000.txt", detail: "no room" },
+      });
+      expect(failed.failure).toEqual({
+        command: "accept",
+        offer: OFFER,
+        name: "a.txt",
+        detail: "no room",
+      });
+      const bad = (patch: Record<string, unknown>) =>
+        filesOf({
+          offers: [],
+          transfers: [engineTransfer(patch)],
+          links: [],
+          relayMbps: null,
+        });
+      expect(() => bad({ status: "teleporting" })).toThrow(NativeCallProtocolError);
+      expect(() => bad({ route: "pigeon" })).toThrow(NativeCallProtocolError);
+      expect(() => bad({ endedBy: "nobody" })).toThrow(NativeCallProtocolError);
+      expect(() =>
+        filesOf({
+          offers: [],
+          transfers: [],
+          links: [],
+          relayMbps: null,
+          failure: { command: "shred", offer: OFFER, name: "a", detail: "b" },
+        } as never),
+      ).toThrow(NativeCallProtocolError);
     });
   });
 
@@ -533,6 +716,99 @@ describe("nativeCall", () => {
 
     it("tells NativeCallFailedError apart from what the plugin refused", () => {
       expect(new NativeCallFailedError("microphone", null).message).toBe("the call failed");
+    });
+  });
+
+  describe("files", () => {
+    it("offers a picked file under an id of its own, and refuses a browser's Blob", async () => {
+      const { call: made } = call();
+      await settle();
+      calls.length = 0;
+      const picked = { reference: "picked-1", name: "notes.bin", size: 1234 };
+      const offer = made.offerFile(picked, "notes.bin", true, 60);
+      expect(offer).toMatch(/^[0-9a-f-]{36}$/);
+      expect(calls).toEqual([
+        {
+          method: "offerFile",
+          options: {
+            origin: ORIGIN,
+            offer,
+            reference: "picked-1",
+            name: "notes.bin",
+            allowDirect: true,
+            validForSeconds: 60,
+          },
+        },
+      ]);
+      expect(made.offerFile(picked, "notes.bin", true, 60)).not.toBe(offer);
+      expect(() => made.offerFile(new Blob(), "a", false, 60)).toThrow(NativeCallUnavailableError);
+    });
+
+    it("accepts into the place the sink names, and reports an acceptance with none", async () => {
+      const { call: made, reported } = call();
+      await settle();
+      calls.length = 0;
+      const sink = {
+        destination: "doc-1",
+        write: () => Promise.resolve(),
+        close: () => Promise.resolve(),
+        abort: () => Promise.resolve(),
+      };
+      made.acceptOffer(OFFER, "relayOnly", sink);
+      expect(calls).toEqual([
+        {
+          method: "acceptOffer",
+          options: { origin: ORIGIN, offer: OFFER, mode: "relayOnly", destination: "doc-1" },
+        },
+      ]);
+      made.acceptOffer(OFFER, "directPreferred");
+      made.acceptOffer(OFFER, "directPreferred", {
+        write: sink.write,
+        close: sink.close,
+        abort: sink.abort,
+      });
+      expect(calls).toHaveLength(1);
+      expect(reported).toHaveLength(2);
+      expect(reported[0]).toBeInstanceOf(NativeCallUnavailableError);
+    });
+
+    it("forwards withdrawing, cancelling, dismissing, and clearing a failure", async () => {
+      const { call: made } = call();
+      await settle();
+      calls.length = 0;
+      made.withdrawOffer(OFFER);
+      made.cancelTransfer(OFFER, BOB);
+      made.dismissTransfer(OFFER, BOB);
+      made.dismissFileFailure();
+      expect(calls).toEqual([
+        { method: "withdrawOffer", options: { origin: ORIGIN, offer: OFFER } },
+        { method: "cancelTransfer", options: { origin: ORIGIN, offer: OFFER, peer: BOB } },
+        { method: "dismissTransfer", options: { origin: ORIGIN, offer: OFFER, peer: BOB } },
+        { method: "clearFileFailure", options: { origin: ORIGIN } },
+      ]);
+    });
+
+    it("shows the engine's files in the state", async () => {
+      const { call: made } = call();
+      await settle();
+      publish(
+        snapshot({
+          revision: 1,
+          status: "connected",
+          channel: CHANNEL,
+          grants: { speak: true, shareScreen: false, camera: false, transferFiles: true },
+          files: {
+            offers: [],
+            transfers: [engineTransfer({ bytes: 7 })],
+            links: [],
+            relayMbps: 50,
+            failure: null,
+          },
+        }),
+      );
+      expect(made.state.canTransfer).toBe(true);
+      expect(made.state.files.transfers[0]?.bytes).toBe(7);
+      expect(made.state.files.relayMbps).toBe(50);
     });
   });
 
@@ -824,7 +1100,7 @@ describe("nativeCall", () => {
   });
 
   describe("what a native call lacks", () => {
-    it("rejects sharing and file transfers, naming them", async () => {
+    it("rejects sharing, naming it", async () => {
       const { call: made } = call();
       await settle();
       await expect(made.startScreenShare()).rejects.toBeInstanceOf(NativeCallUnavailableError);
@@ -834,22 +1110,6 @@ describe("nativeCall", () => {
       expect(() => {
         made.stopScreenShare();
       }).toThrow(NativeCallUnavailableError);
-      expect(() => made.offerFile(new Blob(), "a", false, 60)).toThrow(NativeCallUnavailableError);
-      expect(() => {
-        made.withdrawOffer("o");
-      }).toThrow(NativeCallUnavailableError);
-      expect(() => {
-        made.acceptOffer("o", "relayOnly");
-      }).toThrow(NativeCallUnavailableError);
-      expect(() => {
-        made.cancelTransfer("o", BOB);
-      }).toThrow(NativeCallUnavailableError);
-      expect(() => {
-        made.dismissTransfer("o", BOB);
-      }).toThrow(NativeCallUnavailableError);
-      expect(() => made.offerFile(new Blob(), "a", false, 60)).toThrow(
-        "Offering a file is not part of this build's native calls yet",
-      );
     });
 
     it("takes the system's default microphone and speaker and refuses one chosen by id", async () => {

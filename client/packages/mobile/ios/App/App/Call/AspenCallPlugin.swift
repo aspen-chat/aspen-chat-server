@@ -11,7 +11,9 @@ import Foundation
 /// through, published as
 /// `routes` events, and the call's video: the cameras (`CallCamera`), the holes the page reports
 /// for the pictures (`setTiles`, laid out by `CallVideo`), each picture's shape back as a `shape`
-/// event, and the system's picture in picture as `pip` events. Joining asks the system for the
+/// event, and the system's picture in picture as `pip` events. The call's files go to the engine
+/// by the references the `AspenFiles` plugin's pickers put in `FileRegistry` (`offerFile`,
+/// `acceptOffer`), so no file's bytes cross the bridge. Joining asks the system for the
 /// microphone first (`CallEngine.askForMicrophone`, which an incoming call's answer goes through
 /// too): granted, the microphone is opened and given to the engine; refused, the engine is given
 /// none and fails the join itself where the channel lets the user speak (`errorKind`
@@ -35,6 +37,12 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "sessionEnded", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "acknowledgeEnd", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearStateRefusal", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "offerFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "withdrawOffer", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "acceptOffer", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "cancelTransfer", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "dismissTransfer", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearFileFailure", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "state", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "routes", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setRoute", returnType: CAPPluginReturnPromise),
@@ -264,6 +272,113 @@ public class AspenCallPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func clearStateRefusal(_ call: CAPPluginCall) {
         withEngine(call) { engine in
             engine.engine.clearStateRefusal()
+        }
+    }
+
+    // MARK: Files
+
+    /// Offers the file the `AspenFiles` plugin's picker chose, which `FileRegistry` holds by
+    /// `reference`, under the id the page chose; the engine opens it for its size, and one it
+    /// cannot open is the snapshot's `files.failure`.
+    @objc func offerFile(_ call: CAPPluginCall) {
+        guard let offer = call.getString("offer"), !offer.isEmpty else {
+            call.reject("offer is required")
+            return
+        }
+        guard let reference = call.getString("reference"), !reference.isEmpty else {
+            call.reject("reference is required")
+            return
+        }
+        guard let name = call.getString("name"), !name.isEmpty else {
+            call.reject("name is required")
+            return
+        }
+        guard let allowDirect = call.getBool("allowDirect") else {
+            call.reject("allowDirect is required")
+            return
+        }
+        guard let validForSeconds = call.getInt("validForSeconds"), validForSeconds >= 0 else {
+            call.reject("validForSeconds must be a whole number from 0")
+            return
+        }
+        withEngine(call) { engine in
+            engine.engine.offerFile(
+                offer: offer, reference: reference, name: name, allowDirect: allowDirect,
+                validForSeconds: UInt32(clamping: validForSeconds)
+            )
+        }
+    }
+
+    @objc func withdrawOffer(_ call: CAPPluginCall) {
+        guard let offer = call.getString("offer"), !offer.isEmpty else {
+            call.reject("offer is required")
+            return
+        }
+        withEngine(call) { engine in
+            engine.engine.withdrawOffer(offer: offer)
+        }
+    }
+
+    /// Accepts an offer into the place the `AspenFiles` plugin's save picker opened, which
+    /// `FileRegistry` holds by `destination`; the engine writes the file there as it arrives.
+    @objc func acceptOffer(_ call: CAPPluginCall) {
+        guard let offer = call.getString("offer"), !offer.isEmpty else {
+            call.reject("offer is required")
+            return
+        }
+        guard let mode = Self.transferMode(call.getString("mode")) else {
+            call.reject("mode must be directPreferred or relayOnly")
+            return
+        }
+        guard let destination = call.getString("destination"), !destination.isEmpty else {
+            call.reject("destination is required")
+            return
+        }
+        withEngine(call) { engine in
+            engine.engine.acceptOffer(offer: offer, mode: mode, destination: destination)
+        }
+    }
+
+    @objc func cancelTransfer(_ call: CAPPluginCall) {
+        guard let (offer, peer) = Self.transfer(of: call) else {
+            return
+        }
+        withEngine(call) { engine in
+            engine.engine.cancelTransfer(offer: offer, peer: peer)
+        }
+    }
+
+    @objc func dismissTransfer(_ call: CAPPluginCall) {
+        guard let (offer, peer) = Self.transfer(of: call) else {
+            return
+        }
+        withEngine(call) { engine in
+            engine.engine.dismissTransfer(offer: offer, peer: peer)
+        }
+    }
+
+    @objc func clearFileFailure(_ call: CAPPluginCall) {
+        withEngine(call) { engine in
+            engine.engine.clearFileFailure()
+        }
+    }
+
+    /// The transfer the call names, by its offer and its other side, or a rejected call.
+    private static func transfer(of call: CAPPluginCall) -> (String, String)? {
+        guard let offer = call.getString("offer"), !offer.isEmpty,
+              let peer = call.getString("peer"), !peer.isEmpty else {
+            call.reject("offer and peer are required")
+            return nil
+        }
+        return (offer, peer)
+    }
+
+    /// The two ways a receiver takes a file, as the page names them.
+    private static func transferMode(_ name: String?) -> TransferMode? {
+        switch name {
+        case "directPreferred": return .directPreferred
+        case "relayOnly": return .relayOnly
+        default: return nil
         }
     }
 

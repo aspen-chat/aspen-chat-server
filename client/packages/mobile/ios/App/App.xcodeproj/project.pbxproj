@@ -18,6 +18,8 @@
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
 		A5E000000000000000000001 /* MainViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000011 /* MainViewController.swift */; };
 		A5E000000000000000000002 /* AspenFilesPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000012 /* AspenFilesPlugin.swift */; };
+		A5E000000000000000000005 /* FileRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000016 /* FileRegistry.swift */; };
+		A5E000000000000000000245 /* CallFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000220 /* CallFiles.swift */; };
 		A5E000000000000000000004 /* AspenAgePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000015 /* AspenAgePlugin.swift */; };
 		A5E000000000000000000088 /* AspenMediaPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000089 /* AspenMediaPlugin.swift */; };
 		A5E000000000000000000082 /* AspenUploadsPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000083 /* AspenUploadsPlugin.swift */; };
@@ -106,6 +108,8 @@
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
 		A5E000000000000000000011 /* MainViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewController.swift; sourceTree = "<group>"; };
 		A5E000000000000000000012 /* AspenFilesPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenFilesPlugin.swift; sourceTree = "<group>"; };
+		A5E000000000000000000016 /* FileRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileRegistry.swift; sourceTree = "<group>"; };
+		A5E000000000000000000220 /* CallFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallFiles.swift; sourceTree = "<group>"; };
 		A5E000000000000000000015 /* AspenAgePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenAgePlugin.swift; sourceTree = "<group>"; };
 		A5E000000000000000000089 /* AspenMediaPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenMediaPlugin.swift; sourceTree = "<group>"; };
 		A5E000000000000000000083 /* AspenUploadsPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AspenUploadsPlugin.swift; sourceTree = "<group>"; };
@@ -228,6 +232,7 @@
 				A5E000000000000000000205 /* CallCredentials.swift */,
 				A5E000000000000000000206 /* CallTracks.swift */,
 				A5E000000000000000000207 /* CallPeerConnection.swift */,
+				A5E000000000000000000220 /* CallFiles.swift */,
 				A5E000000000000000000208 /* CallAudio.swift */,
 				A5E000000000000000000215 /* CallSystem.swift */,
 				A5E000000000000000000216 /* CallRoutes.swift */,
@@ -274,6 +279,7 @@
 				A5E000000000000000000011 /* MainViewController.swift */,
 				A5E000000000000000000282 /* RootViewController.swift */,
 				A5E000000000000000000012 /* AspenFilesPlugin.swift */,
+				A5E000000000000000000016 /* FileRegistry.swift */,
 				A5E000000000000000000015 /* AspenAgePlugin.swift */,
 				A5E000000000000000000089 /* AspenMediaPlugin.swift */,
 				A5E000000000000000000083 /* AspenUploadsPlugin.swift */,
@@ -527,6 +533,7 @@
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				A5E000000000000000000001 /* MainViewController.swift in Sources */,
 				A5E000000000000000000002 /* AspenFilesPlugin.swift in Sources */,
+				A5E000000000000000000005 /* FileRegistry.swift in Sources */,
 				A5E000000000000000000004 /* AspenAgePlugin.swift in Sources */,
 				A5E000000000000000000088 /* AspenMediaPlugin.swift in Sources */,
 				A5E000000000000000000082 /* AspenUploadsPlugin.swift in Sources */,
@@ -544,6 +551,7 @@
 				A5E000000000000000000225 /* CallCredentials.swift in Sources */,
 				A5E000000000000000000226 /* CallTracks.swift in Sources */,
 				A5E000000000000000000227 /* CallPeerConnection.swift in Sources */,
+				A5E000000000000000000245 /* CallFiles.swift in Sources */,
 				A5E000000000000000000228 /* CallAudio.swift in Sources */,
 				A5E000000000000000000237 /* CallSystem.swift in Sources */,
 				A5E000000000000000000238 /* CallRoutes.swift in Sources */,

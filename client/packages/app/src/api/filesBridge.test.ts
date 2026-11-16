@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 /** What the native side was asked, in order. */
 const calls: { method: string; options: Record<string, unknown> }[] = [];
 let chosen: string | null = "doc-1";
+let picked: { reference: string; name: string; size: number } | { reference: null } = {
+  reference: "picked-1",
+  name: "notes.bin",
+  size: 1234,
+};
 
 vi.mock("@capacitor/core", () => ({
   Capacitor: {
@@ -15,13 +20,20 @@ vi.mock("@capacitor/core", () => ({
       {
         get: (_, method: string) => (options: Record<string, unknown>) => {
           calls.push({ method, options });
-          return Promise.resolve(method === "create" ? { id: chosen } : undefined);
+          if (method === "create") {
+            return Promise.resolve({ id: chosen });
+          }
+          if (method === "pick") {
+            return Promise.resolve(picked);
+          }
+          return Promise.resolve(undefined);
         },
       },
     ),
 }));
 
-const { nativeCanChooseDestination, nativeChooseDestination } = await import("./filesBridge");
+const { nativeCanChooseDestination, nativeChooseDestination, nativePickFile, nativeReleaseFile } =
+  await import("./filesBridge");
 
 function decode(base64: string): Uint8Array {
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
@@ -31,6 +43,7 @@ describe("filesBridge", () => {
   beforeEach(() => {
     calls.length = 0;
     chosen = "doc-1";
+    picked = { reference: "picked-1", name: "notes.bin", size: 1234 };
   });
 
   it("is used in a mobile app that has the plugin", () => {
@@ -76,5 +89,23 @@ describe("filesBridge", () => {
   it("answers null when the user backs out of the picker", async () => {
     chosen = null;
     expect(await nativeChooseDestination("x.bin")).toBeNull();
+  });
+
+  it("names the chosen place for a native call's engine", async () => {
+    const sink = await nativeChooseDestination("x.bin");
+    expect(sink?.destination).toBe("doc-1");
+  });
+
+  it("picks a file to offer by reference, and lets one not offered go", async () => {
+    expect(await nativePickFile()).toEqual({
+      reference: "picked-1",
+      name: "notes.bin",
+      size: 1234,
+    });
+    picked = { reference: null };
+    expect(await nativePickFile()).toBeNull();
+    await nativeReleaseFile("picked-1");
+    expect(calls.map((c) => c.method)).toEqual(["pick", "pick", "release"]);
+    expect(calls[2]?.options).toEqual({ reference: "picked-1" });
   });
 });
