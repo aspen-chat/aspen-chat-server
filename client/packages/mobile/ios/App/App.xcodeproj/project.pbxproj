@@ -62,6 +62,9 @@
 		A5E000000000000000000295 /* aspen-sound-effects-pack in Resources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000285 /* aspen-sound-effects-pack */; };
 		A5E000000000000000000292 /* RootViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000282 /* RootViewController.swift */; };
 		A5E000000000000000000293 /* SyntheticVideoCapturer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000283 /* SyntheticVideoCapturer.swift */; };
+		A5E000000000000000000321 /* CallEngines.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000301 /* CallEngines.swift */; };
+		A5E000000000000000000322 /* CallRings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000302 /* CallRings.swift */; };
+		A5E000000000000000000323 /* CallRingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000303 /* CallRingsTests.swift */; };
 		A5E000000000000000000296 /* SoftwareSoundPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E000000000000000000286 /* SoftwareSoundPlayer.swift */; };
 /* End PBXBuildFile section */
 
@@ -150,6 +153,9 @@
 		A5E000000000000000000283 /* SyntheticVideoCapturer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticVideoCapturer.swift; sourceTree = "<group>"; };
 		A5E000000000000000000286 /* SoftwareSoundPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoftwareSoundPlayer.swift; sourceTree = "<group>"; };
 		A5E000000000000000000213 /* AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5E000000000000000000301 /* CallEngines.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallEngines.swift; sourceTree = "<group>"; };
+		A5E000000000000000000302 /* CallRings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRings.swift; sourceTree = "<group>"; };
+		A5E000000000000000000303 /* CallRingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRingsTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -226,6 +232,8 @@
 				A5E000000000000000000215 /* CallSystem.swift */,
 				A5E000000000000000000216 /* CallRoutes.swift */,
 				A5E000000000000000000218 /* AspenCallPlugin.swift */,
+				A5E000000000000000000301 /* CallEngines.swift */,
+				A5E000000000000000000302 /* CallRings.swift */,
 				A5E000000000000000000210 /* VoiceClient.swift */,
 				A5E000000000000000000280 /* CallVideo.swift */,
 				A5E000000000000000000281 /* CallCamera.swift */,
@@ -243,6 +251,7 @@
 				A5E000000000000000000217 /* CallRoutesTests.swift */,
 				A5E000000000000000000219 /* AspenCallPluginTests.swift */,
 				A5E000000000000000000283 /* SyntheticVideoCapturer.swift */,
+				A5E000000000000000000303 /* CallRingsTests.swift */,
 				A5E000000000000000000286 /* SoftwareSoundPlayer.swift */,
 			);
 			path = AppTests;
@@ -539,6 +548,8 @@
 				A5E000000000000000000237 /* CallSystem.swift in Sources */,
 				A5E000000000000000000238 /* CallRoutes.swift in Sources */,
 				A5E000000000000000000243 /* AspenCallPlugin.swift in Sources */,
+				A5E000000000000000000321 /* CallEngines.swift in Sources */,
+				A5E000000000000000000322 /* CallRings.swift in Sources */,
 				A5E000000000000000000231 /* VoiceClient.swift in Sources */,
 				A5E000000000000000000290 /* CallVideo.swift in Sources */,
 				A5E000000000000000000291 /* CallCamera.swift in Sources */,
@@ -575,6 +586,7 @@
 				A5E000000000000000000239 /* CallRoutesTests.swift in Sources */,
 				A5E000000000000000000244 /* AspenCallPluginTests.swift in Sources */,
 				A5E000000000000000000293 /* SyntheticVideoCapturer.swift in Sources */,
+				A5E000000000000000000323 /* CallRingsTests.swift in Sources */,
 				A5E000000000000000000296 /* SoftwareSoundPlayer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

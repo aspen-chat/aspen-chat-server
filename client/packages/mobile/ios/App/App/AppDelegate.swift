@@ -9,8 +9,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         excludeWebDataFromBackup()
         // Before any page: the system may have started the app only to tell it how the uploads
-        // it carried on with ended.
+        // it carried on with ended, or for a VoIP push ringing it (`CallRings`), which PushKit
+        // delivers only once the registry exists.
         UploadCenter.shared.start(application: application)
+        CallRings.shared.start()
         return true
     }
 

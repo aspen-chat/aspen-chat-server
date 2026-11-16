@@ -3,9 +3,17 @@ import Security
 
 /// What the notification code needs while the app is closed (`spec/push.md`, The app): the
 /// `PushState` the app keeps through `AspenPush.saveState`, read here by the app and by the
-/// notification service extension alike. Only what the extension reads is typed; the rest of
-/// the object is kept as it was written, so the app's own fields survive a round trip.
+/// notification service extension alike. Only what the extension and the app's call code read is
+/// typed; the rest of the object is kept as it was written, so the app's own fields survive a
+/// round trip.
 struct PushState: Codable {
+    /// The phone's registration at its relay, which the app's VoIP token is registered beside
+    /// (`CallRings`); `nil` until the web view has registered it.
+    struct Device: Codable {
+        let id: String
+        let secret: String
+    }
+
     struct Keys: Codable {
         struct PrivateKey: Codable {
             let d: String
@@ -29,6 +37,7 @@ struct PushState: Codable {
     }
 
     let version: Int
+    let device: Device?
     var accounts: [Account]
 }
 

@@ -52,6 +52,11 @@ public class AspenPushPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         if PushStateStore.save(json: state) {
+            // The device the web view registered may be new, and the VoIP token is registered
+            // beside its token (`CallRings`).
+            DispatchQueue.main.async {
+                CallRings.shared.pushStateSaved()
+            }
             call.resolve()
         } else {
             call.reject("the push state could not be kept")

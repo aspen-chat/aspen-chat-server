@@ -9,7 +9,11 @@ import WebRTC
 /// when the engine is, and ended with `CXEndCallAction` when the user leaves or reported ended,
 /// with the reason, when the engine's state says the call is over; the system's own End, mute,
 /// and hold reach the engine through the provider's actions, and an interruption by another
-/// session holds the engine's call too. CallKit owns the audio session's
+/// session holds the engine's call too. A DM's call ringing this phone is an incoming call,
+/// reported from the VoIP push (`CallRings`, `reportIncoming`) and watched through the engine's
+/// ring watch until it is answered here (`CXAnswerCallAction`, which joins through the
+/// deployment's engine), declined here (`CXEndCallAction`, which ends the ring at the
+/// deployment), or ended anywhere else (`ringEnded`). CallKit owns the audio session's
 /// activation: the session is configured in the start action, activated by CallKit, and WebRTC's
 /// audio runs between `didActivate` and `didDeactivate` (`CallAudio`), which CallKit also calls
 /// around an interruption by another call. So the app never activates the session itself, and on
@@ -35,8 +39,10 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         /// What the system last refused to do, in its words, for the interface to show; a start
         /// it refused never joined.
         var refusal: String?
+        /// The incoming call ringing, by its id at the system, while one does.
+        var incoming: UUID?
 
-        static let idle = Status(call: nil, audioActive: false, held: false, interrupted: false, refusal: nil)
+        static let idle = Status(call: nil, audioActive: false, held: false, interrupted: false, refusal: nil, incoming: nil)
     }
 
     typealias Listener = (Status) -> Void
@@ -65,6 +71,10 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         var channel: String
         /// What the system shows for the call.
         var name: String?
+        /// Whether the system knows the call as outgoing (started from the app) rather than as
+        /// an incoming call answered, which is connected by its answer action and never
+        /// reported connecting or connected.
+        let outgoing: Bool
         var subscription: CallSnapshots.Subscription?
         /// Whether a snapshot has shown the engine in the call, so that the idle state before
         /// the join is not taken for its end.
@@ -76,11 +86,43 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         /// The hold last asked of the engine, so it is asked only when it changes.
         var heldAsked = false
 
-        init(uuid: UUID, engine: CallEngine, channel: String, name: String?) {
+        init(uuid: UUID, engine: CallEngine, channel: String, name: String?, outgoing: Bool = true) {
             self.uuid = uuid
             self.engine = engine
             self.channel = channel
             self.name = name
+            self.outgoing = outgoing
+        }
+    }
+
+    /// A DM's call ringing this phone, reported to the system and not yet answered, declined, or
+    /// ended elsewhere.
+    private final class Incoming {
+        let uuid: UUID
+        let ring: CallRings.IncomingRing
+        /// The engine's watch on the ring, which hears of its end anywhere else.
+        var watch: RingWatch?
+
+        init(uuid: UUID, ring: CallRings.IncomingRing) {
+            self.uuid = uuid
+            self.ring = ring
+        }
+    }
+
+    /// Hears a ring's end from the engine's watch, on the watch's thread, and hands it to the
+    /// main queue; holds no reference to the watch, which is released only there.
+    private final class RingEnds: RingObserver, @unchecked Sendable {
+        let uuid: UUID
+
+        init(uuid: UUID) {
+            self.uuid = uuid
+        }
+
+        func ended(end: RingEnd) {
+            let uuid = self.uuid
+            DispatchQueue.main.async {
+                CallSystem.shared.ringEnded(uuid, end: end)
+            }
         }
     }
 
@@ -88,6 +130,7 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
     private let controller = CXCallController()
     private let lock = NSLock()
     private var current: Current?
+    private var incoming: Incoming?
     /// The audio of a call that has ended, until the system's `didDeactivate` for it.
     private var deactivating: CallAudio?
     private var listeners: [UUID: Listener] = [:]
@@ -248,6 +291,97 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         }
     }
 
+    // MARK: Incoming calls
+
+    /// Reports a DM's call ringing this phone, as its VoIP push describes it, synchronously, so
+    /// that the push's handler has reported it before it returns, and starts the engine's watch
+    /// on the ring. One incoming call rings at a time: a second is reported and ended at once,
+    /// as is one the system refuses (another app's call, Do Not Disturb). Call on the main queue.
+    func reportIncoming(_ ring: CallRings.IncomingRing) {
+        let made = Incoming(uuid: UUID(), ring: ring)
+        let update = Self.update(channel: ring.channel, name: ring.callerName)
+        guard incoming == nil else {
+            provider.reportNewIncomingCall(with: made.uuid, update: update) { [weak self] _ in
+                self?.provider.reportCall(with: made.uuid, endedAt: nil, reason: .unanswered)
+            }
+            return
+        }
+        incoming = made
+        provider.reportNewIncomingCall(with: made.uuid, update: update) { [weak self] error in
+            guard let self, let error else {
+                return
+            }
+            NSLog("The system would not show Aspen's incoming call: %@", String(describing: error))
+            guard self.incoming === made else {
+                return
+            }
+            made.watch?.stop()
+            made.watch = nil
+            self.incoming = nil
+            self.update { $0.incoming = nil }
+        }
+        // The watch runs on a thread of its own and reports on it; `RingEnds` brings the end
+        // here.
+        made.watch = RingWatch.start(
+            platform: RingPlatform(http: CallHttp(), sockets: CallSockets()),
+            options: RingOptions(
+                apiUrl: CallEngines.trimmed(ring.origin),
+                credentials: CallCredentials(origin: ring.origin),
+                loopbackPlainText: Self.loopbackPlainText
+            ),
+            ring: Ring(channel: ring.channel, session: ring.session, until: ring.until),
+            observer: RingEnds(uuid: made.uuid)
+        )
+        update { $0.incoming = made.uuid }
+    }
+
+    /// Reports a call for a VoIP push the app could not read and ends it at once, as Apple
+    /// requires of every VoIP push that must be reported.
+    func reportUnreadable() {
+        let uuid = UUID()
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: "aspen")
+        update.hasVideo = false
+        provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] _ in
+            self?.provider.reportCall(with: uuid, endedAt: nil, reason: .failed)
+        }
+    }
+
+    /// The ring ended elsewhere, as the engine's watch says: the incoming call is reported ended
+    /// with the reason, and nothing is asked of the deployment.
+    func ringEnded(_ uuid: UUID, end: RingEnd) {
+        guard let incoming, incoming.uuid == uuid else {
+            return
+        }
+        self.incoming = nil
+        incoming.watch = nil
+        provider.reportCall(with: uuid, endedAt: nil, reason: Self.reason(end))
+        update { $0.incoming = nil }
+    }
+
+    private static func reason(_ end: RingEnd) -> CXCallEndedReason {
+        switch end {
+        case .answeredElsewhere:
+            return .answeredElsewhere
+        case .declined:
+            return .declinedElsewhere
+        case .callEnded:
+            return .remoteEnded
+        case .timedOut:
+            return .unanswered
+        case .signedOut:
+            return .failed
+        }
+    }
+
+    private static var loopbackPlainText: Bool {
+        #if DEBUG
+            return true
+        #else
+            return false
+        #endif
+    }
+
     private static func update(channel: String, name: String?) -> CXCallUpdate {
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: channel)
@@ -273,7 +407,9 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
             call.joined = true
             if !call.connected {
                 call.connected = true
-                provider.reportOutgoingCall(with: call.uuid, connectedAt: nil)
+                if call.outgoing {
+                    provider.reportOutgoingCall(with: call.uuid, connectedAt: nil)
+                }
             }
         case .idle, .failed:
             guard call.joined, !call.ending else {
@@ -316,7 +452,13 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
     // MARK: CXProviderDelegate
 
     func providerDidReset(_ provider: CXProvider) {
-        // CallKit lost every call it knew of; so does the engine, and the session with it.
+        // CallKit lost every call it knew of; so does the engine, and the session with it. A
+        // ring it forgot is left to the deployment's clock.
+        if let incoming {
+            incoming.watch = nil
+            self.incoming = nil
+            update { $0.incoming = nil }
+        }
         guard let current else {
             return
         }
@@ -354,7 +496,69 @@ final class CallSystem: NSObject, CXProviderDelegate, @unchecked Sendable {
         update { $0.call = current.uuid }
     }
 
+    /// Answers the incoming call: the ring's deployment's engine joins the DM's call, which ends
+    /// the ring at the deployment, as a call the system now holds. The audio session is
+    /// configured before the action is fulfilled, as for a start, so the system activates it as a
+    /// call's; a call of another engine the system held is left first.
+    func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+        guard let incoming, incoming.uuid == action.callUUID else {
+            action.fail()
+            return
+        }
+        self.incoming = nil
+        incoming.watch?.stop()
+        incoming.watch = nil
+        if let current {
+            current.engine.engine.leave()
+            ended(current, reason: .remoteEnded)
+        }
+        let engine = CallEngines.shared.forOrigin(incoming.ring.origin)
+        let made = Current(
+            uuid: incoming.uuid,
+            engine: engine,
+            channel: incoming.ring.channel,
+            name: incoming.ring.callerName,
+            outgoing: false
+        )
+        do {
+            try engine.audio.configureForCall()
+        } catch {
+            NSLog("The audio session could not be configured for Aspen's call: %@", String(describing: error))
+            update {
+                $0.incoming = nil
+                $0.refusal = error.localizedDescription
+            }
+            action.fail()
+            return
+        }
+        current = made
+        made.subscription = engine.snapshots.listen { [weak self, weak made] state in
+            guard let self, let made else {
+                return
+            }
+            self.stateChanged(state, of: made)
+        }
+        engine.engine.join(channel: incoming.ring.channel)
+        action.fulfill()
+        update {
+            $0.call = made.uuid
+            $0.incoming = nil
+            $0.refusal = nil
+        }
+    }
+
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+        if let incoming, incoming.uuid == action.callUUID {
+            // Declined here: the ring ends at the deployment, so the person's other devices
+            // stop ringing too.
+            self.incoming = nil
+            incoming.watch?.stop()
+            incoming.watch = nil
+            CallRings.shared.decline(origin: incoming.ring.origin, channel: incoming.ring.channel)
+            action.fulfill()
+            update { $0.incoming = nil }
+            return
+        }
         guard let current, current.uuid == action.callUUID else {
             action.fail()
             return
